@@ -49,6 +49,23 @@ delays are exponential and capped, and a failed body read resumes from the
 received prefix with HTTP `Range` when the source supports it. The CLI and the
 interactive window therefore have one policy and one cache/path resolver.
 
+## Joining a cropped DEM to the rendered globe
+
+The site keeps its own cropped DEM as the only elevation input for its handoff.
+For rendering, the crop's border datum sets the visible globe shell radius;
+celestial and physics state keep the canonical body radius. Visualization
+samples the crop's measured edge heights and one-sided slopes, then builds a
+crop-specific collar that joins the finite DEM patch to the analytic sphere.
+The collar closes the render surface outside the crop; it does not add measured
+terrain to the DEM oracle or change physics. No body-wide raster asset is
+required for this handoff.
+
+The active crop supplies its own georeference, posting spacing, border datum,
+and measured edge profile, so this works with Twin-local crops at different
+sites and resolutions. A body currently has one built crop handoff; multiple
+built crops for the same body are a visible input error, not a size-based
+selection.
+
 ## Where files live (cache resolution)
 
 - **Shared cache** — the OS-global cache (`~/.cache/lunco` on Linux,

@@ -13,7 +13,7 @@
 //! centre-relative mesh, so the authoritative BigSpace pose is established at
 //! spawn and remains stable while only tile residency changes.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use bevy::math::DVec3;
@@ -23,7 +23,8 @@ use big_space::prelude::*;
 use lunco_materials::{ShaderLook, ShaderLookReady};
 use lunco_render::SceneCamera;
 use lunco_terrain_core::{
-    CompositeHeightSource, HeightSource, Square, normal_at_bounded, square_boundary_posting_spacing,
+    HeightSource, Square, normal_at_bounded, square_boundary_height_at,
+    square_boundary_posting_spacing, square_boundary_sample_coordinate,
 };
 use lunco_terrain_globe::quad_sphere::{
     LodRefinementRegion, balance_cube_sphere_lod, cube_to_sphere, subdivide_face, tile_center_uv,
@@ -39,7 +40,7 @@ use lunco_viewport_core::SceneViewport;
 /// cube-sphere tiles.
 #[derive(Component)]
 pub struct GlobeLod {
-    /// Body radius (m) — tile vertices ride this sphere.
+    /// Canonical body radius (m); a site handoff may supply a render-only datum radius.
     pub radius_m: f64,
     /// Body-fixed physical grid for sites, terrain, cameras, and vehicles.
     ///
@@ -59,37 +60,91 @@ pub struct GlobeLod {
     pub lod_distance_factor: f64,
 }
 
-/// A finite DEM's continuation at the globe boundary.
-///
-/// The DEM owns exactly its authored square. Outside that square it has no
-/// measured samples, so extending the nearest edge sample through the whole
-/// globe collar would turn an edge crater/rim into a many-kilometre artificial
-/// apron. The continuation returns edge relief to the curved border datum over
-/// one site half-extent, while preserving the measured one-sided edge slope.
-/// The wider shoulder prevents large edge-to-datum differences from becoming
-/// an apparent wall at the square boundary.
+/// The site's surface values relative to its render datum.
 #[derive(Clone)]
-struct BoundarySiteSource {
-    oracle: Arc<SurfaceOracle>,
-    region: Square,
-    datum_m: f64,
-    radius_m: f64,
-    relief_blend_m: f64,
+enum SiteSurfaceSource {
+    Dem {
+        oracle: Arc<SurfaceOracle>,
+        datum_m: f64,
+    },
+    Flat {
+        height_m: f64,
+        datum_m: f64,
+    },
 }
 
-impl HeightSource for BoundarySiteSource {
+impl HeightSource for SiteSurfaceSource {
+    fn height_at(&self, x: f64, z: f64) -> f64 {
+        match self {
+            Self::Dem { oracle, datum_m } => oracle.height_at(x, z) - datum_m,
+            Self::Flat { height_m, datum_m } => height_m - datum_m,
+        }
+    }
+}
+
+impl SiteSurfaceSource {
+    fn boundary_height(&self, x: f64, z: f64, half_extent: f64, resolution: usize) -> f64 {
+        match self {
+            Self::Dem { oracle, datum_m } => {
+                square_boundary_height_at(oracle.as_ref(), x, z, half_extent, resolution)
+                    .unwrap_or_else(|| oracle.height_at(x, z))
+                    - datum_m
+            }
+            Self::Flat { height_m, datum_m } => height_m - datum_m,
+        }
+    }
+
+    fn boundary_gradient(&self, x: f64, z: f64, half_extent: f64) -> [f64; 2] {
+        match self {
+            Self::Dem { oracle, .. } => {
+                let normal =
+                    normal_at_bounded(oracle.as_ref(), x, z, oracle.spacing() as f64, half_extent);
+                [-normal[0] / normal[1], -normal[2] / normal[1]]
+            }
+            Self::Flat { .. } => [0.0, 0.0],
+        }
+    }
+}
+
+/// The active crop's render shell as a height graph in its gnomonic chart.
+#[derive(Clone, Copy)]
+struct MeanSphereSource {
+    radius_m: f64,
+    chart_radius_m: f64,
+}
+
+impl MeanSphereSource {
+    fn gradient_at(&self, x: f64, z: f64) -> [f64; 2] {
+        let chart_radius_squared = self.chart_radius_m.powi(2);
+        let scale = (1.0 + (x * x + z * z) / chart_radius_squared).powf(-1.5);
+        [
+            -self.radius_m * x * scale / chart_radius_squared,
+            -self.radius_m * z * scale / chart_radius_squared,
+        ]
+    }
+}
+
+impl HeightSource for MeanSphereSource {
+    fn height_at(&self, x: f64, z: f64) -> f64 {
+        self.radius_m / (1.0 + (x * x + z * z) / self.chart_radius_m.powi(2)).sqrt() - self.radius_m
+    }
+}
+
+/// A finite local source joined to a render-only sphere at this crop's border
+/// datum. Canonical celestial and physics radii remain unchanged.
+#[derive(Clone)]
+struct BoundaryBlendSource {
+    site: SiteSurfaceSource,
+    globe: MeanSphereSource,
+    region: Square,
+    collar_m: f64,
+    boundary_grid_resolution: usize,
+}
+
+impl HeightSource for BoundaryBlendSource {
     fn height_at(&self, x: f64, z: f64) -> f64 {
         if self.region.distance_to([x, z]) <= 0.0 {
-            if let Some(height) = lunco_terrain_core::square_boundary_height_at(
-                self.oracle.as_ref(),
-                x,
-                z,
-                self.region.half,
-                self.oracle.grid().res,
-            ) {
-                return height;
-            }
-            return self.oracle.height_at(x, z);
+            return self.site.height_at(x, z);
         }
 
         let edge_x = x.clamp(
@@ -100,154 +155,137 @@ impl HeightSource for BoundarySiteSource {
             self.region.center[1] - self.region.half,
             self.region.center[1] + self.region.half,
         );
-        if self.relief_blend_m <= 0.0 {
-            return self.curved_datum_height(x, z);
-        }
         let distance_x = x - edge_x;
         let distance_z = z - edge_z;
         let distance = distance_x.hypot(distance_z);
-        if distance >= self.relief_blend_m {
-            return self.curved_datum_height(x, z);
+        if distance >= self.collar_m {
+            return self.globe.height_at(x, z);
         }
-        let edge_height = self.height_at(edge_x, edge_z);
-        let t = (distance / self.relief_blend_m).clamp(0.0, 1.0);
-        let gradient = normal_at_bounded(
-            self,
+
+        let edge_relief = self.site.boundary_height(
             edge_x,
             edge_z,
-            self.oracle.spacing() as f64,
             self.region.half,
-        );
-        let outward_slope = if distance > 0.0 {
-            let outward_x = distance_x / distance;
-            let outward_z = distance_z / distance;
-            -gradient[0] / gradient[1] * outward_x - gradient[2] / gradient[1] * outward_z
+            self.boundary_grid_resolution,
+        ) - self.globe.height_at(edge_x, edge_z);
+        let (outward_x, outward_z) = if distance > 0.0 {
+            (distance_x / distance, distance_z / distance)
         } else {
-            0.0
+            (0.0, 0.0)
         };
-        let datum_height = self.curved_datum_height(x, z);
-        let datum_slope = self.curved_datum_slope(x, z, distance_x, distance_z, distance);
-
-        // Cubic Hermite interpolation preserves the measured outward slope at
-        // the DEM edge and the physical derivative of the curved border datum
-        // at the end of the relief shoulder.
-        let t2 = t * t;
-        let t3 = t2 * t;
-        let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
-        let h10 = t3 - 2.0 * t2 + t;
-        let h01 = -2.0 * t3 + 3.0 * t2;
-        let h11 = t3 - t2;
-        h00 * edge_height
-            + h10 * self.relief_blend_m * outward_slope
-            + h01 * datum_height
-            + h11 * self.relief_blend_m * datum_slope
+        let site_gradient = self
+            .site
+            .boundary_gradient(edge_x, edge_z, self.region.half);
+        let globe_gradient = self.globe.gradient_at(edge_x, edge_z);
+        let edge_slope = (site_gradient[0] - globe_gradient[0]) * outward_x
+            + (site_gradient[1] - globe_gradient[1]) * outward_z;
+        let posting_m =
+            square_boundary_posting_spacing(self.region.half, self.boundary_grid_resolution)
+                .unwrap_or(0.0)
+                .min(self.collar_m);
+        let relief = if posting_m > 0.0 && distance < posting_m {
+            edge_relief
+                + edge_slope * posting_m * integrated_inverse_smootherstep(distance / posting_m)
+        } else {
+            let continued = edge_relief + edge_slope * posting_m * 0.5;
+            let fade_start = posting_m;
+            let fade_width = (self.collar_m - fade_start).max(f64::EPSILON);
+            continued * (1.0 - smoothstep((distance - fade_start) / fade_width))
+        };
+        self.globe.height_at(x, z) + relief
     }
 }
 
-impl BoundarySiteSource {
-    fn curved_datum_height(&self, x: f64, z: f64) -> f64 {
-        self.datum_m
-            + (MeanSphereSource {
-                radius_m: self.radius_m + self.datum_m,
-            })
-            .height_at(x, z)
-    }
-
-    fn curved_datum_slope(
-        &self,
-        x: f64,
-        z: f64,
-        distance_x: f64,
-        distance_z: f64,
-        distance: f64,
-    ) -> f64 {
-        if distance <= 0.0 {
-            return 0.0;
-        }
-        let site_radius = self.radius_m + self.datum_m;
-        let radial = (site_radius * site_radius - (x * x + z * z))
-            .max(0.0)
-            .sqrt();
-        if radial <= f64::EPSILON {
-            return 0.0;
-        }
-        -(x * distance_x + z * distance_z) / (radial * distance)
-    }
+fn integrated_inverse_smootherstep(t: f64) -> f64 {
+    let t2 = t * t;
+    let t4 = t2 * t2;
+    let t5 = t4 * t;
+    let t6 = t5 * t;
+    t - t6 + 3.0 * t5 - 2.5 * t4
 }
 
-/// Mean-body sphere expressed as a tangent-plane height graph. This is the
-/// globe side of the composed source, not a second terrain datum.
-#[derive(Clone, Copy)]
-struct MeanSphereSource {
+fn smoothstep(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn dem_boundary_feather_m(
+    oracle: &SurfaceOracle,
+    half_extent_m: f64,
+    datum_m: f64,
     radius_m: f64,
-}
+) -> Result<f64, &'static str> {
+    let resolution = oracle.grid().res;
+    let posting_m = square_boundary_posting_spacing(half_extent_m, resolution)
+        .ok_or("DEM has no finite square boundary posting grid")?;
+    let sphere = MeanSphereSource {
+        radius_m,
+        chart_radius_m: radius_m,
+    };
+    let mut max_edge_relief = 0.0_f64;
+    let mut max_edge_slope = 0.0_f64;
 
-/// An explicitly authored flat site surface. Its top face is the local terrain
-/// datum; the existing composite source transitions from that finite footprint
-/// to the mean-body sphere outside the footprint collar.
-#[derive(Clone, Copy)]
-struct FlatSurfaceSource {
-    height_m: f64,
-}
-
-impl HeightSource for FlatSurfaceSource {
-    fn height_at(&self, _x: f64, _z: f64) -> f64 {
-        self.height_m
-    }
-}
-
-impl HeightSource for MeanSphereSource {
-    fn height_at(&self, x: f64, z: f64) -> f64 {
-        // The handoff coordinates are gnomonic (`x = R·tan(theta)`), not
-        // orthographic tangent-plane coordinates. Convert that ray to its
-        // exact radial intersection so the composed source and globe mesh use
-        // the same sphere geometry at the collar's outer edge.
-        let q = (1.0 + (x * x + z * z) / (self.radius_m * self.radius_m)).sqrt();
-        self.radius_m / q - self.radius_m
-    }
-}
-
-#[derive(Clone)]
-enum SiteSurfaceSource {
-    Dem(BoundarySiteSource),
-    Flat(FlatSurfaceSource),
-}
-
-impl HeightSource for SiteSurfaceSource {
-    fn height_at(&self, x: f64, z: f64) -> f64 {
-        match self {
-            Self::Dem(source) => source.height_at(x, z),
-            Self::Flat(source) => source.height_at(x, z),
+    for index in 0..resolution {
+        let along = square_boundary_sample_coordinate(index, resolution, half_extent_m)
+            .ok_or("DEM boundary sample coordinate is invalid")?;
+        for (x, z, outward_x, outward_z) in [
+            (-half_extent_m, along, -1.0, 0.0),
+            (half_extent_m, along, 1.0, 0.0),
+            (along, -half_extent_m, 0.0, -1.0),
+            (along, half_extent_m, 0.0, 1.0),
+        ] {
+            let edge_height = square_boundary_height_at(oracle, x, z, half_extent_m, resolution)
+                .ok_or("DEM boundary sample is outside its authored grid")?;
+            let edge_relief = (edge_height - datum_m - sphere.height_at(x, z)).abs();
+            let normal = normal_at_bounded(oracle, x, z, oracle.spacing() as f64, half_extent_m);
+            let site_gradient = [-normal[0] / normal[1], -normal[2] / normal[1]];
+            let globe_gradient = sphere.gradient_at(x, z);
+            let edge_slope = (site_gradient[0] - globe_gradient[0]) * outward_x
+                + (site_gradient[1] - globe_gradient[1]) * outward_z;
+            if !edge_height.is_finite()
+                || !edge_relief.is_finite()
+                || !normal.iter().all(|component| component.is_finite())
+                || !site_gradient.iter().all(|component| component.is_finite())
+                || !globe_gradient.iter().all(|component| component.is_finite())
+                || !edge_slope.is_finite()
+            {
+                return Err("DEM boundary contains non-finite height or slope values");
+            }
+            max_edge_relief = max_edge_relief.max(edge_relief);
+            max_edge_slope = max_edge_slope.max(edge_slope.abs());
         }
     }
-}
 
-#[derive(Clone)]
-struct HandoffSource(CompositeHeightSource<SiteSurfaceSource, MeanSphereSource>);
-
-impl HeightSource for HandoffSource {
-    fn height_at(&self, x: f64, z: f64) -> f64 {
-        self.0.height_at(x, z)
+    let continued_relief = max_edge_slope * posting_m * 0.5;
+    let collar_m = (20.0 * (max_edge_relief + continued_relief))
+        .max(posting_m * 2.0)
+        .max(1.0);
+    if !collar_m.is_finite() || collar_m <= 0.0 {
+        return Err("DEM boundary produces an invalid transition width");
     }
+    if half_extent_m + collar_m >= radius_m * 0.5 {
+        return Err("DEM footprint and transition exceed the local tangent chart limit");
+    }
+    Ok(collar_m)
 }
 
 /// The one continuous site/globe ownership record for a body.
 ///
-/// Inside the exact DEM square, the local terrain remains authoritative. Outside
-/// it, the same composed source supplies a footprint-derived collar and then the
-/// mean-body sphere. The component owns the source so globe tile generation never
-/// reaches into terrain assets or invents a fallback height.
+/// Inside the exact DEM square, the local terrain remains authoritative. The
+/// render shell uses the crop's border datum; canonical body state is unchanged.
 #[derive(Component, Clone)]
-pub struct GlobeHandoff {
+pub(crate) struct GlobeHandoff {
     pub dir: DVec3,
     pub east: DVec3,
     pub north: DVec3,
     pub half_extent: f64,
+    /// Render-only shell radius, equal to canonical body radius plus crop datum.
     pub radius_m: f64,
     pub site_radius_m: f64,
-    pub blend_m: f64,
+    /// Width of the crop's measured-relief feather into its render shell.
+    pub collar_m: f64,
     boundary_grid_resolution: usize,
-    source: HandoffSource,
+    source: BoundaryBlendSource,
     source_key: u64,
 }
 
@@ -259,66 +297,69 @@ impl PartialEq for GlobeHandoff {
             && self.half_extent == other.half_extent
             && self.radius_m == other.radius_m
             && self.site_radius_m == other.site_radius_m
-            && self.blend_m == other.blend_m
+            && self.collar_m == other.collar_m
             && self.boundary_grid_resolution == other.boundary_grid_resolution
             && self.source_key == other.source_key
     }
 }
 
 impl GlobeHandoff {
-    pub fn new(
+    pub(crate) fn new(
         dir: DVec3,
         east: DVec3,
         north: DVec3,
         radius_m: f64,
         oracle: Arc<SurfaceOracle>,
         half_extent: f64,
-    ) -> Self {
-        // The DEM is in the body's absolute vertical datum. Return local edge
-        // relief to the curved perimeter datum over one finite-footprint
-        // half-extent;
-        // the body-scale sagitta then determines the longer source-to-sphere
-        // collar. This keeps the handoff smooth without carrying edge features
-        // through the full globe collar.
+    ) -> Result<Self, &'static str> {
         let border_datum = oracle.grid().border_datum();
-        let sagitta_distance = (2.0 * radius_m * border_datum.abs()).sqrt();
-        let blend_m = half_extent.max(sagitta_distance).max(0.0);
-        let relief_blend_m = half_extent.max(0.0);
+        if !radius_m.is_finite() || radius_m <= 0.0 || !border_datum.is_finite() {
+            return Err("body radius or DEM border datum is invalid");
+        }
+        let render_radius_m = radius_m + border_datum;
+        if !render_radius_m.is_finite() || render_radius_m <= 0.0 {
+            return Err("DEM border datum does not define a positive local body radius");
+        }
+        let globe = MeanSphereSource {
+            radius_m: render_radius_m,
+            chart_radius_m: render_radius_m,
+        };
         let region = Square {
             center: [0.0, 0.0],
             half: half_extent,
         };
-        let source = HandoffSource(CompositeHeightSource::new(
-            SiteSurfaceSource::Dem(BoundarySiteSource {
+        let collar_m = dem_boundary_feather_m(&oracle, half_extent, border_datum, render_radius_m)?;
+        let source = BoundaryBlendSource {
+            site: SiteSurfaceSource::Dem {
                 oracle: oracle.clone(),
-                region,
                 datum_m: border_datum,
-                radius_m,
-                relief_blend_m,
-            }),
-            MeanSphereSource { radius_m },
+            },
+            globe,
             region,
-            blend_m,
-        ));
-        Self {
+            collar_m,
+            boundary_grid_resolution: oracle.grid().res,
+        };
+        Ok(Self {
             dir,
             east,
             north,
             half_extent,
-            radius_m,
-            site_radius_m: radius_m + border_datum,
-            blend_m,
+            radius_m: render_radius_m,
+            site_radius_m: render_radius_m,
+            collar_m,
             boundary_grid_resolution: oracle.grid().res,
             source,
-            source_key: oracle.surface_key(),
-        }
+            source_key: oracle.surface_key()
+                ^ border_datum.to_bits().rotate_left(13)
+                ^ render_radius_m.to_bits().rotate_left(29),
+        })
     }
 
-    /// Compose an authored flat site plane with the mean-body sphere. The
-    /// footprint is deliberately square because the globe clip contract is a
+    /// Compose an authored flat site plane with a render shell at its datum.
+    /// The footprint is deliberately square because the globe clip contract is a
     /// square tangent-plane cutout; non-square authored geometry is rejected by
     /// the USD terrain projection before it reaches this constructor.
-    pub fn new_flat(
+    pub(crate) fn new_flat(
         dir: DVec3,
         east: DVec3,
         north: DVec3,
@@ -326,29 +367,38 @@ impl GlobeHandoff {
         height_m: f64,
         half_extent: f64,
     ) -> Self {
-        let sagitta_distance = (2.0 * radius_m * height_m.abs()).sqrt();
-        let blend_m = half_extent.max(sagitta_distance).max(0.0);
+        let render_radius_m = radius_m + height_m;
+        let globe = MeanSphereSource {
+            radius_m: render_radius_m,
+            chart_radius_m: render_radius_m,
+        };
         let region = Square {
             center: [0.0, 0.0],
             half: half_extent,
         };
-        let source = HandoffSource(CompositeHeightSource::new(
-            SiteSurfaceSource::Flat(FlatSurfaceSource { height_m }),
-            MeanSphereSource { radius_m },
+        let edge_relief = globe.height_at(half_extent, half_extent).abs();
+        let collar_m = (edge_relief * 20.0).max(half_extent / 32.0).max(1.0);
+        let source = BoundaryBlendSource {
+            site: SiteSurfaceSource::Flat {
+                height_m,
+                datum_m: height_m,
+            },
+            globe,
             region,
-            blend_m,
-        ));
+            collar_m,
+            boundary_grid_resolution: 0,
+        };
         Self {
             dir,
             east,
             north,
             half_extent,
-            radius_m,
-            site_radius_m: radius_m + height_m,
-            blend_m,
+            radius_m: render_radius_m,
+            site_radius_m: render_radius_m,
+            collar_m,
             boundary_grid_resolution: 0,
             source,
-            source_key: height_m.to_bits() ^ half_extent.to_bits().rotate_left(17),
+            source_key: render_radius_m.to_bits() ^ half_extent.to_bits().rotate_left(17),
         }
     }
 
@@ -360,7 +410,7 @@ impl GlobeHandoff {
             radius_m: self.radius_m,
             site_radius_m: self.site_radius_m,
             half_extent: self.half_extent,
-            blend_m: self.blend_m,
+            collar_m: self.collar_m,
         }
     }
 
@@ -372,6 +422,7 @@ impl GlobeHandoff {
             self.radius_m,
             self.site_radius_m,
             self.half_extent,
+            self.collar_m,
             self.boundary_grid_resolution,
             tile_resolution,
         )
@@ -444,7 +495,7 @@ pub(crate) struct GlobeTiles {
     /// Completed worker meshes waiting for the bounded main-thread upload
     /// budget. The queue is retained across reconciliations so a worker burst
     /// cannot become an upload burst in one frame.
-    completed_meshes: Vec<(TileCoord, Mesh)>,
+    completed_meshes: BTreeMap<(u32, u8, i32, i32), (TileCoord, Mesh)>,
 }
 
 #[derive(Clone)]
@@ -482,20 +533,26 @@ fn hierarchy_changed(
 /// condition does not maintain a second cache. Walking the active camera's
 /// existing hierarchy catches movement from a parent grid without scanning all
 /// scene transforms; the body/grid queries cover authored LOD and handoff edits.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct GlobeLodUpdateSignals<'w, 's> {
+    parents: Query<'w, 's, &'static ChildOf>,
+    changed_transforms: Query<'w, 's, (), Changed<Transform>>,
+    changed_cells: Query<'w, 's, (), Changed<CellCoord>>,
+    changed_parents: Query<'w, 's, (), Changed<ChildOf>>,
+    changed_grids: Query<'w, 's, (), Changed<Grid>>,
+    changed_lod: Query<'w, 's, (), Changed<GlobeLod>>,
+    changed_handoff: Query<'w, 's, (), Changed<GlobeHandoff>>,
+    lods: Query<'w, 's, &'static GlobeLod>,
+    tiles: Query<'w, 's, &'static GlobeTiles>,
+    ready: Query<'w, 's, (), Added<ShaderLookReady>>,
+    removed_ready: RemovedComponents<'w, 's, ShaderLookReady>,
+    removed_handoff: RemovedComponents<'w, 's, GlobeHandoff>,
+}
+
 pub(crate) fn globe_lod_update_due(
     budget: Res<GlobeLodBudget>,
     viewport: Res<SceneViewport>,
-    parents: Query<&ChildOf>,
-    changed_transforms: Query<(), Changed<Transform>>,
-    changed_cells: Query<(), Changed<CellCoord>>,
-    changed_parents: Query<(), Changed<ChildOf>>,
-    changed_grids: Query<(), Changed<Grid>>,
-    changed_lod: Query<(), Changed<GlobeLod>>,
-    changed_handoff: Query<(), Changed<GlobeHandoff>>,
-    lods: Query<&GlobeLod>,
-    tiles: Query<&GlobeTiles>,
-    ready: Query<(), Added<ShaderLookReady>>,
-    mut removed_ready: RemovedComponents<ShaderLookReady>,
+    mut signals: GlobeLodUpdateSignals<'_, '_>,
 ) -> bool {
     // A Twin setting can hold globe reconciliation when its resident-mesh
     // budget is invalid. Valid budget edits are change-driven invalidations.
@@ -510,10 +567,11 @@ pub(crate) fn globe_lod_update_due(
     // so its resource change tick is not an invalidation signal. The active
     // camera value is compared with the camera entity recorded on each body's
     // authoritative solve state below.
-    if !changed_lod.is_empty()
-        || !changed_handoff.is_empty()
-        || !ready.is_empty()
-        || removed_ready.read().next().is_some()
+    if !signals.changed_lod.is_empty()
+        || !signals.changed_handoff.is_empty()
+        || !signals.ready.is_empty()
+        || signals.removed_ready.read().next().is_some()
+        || signals.removed_handoff.read().next().is_some()
     {
         return true;
     }
@@ -522,7 +580,7 @@ pub(crate) fn globe_lod_update_due(
         return false;
     };
 
-    if tiles.iter().any(|tiles| {
+    if signals.tiles.iter().any(|tiles| {
         tiles.last_solve_cam.is_none()
             || !tiles.retiring.is_empty()
             || tiles.last_solve_camera != Some(camera)
@@ -532,25 +590,27 @@ pub(crate) fn globe_lod_update_due(
 
     if hierarchy_changed(
         camera,
-        &parents,
-        &changed_transforms,
-        &changed_cells,
-        &changed_parents,
+        &signals.parents,
+        &signals.changed_transforms,
+        &signals.changed_cells,
+        &signals.changed_parents,
     ) {
         return true;
     }
 
-    lods.iter()
-        .any(|lod| changed_grids.contains(lod.surface_grid))
+    signals
+        .lods
+        .iter()
+        .any(|lod| signals.changed_grids.contains(lod.surface_grid))
 }
 
 /// Resource limits for live globe streaming.
 ///
 /// These are resource values rather than hidden constants so a host can tune
 /// them for a known adapter without changing the scene or the LOD algorithm.
-/// The resident limit is a backpressure boundary: once reached, refinement
-/// waits for old tiles to retire instead of allocating an unbounded replacement
-/// set.
+/// The byte limit is a backpressure boundary for resident, retiring, in-flight,
+/// and completed tiles; refinement waits for uploads and retirements instead of
+/// accumulating an unbounded mesh queue.
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct GlobeLodBudget {
     /// Maximum fresh tile entities created for one body in one frame.
@@ -562,7 +622,8 @@ pub struct GlobeLodBudget {
     pub mesh_uploads_per_frame: usize,
     /// Maximum retired tile entities released for one body in one frame.
     pub despawn_tiles_per_frame: usize,
-    /// Approximate mesh bytes allowed for resident and retiring tile entities.
+    /// Approximate mesh bytes reserved by resident, retiring, in-flight, and
+    /// completed tiles.
     pub max_resident_mesh_bytes: usize,
     /// Whether the active Twin's resident mesh budget was valid.
     ///
@@ -571,7 +632,8 @@ pub struct GlobeLodBudget {
     pub resident_mesh_budget_valid: bool,
     /// Approximate bytes retained by the reusable mesh-handle cache.
     pub max_cached_mesh_bytes: usize,
-    /// Fresh mesh bytes allowed in one frame, independent of entity count.
+    /// Fresh mesh bytes admitted to workers and committed to render assets per
+    /// body and visualization frame, independent of entity count.
     pub max_fresh_mesh_bytes_per_frame: usize,
 }
 
@@ -642,35 +704,31 @@ fn handoff_lod_refinement_regions(
     radius_m: f64,
     site_radius_m: f64,
     half_extent_m: f64,
+    collar_m: f64,
     boundary_grid_resolution: usize,
     tile_resolution: u32,
 ) -> Vec<LodRefinementRegion> {
-    let posting_m = square_boundary_posting_spacing(half_extent_m, boundary_grid_resolution);
-    let collar_posting_m = posting_m.unwrap_or(0.0);
-    let relief_blend_m = if boundary_grid_resolution > 0 {
-        half_extent_m.max(0.0)
-    } else {
-        0.0
-    };
-    let refinement_width_m = relief_blend_m + collar_posting_m;
-    let outer_extent_m = half_extent_m + refinement_width_m;
-    let outer_corner_radius_m = std::f64::consts::SQRT_2 * outer_extent_m;
-    let local_radius_m = radius_m * (outer_corner_radius_m / site_radius_m).atan();
-    let local_tile_size_m = posting_m
-        .map(|posting_m| posting_m * f64::from(tile_resolution) * 3.0)
-        .unwrap_or_else(|| (half_extent_m * 0.5).max(1.0));
-    let local_max_lod = refinement_lod_for_arc_size(radius_m, local_tile_size_m);
+    let local_posting_m = square_boundary_posting_spacing(half_extent_m, boundary_grid_resolution);
+    let edge_width_m = collar_m.max(0.0);
+    let edge_outer_extent_m = half_extent_m + edge_width_m;
+    let edge_corner_radius_m = std::f64::consts::SQRT_2 * edge_outer_extent_m;
+    let edge_radius_m = radius_m * (edge_corner_radius_m / site_radius_m).atan();
+    // The local boundary grid fixes the high-resolution cutout edge. The
+    // smooth relief feather only needs a bounded number of globe cells across
+    // its width; its sampling density must not follow the full body radius.
+    let edge_tile_size_m = (local_posting_m.unwrap_or(1.0) * f64::from(tile_resolution.max(1)))
+        .max((edge_width_m / 8.0).max(1.0));
     let center = center_direction * radius_m;
     vec![LodRefinementRegion {
         center,
-        radius_m: local_radius_m,
+        radius_m: edge_radius_m,
         east,
         north,
         site_radius_m,
         half_extent_m,
-        width_m: refinement_width_m,
-        max_tile_size_m: local_tile_size_m,
-        max_lod: local_max_lod,
+        width_m: edge_width_m,
+        max_tile_size_m: edge_tile_size_m,
+        max_lod: refinement_lod_for_arc_size(radius_m, edge_tile_size_m),
     }]
 }
 
@@ -952,6 +1010,7 @@ pub(crate) fn update_globe_lod(
             )
         });
         let tile_bytes = tile_mesh_bytes(lod.res);
+        let render_radius_m = handoff.map_or(lod.radius_m, |value| value.radius_m);
 
         // A handoff changes the geometry of every resident tile that crosses its
         // boundary. Retire the old meshes before solving the new cover so a
@@ -961,7 +1020,7 @@ pub(crate) fn update_globe_lod(
             debug!(
                 "globe LOD handoff solve: body={body_ent:?} camera={camera_entity:?} surface_grid={:?} body_local={camera_body_local:?} radius={:.0} handoff={}",
                 lod.surface_grid,
-                lod.radius_m,
+                render_radius_m,
                 handoff.is_some()
             );
             for (_, entity) in tiles.resident.drain() {
@@ -996,7 +1055,8 @@ pub(crate) fn update_globe_lod(
             pending_meshes.retain(
                 |coord, task| match block_on(future::poll_once(&mut *task)) {
                     Some(mesh) => {
-                        completed_meshes.push((*coord, mesh));
+                        completed_meshes
+                            .insert((coord.level, coord.face, coord.i, coord.j), (*coord, mesh));
                         false
                     }
                     None => true,
@@ -1006,12 +1066,23 @@ pub(crate) fn update_globe_lod(
         let mesh_completion_pending = !tiles.completed_meshes.is_empty();
         // A worker can finish many meshes between two render frames. Keep the
         // completed queue across reconciliations and bound only the main-thread
-        // asset uploads; otherwise a healthy compute phase still produces a
-        // periodic frame hitch when all finished meshes are installed together.
+        // asset uploads; completed tiles are committed in stable coarse-to-fine
+        // coordinate order so worker completion order cannot reorder the view.
+        let mut uploaded_mesh_bytes = 0usize;
         for _ in 0..budget.mesh_uploads_per_frame {
-            let Some((coord, mesh)) = tiles.completed_meshes.pop() else {
+            if tiles.completed_meshes.is_empty() {
                 break;
-            };
+            }
+            if uploaded_mesh_bytes.saturating_add(tile_bytes)
+                > budget.max_fresh_mesh_bytes_per_frame
+            {
+                break;
+            }
+            let (coord, mesh) = tiles
+                .completed_meshes
+                .pop_first()
+                .expect("the completed mesh selected above remains queued")
+                .1;
             tiles.cache_clock = tiles.cache_clock.wrapping_add(1);
             let last_used = tiles.cache_clock;
             let handle = meshes.add(mesh);
@@ -1024,6 +1095,7 @@ pub(crate) fn update_globe_lod(
                 },
             );
             tiles.mesh_cache_bytes = tiles.mesh_cache_bytes.saturating_add(tile_bytes);
+            uploaded_mesh_bytes = uploaded_mesh_bytes.saturating_add(tile_bytes);
         }
 
         // CAMERA-MOTION GATE. Resident reconciliation still runs while a
@@ -1042,7 +1114,9 @@ pub(crate) fn update_globe_lod(
             .values()
             .all(|entity| material_ready.contains(*entity));
         if let Some(prev_cam) = tiles.last_solve_cam {
-            let altitude = (camera_body_local.length() - lod.radius_m).abs().max(1.0);
+            let altitude = (camera_body_local.length() - render_radius_m)
+                .abs()
+                .max(1.0);
             let slack = LOD_CAMERA_MOTION_FRACTION * altitude;
             if tiles.last_solve_handoff.as_ref() == handoff
                 && tiles.last_solve_camera == Some(camera_entity)
@@ -1063,13 +1137,15 @@ pub(crate) fn update_globe_lod(
         // change the mathematical selection, so they must not force another
         // full quadtree walk.
         let lod_key = (
-            lod.radius_m.to_bits(),
+            render_radius_m.to_bits(),
             lod.max_lod,
             lod.lod_distance_factor.to_bits(),
             lod.res,
         );
         let selection_needs_rebuild = tiles.last_selection_cam.is_none_or(|previous| {
-            let altitude = (camera_body_local.length() - lod.radius_m).abs().max(1.0);
+            let altitude = (camera_body_local.length() - render_radius_m)
+                .abs()
+                .max(1.0);
             let slack = LOD_CAMERA_MOTION_FRACTION * altitude;
             (camera_body_local - previous).length_squared() >= slack * slack
         }) || tiles.last_selection_handoff.as_ref() != handoff
@@ -1093,7 +1169,7 @@ pub(crate) fn update_globe_lod(
                     0,
                     0,
                     camera_body_local,
-                    lod.radius_m,
+                    render_radius_m,
                     lod.max_lod,
                     lod.lod_distance_factor,
                     refinement_regions,
@@ -1104,8 +1180,8 @@ pub(crate) fn update_globe_lod(
             if tiles.last_selection_handoff.as_ref() != handoff {
                 let deepest_level = desired.iter().map(|tile| tile.level).max().unwrap_or(0);
                 debug!(
-                    "globe LOD handoff cover: body={body_ent:?} blend_m={:.0} detail_bound_m={:.0} boundary_tile_m={:.1} boundary_max_lod={} leaves={} deepest_level={deepest_level}",
-                    handoff.map(|value| value.blend_m).unwrap_or(0.0),
+                    "globe LOD handoff cover: body={body_ent:?} collar_m={:.0} detail_bound_m={:.0} boundary_tile_m={:.1} boundary_max_lod={} leaves={} deepest_level={deepest_level}",
+                    handoff.map(|value| value.collar_m).unwrap_or(0.0),
                     refinement_regions
                         .first()
                         .map(|region| region.radius_m)
@@ -1178,7 +1254,7 @@ pub(crate) fn update_globe_lod(
         let mut prioritized: Vec<(TileCoord, f64)> = missing
             .into_iter()
             .map(|coord| {
-                let distance = tile_dist2(&coord, lod.radius_m, camera_body_local);
+                let distance = tile_dist2(&coord, render_radius_m, camera_body_local);
                 (coord, distance)
             })
             .collect();
@@ -1200,15 +1276,21 @@ pub(crate) fn update_globe_lod(
             }
             if tiles
                 .completed_meshes
-                .iter()
+                .values()
                 .any(|(completed, _)| *completed == coord)
             {
                 continue;
             }
             let needs_fresh_mesh = !tiles.mesh_cache.contains_key(&coord);
+            let reserved_meshes = tiles
+                .resident
+                .len()
+                .saturating_add(tiles.retiring.len())
+                .saturating_add(tiles.pending_meshes.len())
+                .saturating_add(tiles.completed_meshes.len());
             if needs_fresh_mesh
                 && (fresh_bytes.saturating_add(tile_bytes) > budget.max_fresh_mesh_bytes_per_frame
-                    || (tiles.resident.len() + tiles.retiring.len())
+                    || reserved_meshes
                         .saturating_mul(tile_bytes)
                         .saturating_add(fresh_bytes)
                         .saturating_add(tile_bytes)
@@ -1218,7 +1300,7 @@ pub(crate) fn update_globe_lod(
             }
             let (u, v) = tile_center_uv(coord.face, coord.level, coord.i, coord.j);
             let tile_center_dir = cube_to_sphere(coord.face, u, v);
-            let tile_body_local = tile_center_dir * lod.radius_m;
+            let tile_body_local = tile_center_dir * render_radius_m;
             let (tile_cell, tile_local_pos) = sg_grid.translation_to_grid(tile_body_local);
             // Build the mesh relative to the tile centre: the entity is placed at
             // that centre via the grid, so the mesh carries only each vertex's
@@ -1231,7 +1313,7 @@ pub(crate) fn update_globe_lod(
                 cached.handle.clone()
             } else {
                 let handoff = handoff.cloned();
-                let radius = lod.radius_m;
+                let radius = render_radius_m;
                 let res = lod.res;
                 fresh_bytes = fresh_bytes.saturating_add(tile_bytes);
                 let task = AsyncComputeTaskPool::get().spawn(async move {
@@ -1394,12 +1476,13 @@ mod tests {
     use bevy::ecs::system::SystemState;
 
     #[test]
-    fn handoff_refinement_is_confined_to_the_dem_boundary() {
+    fn handoff_refinement_tracks_local_dem_spacing_and_feather_width() {
         let radius_m: f64 = 1_737_400.0;
         let half_extent_m: f64 = 501.0;
         let site_radius_m = radius_m - 1_917.0;
-        let posting_m = square_boundary_posting_spacing(half_extent_m, 512)
+        let local_posting_m = square_boundary_posting_spacing(half_extent_m, 512)
             .expect("valid authored DEM boundary spacing");
+        let blend_m = 8_000.0;
         let regions = handoff_lod_refinement_regions(
             DVec3::X,
             DVec3::Z,
@@ -1407,16 +1490,23 @@ mod tests {
             radius_m,
             site_radius_m,
             half_extent_m,
+            blend_m,
             512,
             32,
         );
 
         assert_eq!(regions.len(), 1);
-        assert!(regions[0].radius_m < 1_000.0);
-        assert_eq!(regions[0].half_extent_m, half_extent_m);
-        assert_eq!(regions[0].width_m, posting_m);
-        assert!(regions[0].max_tile_size_m <= posting_m * 32.0 * 3.0);
-        assert_eq!(regions[0].max_lod, 14);
+        let edge = regions[0];
+        assert_eq!(edge.half_extent_m, half_extent_m);
+        assert_eq!(edge.width_m, blend_m);
+        assert_eq!(
+            edge.max_tile_size_m,
+            (blend_m / 8.0).max(local_posting_m * 32.0)
+        );
+        assert_eq!(
+            edge.max_lod,
+            refinement_lod_for_arc_size(radius_m, edge.max_tile_size_m)
+        );
     }
 
     #[test]
@@ -1431,6 +1521,7 @@ mod tests {
             radius_m,
             site_radius_m,
             half_extent_m,
+            8_000.0,
             512,
             32,
         );
@@ -1477,9 +1568,10 @@ mod tests {
 
         assert!(selected_level(0.0, 0.0) < max_level);
         assert_eq!(
-            selected_level(0.0, half_extent_m / site_radius_m),
+            selected_level(0.0, (half_extent_m + 8_000.0 * 0.9) / site_radius_m),
             max_level
         );
+        assert!(selected_level(0.0, (half_extent_m + 8_000.0 * 2.0) / site_radius_m) < max_level);
     }
 
     #[test]
@@ -1499,17 +1591,18 @@ mod tests {
             radius_m,
             site_radius_m,
             half_extent_m,
+            8_000.0,
+            2_000.0,
             512,
             32,
         );
 
         let local = regions.first().expect("DEM boundary region");
         assert_eq!(regions.len(), 1);
-        assert_eq!(local.max_lod, 14);
-        assert!(local.radius_m < 1_000.0);
+        assert_eq!(local.max_lod, 7);
         assert_eq!(local.half_extent_m, half_extent_m);
-        assert_eq!(local.width_m, posting_m);
-        assert!(local.max_tile_size_m <= posting_m * 32.0 * 3.0);
+        assert_eq!(local.width_m, 8_000.0);
+        assert!(local.max_tile_size_m >= posting_m * 32.0);
 
         let body = Entity::from_bits(1);
         let mut desired = HashSet::new();
@@ -1533,8 +1626,8 @@ mod tests {
         balance_cube_sphere_lod(&mut desired, body, max_level);
         let estimated_resident_bytes = desired.len().saturating_mul(tile_mesh_bytes(32));
         assert!(
-            desired.len() < 600,
-            "boundary-only refinement produced {} tiles",
+            desired.len() < 640,
+            "handoff refinement produced {} tiles",
             desired.len()
         );
         assert!(
@@ -1695,112 +1788,24 @@ mod tests {
     }
 
     #[test]
-    fn finite_dem_edge_relief_is_not_extruded_into_the_globe_collar() {
-        use lunco_obstacle_field::field::HeightGrid;
-
-        let mut grid = HeightGrid::new_flat(3, 10.0);
-        grid.heights.fill(100.0);
-        grid.heights[2 * 3 + 2] = 200.0;
-        let oracle = Arc::new(SurfaceOracle::bare(Arc::new(grid)));
-        let region = Square {
-            center: [0.0, 0.0],
-            half: 10.0,
-        };
-        let source = BoundarySiteSource {
-            oracle,
-            region,
-            datum_m: 100.0,
-            radius_m: 1.0e9,
-            relief_blend_m: 10.0,
-        };
-
-        assert_eq!(source.height_at(10.0, 10.0), 200.0);
-        assert!((source.height_at(20.0, 20.0) - 100.0).abs() < 1.0e-5);
-        assert!(source.height_at(15.0, 15.0) < 200.0);
-    }
-
-    #[test]
-    fn finite_dem_boundary_preserves_the_measured_edge_slope() {
-        use lunco_obstacle_field::field::HeightGrid;
-
-        let mut grid = HeightGrid::new_flat(5, 10.0);
-        for z in 0..grid.res {
-            for x in 0..grid.res {
-                grid.heights[z * grid.res + x] = -10.0 + x as f64 * 5.0;
-            }
-        }
-        let oracle = Arc::new(SurfaceOracle::bare(Arc::new(grid)));
-        let source = BoundarySiteSource {
-            oracle: oracle.clone(),
-            region: Square {
-                center: [0.0, 0.0],
-                half: 10.0,
-            },
-            datum_m: 0.0,
-            radius_m: 1.0e9,
-            relief_blend_m: 5.0,
-        };
-        let epsilon = 1.0e-5;
-        let edge_slope =
-            (oracle.height_at(10.0, 0.0) - oracle.height_at(10.0 - epsilon, 0.0)) / epsilon;
-        let continuation_slope =
-            (source.height_at(10.0 + epsilon, 0.0) - source.height_at(10.0, 0.0)) / epsilon;
-
-        assert!((continuation_slope - edge_slope).abs() < 1.0e-3);
-        let outer_slope =
-            (source.height_at(15.0, 0.0) - source.height_at(15.0 - epsilon, 0.0)) / epsilon;
-        assert!(outer_slope.abs() < 1.0e-3);
-    }
-
-    #[test]
-    fn finite_dem_boundary_continues_body_curvature() {
-        use lunco_obstacle_field::field::HeightGrid;
-
-        let radius_m = 1_000.0;
-        let datum_m = 100.0;
-        let grid = Arc::new(HeightGrid::new_flat(5, 10.0));
-        let oracle = Arc::new(SurfaceOracle::new(
-            grid,
-            vec![lunco_terrain_surface::HeightContribution {
-                modifier: Arc::new(lunco_terrain_core::BodyCurvature::new(radius_m, datum_m)),
-                content_key: 1,
-            }],
-        ));
-        let source = BoundarySiteSource {
-            oracle,
-            region: Square {
-                center: [0.0, 0.0],
-                half: 10.0,
-            },
-            datum_m,
-            radius_m,
-            relief_blend_m: 5.0,
-        };
-        let expected = datum_m
-            + MeanSphereSource {
-                radius_m: radius_m + datum_m,
-            }
-            .height_at(15.0, 0.0);
-
-        assert!((source.height_at(15.0, 0.0) - expected).abs() < 1.0e-9);
-    }
-
-    #[test]
     fn flat_site_handoff_owns_the_authored_datum_inside_its_square() {
-        let handoff = GlobeHandoff::new_flat(DVec3::X, DVec3::Z, DVec3::Y, 1_737_400.0, 0.0, 100.0);
-        assert!(
-            handoff
-                .geometry()
-                .contains(DVec3::new(1.0, 0.00001, 0.00001).normalize())
-        );
-        assert!(
-            !handoff
-                .geometry()
-                .contains(DVec3::new(1.0, 0.001, 0.0).normalize())
-        );
-        let patch = handoff.patch();
-        assert_eq!(patch.source.height_at(0.0, 0.0), 0.0);
-        assert_eq!(patch.source.height_at(50.0, -50.0), 0.0);
+        let geometry = GlobeHandoffGeometry {
+            dir: DVec3::X,
+            east: DVec3::Z,
+            north: DVec3::Y,
+            radius_m: 1_737_400.0,
+            site_radius_m: 1_737_400.0,
+            half_extent: 100.0,
+            collar_m: 8_000.0,
+        };
+        assert!(geometry.contains(DVec3::new(1.0, 0.00001, 0.00001).normalize()));
+        assert!(!geometry.contains(DVec3::new(1.0, 0.001, 0.0).normalize()));
+        let flat = SiteSurfaceSource::Flat {
+            height_m: 0.0,
+            datum_m: 0.0,
+        };
+        assert_eq!(flat.height_at(0.0, 0.0), 0.0);
+        assert_eq!(flat.height_at(50.0, -50.0), 0.0);
     }
 
     #[test]

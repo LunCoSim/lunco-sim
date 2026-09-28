@@ -291,11 +291,15 @@ works* — height-as-function, composition, error-driven detail, content-address
   **globe** (`lunco-terrain-globe` cube-sphere) is a radial `HeightSource`; the
   **surface** (`lunco-terrain-surface` DEM inset pinned to a georef'd lat/lon) is
   a tangent-plane `HeightSource` — and craters/carves/over-zoom are modifiers on
-  *that* node. The **`CompositeHeightSource`**
-  ([`core/source.rs`](../../crates/lunco-terrain-core/src/source.rs)) blends site
-  DEM inside the georef region with globe height outside, crossover by altitude.
-  A planet's full oracle is `globe ⊕ (DEM ⊕ craters ⊕ carves ⊕ over-zoom)`; the
-  crater oracle is **one node in the planet's composite.**
+  *that* node. In Visualization, `lunco-celestial-spatial` projects the retained
+  site oracle into globe tiles and builds a deterministic collar from that
+  crop's own edge samples and slopes. The crop border datum sets the render-only
+  globe shell radius; celestial and physical state keep the canonical radius.
+  This joins the finite crop to an analytic sphere without changing the local
+  physics oracle or requiring a body-wide raster.
+  **`CompositeHeightSource`**
+  ([`core/source.rs`](../../crates/lunco-terrain-core/src/source.rs)) remains a
+  generic pure blending primitive; it does not select or load terrain assets.
 
 - **Error-driven detail is the same law at every scale.** The globe's sphere
   metric (`subdivide_face`) and the surface's planar `Quadtree` differ, but both
@@ -553,42 +557,7 @@ re-stamp swap). Only the avian collider + Bevy mesh derive stays in
    `UsdRead`/`StageView`; replace the `AssetEvent<UsdStageAsset>` reload observer
    with a terrain `UsdAttrProjection` off StageSink; make regen a physics-atomic
    activation unit (see *Alignment* above).
-4. **Orbit→surface bridge app-wiring** — **landed**: `lunco-celestial` builds the
-   live `CompositeHeightSource` from the retained DEM oracle and authored site
-   tangent frame. Globe triangles are clipped only inside the exact DEM square;
-   boundary triangles use a one-posting C1 continuation that fades measured edge
-   relief onto the same body-curved datum. The cutout uses the site's radial
-   datum, and the collar moves its gnomonic coordinates back to the body's mean
-   radius before meeting the radial globe. Cutout boundary edges are split at
-   the DEM's authored grid samples. Perimeter surface tiles bake a matching
-   strip from those same posting-linear heights into their band-limited interior;
-   their boundary remains fixed during geomorph. Both sides derive boundary
-   normals at the native posting spacing, so coarse tile shading stays continuous
-   with the globe at grazing light angles. The globe's one-posting collar is
-   clipped into posting-sized edge and corner cells, so measured boundary relief
-   cannot fan across a coarse globe cell. This keeps coarse terrain tiles joined
-   to the globe even where corner relief changes sharply between samples.
-   The strip is generated in the existing async tile bake and content-addressed
-   cache, with no per-frame boundary sampling. Globe tiles throughout the collar
-   receive the same handoff, including tiles that do not cross the cutout, so
-   neighboring tile edges stay continuous. Handoff refinement selects tiles
-   whose projected bounds cross a one-posting band around the authored DEM
-   square; the DEM interior and the rest of the globe stay at camera-driven LOD.
-   At the seam, globe tile vertices approach three DEM postings apart. The
-   selected tile cover remains cached, and mesh generation uses the existing
-   asynchronous bake path without carrying that density across the entire
-   physical blend collar.
-   This keeps the merge registered at
-   nonzero site elevations. There is no shell sink, guessed wall, or second
-   terrain source. Full lat/lon↔XZ reprojection for non-equirectangular DEMs
-   remains deferred.
-   The resident globe mesh cap defaults to 72 MiB and can be overridden per
-   Twin with `[settings] "celestial.globe_lod.max_resident_mesh_bytes" = 100663296`.
-   The application reads it only when the active Twin changes; an omitted key
-   uses the host's `GlobeLodBudget` default. The value must be a positive integer
-   byte count. An invalid value is reported and pauses globe LOD reconciliation
-   until corrected, keeping the last valid tile cover visible.
-6. **Tile bake cache** — **partly done**: visual tile meshes are
+4. **Tile bake cache** — **partly done**: visual tile meshes are
    content-addressed on disk (`tile_cache`, keyed on `SurfaceOracle::surface_key`
    + tile coord), so a warm reload of the same composed surface streams instead
    of baking. Still open: sharing the bake with the collider ring (one sample

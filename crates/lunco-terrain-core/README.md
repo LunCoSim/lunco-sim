@@ -14,7 +14,7 @@ share one selection algorithm instead of duplicating it.
 |--------|------|
 | `quadtree` | CDLOD quadtree selection over an abstract square region: distance-range refinement from a fixed canonical screen metric (view-independent → deterministic across peers), 3D-Tiles geometric error, and CDLOD geomorph bands. `select_3d` takes eye-height so altitude coarsens LOD. |
 | `tile` | uniform planar tile-grid math: world↔tile mapping, the resident ring of tiles around a focus (the physics-collider-ring substrate). |
-| `source` | the `HeightSource` trait (`height_at` as a pure function of position) + `normal_at`, a deterministic analytic FBM source for bring-up / tests, and **`CompositeHeightSource`** — the orbit→surface bridge (site DEM inside a georeferenced region, globe height outside, smoothstep collar). |
+| `source` | the `HeightSource` trait (`height_at` as a pure function of position) + `normal_at`, a deterministic analytic FBM source for bring-up / tests, and **`CompositeHeightSource`** — a reusable blend from a finite site source to a caller-supplied globe source. |
 
 ## The height oracle
 
@@ -33,7 +33,9 @@ assets. See the design narrative:
 - **`lunco-terrain-globe`** — globe scale: cube-sphere region map + radius
   `HeightSource` for whole bodies seen from orbit.
 
-The orbit→surface bridge is `CompositeHeightSource` (above): it returns the site
-DEM inside its georeferenced region, a composed collar at the measured boundary,
-and the globe height outside it. `lunco-celestial` supplies the live oracle and
-tangent frame to the globe projection; the core remains pure and render-free.
+`CompositeHeightSource` is a pure reusable primitive; it does not own a body's
+terrain policy or any asset lookup. The live crop-to-globe render handoff is
+owned by `lunco-celestial-spatial`: it reads the retained `SurfaceOracle`, derives
+a bounded visual collar from that crop's edge, and projects the result onto a
+datum-aligned render shell. Canonical body and physics state stay outside this
+presentation path. The core remains render- and asset-free.

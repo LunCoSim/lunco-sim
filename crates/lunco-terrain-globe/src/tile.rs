@@ -17,17 +17,14 @@ pub struct GlobeHandoff {
     /// Unit east and north axes at the site, in body-fixed coordinates.
     pub east: DVec3,
     pub north: DVec3,
-    /// Radius of the body used to convert angular gnomonic coordinates to metres.
+    /// Render radius of the globe shell for the active site datum.
     pub radius_m: f64,
-    /// Radius at the authored site's vertical datum. The local surface square
-    /// is projected from this radius, while the outer collar returns to
-    /// `radius_m`.
+    /// Radius used to project the local square into the globe direction chart.
     pub site_radius_m: f64,
     /// Half side of the DEM square in metres.
     pub half_extent: f64,
-    /// Width of the source-driven transition from the DEM to the mean sphere.
-    /// This is supplied by the composed terrain source, not baked into the mesh.
-    pub blend_m: f64,
+    /// Width of the local measured-relief feather into the sphere.
+    pub collar_m: f64,
 }
 
 /// A globe tile's local source-driven handoff. The DEM is clipped out of the
@@ -58,10 +55,16 @@ pub fn create_quadsphere_tile_mesh(
     let mut normals = Vec::new();
     let mut indices = Vec::new();
     let mut directions = Vec::new();
-    let boundary_grid = patch
-        .and_then(|patch| HandoffBoundaryGrid::new(patch.handoff, patch.boundary_grid_resolution));
+    let boundary_grid = patch.and_then(|patch| {
+        HandoffBoundaryGrid::new(
+            patch.handoff,
+            patch.boundary_grid_resolution,
+            patch.handoff.collar_m,
+        )
+    });
     let tiles_at_level = 1 << level;
     let step = 2.0 / tiles_at_level as f64;
+    let tile_vertex_spacing_m = (radius * step / f64::from(res.max(1))).max(1.0);
     let start_u = -1.0 + (i as f64) * step;
     let start_v = -1.0 + (j as f64) * step;
 
@@ -70,8 +73,13 @@ pub fn create_quadsphere_tile_mesh(
             let u = start_u + (x as f64 / res as f64) * step;
             let v = start_v + (y as f64 / res as f64) * step;
             let pos_sphere = cube_to_sphere(face, u, v);
-            let (position, normal) =
-                surface_vertex(pos_sphere, radius, tile_center, patch.as_ref());
+            let (position, normal) = surface_vertex(
+                pos_sphere,
+                radius,
+                tile_center,
+                patch.as_ref(),
+                tile_vertex_spacing_m,
+            );
             positions.push(position);
             normals.push(normal);
             directions.push(pos_sphere);
@@ -130,8 +138,13 @@ pub fn create_quadsphere_tile_mesh(
                 ) else {
                     let first = clipped_positions.len() as u32;
                     for dir in dirs {
-                        let (position, normal) =
-                            surface_vertex(dir, radius, tile_center, Some(&patch));
+                        let (position, normal) = surface_vertex(
+                            dir,
+                            radius,
+                            tile_center,
+                            Some(&patch),
+                            tile_vertex_spacing_m,
+                        );
                         clipped_positions.push(position);
                         clipped_normals.push(normal);
                         clipped_directions.push(dir);
@@ -155,8 +168,13 @@ pub fn create_quadsphere_tile_mesh(
                     let first = clipped_positions.len() as u32;
                     for v in triangle {
                         let dir = interpolate_dir(&dirs, v.bary);
-                        let (position, normal) =
-                            surface_vertex(dir, radius, tile_center, Some(&patch));
+                        let (position, normal) = surface_vertex(
+                            dir,
+                            radius,
+                            tile_center,
+                            Some(&patch),
+                            tile_vertex_spacing_m,
+                        );
                         clipped_positions.push(position);
                         clipped_normals.push(normal);
                         clipped_directions.push(dir);
@@ -206,18 +224,34 @@ struct HandoffBoundaryGrid {
 }
 
 impl HandoffBoundaryGrid {
-    fn new(handoff: GlobeHandoff, resolution: usize) -> Option<Self> {
-        let posting_spacing = square_boundary_posting_spacing(handoff.half_extent, resolution)?;
-        let inner_samples = square_boundary_sample_coordinates(handoff.half_extent, resolution);
-        let outer_extent = handoff.half_extent + posting_spacing;
+    fn new(handoff: GlobeHandoff, resolution: usize, collar_m: f64) -> Option<Self> {
+        let (posting_spacing, inner_samples) =
+            match square_boundary_posting_spacing(handoff.half_extent, resolution) {
+                Some(spacing) => (
+                    spacing,
+                    square_boundary_sample_coordinates(handoff.half_extent, resolution),
+                ),
+                None if resolution == 0 => {
+                    let spacing = (collar_m / 8.0).max(1.0);
+                    (
+                        spacing,
+                        vec![-handoff.half_extent, 0.0, handoff.half_extent],
+                    )
+                }
+                None => return None,
+            };
+        let outer_extent = handoff.half_extent + collar_m;
+        let outer_spacing = (collar_m / 8.0).max(posting_spacing);
+        let outer_segments = ((2.0 * outer_extent) / outer_spacing).ceil().max(1.0) as usize;
         let outer_handoff = GlobeHandoff {
             half_extent: outer_extent,
             ..handoff
         };
-        let mut outer_samples = Vec::with_capacity(inner_samples.len() + 2);
-        outer_samples.push(-outer_extent);
-        outer_samples.extend(inner_samples.iter().copied());
-        outer_samples.push(outer_extent);
+        let outer_samples = (0..=outer_segments)
+            .map(|segment| {
+                -outer_extent + (2.0 * outer_extent * segment as f64 / outer_segments as f64)
+            })
+            .collect();
         Some(Self {
             posting_spacing,
             inner_samples,
@@ -240,17 +274,6 @@ impl GlobeHandoff {
         ])
     }
 
-    fn globe_coordinates(self, direction: DVec3) -> Option<[f64; 2]> {
-        let denominator = direction.dot(self.dir);
-        if denominator <= 0.0 {
-            return None;
-        }
-        Some([
-            direction.dot(self.east) / denominator * self.radius_m,
-            direction.dot(self.north) / denominator * self.radius_m,
-        ])
-    }
-
     pub fn contains(self, direction: DVec3) -> bool {
         let Some([x, z]) = self.coordinates(direction) else {
             return false;
@@ -268,78 +291,71 @@ impl GlobeHandoff {
     }
 }
 
-/// Evaluate the source-driven handoff in body-local coordinates.
+/// Evaluate one source sample on the cube-sphere ray that owns the vertex.
 ///
-/// `CompositeHeightSource` already performs the one height transition from the
-/// retained DEM to the sphere source. The mesh transition below therefore only
-/// changes the tangent-plane parameterisation into the exact radial sphere
-/// parameterisation. Blending the complete position here as well would blend the
-/// elevation twice and create the artificial dark wall this handoff removes.
+/// The local DEM is authored in a tangent chart, while the planetary tiles are
+/// parameterized by radial directions. Convert the tangent-chart height graph
+/// to a radius along that same ray. This preserves the DEM boundary position and
+/// keeps every outer vertex on the cube-sphere direction; translating vertices
+/// sideways between the two charts would warp the collar into ridges.
 fn surface_vertex(
     direction: DVec3,
     radius: f64,
     tile_center: DVec3,
     patch: Option<&GlobeSurfacePatch<'_>>,
+    tile_vertex_spacing_m: f64,
 ) -> ([f32; 3], [f32; 3]) {
+    let globe_position = direction * radius;
     let Some(patch) = patch else {
         return (
-            (direction * radius - tile_center).as_vec3().into(),
+            (globe_position - tile_center).as_vec3().into(),
             direction.as_vec3().into(),
         );
     };
     let Some([x, z_body_north]) = patch.handoff.coordinates(direction) else {
         return (
-            (direction * radius - tile_center).as_vec3().into(),
+            (globe_position - tile_center).as_vec3().into(),
             direction.as_vec3().into(),
         );
     };
     let Some(collar_distance) = patch.handoff.collar_distance(direction) else {
         return (
-            (direction * radius - tile_center).as_vec3().into(),
+            (globe_position - tile_center).as_vec3().into(),
             direction.as_vec3().into(),
         );
     };
-    if collar_distance > patch.handoff.blend_m {
+    if collar_distance > patch.handoff.collar_m {
         return (
-            (direction * radius - tile_center).as_vec3().into(),
+            (globe_position - tile_center).as_vec3().into(),
             direction.as_vec3().into(),
         );
     }
-    let Some([globe_x, globe_z_body_north]) = patch.handoff.globe_coordinates(direction) else {
-        return (
-            (direction * radius - tile_center).as_vec3().into(),
-            direction.as_vec3().into(),
-        );
-    };
 
-    // Scene +Z is south in the ENU convention, while this globe handoff stores
-    // the body-fixed north coordinate. Convert once at the source boundary so
-    // the DEM's relief is not mirrored north/south.
-    let t = if patch.handoff.blend_m > 0.0 {
-        smoothstep(collar_distance / patch.handoff.blend_m)
-    } else {
-        0.0
-    };
+    // Scene +Z is south in ENU, while the tile chart stores body-fixed north.
+    // The local overlay source converts chart heights onto this exact radial ray.
     let position = surface_position(
         &patch.handoff,
         patch.source,
+        direction,
         radius,
         x,
         z_body_north,
-        globe_x,
-        globe_z_body_north,
-        t,
     );
-    let epsilon =
-        square_boundary_posting_spacing(patch.handoff.half_extent, patch.boundary_grid_resolution)
-            .unwrap_or_else(|| (radius * 1.0e-6).max(1.0));
+    let posting_spacing =
+        square_boundary_posting_spacing(patch.handoff.half_extent, patch.boundary_grid_resolution);
+    let normal_spacing = if let Some(posting_spacing) = posting_spacing {
+        posting_spacing
+    } else {
+        tile_vertex_spacing_m
+    };
     let normal = surface_normal(
         &patch.handoff,
         patch.source,
         radius,
         x,
         z_body_north,
-        epsilon,
+        normal_spacing,
+        posting_spacing.is_some(),
     );
     (
         (position - tile_center).as_vec3().into(),
@@ -347,38 +363,24 @@ fn surface_vertex(
     )
 }
 
-/// Position the composed surface while moving from the authored site's tangent
-/// radius to the body's mean radius.
-///
-/// The local terrain uses the site's datum radius, while the outer globe uses
-/// the body's mean radius. Their gnomonic coordinates differ by that radius
-/// ratio. Blend the source coordinates between those frames, then blend the
-/// horizontal position to the exact radial point on the mean sphere. The outer
-/// edge is exactly `direction * R` and the authored DEM height stays unchanged.
+/// Convert the local chart graph sample to the radial point on its owning ray.
 fn surface_position(
     handoff: &GlobeHandoff,
     source: &dyn HeightSource,
+    direction: DVec3,
     radius: f64,
     site_x: f64,
     site_z_north: f64,
-    globe_x: f64,
-    globe_z_north: f64,
-    t: f64,
 ) -> DVec3 {
-    let source_x = site_x.lerp(globe_x, t);
-    let source_z_north = site_z_north.lerp(globe_z_north, t);
-    let source_height = source.height_at(source_x, -source_z_north);
-    let q = (1.0 + (globe_x * globe_x + globe_z_north * globe_z_north) / (radius * radius)).sqrt();
-    let radial_x = globe_x / q;
-    let radial_z = globe_z_north / q;
-    let x = site_x.lerp(radial_x, t);
-    let z_body_north = site_z_north.lerp(radial_z, t);
-    handoff.dir * (radius + source_height) + handoff.east * x + handoff.north * z_body_north
+    let source_height = source.height_at(site_x, -site_z_north);
+    let radial_cosine = direction.dot(handoff.dir);
+    direction * ((radius + source_height) / radial_cosine)
 }
 
-/// Derive the normal from the actual composed position function. This keeps the
-/// normal continuous at both collar boundaries, including the DEM's analytic
-/// modifiers, instead of approximating it by blending two unrelated normals.
+/// Derive the normal from the composed position function at the tile's sampling
+/// scale. The exact DEM edge uses its one-sided posting normal; coarse globe
+/// vertices must not inherit a posting-scale normal that their geometry cannot
+/// represent.
 fn surface_normal(
     handoff: &GlobeHandoff,
     source: &dyn HeightSource,
@@ -386,50 +388,42 @@ fn surface_normal(
     x: f64,
     z_body_north: f64,
     epsilon: f64,
+    has_dem_boundary: bool,
 ) -> DVec3 {
     let position_at = |x: f64, z_body_north: f64| {
         let direction = (handoff.dir
             + handoff.east * (x / handoff.site_radius_m)
             + handoff.north * (z_body_north / handoff.site_radius_m))
             .normalize();
-        let Some(collar_distance) = handoff.collar_distance(direction) else {
-            return direction * radius;
-        };
-        let t = if collar_distance <= handoff.blend_m && handoff.blend_m > 0.0 {
-            smoothstep(collar_distance / handoff.blend_m)
-        } else {
-            1.0
-        };
-        let Some([globe_x, globe_z_north]) = handoff.globe_coordinates(direction) else {
-            return direction * radius;
-        };
-        surface_position(
-            handoff,
-            source,
-            radius,
-            x,
-            z_body_north,
-            globe_x,
-            globe_z_north,
-            t,
-        )
+        surface_position(handoff, source, direction, radius, x, z_body_north)
     };
-    let east_derivative =
-        position_at(x + epsilon, z_body_north) - position_at(x - epsilon, z_body_north);
-    let north_derivative =
-        position_at(x, z_body_north + epsilon) - position_at(x, z_body_north - epsilon);
+    let boundary_tolerance = (handoff.half_extent.abs() * 1.0e-9).max(1.0e-6);
+    let east_boundary = (has_dem_boundary
+        && (x.abs() - handoff.half_extent).abs() <= boundary_tolerance)
+        .then_some(x.signum());
+    let north_boundary = (has_dem_boundary
+        && (z_body_north.abs() - handoff.half_extent).abs() <= boundary_tolerance)
+        .then_some(z_body_north.signum());
+    let east_derivative = match east_boundary {
+        Some(sign) if sign > 0.0 => {
+            position_at(x, z_body_north) - position_at(x - epsilon, z_body_north)
+        }
+        Some(_) => position_at(x + epsilon, z_body_north) - position_at(x, z_body_north),
+        None => position_at(x + epsilon, z_body_north) - position_at(x - epsilon, z_body_north),
+    };
+    let north_derivative = match north_boundary {
+        Some(sign) if sign > 0.0 => {
+            position_at(x, z_body_north) - position_at(x, z_body_north - epsilon)
+        }
+        Some(_) => position_at(x, z_body_north + epsilon) - position_at(x, z_body_north),
+        None => position_at(x, z_body_north + epsilon) - position_at(x, z_body_north - epsilon),
+    };
     let normal = north_derivative.cross(east_derivative).normalize_or_zero();
     if normal.dot(handoff.dir) < 0.0 {
         -normal
     } else {
         normal
     }
-}
-
-#[inline]
-fn smoothstep(t: f64) -> f64 {
-    let t = t.clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
 }
 
 fn interpolate_dir(dirs: &[DVec3; 3], bary: [f64; 3]) -> DVec3 {
@@ -472,8 +466,8 @@ fn clip_triangle_to_handoff_regions(
     let outer_handoff = &boundary_grid.outer_handoff;
     let mut polygons = Vec::with_capacity(13);
 
-    // Keep the globe outside the posting collar in the existing disjoint
-    // regions, including the hemisphere behind the gnomonic tangent plane.
+    // Keep the globe outside the full transition annulus in the existing
+    // disjoint regions, including the hemisphere behind the tangent plane.
     for region in 0..5u8 {
         let clipped = clip_triangle_to_region(dirs, outer_handoff, region);
         if clipped.len() < 3 {
@@ -490,9 +484,9 @@ fn clip_triangle_to_handoff_regions(
         polygons.push((polygon, split));
     }
 
-    // Refine the one-posting source continuation as four edge strips and four
-    // corner cells. Each piece stays near posting scale, so edge relief cannot
-    // fan across a coarse globe cell.
+    // Split the transition annulus at measured DEM edge postings. Mesh LOD
+    // controls the annulus cell size; it does not inherit DEM posting density
+    // across the full collar width.
     let inner_samples = &boundary_grid.inner_samples;
     let z_intervals = sample_interval_range(inner_samples, bounds[2], bounds[3]);
     let x_intervals = sample_interval_range(inner_samples, bounds[0], bounds[1]);
@@ -550,8 +544,8 @@ fn clip_triangle_to_handoff_regions(
             outer_extent,
             &boundary_grid.outer_samples,
         );
-        let polygon =
-            subdivide_polygon_edges(&outer_split, dirs, handoff, boundary_grid.posting_spacing);
+        let collar_edge_spacing = (handoff.collar_m / 8.0).max(boundary_grid.posting_spacing);
+        let polygon = subdivide_polygon_edges(&outer_split, dirs, handoff, collar_edge_spacing);
         polygons.push((polygon, true));
     }
     polygons
@@ -839,7 +833,7 @@ fn handoff_intersects_tile(handoff: &GlobeHandoff, directions: &[DVec3]) -> bool
         min_z = min_z.min(z);
         max_z = max_z.max(z);
     }
-    let patched_extent = handoff.half_extent + handoff.blend_m;
+    let patched_extent = handoff.half_extent + handoff.collar_m;
     !(max_x < -patched_extent
         || min_x > patched_extent
         || max_z < -patched_extent
@@ -932,7 +926,7 @@ mod tests {
             radius_m: 100.0,
             site_radius_m: 100.0,
             half_extent,
-            blend_m: half_extent,
+            collar_m: half_extent,
         }
     }
 
@@ -971,7 +965,7 @@ mod tests {
             radius_m: 100.0,
             site_radius_m: 100.0,
             half_extent: 10.0,
-            blend_m: 100.0,
+            collar_m: 100.0,
         };
         let source = Flat(0.0);
         let patch = GlobeSurfacePatch {
@@ -986,8 +980,8 @@ mod tests {
         assert!(handoff_intersects_tile(&handoff, &[in_collar]));
         assert!(!handoff_intersects_tile(&handoff, &[beyond_collar]));
 
-        let (patched, _) = surface_vertex(in_collar, 100.0, DVec3::ZERO, Some(&patch));
-        let (sphere, _) = surface_vertex(in_collar, 100.0, DVec3::ZERO, None);
+        let (patched, _) = surface_vertex(in_collar, 100.0, DVec3::ZERO, Some(&patch), 1.0);
+        let (sphere, _) = surface_vertex(in_collar, 100.0, DVec3::ZERO, None, 1.0);
         let patched = DVec3::from_array(patched.map(f64::from));
         let sphere = DVec3::from_array(sphere.map(f64::from));
         assert!((patched - sphere).length() > 1.0);
@@ -1123,9 +1117,10 @@ mod tests {
             radius_m: 10_000.0,
             site_radius_m: 9_982.0,
             half_extent: 1_200.0,
-            blend_m: 1_200.0,
+            collar_m: 1_200.0,
         };
-        let boundary_grid = HandoffBoundaryGrid::new(handoff, 17).expect("measured boundary");
+        let boundary_grid =
+            HandoffBoundaryGrid::new(handoff, 17, handoff.collar_m).expect("measured boundary");
         let uncut_triangle = vec![
             ClipVertex {
                 bary: [1.0, 0.0, 0.0],
@@ -1244,7 +1239,7 @@ mod tests {
     }
 
     #[test]
-    fn posting_collar_clipping_keeps_every_triangle_point_outside_the_site_square() {
+    fn transition_collar_clipping_keeps_every_triangle_point_outside_the_site_square() {
         let handoff = GlobeHandoff {
             dir: DVec3::X,
             east: DVec3::Z,
@@ -1252,7 +1247,7 @@ mod tests {
             radius_m: 100.0,
             site_radius_m: 100.0,
             half_extent: 10.0,
-            blend_m: 50.0,
+            collar_m: 50.0,
         };
         let direction_at = |x: f64, z: f64| {
             (handoff.dir
@@ -1265,7 +1260,8 @@ mod tests {
             direction_at(100.0, -100.0),
             direction_at(0.0, 100.0),
         ];
-        let boundary_grid = HandoffBoundaryGrid::new(handoff, 9).expect("measured boundary");
+        let boundary_grid =
+            HandoffBoundaryGrid::new(handoff, 9, handoff.collar_m).expect("measured boundary");
         let bounds = triangle_bounds_in_square(
             &dirs,
             &boundary_grid.outer_handoff,
@@ -1399,7 +1395,7 @@ mod tests {
     }
 
     #[test]
-    fn posting_collar_regions_cover_the_seam_once_with_posting_scale_edges() {
+    fn transition_regions_cover_the_seam_once_with_bounded_edges() {
         let mut handoff = handoff(20.0);
         handoff.radius_m = 1_000.0;
         handoff.site_radius_m = 1_000.0;
@@ -1415,8 +1411,8 @@ mod tests {
             direction_at(0.0, 90.0),
         ];
         let grid_resolution = 5;
-        let boundary_grid =
-            HandoffBoundaryGrid::new(handoff, grid_resolution).expect("measured posting spacing");
+        let boundary_grid = HandoffBoundaryGrid::new(handoff, grid_resolution, handoff.collar_m)
+            .expect("measured posting spacing");
         let spacing = boundary_grid.posting_spacing;
         let inner_samples =
             square_boundary_sample_coordinates(handoff.half_extent, grid_resolution);
@@ -1465,7 +1461,8 @@ mod tests {
             }
         }
 
-        let outer_extent = handoff.half_extent + spacing;
+        let outer_extent = handoff.half_extent + handoff.collar_m;
+        let max_edge_spacing = (handoff.collar_m / 8.0).max(spacing);
         for (polygon, interior_fan) in polygons.iter().filter(|(_, fan)| *fan) {
             for triangle in triangulate_clipped_polygon(polygon, *interior_fan) {
                 let positions = triangle.map(|vertex| {
@@ -1483,8 +1480,8 @@ mod tests {
                     let b = positions[(edge + 1) % 3];
                     assert!(
                         (a[0] - b[0]).hypot(a[1] - b[1])
-                            <= spacing * std::f64::consts::SQRT_2 * 1.01,
-                        "collar triangle edge exceeds one posting cell: {a:?} to {b:?}"
+                            <= max_edge_spacing * std::f64::consts::SQRT_2 * 1.01,
+                        "collar triangle edge exceeds its mesh spacing: {a:?} to {b:?}"
                     );
                 }
             }
@@ -1586,7 +1583,7 @@ mod tests {
             radius_m: 100.0,
             site_radius_m: 80.0,
             half_extent: 10.0,
-            blend_m: 10.0,
+            collar_m: 10.0,
         };
         let source = Flat(-20.0);
         let patch = GlobeSurfacePatch {
@@ -1595,8 +1592,13 @@ mod tests {
             boundary_grid_resolution: 0,
         };
         let direction_at_site_x = |x: f64| DVec3::new(1.0, 0.0, x / c.site_radius_m).normalize();
-        let (inner, _) =
-            surface_vertex(direction_at_site_x(10.0), 100.0, DVec3::ZERO, Some(&patch));
+        let (inner, _) = surface_vertex(
+            direction_at_site_x(10.0),
+            100.0,
+            DVec3::ZERO,
+            Some(&patch),
+            1.0,
+        );
         let inner = DVec3::new(inner[0] as f64, inner[1] as f64, inner[2] as f64);
         let expected_inner = DVec3::X * 80.0 + DVec3::Z * 10.0;
         assert!((inner - expected_inner).length() < 1.0e-5);
@@ -1606,15 +1608,14 @@ mod tests {
         assert!((edge_coords[0] - c.half_extent).abs() < 1.0e-12);
         assert!(c.contains(cutout_edge));
 
-        // The source height is not blended a second time by the mesh
-        // parameterisation. At the collar midpoint it remains the authored
-        // -20 m source height, rather than becoming -10 m.
+        // Every point stays on its cube-sphere ray. In the flat site region this
+        // reproduces the tangent-plane point; the collar changes only its radial
+        // distance, never its horizontal parameterization.
         let midpoint_direction = direction_at_site_x(15.0);
-        let (midpoint, _) = surface_vertex(midpoint_direction, 100.0, DVec3::ZERO, Some(&patch));
+        let (midpoint, _) =
+            surface_vertex(midpoint_direction, 100.0, DVec3::ZERO, Some(&patch), 1.0);
         let midpoint = DVec3::new(midpoint[0] as f64, midpoint[1] as f64, midpoint[2] as f64);
-        let globe_x = 15.0 * c.radius_m / c.site_radius_m;
-        let q = (1.0 + globe_x.powi(2) / c.radius_m.powi(2)).sqrt();
-        let expected_midpoint = DVec3::X * 80.0 + DVec3::Z * (15.0 + (globe_x / q - 15.0) * 0.5);
+        let expected_midpoint = DVec3::X * 80.0 + DVec3::Z * 15.0;
         assert!((midpoint - expected_midpoint).length() < 1.0e-5);
 
         let sphere = Sphere(100.0);
@@ -1624,7 +1625,7 @@ mod tests {
             boundary_grid_resolution: 0,
         };
         let outer_direction = direction_at_site_x(20.0);
-        let (outer, _) = surface_vertex(outer_direction, 100.0, DVec3::ZERO, Some(&patch));
+        let (outer, _) = surface_vertex(outer_direction, 100.0, DVec3::ZERO, Some(&patch), 1.0);
         let outer = DVec3::new(outer[0] as f64, outer[1] as f64, outer[2] as f64);
         assert!((outer - outer_direction * 100.0).length() < 1.0e-5);
     }
@@ -1642,7 +1643,7 @@ mod tests {
                 radius_m: 100.0,
                 site_radius_m: 100.0,
                 half_extent: 40.0,
-                blend_m: 40.0,
+                collar_m: 40.0,
             },
             source: &Flat(0.0),
             boundary_grid_resolution: 0,
@@ -1716,7 +1717,7 @@ mod tests {
                 radius_m: radius,
                 site_radius_m: radius,
                 half_extent: 1_000.0,
-                blend_m: 75_000.0,
+                collar_m: 1_500.0,
             },
             source: &Sphere(radius),
             boundary_grid_resolution: 0,
