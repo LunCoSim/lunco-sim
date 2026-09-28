@@ -5,9 +5,12 @@
 //!
 //! An explicit `doc_id` uses the synchronized document-to-stage mapping when a
 //! Twin owns the document, or the document's composed data for an isolated
-//! Editor fork. Without `doc_id`, exactly one mounted live stage is required.
-//! Preview focus, duplicate prim paths, and detached cached stages never choose
-//! the query target.
+//! Editor fork. Twin-backed queries and unscoped live-scene queries use the
+//! mounted canonical stage whenever it exists, including its disposable
+//! `@view@` state; before the stage is mounted they use the worker-prepared
+//! composed plan. Without `doc_id`, exactly one mounted live scene root is
+//! required. Preview focus, duplicate prim paths, and detached cached stages
+//! never choose the query target.
 //!
 //! ## Why a query provider and not a rhai binding
 //!
@@ -93,13 +96,13 @@ use lunco_usd_bevy_scene::collision::{
     ObjectAabb, collision_aabb, geometry_world_matrix_d, prim_geometry_aabb,
 };
 use lunco_usd_bevy_scene::{UsdPrimPath, read_primitive_axis, usd_axis_to_quat};
-use lunco_usd_bevy_stage::read::UsdRead;
+use lunco_usd_bevy_stage::read::{UsdRead, UsdReadSource};
 use lunco_usd_bevy_stage::view::StageView;
 use lunco_usd_bevy_stage::{
     MaterialPurpose, UsdStageAsset, canonical::CanonicalStages, effective_purpose,
     is_descendant_or_self, resolve_bound_shader, stage_convention,
 };
-use lunco_usd_bevy_twin::{DocBackedTwinScenes, canonical_stage_for_document, scene_document_for};
+use lunco_usd_bevy_twin::{DocBackedTwinScenes, scene_document_for, stage_asset_for_document};
 use lunco_usd_document::document::UsdDocument;
 use openusd::schemas::physics::tokens as physics_tokens;
 use openusd::sdf::{Path as SdfPath, Value};
@@ -117,7 +120,11 @@ use std::collections::{HashMap, HashSet};
 /// Emptiness is why the array probes are guarded with `is_empty()`: an
 /// unguarded `reals()` would answer `[]` for a `token` attribute and shadow the
 /// text reader below it.
-fn attr_api_value(view: &StageView<'_>, prim: &SdfPath, name: &str) -> ApiValue {
+fn attr_api_value(
+    view: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    prim: &SdfPath,
+    name: &str,
+) -> ApiValue {
     // Scalars first — an array reader would answer `[]` for these, not `None`.
     if let Some(v) = view.real(prim, name) {
         return api_value!(v);
@@ -125,7 +132,7 @@ fn attr_api_value(view: &StageView<'_>, prim: &SdfPath, name: &str) -> ApiValue 
     if let Some(v) = view.boolean(prim, name) {
         return api_value!(v);
     }
-    if let Some(v) = view.scalar::<i32>(prim, name) {
+    if let Some(v) = view.integer(prim, name) {
         return api_value!(v);
     }
     if let Some(v) = view.text(prim, name) {
@@ -148,11 +155,19 @@ fn attr_api_value(view: &StageView<'_>, prim: &SdfPath, name: &str) -> ApiValue 
                 .collect(),
         );
     }
-    let reals = view.reals(prim, name);
+    let reals = match view.attr_value(prim, name) {
+        Some(Value::DoubleVec(values)) => values,
+        Some(Value::FloatVec(values)) => values.into_iter().map(f64::from).collect(),
+        _ => Vec::new(),
+    };
     if !reals.is_empty() {
         return api_value!(reals);
     }
-    let texts = view.texts(prim, name);
+    let texts = match view.attr_value(prim, name) {
+        Some(Value::TokenVec(values)) => values.iter().map(ToString::to_string).collect(),
+        Some(Value::StringVec(values)) => values,
+        _ => Vec::new(),
+    };
     if !texts.is_empty() {
         return api_value!(texts);
     }
@@ -760,6 +775,23 @@ fn query_document_id(
         .and_then(|scenes| scenes.synced_generation(doc))
     {
         if synced_generation != generation {
+            let stage_id = twin_stage_id_for_document(world, doc);
+            let stage_mounted =
+                stage_id.is_some_and(|stage| is_mounted_document_stage(world, stage));
+            let applied_stage_generation = stage_id.and_then(|stage| {
+                stage_mounted.then(|| {
+                    world
+                        .get_resource::<DocBackedTwinScenes>()
+                        .and_then(|scenes| scenes.applied_stage_generation(doc, stage))
+                })?
+            });
+            if can_read_applied_stage_generation(
+                generation,
+                applied_stage_generation,
+                stage_mounted,
+            ) {
+                return Ok((Some(doc), Some(generation)));
+            }
             return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 format!("QueryUsdPrim: document {doc} projection is not current"),
@@ -767,6 +799,47 @@ fn query_document_id(
         }
     }
     Ok((Some(doc), Some(generation)))
+}
+
+fn can_read_applied_stage_generation(
+    document_generation: u64,
+    applied_stage_generation: Option<u64>,
+    stage_mounted: bool,
+) -> bool {
+    stage_mounted && applied_stage_generation == Some(document_generation)
+}
+
+fn is_mounted_document_stage(world: &World, stage: bevy::asset::AssetId<UsdStageAsset>) -> bool {
+    let canonical_stage_exists = world
+        .get_non_send::<CanonicalStages>()
+        .is_some_and(|stages| stages.get(stage).is_some());
+    if !canonical_stage_exists {
+        return false;
+    }
+    let Some(mut roots) = QueryState::<(Entity, &UsdPrimPath), With<UsdSceneRoot>>::try_new(world)
+    else {
+        return false;
+    };
+    roots
+        .iter(world)
+        .any(|(_, path)| path.stage_handle.id() == stage)
+}
+
+#[cfg(test)]
+mod query_generation_tests {
+    use super::can_read_applied_stage_generation;
+
+    #[test]
+    fn explicit_queries_accept_a_stage_applied_ahead_of_ecs_cursor() {
+        assert!(can_read_applied_stage_generation(8, Some(8), true));
+    }
+
+    #[test]
+    fn explicit_queries_reject_a_stage_that_has_not_applied_the_document_generation() {
+        assert!(!can_read_applied_stage_generation(8, Some(7), true));
+        assert!(!can_read_applied_stage_generation(8, Some(8), false));
+        assert!(!can_read_applied_stage_generation(8, None, true));
+    }
 }
 
 fn spawned_entities_for_paths(
@@ -976,18 +1049,25 @@ fn execute_query_paths(
             "QueryUsdPrim: live scene ownership is unavailable",
         ));
     };
-    let mut live_stages = live_roots
-        .iter(world)
-        .filter(|(entity, _)| !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity))
-        .map(|(_, path)| path.stage_handle.id())
-        .collect::<HashSet<_>>();
+    let mut document_stages = HashSet::new();
+    let mut live_stages = HashSet::new();
+    for (entity, path) in live_roots.iter(world) {
+        let stage = path.stage_handle.id();
+        document_stages.insert(stage);
+        if !lunco_usd_bevy_scene::is_preview_only_entity(world, entity) {
+            live_stages.insert(stage);
+        }
+    }
     if doc.is_none() && live_stages.len() != 1 {
         return Err(ApiQueryError::new(
             ApiErrorCode::InternalError,
             "QueryUsdPrim: exactly one mounted live stage is required; pass doc_id for an Editor document",
         ));
     }
-    let live_stage = live_stages.drain().next();
+    let live_stage = doc
+        .is_none()
+        .then(|| live_stages.iter().next().copied())
+        .flatten();
     let live_document = if doc.is_none() {
         live_stage.and_then(|stage| {
             let backed = world.get_resource::<DocBackedTwinScenes>()?;
@@ -998,19 +1078,56 @@ fn execute_query_paths(
         None
     };
     let source_document = doc.or(live_document);
+    let document_stage = doc.and_then(|document| twin_stage_id_for_document(world, document));
+    let query_stage = document_stage.or_else(|| doc.is_none().then_some(live_stage).flatten());
+    let query_stage_is_mounted = query_stage.is_some_and(|stage| {
+        let has_root = if doc.is_some() {
+            document_stages.contains(&stage)
+        } else {
+            live_stages.contains(&stage)
+        };
+        has_root
+            && world
+                .get_non_send::<CanonicalStages>()
+                .is_some_and(|stages| stages.get(stage).is_some())
+    });
+    let stage_asset = query_stage.and_then(|stage| {
+        world
+            .get_resource::<Assets<UsdStageAsset>>()
+            .and_then(|assets| assets.get(stage))
+    });
+    // Read mounted stages so queries see current activity and transient view
+    // edits at every generation. Before the canonical owner mounts a stage,
+    // its worker-prepared plan keeps initial queries available without opening
+    // OpenUSD on the query path.
+    let selected_reader = stage_asset.map(|asset| {
+        if query_stage_is_mounted {
+            query_stage
+                .and_then(|stage| {
+                    world
+                        .get_non_send::<CanonicalStages>()
+                        .map(|stages| stages.reader_for_composed_query(stage, asset))
+                })
+                .unwrap_or((UsdReadSource::Prepared(asset.projection_plan.as_ref()), 0))
+        } else {
+            (UsdReadSource::Prepared(asset.projection_plan.as_ref()), 0)
+        }
+    });
     let source_document_generation = source_document.and_then(|document| {
         world
             .get_resource::<DocumentRegistry<UsdDocument>>()
             .and_then(|registry| registry.host(document))
             .map(|host| host.document().generation())
     });
-    let stage_generation = world
-        .get_non_send::<CanonicalStages>()
-        .and_then(|stages| match doc {
-            Some(document) => canonical_stage_for_document(world, document),
-            None => live_stage.and_then(|asset| stages.get(asset)),
-        })
-        .map(|stage| stage.generation());
+    let stage_generation = selected_reader
+        .as_ref()
+        .map(|(_, generation)| *generation)
+        .or_else(|| {
+            world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|stages| live_stage.and_then(|asset| stages.get(asset)))
+                .map(|stage| stage.generation())
+        });
 
     let requested_paths = paths
         .iter()
@@ -1030,12 +1147,15 @@ fn execute_query_paths(
         )
     };
 
-    let mut read_paths = |view: &StageView<'_>| -> Result<Vec<ApiValue>, ApiQueryError> {
+    let mut read_paths = |view: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+                          live_view: Option<&StageView<'_>>|
+     -> Result<Vec<ApiValue>, ApiQueryError> {
         paths
             .iter()
             .map(|(path, prim)| {
-                let read = read_prim_from_view(
+                let read = read_prim_from_reader(
                     view,
+                    live_view,
                     prim,
                     path,
                     &options.requested,
@@ -1076,17 +1196,22 @@ fn execute_query_paths(
             .collect()
     };
 
+    if let Some((reader, _)) = selected_reader.as_ref() {
+        return match reader {
+            UsdReadSource::Prepared(_) => read_paths(reader, None),
+            UsdReadSource::Live(view) => read_paths(reader, Some(view)),
+        };
+    }
+
     // Read everything under one short canonical-stage borrow. An Editor fork
     // is not a Twin and therefore has no canonical mapping; its composed
     // document is opened once as the explicit fallback stage owner.
     if let Some(stage) = world
         .get_non_send::<CanonicalStages>()
-        .and_then(|stages| match doc {
-            Some(doc) => canonical_stage_for_document(world, doc),
-            None => live_stage.and_then(|id| stages.get(id)),
-        })
+        .and_then(|stages| live_stage.and_then(|id| stages.get(id)))
     {
-        return read_paths(&stage.view());
+        let view = stage.view();
+        return read_paths(&view, Some(&view));
     }
 
     let Some(doc) = doc else {
@@ -1111,11 +1236,24 @@ fn execute_query_paths(
             format!("QueryUsdPrim: document stage could not be opened: {error}"),
         )
     })?;
-    read_paths(&StageView::new(&stage))
+    let view = StageView::new(&stage);
+    read_paths(&view, Some(&view))
 }
 
-fn read_prim_from_view(
-    view: &StageView<'_>,
+fn twin_stage_id_for_document(
+    world: &World,
+    document: DocumentId,
+) -> Option<bevy::asset::AssetId<UsdStageAsset>> {
+    stage_asset_for_document(
+        world.get_resource::<DocBackedTwinScenes>()?,
+        world.get_resource::<AssetServer>()?,
+        document,
+    )
+}
+
+fn read_prim_from_reader(
+    view: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    live_view: Option<&StageView<'_>>,
     prim: &SdfPath,
     path: &str,
     requested: &Option<Vec<String>>,
@@ -1134,6 +1272,18 @@ fn read_prim_from_view(
         return Ok(None);
     }
 
+    let needs_native_view = include_collision_bounds
+        || include_collision_geometry
+        || include_geometry_bounds
+        || include_topology;
+    let native_view = if needs_native_view {
+        Some(live_view.ok_or_else(|| {
+            "QueryUsdPrim: derived geometry queries require a live canonical stage".to_owned()
+        })?)
+    } else {
+        live_view
+    };
+
     let authored_position = if doc.is_some() {
         Some(
             lunco_usd_bevy_stage::world_transform(view, prim)
@@ -1145,7 +1295,7 @@ fn read_prim_from_view(
     };
 
     let geometry_bounds = if include_geometry_bounds {
-        match prim_geometry_aabb(view, path) {
+        match prim_geometry_aabb(native_view.expect("native view required"), path) {
             Ok(Some(aabb)) => Some(aabb_api_value(aabb)),
             Ok(None) => Some(ApiValue::Unit),
             Err(error) => {
@@ -1159,7 +1309,7 @@ fn read_prim_from_view(
     };
 
     let collision_bounds = if include_collision_bounds {
-        match collision_aabb(view, path) {
+        match collision_aabb(native_view.expect("native view required"), path) {
             Ok(Some(aabb)) => Some(api_value!({
                 "min": api_value!([aabb.min.x, aabb.min.y, aabb.min.z]),
                 "max": api_value!([aabb.max.x, aabb.max.y, aabb.max.z]),
@@ -1192,12 +1342,17 @@ fn read_prim_from_view(
         if !view.has_api_schema(prim, physics_tokens::API_COLLISION) {
             Some(ApiValue::Unit)
         } else {
-            let (transform, scale) = collider_transform_in_stage(view, prim).map_err(|error| {
-                format!("QueryUsdPrim: invalid collision geometry at `{path}`: {error}")
-            })?;
+            let native_view = native_view.expect("native view required");
+            let (transform, scale) =
+                collider_transform_in_stage(native_view, prim).map_err(|error| {
+                    format!("QueryUsdPrim: invalid collision geometry at `{path}`: {error}")
+                })?;
             match authored_collider_geometry_from_usd(view, prim, scale) {
                 Ok(Some(geometry)) => Some(collider_geometry_api_value(
-                    view, prim, &geometry, transform,
+                    native_view,
+                    prim,
+                    &geometry,
+                    transform,
                 )?),
                 Ok(None) => Some(ApiValue::Unit),
                 Err(error) => {
@@ -1258,7 +1413,8 @@ fn read_prim_from_view(
     } else {
         Vec::new()
     };
-    let topology = include_topology.then(|| topology_for_stage(view, prim));
+    let topology = include_topology
+        .then(|| topology_for_stage(native_view.expect("native view required"), prim));
 
     Ok(Some((
         authored_position,

@@ -348,6 +348,14 @@ has a distinct lifetime and write path:
   `base ⊕ runtime ⊕ view` strength order. `Rc`-backed, therefore `!Send`:
   a main-thread `NonSend` resource (`CanonicalStages`). It is the projection engine —
   authoring onto it fires openusd's change sink, which reconciles the ECS.
+  `QueryUsdPrim` reads this stage whenever it is mounted, including generation
+  zero, so composed queries see current activity and transient `@view@` edits;
+  it uses the worker-prepared plan only before the canonical stage is mounted.
+  A document-scoped query may read ahead of the durable ECS sync cursor only
+  when that exact document generation is already applied to the same mounted
+  stage. Pending document operations remain a visible projection-not-current
+  error. ECS consumers continue to use the durable projection cursor.
+  Projection retains its separate generation-zero prepared-plan contract.
 
 The `Send`/`!Send` boundary falls on this same seam by nature, so the two stay even if
 openusd ever makes `Stage` `Send`. Save / journal / net-sync touch the cheap serializable

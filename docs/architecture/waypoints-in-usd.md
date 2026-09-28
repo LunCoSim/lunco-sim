@@ -131,8 +131,13 @@ The document layer is authoritative during the short interval before the
 canonical projection contains a newly authored point. Move and delete resolve
 that local target immediately, while a point-name or composed-stage read that
 is not synchronized reports a retryable authoring error rather than guessing
-or silently reusing an existing path. Once the live entity exists, the same
-canonical path is used for selection and menu dispatch.
+or silently reusing an existing path. Once mounted, `QueryUsdPrim` reads the
+current canonical stage even at generation zero, so it observes inactive
+referenced points and live `@view@` previews instead of the loader's initial
+snapshot. A document-scoped query can observe an exact generation after it has
+reached the mounted stage, even while the ECS projection cursor is catching up;
+operations still pending at the stage boundary remain retryable. Once the live
+entity exists, the same canonical path is used for selection and menu dispatch.
 
 ## Progression
 
@@ -210,18 +215,24 @@ screen distance is never used to guess which waypoint was clicked. The adapter
 translates authored hit behavior into Bevy's backend contract; it does not
 choose a route action or tool owner.
 
-Pass-through hits can still emit a Bevy pointer event. The shared dispatcher
-stops that hit's ancestor propagation before click de-duplication, leaving the
-lower blocking or context target eligible to receive the same gesture. The
-move preview and its Dome child author pass-through behavior for both buttons
-so their visual overlap cannot consume waypoint selection or context clicks.
+Pass-through hits can still emit their own Bevy pointer event, while the
+`Pickable` hit map also includes lower hits. The shared dispatcher stops the
+pass-through event's ancestor propagation and returns before click and hover
+de-duplication, so the independently emitted lower blocking or context event
+can own the gesture or terrain position. The move preview and its Dome child author
+pass-through behavior for both buttons, so their visual overlap cannot consume
+waypoint selection, context clicks, or move-preview terrain samples.
 
 The `Move route point` context-menu action selects the point and arms placement
 for the next ordinary primary scene hit. The selected point path remains its
 identity; the editor writes a `SetTranslate` opinion to `@runtime@` and leaves
 the route program and live subject intact. Pointer movement is coalesced per
-pointer and picking frame, retaining only its newest position before the typed
-UI hook enters the bounded script queue. Rhai creates a translucent `Xform` and
+pointer and picking frame, retaining only its newest position from scene Move
+or Enter hits before the typed UI hook enters the bounded script queue. Enter
+supplies the first scene sample when a cursor leaves a menu and the chrome hit
+from the prior picking frame is being retired. Scene pointer consumers use the
+picked hit to distinguish scene input from chrome; they do not gate that hit
+with the later-published `EguiFocus` snapshot. Rhai creates a translucent `Xform` and
 Dome in the disposable `@view@` layer, with a view-layer target child that
 identifies the armed point. The Dome copies the selected marker's authored
 radius and local offset. Hover sends a typed `SetUsdViewPreviewTransform`
@@ -236,8 +247,12 @@ preview work does not batch-sample terrain or resample curve geometry.
 
 The point context menu adds `Add point before` and `Add point after` when the
 route has at least two active points. Each inserts a new ordinary marker and
-authors USD `primOrder` on the route scope in the same runtime operation group;
-existing point paths and route-progress identities do not change. Interior
+authors USD `primOrder` from the same settled list of active composed route
+points in the runtime operation group, excluding inactive referenced points;
+new point names also reserve authored-but-inactive children, so insertion
+cannot reuse a path whose inactive opinion would keep the new point out of the
+composed route. Existing point paths and route-progress identities do not
+change. Interior
 insertions use the adjacent-point midpoint. Endpoint insertions extend the
 neighboring segment by its authored length. A single-point route has no
 direction to infer, so the menu does not offer these actions yet. Right-clicking

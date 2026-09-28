@@ -1193,6 +1193,26 @@ impl CanonicalStages {
         )
     }
 
+    /// Select the current read surface for an explicit composed-stage query.
+    ///
+    /// Queries expose mounted `@view@` state as well as authored edits, so any
+    /// open canonical stage is current even at generation zero. Before a live
+    /// stage is mounted, the worker-prepared plan remains the only read source.
+    /// This does not change the projection reader's generation-zero contract.
+    pub fn reader_for_composed_query<'a>(
+        &'a self,
+        asset: bevy::asset::AssetId<UsdStageAsset>,
+        stage_asset: &'a UsdStageAsset,
+    ) -> (UsdReadSource<'a>, u64) {
+        if let Some(stage) = self.get(asset) {
+            return (UsdReadSource::Live(stage.view()), stage.generation());
+        }
+        (
+            UsdReadSource::Prepared(stage_asset.projection_plan.as_ref()),
+            0,
+        )
+    }
+
     /// Select the composed reader for one projected entity.
     ///
     /// Referenced runtime instances carry an immutable plan remapped to their

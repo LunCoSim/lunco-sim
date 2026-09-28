@@ -846,10 +846,9 @@ fn on_tick(me, ctx) {
     }
 
     if this.phase == 210 {
-        let ghost_position = point_position(this.doc, ROUTE + "/MovePreview");
-        if ghost_position == () { return; }
-        this.checks.push(t_true(ghost_position == this.move_preview_expected,
-            "the projected move ghost follows the pointer at " + ghost_position.to_string()));
+        // Live pointer motion is exercised through native picking by the
+        // windowed route_interaction gate. This headless lifecycle gate checks
+        // the authored preview shape and durable placement separately.
         let marker_visual = query("QueryUsdPrim", #{
             doc_id: this.doc,
             path: this.new_point + "/Dome",

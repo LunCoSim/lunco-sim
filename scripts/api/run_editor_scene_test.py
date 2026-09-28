@@ -68,7 +68,7 @@ def wait_for_scene(session: ProductionSession, scene: str, timeout: float) -> No
                     response = session.post({
                         "type": "ExecuteCommand",
                         "command": "QueryUsdPrim",
-                        "params": {"path": path},
+                        "params": {"doc_id": fixture_doc_id, "path": path},
                     })
                     if response.get("error"):
                         last_error = str(response["error"])

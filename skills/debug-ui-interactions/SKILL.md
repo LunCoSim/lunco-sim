@@ -81,7 +81,10 @@ pick markers and marks only visible authored press controls and draggable
 surface content as `Pickable`; keep that explicit target policy when adding UI
 nodes. Native pointer routing and tool dispatch run in the application input
 schedule before fixed simulation, so route context handling must not wait for a
-physics tick.
+physics tick. Scene-pointer observers use the picked hit and viewport-aware
+chrome capture as the ownership decision. `EguiFocus` is published after
+picking and can still describe the old cursor location during the first event
+that leaves a menu; do not use that snapshot to reject a valid scene hit.
 
 `RunRhaiTool` and `RunRhaiToolHook` callbacks use a bounded UI queue drained
 after picking in `PreUpdate`, before fixed simulation. Keep authored pointer
@@ -90,9 +93,14 @@ REPL queue or a fixed-tick scenario. Heavy synchronous work in an input hook
 would still occupy the application thread, so keep the hook bounded and move
 preparation or I/O to its owning asynchronous boundary.
 
-Scene `Pointer<Move>` observers used for an armed route-point preview must
-coalesce to the newest position per pointer and picking frame before adding one
-typed hook to the bounded UI queue. Keep the hook presentation-only: update the
+Scene `Pointer<Move>` and `Pointer<Enter>` observers used for an armed
+route-point preview must coalesce to the newest position per pointer and
+picking frame before adding one typed hook to the bounded UI queue. Enter
+provides the first sample after a scene hit replaces a popup's previous-frame
+capture hit. Bevy can emit move events for both the pass-through preview and
+lower hits. Before deduplication, skip the preview event and stop its ancestor
+propagation; otherwise the preview can consume the cursor sample intended for
+terrain beneath it. Keep the hook presentation-only: update the
 live transform of the projected `@view@` preview through the generic typed
 preview-transform command. It validates document and view-layer ownership and
 uses the canonical active-frame/parent-local conversion; hover must not edit the
