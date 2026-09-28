@@ -197,9 +197,8 @@ struct PendingJointTopologyChanges(
 #[derive(Resource)]
 struct PendingUsdSimPrimWork(PendingEntityWork, Vec<lunco_core::RuntimeDiagnostic>);
 
-// Deferred Commands are applied at the end of this Update system. Keep the
-// authored-path ordering while limiting the command batch that can occupy one
-// UI frame.
+// Deferred Commands are applied at the end of this Update system. Admit the
+// lowest authored paths while limiting selection and command work per UI frame.
 const MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE: usize = 32;
 
 impl Default for PendingUsdSimPrimWork {
@@ -797,15 +796,27 @@ fn process_usd_sim_prims(
             .into_iter()
             .filter_map(|entity| query.get(entity).ok())
             .collect();
-        unprocessed.sort_by(|left, right| left.1.path.cmp(&right.1.path));
-        let remainder = if unprocessed.len() > MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE {
-            unprocessed.split_off(MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE)
-        } else {
-            Vec::new()
-        };
-        pending
-            .0
-            .extend(remainder.into_iter().map(|(entity, ..)| entity));
+        if unprocessed.len() > MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE {
+            unprocessed.select_nth_unstable_by(
+                MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE,
+                |left, right| {
+                    left.1
+                        .path
+                        .cmp(&right.1.path)
+                        .then_with(|| left.0.cmp(&right.0))
+                },
+            );
+            let remainder = unprocessed.split_off(MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE);
+            pending
+                .0
+                .extend(remainder.into_iter().map(|(entity, ..)| entity));
+        }
+        unprocessed.sort_by(|left, right| {
+            left.1
+                .path
+                .cmp(&right.1.path)
+                .then_with(|| left.0.cmp(&right.0))
+        });
         unprocessed
     };
 

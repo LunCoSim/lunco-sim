@@ -159,6 +159,9 @@ invalidation, removal, and scene teardown. The same applies to deferred adapter
 steps such as wrapping a Modelica model into its shared port surface. Keep a
 single bootstrap discovery for entities predating plugin installation, and
 retry only work whose authoritative stage/readiness input is still pending.
+When a projector caps per-update work, select the bounded prefix in stable owner
+order and retain the remainder; avoid sorting the entire pending batch on the UI
+thread before applying that cap.
 For render-free USD discovery, wake candidates from changed prim identity,
 canonical stage generation, or stage-asset events, and keep only transient
 runtime prerequisites in the per-frame retry set. Dormant `BasisCurves` without

@@ -96,7 +96,12 @@ vehicle wheel attachments and gear drives, plus their authored lint facts;
 `lunco-usd-sim-domain` owns composed component-network and Modelica projection;
 `lunco-usd-sim-domain-api` owns optional generated-source API queries;
 `lunco-usd-sim` owns vehicle projection and registers its in-place wheel edit
-owner with the generic USD runtime; `lunco-usd-sim-shader` owns shader intent
+owner with the generic USD runtime. Prim admission is capped at 32 candidates
+per Update, ordered by authored path with entity identity as the tie-breaker. It
+selects that prefix without sorting the full pending population and retains the
+remainder for the next pass. This bounds discovery spikes while preserving
+deterministic projection order.
+`lunco-usd-sim-shader` owns shader intent
 projection and its port backend; `lunco-usd-sim-cosim` owns participant
 discovery, wiring, readiness, and Modelica/script exchange; and
 `lunco-usd-sim-cosim-api` owns optional API query serialization. The application
