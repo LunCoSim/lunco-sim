@@ -77,9 +77,12 @@ world, or emit events. Invalid or unresolved ids fail that source revision
 with a diagnostic. Unbarriered port access and Modelica event delivery
 fail visibly. Connected Modelica event edges are sampled only while the
 simulation clock advances, after `SimTickSet` and before Rhai; this gives an
-initially active output its producer tick after scenario readiness. Physics
-operations that can accumulate into shared bodies use
-`PhysicsOrderKey` from the instance root and authored prim path. Joint solving,
+initially active output its producer tick after scenario readiness. USD
+simulation projection uses stable logical stage source and authored prim path
+for bounded admission and topology-preparation order; missing or ambiguous
+identities fault and remain queued. Physics operations that can accumulate into
+shared bodies use `PhysicsOrderKey` from the stable logical stage source,
+instance root, and authored prim path. Joint solving,
 motor warm-start, custom prismatic correction, raycast and jointed tire forces,
 and raycast mass-property folds consume stable key order. The production
 `multi_rover_stress_20` Rhai gate compares physics and Modelica state across

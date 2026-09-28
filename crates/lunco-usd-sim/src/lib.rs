@@ -194,6 +194,12 @@ struct JointTopologyPreparationParams<'w> {
     admission: ResMut<'w, lunco_core_runtime::AsyncWorkAdmission>,
 }
 
+#[derive(SystemParam)]
+struct UsdStageIdentityParams<'w> {
+    stages: Res<'w, Assets<UsdStageAsset>>,
+    asset_server: Res<'w, AssetServer>,
+}
+
 struct FailedJointTopologyPreparation {
     generation: u64,
     error: String,
@@ -287,6 +293,104 @@ struct PendingUsdSimPrimWork(PendingEntityWork, Vec<lunco_core::RuntimeDiagnosti
 // Deferred Commands are applied at the end of this Update system. Admit the
 // lowest authored paths while limiting selection and command work per UI frame.
 const MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE: usize = 32;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StableUsdSimWork<T> {
+    stage_source: String,
+    prim_path: String,
+    item: T,
+}
+
+fn compare_stable_usd_sim_work<T>(
+    left: &StableUsdSimWork<T>,
+    right: &StableUsdSimWork<T>,
+) -> std::cmp::Ordering {
+    left.stage_source
+        .cmp(&right.stage_source)
+        .then_with(|| left.prim_path.cmp(&right.prim_path))
+}
+
+fn duplicate_nonpreview_usd_sim_work_keys<T>(
+    candidates: &[StableUsdSimWork<T>],
+    mut entity_of: impl FnMut(&T) -> Entity,
+    mut is_preview: impl FnMut(Entity) -> bool,
+    preview_cache: &mut HashMap<Entity, bool>,
+) -> HashSet<(String, String)> {
+    let mut entities_by_key = HashMap::<(String, String), Vec<Entity>>::new();
+    for candidate in candidates {
+        entities_by_key
+            .entry((candidate.stage_source.clone(), candidate.prim_path.clone()))
+            .or_default()
+            .push(entity_of(&candidate.item));
+    }
+    let mut duplicates = HashSet::new();
+    for (key, entities) in entities_by_key {
+        if entities.len() < 2 {
+            continue;
+        }
+        let mut nonpreview_count = 0;
+        for entity in entities {
+            let preview = is_preview(entity);
+            preview_cache.insert(entity, preview);
+            if !preview {
+                nonpreview_count += 1;
+            }
+        }
+        if nonpreview_count > 1 {
+            duplicates.insert(key);
+        }
+    }
+    duplicates
+}
+
+fn stable_stage_source(
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    asset: &UsdStageAsset,
+    asset_server: &AssetServer,
+) -> Result<String, String> {
+    let source = match asset.recipe.as_deref() {
+        Some(recipe) if !recipe.root_id.is_empty() => recipe.root_id.clone(),
+        Some(_) => return Err("USD stage recipe has an empty root identifier".to_owned()),
+        None => asset_server
+            .get_path(stage_id)
+            .map(|path| path.to_string())
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| {
+                "USD stage has neither a recipe root identifier nor an AssetServer source path"
+                    .to_owned()
+            })?,
+    };
+    Ok(source)
+}
+
+fn append_order_segment(key: &mut String, segment: &str) {
+    key.push_str(&segment.len().to_string());
+    key.push(':');
+    key.push_str(segment);
+}
+
+fn stable_usd_physics_order_key(
+    stage_source: &str,
+    instance_root_path: Option<&str>,
+    prim_path: &str,
+) -> Result<lunco_physics::PhysicsOrderKey, String> {
+    if stage_source.is_empty() {
+        return Err("USD stage has no stable source identity".to_owned());
+    }
+    if prim_path.is_empty() {
+        return Err("USD prim has no authored path identity".to_owned());
+    }
+    let mut key = String::new();
+    append_order_segment(&mut key, stage_source);
+    if let Some(root_path) = instance_root_path {
+        if root_path.is_empty() {
+            return Err("USD instance root has no authored prim path".to_owned());
+        }
+        append_order_segment(&mut key, root_path);
+    }
+    append_order_segment(&mut key, prim_path);
+    Ok(lunco_physics::PhysicsOrderKey(key))
+}
 
 /// Find the lowest-ranked simulation rows without charging preview rows to the
 /// bounded simulation-work prefix.
@@ -1086,7 +1190,7 @@ fn process_usd_sim_prims(
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     primary_roots: Query<&UsdPrimPath, With<UsdSceneRoot>>,
     mount: Option<Res<lunco_core::SceneMountState>>,
-    stages: Res<Assets<UsdStageAsset>>,
+    stage_identity: UsdStageIdentityParams,
     // Initial reads use the worker-produced plan; later authored generations
     // use the live canonical stage selected by the shared reader boundary.
     canonical: NonSend<CanonicalStages>,
@@ -1100,6 +1204,10 @@ fn process_usd_sim_prims(
         tasks: mut topology_tasks,
         admission: mut async_work,
     } = topology_work;
+    let UsdStageIdentityParams {
+        stages,
+        asset_server,
+    } = stage_identity;
     let started = web_time::Instant::now();
     let mut processed = 0usize;
     let mut authored_diagnostics = Vec::new();
@@ -1113,27 +1221,117 @@ fn process_usd_sim_prims(
         .collect();
     let unprocessed = {
         let _span = bevy::log::info_span!("usd_sim_pending_collect_sort").entered();
-        let mut entities = pending.0.take_queued();
+        let mut entities = pending.0.take_queued().into_iter().collect::<Vec<_>>();
         if pending.0.take_initial_discovery() {
             // One bootstrap query covers prims that existed before this projector
             // was installed. Normal arrivals are supplied by lifecycle observers.
             entities.extend(query.iter().map(|(entity, ..)| entity));
         }
-        let candidates = entities
-            .into_iter()
-            .filter_map(|entity| query.get(entity).ok())
-            .collect();
+        entities.sort_unstable();
+        entities.dedup();
+        let mut candidates = Vec::new();
+        let mut unidentified_prims = Vec::new();
+        for entity in entities {
+            let Ok(item) = query.get(entity) else {
+                continue;
+            };
+            let stage_id = item.1.stage_handle.id();
+            let Some(stage_asset) = stages.get(stage_id) else {
+                pending.0.queue(entity);
+                continue;
+            };
+            match stable_stage_source(stage_id, stage_asset, &asset_server) {
+                Ok(stage_source) => candidates.push(StableUsdSimWork {
+                    stage_source,
+                    prim_path: item.1.path.clone(),
+                    item,
+                }),
+                Err(error) => {
+                    pending.0.queue(entity);
+                    unidentified_prims.push((item.1.path.clone(), error));
+                }
+            }
+        }
+        unidentified_prims.sort();
+        unidentified_prims.dedup();
+        for (prim_path, error) in unidentified_prims {
+            let message = format!(
+                "USD simulation cannot order prim `{prim_path}` because its stage has no stable source identity: {error}"
+            );
+            runtime_faults.raise(
+                "usd-sim-stage-identity",
+                None,
+                prim_path.clone(),
+                message.clone(),
+            );
+            push_usd_sim_diagnostic(
+                &mut authored_diagnostics,
+                &prim_path,
+                "stage-identity",
+                message,
+            );
+        }
+        let mut preview_cache = HashMap::new();
+        let duplicate_keys = duplicate_nonpreview_usd_sim_work_keys(
+            &candidates,
+            |candidate| candidate.0,
+            |entity| is_preview_only(entity, &q_child_of, &q_preview_only),
+            &mut preview_cache,
+        );
+        if !duplicate_keys.is_empty() {
+            for candidate in &candidates {
+                let key = (candidate.stage_source.clone(), candidate.prim_path.clone());
+                if duplicate_keys.contains(&key)
+                    && !preview_cache
+                        .get(&candidate.item.0)
+                        .copied()
+                        .unwrap_or(false)
+                {
+                    pending.0.queue(candidate.item.0);
+                }
+            }
+            let mut ordered_duplicate_keys = duplicate_keys.iter().cloned().collect::<Vec<_>>();
+            ordered_duplicate_keys.sort();
+            for (stage_source, prim_path) in &ordered_duplicate_keys {
+                let message = format!(
+                    "USD stage `{stage_source}` projects multiple entities for `{prim_path}`; simulation admission requires one stable stage/path identity"
+                );
+                let mut fault_identity = String::new();
+                append_order_segment(&mut fault_identity, stage_source);
+                append_order_segment(&mut fault_identity, prim_path);
+                runtime_faults.raise(
+                    "usd-sim-duplicate-order-identity",
+                    None,
+                    fault_identity,
+                    message.clone(),
+                );
+                push_usd_sim_diagnostic(
+                    &mut authored_diagnostics,
+                    prim_path,
+                    "duplicate-stage-path",
+                    message,
+                );
+            }
+            candidates.retain(|candidate| {
+                let key = (candidate.stage_source.clone(), candidate.prim_path.clone());
+                !duplicate_keys.contains(&key)
+                    || preview_cache
+                        .get(&candidate.item.0)
+                        .copied()
+                        .unwrap_or(false)
+            });
+        }
         let (unprocessed, deferred, previews) = select_bounded_sim_prim_work(
             candidates,
             MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE,
-            |candidate| candidate.0,
-            |left, right| {
-                left.1
-                    .path
-                    .cmp(&right.1.path)
-                    .then_with(|| left.0.cmp(&right.0))
+            |candidate| candidate.item.0,
+            compare_stable_usd_sim_work,
+            |entity| {
+                preview_cache
+                    .get(&entity)
+                    .copied()
+                    .unwrap_or_else(|| is_preview_only(entity, &q_child_of, &q_preview_only))
             },
-            |entity| is_preview_only(entity, &q_child_of, &q_preview_only),
         );
         pending.0.extend(deferred);
         // Preview prims have no simulation owner and need no stage topology.
@@ -1156,14 +1354,80 @@ fn process_usd_sim_prims(
         }
         let mut seen_stages = topology_index.refresh_pending.clone();
         let mut stage_ids: Vec<_> = seen_stages.iter().copied().collect();
-        for (_, prim_path, ..) in &unprocessed {
+        for candidate in &unprocessed {
+            let prim_path = &candidate.item.1;
             let id = prim_path.stage_handle.id();
             if seen_stages.insert(id) {
                 stage_ids.push(id);
             }
         }
-        stage_ids.sort_by_key(|stage| (!primary_stages.contains(stage), format!("{stage:?}")));
-        for (stage_order, id) in stage_ids.iter().copied().enumerate() {
+        let mut ordered_stages = Vec::new();
+        let mut unidentified_stages = Vec::new();
+        for id in stage_ids {
+            let Some(stage_asset) = stages.get(id) else {
+                continue;
+            };
+            match stable_stage_source(id, stage_asset, &asset_server) {
+                Ok(source) => ordered_stages.push((!primary_stages.contains(&id), source, id)),
+                Err(error) => unidentified_stages.push(error),
+            }
+        }
+        unidentified_stages.sort();
+        unidentified_stages.dedup();
+        for error in unidentified_stages {
+            let message = format!(
+                "USD simulation cannot order one or more stages because they have no stable source identity: {error}"
+            );
+            runtime_faults.raise(
+                "usd-sim-stage-identity",
+                None,
+                error.clone(),
+                message.clone(),
+            );
+            push_usd_sim_diagnostic(
+                &mut authored_diagnostics,
+                "usd-stage-identity",
+                "stage-identity",
+                message,
+            );
+        }
+        ordered_stages.sort_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
+        let mut source_counts = HashMap::new();
+        for (_, source, _) in &ordered_stages {
+            *source_counts.entry(source.clone()).or_insert(0usize) += 1;
+        }
+        let mut duplicate_sources: Vec<_> = source_counts
+            .into_iter()
+            .filter_map(|(source, count)| (count > 1).then_some(source))
+            .collect();
+        duplicate_sources.sort();
+        if !duplicate_sources.is_empty() {
+            for source in &duplicate_sources {
+                let message = format!(
+                    "multiple loaded USD stages share stable root identifier `{source}`; simulation admission requires a unique stage source"
+                );
+                runtime_faults.raise(
+                    "usd-sim-duplicate-stage-identity",
+                    None,
+                    source.clone(),
+                    message.clone(),
+                );
+                push_usd_sim_diagnostic(
+                    &mut authored_diagnostics,
+                    source,
+                    "duplicate-stage-identity",
+                    message,
+                );
+            }
+            ordered_stages
+                .retain(|(_, source, _)| duplicate_sources.binary_search(source).is_err());
+        }
+        let stage_ids = ordered_stages
+            .iter()
+            .map(|(_, _, id)| *id)
+            .collect::<Vec<_>>();
+        for (stage_rank, (_, _, id)) in ordered_stages.iter().enumerate() {
+            let id = *id;
             let Some(stage_asset) = stages.get(id) else {
                 continue;
             };
@@ -1216,7 +1480,7 @@ fn process_usd_sim_prims(
                     source,
                     generation,
                     priority,
-                    stage_order as u64,
+                    stage_rank as u64,
                     move || {
                         let _span =
                             bevy::log::info_span!("usd_sim_canonical_topology_prepare", generation)
@@ -1242,7 +1506,7 @@ fn process_usd_sim_prims(
                     },
                     generation,
                     priority,
-                    stage_order as u64,
+                    stage_rank as u64,
                     move || Ok(build_joint_topology(plan.as_ref())),
                     &mut topology_tasks,
                     &mut async_work,
@@ -1262,14 +1526,16 @@ fn process_usd_sim_prims(
             physics_holds.as_deref_mut(),
             Some(&mut runtime_diagnostics),
         );
-        if stage_ids
-            .iter()
-            .any(|id| !topology_index.is_current(*id, canonical.generation_for(*id)))
-        {
-            for (entity, path, ..) in &unprocessed {
-                let stage = path.stage_handle.id();
+        if unprocessed.iter().any(|candidate| {
+            let stage = candidate.item.1.stage_handle.id();
+            !stage_ids.contains(&stage)
+                || !topology_index.is_current(stage, canonical.generation_for(stage))
+        }) {
+            for candidate in &unprocessed {
+                let entity = candidate.item.0;
+                let stage = candidate.item.1.stage_handle.id();
                 if !topology_tasks.failed_for_generation(stage, canonical.generation_for(stage)) {
-                    pending.0.queue(*entity);
+                    pending.0.queue(entity);
                 }
             }
             return;
@@ -1277,30 +1543,29 @@ fn process_usd_sim_prims(
     }
 
     // --- Pass 2: Process all prims ---
-    // Query order is an ECS allocation detail.  Async USD closure loading can
-    // allocate the same authored hierarchy in a different order between fresh
-    // processes, and the deferred physics components would then reach Avian in
-    // that different order.  Sort by the stable composed USD path before
-    // recording any simulation state.  This keeps physics admission independent
-    // of loader timing while preserving the existing bounded work path.
+    // Query order and Bevy entity ids are allocation details. Order simulation
+    // admission by the stage's stable logical root identifier and authored prim
+    // path so identical paths in separate loaded stages do not race for the
+    // bounded prefix.
     let projection_prim_count = unprocessed.len();
     let _projection_span = bevy::log::info_span!(
         "usd_sim_prim_projection_batch",
         prim_count = projection_prim_count
     )
     .entered();
-    for (
-        entity,
-        prim_path,
-        maybe_tf,
-        maybe_mesh,
-        maybe_mat,
-        maybe_shader_mat,
-        instance_projection,
-        mesh_pending,
-        shader_bound,
-    ) in unprocessed
-    {
+    for candidate in unprocessed {
+        let stage_source = candidate.stage_source;
+        let (
+            entity,
+            prim_path,
+            maybe_tf,
+            maybe_mesh,
+            maybe_mat,
+            maybe_shader_mat,
+            instance_projection,
+            mesh_pending,
+            shader_bound,
+        ) = candidate.item;
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
             let message = format!(
                 "USD simulation prim has an invalid path `{}`",
@@ -1358,6 +1623,7 @@ fn process_usd_sim_prims(
             &q_child_of,
             &q_preview_only,
             instance_projection,
+            &stage_source,
             &grid_components,
             &q_spatial,
             &mut commands,
@@ -1814,6 +2080,7 @@ fn process_usd_sim_prim_read(
     q_child_of: &Query<&ChildOf>,
     q_preview_only: &Query<(), With<UsdPreviewOnly>>,
     instance_projection: Option<&UsdInstanceProjection>,
+    stage_source: &str,
     grid_components: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     commands: &mut Commands,
@@ -1853,6 +2120,7 @@ fn process_usd_sim_prim_read(
         reader,
         &sdf_path,
         prim_path.stage_handle.id(),
+        stage_source,
         all_prims,
         instance_projection,
         q_child_of,
@@ -2638,19 +2906,23 @@ fn process_usd_sim_prim_read(
             commands.entity(entity).try_insert(UsdSimProcessed);
             return;
         };
-        let wheel_order_key =
-            match usd_physics_order_key(&prim_path.path, instance_projection, all_prims) {
-                Ok(key) => key,
-                Err(reason) => {
-                    error!(
-                        "USD wheel {} has no stable physics identity — refusing to spawn: {}",
-                        sdf_path.as_str(),
-                        reason
-                    );
-                    commands.entity(entity).try_insert(UsdSimProcessed);
-                    return;
-                }
-            };
+        let wheel_order_key = match usd_physics_order_key(
+            stage_source,
+            &prim_path.path,
+            instance_projection,
+            all_prims,
+        ) {
+            Ok(key) => key,
+            Err(reason) => {
+                error!(
+                    "USD wheel {} has no stable physics identity — refusing to spawn: {}",
+                    sdf_path.as_str(),
+                    reason
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+        };
         if is_physical {
             let Some(authored_collider) = authored_collider else {
                 error!(
@@ -2789,6 +3061,7 @@ fn usd_entity_for_path(
 }
 
 fn usd_physics_order_key(
+    stage_source: &str,
     prim_path: &str,
     instance_projection: Option<&UsdInstanceProjection>,
     all_prims: &Query<(
@@ -2798,19 +3071,18 @@ fn usd_physics_order_key(
         Option<&UsdInstanceProjection>,
     )>,
 ) -> Result<lunco_physics::PhysicsOrderKey, String> {
-    let Some(projection) = instance_projection else {
-        return Ok(lunco_physics::PhysicsOrderKey(prim_path.to_owned()));
+    let instance_root_path = if let Some(projection) = instance_projection {
+        let root = projection
+            .root
+            .ok_or_else(|| "instanced prim has no projected instance root".to_owned())?;
+        let (_, root_path, ..) = all_prims
+            .get(root)
+            .map_err(|_| "projected instance root has no USD prim identity".to_owned())?;
+        Some(root_path.path.as_str())
+    } else {
+        None
     };
-    let root = projection
-        .root
-        .ok_or_else(|| "instanced prim has no projected instance root".to_owned())?;
-    let (_, root_path, ..) = all_prims
-        .get(root)
-        .map_err(|_| "projected instance root has no USD prim identity".to_owned())?;
-    Ok(lunco_physics::PhysicsOrderKey(format!(
-        "{}|{prim_path}",
-        root_path.path
-    )))
+    stable_usd_physics_order_key(stage_source, instance_root_path, prim_path)
 }
 
 /// Resolve the nearest authored rigid body above a raycast wheel. The wheel
@@ -2897,6 +3169,7 @@ fn raycast_mass_contribution_from_usd(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     prim: &SdfPath,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    stage_source: &str,
     all_prims: &Query<(
         Entity,
         &UsdPrimPath,
@@ -2957,7 +3230,8 @@ fn raycast_mass_contribution_from_usd(
         .ok_or_else(|| "cannot resolve local transform".to_owned())?;
     let principal = convention.dir_d(DVec3::new(inertia[0], inertia[1], inertia[2]))
         * (meters_per_unit * meters_per_unit);
-    let order_key = usd_physics_order_key(prim.as_str(), instance_projection, all_prims)?;
+    let order_key =
+        usd_physics_order_key(stage_source, prim.as_str(), instance_projection, all_prims)?;
     Ok(Some(lunco_mobility::RaycastMassContribution {
         owner,
         order_key,
@@ -4045,6 +4319,109 @@ fn reset_usd_sim_prim_work(mut pending: ResMut<PendingUsdSimPrimWork>) {
 #[cfg(test)]
 mod pending_sim_work_tests {
     use super::*;
+
+    #[test]
+    fn bounded_prefix_orders_equal_prim_paths_by_stable_stage_source() {
+        let lower_entity = Entity::from_bits(2);
+        let higher_entity = Entity::from_bits(900);
+        let first_stage = StableUsdSimWork {
+            stage_source: "twin://a/scene.usda".to_owned(),
+            prim_path: "/World/Rover".to_owned(),
+            item: (higher_entity, "first"),
+        };
+        let second_stage = StableUsdSimWork {
+            stage_source: "twin://b/scene.usda".to_owned(),
+            prim_path: "/World/Rover".to_owned(),
+            item: (lower_entity, "second"),
+        };
+
+        for candidates in [
+            vec![first_stage.clone(), second_stage.clone()],
+            vec![second_stage.clone(), first_stage.clone()],
+        ] {
+            let (selected, deferred, _) = select_bounded_sim_prim_work(
+                candidates,
+                1,
+                |candidate| candidate.item.0,
+                compare_stable_usd_sim_work,
+                |_| false,
+            );
+            assert_eq!(selected[0].item.1, "first");
+            assert_eq!(deferred, [lower_entity]);
+        }
+    }
+
+    #[test]
+    fn duplicate_stage_and_prim_identity_is_rejected_before_selection() {
+        let candidates = [1, 2]
+            .into_iter()
+            .map(|raw| StableUsdSimWork {
+                stage_source: "twin://mission/scene.usda".to_owned(),
+                prim_path: "/World/Rover".to_owned(),
+                item: Entity::from_bits(raw),
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            duplicate_nonpreview_usd_sim_work_keys(
+                &candidates,
+                |entity| *entity,
+                |_| false,
+                &mut HashMap::new(),
+            ),
+            HashSet::from([(
+                "twin://mission/scene.usda".to_owned(),
+                "/World/Rover".to_owned(),
+            )])
+        );
+    }
+
+    #[test]
+    fn matching_preview_paths_do_not_make_the_live_identity_ambiguous() {
+        let live = Entity::from_bits(1);
+        let preview = Entity::from_bits(2);
+        let candidates = [live, preview]
+            .into_iter()
+            .map(|entity| StableUsdSimWork {
+                stage_source: "twin://mission/scene.usda".to_owned(),
+                prim_path: "/World/Rover".to_owned(),
+                item: entity,
+            })
+            .collect::<Vec<_>>();
+        let mut preview_cache = HashMap::new();
+
+        assert!(
+            duplicate_nonpreview_usd_sim_work_keys(
+                &candidates,
+                |entity| *entity,
+                |entity| entity == preview,
+                &mut preview_cache,
+            )
+            .is_empty()
+        );
+        assert_eq!(preview_cache.get(&live), Some(&false));
+        assert_eq!(preview_cache.get(&preview), Some(&true));
+    }
+
+    #[test]
+    fn physics_order_identity_includes_stage_and_instance_scope() {
+        let first =
+            stable_usd_physics_order_key("twin://first/scene.usda", None, "/World/Rover/Wheel")
+                .expect("stage-scoped physics key");
+        let second =
+            stable_usd_physics_order_key("twin://second/scene.usda", None, "/World/Rover/Wheel")
+                .expect("other stage-scoped physics key");
+        let instance = stable_usd_physics_order_key(
+            "twin://first/scene.usda",
+            Some("/World/Instances/RoverA"),
+            "/World/Instances/RoverA/Wheel",
+        )
+        .expect("instance-scoped physics key");
+        assert_ne!(first, second);
+        assert_ne!(first, instance);
+        assert!(stable_usd_physics_order_key("", None, "/World/Rover").is_err());
+        assert!(stable_usd_physics_order_key("twin://first/scene.usda", None, "").is_err());
+    }
 
     #[test]
     fn preview_prims_do_not_consume_bounded_simulation_admission() {

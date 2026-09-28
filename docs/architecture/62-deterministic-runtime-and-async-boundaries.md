@@ -908,6 +908,10 @@ ordering includes:
   recursive order over the typed payload;
 - USD-connected events: instance namespace, authored event prim path, source,
   and event name;
+- USD simulation projection: stable logical stage source, then authored prim
+  path. The bounded prefix and topology-preparation ranks never use Bevy entity
+  bits or asset allocation ids; missing or ambiguous stage/path identity raises
+  a runtime fault and keeps the affected projection queued;
 - serialized Modelica commands: `GlobalEntityId`, then the world-local entity
   key for local-only models;
 - API entity batches use ascending `GlobalEntityId`; scalar first-match
@@ -1107,7 +1111,8 @@ The whole-simulation guarantee remains open because:
    results retain input order before contact-graph insertion; narrow-phase
    status bitsets combine before serial graph/solver updates; the active
    collision filter is read-only. USD projection supplies `PhysicsOrderKey`
-   from the instance root and authored prim path. The physics owner validates
+   from the stable logical stage source, instance root, and authored prim path.
+   The physics owner validates
    joint keys after Avian prepares solver data and before its substep loop;
    native joints, motor warm-start, custom prismatic correction, raycast
    suspension and tire forces, jointed tire forces, and raycast wheel
