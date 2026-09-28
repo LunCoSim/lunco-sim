@@ -370,7 +370,7 @@ impl Default for UsdVisualProjectionSettings {
             // batch. The independent child cap bounds its own later command
             // flush after the admission system returns.
             frame_budget: std::time::Duration::from_millis(4),
-            max_prim_work_items_per_update: 64,
+            max_prim_work_items_per_update: 32,
             child_spawn_budget: std::time::Duration::from_millis(1),
             max_child_spawns_per_update: 128,
         }
