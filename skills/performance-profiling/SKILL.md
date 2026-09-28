@@ -148,11 +148,13 @@ invalidation, removal, and scene teardown. The same applies to deferred adapter
 steps such as wrapping a Modelica model into its shared port surface. Keep a
 single bootstrap discovery for entities predating plugin installation, and
 retry only work whose authoritative stage/readiness input is still pending.
-The celestial admission projector still marks every arriving prim once, but
-can skip its authored field decoder for ordinary prims. Preserve candidates
-with a `lunco:` property, the scene root, `DistantLight` parent-body fills, and
-non-root `LunCoEpochAPI` diagnostics.
-The idle run condition should inspect the owner set, not scan the population.
+The celestial admission projector uses the shared `PendingEntityWork` queue for
+one bootstrap and later lifecycle arrivals; its idle run condition reads that
+owner instead of scanning all USD prims. Keep `CelestialProjected` on the scene
+root after its source classification because static-light resolution consumes
+that boundary. Ordinary non-root prims do not need a completion command.
+Preserve authored-field candidates with a `lunco:` property, the scene root,
+`DistantLight` parent-body fills, and non-root `LunCoEpochAPI` diagnostics.
 When initial candidate processing spans many owners, queue the bootstrap IDs
 once and drain a fixed-size batch in stable entity order per app update; keep
 the remainder queued so a large scene cannot monopolize one UI frame.

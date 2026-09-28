@@ -15,6 +15,7 @@ lunco-environment = { path = "../lunco-environment" }
 lunco-core = { path = "../lunco-core" }
 lunco-time = { path = "../lunco-time" }
 lunco-hooks = { path = "../lunco-hooks" }
+lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 
 [dev-dependencies]

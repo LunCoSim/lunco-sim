@@ -265,6 +265,12 @@ The same ownership rule applies to the measured presentation paths:
   during admission, avoiding a large deferred marker-removal flush.
   Steady frames do not rebuild maps or clone authored path keys, and a wrapper
   becoming available cannot be mistaken for a missing telemetry port.
+- **Celestial projection** uses the shared `PendingEntityWork` lifecycle queue
+  and one bootstrap discovery instead of scanning for unmarked USD prims on
+  every Update. Non-root prim completion stays in the queue owner rather than
+  creating a deferred ECS command per prim; `CelestialProjected` marks only the
+  scene root after celestial-source classification, where static-light
+  resolution consumes it.
 - **Authored runtime projection** shares one canonical owner reader and one
   child-path snapshot between control-surface and generic-program resolution.
   It prepares owned typed facts before mutating the owner, avoiding a second

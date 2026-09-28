@@ -10482,6 +10482,7 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",
  "lunco-usd-compose",
+ "lunco-usd-sim-core",
  "openusd",
 ]
 

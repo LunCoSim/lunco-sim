@@ -36,6 +36,7 @@ use lunco_celestial::geo::{Geodetic, GeodeticAnchor, SiteAnchor};
 use lunco_celestial::kepler::{KeplerOrbit, KeplerianElements};
 use lunco_celestial::transform::LibrationAnchor;
 use lunco_usd_bevy_stage::read::UsdReadObject;
+use lunco_usd_sim_core::PendingEntityWork;
 use openusd::sdf::{Path as SdfPath, Value};
 
 /// Update ordering for authored celestial/link projection.
@@ -56,11 +57,17 @@ impl Plugin for CelestialProjectionPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(Update, CelestialProjectionSet::Projection)
             .init_resource::<lunco_time::SceneTimeState>()
+            .init_resource::<PendingCelestialProjection>()
+            .add_observer(queue_celestial_projection_on_prim_insert)
+            .add_observer(queue_celestial_projection_on_root_insert)
+            .add_observer(forget_removed_celestial_projection_prim)
+            .add_observer(queue_celestial_projection_after_root_invalidation)
+            .add_systems(lunco_core::SceneTeardown, reset_celestial_projection_work)
             .add_observer(select_scene_time_on_transition_completed)
             .add_systems(
                 Update,
                 project_celestial_comms_prims
-                    .run_if(any_unprojected_celestial)
+                    .run_if(celestial_projection_due)
                     .run_if(lunco_time::scene_time_ready)
                     .after(lunco_usd_bevy_scene::UsdSceneSyncSet)
                     .in_set(CelestialProjectionSet::Projection),
@@ -853,40 +860,90 @@ fn read_occluder_box(
     })
 }
 
-/// Marker: this prim's link/celestial vocabulary has been projected to
-/// components. It is public so scene refresh code can invalidate the
-/// projection alongside the other USD-derived markers.
+/// Marks the scene root after celestial-source classification has been
+/// published. Static-light resolution waits for this marker. Other prims'
+/// projection work is tracked by the owner's pending-entity queue.
 #[derive(Component)]
 pub struct CelestialProjected;
 
-fn any_unprojected_celestial(
-    q: Query<
-        (),
-        (
-            With<lunco_usd_bevy_scene::UsdPrimPath>,
-            Without<CelestialProjected>,
-        ),
-    >,
-) -> bool {
-    !q.is_empty()
+#[derive(Resource)]
+struct PendingCelestialProjection(PendingEntityWork);
+
+impl Default for PendingCelestialProjection {
+    fn default() -> Self {
+        Self(PendingEntityWork::with_initial_discovery())
+    }
+}
+
+fn queue_celestial_projection_on_prim_insert(
+    trigger: On<Insert, lunco_usd_bevy_scene::UsdPrimPath>,
+    mut pending: ResMut<PendingCelestialProjection>,
+) {
+    pending.0.queue(trigger.entity);
+}
+
+fn queue_celestial_projection_on_root_insert(
+    trigger: On<Insert, lunco_usd_bevy_scene::UsdSceneRoot>,
+    mut pending: ResMut<PendingCelestialProjection>,
+) {
+    pending.0.queue(trigger.entity);
+}
+
+fn forget_removed_celestial_projection_prim(
+    trigger: On<Remove, lunco_usd_bevy_scene::UsdPrimPath>,
+    mut pending: ResMut<PendingCelestialProjection>,
+) {
+    pending.0.forget(trigger.entity);
+}
+
+fn queue_celestial_projection_after_root_invalidation(
+    trigger: On<Remove, CelestialProjected>,
+    prims: Query<(), With<lunco_usd_bevy_scene::UsdPrimPath>>,
+    mut pending: ResMut<PendingCelestialProjection>,
+) {
+    if prims.contains(trigger.entity) {
+        pending.0.queue(trigger.entity);
+    }
+}
+
+fn reset_celestial_projection_work(mut pending: ResMut<PendingCelestialProjection>) {
+    pending.0.clear();
+}
+
+fn celestial_projection_due(pending: Res<PendingCelestialProjection>) -> bool {
+    pending.0.has_work()
 }
 
 fn project_celestial_comms_prims(
     mut commands: Commands,
-    query: Query<
-        (
-            Entity,
-            &lunco_usd_bevy_scene::UsdPrimPath,
-            Has<lunco_usd_bevy_scene::UsdSceneRoot>,
-        ),
-        Without<CelestialProjected>,
-    >,
+    query: Query<(
+        Entity,
+        &lunco_usd_bevy_scene::UsdPrimPath,
+        Has<lunco_usd_bevy_scene::UsdSceneRoot>,
+        Has<CelestialProjected>,
+    )>,
+    mut pending: ResMut<PendingCelestialProjection>,
     stages: Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>,
     canonical: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
 ) {
-    for (entity, prim_path, is_scene_root) in query.iter() {
+    let mut entities = pending.0.take_queued();
+    if pending.0.take_initial_discovery() {
+        entities.extend(query.iter().map(|(entity, ..)| entity));
+    }
+    let mut entities: Vec<_> = entities.into_iter().collect();
+    entities.sort_unstable();
+
+    for entity in entities {
+        let Ok((entity, prim_path, is_scene_root, root_already_projected)) = query.get(entity)
+        else {
+            continue;
+        };
+        if is_scene_root && root_already_projected {
+            continue;
+        }
         let id = prim_path.stage_handle.id();
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
+            pending.0.queue(entity);
             continue;
         };
         // An ordinary scene mount keeps the empty path as a documented
@@ -901,9 +958,11 @@ fn project_celestial_comms_prims(
                 stage = ?id,
                 "USD stage root has no defaultPrim; celestial projection skipped"
             );
+            pending.0.queue(entity);
             continue;
         };
         let Ok(sdf_path) = SdfPath::new(&resolved_path) else {
+            pending.0.queue(entity);
             continue;
         };
         if is_scene_root {
@@ -914,16 +973,15 @@ fn project_celestial_comms_prims(
                 });
         }
         // Most scene prims carry only standard transform/material properties.
-        // Preserve the completion marker for live arrivals, but avoid probing
-        // every celestial and link attribute when this prim cannot author any
-        // of those facts. DistantLight carries the body-fill convention through
-        // its parent, and EpochAPI still needs its misplaced-root diagnostic.
+        // Avoid both a per-prim marker command and the authored-field decoder
+        // when this prim cannot carry celestial or link facts. DistantLight
+        // carries the body-fill convention through its parent, and EpochAPI
+        // still needs its misplaced-root diagnostic.
         if !is_scene_root
             && !reader.any_attr_with_prefix(&sdf_path, "lunco:")
             && reader.type_name(&sdf_path).as_deref() != Some("DistantLight")
             && !reader.has_api_schema(&sdf_path, "LunCoEpochAPI")
         {
-            commands.entity(entity).try_insert(CelestialProjected);
             continue;
         }
         insert_celestial_comms_components(
@@ -934,7 +992,9 @@ fn project_celestial_comms_prims(
             is_scene_root,
             &mut commands,
         );
-        commands.entity(entity).try_insert(CelestialProjected);
+        if is_scene_root {
+            commands.entity(entity).try_insert(CelestialProjected);
+        }
     }
 }
 
