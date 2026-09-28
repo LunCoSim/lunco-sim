@@ -104,6 +104,7 @@ pub fn retain_modelica_runtime_state(
         &ModelicaModel,
         Option<Ref<ModelicaSignalLayout>>,
         Option<&GlobalEntityId>,
+        Option<&SignalSource>,
     )>,
 ) {
     let Some(settings) = settings else {
@@ -129,7 +130,7 @@ pub fn retain_modelica_runtime_state(
     // the registry provides this count without walking every retained history.
     let mut channel_count = signals.scalar_count();
 
-    for (entity, model, layout, global_owner) in &models {
+    for (entity, model, layout, global_owner, signal_source) in &models {
         let document_host = documents
             .as_ref()
             .and_then(|documents| documents.host(model.document));
@@ -258,7 +259,7 @@ pub fn retain_modelica_runtime_state(
             }
         }
 
-        if retained_any {
+        if retained_any && signal_source.is_none() {
             commands.entity(entity).try_insert(SignalSource);
         }
         if sample_due && model.current_time.is_finite() {

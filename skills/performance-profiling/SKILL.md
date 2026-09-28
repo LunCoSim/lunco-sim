@@ -431,7 +431,9 @@ type lookup for every prim.
 
 For fixed-step telemetry, keep static channel-presentation facts borrowed in
 the per-sample path and allocate their owned signal metadata only when that
-channel's metadata is first created or changes.
+channel's metadata is first created or changes. Add the shared `SignalSource`
+owner marker only when the entity first retains a sample; its removal observer
+owns history cleanup, so later batches do not need to queue marker writes.
 
 Dependent USD-stage refresh is owner work behind `sync_twin_overlays`. Snapshot
 the base/runtime revisions, serialize each persistent source snapshot once on

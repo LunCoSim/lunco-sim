@@ -365,6 +365,9 @@ discovery or when an entity's USD owner path changes, then only records samples 
 steps. This keeps the fixed physics path from rebuilding identical descriptions while the shared
 registry remains the single metadata owner.
 
+Physics and Modelica producers add `SignalSource` when an entity first retains a sample. The
+marker owns history cleanup on source removal; later sample batches do not rewrite it.
+
 Its transient per-entity cursors follow the same lifecycle boundary: `RemovedComponents` retires
 state when the last physical source leaves an entity, while the shared registry deliberately keeps
 the archived history. The producer does not rebuild a live-entity set or scan its state maps on

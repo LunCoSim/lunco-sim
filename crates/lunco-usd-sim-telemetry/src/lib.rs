@@ -19,7 +19,7 @@ use lunco_signal::{SignalMeta, SignalPresentation, SignalRef, SignalRegistry, Si
 use lunco_telemetry::TelemetrySettings;
 use lunco_time::MissionClock;
 use std::borrow::Cow;
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 
 use lunco_usd_bevy_scene::UsdPrimPath;
 
@@ -80,6 +80,7 @@ fn retain_physics_telemetry(
     mut removed_bodies: RemovedComponents<RigidBody>,
     mut removed_wheels: RemovedComponents<WheelRaycast>,
     mut sample_buffer: Local<Vec<PhysicsSample>>,
+    mut queued_signal_sources: Local<HashSet<Entity>>,
     sources: Query<(), Or<(With<RigidBody>, With<WheelRaycast>)>>,
     bodies: Query<
         (
@@ -88,6 +89,7 @@ fn retain_physics_telemetry(
             Option<&LinearVelocity>,
             Option<&AngularVelocity>,
             Option<&GlobalEntityId>,
+            Option<&SignalSource>,
         ),
         With<RigidBody>,
     >,
@@ -109,8 +111,10 @@ fn retain_physics_telemetry(
         &Suspension,
         &avian3d::prelude::RayHits,
         Option<&GlobalEntityId>,
+        Option<&SignalSource>,
     )>,
 ) {
+    queued_signal_sources.clear();
     let Some(settings) = settings else {
         state.previous.clear();
         state.next_sample_time = None;
@@ -196,7 +200,7 @@ fn retain_physics_telemetry(
     // pass without walking every retained history.
     let mut channel_count = signals.scalar_count();
 
-    for (entity, prim, linear, angular, global_owner) in &bodies {
+    for (entity, prim, linear, angular, global_owner, signal_source) in &bodies {
         let metadata_dirty = state
             .metadata_group_paths
             .get(&entity)
@@ -502,12 +506,14 @@ fn retain_physics_telemetry(
             &mut channel_count,
             &mut state.metadata,
             metadata_dirty,
-        ) {
+        ) && signal_source.is_none()
+            && queued_signal_sources.insert(entity)
+        {
             commands.entity(entity).try_insert(SignalSource);
         }
     }
 
-    for (entity, prim, wheel, suspension, hits, global_owner) in &wheels {
+    for (entity, prim, wheel, suspension, hits, global_owner, signal_source) in &wheels {
         let metadata_dirty = state
             .metadata_group_paths
             .get(&entity)
@@ -571,7 +577,9 @@ fn retain_physics_telemetry(
             &mut channel_count,
             &mut state.metadata,
             metadata_dirty,
-        ) {
+        ) && signal_source.is_none()
+            && queued_signal_sources.insert(entity)
+        {
             commands.entity(entity).try_insert(SignalSource);
         }
     }
