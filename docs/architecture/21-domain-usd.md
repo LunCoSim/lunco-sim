@@ -821,10 +821,13 @@ velocity, quaternion, angular velocity, mass/inertia, and collider contact.
 Those ports are not semantic flight sensors and are available because the
 physical component exists.
 
-A mounted single ray applies the LunCoRaycastAPI. Rust performs only the
-required Avian spatial query and publishes raw distance, validity, hit position,
-hit normal, and sample time. A miss remains invalid; it is never converted to
-ideal altitude or another fallback.
+A mounted single ray applies the LunCoRaycastAPI. Rust performs the required
+Avian spatial query and publishes raw distance, validity, hit position, hit
+normal, and sample time. It also publishes the effective ray origin and
+direction in the rigid body's local frame, composed from the sensor's authored
+transform hierarchy. Conversions can consume the exact geometry the query used
+without repeating mount coordinates. A miss remains invalid; it is never
+converted to ideal altitude or another fallback.
 
 IMU, altimeter, attitude estimator, and touchdown logic are ordinary Modelica
 programs. USD authors their connections to the raw Avian ports and environment

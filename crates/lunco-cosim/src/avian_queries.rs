@@ -10,8 +10,10 @@ use bevy::prelude::*;
 use lunco_physics::raycast::RaycastObservation;
 use lunco_port_core::ports::PortDirection;
 
-/// Raw Avian ray-query ports.  The Modelica sensor wrapper consumes these
-/// ports and supplies the semantic names used by a mission model.
+/// Raw Avian ray-query ports. The Modelica sensor wrapper consumes these
+/// ports and supplies the semantic names used by a mission model. The body-local
+/// origin/direction ports expose the effective mounted geometry already used by
+/// the raw query, including every transform between the sensor and rigid body.
 pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
     present: |world, entity| world.get::<RaycastObservation>(entity).is_some(),
     entities: |world, out| {
@@ -113,6 +115,66 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             }),
             write: None,
         },
+        AvianPort {
+            name: "ray_origin_body_local_x",
+            dir: PortDirection::Out,
+            read: Some(|world, entity| {
+                world
+                    .get::<RaycastObservation>(entity)
+                    .map(|observation| observation.ray_origin_body_local.x)
+            }),
+            write: None,
+        },
+        AvianPort {
+            name: "ray_origin_body_local_y",
+            dir: PortDirection::Out,
+            read: Some(|world, entity| {
+                world
+                    .get::<RaycastObservation>(entity)
+                    .map(|observation| observation.ray_origin_body_local.y)
+            }),
+            write: None,
+        },
+        AvianPort {
+            name: "ray_origin_body_local_z",
+            dir: PortDirection::Out,
+            read: Some(|world, entity| {
+                world
+                    .get::<RaycastObservation>(entity)
+                    .map(|observation| observation.ray_origin_body_local.z)
+            }),
+            write: None,
+        },
+        AvianPort {
+            name: "ray_direction_body_local_x",
+            dir: PortDirection::Out,
+            read: Some(|world, entity| {
+                world
+                    .get::<RaycastObservation>(entity)
+                    .map(|observation| observation.direction_body_local.x)
+            }),
+            write: None,
+        },
+        AvianPort {
+            name: "ray_direction_body_local_y",
+            dir: PortDirection::Out,
+            read: Some(|world, entity| {
+                world
+                    .get::<RaycastObservation>(entity)
+                    .map(|observation| observation.direction_body_local.y)
+            }),
+            write: None,
+        },
+        AvianPort {
+            name: "ray_direction_body_local_z",
+            dir: PortDirection::Out,
+            read: Some(|world, entity| {
+                world
+                    .get::<RaycastObservation>(entity)
+                    .map(|observation| observation.direction_body_local.z)
+            }),
+            write: None,
+        },
     ],
     install_topology: register_raycast_topology,
 };
@@ -132,6 +194,8 @@ mod tests {
         let names: Vec<_> = RAYCAST_GROUP.ports.iter().map(|port| port.name).collect();
         assert!(names.contains(&"ray_distance"));
         assert!(names.contains(&"ray_hit_valid"));
+        assert!(names.contains(&"ray_origin_body_local_y"));
+        assert!(names.contains(&"ray_direction_body_local_y"));
         assert!(!names.contains(&"range"));
         assert!(!names.contains(&"altitude"));
         assert!(!names.contains(&"range_rate"));
