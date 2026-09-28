@@ -153,10 +153,13 @@ fn avian_topology_key(world: &World, entity: Entity) -> u64 {
 fn avian_unit(name: &str) -> Option<&'static str> {
     if name.starts_with("position_")
         || name.starts_with("ray_hit_position_")
+        || name.starts_with("ray_origin_body_local_")
         || name == "displacement"
         || name == "ray_distance"
     {
         Some("m")
+    } else if name.starts_with("ray_direction_body_local_") {
+        Some("1")
     } else if name.starts_with("velocity_") || name == "velocity" {
         Some("m/s")
     } else if name.starts_with("angvel_") {

@@ -13,9 +13,10 @@ use bevy::prelude::*;
 /// A raw, single-ray observation authored on a mounted USD prim.
 ///
 /// Configuration (`offset`, `axis`, and `max_distance`) is structural input.
-/// The result contains only what Avian's query returned: validity, distance,
-/// hit point, hit normal, and the physics sample timestamp. A miss is invalid
-/// and has no invented distance or terrain altitude.
+/// The result contains Avian's hit facts plus the effective ray origin and
+/// direction in the rigid body's local frame. Those vectors are composed from
+/// the authored transform hierarchy and are the same geometry used by the ray
+/// query. A miss is invalid and has no invented distance or terrain altitude.
 #[derive(Component, Debug, Clone, Copy, Reflect)]
 #[reflect(Component)]
 pub struct RaycastObservation {
@@ -25,6 +26,10 @@ pub struct RaycastObservation {
     pub axis: DVec3,
     /// Maximum distance passed to Avian's query, in metres.
     pub max_distance: f64,
+    /// Effective ray-origin offset from the rigid-body origin, in body-local m.
+    pub ray_origin_body_local: DVec3,
+    /// Effective ray direction after the mounted hierarchy, in body-local axes.
+    pub direction_body_local: DVec3,
     /// Distance returned by Avian for the last valid hit, in metres.
     pub distance: f64,
     /// World-grid position returned by the query, in metres.
@@ -43,6 +48,8 @@ impl Default for RaycastObservation {
             offset: DVec3::ZERO,
             axis: DVec3::NEG_Y,
             max_distance: 100.0,
+            ray_origin_body_local: DVec3::ZERO,
+            direction_body_local: DVec3::NEG_Y,
             distance: 0.0,
             hit_position: DVec3::ZERO,
             hit_normal: DVec3::ZERO,
@@ -98,10 +105,13 @@ pub fn sample_raycast_observations(
         };
 
         let body_rotation = body_rotation.0;
-        let mount_offset =
+        let ray_origin_body_local =
             mount.translation.as_dvec3() + mount.rotation.as_dquat() * observation.offset;
-        let origin = body_position.0 + body_rotation * mount_offset;
-        let direction = body_rotation * (mount.rotation.as_dquat() * observation.axis);
+        let direction_body_local = mount.rotation.as_dquat() * observation.axis;
+        observation.ray_origin_body_local = ray_origin_body_local;
+        observation.direction_body_local = direction_body_local;
+        let origin = body_position.0 + body_rotation * ray_origin_body_local;
+        let direction = body_rotation * direction_body_local;
         let Ok(direction) = Dir3::new(direction.as_vec3()) else {
             continue;
         };
