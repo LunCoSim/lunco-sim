@@ -47,6 +47,14 @@ creates two domains:
    user pause.
 2. A path playback domain carries the playhead, range, rate, and loop state.
 
+Discovery bootstraps once, queues inserted USD prim identities, and follows
+canonical-stage generations and asset lifecycle events. Curves without
+`lunco:path:camera` remain dormant until their stage changes; candidates waiting
+on runtime prerequisites (stage asset, clock, camera entity, or spatial
+hierarchy) retry between those invalidations. This keeps unrelated `BasisCurves`
+out of the per-frame USD read path while preserving live relationship authoring
+and asynchronous scene admission.
+
 `CameraPathTransport` is the explicit typed command for `Play`, `Pause`, and
 `Rewind`. It is available through the HTTP/API/MCP command surface and Rhai. `Play`
 releases the gate; `Pause` changes user playback state; `Rewind` seeks to the

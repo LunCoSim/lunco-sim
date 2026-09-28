@@ -159,6 +159,11 @@ invalidation, removal, and scene teardown. The same applies to deferred adapter
 steps such as wrapping a Modelica model into its shared port surface. Keep a
 single bootstrap discovery for entities predating plugin installation, and
 retry only work whose authoritative stage/readiness input is still pending.
+For render-free USD discovery, wake candidates from changed prim identity,
+canonical stage generation, or stage-asset events, and keep only transient
+runtime prerequisites in the per-frame retry set. Dormant `BasisCurves` without
+the owner's relationship must be revisited when their stage changes, not
+queried from USD every update.
 The celestial admission projector uses the shared `PendingEntityWork` queue for
 one bootstrap and later lifecycle arrivals; its idle run condition reads that
 owner instead of scanning all USD prims. Keep `CelestialProjected` on the scene

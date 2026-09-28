@@ -47,6 +47,7 @@ use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_geometry::curve::{CurveBasis, eval_curve, eval_curve_tangent};
 use openusd::schemas::geom::tokens;
 use openusd::sdf::Path as SdfPath;
+use std::collections::{HashMap, HashSet};
 
 /// Ordering boundary for the analytic path sample and BigSpace write.
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
@@ -104,22 +105,49 @@ pub struct CameraPath {
 
 /// This prim's `typeName` is not `BasisCurves`, so it can never become a
 /// [`CameraPath`]. Inserted by [`resolve_camera_paths`] to retire the prim from
-/// its scan.
-///
-/// Keyed on `typeName` and NOTHING ELSE, deliberately. `resolve_camera_paths`
-/// re-examined every prim without a `CameraPath` on every frame — reading the
-/// canonical stage, building an `SdfPath`, and querying `typeName` for each. On
-/// the summer-space-school twin that measured **37.3 ms/s** (0.562 ms/frame over
-/// 2659 frames), spent almost entirely on prims that were never candidates.
-///
-/// A prim's `typeName` is fixed for the entity's life: changing it re-authors the
-/// prim, which respawns the entity, which arrives without this marker. The
-/// *other* early-out — a `BasisCurves` with no `lunco:path:camera` rel — is
-/// deliberately NOT marked, because that rel can be authored onto an existing
-/// curve by a live edit and must still resolve. Curves are a handful of prims per
-/// scene, so re-scanning them costs nothing.
+/// discovery. A prim's `typeName` is fixed for the entity's life: changing it
+/// re-authors the prim, which respawns the entity without this marker.
 #[derive(Component)]
 pub struct NotACameraPath;
+
+/// A camera-path candidate is waiting for a transient runtime prerequisite,
+/// such as its camera entity or spatial frame, to arrive. Only these candidates
+/// are retried between USD identity or stage-generation changes.
+#[derive(Component)]
+pub(super) struct CameraPathPending;
+
+#[derive(Resource, Default)]
+pub(super) struct CameraPathScanState {
+    stage_generations: HashMap<bevy::asset::AssetId<UsdStageAsset>, u64>,
+    changed_stages: HashSet<bevy::asset::AssetId<UsdStageAsset>>,
+    queued_entities: Vec<Entity>,
+    queued_set: HashSet<Entity>,
+    candidates: Vec<Entity>,
+    selected: HashSet<Entity>,
+    initialized: bool,
+}
+
+impl CameraPathScanState {
+    fn enqueue_identity(&mut self, entity: Entity) {
+        if self.queued_set.insert(entity) {
+            self.queued_entities.push(entity);
+        }
+    }
+
+    fn queue(&mut self, entity: Entity) {
+        if self.selected.insert(entity) {
+            self.candidates.push(entity);
+        }
+    }
+}
+
+/// Queue a newly projected prim identity for render-free camera-path discovery.
+pub(super) fn queue_camera_path_candidate(
+    trigger: On<Add, UsdPrimPath>,
+    mut scan: ResMut<CameraPathScanState>,
+) {
+    scan.enqueue_identity(trigger.entity);
+}
 
 impl CameraPath {
     /// The aim mode in force at `t` — the last key at or before it (held).
@@ -396,15 +424,29 @@ pub fn camera_path_transport(
 }
 
 /// Resolve `BasisCurves` prims carrying `lunco:path:camera` into [`CameraPath`]s,
-/// spawning each path's driven clock. Retries next frame while the camera prim
-/// has not spawned yet (async scene load).
+/// spawning each path's driven clock. Retries only candidates waiting for a
+/// runtime prerequisite during asynchronous scene load.
 ///
-/// Non-curve prims retire from the scan after one look — see [`NotACameraPath`].
-pub fn resolve_camera_paths(
+/// New prim identities and authored stage generations trigger discovery. Only
+/// candidates waiting for runtime entities or spatial structure retry per frame.
+pub(super) fn resolve_camera_paths(
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
     clocks: Option<Res<Clocks>>,
-    q_new: Query<(Entity, &UsdPrimPath), (Without<CameraPath>, Without<NotACameraPath>)>,
+    mut stage_events: MessageReader<bevy::asset::AssetEvent<UsdStageAsset>>,
+    mut scan: ResMut<CameraPathScanState>,
+    q_candidates: Query<
+        (Entity, &UsdPrimPath, Option<&CameraPathPending>),
+        (Without<CameraPath>, Without<NotACameraPath>),
+    >,
+    q_pending: Query<
+        Entity,
+        (
+            With<CameraPathPending>,
+            Without<CameraPath>,
+            Without<NotACameraPath>,
+        ),
+    >,
     q_prims: Query<(
         Entity,
         &UsdPrimPath,
@@ -415,9 +457,74 @@ pub fn resolve_camera_paths(
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     mut commands: Commands,
 ) {
-    let Some(clocks) = clocks else { return };
-    for (entity, prim) in q_new.iter() {
+    scan.candidates.clear();
+    scan.selected.clear();
+    scan.changed_stages.clear();
+    for index in 0..scan.queued_entities.len() {
+        let entity = scan.queued_entities[index];
+        scan.queued_set.remove(&entity);
+        scan.queue(entity);
+    }
+    scan.queued_entities.clear();
+    for (stage_id, stage) in canonical.iter() {
+        let generation = stage.generation();
+        let changed = match scan.stage_generations.insert(stage_id, generation) {
+            Some(previous) => previous != generation,
+            None => generation > 0,
+        };
+        if changed {
+            scan.changed_stages.insert(stage_id);
+        }
+    }
+    for event in stage_events.read() {
+        match event {
+            bevy::asset::AssetEvent::Added { id }
+            | bevy::asset::AssetEvent::Modified { id }
+            | bevy::asset::AssetEvent::LoadedWithDependencies { id } => {
+                scan.changed_stages.insert(*id);
+            }
+            bevy::asset::AssetEvent::Removed { id } | bevy::asset::AssetEvent::Unused { id } => {
+                scan.stage_generations.remove(id);
+            }
+        }
+    }
+    let stage_generation_changed = !scan.changed_stages.is_empty();
+    if !scan.initialized {
+        for (entity, _, _) in &q_candidates {
+            scan.queue(entity);
+        }
+        scan.initialized = true;
+    } else {
+        if stage_generation_changed {
+            for (entity, prim, _) in &q_candidates {
+                if scan.changed_stages.contains(&prim.stage_handle.id()) {
+                    scan.queue(entity);
+                }
+            }
+        }
+        for entity in &q_pending {
+            scan.queue(entity);
+        }
+    }
+
+    let Some(clocks) = clocks.as_deref() else {
+        for entity in scan.candidates.iter().copied() {
+            commands.entity(entity).try_insert(CameraPathPending);
+        }
+        scan.candidates.clear();
+        scan.selected.clear();
+        return;
+    };
+    for candidate_index in 0..scan.candidates.len() {
+        let entity = scan.candidates[candidate_index];
+        let Ok((_, prim, was_pending)) = q_candidates.get(entity) else {
+            continue;
+        };
+        if was_pending.is_some() {
+            commands.entity(entity).remove::<CameraPathPending>();
+        }
         let Some(stage_asset) = stages.get(&prim.stage_handle) else {
+            commands.entity(entity).try_insert(CameraPathPending);
             continue;
         };
         let (reader, _generation) = canonical.reader_for(prim.stage_handle.id(), stage_asset);
@@ -446,8 +553,33 @@ pub fn resolve_camera_paths(
             })
             .map(|(camera, path, _)| (camera, path))
         else {
+            commands.entity(entity).try_insert(CameraPathPending);
             continue;
         };
+
+        // Wait on runtime hierarchy before decoding authored track and curve
+        // data; this candidate will be retried while its spatial frame settles.
+        let Some((grid, _)) = lunco_spatial::coords::ancestor_grid(entity, &q_parents, &q_grids)
+        else {
+            commands.entity(entity).try_insert(CameraPathPending);
+            continue;
+        };
+        let Ok(grid_ref) = q_grids.get(grid) else {
+            error!(
+                "[camera-path] {} resolves to a missing Grid {:?}",
+                prim.path, grid
+            );
+            continue;
+        };
+        let Some((camera_position, camera_rotation)) =
+            lunco_spatial::coords::pose_in_grid(camera, grid, &q_parents, &q_grids, &q_spatial)
+        else {
+            commands.entity(entity).try_insert(CameraPathPending);
+            continue;
+        };
+        let (camera_cell, camera_translation) = grid_ref.translation_to_grid(camera_position);
+        let camera_transform = Transform::from_translation(camera_translation)
+            .with_rotation(camera_rotation.as_quat());
 
         // ── Aim track ────────────────────────────────────────────────────────
         // `lunco:path:aim:times` + `lunco:path:aim:modes` (+ `…:targets` rel, one
@@ -800,34 +932,6 @@ pub fn resolve_camera_paths(
         } else {
             clocks.sim
         };
-
-        // Resolve the authored frame before allocating any path state. Commands
-        // are deferred; inserting `CameraPath` first would remove this prim from
-        // `q_new`, and a missing grid would then orphan the newly created clocks
-        // forever instead of allowing the next load frame to retry.
-        let Some((grid, _)) = lunco_spatial::coords::ancestor_grid(entity, &q_parents, &q_grids)
-        else {
-            continue;
-        };
-        let Ok(grid_ref) = q_grids.get(grid) else {
-            error!(
-                "[camera-path] {} resolves to a missing Grid {:?}",
-                prim.path, grid
-            );
-            continue;
-        };
-        let Some((camera_position, camera_rotation)) =
-            lunco_spatial::coords::pose_in_grid(camera, grid, &q_parents, &q_grids, &q_spatial)
-        else {
-            error!(
-                "[camera-path] {} camera {:?} has no complete pose in its path Grid {:?}",
-                prim.path, camera, grid
-            );
-            continue;
-        };
-        let (camera_cell, camera_translation) = grid_ref.translation_to_grid(camera_position);
-        let camera_transform = Transform::from_translation(camera_translation)
-            .with_rotation(camera_rotation.as_quat());
 
         // The shot hangs off its real clock through a GATE domain, frozen at birth
         // (`scale = 0`). A driven clock advances by its PARENT's delta, so a frozen
