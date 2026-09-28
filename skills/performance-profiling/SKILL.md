@@ -384,7 +384,9 @@ When `system_commands` dominates after a producer, inspect the number and shape
 of its deferred writes. For a large set of entities receiving the same bundle,
 use Bevy's existing batch command when its fallible/overwrite semantics match
 the owner, and preserve the owner's iteration order when it determines stable
-IDs.
+IDs. Relationship bundles such as `ChildOf` can use the same fallible batch:
+Bevy runs their relationship hooks per entity, in batch order, while continuing
+past stale entities.
 
 For `process_queued_usd_visuals`, include queue preparation in the frame-budget
 review. Reuse its system-local child-key scratch set across updates, and keep

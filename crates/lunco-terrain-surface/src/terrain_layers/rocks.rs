@@ -302,7 +302,7 @@ impl TerrainLayer for RockScatterLayer {
         let mut spawned = 0usize;
         let mut rock_updates = Vec::with_capacity(placements.len());
         let mut visual_updates = Vec::with_capacity(placements.len());
-        let mut parented_entities = Vec::with_capacity(placements.len());
+        let mut parent_updates = Vec::with_capacity(placements.len());
         for p in placements.iter() {
             let y =
                 lunco_terrain_core::HeightSource::height_at(oracle, p.pos.x as f64, p.pos.y as f64)
@@ -361,16 +361,14 @@ impl TerrainLayer for RockScatterLayer {
                 ));
             }
             // Reassert parenting for recycled rocks because presentation may
-            // reparent them. ChildOf has relationship hooks, so keep this
-            // per-entity while batching the common and visual components.
-            parented_entities.push(entity);
+            // reparent them. Batch insertion runs ChildOf's relationship hooks
+            // in placement order while keeping the deferred command queue compact.
+            parent_updates.push((entity, ChildOf(cx.terrain)));
         }
         if !rock_updates.is_empty() {
             // A doc-backed terrain can disappear before deferred commands apply;
             // the fallible batch reports any stale target without panicking.
-            for entity in parented_entities {
-                cx.commands.entity(entity).try_insert(ChildOf(cx.terrain));
-            }
+            cx.commands.try_insert_batch(parent_updates);
             cx.commands.try_insert_batch(rock_updates);
             if !visual_updates.is_empty() {
                 cx.commands.try_insert_batch(visual_updates);
