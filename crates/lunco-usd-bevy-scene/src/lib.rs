@@ -216,15 +216,17 @@ pub enum UsdPrimDisplayMode {
     Contour,
 }
 
-/// Marks a scene prim whose stage has not finished loading.
+/// Holds scene admission while a prim awaits its stage or direct-child queue.
 ///
 /// This is a scene-lifecycle fact rather than a visual implementation detail:
 /// camera presentation, readiness, tools, and simulation use it to distinguish
-/// an incomplete scene from one that has no authored content.
+/// an incomplete scene from one that has no authored content. A projected
+/// parent keeps the marker until its bounded child continuation is admitted.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct UsdSceneAwaitingStage;
 
-/// Marks a scene prim admitted to the bounded structural projection queue.
+/// Marks a scene prim or projected parent with work in the bounded structural
+/// projection queue.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct UsdSceneProjectionQueued;
 

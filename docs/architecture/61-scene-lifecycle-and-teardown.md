@@ -167,12 +167,19 @@ mutation is committed on the main thread. The live OpenUSD stage is still
 `!Send` and is retained only by `CanonicalStages` for authoring and explicit
 incremental edits after the initial snapshot.
 
-`UsdVisualProjectionSettings::frame_budget` bounds the ECS binding phase because
-entity allocation and Bevy asset mutation are main-thread responsibilities. The
-queue marker is the ownership fence: a prepared hierarchy creates one child
-under its parent, without a world-wide duplicate-path scan. The same composed
-path can legitimately occur in separate mounts or runtime instances, where the
-parent hierarchy and instance identity scope it.
+`UsdVisualProjectionSettings::frame_budget` bounds prim binding because entity
+allocation and Bevy asset mutation are main-thread responsibilities.
+`child_spawn_budget` and `max_child_spawns_per_update` bound direct-child
+admission separately, including the deferred command flush after the systems
+return. Defaults are 4 ms for prim binding, 1 ms for child admission, and 128
+child entities per update. Each parent records children in stable composed-path
+order and keeps its `UsdSceneAwaitingStage` and `UsdSceneProjectionQueued`
+fences until every direct child has entered the ECS queue. Admission re-reads
+the current composed stage. Bevy child-set changes refresh that parent's live
+child keys, so a structural sink that creates a child while the continuation is
+waiting cannot produce a second projection. The same composed path can
+legitimately occur in separate mounts or runtime instances, where the parent
+hierarchy and instance identity scope it.
 For a referenced runtime instance, the root also carries the source asset's
 path-remapped prepared plan and the canonical generation at which the
 reference was admitted. Descendants reuse that plan through the same queue;
@@ -183,10 +190,11 @@ stage identity, not by later generations of the containing document; runtime
 placement and disposable presentation edits therefore cannot cancel an
 unrelated marker or component mesh task. Geometry read from the canonical
 stage remains generation-fenced and is discarded when its source changes.
-`UsdSceneAwaitingStage` remains on queued prims, so the authoritative stage outcome
-is retained until the queue is empty. The workbench reports the indeterminate
-loading/projecting phase, and a clear transaction reports unloading, rather than
-presenting a partially projected scene as ready.
+`UsdSceneAwaitingStage` remains on queued prims and on parents with child
+continuations, so the authoritative stage outcome is retained until the
+projection queues are empty. The workbench reports the
+indeterminate loading/projecting phase, and a clear transaction reports
+unloading, rather than presenting a partially projected scene as ready.
 
 Authored control and program projection use the same composed reader contract:
 the prepared projection plan supplies facts before the live canonical stage is

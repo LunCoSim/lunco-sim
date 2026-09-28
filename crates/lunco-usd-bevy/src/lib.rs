@@ -100,6 +100,7 @@ impl Plugin for UsdVisualPlugin {
             lunco_usd_bevy_camera::UsdCameraPlugin,
             lunco_usd_bevy_light::UsdLightPlugin,
         ))
+        .init_resource::<UsdPendingChildAdmissions>()
         .configure_sets(
             Update,
             lunco_usd_bevy_camera::UsdCameraProjectionSet.after(UsdVisualProjectionSet),
@@ -248,9 +249,13 @@ impl Plugin for UsdVisualPlugin {
                         .run_if(any_queued_usd_visuals)
                         .after(sync_usd_visuals)
                         .in_set(UsdVisualProjectionSet),
+                    admit_pending_usd_children
+                        .run_if(has_pending_usd_children)
+                        .after(process_queued_usd_visuals)
+                        .in_set(UsdVisualProjectionSet),
                     poll_pending_usd_meshes
                         .run_if(any_pending_usd_meshes)
-                        .after(process_queued_usd_visuals)
+                        .after(admit_pending_usd_children)
                         .in_set(UsdVisualProjectionSet),
                     resolve_point_instancer_meshes
                         .run_if(point_instance_render_inputs_changed)
@@ -345,16 +350,139 @@ pub struct UsdVisualProjectionSettings {
     /// A zero budget is invalid and is reported by the projector rather than
     /// silently changing the pacing contract.
     pub frame_budget: std::time::Duration,
+    /// Maximum time spent admitting deferred direct children in one `Update`.
+    pub child_spawn_budget: std::time::Duration,
+    /// Maximum number of child entities admitted in one `Update`.
+    pub max_child_spawns_per_update: usize,
 }
 
 impl Default for UsdVisualProjectionSettings {
     fn default() -> Self {
         Self {
-            // Eight milliseconds leaves the rest of a 60 Hz frame for input,
-            // simulation, and UI while avoiding a hundreds-of-frames load for
-            // ordinary scenes.
-            frame_budget: std::time::Duration::from_millis(8),
+            // Keep structural binding and its deferred command flush within a
+            // small part of a presentation frame. The independent child cap
+            // also bounds work Bevy applies after these systems return.
+            frame_budget: std::time::Duration::from_millis(4),
+            child_spawn_budget: std::time::Duration::from_millis(1),
+            max_child_spawns_per_update: 128,
         }
+    }
+}
+
+/// Stable continuation queue for a prim's direct children.
+///
+/// `deferred` receives children discovered during the current projection pass;
+/// `ready` contains children eligible for admission on this pass. Keeping the
+/// queues separate ensures a parent has committed its projected identity and
+/// readiness markers before a later update admits its children.
+#[derive(Resource, Default)]
+struct UsdPendingChildAdmissions {
+    ready: std::collections::BTreeSet<(String, Entity)>,
+    deferred: std::collections::BTreeSet<(String, Entity)>,
+    counts_by_parent: std::collections::HashMap<Entity, usize>,
+    live_child_keys_by_parent: std::collections::HashMap<Entity, PendingLiveChildKeys>,
+}
+
+#[derive(Default)]
+struct PendingLiveChildKeys {
+    keys: std::collections::HashSet<(AssetId<UsdStageAsset>, String)>,
+    entities: std::collections::HashSet<Entity>,
+}
+
+impl UsdPendingChildAdmissions {
+    fn enqueue(&mut self, parent: Entity, child_path: &SdfPath) -> bool {
+        let key = (child_path.as_str().to_owned(), parent);
+        if self.ready.contains(&key) || self.deferred.contains(&key) {
+            return false;
+        }
+        self.deferred.insert(key);
+        *self.counts_by_parent.entry(parent).or_default() += 1;
+        true
+    }
+
+    fn promote_deferred(&mut self) {
+        self.ready.append(&mut self.deferred);
+    }
+
+    fn pop_first_ready(&mut self) -> Option<(String, Entity)> {
+        self.ready.pop_first()
+    }
+
+    fn has_parent(&self, parent: Entity) -> bool {
+        self.counts_by_parent.contains_key(&parent)
+    }
+
+    /// Mark one child complete and return whether it was the parent's last.
+    fn finish_child(&mut self, parent: Entity) -> bool {
+        let Some(count) = self.counts_by_parent.get_mut(&parent) else {
+            return false;
+        };
+        *count -= 1;
+        if *count == 0 {
+            self.counts_by_parent.remove(&parent);
+            self.live_child_keys_by_parent.remove(&parent);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn refresh_live_child_keys(
+        &mut self,
+        parent: Entity,
+        keys: std::collections::HashSet<(AssetId<UsdStageAsset>, String)>,
+        entities: std::collections::HashSet<Entity>,
+    ) {
+        self.live_child_keys_by_parent
+            .insert(parent, PendingLiveChildKeys { keys, entities });
+    }
+
+    fn needs_live_child_key_refresh(
+        &self,
+        parent: Entity,
+        children_changed: bool,
+        children: Option<&Children>,
+    ) -> bool {
+        let Some(cache) = self.live_child_keys_by_parent.get(&parent) else {
+            return true;
+        };
+        if !children_changed {
+            return false;
+        }
+        let Some(children) = children else {
+            return !cache.entities.is_empty();
+        };
+        children.len() != cache.entities.len()
+            || children
+                .iter()
+                .any(|child| !cache.entities.contains(&child))
+    }
+
+    fn insert_live_child_key(
+        &mut self,
+        parent: Entity,
+        stage_id: AssetId<UsdStageAsset>,
+        path: String,
+    ) -> bool {
+        self.live_child_keys_by_parent
+            .get_mut(&parent)
+            .is_some_and(|cache| cache.keys.insert((stage_id, path)))
+    }
+
+    fn register_child_entity(&mut self, parent: Entity, child: Entity) {
+        if let Some(cache) = self.live_child_keys_by_parent.get_mut(&parent) {
+            cache.entities.insert(child);
+        }
+    }
+
+    /// Discard all remaining child work for a parent that failed or went stale.
+    fn discard_parent(&mut self, parent: Entity) {
+        self.ready
+            .retain(|(_, queued_parent)| *queued_parent != parent);
+        self.deferred
+            .retain(|(_, queued_parent)| *queued_parent != parent);
+        self.counts_by_parent.remove(&parent);
+        self.live_child_keys_by_parent.remove(&parent);
     }
 }
 
@@ -420,12 +548,9 @@ fn instantiate_usd_prim(
     prim_path: &UsdPrimPath,
     existing_vis: Option<&Visibility>,
     existing_tf: Option<&Transform>,
-    is_instance_root: bool,
     inherited_member: Option<&UsdInstanceMember>,
     instance_projection: Option<&UsdInstanceProjection>,
-    is_high_precision_parent: bool,
     parent_grid: Option<&Grid>,
-    is_grid_entity: bool,
     preview_only: bool,
     commands: &mut Commands,
     stages: &Assets<UsdStageAsset>,
@@ -434,6 +559,7 @@ fn instantiate_usd_prim(
     meshes: &mut Assets<Mesh>,
     quality: lunco_render::RenderQualityProfile,
     live_child_keys: &mut std::collections::HashSet<(Entity, AssetId<UsdStageAsset>, String)>,
+    pending_children: &mut UsdPendingChildAdmissions,
 ) {
     let id = prim_path.stage_handle.id();
     let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
@@ -451,12 +577,9 @@ fn instantiate_usd_prim(
         prim_path,
         existing_vis,
         existing_tf,
-        is_instance_root,
         inherited_member,
         instance_projection,
-        is_high_precision_parent,
         parent_grid,
-        is_grid_entity,
         preview_only,
         commands,
         asset_server,
@@ -464,6 +587,7 @@ fn instantiate_usd_prim(
         quality,
         stage_generation,
         live_child_keys,
+        pending_children,
     );
 }
 
@@ -479,12 +603,9 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
     prim_path: &UsdPrimPath,
     existing_vis: Option<&Visibility>,
     existing_tf: Option<&Transform>,
-    is_instance_root: bool,
     inherited_member: Option<&UsdInstanceMember>,
     instance_projection: Option<&UsdInstanceProjection>,
-    is_high_precision_parent: bool,
     parent_grid: Option<&Grid>,
-    is_grid_entity: bool,
     preview_only: bool,
     commands: &mut Commands,
     asset_server: &AssetServer,
@@ -492,6 +613,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
     quality: lunco_render::RenderQualityProfile,
     stage_generation: u64,
     live_child_keys: &mut std::collections::HashSet<(Entity, AssetId<UsdStageAsset>, String)>,
+    pending_children: &mut UsdPendingChildAdmissions,
 ) {
     let convention = match stage_convention(reader) {
         Ok(convention) => convention,
@@ -579,16 +701,6 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         ) {
             commands.entity(entity).try_insert(provenance);
         }
-
-        // Membership to hand down to children: inherited if we're mid-subtree,
-        // or freshly rooted at *this* entity if it is the instance root. `None`
-        // for ordinary scene prims (their descendants keep `Content` identity).
-        let child_member: Option<UsdInstanceMember> = inherited_member.cloned().or_else(|| {
-            is_instance_root.then(|| UsdInstanceMember {
-                root: entity,
-                root_path: resolved_path.clone(),
-            })
-        });
 
         // Skip inactive prims
         if !reader.is_active(&sdf_path) {
@@ -1257,12 +1369,8 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             &prim_path.stage_handle,
             reader,
             &sdf_path,
-            &child_member,
-            instance_projection,
-            is_high_precision_parent,
-            is_grid_entity,
             live_child_keys,
-            commands,
+            pending_children,
         );
     }
 }
@@ -1575,24 +1683,19 @@ fn project_spawnable_selectable(
     }
 }
 
-/// Record the direct USD children from an owned read source.
+/// Record direct children for bounded admission after the parent projection commits.
 ///
-/// Initial loads pass the worker-produced [`UsdStageProjectionPlan`], so this
-/// function performs only cheap map reads and ECS command recording on the main
-/// thread. Each child enters the same queue and owns the next direct-child
-/// commit. A later live structural edit explicitly passes the canonical
-/// [`StageView`] and follows the same ownership boundary for that edit.
+/// Initial loads use the worker-produced [`UsdStageProjectionPlan`]. This pass
+/// stores stable child paths only; transform reads and ECS command recording
+/// happen in bounded batches on later updates. Live structural edits use the
+/// same queue with the canonical [`StageView`].
 fn commit_usd_children<R: UsdRead>(
     parent: Entity,
     stage_handle: &Handle<UsdStageAsset>,
     reader: &R,
     parent_path: &SdfPath,
-    child_member: &Option<UsdInstanceMember>,
-    instance_projection: Option<&UsdInstanceProjection>,
-    is_high_precision_parent: bool,
-    is_grid_entity: bool,
     live_child_keys: &mut std::collections::HashSet<(Entity, AssetId<UsdStageAsset>, String)>,
-    commands: &mut Commands,
+    pending_children: &mut UsdPendingChildAdmissions,
 ) {
     // Child order is part of the structural admission contract.  Readers may
     // be backed by different composition/index implementations, and their
@@ -1614,88 +1717,7 @@ fn commit_usd_children<R: UsdRead>(
         if !live_child_keys.insert(child_key) {
             continue;
         }
-
-        let child_tf = match read_transform_from_usd(reader, &child_path) {
-            Ok(transform) => transform,
-            Err(error) => {
-                error!(
-                    "[usd-bevy] {} has malformed authored transform; visual projection rejected: {}",
-                    child_path.as_str(),
-                    error
-                );
-                commands.entity(parent).try_insert((
-                    UsdSceneProjectionFailed(error.to_string()),
-                    Visibility::Hidden,
-                ));
-                return;
-            }
-        };
-
-        let base_components = (
-            Name::new(child_path.to_string()),
-            UsdPrimPath {
-                stage_handle: stage_handle.clone(),
-                path: child_path.to_string(),
-            },
-            child_tf,
-            GlobalTransform::default(),
-            Visibility::Visible,
-            InheritedVisibility::VISIBLE,
-            ViewVisibility::default(),
-            UsdSceneAwaitingStage,
-            UsdSceneProjectionQueued,
-        );
-        let is_low_precision_root_target = is_high_precision_parent && !is_grid_entity;
-        let child_entity = match child_member {
-            Some(member) if is_low_precision_root_target => queue_usd_child_spawn(
-                commands,
-                parent,
-                base_components,
-                (
-                    member.clone(),
-                    big_space::grid::propagation::LowPrecisionRoot,
-                ),
-                instance_projection.cloned(),
-            ),
-            Some(member) if is_grid_entity => queue_usd_child_spawn(
-                commands,
-                parent,
-                base_components,
-                (member.clone(), CellCoord::default()),
-                instance_projection.cloned(),
-            ),
-            Some(member) => queue_usd_child_spawn(
-                commands,
-                parent,
-                base_components,
-                (member.clone(),),
-                instance_projection.cloned(),
-            ),
-            None if is_low_precision_root_target => queue_usd_child_spawn(
-                commands,
-                parent,
-                base_components,
-                (big_space::grid::propagation::LowPrecisionRoot,),
-                instance_projection.cloned(),
-            ),
-            None if is_grid_entity => queue_usd_child_spawn(
-                commands,
-                parent,
-                base_components,
-                (CellCoord::default(),),
-                instance_projection.cloned(),
-            ),
-            None => queue_usd_child_spawn(
-                commands,
-                parent,
-                base_components,
-                (),
-                instance_projection.cloned(),
-            ),
-        };
-
-        project_spawnable_selectable(reader, &child_path, child_entity, commands);
-        project_catalog_entry_id(reader, &child_path, child_entity, commands);
+        pending_children.enqueue(parent, &child_path);
     }
 }
 
@@ -1920,6 +1942,7 @@ struct UsdVisualProjectionState<'w, 's> {
     queued: Local<'s, std::collections::BTreeSet<(String, Entity)>>,
     queued_entities: Local<'s, std::collections::HashSet<Entity>>,
     last_active_root: Local<'s, Option<Entity>>,
+    pending_children: ResMut<'w, UsdPendingChildAdmissions>,
 }
 
 /// Project USD prims until the configured wall-clock budget is exhausted.
@@ -1938,7 +1961,6 @@ fn process_queued_usd_visuals(
             &UsdPrimPath,
             Option<&Visibility>,
             Option<&Transform>,
-            Has<UsdInstanceRoot>,
             Option<&UsdInstanceMember>,
             Option<&UsdInstanceProjection>,
         ),
@@ -1948,13 +1970,6 @@ fn process_queued_usd_visuals(
             Without<UsdSceneProjectionFailed>,
             Without<PendingUsdMesh>,
         ),
-    >,
-    q_high_precision: Query<
-        (),
-        Or<(
-            With<big_space::prelude::Grid>,
-            With<big_space::prelude::CellCoord>,
-        )>,
     >,
     q_grid: Query<&Grid>,
     mut visual_state: UsdVisualProjectionState,
@@ -1988,7 +2003,6 @@ fn process_queued_usd_visuals(
             }
         }
     }
-
     let requested_profile = match quality.validated_profile() {
         Ok(profile) => profile,
         Err(reason) => {
@@ -1996,9 +2010,12 @@ fn process_queued_usd_visuals(
             return;
         }
     };
-    if settings.frame_budget.is_zero() {
+    if settings.frame_budget.is_zero()
+        || settings.child_spawn_budget.is_zero()
+        || settings.max_child_spawns_per_update == 0
+    {
         error!(
-            "[usd-bevy] USD visual projection requires a non-zero frame budget; refusing invalid configuration"
+            "[usd-bevy] USD visual projection requires non-zero time and child admission budgets; refusing invalid configuration"
         );
         return;
     }
@@ -2015,9 +2032,7 @@ fn process_queued_usd_visuals(
         };
         visual_state.queued_entities.remove(&entity);
         visited += 1;
-        let Ok((entity, prim_path, vis, tf, is_instance_root, member, instance_projection)) =
-            q.get(entity)
-        else {
+        let Ok((entity, prim_path, vis, tf, member, instance_projection)) = q.get(entity) else {
             continue;
         };
         if stages.get(&prim_path.stage_handle).is_none() {
@@ -2046,11 +2061,6 @@ fn process_queued_usd_visuals(
             .entity(entity)
             .try_remove::<UsdSceneProjectionQueued>()
             .try_remove::<UsdSceneAwaitingStage>();
-        let is_high_precision_parent = q_high_precision.contains(entity)
-            || q_child_of
-                .get(entity)
-                .ok()
-                .is_some_and(|c| q_high_precision.contains(c.parent()));
         let parent_grid = q_child_of
             .get(entity)
             .ok()
@@ -2079,12 +2089,9 @@ fn process_queued_usd_visuals(
             prim_path,
             vis,
             tf,
-            is_instance_root,
             member,
             instance_projection,
-            is_high_precision_parent,
             parent_grid,
-            q_grid.contains(entity),
             preview_only,
             &mut commands,
             &stages,
@@ -2093,7 +2100,15 @@ fn process_queued_usd_visuals(
             &mut meshes,
             requested_profile,
             &mut visual_state.child_keys,
+            &mut visual_state.pending_children,
         );
+        if visual_state.pending_children.has_parent(entity) {
+            // Keep the existing readiness and workbench projection fences on
+            // the parent until every direct child has entered the ECS queue.
+            commands
+                .entity(entity)
+                .try_insert((UsdSceneAwaitingStage, UsdSceneProjectionQueued));
+        }
         projected += 1;
     }
     if projected > 0 {
@@ -2102,6 +2117,300 @@ fn process_queued_usd_visuals(
             started.elapsed().as_secs_f64() * 1_000.0
         );
     }
+}
+
+fn has_pending_usd_children(pending: Res<UsdPendingChildAdmissions>) -> bool {
+    !pending.ready.is_empty() || !pending.deferred.is_empty()
+}
+
+#[derive(SystemParam)]
+struct UsdChildAdmissionContext<'w, 's> {
+    settings: Res<'w, UsdVisualProjectionSettings>,
+    parent: Query<
+        'w,
+        's,
+        (
+            &'static UsdPrimPath,
+            Has<UsdInstanceRoot>,
+            Option<&'static UsdInstanceMember>,
+            Option<&'static UsdInstanceProjection>,
+        ),
+        (With<UsdSceneProjected>, With<UsdSceneProjectionQueued>),
+    >,
+    children: Query<'w, 's, &'static Children>,
+    children_changed: Query<'w, 's, (), Changed<Children>>,
+    paths: Query<'w, 's, &'static UsdPrimPath>,
+    high_precision: Query<
+        'w,
+        's,
+        (),
+        Or<(
+            With<big_space::prelude::Grid>,
+            With<big_space::prelude::CellCoord>,
+        )>,
+    >,
+    grid: Query<'w, 's, &'static Grid>,
+    child_of: Query<'w, 's, &'static ChildOf>,
+    scene_root: Query<'w, 's, (), With<UsdSceneRoot>>,
+    entities: Query<'w, 's, Entity>,
+    preview_only: Query<'w, 's, (), With<UsdPreviewOnly>>,
+    mount_state: Res<'w, lunco_core::SceneMountState>,
+    stages: Res<'w, Assets<UsdStageAsset>>,
+    canonical: NonSend<'w, CanonicalStages>,
+}
+
+/// Admit a bounded batch of direct children from the stable projection queue.
+///
+/// Parents remain marked awaiting/projecting until all their direct children
+/// have either been admitted or rejected by the current composed stage. This
+/// keeps scene readiness behind the same authoritative projection boundary
+/// while capping the deferred command flush after this system.
+fn admit_pending_usd_children(
+    mut pending_children: ResMut<UsdPendingChildAdmissions>,
+    context: UsdChildAdmissionContext,
+    mut commands: Commands,
+) {
+    if context.settings.child_spawn_budget.is_zero()
+        || context.settings.max_child_spawns_per_update == 0
+    {
+        error!(
+            "[usd-bevy] USD child admission requires non-zero time and entity budgets; refusing invalid configuration"
+        );
+        return;
+    }
+
+    let started = web_time::Instant::now();
+    let mut admitted = 0usize;
+    let mut visited = 0usize;
+
+    while !pending_children.ready.is_empty() {
+        if visited != 0 && started.elapsed() >= context.settings.child_spawn_budget {
+            break;
+        }
+        if admitted >= context.settings.max_child_spawns_per_update {
+            break;
+        }
+        let Some((child_path_text, parent)) = pending_children.pop_first_ready() else {
+            break;
+        };
+        visited += 1;
+
+        let Ok((parent_prim_path, is_instance_root, inherited_member, instance_projection)) =
+            context.parent.get(parent)
+        else {
+            pending_children.discard_parent(parent);
+            continue;
+        };
+        let preview_only = is_preview_only(parent, &context.child_of, &context.preview_only);
+        if !preview_only {
+            let stale_mount = match scene_root_ancestor(
+                parent,
+                &context.scene_root,
+                &context.child_of,
+                &context.entities,
+            ) {
+                Ok(Some(root)) => !context.mount_state.contains_root(root),
+                Ok(None) => false,
+                Err(_) => true,
+            };
+            if stale_mount {
+                commands.entity(parent).try_despawn();
+                pending_children.discard_parent(parent);
+                continue;
+            }
+        }
+
+        let Some(stage_asset) = context.stages.get(&parent_prim_path.stage_handle) else {
+            fail_pending_usd_children(
+                parent,
+                format!("stage asset disappeared while admitting child `{child_path_text}`"),
+                &mut pending_children,
+                &mut commands,
+            );
+            continue;
+        };
+        let (reader, _) = context.canonical.reader_for_entity(
+            parent_prim_path.stage_handle.id(),
+            stage_asset,
+            instance_projection,
+        );
+        let Ok(child_path) = SdfPath::new(&child_path_text) else {
+            fail_pending_usd_children(
+                parent,
+                format!("queued child path `{child_path_text}` is invalid"),
+                &mut pending_children,
+                &mut commands,
+            );
+            continue;
+        };
+        if !UsdRead::is_active(&reader, &child_path) {
+            finish_pending_usd_child(parent, &mut pending_children, &mut commands);
+            continue;
+        }
+
+        let live_children = context.children.get(parent).ok();
+        if pending_children.needs_live_child_key_refresh(
+            parent,
+            context.children_changed.contains(parent),
+            live_children,
+        ) {
+            let mut live_keys = std::collections::HashSet::new();
+            let mut live_entities = std::collections::HashSet::new();
+            if let Some(children) = live_children {
+                for child in children.iter() {
+                    live_entities.insert(child);
+                    if let Ok(path) = context.paths.get(child) {
+                        live_keys.insert((path.stage_handle.id(), path.path.clone()));
+                    }
+                }
+            }
+            pending_children.refresh_live_child_keys(parent, live_keys, live_entities);
+        }
+        let stage_id = parent_prim_path.stage_handle.id();
+        if !pending_children.insert_live_child_key(parent, stage_id, child_path_text.clone()) {
+            finish_pending_usd_child(parent, &mut pending_children, &mut commands);
+            continue;
+        }
+
+        let child_tf = match read_transform_from_usd(&reader, &child_path) {
+            Ok(transform) => transform,
+            Err(error) => {
+                fail_pending_usd_children(
+                    parent,
+                    format!(
+                        "{} has malformed authored transform; visual projection rejected: {error}",
+                        child_path.as_str()
+                    ),
+                    &mut pending_children,
+                    &mut commands,
+                );
+                continue;
+            }
+        };
+
+        let child_member = if let Some(member) = inherited_member {
+            Some(member.clone())
+        } else if is_instance_root {
+            let Some(root_path) = resolve_stage_prim_path(&reader, &parent_prim_path.path) else {
+                fail_pending_usd_children(
+                    parent,
+                    format!(
+                        "instance root `{}` could not be resolved while admitting its children",
+                        parent_prim_path.path
+                    ),
+                    &mut pending_children,
+                    &mut commands,
+                );
+                continue;
+            };
+            Some(UsdInstanceMember {
+                root: parent,
+                root_path,
+            })
+        } else {
+            None
+        };
+        let base_components = (
+            Name::new(child_path_text.clone()),
+            UsdPrimPath {
+                stage_handle: parent_prim_path.stage_handle.clone(),
+                path: child_path_text,
+            },
+            child_tf,
+            GlobalTransform::default(),
+            Visibility::Visible,
+            InheritedVisibility::VISIBLE,
+            ViewVisibility::default(),
+            UsdSceneAwaitingStage,
+            UsdSceneProjectionQueued,
+        );
+        let is_high_precision_parent = context.high_precision.contains(parent)
+            || context
+                .child_of
+                .get(parent)
+                .ok()
+                .is_some_and(|c| context.high_precision.contains(c.parent()));
+        let is_grid_entity = context.grid.contains(parent);
+        let is_low_precision_root_target = is_high_precision_parent && !is_grid_entity;
+        let child_entity = match child_member {
+            Some(member) if is_low_precision_root_target => queue_usd_child_spawn(
+                &mut commands,
+                parent,
+                base_components,
+                (member, big_space::grid::propagation::LowPrecisionRoot),
+                instance_projection.cloned(),
+            ),
+            Some(member) if is_grid_entity => queue_usd_child_spawn(
+                &mut commands,
+                parent,
+                base_components,
+                (member, CellCoord::default()),
+                instance_projection.cloned(),
+            ),
+            Some(member) => queue_usd_child_spawn(
+                &mut commands,
+                parent,
+                base_components,
+                (member,),
+                instance_projection.cloned(),
+            ),
+            None if is_low_precision_root_target => queue_usd_child_spawn(
+                &mut commands,
+                parent,
+                base_components,
+                (big_space::grid::propagation::LowPrecisionRoot,),
+                instance_projection.cloned(),
+            ),
+            None if is_grid_entity => queue_usd_child_spawn(
+                &mut commands,
+                parent,
+                base_components,
+                (CellCoord::default(),),
+                instance_projection.cloned(),
+            ),
+            None => queue_usd_child_spawn(
+                &mut commands,
+                parent,
+                base_components,
+                (),
+                instance_projection.cloned(),
+            ),
+        };
+        project_spawnable_selectable(&reader, &child_path, child_entity, &mut commands);
+        project_catalog_entry_id(&reader, &child_path, child_entity, &mut commands);
+        pending_children.register_child_entity(parent, child_entity);
+        admitted += 1;
+        finish_pending_usd_child(parent, &mut pending_children, &mut commands);
+    }
+    pending_children.promote_deferred();
+}
+
+fn finish_pending_usd_child(
+    parent: Entity,
+    pending_children: &mut UsdPendingChildAdmissions,
+    commands: &mut Commands,
+) {
+    if pending_children.finish_child(parent) {
+        commands
+            .entity(parent)
+            .try_remove::<UsdSceneAwaitingStage>()
+            .try_remove::<UsdSceneProjectionQueued>();
+    }
+}
+
+fn fail_pending_usd_children(
+    parent: Entity,
+    message: String,
+    pending_children: &mut UsdPendingChildAdmissions,
+    commands: &mut Commands,
+) {
+    error!("[usd-bevy] {message}");
+    pending_children.discard_parent(parent);
+    commands
+        .entity(parent)
+        .try_insert((UsdSceneProjectionFailed(message), Visibility::Hidden))
+        .try_remove::<UsdSceneAwaitingStage>()
+        .try_remove::<UsdSceneProjectionQueued>();
 }
 
 /// Commit completed CPU-generated USD meshes without reading USD again.

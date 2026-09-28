@@ -150,6 +150,12 @@ The idle run condition should inspect the owner set, not scan the population.
 When initial candidate processing spans many owners, queue the bootstrap IDs
 once and drain a fixed-size batch in stable entity order per app update; keep
 the remainder queued so a large scene cannot monopolize one UI frame.
+For USD visual projection, read both the system body and its Tracy
+`system_commands` flush: the prim `frame_budget` does not bound commands
+recorded by one high-fanout parent. `child_spawn_budget` and
+`max_child_spawns_per_update` cap that continuation separately; the parent
+keeps its awaiting/projecting markers until its direct children enter the ECS
+queue, so scene readiness must remain held while batches drain.
 When a worker prepares facts for a composed plan, result commit must use the
 same prepared-plan identity for any derived cache. If the canonical owner
 records that exact plan as the source of the current live-stage generation,
