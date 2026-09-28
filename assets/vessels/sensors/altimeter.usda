@@ -6,12 +6,9 @@
 )
 
 # Reusable range-finding altimeter (radar/laser) — a library primitive, sibling of
-# imu.usda. Reference it onto a vessel with `prepend references` + a local mount
-# translate; override `rangeMax` / `rangeAxis` on the referencing prim as needed:
-#
-#   def "Altimeter" (prepend references = @lunco://vessels/sensors/altimeter.usda@</Altimeter>)
-#   { double3 xformOp:translate = (0, -3.3, 0); uniform token[] xformOpOrder = ["xformOp:translate"] }
-#
+# imu.usda. Reference it onto a vessel with `prepend references` and author its
+# local mount transform on the referencing prim. The reusable Modelica model
+# consumes the effective ray origin/direction composed from that transform.
 # Backed by a generic raw Avian ray observation plus the Modelica Altimeter
 # conversion. A miss is invalid and is never replaced by ideal altitude.
 #
@@ -48,6 +45,12 @@ def Xform "Altimeter" (
     float outputs:ray_hit_normal_y
     float outputs:ray_hit_normal_z
     float outputs:ray_sample_time
+    float outputs:ray_origin_body_local_x
+    float outputs:ray_origin_body_local_y
+    float outputs:ray_origin_body_local_z
+    float outputs:ray_direction_body_local_x
+    float outputs:ray_direction_body_local_y
+    float outputs:ray_direction_body_local_z
 
     # This is a Modelica conversion attached to the raw ray query. The
     # connections are local to this reusable sensor, while the vehicle owns
@@ -64,16 +67,14 @@ def Xform "Altimeter" (
         float inputs:ray_hit_position_y.connect = </Altimeter.outputs:ray_hit_position_y>
         float inputs:ray_hit_position_z.connect = </Altimeter.outputs:ray_hit_position_z>
         float inputs:ray_sample_time.connect = </Altimeter.outputs:ray_sample_time>
-        # The ray origin is mounted on the vehicle, so the Modelica sensor
-        # removes this authored local offset after back-projecting the hit.
-        float inputs:mount_local_x = 0.0
-        float inputs:mount_local_y = -3.3
-        float inputs:mount_local_z = 0.0
-        # The direction is part of the authored ray geometry. Modelica uses the
-        # live IMU attitude to turn its Avian hit distance into vertical clearance.
-        float inputs:ray_direction_local_x = 0.0
-        float inputs:ray_direction_local_y = -1.0
-        float inputs:ray_direction_local_z = 0.0
+        # Use the effective body-local ray geometry computed by the raw ray
+        # sampler from this prim's full composed transform hierarchy.
+        float inputs:ray_origin_body_local_x.connect = </Altimeter.outputs:ray_origin_body_local_x>
+        float inputs:ray_origin_body_local_y.connect = </Altimeter.outputs:ray_origin_body_local_y>
+        float inputs:ray_origin_body_local_z.connect = </Altimeter.outputs:ray_origin_body_local_z>
+        float inputs:ray_direction_body_local_x.connect = </Altimeter.outputs:ray_direction_body_local_x>
+        float inputs:ray_direction_body_local_y.connect = </Altimeter.outputs:ray_direction_body_local_y>
+        float inputs:ray_direction_body_local_z.connect = </Altimeter.outputs:ray_direction_body_local_z>
         # A nadir altimeter is not a general oblique range finder.  Requiring
         # a strong downward projection keeps the flight computer from using a
         # terrain hit at the horizon while attitude is still recovering.

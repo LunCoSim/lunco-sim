@@ -9,26 +9,22 @@ model Altimeter
 
   parameter Real range_filter_time_constant_s = 0.02
     "Range-rate differentiator time constant (s)";
-  parameter Real ray_direction_local_x = 0.0
-    "Authored ray direction in the sensor frame, X";
-  parameter Real ray_direction_local_y = -1.0
-    "Authored ray direction in the sensor frame, Y";
-  parameter Real ray_direction_local_z = 0.0
-    "Authored ray direction in the sensor frame, Z";
   parameter Real minimum_vertical_projection = 0.05
     "Smallest downward ray projection accepted as altitude evidence";
   parameter Real minimum_range_m = 1.0e-3
     "Smallest positive raw range accepted as a hit (m)";
-
   input Real ray_distance_m = 0.0 "Raw Avian hit distance (m)";
   input Real ray_hit_valid = 0.0 "Raw Avian hit validity (1 = hit)";
   input Real ray_hit_position_x = 0.0 "Raw hit point world X (m)";
   input Real ray_hit_position_y = 0.0 "Raw hit point world Y (m)";
   input Real ray_hit_position_z = 0.0 "Raw hit point world Z (m)";
   input Real ray_sample_time = 0.0 "Raw Avian physics sample time (s)";
-  input Real mount_local_x = 0.0 "Sensor mount position in vehicle X (m)";
-  input Real mount_local_y = 0.0 "Sensor mount position in vehicle Y (m)";
-  input Real mount_local_z = 0.0 "Sensor mount position in vehicle Z (m)";
+  input Real ray_origin_body_local_x = 0.0 "Effective ray origin in body-local X (m)";
+  input Real ray_origin_body_local_y = 0.0 "Effective ray origin in body-local Y (m)";
+  input Real ray_origin_body_local_z = 0.0 "Effective ray origin in body-local Z (m)";
+  input Real ray_direction_body_local_x = 0.0 "Effective ray direction in body-local X";
+  input Real ray_direction_body_local_y = 0.0 "Effective ray direction in body-local Y";
+  input Real ray_direction_body_local_z = 0.0 "Effective ray direction in body-local Z";
   input Real attitude_quat_w = 1.0 "Measured attitude quaternion W";
   input Real attitude_quat_x = 0.0 "Measured attitude quaternion X";
   input Real attitude_quat_y = 0.0 "Measured attitude quaternion Y";
@@ -77,16 +73,16 @@ model Altimeter
   FrameVectorTransform angular_velocity_transform;
 
 equation
-  // The raw ray is authored in the altimeter frame. Its attitude is supplied
-  // by the IMU connection on the vehicle, so a tilted ray is converted into
-  // vertical clearance without introducing a world-coordinate dependency.
+  // The raw query composes the authored ray axis with the complete sensor
+  // transform hierarchy into vehicle-local axes. The measured IMU attitude
+  // then converts that direction into navigation coordinates.
   ray_direction_norm = sqrt(max(1.0e-12,
-    ray_direction_local_x * ray_direction_local_x
-      + ray_direction_local_y * ray_direction_local_y
-      + ray_direction_local_z * ray_direction_local_z));
-  ray_direction_normalized_x = ray_direction_local_x / ray_direction_norm;
-  ray_direction_normalized_y = ray_direction_local_y / ray_direction_norm;
-  ray_direction_normalized_z = ray_direction_local_z / ray_direction_norm;
+    ray_direction_body_local_x * ray_direction_body_local_x
+      + ray_direction_body_local_y * ray_direction_body_local_y
+      + ray_direction_body_local_z * ray_direction_body_local_z));
+  ray_direction_normalized_x = ray_direction_body_local_x / ray_direction_norm;
+  ray_direction_normalized_y = ray_direction_body_local_y / ray_direction_norm;
+  ray_direction_normalized_z = ray_direction_body_local_z / ray_direction_norm;
   ray_transform.quaternion_w = attitude_quat_w;
   ray_transform.quaternion_x = attitude_quat_x;
   ray_transform.quaternion_y = attitude_quat_y;
@@ -98,17 +94,17 @@ equation
   ray_direction_nav_y = ray_transform.world_frame_y;
   ray_direction_nav_z = ray_transform.world_frame_z;
   // The raw hit point is not the vehicle position when the vehicle is tilted:
-  // it is the end of an oblique ray.  Back-project by the measured range to
-  // recover the ray origin, then remove the authored sensor mount in the same
-  // measured attitude.  This is a geometric altimeter observation, not a
-  // read of the rigid body's simulator pose.
+  // it is the end of an oblique ray. Back-project by the measured range to
+  // recover the ray origin, then remove the effective body-local ray mount in
+  // the same measured attitude. This is a geometric altimeter observation,
+  // not a read of the rigid body's simulator pose.
   mount_transform.quaternion_w = attitude_quat_w;
   mount_transform.quaternion_x = attitude_quat_x;
   mount_transform.quaternion_y = attitude_quat_y;
   mount_transform.quaternion_z = attitude_quat_z;
-  mount_transform.vector_x = mount_local_x;
-  mount_transform.vector_y = mount_local_y;
-  mount_transform.vector_z = mount_local_z;
+  mount_transform.vector_x = ray_origin_body_local_x;
+  mount_transform.vector_y = ray_origin_body_local_y;
+  mount_transform.vector_z = ray_origin_body_local_z;
   // The range is projected onto navigation vertical.  When the vehicle is
   // rotating, the projection itself changes even if the vehicle has no
   // vertical motion.  Use the measured body rate to remove that geometric
