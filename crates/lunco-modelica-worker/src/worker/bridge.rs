@@ -74,13 +74,15 @@ pub fn request_modelica_compiles(
 }
 
 /// Hold the causal simulation while an active Modelica participant is not
-/// compiled for its current session.
+/// compiled for its current session and has not failed terminally.
 ///
 /// Runs in the lifecycle cycle before the time spine. The worker compile path
 /// remains live while `Time<Virtual>` is held; a successful compile result is
 /// committed in `Update`, and this system releases the exact participant hold
-/// on the next lifecycle pass. Intentionally paused models and models outside
-/// the shared causal closure do not gate world time.
+/// on the next lifecycle pass. A terminal Modelica error releases the
+/// preparation hold; the readiness owner continues to report the failure.
+/// Intentionally paused models and models outside the shared causal closure do
+/// not gate world time.
 pub fn reconcile_modelica_preparation_progress(
     models: Query<(Entity, &ModelicaModel, Option<&lunco_core::GlobalEntityId>)>,
     mut removed_models: RemovedComponents<ModelicaModel>,
@@ -105,7 +107,8 @@ pub fn reconcile_modelica_preparation_progress(
                 && participants.requires_barrier(entity)
         });
         let run_requested = !model.paused || model.resume_after_compile;
-        let preparation_pending = !model.is_compiled || model.is_compiling;
+        let preparation_pending =
+            model.last_error.is_none() && (!model.is_compiled || model.is_compiling);
 
         if causal_participant && run_requested && preparation_pending {
             progress.acquire(

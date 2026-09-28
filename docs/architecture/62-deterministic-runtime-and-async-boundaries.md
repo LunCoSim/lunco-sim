@@ -407,6 +407,9 @@ worker result is committed by the Modelica response handler before the next
 lifecycle pass releases that key. Intentionally paused and noncausal models do
 not hold world time. This gate covers prepared solver state; the first normal
 co-simulation step remains governed by the per-step barrier after activation.
+A terminal Modelica error also releases the preparation key, while the
+readiness owner keeps the failure visible as `program_failed` and applies its
+configured failed-participant action.
 The causal transaction follows explicit owner phases:
 
 1. Capture external commands and events as typed inputs with their authoritative
