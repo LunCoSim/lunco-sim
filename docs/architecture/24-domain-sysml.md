@@ -105,14 +105,17 @@ shows the channel, verification identity, source revision, simulation tick, and
 check-level results, including failure messages and actual/expected values when
 the observer supplies them. The view keeps up to 64 detail records per
 requirement and retains aggregate counts for larger result sets. Each
-Twin-mapped verification can be run from its linked requirement; the panel
-starts the production headless scene-test runner,
-shows elapsed time and live output, and allows cancellation. Completed runs
-retain their summary and captured output for the open Twin session. Tests read
-saved Twin files, so running is disabled while an indexed SysML document or
-local source draft has unsaved edits. Statuses distinguish missing evidence,
-missing `verify` links, missing Twin runner mappings, unrun or stale results,
-and execution errors. A missing formal `require` criterion is a model-coverage
+Twin-mapped verification can be run from its linked requirement; **Run all
+mapped tests** runs each distinct linked case once, sequentially, through the
+production headless scene-test runner. The panel shows suite progress, supports
+stopping the suite, and displays failing check identities and runner messages,
+including actual/expected values when emitted. Full captured output remains
+available per case. Requirements without a resolved `verify` link or a Twin
+test mapping remain visible as coverage gaps and are skipped. Tests read saved
+Twin files, so running is disabled while an indexed SysML document or local
+source draft has unsaved edits. Statuses distinguish missing evidence, missing
+`verify` links, missing Twin runner mappings, unrun or stale results, and
+execution errors. A missing formal `require` criterion is a model-coverage
 issue, not a test failure.
 
 The panel belongs to the existing workbench Editor level, alongside native

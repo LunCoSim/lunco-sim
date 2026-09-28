@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::Read;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -20,9 +20,21 @@ pub(crate) struct RunSysmlVerification {
 }
 
 #[derive(Event, Clone, Debug)]
+pub(crate) struct RunSysmlVerificationSuite {
+    pub twin_id: TwinId,
+    pub source_revision: u64,
+    pub names: Vec<String>,
+}
+
+#[derive(Event, Clone, Debug)]
 pub(crate) struct CancelSysmlVerification {
     pub twin_id: TwinId,
     pub name: String,
+}
+
+#[derive(Event, Clone, Debug)]
+pub(crate) struct CancelSysmlVerificationSuite {
+    pub twin_id: TwinId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,6 +53,7 @@ pub(crate) struct VerificationRunResult {
     pub name: String,
     pub outcome: VerificationRunOutcome,
     pub summary: String,
+    pub diagnostics: Vec<String>,
     pub output: String,
     pub elapsed: Duration,
 }
@@ -48,7 +61,17 @@ pub(crate) struct VerificationRunResult {
 #[derive(Resource, Default)]
 pub(crate) struct SysmlVerificationRuns {
     active: Option<ActiveRun>,
+    suite: Option<VerificationSuiteRun>,
     completed: HashMap<u64, HashMap<String, VerificationRunResult>>,
+}
+
+struct VerificationSuiteRun {
+    twin_id: TwinId,
+    source_revision: u64,
+    pending: VecDeque<String>,
+    total: usize,
+    started: usize,
+    stopping: bool,
 }
 
 struct ActiveRun {
@@ -101,8 +124,27 @@ impl SysmlVerificationRuns {
             .is_some_and(|active| active.twin_id == twin_id && active.name == name)
     }
 
+    pub(crate) fn is_queued(&self, twin_id: TwinId, name: &str) -> bool {
+        self.suite.as_ref().is_some_and(|suite| {
+            suite.twin_id == twin_id && suite.pending.iter().any(|queued| queued == name)
+        })
+    }
+
     pub(crate) fn has_active_run(&self) -> bool {
-        self.active.is_some()
+        self.active.is_some() || self.suite.is_some()
+    }
+
+    pub(crate) fn suite_progress(&self, twin_id: TwinId) -> Option<(usize, usize, usize, bool)> {
+        let suite = self
+            .suite
+            .as_ref()
+            .filter(|suite| suite.twin_id == twin_id)?;
+        Some((
+            suite.started,
+            suite.total,
+            suite.pending.len(),
+            suite.stopping,
+        ))
     }
 
     pub(crate) fn active_case(&self) -> Option<(TwinId, &str)> {
@@ -126,30 +168,76 @@ pub(crate) fn start_sysml_verification(
     mut runs: ResMut<SysmlVerificationRuns>,
 ) {
     let request = trigger.event();
+    if runs.active.is_some() || runs.suite.is_some() {
+        return;
+    }
+
+    start_verification(
+        request,
+        workspace.as_deref(),
+        view_model.as_deref(),
+        documents.as_deref(),
+        &mut runs,
+    );
+}
+
+pub(crate) fn start_sysml_verification_suite(
+    trigger: On<RunSysmlVerificationSuite>,
+    mut runs: ResMut<SysmlVerificationRuns>,
+) {
+    let request = trigger.event();
+    if runs.active.is_some() || runs.suite.is_some() {
+        return;
+    }
+    let mut names = request.names.clone();
+    names.retain(|name| !name.trim().is_empty());
+    names.sort();
+    names.dedup();
+    if names.is_empty() {
+        return;
+    }
+    let total = names.len();
+    runs.suite = Some(VerificationSuiteRun {
+        twin_id: request.twin_id,
+        source_revision: request.source_revision,
+        pending: names.into(),
+        total,
+        started: 0,
+        stopping: false,
+    });
+}
+
+fn start_verification(
+    request: &RunSysmlVerification,
+    workspace: Option<&WorkspaceResource>,
+    view_model: Option<&SysmlRequirementsViewModel>,
+    documents: Option<&DocumentRegistry<SysmlDocument>>,
+    runs: &mut SysmlVerificationRuns,
+) {
     if runs.active.is_some() {
         return;
     }
 
     let Some(workspace) = workspace else {
-        return store_setup_error(&mut runs, request, "workspace is unavailable");
+        return store_setup_error(runs, request, "workspace is unavailable");
     };
     if workspace.active_twin != Some(request.twin_id) {
-        return store_setup_error(&mut runs, request, "the requested Twin is no longer active");
+        return store_setup_error(runs, request, "the requested Twin is no longer active");
     }
     let Some(view_model) = view_model else {
-        return store_setup_error(&mut runs, request, "SysML analysis is unavailable");
+        return store_setup_error(runs, request, "SysML analysis is unavailable");
     };
     if view_model.twin_id != Some(request.twin_id)
         || view_model.source_revision != Some(request.source_revision)
     {
         return store_setup_error(
-            &mut runs,
+            runs,
             request,
             "SysML source changed; refresh before running",
         );
     }
     let Some(twin) = workspace.twin(request.twin_id) else {
-        return store_setup_error(&mut runs, request, "the requested Twin is no longer open");
+        return store_setup_error(runs, request, "the requested Twin is no longer open");
     };
     if view_model
         .source_files
@@ -158,7 +246,7 @@ pub(crate) fn start_sysml_verification(
         .any(|document| document.dirty)
     {
         return store_setup_error(
-            &mut runs,
+            runs,
             request,
             "save or discard open SysML edits before running verification",
         );
@@ -167,11 +255,11 @@ pub(crate) fn start_sysml_verification(
     let mut registry_errors = twin.verification_registry_errors();
     registry_errors.extend(twin.component_registry_errors());
     if !registry_errors.is_empty() {
-        return store_setup_error(&mut runs, request, &registry_errors.join("; "));
+        return store_setup_error(runs, request, &registry_errors.join("; "));
     }
     let Some(case) = twin.verification_case(&request.name) else {
         return store_setup_error(
-            &mut runs,
+            runs,
             request,
             "the Twin has no registered test for this verification case",
         );
@@ -183,7 +271,7 @@ pub(crate) fn start_sysml_verification(
         Ok(executable) => executable,
         Err(error) => {
             return store_setup_error(
-                &mut runs,
+                runs,
                 request,
                 &format!("cannot locate the LunCoSim executable: {error}"),
             );
@@ -204,7 +292,7 @@ pub(crate) fn start_sysml_verification(
         Ok(child) => child,
         Err(error) => {
             return store_setup_error(
-                &mut runs,
+                runs,
                 request,
                 &format!("could not start the scene-test runner: {error}"),
             );
@@ -218,7 +306,7 @@ pub(crate) fn start_sysml_verification(
         let _ = child.kill();
         let _ = child.wait();
         return store_setup_error(
-            &mut runs,
+            runs,
             request,
             &format!("could not read scene-test output: {error}"),
         );
@@ -227,7 +315,7 @@ pub(crate) fn start_sysml_verification(
         let _ = child.kill();
         let _ = child.wait();
         return store_setup_error(
-            &mut runs,
+            runs,
             request,
             &format!("could not read scene-test errors: {error}"),
         );
@@ -310,6 +398,7 @@ fn store_setup_error(
                 name: request.name.clone(),
                 outcome: VerificationRunOutcome::Error(message.to_owned()),
                 summary: message.to_owned(),
+                diagnostics: vec![message.to_owned()],
                 output: String::new(),
                 elapsed: Duration::ZERO,
             },
@@ -329,12 +418,82 @@ pub(crate) fn cancel_sysml_verification(
     }
 }
 
+pub(crate) fn cancel_sysml_verification_suite(
+    trigger: On<CancelSysmlVerificationSuite>,
+    mut runs: ResMut<SysmlVerificationRuns>,
+) {
+    let twin_id = trigger.event().twin_id;
+    let (source_revision, pending) = {
+        let Some(suite) = runs.suite.as_mut().filter(|suite| suite.twin_id == twin_id) else {
+            return;
+        };
+        suite.stopping = true;
+        (
+            suite.source_revision,
+            suite.pending.drain(..).collect::<Vec<_>>(),
+        )
+    };
+    for name in pending {
+        store_cancelled_queued_case(&mut runs, twin_id, source_revision, name);
+    }
+    if let Some(active) = runs
+        .active
+        .as_mut()
+        .filter(|active| active.twin_id == twin_id)
+    {
+        active.cancel_requested = true;
+    } else {
+        runs.suite = None;
+    }
+}
+
+fn store_cancelled_queued_case(
+    runs: &mut SysmlVerificationRuns,
+    twin_id: TwinId,
+    source_revision: u64,
+    name: String,
+) {
+    let message = "Not run because the verification suite was stopped.".to_owned();
+    runs.completed.entry(twin_id.raw()).or_default().insert(
+        name.clone(),
+        VerificationRunResult {
+            twin_id,
+            source_revision,
+            name,
+            outcome: VerificationRunOutcome::Cancelled,
+            summary: message.clone(),
+            diagnostics: vec![message],
+            output: String::new(),
+            elapsed: Duration::ZERO,
+        },
+    );
+}
+
 pub(crate) fn poll_sysml_verification_run(
     mut runs: ResMut<SysmlVerificationRuns>,
     workspace: Option<Res<WorkspaceResource>>,
+    view_model: Option<Res<SysmlRequirementsViewModel>>,
+    documents: Option<Res<DocumentRegistry<SysmlDocument>>>,
 ) {
-    let Some(active) = runs.active.as_mut() else {
+    let workspace = workspace.as_deref();
+    if poll_active_verification(&mut runs, workspace) {
         return;
+    }
+    start_next_suite_case(
+        &mut runs,
+        workspace,
+        view_model.as_deref(),
+        documents.as_deref(),
+    );
+}
+
+/// Returns true while a child process remains active.
+fn poll_active_verification(
+    runs: &mut SysmlVerificationRuns,
+    workspace: Option<&WorkspaceResource>,
+) -> bool {
+    let Some(active) = runs.active.as_mut() else {
+        return false;
     };
     if active.cancel_requested {
         active.cancel_requested = false;
@@ -354,12 +513,13 @@ pub(crate) fn poll_sysml_verification_run(
                     "scene-test output channel is unavailable".to_owned(),
                 ),
                 summary: "The scene-test output channel could not be read.".to_owned(),
+                diagnostics: vec!["The scene-test output channel could not be read.".to_owned()],
                 output: active.output_log.clone(),
                 elapsed: active.started_at.elapsed(),
             };
             runs.active = None;
-            store_result_if_twin_open(&mut runs, workspace.as_deref(), result);
-            return;
+            store_result_if_twin_open(runs, workspace, result);
+            return false;
         }
     };
     loop {
@@ -412,22 +572,59 @@ pub(crate) fn poll_sysml_verification_run(
                         "could not read scene-test process status: {error}"
                     )),
                     summary: "The scene-test process could not be monitored.".to_owned(),
+                    diagnostics: vec![format!("Could not read scene-test process status: {error}")],
                     output: active.output_log.clone(),
                     elapsed: active.started_at.elapsed(),
                 };
                 runs.active = None;
-                store_result_if_twin_open(&mut runs, workspace.as_deref(), result);
-                return;
+                store_result_if_twin_open(runs, workspace, result);
+                return false;
             }
         }
     }
     if active.exit_status.is_none() || !active.stdout_complete || !active.stderr_complete {
-        return;
+        return true;
     }
 
     let active = runs.active.take().expect("active run was just checked");
     let result = build_run_result(active);
-    store_result_if_twin_open(&mut runs, workspace.as_deref(), result);
+    store_result_if_twin_open(runs, workspace, result);
+    false
+}
+
+fn start_next_suite_case(
+    runs: &mut SysmlVerificationRuns,
+    workspace: Option<&WorkspaceResource>,
+    view_model: Option<&SysmlRequirementsViewModel>,
+    documents: Option<&DocumentRegistry<SysmlDocument>>,
+) {
+    if runs.active.is_some() {
+        return;
+    }
+    if runs
+        .suite
+        .as_ref()
+        .is_some_and(|suite| suite.pending.is_empty())
+    {
+        runs.suite = None;
+        return;
+    }
+    let request = {
+        let Some(suite) = runs.suite.as_mut() else {
+            return;
+        };
+        let name = suite
+            .pending
+            .pop_front()
+            .expect("non-empty suite was checked");
+        suite.started += 1;
+        RunSysmlVerification {
+            twin_id: suite.twin_id,
+            source_revision: suite.source_revision,
+            name,
+        }
+    };
+    start_verification(&request, workspace, view_model, documents, runs);
 }
 
 fn append_output_log(
@@ -498,15 +695,50 @@ fn build_run_result(mut active: ActiveRun) -> VerificationRunResult {
         };
         (outcome, test_summary(&stdout, &stderr, status))
     };
+    let diagnostics = match &outcome {
+        VerificationRunOutcome::Failed | VerificationRunOutcome::NoVerdict => {
+            let mut diagnostics = failure_diagnostics(&stdout, &stderr);
+            if diagnostics.is_empty() {
+                diagnostics.push(summary.clone());
+            }
+            diagnostics
+        }
+        _ => Vec::new(),
+    };
     VerificationRunResult {
         twin_id: active.twin_id,
         source_revision: active.source_revision,
         name: active.name.clone(),
         outcome,
         summary,
+        diagnostics,
         output: output_log,
         elapsed,
     }
+}
+
+fn failure_diagnostics(stdout: &str, stderr: &str) -> Vec<String> {
+    const MAX_DIAGNOSTIC_LINES: usize = 12;
+    let mut diagnostics = Vec::new();
+    for line in stdout.lines().chain(stderr.lines()) {
+        let line = line.trim();
+        if line.is_empty()
+            || !(line.contains("FAIL:")
+                || line.contains("TESTS_FAIL")
+                || line.contains("luncosim test FAIL")
+                || line.contains("luncosim test NO-VERDICT")
+                || line.contains("verification selection failed"))
+        {
+            continue;
+        }
+        if diagnostics.last().is_none_or(|previous| previous != line) {
+            diagnostics.push(line.to_owned());
+        }
+        if diagnostics.len() == MAX_DIAGNOSTIC_LINES {
+            break;
+        }
+    }
+    diagnostics
 }
 
 fn test_summary(stdout: &str, stderr: &str, status: &ExitStatus) -> String {
@@ -538,6 +770,13 @@ pub(crate) fn clear_sysml_verification_results(
 ) {
     let twin_id = trigger.event().twin;
     runs.completed.remove(&twin_id.raw());
+    if runs
+        .suite
+        .as_ref()
+        .is_some_and(|suite| suite.twin_id == twin_id)
+    {
+        runs.suite = None;
+    }
     if runs
         .active
         .as_ref()

@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use bevy_egui::egui;
 use lunco_doc::{Document, FileBacked};
 use lunco_doc_bevy::{DocumentRegistry, OpenFile};
@@ -7,7 +9,8 @@ use lunco_workbench_core::{
 };
 
 use crate::verification::{
-    CancelSysmlVerification, RunSysmlVerification, SysmlVerificationRuns, VerificationRunOutcome,
+    CancelSysmlVerification, CancelSysmlVerificationSuite, RunSysmlVerification,
+    RunSysmlVerificationSuite, SysmlVerificationRuns, VerificationRunOutcome,
 };
 use crate::view_model::{
     AnalysisState, ParserDiagnosticView, RequirementView, SourceFileView,
@@ -97,6 +100,14 @@ enum PanelAction {
     CancelVerification {
         twin_id: lunco_workspace::TwinId,
         name: String,
+    },
+    RunVerificationSuite {
+        twin_id: lunco_workspace::TwinId,
+        source_revision: u64,
+        names: Vec<String>,
+    },
+    CancelVerificationSuite {
+        twin_id: lunco_workspace::TwinId,
     },
 }
 
@@ -210,6 +221,18 @@ impl Panel for SysmlRequirementsPanel {
                 }),
                 PanelAction::CancelVerification { twin_id, name } => {
                     ctx.trigger(CancelSysmlVerification { twin_id, name })
+                }
+                PanelAction::RunVerificationSuite {
+                    twin_id,
+                    source_revision,
+                    names,
+                } => ctx.trigger(RunSysmlVerificationSuite {
+                    twin_id,
+                    source_revision,
+                    names,
+                }),
+                PanelAction::CancelVerificationSuite { twin_id } => {
+                    ctx.trigger(CancelSysmlVerificationSuite { twin_id })
                 }
             }
         }
@@ -333,7 +356,8 @@ impl SysmlRequirementsPanel {
                 .map(|requirement| requirement.qualified_name.clone());
         }
 
-        self.render_summary(ui, view_model, runs, theme);
+        let unsaved_source = self.has_unsaved_source_edits(view_model, documents);
+        self.render_summary(ui, view_model, runs, unsaved_source, theme, &mut actions);
         ui.add_space(theme.spacing.item_spacing);
         self.render_filters(ui, view_model, runs, theme);
         ui.add_space(theme.spacing.item_spacing);
@@ -388,7 +412,6 @@ impl SysmlRequirementsPanel {
                 .iter()
                 .find(|requirement| requirement.qualified_name == name)
         });
-        let unsaved_source = self.has_unsaved_source_edits(view_model, documents);
         let mut edit_source = None;
         if ui.available_width() >= 760.0 {
             ui.columns(2, |columns| {
@@ -499,7 +522,9 @@ impl SysmlRequirementsPanel {
         ui: &mut egui::Ui,
         view_model: &SysmlRequirementsViewModel,
         runs: Option<&SysmlVerificationRuns>,
+        unsaved_source: bool,
         theme: &lunco_theme::Theme,
+        actions: &mut Vec<PanelAction>,
     ) {
         let evidence_counts = [
             (EvidenceState::Pass, "pass", theme.tokens.success),
@@ -605,7 +630,72 @@ impl SysmlRequirementsPanel {
                 );
             }
         });
+        ui.horizontal_wrapped(|ui| {
+            let names = mapped_verification_names(view_model);
+            if let Some(twin_id) = view_model.twin_id
+                && let Some((started, total, pending, stopping)) =
+                    runs.and_then(|runs| runs.suite_progress(twin_id))
+            {
+                ui.spinner();
+                let active_name = runs
+                    .and_then(SysmlVerificationRuns::active_case)
+                    .filter(|(active_twin, _)| *active_twin == twin_id)
+                    .map(|(_, name)| name);
+                let progress = if stopping {
+                    format!("Stopping suite after current test · {started}/{total} started")
+                } else {
+                    active_name.map_or_else(
+                        || format!("Preparing next test · {started}/{total} started · {pending} queued"),
+                        |name| format!("Running {name} · {started}/{total} started · {pending} queued"),
+                    )
+                };
+                muted(ui, theme, &progress);
+                if !stopping && ui.button("Stop suite").clicked() {
+                    actions.push(PanelAction::CancelVerificationSuite { twin_id });
+                }
+            } else {
+                let label = format!("Run all mapped tests ({})", names.len());
+                let can_run = cfg!(not(target_arch = "wasm32"))
+                    && !names.is_empty()
+                    && !runs.is_some_and(SysmlVerificationRuns::has_active_run)
+                    && !unsaved_source
+                    && view_model.verification_setup_errors.is_empty();
+                if ui
+                    .add_enabled(can_run, egui::Button::new(label))
+                    .on_hover_text(if unsaved_source {
+                        "Save or discard SysML edits before running the saved Twin source."
+                    } else if cfg!(target_arch = "wasm32") {
+                        "Run tests from the desktop application."
+                    } else if names.is_empty() {
+                        "No Twin-mapped verification cases are linked from a requirement."
+                    } else if runs.is_some_and(SysmlVerificationRuns::has_active_run) {
+                        "Wait for the active Twin test or suite to finish."
+                    } else if !view_model.verification_setup_errors.is_empty() {
+                        "Fix the Twin test setup issues above first."
+                    } else {
+                        "Runs each distinct Twin-mapped case linked from a requirement once; one case can update several linked requirements. Requirements without a runnable mapping remain visible as coverage gaps."
+                    })
+                    .clicked()
+                {
+                    if let (Some(twin_id), Some(source_revision)) =
+                        (view_model.twin_id, view_model.source_revision)
+                    {
+                        actions.push(PanelAction::RunVerificationSuite {
+                            twin_id,
+                            source_revision,
+                            names,
+                        });
+                    }
+                }
+                muted(
+                    ui,
+                    theme,
+                    "Each unique mapped verify case runs once; missing verify links and Twin mappings remain reported as gaps.",
+                );
+            }
+        });
         if let Some((twin_id, name)) = runs.and_then(SysmlVerificationRuns::active_case)
+            && !runs.is_some_and(|runs| runs.suite_progress(twin_id).is_some())
             && Some(twin_id) == view_model.twin_id
         {
             ui.horizontal(|ui| {
@@ -622,7 +712,7 @@ impl SysmlRequirementsPanel {
             .show(ui, |ui| {
                 ui.label("Evidence is the structured result emitted by the Twin's requirement checks. PASS/FAIL summarizes checks; STALE means the evidence source revision differs from the analyzed revision; NO EVIDENCE means no check result is available.");
                 ui.label("Tests are the mapped scene-test runs. PASS means all linked runnable cases passed; FAIL means at least one failed; PARTIAL means results are mixed.");
-                ui.label("NOT RUN has no current result; RUNNING is active; CANCELLED ended without a verdict; STALE belongs to an older source revision.");
+                ui.label("NOT RUN has no current result; RUNNING is active; QUEUED is waiting in a bulk run; CANCELLED ended without a verdict; STALE belongs to an older source revision.");
                 ui.label("Model coverage counts formal `require` criteria and resolved `verify` links separately from evidence and test runs.");
                 ui.label("NO VERIFY means no resolved link; NO RUNNER means a link has no Twin scene-test mapping. NO VERDICT and RUN ERROR describe the run itself.");
             });
@@ -949,11 +1039,16 @@ impl SysmlRequirementsPanel {
                                     .twin_id
                                     .and_then(|twin_id| runs.result(twin_id, verification))
                             });
-                            let case_is_running = runs.is_some_and(|runs| {
-                                view_model.twin_id.is_some_and(|twin_id| {
-                                    runs.is_running(twin_id, verification)
-                                })
-                            });
+                                let case_is_running = runs.is_some_and(|runs| {
+                                    view_model.twin_id.is_some_and(|twin_id| {
+                                        runs.is_running(twin_id, verification)
+                                    })
+                                });
+                                let case_is_queued = runs.is_some_and(|runs| {
+                                    view_model.twin_id.is_some_and(|twin_id| {
+                                        runs.is_queued(twin_id, verification)
+                                    })
+                                });
                             let case_stale = case_result.is_some_and(|result| {
                                 Some(result.source_revision) != view_model.source_revision
                             });
@@ -962,6 +1057,8 @@ impl SysmlRequirementsPanel {
                                     .on_hover_text(format!("Scene: {}", case.scene.display()));
                                 let (label, color) = if case_is_running {
                                     ("RUNNING", theme.tokens.text_subdued)
+                                } else if case_is_queued {
+                                    ("QUEUED", theme.tokens.text_subdued)
                                 } else if case_stale {
                                     ("STALE", theme.tokens.warning)
                                 } else if let Some(result) = case_result {
@@ -986,7 +1083,7 @@ impl SysmlRequirementsPanel {
                                     ("NOT RUN", theme.tokens.text_subdued)
                                 };
                                 let status = ui.colored_label(color, label);
-                                if let Some(result) = case_result {
+                                if let Some(result) = case_result.filter(|_| !case_is_queued) {
                                     status.on_hover_text(&result.summary);
                                 }
                                 if case_is_running {
@@ -1005,6 +1102,8 @@ impl SysmlRequirementsPanel {
                                             name: verification.clone(),
                                         });
                                     }
+                                } else if case_is_queued {
+                                    muted(ui, theme, "Waiting for the earlier linked tests to finish.");
                                 } else {
                                     let can_run = cfg!(not(target_arch = "wasm32"))
                                         && !runs.is_some_and(SysmlVerificationRuns::has_active_run)
@@ -1037,12 +1136,34 @@ impl SysmlRequirementsPanel {
                                     }
                                 }
                             });
-                            if let Some(result) = case_result {
+                            if let Some(result) = case_result.filter(|_| !case_is_queued) {
                                 muted(
                                     ui,
                                     theme,
                                     &format!("{} · {:.1} s", result.summary, result.elapsed.as_secs_f32()),
                                 );
+                                if !result.diagnostics.is_empty() {
+                                    ui.colored_label(
+                                        if matches!(
+                                            &result.outcome,
+                                            VerificationRunOutcome::Failed
+                                                | VerificationRunOutcome::NoVerdict
+                                                | VerificationRunOutcome::Error(_)
+                                        ) {
+                                            theme.tokens.error
+                                        } else {
+                                            theme.tokens.text_subdued
+                                        },
+                                        if matches!(&result.outcome, VerificationRunOutcome::Failed) {
+                                            "Why it failed"
+                                        } else {
+                                            "Run details"
+                                        },
+                                    );
+                                    for diagnostic in &result.diagnostics {
+                                        ui.label(diagnostic);
+                                    }
+                                }
                                 if !result.output.is_empty() {
                                     ui.collapsing("Run output", |ui| {
                                         egui::ScrollArea::vertical()
@@ -1080,6 +1201,11 @@ impl SysmlRequirementsPanel {
                                 ui.label(verification);
                                 ui.colored_label(theme.tokens.warning, "NO TWIN TEST MAPPING");
                             });
+                            muted(
+                                ui,
+                                theme,
+                                "This verify link has no Twin scene-test registration, so bulk execution skips it.",
+                            );
                         }
                     }
                     if unsaved_source {
@@ -1412,6 +1538,23 @@ fn has_mapped_verification(
     })
 }
 
+fn mapped_verification_names(view_model: &SysmlRequirementsViewModel) -> Vec<String> {
+    view_model
+        .requirements
+        .iter()
+        .flat_map(|requirement| requirement.verification_cases.iter())
+        .filter(|name| {
+            view_model
+                .verification_cases
+                .iter()
+                .any(|case| case.name.as_str() == name.as_str())
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExecutionState {
     Pass,
@@ -1474,6 +1617,14 @@ fn execution_summary(
             summary.running += 1;
             continue;
         }
+        if runs.is_some_and(|runs| {
+            view_model
+                .twin_id
+                .is_some_and(|twin_id| runs.is_queued(twin_id, name))
+        }) {
+            summary.running += 1;
+            continue;
+        }
         let Some(result) = runs.and_then(|runs| {
             view_model
                 .twin_id
@@ -1522,7 +1673,7 @@ fn execution_summary(
 fn execution_label(summary: &ExecutionSummary) -> String {
     match summary.state {
         ExecutionState::Pass => format!("PASS · {}/{}", summary.passed, summary.mapped),
-        ExecutionState::Fail => format!("FAIL · {}/{}", summary.passed, summary.mapped),
+        ExecutionState::Fail => format!("FAIL · {}/{} failed", summary.failed, summary.mapped),
         ExecutionState::Partial => format!("PARTIAL · {}/{}", summary.passed, summary.mapped),
         ExecutionState::Running => format!("RUNNING · {}/{}", summary.passed, summary.mapped),
         ExecutionState::NotRun => "NOT RUN".to_owned(),
@@ -1558,7 +1709,7 @@ fn execution_explanation(state: ExecutionState) -> &'static str {
         ExecutionState::Partial => {
             "Some linked cases passed; remaining cases need a current result."
         }
-        ExecutionState::Running => "A linked scene test is running.",
+        ExecutionState::Running => "At least one linked scene test is running or queued.",
         ExecutionState::NotRun => "Runnable tests are linked, but none has a current result.",
         ExecutionState::Stale => "The available test result belongs to an older source revision.",
         ExecutionState::NoVerify => "The requirement has no resolved SysML verify link.",

@@ -210,10 +210,21 @@ fn report_structured_verdict(report, title, channel) {
             for failure in report.failures {
                 if type_of(failure) == "map" {
                     let line = "";
-                    if failure.id != () { line += failure.id + " "; }
-                    if failure.component != () { line += failure.component + " "; }
-                    if failure.path != () { line += failure.path + ": "; }
-                    if failure.error != () { line += failure.error; }
+                    if failure.requirement != () {
+                        line += "requirement=" + failure.requirement.to_string() + " ";
+                    }
+                    if failure.id != () { line += "check=" + failure.id.to_string() + " "; }
+                    if failure.component != () {
+                        line += "component=" + failure.component.to_string() + " ";
+                    }
+                    if failure.path != () { line += "path=" + failure.path.to_string() + " "; }
+                    if failure.error != () { line += failure.error.to_string(); }
+                    if failure.actual != () {
+                        line += " [actual=" + failure.actual.to_string() + "]";
+                    }
+                    if failure.expected != () {
+                        line += " [expected=" + failure.expected.to_string() + "]";
+                    }
                     failures.push(line);
                     raw_failures.push(failure);
                 } else {

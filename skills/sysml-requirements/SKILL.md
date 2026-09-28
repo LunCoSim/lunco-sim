@@ -711,9 +711,13 @@ In the desktop workbench, open **Editor → SysML Requirements** to inspect the
 active Twin, search requirements, filter by test status, and open a linked
 source at its declaration. The detail pane initially selects a requirement
 with a Twin-mapped test when one is available. The panel offers **Run test** for
-each Twin-mapped verification case, displays elapsed time and live output, and
-allows a running test to be cancelled. Save or discard open SysML edits before
-running; the runner reads the saved Twin source.
+one mapped case and **Run all mapped tests** to run each distinct case linked
+from a requirement once, sequentially. It shows suite progress and lets the
+suite be stopped. Failed cases surface their check identity and runner error,
+including actual/expected values when emitted, with full captured output
+available for inspection. Requirements without a resolved `verify` link or a
+Twin test mapping remain visible as coverage gaps and are skipped. Save or
+discard open SysML edits before running; the runner reads the saved Twin source.
 
 Read the three status dimensions separately; they answer different questions:
 

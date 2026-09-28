@@ -79,7 +79,11 @@ channel, verification, source revision, and simulation tick, then presents its
 ID, kind, component/path, failure message, and actual/expected values when
 present. It retains up to 64 display details per requirement, preferring
 failures; aggregate requirement counts remain the status source for larger
-reports.
+reports. **Run all mapped tests** executes each unique Twin-mapped case linked
+from a requirement once, in sequence, and reports progress. Failed cases show
+the check identity and runner diagnostic, with full captured output available.
+Unmapped links and requirements without `verify` links remain coverage gaps and
+are not executed.
 
 For bounded generic inspection, `sysml_report(path)` exposes `AnalyzeSysml`
 facts as native Rhai values (no stringify/parse round trip). Twin-scale callers

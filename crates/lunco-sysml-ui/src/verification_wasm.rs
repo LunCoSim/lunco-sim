@@ -11,9 +11,21 @@ pub(crate) struct RunSysmlVerification {
 }
 
 #[derive(Event, Clone, Debug)]
+pub(crate) struct RunSysmlVerificationSuite {
+    pub twin_id: TwinId,
+    pub source_revision: u64,
+    pub names: Vec<String>,
+}
+
+#[derive(Event, Clone, Debug)]
 pub(crate) struct CancelSysmlVerification {
     pub twin_id: TwinId,
     pub name: String,
+}
+
+#[derive(Event, Clone, Debug)]
+pub(crate) struct CancelSysmlVerificationSuite {
+    pub twin_id: TwinId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,6 +44,7 @@ pub(crate) struct VerificationRunResult {
     pub name: String,
     pub outcome: VerificationRunOutcome,
     pub summary: String,
+    pub diagnostics: Vec<String>,
     pub output: String,
     pub elapsed: Duration,
 }
@@ -48,8 +61,16 @@ impl SysmlVerificationRuns {
         false
     }
 
+    pub(crate) fn is_queued(&self, _twin_id: TwinId, _name: &str) -> bool {
+        false
+    }
+
     pub(crate) fn has_active_run(&self) -> bool {
         false
+    }
+
+    pub(crate) fn suite_progress(&self, _twin_id: TwinId) -> Option<(usize, usize, usize, bool)> {
+        None
     }
 
     pub(crate) fn active_case(&self) -> Option<(TwinId, &str)> {
@@ -67,10 +88,22 @@ pub(crate) fn start_sysml_verification(
 ) {
 }
 
+pub(crate) fn start_sysml_verification_suite(
+    _trigger: On<RunSysmlVerificationSuite>,
+    _runs: ResMut<SysmlVerificationRuns>,
+) {
+}
+
 pub(crate) fn poll_sysml_verification_run(_runs: ResMut<SysmlVerificationRuns>) {}
 
 pub(crate) fn cancel_sysml_verification(
     _trigger: On<CancelSysmlVerification>,
+    _runs: ResMut<SysmlVerificationRuns>,
+) {
+}
+
+pub(crate) fn cancel_sysml_verification_suite(
+    _trigger: On<CancelSysmlVerificationSuite>,
     _runs: ResMut<SysmlVerificationRuns>,
 ) {
 }
