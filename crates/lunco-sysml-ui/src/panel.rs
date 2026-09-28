@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use bevy_egui::egui;
 use lunco_doc::{Document, FileBacked};
 use lunco_doc_bevy::{DocumentRegistry, OpenFile};
@@ -7,11 +9,12 @@ use lunco_workbench_core::{
 };
 
 use crate::verification::{
-    CancelSysmlVerification, RunSysmlVerification, SysmlVerificationRuns, VerificationRunOutcome,
+    CancelSysmlVerification, CancelSysmlVerificationSuite, RunSysmlVerification,
+    RunSysmlVerificationSuite, SysmlVerificationRuns, VerificationRunOutcome,
 };
 use crate::view_model::{
-    AnalysisState, ParserDiagnosticView, RequirementView, SourceFileView,
-    SysmlRequirementsViewModel,
+    AnalysisState, ParserDiagnosticView, RequirementView, RuntimeRequirementEvidence,
+    SourceFileView, SysmlRequirementsViewModel,
 };
 
 /// Canonical source view read from the SysML document owner.
@@ -98,6 +101,14 @@ enum PanelAction {
         twin_id: lunco_workspace::TwinId,
         name: String,
     },
+    RunVerificationSuite {
+        twin_id: lunco_workspace::TwinId,
+        source_revision: u64,
+        names: Vec<String>,
+    },
+    CancelVerificationSuite {
+        twin_id: lunco_workspace::TwinId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -116,6 +127,7 @@ enum TestFilter {
     #[default]
     All,
     Failed,
+    SuiteFailures,
     NeedsResult,
     Stale,
     Unmapped,
@@ -210,6 +222,18 @@ impl Panel for SysmlRequirementsPanel {
                 }),
                 PanelAction::CancelVerification { twin_id, name } => {
                     ctx.trigger(CancelSysmlVerification { twin_id, name })
+                }
+                PanelAction::RunVerificationSuite {
+                    twin_id,
+                    source_revision,
+                    names,
+                } => ctx.trigger(RunSysmlVerificationSuite {
+                    twin_id,
+                    source_revision,
+                    names,
+                }),
+                PanelAction::CancelVerificationSuite { twin_id } => {
+                    ctx.trigger(CancelSysmlVerificationSuite { twin_id })
                 }
             }
         }
@@ -333,7 +357,8 @@ impl SysmlRequirementsPanel {
                 .map(|requirement| requirement.qualified_name.clone());
         }
 
-        self.render_summary(ui, view_model, runs, theme);
+        let unsaved_source = self.has_unsaved_source_edits(view_model, documents);
+        self.render_summary(ui, view_model, runs, unsaved_source, theme, &mut actions);
         ui.add_space(theme.spacing.item_spacing);
         self.render_filters(ui, view_model, runs, theme);
         ui.add_space(theme.spacing.item_spacing);
@@ -388,7 +413,6 @@ impl SysmlRequirementsPanel {
                 .iter()
                 .find(|requirement| requirement.qualified_name == name)
         });
-        let unsaved_source = self.has_unsaved_source_edits(view_model, documents);
         let mut edit_source = None;
         if ui.available_width() >= 760.0 {
             ui.columns(2, |columns| {
@@ -495,11 +519,13 @@ impl SysmlRequirementsPanel {
     }
 
     fn render_summary(
-        &self,
+        &mut self,
         ui: &mut egui::Ui,
         view_model: &SysmlRequirementsViewModel,
         runs: Option<&SysmlVerificationRuns>,
+        unsaved_source: bool,
         theme: &lunco_theme::Theme,
+        actions: &mut Vec<PanelAction>,
     ) {
         let evidence_counts = [
             (EvidenceState::Pass, "pass", theme.tokens.success),
@@ -515,7 +541,7 @@ impl SysmlRequirementsPanel {
             let count = view_model
                 .requirements
                 .iter()
-                .filter(|requirement| evidence_state(requirement, view_model) == state)
+                .filter(|requirement| evidence_state(requirement, view_model, runs) == state)
                 .count();
             (label, count, color)
         });
@@ -605,7 +631,243 @@ impl SysmlRequirementsPanel {
                 );
             }
         });
+        let rollup_counts = [
+            (
+                RequirementRollupState::Verified,
+                "verified",
+                theme.tokens.success,
+            ),
+            (RequirementRollupState::Failed, "failed", theme.tokens.error),
+            (RequirementRollupState::Stale, "stale", theme.tokens.warning),
+            (
+                RequirementRollupState::Running,
+                "running",
+                theme.tokens.text_subdued,
+            ),
+            (
+                RequirementRollupState::Incomplete,
+                "incomplete",
+                theme.tokens.warning,
+            ),
+        ]
+        .map(|(state, label, color)| {
+            let count = view_model
+                .requirements
+                .iter()
+                .filter(|requirement| {
+                    requirement_rollup_state(requirement, view_model, runs) == state
+                })
+                .count();
+            (label, count, color)
+        });
+        ui.horizontal_wrapped(|ui| {
+            status_counts(ui, "Overall requirement status", &rollup_counts);
+            muted(
+                ui,
+                theme,
+                "VERIFIED requires complete coverage, current passing evidence, and passing mapped tests.",
+            );
+        });
+        ui.horizontal_wrapped(|ui| {
+            let names = mapped_verification_names(view_model);
+            if let Some(twin_id) = view_model.twin_id
+                && let Some((started, total, pending, stopping)) =
+                    runs.and_then(|runs| runs.suite_progress(twin_id))
+            {
+                ui.spinner();
+                let active_name = runs
+                    .and_then(SysmlVerificationRuns::active_case)
+                    .filter(|(active_twin, _)| *active_twin == twin_id)
+                    .map(|(_, name)| name);
+                let progress = if stopping {
+                    format!("Stopping suite after current test · {started}/{total} started")
+                } else {
+                    active_name.map_or_else(
+                        || format!("Preparing next test · {started}/{total} started · {pending} queued"),
+                        |name| format!("Running {name} · {started}/{total} started · {pending} queued"),
+                    )
+                };
+                muted(ui, theme, &progress);
+                if !stopping && ui.button("Stop suite").clicked() {
+                    actions.push(PanelAction::CancelVerificationSuite { twin_id });
+                }
+            } else {
+                let can_run = cfg!(not(target_arch = "wasm32"))
+                    && !runs.is_some_and(SysmlVerificationRuns::has_active_run)
+                    && !unsaved_source
+                    && view_model.verification_setup_errors.is_empty();
+                let selected_names = self
+                    .selected_requirement
+                    .as_deref()
+                    .and_then(|selected| {
+                        view_model
+                            .requirements
+                            .iter()
+                            .find(|requirement| requirement.qualified_name == selected)
+                    })
+                    .map(|requirement| mapped_names_for_requirement(requirement, view_model))
+                    .unwrap_or_default();
+                ui.horizontal_wrapped(|ui| {
+                    let selected_label = format!(
+                        "Run selected requirement tests ({})",
+                        selected_names.len()
+                    );
+                    if ui
+                        .add_enabled(
+                            can_run && !selected_names.is_empty(),
+                            egui::Button::new(selected_label),
+                        )
+                        .on_hover_text(
+                            "Runs the distinct Twin-mapped cases linked from the selected requirement.",
+                        )
+                        .clicked()
+                        && let (Some(twin_id), Some(source_revision)) =
+                            (view_model.twin_id, view_model.source_revision)
+                    {
+                        actions.push(PanelAction::RunVerificationSuite {
+                            twin_id,
+                            source_revision,
+                            names: selected_names,
+                        });
+                    }
+
+                    let label = format!("Run all mapped tests ({})", names.len());
+                    if ui
+                        .add_enabled(can_run && !names.is_empty(), egui::Button::new(label))
+                        .on_hover_text(if unsaved_source {
+                            "Save or discard SysML edits before running the saved Twin source."
+                        } else if cfg!(target_arch = "wasm32") {
+                            "Run tests from the desktop application."
+                        } else if names.is_empty() {
+                            "No Twin-mapped verification cases are linked from a requirement."
+                        } else if runs.is_some_and(SysmlVerificationRuns::has_active_run) {
+                            "Wait for the active Twin test or suite to finish."
+                        } else if !view_model.verification_setup_errors.is_empty() {
+                            "Fix the Twin test setup issues above first."
+                        } else {
+                            "Runs each distinct mapped case once."
+                        })
+                        .clicked()
+                        && let (Some(twin_id), Some(source_revision)) =
+                            (view_model.twin_id, view_model.source_revision)
+                    {
+                        actions.push(PanelAction::RunVerificationSuite {
+                            twin_id,
+                            source_revision,
+                            names,
+                        });
+                    }
+                });
+                muted(
+                    ui,
+                    theme,
+                    "Each unique mapped case runs once; missing verify links and Twin mappings remain visible as gaps.",
+                );
+            }
+        });
+        if let Some(twin_id) = view_model.twin_id
+            && let Some(suite) = runs.and_then(|runs| runs.last_suite(twin_id))
+            && runs.and_then(|runs| runs.suite_progress(twin_id)).is_none()
+        {
+            let passed = suite
+                .cases
+                .iter()
+                .filter(|case| case.outcome == VerificationRunOutcome::Passed)
+                .count();
+            let failed = suite
+                .cases
+                .iter()
+                .filter(|case| case.outcome == VerificationRunOutcome::Failed)
+                .count();
+            let incomplete = suite
+                .cases
+                .iter()
+                .filter(|case| {
+                    matches!(
+                        case.outcome,
+                        VerificationRunOutcome::NoVerdict | VerificationRunOutcome::Error(_)
+                    )
+                })
+                .count();
+            let cancelled = suite
+                .cases
+                .iter()
+                .filter(|case| case.outcome == VerificationRunOutcome::Cancelled)
+                .count();
+            let stale = Some(suite.source_revision) != view_model.source_revision;
+            let failed_names: Vec<_> = suite
+                .cases
+                .iter()
+                .filter(|case| case.outcome == VerificationRunOutcome::Failed)
+                .map(|case| case.name.clone())
+                .filter(|name| {
+                    view_model
+                        .verification_cases
+                        .iter()
+                        .any(|case| case.name == *name)
+                })
+                .collect();
+            let can_run = cfg!(not(target_arch = "wasm32"))
+                && !runs.is_some_and(SysmlVerificationRuns::has_active_run)
+                && !unsaved_source
+                && view_model.verification_setup_errors.is_empty();
+            ui.horizontal_wrapped(|ui| {
+                ui.strong(if stale {
+                    "Previous suite report"
+                } else {
+                    "Last suite report"
+                });
+                if stale {
+                    ui.colored_label(theme.tokens.warning, "STALE");
+                }
+                muted(
+                    ui,
+                    theme,
+                    &format!(
+                        "revision {} · {passed} passed · {failed} failed · {incomplete} incomplete · {cancelled} cancelled{}",
+                        suite.source_revision,
+                        if suite.stopped { " · stopped" } else { "" }
+                    ),
+                );
+                if failed > 0 && ui.button("Show failures").clicked() {
+                    self.filters = RequirementFilters::default();
+                    self.filters.tests = TestFilter::SuiteFailures;
+                    self.selected_requirement = view_model
+                        .requirements
+                        .iter()
+                        .find(|requirement| {
+                            suite.cases.iter().any(|case| {
+                                case.outcome == VerificationRunOutcome::Failed
+                                    && requirement
+                                        .verification_cases
+                                        .iter()
+                                        .any(|name| name == &case.name)
+                            })
+                        })
+                        .map(|requirement| requirement.qualified_name.clone());
+                    self.selected_source = None;
+                    self.search.clear();
+                }
+                if failed > 0
+                    && ui
+                        .add_enabled(
+                            can_run && !failed_names.is_empty(),
+                            egui::Button::new(format!("Rerun failed ({})", failed_names.len())),
+                        )
+                        .clicked()
+                    && let (Some(twin_id), Some(source_revision)) =
+                        (view_model.twin_id, view_model.source_revision)
+                {
+                    actions.push(PanelAction::RunVerificationSuite {
+                        twin_id,
+                        source_revision,
+                        names: failed_names,
+                    });
+                }
+            });
+        }
         if let Some((twin_id, name)) = runs.and_then(SysmlVerificationRuns::active_case)
+            && !runs.is_some_and(|runs| runs.suite_progress(twin_id).is_some())
             && Some(twin_id) == view_model.twin_id
         {
             ui.horizontal(|ui| {
@@ -622,7 +884,9 @@ impl SysmlRequirementsPanel {
             .show(ui, |ui| {
                 ui.label("Evidence is the structured result emitted by the Twin's requirement checks. PASS/FAIL summarizes checks; STALE means the evidence source revision differs from the analyzed revision; NO EVIDENCE means no check result is available.");
                 ui.label("Tests are the mapped scene-test runs. PASS means all linked runnable cases passed; FAIL means at least one failed; PARTIAL means results are mixed.");
-                ui.label("NOT RUN has no current result; RUNNING is active; CANCELLED ended without a verdict; STALE belongs to an older source revision.");
+                ui.label("VERIFIED requires a `require` criterion, mapped `verify` links, current passing requirement evidence, and passing linked tests. FAILED means a current check or test failed; STALE and INCOMPLETE identify out-of-date or missing proof. This does not claim full KerML constraint execution.");
+                ui.label("Failures from last suite follows the most recent suite report, including failures that are now marked STALE.");
+                ui.label("NOT RUN has no current result; RUNNING is active; QUEUED is waiting in a bulk run; CANCELLED ended without a verdict; STALE belongs to an older source revision.");
                 ui.label("Model coverage counts formal `require` criteria and resolved `verify` links separately from evidence and test runs.");
                 ui.label("NO VERIFY means no resolved link; NO RUNNER means a link has no Twin scene-test mapping. NO VERDICT and RUN ERROR describe the run itself.");
             });
@@ -737,6 +1001,7 @@ impl SysmlRequirementsPanel {
                 .selected_text(match self.filters.tests {
                     TestFilter::All => "Any test result",
                     TestFilter::Failed => "Tests: failed",
+                    TestFilter::SuiteFailures => "Tests: last suite failures",
                     TestFilter::NeedsResult => "Tests: needs result",
                     TestFilter::Stale => "Tests: stale",
                     TestFilter::Unmapped => "Tests: no runnable test",
@@ -745,6 +1010,7 @@ impl SysmlRequirementsPanel {
                     for (filter, label) in [
                         (TestFilter::All, "Any test result"),
                         (TestFilter::Failed, "Failed tests"),
+                        (TestFilter::SuiteFailures, "Failures from last suite"),
                         (TestFilter::NeedsResult, "Needs a current result"),
                         (TestFilter::Stale, "Stale test results"),
                         (TestFilter::Unmapped, "No runnable test"),
@@ -832,6 +1098,13 @@ impl SysmlRequirementsPanel {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
+                                    let rollup =
+                                        requirement_rollup_state(requirement, view_model, runs);
+                                    let (rollup_label, rollup_color, rollup_explanation) =
+                                        requirement_rollup_label(rollup, theme);
+                                    ui.colored_label(rollup_color, rollup_label)
+                                        .on_hover_text(rollup_explanation);
+                                    ui.separator();
                                     let execution =
                                         execution_summary(requirement, view_model, runs);
                                     ui.colored_label(
@@ -851,7 +1124,7 @@ impl SysmlRequirementsPanel {
                             .unwrap_or_else(|| requirement.logical_uri.clone());
                         let execution = execution_summary(requirement, view_model, runs);
                         let (evidence_label, evidence_color, evidence_explanation) =
-                            evidence_status(requirement, view_model, theme);
+                            evidence_status(requirement, view_model, runs, theme);
                         let (quality_label, quality_color) =
                             model_coverage_label(requirement, view_model, theme);
                         ui.horizontal_wrapped(|ui| {
@@ -887,6 +1160,8 @@ impl SysmlRequirementsPanel {
             .id_salt("sysml_requirement_details")
             .auto_shrink([false; 2])
             .show(ui, |ui| {
+                let mut selected_source = None;
+                let mut open_requirement_source = false;
                 ui.heading(&requirement.display_name);
                 muted(ui, theme, &requirement.qualified_name);
                 for text in &requirement.documentation {
@@ -894,14 +1169,30 @@ impl SysmlRequirementsPanel {
                     ui.label(text);
                 }
                 ui.separator();
+                let rollup = requirement_rollup_state(requirement, view_model, runs);
+                let (rollup_label, rollup_color, rollup_explanation) =
+                    requirement_rollup_label(rollup, theme);
+                ui.horizontal(|ui| {
+                    ui.strong("Overall requirement status");
+                    ui.colored_label(rollup_color, rollup_label)
+                        .on_hover_text(rollup_explanation);
+                });
+                ui.separator();
                 let (evidence_label, evidence_color, evidence_explanation) =
-                    evidence_status(requirement, view_model, theme);
+                    evidence_status(requirement, view_model, runs, theme);
                 ui.horizontal(|ui| {
                     ui.strong("Requirement evidence");
                     ui.colored_label(evidence_color, evidence_label)
                         .on_hover_text(evidence_explanation);
                 });
-                render_requirement_evidence(ui, requirement, view_model, theme);
+                render_requirement_evidence(
+                    ui,
+                    requirement,
+                    view_model,
+                    runs,
+                    theme,
+                    &mut open_requirement_source,
+                );
                 ui.separator();
                 let execution = execution_summary(requirement, view_model, runs);
                 ui.horizontal(|ui| {
@@ -949,11 +1240,16 @@ impl SysmlRequirementsPanel {
                                     .twin_id
                                     .and_then(|twin_id| runs.result(twin_id, verification))
                             });
-                            let case_is_running = runs.is_some_and(|runs| {
-                                view_model.twin_id.is_some_and(|twin_id| {
-                                    runs.is_running(twin_id, verification)
-                                })
-                            });
+                                let case_is_running = runs.is_some_and(|runs| {
+                                    view_model.twin_id.is_some_and(|twin_id| {
+                                        runs.is_running(twin_id, verification)
+                                    })
+                                });
+                                let case_is_queued = runs.is_some_and(|runs| {
+                                    view_model.twin_id.is_some_and(|twin_id| {
+                                        runs.is_queued(twin_id, verification)
+                                    })
+                                });
                             let case_stale = case_result.is_some_and(|result| {
                                 Some(result.source_revision) != view_model.source_revision
                             });
@@ -962,6 +1258,8 @@ impl SysmlRequirementsPanel {
                                     .on_hover_text(format!("Scene: {}", case.scene.display()));
                                 let (label, color) = if case_is_running {
                                     ("RUNNING", theme.tokens.text_subdued)
+                                } else if case_is_queued {
+                                    ("QUEUED", theme.tokens.text_subdued)
                                 } else if case_stale {
                                     ("STALE", theme.tokens.warning)
                                 } else if let Some(result) = case_result {
@@ -986,7 +1284,7 @@ impl SysmlRequirementsPanel {
                                     ("NOT RUN", theme.tokens.text_subdued)
                                 };
                                 let status = ui.colored_label(color, label);
-                                if let Some(result) = case_result {
+                                if let Some(result) = case_result.filter(|_| !case_is_queued) {
                                     status.on_hover_text(&result.summary);
                                 }
                                 if case_is_running {
@@ -1005,6 +1303,8 @@ impl SysmlRequirementsPanel {
                                             name: verification.clone(),
                                         });
                                     }
+                                } else if case_is_queued {
+                                    muted(ui, theme, "Waiting for the earlier linked tests to finish.");
                                 } else {
                                     let can_run = cfg!(not(target_arch = "wasm32"))
                                         && !runs.is_some_and(SysmlVerificationRuns::has_active_run)
@@ -1037,12 +1337,34 @@ impl SysmlRequirementsPanel {
                                     }
                                 }
                             });
-                            if let Some(result) = case_result {
+                            if let Some(result) = case_result.filter(|_| !case_is_queued) {
                                 muted(
                                     ui,
                                     theme,
                                     &format!("{} · {:.1} s", result.summary, result.elapsed.as_secs_f32()),
                                 );
+                                if !result.diagnostics.is_empty() {
+                                    ui.colored_label(
+                                        if matches!(
+                                            &result.outcome,
+                                            VerificationRunOutcome::Failed
+                                                | VerificationRunOutcome::NoVerdict
+                                                | VerificationRunOutcome::Error(_)
+                                        ) {
+                                            theme.tokens.error
+                                        } else {
+                                            theme.tokens.text_subdued
+                                        },
+                                        if matches!(&result.outcome, VerificationRunOutcome::Failed) {
+                                            "Why it failed"
+                                        } else {
+                                            "Run details"
+                                        },
+                                    );
+                                    for diagnostic in &result.diagnostics {
+                                        ui.label(diagnostic);
+                                    }
+                                }
                                 if !result.output.is_empty() {
                                     ui.collapsing("Run output", |ui| {
                                         egui::ScrollArea::vertical()
@@ -1080,6 +1402,11 @@ impl SysmlRequirementsPanel {
                                 ui.label(verification);
                                 ui.colored_label(theme.tokens.warning, "NO TWIN TEST MAPPING");
                             });
+                            muted(
+                                ui,
+                                theme,
+                                "This verify link has no Twin scene-test registration, so bulk execution skips it.",
+                            );
                         }
                     }
                     if unsaved_source {
@@ -1096,9 +1423,13 @@ impl SysmlRequirementsPanel {
                     .iter()
                     .find(|source| source.logical_uri == requirement.logical_uri)
                     .cloned();
-                let mut selected_source = None;
                 if let Some(path) = &requirement.relative_path {
                     let line = requirement.line.unwrap_or(1);
+                    if open_requirement_source
+                        && let Some(source) = source.clone()
+                    {
+                        selected_source = Some((source, line));
+                    }
                     ui.horizontal(|ui| {
                         ui.label(format!("{}:{line}", path.display()));
                         if let Some(source) = source.clone() {
@@ -1412,6 +1743,42 @@ fn has_mapped_verification(
     })
 }
 
+fn mapped_verification_names(view_model: &SysmlRequirementsViewModel) -> Vec<String> {
+    view_model
+        .requirements
+        .iter()
+        .flat_map(|requirement| requirement.verification_cases.iter())
+        .filter(|name| {
+            view_model
+                .verification_cases
+                .iter()
+                .any(|case| case.name.as_str() == name.as_str())
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn mapped_names_for_requirement(
+    requirement: &RequirementView,
+    view_model: &SysmlRequirementsViewModel,
+) -> Vec<String> {
+    requirement
+        .verification_cases
+        .iter()
+        .filter(|name| {
+            view_model
+                .verification_cases
+                .iter()
+                .any(|case| case.name.as_str() == name.as_str())
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExecutionState {
     Pass,
@@ -1474,6 +1841,14 @@ fn execution_summary(
             summary.running += 1;
             continue;
         }
+        if runs.is_some_and(|runs| {
+            view_model
+                .twin_id
+                .is_some_and(|twin_id| runs.is_queued(twin_id, name))
+        }) {
+            summary.running += 1;
+            continue;
+        }
         let Some(result) = runs.and_then(|runs| {
             view_model
                 .twin_id
@@ -1522,7 +1897,7 @@ fn execution_summary(
 fn execution_label(summary: &ExecutionSummary) -> String {
     match summary.state {
         ExecutionState::Pass => format!("PASS · {}/{}", summary.passed, summary.mapped),
-        ExecutionState::Fail => format!("FAIL · {}/{}", summary.passed, summary.mapped),
+        ExecutionState::Fail => format!("FAIL · {}/{} failed", summary.failed, summary.mapped),
         ExecutionState::Partial => format!("PARTIAL · {}/{}", summary.passed, summary.mapped),
         ExecutionState::Running => format!("RUNNING · {}/{}", summary.passed, summary.mapped),
         ExecutionState::NotRun => "NOT RUN".to_owned(),
@@ -1558,7 +1933,7 @@ fn execution_explanation(state: ExecutionState) -> &'static str {
         ExecutionState::Partial => {
             "Some linked cases passed; remaining cases need a current result."
         }
-        ExecutionState::Running => "A linked scene test is running.",
+        ExecutionState::Running => "At least one linked scene test is running or queued.",
         ExecutionState::NotRun => "Runnable tests are linked, but none has a current result.",
         ExecutionState::Stale => "The available test result belongs to an older source revision.",
         ExecutionState::NoVerify => "The requirement has no resolved SysML verify link.",
@@ -1582,11 +1957,12 @@ enum EvidenceState {
 fn evidence_state(
     requirement: &RequirementView,
     view_model: &SysmlRequirementsViewModel,
+    runs: Option<&SysmlVerificationRuns>,
 ) -> EvidenceState {
     let mut current_checks = 0_u64;
     let mut current_failures = 0_u64;
     let mut has_stale_evidence = false;
-    for evidence in &requirement.runtime_evidence {
+    for evidence in requirement_evidence_records(requirement, view_model, runs) {
         if Some(evidence.source_revision) == view_model.source_revision {
             current_checks = current_checks.saturating_add(evidence.checks);
             current_failures = current_failures.saturating_add(evidence.failures);
@@ -1608,9 +1984,10 @@ fn evidence_state(
 fn evidence_status(
     requirement: &RequirementView,
     view_model: &SysmlRequirementsViewModel,
+    runs: Option<&SysmlVerificationRuns>,
     theme: &lunco_theme::Theme,
 ) -> (&'static str, egui::Color32, &'static str) {
-    match evidence_state(requirement, view_model) {
+    match evidence_state(requirement, view_model, runs) {
         EvidenceState::Pass => (
             "PASS",
             theme.tokens.success,
@@ -1639,9 +2016,11 @@ fn render_requirement_evidence(
     ui: &mut egui::Ui,
     requirement: &RequirementView,
     view_model: &SysmlRequirementsViewModel,
+    runs: Option<&SysmlVerificationRuns>,
     theme: &lunco_theme::Theme,
+    open_requirement_source: &mut bool,
 ) {
-    for evidence in &requirement.runtime_evidence {
+    for evidence in requirement_evidence_records(requirement, view_model, runs) {
         let stale = Some(evidence.source_revision) != view_model.source_revision;
         let state = if stale {
             "STALE"
@@ -1702,6 +2081,9 @@ fn render_requirement_evidence(
                     if let Some(path) = &check.path {
                         muted(ui, theme, path);
                     }
+                    if !check.passed && ui.small_button("Open source").clicked() {
+                        *open_requirement_source = true;
+                    }
                 });
                 if let Some(error) = &check.error {
                     ui.colored_label(theme.tokens.error, error);
@@ -1726,6 +2108,141 @@ fn render_requirement_evidence(
                 );
             }
         });
+    }
+}
+
+fn requirement_evidence_records(
+    requirement: &RequirementView,
+    view_model: &SysmlRequirementsViewModel,
+    runs: Option<&SysmlVerificationRuns>,
+) -> Vec<RuntimeRequirementEvidence> {
+    let mut records = BTreeMap::<(String, Option<String>, u64), RuntimeRequirementEvidence>::new();
+    let mut add = |incoming: &RuntimeRequirementEvidence| {
+        let key = (
+            incoming.channel.clone(),
+            incoming.verification.clone(),
+            incoming.source_revision,
+        );
+        let Some(existing) = records.get_mut(&key) else {
+            records.insert(key, incoming.clone());
+            return;
+        };
+        existing.checks = existing.checks.max(incoming.checks);
+        existing.failures = existing.failures.max(incoming.failures);
+        existing.sim_tick = existing.sim_tick.max(incoming.sim_tick);
+        for detail in &incoming.details {
+            if !existing.details.contains(detail)
+                && (existing.details.len() < 64
+                    || (!detail.passed
+                        && existing
+                            .details
+                            .iter()
+                            .rposition(|item| item.passed)
+                            .is_some()))
+            {
+                if existing.details.len() >= 64
+                    && let Some(index) = existing.details.iter().rposition(|item| item.passed)
+                {
+                    existing.details.remove(index);
+                }
+                existing.details.push(detail.clone());
+            }
+        }
+    };
+    for evidence in &requirement.runtime_evidence {
+        add(evidence);
+    }
+    if let (Some(runs), Some(twin_id)) = (runs, view_model.twin_id) {
+        for name in &requirement.verification_cases {
+            if let Some(result) = runs.result(twin_id, name) {
+                for evidence in result
+                    .evidence
+                    .iter()
+                    .filter(|evidence| evidence.requirement == requirement.qualified_name)
+                {
+                    add(evidence);
+                }
+            }
+        }
+    }
+    records.into_values().collect()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RequirementRollupState {
+    Verified,
+    Failed,
+    Stale,
+    Running,
+    Incomplete,
+}
+
+fn requirement_rollup_label(
+    state: RequirementRollupState,
+    theme: &lunco_theme::Theme,
+) -> (&'static str, egui::Color32, &'static str) {
+    match state {
+        RequirementRollupState::Verified => (
+            "VERIFIED",
+            theme.tokens.success,
+            "Model coverage is complete; current requirement evidence and all linked mapped tests passed.",
+        ),
+        RequirementRollupState::Failed => (
+            "FAILED",
+            theme.tokens.error,
+            "A current structured requirement check or linked scene test failed.",
+        ),
+        RequirementRollupState::Stale => (
+            "STALE",
+            theme.tokens.warning,
+            "The available evidence or test result belongs to an older SysML source revision.",
+        ),
+        RequirementRollupState::Running => (
+            "RUNNING",
+            theme.tokens.text_subdued,
+            "At least one linked scene test is running or queued.",
+        ),
+        RequirementRollupState::Incomplete => (
+            "INCOMPLETE",
+            theme.tokens.warning,
+            "Coverage, current requirement evidence, or a current passing linked test is missing.",
+        ),
+    }
+}
+
+fn requirement_rollup_state(
+    requirement: &RequirementView,
+    view_model: &SysmlRequirementsViewModel,
+    runs: Option<&SysmlVerificationRuns>,
+) -> RequirementRollupState {
+    let evidence = evidence_state(requirement, view_model, runs);
+    let execution = execution_summary(requirement, view_model, runs).state;
+    if evidence == EvidenceState::Fail || execution == ExecutionState::Fail {
+        RequirementRollupState::Failed
+    } else if execution == ExecutionState::Running {
+        RequirementRollupState::Running
+    } else if evidence == EvidenceState::Stale || execution == ExecutionState::Stale {
+        RequirementRollupState::Stale
+    } else {
+        let mapped = requirement
+            .verification_cases
+            .iter()
+            .filter(|name| {
+                view_model
+                    .verification_cases
+                    .iter()
+                    .any(|case| case.name.as_str() == name.as_str())
+            })
+            .count();
+        let complete_coverage = requirement.has_required_constraint
+            && !requirement.verification_cases.is_empty()
+            && mapped == requirement.verification_cases.len();
+        if complete_coverage && evidence == EvidenceState::Pass && execution == ExecutionState::Pass
+        {
+            RequirementRollupState::Verified
+        } else {
+            RequirementRollupState::Incomplete
+        }
     }
 }
 
@@ -1774,7 +2291,7 @@ fn requirement_matches_filters(
     runs: Option<&SysmlVerificationRuns>,
     filters: RequirementFilters,
 ) -> bool {
-    let evidence = evidence_state(requirement, view_model);
+    let evidence = evidence_state(requirement, view_model, runs);
     let test = execution_summary(requirement, view_model, runs).state;
     let mapped_count = requirement
         .verification_cases
@@ -1804,6 +2321,9 @@ fn requirement_matches_filters(
     let test_matches = match filters.tests {
         TestFilter::All => true,
         TestFilter::Failed => test == ExecutionState::Fail,
+        TestFilter::SuiteFailures => {
+            requirement_has_last_suite_failure(requirement, view_model, runs)
+        }
         TestFilter::NeedsResult => matches!(
             test,
             ExecutionState::Partial
@@ -1818,6 +2338,25 @@ fn requirement_matches_filters(
         }
     };
     evidence_matches && test_matches && coverage_matches
+}
+
+fn requirement_has_last_suite_failure(
+    requirement: &RequirementView,
+    view_model: &SysmlRequirementsViewModel,
+    runs: Option<&SysmlVerificationRuns>,
+) -> bool {
+    view_model
+        .twin_id
+        .and_then(|twin_id| runs.and_then(|runs| runs.last_suite(twin_id)))
+        .is_some_and(|suite| {
+            suite.cases.iter().any(|case| {
+                case.outcome == VerificationRunOutcome::Failed
+                    && requirement
+                        .verification_cases
+                        .iter()
+                        .any(|name| name == &case.name)
+            })
+        })
 }
 
 /// Shows only non-zero states so the overview stays compact.
