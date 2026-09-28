@@ -63,6 +63,12 @@ when their owning Twin closes. Reuse authored Rhai source classifications for
 the same manifest and policy revision; asset-content changes do not require a
 second classification pass.
 
+For Modelica startup, separate Rumoca compile time, prepared-solve cache lookup,
+`lower_for_live`, and ordered result commit. When equivalent requests share the
+same structural solve key, coalesce in-flight lowering instead of occupying a
+second worker; preserve one result position per participant in the existing
+stable commit queue.
+
 Application policy startup has separate Tracy spans for
 `application_policy_source_prepare_offthread`,
 `application_policy_compile_offthread`,

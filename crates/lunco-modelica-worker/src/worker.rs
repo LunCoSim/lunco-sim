@@ -296,6 +296,8 @@ struct SolvePreparationPool {
     tx: Sender<WorkerPreparationResult>,
     rx: Receiver<WorkerPreparationResult>,
     next_id: u64,
+    in_flight_solve_keys: HashMap<PreparedSolveKey, u64>,
+    solve_followers: HashMap<u64, Vec<u64>>,
 }
 
 fn prepare_source_root_payload(id: String, payload: LoadSourceRootPayload) -> PreparedSourceRoot {
@@ -390,12 +392,29 @@ impl SolvePreparationPool {
             tx,
             rx,
             next_id: 0,
+            in_flight_solve_keys: HashMap::default(),
+            solve_followers: HashMap::default(),
         }
     }
 
-    fn submit(&mut self, work: &CompileWork) -> u64 {
+    fn allocate_id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
+        id
+    }
+
+    fn submit(&mut self, work: &CompileWork) -> u64 {
+        let id = self.allocate_id();
+        let key = work.plan.key.clone();
+        if let Some(leader_id) = self.in_flight_solve_keys.get(&key).copied() {
+            self.solve_followers.entry(leader_id).or_default().push(id);
+            log::debug!(
+                "[modelica-runtime] sharing in-flight solve preparation {leader_id} for `{}` as {id}",
+                work.model_name,
+            );
+            return id;
+        }
+        self.in_flight_solve_keys.insert(key.clone(), id);
         let dae = work.comp_res.dae.clone();
         let options = work.plan.options.clone();
         let model_name = work.model_name.clone();
@@ -485,7 +504,8 @@ impl SolvePreparationPool {
             if tx
                 .send(WorkerPreparationResult::Solve(SolvePreparationResult {
                     id,
-                    result,
+                    key,
+                    result: std::sync::Arc::new(result),
                 }))
                 .is_err()
             {
@@ -498,8 +518,7 @@ impl SolvePreparationPool {
     }
 
     fn submit_source_root(&mut self, id: String, payload: LoadSourceRootPayload) -> u64 {
-        let operation_id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1);
+        let operation_id = self.allocate_id();
         let tx = self.tx.clone();
         self.pool.spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -535,6 +554,13 @@ impl SolvePreparationPool {
             }
         });
         operation_id
+    }
+
+    fn finish_solve(&mut self, result: &SolvePreparationResult) -> Vec<u64> {
+        if self.in_flight_solve_keys.get(&result.key) == Some(&result.id) {
+            self.in_flight_solve_keys.remove(&result.key);
+        }
+        self.solve_followers.remove(&result.id).unwrap_or_default()
     }
 }
 
@@ -600,7 +626,9 @@ impl StepRequest {
 #[cfg(not(target_arch = "wasm32"))]
 struct SolvePreparationResult {
     id: u64,
-    result: Result<rumoca_ir_solve::SolveModel, rumoca_sim::SimulationDiagnosticError>,
+    key: PreparedSolveKey,
+    result:
+        std::sync::Arc<Result<rumoca_ir_solve::SolveModel, rumoca_sim::SimulationDiagnosticError>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -889,11 +917,11 @@ fn complete_preparation(
         );
         return;
     }
-    match preparation.result {
+    match preparation.result.as_ref() {
         Ok(model) => {
             prepared_solve_cache
                 .models
-                .insert(work.plan.key.clone(), model);
+                .insert(work.plan.key.clone(), model.clone());
             let entity = work.entity;
             let session_id = work.session_id;
             let model_name = work.model_name.clone();
@@ -926,7 +954,7 @@ fn complete_preparation(
                 let _ = tx.send(result);
             }
         }
-        Err(error) => compile_work_error(tx, &work, &error),
+        Err(error) => compile_work_error(tx, &work, error),
     }
 }
 
@@ -957,6 +985,7 @@ fn stage_preparation_result(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn commit_ready_solve_preparations(
+    pool: &mut SolvePreparationPool,
     order: &mut VecDeque<u64>,
     ready: &mut HashMap<u64, SolvePreparationResult>,
     pending_compile_works: &mut HashMap<u64, CompileWork>,
@@ -973,6 +1002,18 @@ fn commit_ready_solve_preparations(
         let Some(result) = pop_ready_in_order(order, ready) else {
             return;
         };
+        for follower_id in pool.finish_solve(&result) {
+            let follower = SolvePreparationResult {
+                id: follower_id,
+                key: result.key.clone(),
+                result: std::sync::Arc::clone(&result.result),
+            };
+            if ready.insert(follower_id, follower).is_some() {
+                bevy::log::error!(
+                    "[modelica-runtime] duplicate shared solve preparation id {follower_id}"
+                );
+            }
+        }
         complete_preparation(
             result,
             pending_compile_works,
@@ -2539,6 +2580,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
             &tx,
         );
         commit_ready_solve_preparations(
+            &mut solve_preparation_pool,
             &mut solve_preparation_order,
             &mut ready_solve_preparations,
             &mut pending_compile_works,
@@ -2599,6 +2641,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
             &tx,
         );
         commit_ready_solve_preparations(
+            &mut solve_preparation_pool,
             &mut solve_preparation_order,
             &mut ready_solve_preparations,
             &mut pending_compile_works,

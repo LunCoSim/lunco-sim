@@ -418,8 +418,10 @@ participants before the time spine. A participant whose current session still
 needs compilation owns one `ModelicaPreparation` key; compile intent is admitted
 in the lifecycle cycle, which continues while `Time<Virtual>` is held. The
 worker result is committed by the Modelica response handler before the next
-lifecycle pass releases that key. Intentionally paused and noncausal models do
-not hold world time. This gate covers prepared solver state; the first normal
+lifecycle pass releases that key. Concurrent requests with the same prepared
+solve key share one immutable worker result, but retain their individual IDs in
+the ordered commit queue. Intentionally paused and noncausal models do not hold
+world time. This gate covers prepared solver state; the first normal
 co-simulation step remains governed by the per-step barrier after activation.
 A terminal Modelica error also releases the preparation key, while the
 readiness owner keeps the failure visible as `program_failed` and applies its
