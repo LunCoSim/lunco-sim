@@ -943,6 +943,7 @@ fn pose_to_position(
     active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     mut frame_state: ResMut<PhysicsFrameTransportState>,
     q_sleeping: Query<(), (With<Sleeping>, With<RigidBody>)>,
+    q_pose_seeded: Query<(), With<lunco_physics::PhysicsPoseSeeded>>,
     mut moved: Local<EntityHashSet>,
     mut body_entities: Local<Vec<Entity>>,
     // Plain chain nodes have a representation shadow when they carry a
@@ -1188,9 +1189,11 @@ fn pose_to_position(
         pos.0 = p.0;
         rot.0 = r.0;
         shadow.capture(cell, tf, active_frame);
-        commands
-            .entity(e)
-            .try_insert(lunco_physics::PhysicsPoseSeeded);
+        if !q_pose_seeded.contains(e) {
+            commands
+                .entity(e)
+                .try_insert(lunco_physics::PhysicsPoseSeeded);
+        }
         // avian's `wake_on_changed` only sees Position writes made OUTSIDE
         // the physics schedule (it compares against `LastPhysicsTick`), so an
         // external Transform teleport applied here would leave a sleeping
