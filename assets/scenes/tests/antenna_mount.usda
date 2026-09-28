@@ -3,7 +3,7 @@
     defaultPrim = "AntennaMountTest"
     upAxis = "Y"
     metersPerUnit = 1
-    doc = "One antenna component mounted on four different hosts: every mount must attach and slew, and the one deliberately parked must not."
+    doc = "One antenna component mounted on three host kinds with a passive control: active mounts must attach and slew to DSS Goldstone."
 )
 
 # ── Scene: Antenna Mount Test ────────────────────────────────────────────────
@@ -13,35 +13,23 @@
 # nearest ancestor rigid body — whatever it happens to be parented under. The
 # host authors a `translate` and nothing else.
 #
-# That is a claim about EVERY host, so this scene mounts the same component on
-# every KIND of host the catalogue has, in one tick, and asserts each one
-# actually articulates:
+# This fixture checks the same component on three host kinds and keeps one
+# passive control:
 #
 #   Rover        dynamic body, antenna is a direct child        (skid_rover)
-#   Lander       dynamic body, antenna is a direct child        (descent_lander)
 #   Mast         STATIC body, antenna is a SIBLING of the tower (comms_mast)
 #   Bare         a body this scene declares itself, no catalogue host at all
 #
-# The mast is the interesting one and the reason this scene exists rather than a
-# unit test. Its tower is a sibling of the antenna, not its ancestor, so the mount
-# resolves only because the mast's ROOT carries `PhysicsRigidBodyAPI`. Nothing
-# else in the project would notice if that came off — the dish would simply stop
-# tracking Earth, exactly as it silently did for as long as the yaw joint was
-# authored per-host.
-#
+# The mast checks that the antenna joint resolves its mount through the declared
+# body relationship. Each active mount explicitly selects DSS Goldstone; the
+# parked control retains the component's no-target default.
 # `Bare` is the anti-catalogue case: proof the component needs NOTHING from a
 # host but a body to hang under, so a scene can mount one on a prim it invents.
 #
 # ── The control ──────────────────────────────────────────────────────────────
 #
-# `Parked` mounts the same component on the same kind of body and deactivates the
-# mechanism while disabling both nested rigid bodies — what a host does when it
-# wants the dish as scenery (`components/comms/ground_station.usda` uses the same
-# contract for stations with no lunar target to track).
-#
-# Without it, every assertion here passes for a scene where the engine attaches a
-# joint to anything that asks, including things that asked not to. The control is
-# what makes "it attached" mean "it attached BECAUSE it was authored to".
+# `Parked` mounts the same component on a dynamic body with no target connection.
+# It confirms the shared component stays inert until a scene opts in.
 def Xform "AntennaMountTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
@@ -51,23 +39,22 @@ def Xform "AntennaMountTest" (
 {
     uniform bool lunco:spawnable = false
 
-    # Celestial content is OPT-IN per scene, and this scene needs it: the whole
-    # point of the mount is that the dish TRACKS something, and `EarthTracker`
-    # has nothing to point at until a scene declares where Earth is. Without
-    # this every mount below attaches correctly and sits perfectly still, which
-    # is the failure the `slewed` assertion exists to catch.
+    # Celestial content is OPT-IN per scene, and this scene needs it to place the
+    # named Goldstone ground station. Antennas below select that station through
+    # explicit direction connections.
     def "SolarSystem" (
         prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
     )
     {
     }
+    def "Goldstone" (
+        prepend references = @lunco://structures/ground_stations/dss_goldstone.usda@</DSSGoldstone>
+    )
+    {
+    }
 
-    # A high-latitude site like the other comms scenes, but deliberately OFF the
-    # prime meridian. The sub-Earth point is lat 0 lon 0, so from lon 0 Earth sits
-    # due north and the correct yaw azimuth is genuinely ~0 — a site where a dish
-    # that tracks perfectly and a dish welded shut produce the same reading, and
-    # the `slewed` assertion below cannot tell them apart. At lon 60 the answer is
-    # tens of degrees off north, so zero means broken.
+    # This lunar site supplies a nontrivial mount frame for the Goldstone target;
+    # the verdict below requires a measurable yaw slew on every active mount.
     double lunco:anchor:lat = -85.0
     double lunco:anchor:lon = 60.0
     double lunco:anchor:height = 0.0
@@ -79,6 +66,20 @@ def Xform "AntennaMountTest" (
     {
         double3 xformOp:translate = (-14.0, 0.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        over "Comms"
+        {
+            double inputs:target_mount_x.connect = </AntennaMountTest/Rover/Comms/Environment.outputs:dss_goldstone_mount_x>
+            double inputs:target_mount_y.connect = </AntennaMountTest/Rover/Comms/Environment.outputs:dss_goldstone_mount_y>
+            double inputs:target_mount_z.connect = </AntennaMountTest/Rover/Comms/Environment.outputs:dss_goldstone_mount_z>
+            over "AntennaTrackerController" (active = true) { }
+            over "YawJoint" (active = true) { }
+            over "ElevationJoint" (active = true) { }
+            over "YawHead"
+            {
+                bool physics:rigidBodyEnabled = true
+                over "DishGimbal" { bool physics:rigidBodyEnabled = true }
+            }
+        }
     }
 
     # (No lander. It mounts the same antenna the same way — a direct child of a
@@ -94,6 +95,20 @@ def Xform "AntennaMountTest" (
     {
         double3 xformOp:translate = (14.0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        over "Antenna"
+        {
+            double inputs:target_mount_x.connect = </AntennaMountTest/Mast/Antenna/Environment.outputs:dss_goldstone_mount_x>
+            double inputs:target_mount_y.connect = </AntennaMountTest/Mast/Antenna/Environment.outputs:dss_goldstone_mount_y>
+            double inputs:target_mount_z.connect = </AntennaMountTest/Mast/Antenna/Environment.outputs:dss_goldstone_mount_z>
+            over "AntennaTrackerController" (active = true) { }
+            over "YawJoint" (active = true) { }
+            over "ElevationJoint" (active = true) { }
+            over "YawHead"
+            {
+                bool physics:rigidBodyEnabled = true
+                over "DishGimbal" { bool physics:rigidBodyEnabled = true }
+            }
+        }
     }
 
     # A host this scene invents: a plain static box, nothing from the catalogue.
@@ -115,6 +130,17 @@ def Xform "AntennaMountTest" (
         {
             double3 xformOp:translate = (0, 0.5, 0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
+            double inputs:target_mount_x.connect = </AntennaMountTest/Bare/Antenna/Environment.outputs:dss_goldstone_mount_x>
+            double inputs:target_mount_y.connect = </AntennaMountTest/Bare/Antenna/Environment.outputs:dss_goldstone_mount_y>
+            double inputs:target_mount_z.connect = </AntennaMountTest/Bare/Antenna/Environment.outputs:dss_goldstone_mount_z>
+            over "AntennaTrackerController" (active = true) { }
+            over "YawJoint" (active = true) { }
+            over "ElevationJoint" (active = true) { }
+            over "YawHead"
+            {
+                bool physics:rigidBodyEnabled = true
+                over "DishGimbal" { bool physics:rigidBodyEnabled = true }
+            }
         }
     }
 
@@ -136,33 +162,6 @@ def Xform "AntennaMountTest" (
             double3 xformOp:translate = (0, 0.5, 0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
 
-            # The whole mechanism is scenery here. Deactivate both joints and the
-            # controller, and disable both nested bodies so neither link becomes a
-            # free dynamic body when its articulation is absent.
-            over "YawHead"
-            {
-                bool physics:rigidBodyEnabled = false
-
-                over "DishGimbal"
-                {
-                    bool physics:rigidBodyEnabled = false
-                }
-            }
-            over "EarthTrackerController" (
-                active = false
-            )
-            {
-            }
-            over "YawJoint" (
-                active = false
-            )
-            {
-            }
-            over "ElevationJoint" (
-                active = false
-            )
-            {
-            }
         }
     }
 

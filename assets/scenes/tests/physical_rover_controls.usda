@@ -8,16 +8,11 @@
 def Xform "PhysicalRoverControls" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    documentation = "Physical skid and Ackermann rover control matrix with explicit lunar-site and SolarSystem facts for their Earth-tracking probes."
-    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
+    documentation = "Physical skid and Ackermann rover control matrix; the shared antennas stay parked because this scene selects no ground station."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = false
-    double lunco:anchor:lat = 26.13
-    double lunco:anchor:lon = 3.63
-    double lunco:anchor:height = 0.0
-    int lunco:anchor:body = 301
-    double lunco:time:epochJd = 2461395.5
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
@@ -93,10 +88,5 @@ def Xform "PhysicalRoverControls" (
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/physical_rover_controls.rhai@
         }
-    }
-    def "SolarSystem" (
-        references = @lunco://celestial/solar_system.usda@
-    )
-    {
     }
 }

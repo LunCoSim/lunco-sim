@@ -16,11 +16,14 @@
 # See `structures/ground_stations/README.md` — the height here is approximate.
 def Xform "BearLakes" (
     prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
+    prepend apiSchemas = "LunCoDirectionTargetAPI"
     kind = "component"
     displayName = "Bear Lakes · RT-64"
     doc = "Bear Lakes (Медвежьи Озёра), Moscow oblast — TNA-1500, 64 m. Western half of the Russian deep-space pair."
 )
 {
+    uniform token lunco:directionTarget:id = "bear_lakes"
+
 
     double lunco:anchor:lat = 55.87
     double lunco:anchor:lon = 38.23

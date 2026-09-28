@@ -9,11 +9,10 @@ def Xform "WheelAttachmentContract" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     documentation = "A rover wheel whose standard attachment resolves tire and suspension from separate targets."
-    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = false
-    double lunco:time:epochJd = 2461395.5
     def Xform "Rover" (
         prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
         variants = { string "drivetrain" = "raycast"; string "generation" = "none"; string "power" = "infinite"; string "thermal" = "none" }
@@ -47,10 +46,5 @@ def Xform "WheelAttachmentContract" (
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/wheel_attachment_contract.rhai@
         }
-    }
-    def "SolarSystem" (
-        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
-    )
-    {
     }
 }

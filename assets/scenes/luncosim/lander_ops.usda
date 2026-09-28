@@ -44,9 +44,8 @@ def Xform "LanderTest" (
 
     uniform bool lunco:spawnable = false
 
-    # The lander carries an Earth-tracking communications subsystem. Celestial
-    # content and the lunar site frame are therefore part of this mission scene,
-    # not an implicit Rust default.
+    # This mission authors its lunar site, epoch, and celestial lighting. The
+    # shared antenna remains passive because no ground station is selected.
     double lunco:anchor:lat = 26.13
     double lunco:anchor:lon = 3.63
     double lunco:anchor:height = 0.0

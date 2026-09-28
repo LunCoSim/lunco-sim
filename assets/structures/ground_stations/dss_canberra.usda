@@ -12,11 +12,14 @@
 # See `structures/ground_stations/README.md`.
 def Xform "DSSCanberra" (
     prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
+    prepend apiSchemas = "LunCoDirectionTargetAPI"
     kind = "component"
     displayName = "DSN Canberra · DSS-43"
     doc = "DSN Canberra (DSS-43), Tidbinbilla — 70 m deep-space dish."
 )
 {
+    uniform token lunco:directionTarget:id = "dss_canberra"
+
 
     double lunco:anchor:lat = -35.4014
     double lunco:anchor:lon = 148.9817

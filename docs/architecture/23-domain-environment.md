@@ -170,6 +170,15 @@ co-simulation consumer faults. The authoring action is to connect one valid
 source id to the generic target triplet or resolve the lint finding before
 running the model.
 
+The shared communications antenna follows that rule. Its controller and hinge
+joints are inactive, and its nested links are non-dynamic by default. A scene
+that points the dish must compose a named `LunCoDirectionTargetAPI` asset,
+connect that target's probe outputs to `target_mount_x/y/z`, and explicitly
+activate the controller, joints, and link bodies. A scene with no selected
+station keeps the passive default and does not need a `SolarSystem` for the
+antenna. A station whose authored position is relative to a celestial body
+still needs the scene's celestial composition to resolve that position.
+
 ## Invariants
 
 **1. Nothing here is gated on rendering.** `lunco-environment` is **render-free** —

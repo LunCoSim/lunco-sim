@@ -7,7 +7,7 @@ penalty for being off target — so the servo is a component here rather than an
 copied into each tracker.</p>
 
 <p><code>ServoAxis</code> is the shared part: one first-order axis. <code>SunTracker</code>
-(one axis, azimuth) and <code>EarthTracker</code> (two axes plus a beam pattern) are
+(one axis, azimuth) and <code>AntennaTracker</code> (two axes plus a beam pattern) are
 assemblies of it. Adding a third tracker should mean instantiating this, not writing
 <code>der(x) = (cmd - x)/tau</code> again.</p>
 

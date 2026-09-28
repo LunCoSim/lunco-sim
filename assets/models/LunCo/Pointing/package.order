@@ -2,5 +2,5 @@ ServoAxis
 RateIntegrator
 DishPattern
 SunTracker
-EarthTracker
+AntennaTracker
 ReactionWheel

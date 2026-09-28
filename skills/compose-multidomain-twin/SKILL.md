@@ -482,7 +482,7 @@ tick. `DeclaredOutputPorts` records topology; `SimComponent.outputs` records
 current samples. An empty codeless `LunCoEnvironmentProbeAPI` asset is valid:
 the projection supplies the authoritative environment names, while the
 environment domain removes absent samples instead of fabricating zeroes or
-retaining stale values. Do not add dummy USD properties or an EarthTracker
+retaining stale values. Do not add dummy USD properties or an AntennaTracker
 alias to hide a missing declaration. See
 [`tutorial-autopilot-and-port-contracts`](../../docs/architecture/tutorial-autopilot-and-port-contracts.md).
 

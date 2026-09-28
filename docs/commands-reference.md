@@ -329,7 +329,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `target` | `Entity` |  Target entity or prim root. |
 | `name` | `String` |  Attribute name (e.g. `inputs:angle` or `inputs:earth_azimuth`). |
 | `type_name` | `String` |  Attribute type name (e.g. `float`). Defaults to `float`. |
-| `sources` | `Vec < String >` |  Absolute property paths this attribute connects to (e.g. `["/SandboxScene/Skid_Raycast_1/Comms/EarthTrackerController.outputs:az"]`). |
+| `sources` | `Vec < String >` |  Absolute property paths this attribute connects to (e.g. `["/SandboxScene/Skid_Raycast_1/Comms/AntennaTrackerController.outputs:az"]`). |
 
 #### `StepPhysics`
 

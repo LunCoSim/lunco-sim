@@ -72,7 +72,7 @@ the short version is below.
 | Scene contract | Author | Use it when |
 |---|---|---|
 | Fixed instructional world | A real `DistantLight` reference such as `lunco://lighting/sun.usda`, with an authored rotation; omit the celestial payload. | Teaching UI, spawning, or basic controls where changing sunlight is not the subject. |
-| Ephemeris world | Reference `lunco://celestial/solar_system.usda` under `SolarSystem`; author the site anchor on the scene root when needed. Add `LunCoEpochAPI` and a non-zero `double lunco:time:epochJd` on the scene root when a repeatable date is required. | Teaching a real lunar day, Earth tracking, orbital motion, or any feature whose result depends on celestial time. |
+| Ephemeris world | Reference `lunco://celestial/solar_system.usda` under `SolarSystem`; author the site anchor on the scene root when needed. Add `LunCoEpochAPI` and a non-zero `double lunco:time:epochJd` on the scene root when a repeatable date is required. | Teaching a real lunar day, antenna pointing to a body-relative station, orbital motion, or another feature whose result depends on celestial time. |
 | Existing world | Reference or payload the authoritative scene that already owns gravity, lighting, time, and celestial content. | Adding a lesson or assembly whose subject is behaviour, not scenery. |
 | UI-only lesson | Omit the payload; the tutorial launcher clears an outgoing lesson scene before showing the UI-only lesson. | Teaching menus, commands, or workbench concepts. |
 

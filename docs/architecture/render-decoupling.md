@@ -95,6 +95,14 @@ Keep this optimization in `lunco-render-bevy`. Scene-camera reconciliation
 remains the sole owner of which authored window camera is active; Bevy's
 auxiliary shadow subviews are not extra scene cameras and remain intact.
 
+Before Bevy's visibility and spotlight-frustum systems consume propagated
+light transforms, `lunco-render-bevy` validates that each spotlight has a
+finite transform and a finite unit direction. An invalid light is hidden and
+its shadow map is disabled before Bevy can construct a `Dir3`; the owning
+runtime also receives a terminal `RuntimeFaults` record and a
+`render-light-transform-safety` diagnostic. This keeps malformed simulation
+state visible while preventing a renderer system from panicking on it.
+
 ### Auxiliary shadow-view schedule admission
 
 Bevy's camera driver also runs `Core3d` for point- and spot-light shadow roots.

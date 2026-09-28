@@ -76,37 +76,8 @@ def Xform "RockerBogieAntennaVisual" (
         over "BogieHingeL" (active = false) { }
         over "BogieHingeR" (active = false) { }
 
-        # This companion is a hardware composition review, not the pointing
-        # dynamics gate. Keep the rover's single authored antenna instance and
-        # make its existing mechanism inert for this frozen view; the numeric
-        # companion keeps the same instance live while the rover drives.
-        over "Antenna"
-        {
-            over "YawHead"
-            {
-                bool physics:rigidBodyEnabled = false
-                over "DishGimbal"
-                {
-                    bool physics:rigidBodyEnabled = false
-                }
-            }
-
-            over "EarthTrackerController" (
-                active = false
-            )
-            {
-            }
-            over "YawJoint" (
-                active = false
-            )
-            {
-            }
-            over "ElevationJoint" (
-                active = false
-            )
-            {
-            }
-        }
+        # This hardware composition review leaves the shared antenna in its
+        # passive no-target default.
     }
 
     over "Avatar"
