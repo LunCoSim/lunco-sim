@@ -636,6 +636,7 @@ impl PhysicsSignalName {
 struct CachedPhysicsSignal {
     signal: SignalRef,
     metadata: Option<SignalMeta>,
+    global_owner: Option<GlobalEntityId>,
 }
 
 /// Borrowed static presentation facts for a sample; owned labels are built only
@@ -784,6 +785,7 @@ fn retain_samples(
                     entry.insert(CachedPhysicsSignal {
                         signal,
                         metadata: None,
+                        global_owner: None,
                     }),
                     known,
                 )
@@ -791,7 +793,10 @@ fn retain_samples(
         };
         let signal = &cached.signal;
         if let Some(owner) = global_owner {
-            signals.associate_global_owner(signal, owner);
+            if cached.global_owner != Some(owner) {
+                signals.associate_global_owner(signal, owner);
+                cached.global_owner = Some(owner);
+            }
         }
         if metadata_dirty || cached.metadata.is_none() {
             let signal_meta = SignalMeta {

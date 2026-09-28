@@ -432,7 +432,8 @@ type lookup for every prim.
 For fixed-step telemetry, keep static channel-presentation facts borrowed in
 the per-sample path and allocate their owned signal metadata only when that
 channel's metadata is first created or changes. Reuse one `HashMap::entry` for
-each sample's cached identity lookup and mutation. Add the shared `SignalSource`
+each sample's cached identity lookup and mutation, and update its global-owner
+association only when the owner identity changes. Add the shared `SignalSource`
 owner marker only when the entity first retains a sample; its removal observer
 owns history cleanup, so later batches do not need to queue marker writes.
 
