@@ -39,6 +39,12 @@ telemetry browser and channel dictionary show vector components with a shared
 group and a defined headline formula, without parsing channel names or
 duplicating a derived-value registry.
 
+The telemetry browser snapshots channel metadata and the relevant owner
+hierarchy when `SignalRegistry::catalog_revision` or `TelemetryFocus` changes.
+It sorts and derives the grouped tree on the async-compute pool; sample updates
+do not rebuild the catalog, and panel rendering never waits for a pending tree.
+Rows read their latest values from the shared registry when painted.
+
 Persisted bindings are reconciled from stable `GlobalEntityId` identity only
 when the visualization registry or an identity publication changes. Unchanged
 scenes do not rebuild entity lookup maps or rewrite plot bindings; missing

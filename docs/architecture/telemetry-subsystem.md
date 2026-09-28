@@ -83,6 +83,13 @@ Modelica runtime telemetry caches each session's `SignalRef` by solver variable 
 not rebuild or clone an owned signal path. The registry clones the key only when it first
 creates the channel; a new solver session clears the prior histories and cached identities.
 
+The telemetry browser's grouped catalog is presentation state. It snapshots channel metadata
+and the signal owners' label/path/parent facts when the registry catalog revision or selected
+focus changes, then deduplicates, groups, and sorts those immutable rows on the async-compute
+pool. A catalog result is published only for the matching registry and focus keys. The panel
+does not build the tree or wait for a worker during `Panel::render`; live sample values remain
+read from `SignalRegistry` when visible rows are painted.
+
 ### Archived history is not automatically stale
 
 An archived row means that its publisher was removed during this process (for example, a

@@ -40,7 +40,10 @@ use crate::oracle::DemHeightField;
 
 pub use craters::{crater_layer, make_crater_layer};
 pub use edits::{EditKind, EditsLayer, edit_attr_writes, parse_edit};
-pub(crate) use rocks::ProceduralRock;
+pub(crate) use rocks::{
+    PendingTerrainRockAdmission, ProceduralRock, admit_pending_terrain_rocks,
+    clear_pending_terrain_rocks,
+};
 pub use rocks::{TerrainRock, rock_instance_layer, rock_layer};
 
 /// Parameters decoded from one built-in USD-free terrain layer.
@@ -281,6 +284,11 @@ impl TerrainLayerStack {
 #[derive(Component)]
 pub struct TerrainLayersApplied;
 
+/// Scatter was requested, but generated rock bodies or visuals have not all
+/// crossed their bounded ECS admission batches yet.
+#[derive(Component)]
+pub(crate) struct TerrainLayersPending;
+
 /// The [`TerrainLayerStack::scatter_fingerprint`] of the stack whose scatter is
 /// CURRENTLY spawned on this terrain — written where the scatter applies, read
 /// by `finish_dem_restamp` to no-op recomposes that change nothing.
@@ -374,6 +382,8 @@ pub struct LayerScatterCx<'a, 'w, 's> {
     /// scene and must keep the normal rebuild lifecycle.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) rock_pool: &'a mut Vec<Entity>,
+    /// Generated rocks cross the ECS boundary in bounded, ordered batches.
+    pub(crate) pending_rock_admission: &'a mut PendingTerrainRockAdmission,
 }
 
 /// The shared boulder assets every rock layer draws with.
@@ -614,10 +624,14 @@ pub(crate) fn scatter_terrain_layers(
     meshes: Option<ResMut<Assets<Mesh>>>,
     asset_server: Res<AssetServer>,
     mut rock_assets: ResMut<SharedRockAssets>,
+    mut pending_rock_admission: ResMut<PendingTerrainRockAdmission>,
     quality: Res<lunco_render::RenderingQualitySettings>,
     q: Query<
         (Entity, &DemHeightField, &TerrainLayerStack),
-        Or<(Without<TerrainLayersApplied>, With<TerrainScatterRefresh>)>,
+        Or<(
+            (Without<TerrainLayersApplied>, Without<TerrainLayersPending>),
+            With<TerrainScatterRefresh>,
+        )>,
     >,
     scattered: Query<
         (Entity, &TerrainScatterOwner, Option<&ProceduralRock>),
@@ -640,6 +654,7 @@ pub(crate) fn scatter_terrain_layers(
         // Procedural rocks are recycled in-place; authored scene children remain
         // untouched because they do not carry the runtime scatter marker. Authored
         // layer instances carry the marker and retain their normal despawn lifecycle.
+        pending_rock_admission.cancel_terrain(entity);
         let mut rock_pool = Vec::new();
         for (scatter_entity, owner, procedural) in &scattered {
             if owner.0 == entity {
@@ -654,10 +669,9 @@ pub(crate) fn scatter_terrain_layers(
         // `try_insert`: a doc-backed scene reload (E1b) can despawn + re-instantiate
         // this terrain in the same frame, so the entity may be gone by the time
         // these deferred commands apply — skip silently rather than panic.
-        commands.entity(entity).try_insert((
-            TerrainLayersApplied,
-            ScatteredContent(stack.scatter_fingerprint()),
-        ));
+        commands
+            .entity(entity)
+            .try_remove::<(TerrainLayersApplied, TerrainLayersPending, ScatteredContent)>();
         commands
             .entity(entity)
             .try_remove::<TerrainScatterRefresh>();
@@ -672,9 +686,19 @@ pub(crate) fn scatter_terrain_layers(
             rock_assets: &mut rock_assets,
             #[cfg(not(target_arch = "wasm32"))]
             rock_pool: &mut rock_pool,
+            pending_rock_admission: &mut pending_rock_admission,
         };
         for entry in &stack.0 {
             entry.layer.scatter(&mut cx);
+        }
+        let fingerprint = stack.scatter_fingerprint();
+        if pending_rock_admission.has_terrain_work(entity) {
+            pending_rock_admission.register_terrain(entity, fingerprint);
+            commands.entity(entity).try_insert(TerrainLayersPending);
+        } else {
+            commands
+                .entity(entity)
+                .try_insert((TerrainLayersApplied, ScatteredContent(fingerprint)));
         }
     }
 }

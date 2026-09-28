@@ -53,6 +53,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bevy::prelude::*;
+use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use lunco_core::{Command, on_command, register_commands};
@@ -357,28 +358,34 @@ fn model_state_priority(row: &Row) -> (u8, u8, u8) {
     )
 }
 
-fn deduplicated_rows(reg: &SignalRegistry) -> Vec<Row> {
+fn snapshot_rows(reg: &SignalRegistry) -> Vec<Row> {
+    reg.iter_scalar()
+        .map(|(sig, _history)| {
+            let meta = reg.meta(sig);
+            Row {
+                sig: sig.clone(),
+                unit: meta.and_then(|m| m.unit.clone()),
+                description: meta.and_then(|m| m.description.clone()),
+                provenance: meta.and_then(|m| m.provenance.clone()),
+                group_path: meta.and_then(|m| m.group_path.clone()),
+                model_class: meta.and_then(|m| m.model_class.clone()),
+                model_variable: meta.and_then(|m| m.model_variable.clone()),
+                source_asset: meta.and_then(|m| m.source_asset.clone()),
+                canonical_name: meta.and_then(|m| m.canonical_name.clone()),
+                presentation: meta.map(|m| m.presentation.clone()).unwrap_or_default(),
+                exposure: meta.map_or(SignalExposure::Public, |m| m.exposure),
+                in_focus: sig.entity != Entity::PLACEHOLDER,
+                active: reg.is_active(sig),
+            }
+        })
+        .collect()
+}
+
+fn deduplicated_rows_from_snapshot(rows: Vec<Row>) -> Vec<Row> {
     let mut selected = HashMap::<ModelStateIdentity, Row>::new();
     let mut standalone = Vec::new();
 
-    for (sig, _history) in reg.iter_scalar() {
-        let meta = reg.meta(sig);
-        let row = Row {
-            sig: sig.clone(),
-            unit: meta.and_then(|m| m.unit.clone()),
-            description: meta.and_then(|m| m.description.clone()),
-            provenance: meta.and_then(|m| m.provenance.clone()),
-            group_path: meta.and_then(|m| m.group_path.clone()),
-            model_class: meta.and_then(|m| m.model_class.clone()),
-            model_variable: meta.and_then(|m| m.model_variable.clone()),
-            source_asset: meta.and_then(|m| m.source_asset.clone()),
-            canonical_name: meta.and_then(|m| m.canonical_name.clone()),
-            presentation: meta.map(|m| m.presentation.clone()).unwrap_or_default(),
-            exposure: meta.map_or(SignalExposure::Public, |m| m.exposure),
-            in_focus: sig.entity != Entity::PLACEHOLDER,
-            active: reg.is_active(sig),
-        };
-
+    for row in rows {
         let Some(identity) = model_state_identity(&row) else {
             standalone.push(row);
             continue;
@@ -402,6 +409,11 @@ fn deduplicated_rows(reg: &SignalRegistry) -> Vec<Row> {
             .then(left.sig.path.cmp(&right.sig.path))
     });
     standalone
+}
+
+#[cfg(test)]
+fn deduplicated_rows(reg: &SignalRegistry) -> Vec<Row> {
+    deduplicated_rows_from_snapshot(snapshot_rows(reg))
 }
 
 struct Catalog {
@@ -467,8 +479,8 @@ fn authored_path_lineage(path: &str, leaf_label: Option<&str>) -> Vec<(String, S
 /// has no `wheel`, `motor`, `beam`, or other name-based classifier: the USD
 /// parent graph supplies the assembly, subsystem, and component grouping for
 /// every scene, including ones the editor has never seen before.
-fn build_tree(
-    reg: &SignalRegistry,
+fn build_tree_rows(
+    rows: Vec<Row>,
     label_of: impl Fn(Entity) -> Option<String>,
     parent_of: impl Fn(Entity) -> Option<Entity>,
     usd_path_of: impl Fn(Entity) -> Option<String>,
@@ -476,7 +488,7 @@ fn build_tree(
     in_focus: impl Fn(Entity) -> bool,
 ) -> TreeNode {
     let mut root = TreeNode::new("root".to_string(), "Telemetry".to_string());
-    for row in deduplicated_rows(reg) {
+    for row in deduplicated_rows_from_snapshot(rows) {
         // Keep the signal identity independent from the row move below.
         let sig = row.sig.clone();
         let row = Row {
@@ -580,6 +592,25 @@ fn build_tree(
     root
 }
 
+#[cfg(test)]
+fn build_tree(
+    reg: &SignalRegistry,
+    label_of: impl Fn(Entity) -> Option<String>,
+    parent_of: impl Fn(Entity) -> Option<Entity>,
+    usd_path_of: impl Fn(Entity) -> Option<String>,
+    is_navigation_root: impl Fn(Entity) -> bool,
+    in_focus: impl Fn(Entity) -> bool,
+) -> TreeNode {
+    build_tree_rows(
+        snapshot_rows(reg),
+        label_of,
+        parent_of,
+        usd_path_of,
+        is_navigation_root,
+        in_focus,
+    )
+}
+
 fn sort_tree(node: &mut TreeNode) {
     node.rows.sort_by(|a, b| a.sig.path.cmp(&b.sig.path));
     for child in node.children.values_mut() {
@@ -591,6 +622,173 @@ fn sort_tree(node: &mut TreeNode) {
 /// handful of levels deep (rover → rocker → motor); the cap exists so a cyclic or
 /// corrupt hierarchy can't spin the UI thread, not because 32 is a real limit.
 const MAX_ANCESTOR_DEPTH: usize = 32;
+
+#[derive(Default)]
+struct EntityCatalogFacts {
+    label: Option<String>,
+    parent: Option<Entity>,
+    usd_path: Option<String>,
+}
+
+/// The telemetry catalog is derived from an immutable registry and hierarchy
+/// snapshot so sorting and tree construction stay off the panel render pass.
+#[derive(Resource)]
+pub(crate) struct TelemetryCatalogBuildState {
+    desired_key: Option<(u64, u64)>,
+    catalog: Arc<Catalog>,
+    task: Option<Task<((u64, u64), Catalog)>>,
+}
+
+impl Default for TelemetryCatalogBuildState {
+    fn default() -> Self {
+        Self {
+            desired_key: None,
+            catalog: Arc::new(Catalog::default()),
+            task: None,
+        }
+    }
+}
+
+/// Snapshot channel metadata and owner hierarchy on invalidation, then derive
+/// the grouped presentation tree on the compute pool. Sample updates do not
+/// change the catalog revision and therefore do not schedule this work.
+pub(crate) fn prepare_telemetry_catalog(
+    mut build: ResMut<TelemetryCatalogBuildState>,
+    registry: Option<Res<SignalRegistry>>,
+    focus: Option<Res<TelemetryFocus>>,
+    entity_info: Query<(
+        Option<&Name>,
+        Option<&lunco_core::markers::Callsign>,
+        Option<&lunco_core::CatalogEntryId>,
+        Option<&ChildOf>,
+        Option<&UsdPrimPath>,
+    )>,
+) {
+    let Some(registry) = registry else {
+        return;
+    };
+    let focus_roots = focus
+        .as_deref()
+        .map(|focus| focus.roots.clone())
+        .unwrap_or_default();
+    let key = (
+        catalog_key(&registry),
+        focus.as_deref().map_or(0, TelemetryFocus::fingerprint),
+    );
+    build.desired_key = Some(key);
+    if (build.catalog.key, build.catalog.focus_key) == key || build.task.is_some() {
+        return;
+    }
+
+    let (rows, facts) = bevy::log::info_span!(
+        "telemetry_catalog_snapshot",
+        catalog_revision = key.0
+    )
+    .in_scope(|| {
+        let rows = snapshot_rows(&registry);
+        let mut facts = HashMap::new();
+        let owners = rows
+            .iter()
+            .map(|row| row.sig.entity)
+            .chain(focus_roots.iter().copied());
+        for owner in owners {
+            let mut cursor = Some(owner);
+            for _ in 0..MAX_ANCESTOR_DEPTH {
+                let Some(entity) = cursor else { break };
+                if facts.contains_key(&entity) {
+                    break;
+                }
+                let Ok((name, callsign, catalog_id, parent, usd_path)) = entity_info.get(entity)
+                else {
+                    break;
+                };
+                let label = lunco_core::entity_display_name(name, callsign, catalog_id);
+                let parent = parent.map(ChildOf::parent);
+                facts.insert(
+                    entity,
+                    EntityCatalogFacts {
+                        label: (!label.is_empty()).then_some(label),
+                        parent,
+                        usd_path: usd_path.map(|path| path.path.clone()),
+                    },
+                );
+                cursor = parent;
+            }
+        }
+        (rows, facts)
+    });
+
+    if rows.is_empty() {
+        build.catalog = Arc::new(Catalog {
+            key: key.0,
+            focus_key: key.1,
+            root: TreeNode::new("root".to_string(), "Telemetry".to_string()),
+        });
+        return;
+    }
+
+    let channel_count = rows.len();
+    let entity_fact_count = facts.len();
+    let span = bevy::log::info_span!(
+        "telemetry_catalog_build_worker",
+        catalog_revision = key.0,
+        channels = channel_count,
+        entity_facts = entity_fact_count
+    );
+    build.task = Some(AsyncComputeTaskPool::get().spawn(async move {
+        let _span = span.enter();
+        let root = build_tree_rows(
+            rows,
+            |entity| facts.get(&entity).and_then(|fact| fact.label.clone()),
+            |entity| facts.get(&entity).and_then(|fact| fact.parent),
+            |entity| facts.get(&entity).and_then(|fact| fact.usd_path.clone()),
+            |_| false,
+            |entity| {
+                let Some(path) = facts.get(&entity).and_then(|fact| fact.usd_path.as_deref())
+                else {
+                    return entity_in_focus(entity, &focus_roots, |child| {
+                        facts.get(&child).and_then(|fact| fact.parent)
+                    });
+                };
+                focus_roots.iter().any(|root| {
+                    facts
+                        .get(root)
+                        .and_then(|fact| fact.usd_path.as_deref())
+                        .is_some_and(|root_path| {
+                            path == root_path
+                                || path
+                                    .strip_prefix(root_path)
+                                    .is_some_and(|suffix| suffix.starts_with('/'))
+                        })
+                })
+            },
+        );
+        (
+            key,
+            Catalog {
+                key: key.0,
+                focus_key: key.1,
+                root,
+            },
+        )
+    }));
+}
+
+/// Publish only the snapshot that still matches the live catalog and focus.
+/// A superseded worker result is discarded before the next snapshot starts.
+pub(crate) fn poll_telemetry_catalog(mut build: ResMut<TelemetryCatalogBuildState>) {
+    let completed = build
+        .task
+        .as_mut()
+        .and_then(|task| future::block_on(future::poll_once(task)));
+    let Some((key, catalog)) = completed else {
+        return;
+    };
+    build.task = None;
+    if build.desired_key == Some(key) {
+        build.catalog = Arc::new(catalog);
+    }
+}
 
 /// Is `entity` one of `roots`, or a descendant of one?
 ///
@@ -1150,7 +1348,6 @@ fn unit_tooltip(unit: Option<&str>) -> &'static str {
 /// itself. See the module docs for the two plot-creation doors.
 pub struct TelemetryBrowserPanel {
     filter: String,
-    catalog: Catalog,
     selected: Option<SignalRef>,
     preview: Option<PreviewCache>,
     /// Narrow the list to [`TelemetryFocus`] — the selected vessel and everything
@@ -1169,7 +1366,6 @@ impl Default for TelemetryBrowserPanel {
     fn default() -> Self {
         Self {
             filter: String::new(),
-            catalog: Catalog::default(),
             selected: None,
             preview: None,
             focus_only: true,
@@ -1374,53 +1570,22 @@ impl Panel for TelemetryBrowserPanel {
             }
         }
 
-        // ── Change-driven catalog rebuild ────────────────────────
-        // Two independent invalidators: the channel SET (a sim started, a vessel
-        // spawned) and the FOCUS (the user clicked a different rover — same channels,
-        // different membership).
+        // ── Change-driven catalog read ───────────────────────────
+        // The catalog producer snapshots the registry revision and focus, then
+        // derives the grouped tree off the UI pass. Never wait for that worker here.
         let key = catalog_key(registry);
-        if self.catalog.key != key
-            || self.catalog.focus_key != focus_key
-            || (self.catalog.root.children.is_empty() && key != 0)
-        {
-            let root = build_tree(
-                registry,
-                |e| {
-                    let label = lunco_core::entity_display_name(
-                        ctx.get::<Name>(e),
-                        ctx.get::<lunco_core::markers::Callsign>(e),
-                        ctx.get::<lunco_core::CatalogEntryId>(e),
-                    );
-                    (!label.is_empty()).then_some(label)
-                },
-                |c| ctx.get::<ChildOf>(c).map(|p| p.parent()),
-                |e| ctx.get::<UsdPrimPath>(e).map(|path| path.path.clone()),
-                |_| false,
-                |e| {
-                    let Some(path) = ctx.get::<UsdPrimPath>(e).map(|path| path.path.as_str())
-                    else {
-                        return entity_in_focus(e, &focus, |c| {
-                            ctx.get::<ChildOf>(c).map(|p| p.parent())
-                        });
-                    };
-                    focus.iter().any(|root| {
-                        ctx.get::<UsdPrimPath>(*root).is_some_and(|root_path| {
-                            path == root_path.path
-                                || path
-                                    .strip_prefix(root_path.path.as_str())
-                                    .is_some_and(|suffix| suffix.starts_with('/'))
-                        })
-                    })
-                },
-            );
-            self.catalog = Catalog {
-                key,
-                focus_key,
-                root,
-            };
-        }
+        let Some(build) = ctx.resource::<TelemetryCatalogBuildState>() else {
+            ui.label("Telemetry catalog is unavailable.");
+            return;
+        };
+        let Some(catalog) = (build.catalog.key == key && build.catalog.focus_key == focus_key)
+            .then(|| Arc::clone(&build.catalog))
+        else {
+            ui.label("Preparing telemetry channels…");
+            return;
+        };
 
-        if self.catalog.root.children.is_empty() {
+        if catalog.root.children.is_empty() {
             if telemetry_enabled != Some(false) {
                 ui.label(
                     egui::RichText::new(
@@ -1438,7 +1603,7 @@ impl Panel for TelemetryBrowserPanel {
         // and "none in scope".
         let scoped = self.focus_only && !focus.is_empty();
         if scoped
-            && !tree_any_row(&self.catalog.root, |row| {
+            && !tree_any_row(&catalog.root, |row| {
                 row.in_focus && (row.active || display_settings.show_archived)
             })
         {
@@ -1452,7 +1617,7 @@ impl Panel for TelemetryBrowserPanel {
             return;
         }
         if visible_count(
-            &self.catalog.root,
+            &catalog.root,
             scoped,
             self.show_model_variables,
             display_settings.show_archived,
@@ -1471,14 +1636,14 @@ impl Panel for TelemetryBrowserPanel {
 
         if !self.show_model_variables {
             let public_count = visible_count(
-                &self.catalog.root,
+                &catalog.root,
                 scoped,
                 false,
                 display_settings.show_archived,
                 &self.filter,
             );
             let complete_count = visible_count(
-                &self.catalog.root,
+                &catalog.root,
                 scoped,
                 true,
                 display_settings.show_archived,
@@ -1497,7 +1662,7 @@ impl Panel for TelemetryBrowserPanel {
         }
 
         // Deferred row actions — can't mutate `self.selected` while
-        // iterating `self.catalog`.
+        // iterating the catalog snapshot.
         let mut clicked: Option<SignalRef> = None;
 
         // ── Channel list ─────────────────────────────────────────
@@ -1507,7 +1672,7 @@ impl Panel for TelemetryBrowserPanel {
             .auto_shrink([false, false])
             .max_height((ui.available_height() - detail_reserve).max(60.0))
             .show(ui, |ui| {
-                for node in display_roots(&self.catalog.root) {
+                for node in display_roots(&catalog.root) {
                     render_tree_node(
                         ui,
                         node,

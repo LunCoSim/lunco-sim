@@ -45,6 +45,11 @@ costs less.
 For the entity tree, derive parent and grid facts through indexed lookups along
 named candidates' deduplicated ancestor closure instead of copying every scene
 entity's `ChildOf` and `Grid` membership into the snapshot.
+For Builder telemetry, inspect `telemetry_catalog_snapshot` separately from
+`telemetry_catalog_build_worker`. The first copies only signal metadata and
+owner ancestry; grouping and sorting belong on the worker. Compare the first
+Builder frame with settled `render_workbench` and `EguiPrimaryContextPass`
+samples so a one-time catalog build is not reported as a steady per-frame cost.
 
 For startup asset graphs, separate asynchronous source reads from discovery,
 composition, and UI/physics admission. Read all known dependencies in each
@@ -214,6 +219,11 @@ items per update as well as elapsed time. Direct-child admission has its own
 `child_spawn_budget` and `max_child_spawns_per_update`; the parent keeps its
 awaiting/projecting markers until its direct children enter the ECS queue, so
 scene readiness must remain held while batches drain.
+For large procedural terrain fields, profile both scatter execution and its
+deferred entity commands. Admit generated body bundles and visual components in
+stable bounded batches while physics continues. Keep the terrain's applied
+marker pending until bodies and required visuals are committed. Cancel queued
+entries on refresh and teardown.
 Gate sparse lifecycle work on an existing pending marker or owner queue; an
 idle Update should not scan lifecycle state for a request that did not arrive.
 For joint admission, use one combined query over the existing

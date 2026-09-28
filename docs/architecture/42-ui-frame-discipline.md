@@ -262,6 +262,12 @@ package — none of these belong on the UI thread every frame. Patterns:
   with indexed entity lookups, and collect grid membership along those same
   paths; do not materialize `ChildOf` and `Grid` facts for unrelated scene
   entities. Validate the selected active grid with a direct entity lookup.
+- **Telemetry catalog**: snapshot channel metadata and the label/path/parent
+  facts for signal owners and their ancestor closure when the registry catalog
+  revision or focus fingerprint changes. Deduplication, grouping, and sorting
+  run on one async-compute task; a result publishes only while both keys still
+  match. The panel displays a pending state instead of building or joining the
+  catalog in `Panel::render`, and sample updates do not invalidate its tree.
 - **Generation-gated recompute**: the canvas diagram only
   reprojects when the document generation moves; the panel advances
   its `last_seen_gen` to skip echo rebuilds of its own ops.

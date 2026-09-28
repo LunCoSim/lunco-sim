@@ -111,6 +111,7 @@ impl Plugin for LuncoVizPlugin {
         .register_settings_section::<telemetry_browser::TelemetryDisplaySettings>()
         .init_resource::<VisualizationRegistry>()
         .init_resource::<telemetry_browser::TelemetryBrowserView>()
+        .init_resource::<telemetry_browser::TelemetryCatalogBuildState>()
         .init_resource::<VizKindCatalog>()
         .init_resource::<VizFitRequests>()
         .register_visualization::<LinePlot>()
@@ -120,6 +121,14 @@ impl Plugin for LuncoVizPlugin {
         .add_observer(kinds::line_plot::on_line_plot_fit_requested)
         .add_observer(panel::on_bind_channel_requested)
         .add_observer(telemetry_browser::on_open_visualization_requested)
+        .add_systems(
+            Update,
+            (
+                telemetry_browser::prepare_telemetry_catalog,
+                telemetry_browser::poll_telemetry_catalog,
+            )
+                .chain(),
+        )
         // A plot config survives scene replacement; its Bevy entity does not.
         // Reconcile only when the config or a stable entity identity changes,
         // before the next UI frame reads the config.
