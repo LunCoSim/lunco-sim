@@ -67,9 +67,12 @@ manifest kind with `scope = "twin"`; the explicit scope keeps Twin assets from
 colliding with the application namespace during discovery. The repository
 ships the application manifest at
 `assets/scripting/policy/index.toml`, but its location is not a Rust path
-contract. The manifest has one `[startup]` entry. That entry names the Rhai
-function that receives the manifest-resolved policy records and installs them
-through the private typed bootstrap binding. Each
+contract. The manifest has one `[startup]` entry. That entry names a Rhai
+function that returns hook identities in installation order. Application
+startup receives only those identities; Rust validates and commits the
+prepared definitions and callables. A Twin startup receives its full resolved
+policy records and installs them through the private typed bootstrap binding.
+Each
 `[[policies]]` entry names a hook id, a relative Rhai source file, an entry
 function, and its determinism/required declaration. A policy owned by an
 optional runtime feature may set `skip_when_hook_unavailable = true`; the
@@ -99,8 +102,17 @@ precede policy activation while the UI remains available. Browser builds
 currently keep their WebStorage-backed synchronous read path because the shared
 queue has no browser worker transport.
 
-The Rhai policy bootstrap runs in `PreStartup`, before startup systems consume
-authored policies. For example, rendering quality is owned by the
+The Rhai policy bootstrap commits in `PreStartup`, before startup systems
+consume authored policies. On native, runtime plugin construction starts one
+bounded application-policy preparation on `AsyncComputeTaskPool`: manifest
+discovery, asset reads, hook compilation, and evaluation of the authored hook
+order happen there while the remaining plugins are installed. `PreStartup`
+validates that typed selection and commits the prepared hooks before any
+`Startup` consumer. A missing worker pool or failed preparation is reported
+through the application policy status; activation does not silently repeat
+the I/O, compilation, or selection on the app thread. The application startup
+function sees hook identities, while a Twin startup retains access to its full
+resolved records. For example, rendering quality is owned by the
 `lunco-render` seam: `render.quality_profile(id: String) -> Map` supplies the
 complete typed settings for one stable profile id, while
 `render.default_quality_profile() -> String` chooses the initial id for fresh

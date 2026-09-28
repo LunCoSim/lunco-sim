@@ -29,9 +29,8 @@ use std::sync::{Arc, Mutex};
 /// The reserved policy seam that drives the journal's convergent merge order.
 pub const MERGE_SEAM: &str = "journal.merge.order";
 
-/// The one application startup seam. Its authored function receives the
-/// manifest-resolved policy records and installs them through the private
-/// `install_manifest_policy` bootstrap binding.
+/// The one application startup seam. Its authored function returns policy
+/// identities in the desired installation order.
 pub const APPLICATION_STARTUP_HOOK: &str = "application.startup";
 
 /// Generic application asset lifecycle policy for authored asset consumers.
@@ -45,7 +44,7 @@ pub const TWIN_LIFECYCLE_HOOK: &str = "twin.lifecycle";
 lunco_hooks::declare_hook! {
     id: APPLICATION_STARTUP_HOOK,
     owner: "lunco-scripting",
-    description: "Install the application or active Twin's manifest-selected policy functions.",
+    description: "Select application policy order or install active Twin manifest policies.",
     signature: [policies: ArrayOfMap],
     output: ArrayOfMap,
     deterministic: false,
@@ -177,6 +176,39 @@ pub struct PendingTwinPolicyLoad {
     completions: Arc<Mutex<Vec<TwinPolicyLoadCompletion>>>,
 }
 
+struct PreparedApplicationPolicyHook {
+    definition: PolicyDef,
+    policy_file: String,
+    hook: Result<Arc<lunco_hooks_rhai::RhaiHook>, String>,
+}
+
+struct PreparedApplicationPolicyBundle {
+    bundle: lunco_assets_runtime::scripting::LoadedPolicyBundle,
+    hooks: HashMap<String, PreparedApplicationPolicyHook>,
+    startup_policy_order: Vec<String>,
+}
+
+/// One application policy bundle prepared on the async-compute pool before its
+/// lifecycle-bound activation in `PreStartup`.
+#[derive(Resource)]
+pub struct PendingApplicationPolicyPreparation(
+    Mutex<Option<std::sync::mpsc::Receiver<Result<PreparedApplicationPolicyBundle, String>>>>,
+);
+
+impl PendingApplicationPolicyPreparation {
+    fn receive(&self) -> Result<PreparedApplicationPolicyBundle, String> {
+        let receiver = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .ok_or_else(|| "application policy preparation was already consumed".to_owned())?;
+        receiver.recv().map_err(|_| {
+            "application policy preparation worker ended without a result".to_owned()
+        })?
+    }
+}
+
 impl PendingTwinPolicyLoad {
     fn allocate_operation(&mut self) -> Option<u64> {
         let operation = self.next_operation.checked_add(1)?;
@@ -232,6 +264,61 @@ struct StartupInstallState {
     reused: HashSet<String>,
 }
 
+fn install_startup_policy(
+    id: &str,
+    definition: PolicyDef,
+    policy_file: String,
+    state: &Mutex<StartupInstallState>,
+    reusable: &HashMap<String, PolicyDef>,
+    journal: Option<&JournalResource>,
+    prepared_hook: Option<Result<Arc<lunco_hooks_rhai::RhaiHook>, String>>,
+) -> Result<(), String> {
+    let mut state = state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    state.attempted.insert(id.to_owned());
+    if definition.seam != id {
+        let error = format!(
+            "startup selected '{id}' but resolved manifest policy '{}'",
+            definition.seam
+        );
+        state.failed.push(format!("{id}: {error}"));
+        return Err(error);
+    }
+    if reusable.get(&definition.seam) == Some(&definition)
+        && lunco_hooks::get(&definition.seam).is_some()
+    {
+        state.installed.push(definition.seam.clone());
+        state.reused.insert(definition.seam.clone());
+        state.definitions.push(definition);
+        return Ok(());
+    }
+    let result = match prepared_hook {
+        Some(prepared_hook) => {
+            prepared_hook.and_then(|hook| apply_prepared_policy(&definition, journal, hook))
+        }
+        None => apply_policy(&definition, journal),
+    };
+    match result {
+        Ok(()) => {
+            lunco_hooks::bind_policy(
+                definition.seam.clone(),
+                lunco_hooks::HookPolicyBinding {
+                    policy_file,
+                    policy_entry: definition.entry.clone(),
+                },
+            );
+            state.installed.push(definition.seam.clone());
+            state.definitions.push(definition);
+            Ok(())
+        }
+        Err(error) => {
+            state.failed.push(format!("{}: {error}", definition.seam));
+            Err(error)
+        }
+    }
+}
+
 fn policy_value(loaded: &lunco_assets_runtime::scripting::LoadedPolicy) -> HookValue {
     HookValue::map([
         ("hook", HookValue::str(loaded.spec.hook.clone())),
@@ -241,6 +328,93 @@ fn policy_value(loaded: &lunco_assets_runtime::scripting::LoadedPolicy) -> HookV
         ("deterministic", HookValue::Bool(loaded.spec.deterministic)),
         ("required", HookValue::Bool(loaded.spec.required)),
     ])
+}
+
+fn select_application_policy_order(
+    startup: &lunco_assets_runtime::scripting::LoadedStartup,
+    policy_ids: &[String],
+) -> Result<Vec<String>, String> {
+    let startup_hook =
+        lunco_hooks_rhai::RhaiHook::compile(&startup.source, startup.spec.entry.clone()).map_err(
+            |error| {
+                format!(
+                    "startup policy '{}' failed to compile ({}): {error}",
+                    startup.policy_file, startup.spec.entry
+                )
+            },
+        )?;
+    let policies = HookValue::Array(
+        policy_ids
+            .iter()
+            .map(|id| HookValue::map([("hook", HookValue::str(id.clone()))]))
+            .collect(),
+    );
+    let output = startup_hook
+        .invoke(&lunco_hooks::HookInvocation::unclassified(&[policies]))
+        .map_err(|error| {
+            format!(
+                "startup policy '{}' failed ({}): {error}",
+                startup.policy_file, startup.spec.entry
+            )
+        })?;
+    let HookValue::Array(selected) = output else {
+        return Err(format!(
+            "startup policy '{}' returned no policy order array",
+            startup.policy_file
+        ));
+    };
+    let order = selected
+        .into_iter()
+        .map(|record| {
+            record
+                .get("hook")
+                .and_then(HookValue::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    format!(
+                        "startup policy '{}' returned an order entry without a string hook id",
+                        startup.policy_file
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    validate_application_policy_order(&order, policy_ids)?;
+    Ok(order)
+}
+
+fn validate_application_policy_order(
+    order: &[String],
+    available_ids: &[String],
+) -> Result<(), String> {
+    let mut expected = HashSet::with_capacity(available_ids.len());
+    for id in available_ids {
+        if !expected.insert(id.as_str()) {
+            return Err(format!(
+                "application manifest contains duplicate policy hook '{id}'"
+            ));
+        }
+    }
+    let mut selected = HashSet::with_capacity(order.len());
+    for id in order {
+        if !expected.contains(id.as_str()) {
+            return Err(format!(
+                "application startup selected unknown policy '{id}'"
+            ));
+        }
+        if !selected.insert(id.as_str()) {
+            return Err(format!(
+                "application startup selected policy '{id}' more than once"
+            ));
+        }
+    }
+    if selected.len() != expected.len() {
+        return Err(format!(
+            "application startup selected {} of {} available policies",
+            selected.len(),
+            expected.len()
+        ));
+    }
+    Ok(())
 }
 
 fn startup_operation_result(id: &str, ok: bool, error: Option<&str>) -> Dynamic {
@@ -1274,41 +1448,25 @@ fn run_startup_policy(
                       deterministic: bool,
                       _required: bool|
                       -> Dynamic {
+                    let policy_id = id.to_string();
                     let definition = PolicyDef {
-                        seam: id.to_string(),
+                        seam: policy_id.clone(),
                         entry: entry.to_string(),
                         source: source.to_string(),
                         deterministic,
                     };
-                    let mut state = callback_state
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    state.attempted.insert(definition.seam.clone());
-                    if reusable.get(&definition.seam) == Some(&definition)
-                        && lunco_hooks::get(&definition.seam).is_some()
-                    {
-                        state.installed.push(definition.seam.clone());
-                        state.reused.insert(definition.seam.clone());
-                        state.definitions.push(definition);
-                        return startup_operation_result(id.as_str(), true, None);
-                    }
-                    let result = apply_policy(&definition, callback_journal.as_ref());
-                    match result {
-                        Ok(()) => {
-                            lunco_hooks::bind_policy(
-                                definition.seam.clone(),
-                                lunco_hooks::HookPolicyBinding {
-                                    policy_file: policy_file.to_string(),
-                                    policy_entry: definition.entry.clone(),
-                                },
-                            );
-                            state.installed.push(definition.seam.clone());
-                            state.definitions.push(definition);
-                            startup_operation_result(id.as_str(), true, None)
-                        }
+                    match install_startup_policy(
+                        &policy_id,
+                        definition,
+                        policy_file.to_string(),
+                        &callback_state,
+                        &reusable,
+                        callback_journal.as_ref(),
+                        None,
+                    ) {
+                        Ok(()) => startup_operation_result(&policy_id, true, None),
                         Err(error) => {
-                            state.failed.push(format!("{}: {error}", definition.seam));
-                            startup_operation_result(id.as_str(), false, Some(error.as_str()))
+                            startup_operation_result(&policy_id, false, Some(error.as_str()))
                         }
                     }
                 },
@@ -1361,6 +1519,112 @@ fn run_startup_policy(
 /// Compile and register a policy, activating the journal merge strategy when
 /// the reserved merge seam is used.
 pub fn apply_policy(def: &PolicyDef, journal: Option<&JournalResource>) -> Result<(), String> {
+    let deterministic = validate_policy_definition(def)?;
+    if def.seam == MERGE_SEAM {
+        lunco_hooks_rhai::register_rhai_hook(&def.seam, &def.entry, &def.source, true)?;
+        if let Some(journal) = journal {
+            journal.with_write(|journal| {
+                journal.set_merge_strategy(MergeStrategy::Scripted(def.seam.clone()))
+            });
+        }
+        return Ok(());
+    }
+    lunco_hooks_rhai::register_rhai_hook(&def.seam, &def.entry, &def.source, deterministic)
+        .map(|_| ())
+}
+
+fn prepare_application_policy_bundle() -> Result<PreparedApplicationPolicyBundle, String> {
+    let bundle = {
+        let _span = bevy::log::info_span!("application_policy_source_prepare_offthread").entered();
+        lunco_assets_runtime::scripting::active_policy_bundle()?
+    };
+    let _span = bevy::log::info_span!("application_policy_compile_offthread").entered();
+    prepare_application_policy_bundle_from(bundle)
+}
+
+fn prepare_application_policy_bundle_for_validation()
+-> Result<PreparedApplicationPolicyBundle, String> {
+    let bundle = lunco_assets_runtime::scripting::active_policy_bundle()?;
+    prepare_application_policy_bundle_from(bundle)
+}
+
+fn prepare_application_policy_bundle_from(
+    bundle: lunco_assets_runtime::scripting::LoadedPolicyBundle,
+) -> Result<PreparedApplicationPolicyBundle, String> {
+    let startup = bundle
+        .startup
+        .as_ref()
+        .ok_or_else(|| "application policy set has no startup entry".to_owned())?;
+    let available_policy_ids = bundle
+        .policies
+        .iter()
+        .filter(|policy| runtime_policy_available(policy))
+        .map(|policy| policy.spec.hook.clone())
+        .collect::<Vec<_>>();
+    let hooks = bundle
+        .policies
+        .iter()
+        .map(|policy| {
+            let definition = PolicyDef {
+                seam: policy.spec.hook.clone(),
+                entry: policy.spec.entry.clone(),
+                source: policy.source.clone(),
+                deterministic: policy.spec.deterministic,
+            };
+            let hook =
+                lunco_hooks_rhai::RhaiHook::compile(&policy.source, policy.spec.entry.clone())
+                    .map(Arc::new);
+            (
+                definition.seam.clone(),
+                PreparedApplicationPolicyHook {
+                    definition,
+                    policy_file: policy.policy_file.clone(),
+                    hook,
+                },
+            )
+        })
+        .collect();
+    let startup_policy_order = select_application_policy_order(startup, &available_policy_ids)?;
+    Ok(PreparedApplicationPolicyBundle {
+        bundle,
+        hooks,
+        startup_policy_order,
+    })
+}
+
+/// Begin the single application-policy preparation while the remaining app
+/// plugins are being installed. The authored function selects hook order on
+/// the worker; `PreStartup` validates and commits the prepared hooks before any
+/// Startup consumer runs.
+pub fn prepare_application_policies_offthread(app: &mut App) {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    #[cfg(not(target_arch = "wasm32"))]
+    match bevy::tasks::AsyncComputeTaskPool::try_get() {
+        Some(pool) => {
+            pool.spawn(async move {
+                let _ = sender.send(prepare_application_policy_bundle());
+            })
+            .detach();
+        }
+        None => {
+            let _ = sender.send(Err(
+                "AsyncComputeTaskPool must be initialized before application policy preparation"
+                    .into(),
+            ));
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = sender.send(Err(
+            "application policy preparation requires native async asset access".into(),
+        ));
+    }
+    app.insert_resource(PendingApplicationPolicyPreparation(Mutex::new(Some(
+        receiver,
+    ))));
+}
+
+fn validate_policy_definition(def: &PolicyDef) -> Result<bool, String> {
     let deterministic = def.seam == MERGE_SEAM || def.deterministic;
     let Some(contract) = lunco_hooks::descriptor(&def.seam) else {
         return Err(format!(
@@ -1377,17 +1641,40 @@ pub fn apply_policy(def: &PolicyDef, journal: Option<&JournalResource>) -> Resul
             def.seam
         ));
     }
+    Ok(deterministic)
+}
+
+fn apply_prepared_policy(
+    def: &PolicyDef,
+    journal: Option<&JournalResource>,
+    hook: Arc<lunco_hooks_rhai::RhaiHook>,
+) -> Result<(), String> {
+    let deterministic = validate_policy_definition(def)?;
+    if let Some(contract) = lunco_hooks::descriptor(&def.seam) {
+        if !hook.supports_arity(contract.parameters.len()) {
+            return Err(format!(
+                "Rhai hook '{}' has no '{}' overload accepting {} argument(s)",
+                contract.id,
+                def.entry,
+                contract.parameters.len()
+            ));
+        }
+    }
+    let hook: Arc<dyn ScriptHook> = hook;
+    lunco_hooks::register(lunco_hooks::RegisteredHook {
+        id: def.seam.clone(),
+        backend: "rhai".into(),
+        deterministic,
+        hook,
+    });
     if def.seam == MERGE_SEAM {
-        lunco_hooks_rhai::register_rhai_hook(&def.seam, &def.entry, &def.source, true)?;
         if let Some(journal) = journal {
             journal.with_write(|journal| {
                 journal.set_merge_strategy(MergeStrategy::Scripted(def.seam.clone()))
             });
         }
-        return Ok(());
     }
-    lunco_hooks_rhai::register_rhai_hook(&def.seam, &def.entry, &def.source, deterministic)
-        .map(|_| ())
+    Ok(())
 }
 
 /// Deactivate a policy whose definition vanished and restore the default
@@ -1498,9 +1785,7 @@ fn retain_runtime_policies(
     let mut available = Vec::with_capacity(policies.len());
     let mut unavailable = Vec::new();
     for policy in policies {
-        if policy.spec.skip_when_hook_unavailable
-            && lunco_hooks::descriptor(&policy.spec.hook).is_none()
-        {
+        if !runtime_policy_available(&policy) {
             unavailable.push(policy.spec.hook);
         } else {
             available.push(policy);
@@ -1509,15 +1794,72 @@ fn retain_runtime_policies(
     (available, unavailable)
 }
 
+fn runtime_policy_available(policy: &lunco_assets_runtime::scripting::LoadedPolicy) -> bool {
+    !policy.spec.skip_when_hook_unavailable || lunco_hooks::descriptor(&policy.spec.hook).is_some()
+}
+
+fn activate_prepared_application_policy_order(
+    order: &[String],
+    loaded: &[lunco_assets_runtime::scripting::LoadedPolicy],
+    mut prepared_hooks: HashMap<String, PreparedApplicationPolicyHook>,
+    journal: Option<&JournalResource>,
+) -> Result<StartupInstallState, String> {
+    let available_ids = loaded
+        .iter()
+        .map(|policy| policy.spec.hook.clone())
+        .collect::<Vec<_>>();
+    validate_application_policy_order(order, &available_ids)?;
+    for policy in loaded {
+        let Some(prepared) = prepared_hooks.get(&policy.spec.hook) else {
+            return Err(format!(
+                "application startup has no prepared hook for '{}'",
+                policy.spec.hook
+            ));
+        };
+        if prepared.definition.seam != policy.spec.hook
+            || prepared.definition.entry != policy.spec.entry
+            || prepared.definition.deterministic != policy.spec.deterministic
+            || prepared.policy_file != policy.policy_file
+        {
+            return Err(format!(
+                "prepared application hook '{}' no longer matches its manifest record",
+                policy.spec.hook
+            ));
+        }
+    }
+
+    let state = Mutex::new(StartupInstallState::default());
+    let reusable = HashMap::new();
+    for id in order {
+        let prepared = prepared_hooks
+            .remove(id)
+            .ok_or_else(|| format!("application startup has no prepared hook for '{id}'"))?;
+        let _ = install_startup_policy(
+            id,
+            prepared.definition,
+            prepared.policy_file,
+            &state,
+            &reusable,
+            journal,
+            Some(prepared.hook),
+        );
+    }
+    Ok(state
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner))
+}
+
 fn report_for_application_policies(
     scope: impl Into<String>,
     application: lunco_assets_runtime::scripting::LoadedPolicyBundle,
     registry: &mut ScriptedPolicyRegistry,
     journal: Option<&JournalResource>,
+    prepared_hooks: HashMap<String, PreparedApplicationPolicyHook>,
+    startup_policy_order: Vec<String>,
 ) -> PolicyLoadReport {
     let scope = scope.into();
     clear_active_policies(registry, journal);
-    let Some(application_startup) = application.startup else {
+    if application.startup.is_none() {
         let report = PolicyLoadReport {
             scope,
             error: Some("application policy set has no startup entry".into()),
@@ -1526,18 +1868,18 @@ fn report_for_application_policies(
         registry.application_status = report.clone();
         registry.status = report.clone();
         return report;
-    };
+    }
     let (application_loaded, unavailable) = retain_runtime_policies(application.policies);
     let required = application_loaded
         .iter()
         .filter(|policy| policy.spec.required)
         .map(|policy| policy.spec.hook.clone())
         .collect::<HashSet<_>>();
-    let application_run = match run_startup_policy(
-        application_startup,
+    let application_run = match activate_prepared_application_policy_order(
+        &startup_policy_order,
         &application_loaded,
+        prepared_hooks,
         journal,
-        &HashMap::new(),
     ) {
         Ok(run) => run,
         Err(error) => {
@@ -1777,18 +2119,30 @@ pub fn load_application_policies(
     registry: &mut ScriptedPolicyRegistry,
     journal: Option<&JournalResource>,
 ) -> PolicyLoadReport {
+    activate_prepared_application_policies(
+        prepare_application_policy_bundle_for_validation(),
+        registry,
+        journal,
+    )
+}
+
+fn activate_prepared_application_policies(
+    prepared: Result<PreparedApplicationPolicyBundle, String>,
+    registry: &mut ScriptedPolicyRegistry,
+    journal: Option<&JournalResource>,
+) -> PolicyLoadReport {
     let previous = registry.policies.clone();
-    let bundle = match lunco_assets_runtime::scripting::active_policy_bundle() {
-        Ok(bundle) => bundle,
-        Err(error) => {
-            let report = report_load_error("application", error, registry, journal);
-            if registry.policies != previous {
-                registry.revision = registry.revision.wrapping_add(1);
-            }
-            return report;
-        }
+    let report = match prepared {
+        Ok(prepared) => report_for_application_policies(
+            "application",
+            prepared.bundle,
+            registry,
+            journal,
+            prepared.hooks,
+            prepared.startup_policy_order,
+        ),
+        Err(error) => report_load_error("application", error, registry, journal),
     };
-    let report = report_for_application_policies("application", bundle, registry, journal);
     if registry.policies != previous {
         registry.revision = registry.revision.wrapping_add(1);
     }
@@ -1833,8 +2187,16 @@ fn activate_twin_policies(
 pub fn load_application_policies_on_startup(
     mut registry: ResMut<ScriptedPolicyRegistry>,
     journal: Option<Res<JournalResource>>,
+    preparation: Res<PendingApplicationPolicyPreparation>,
 ) {
-    let report = load_application_policies(&mut registry, journal.as_deref());
+    let prepared = {
+        let _span = bevy::log::info_span!("application_policy_prestartup_wait").entered();
+        preparation.receive()
+    };
+    let report = {
+        let _span = bevy::log::info_span!("application_policy_activation").entered();
+        activate_prepared_application_policies(prepared, &mut registry, journal.as_deref())
+    };
     log_report(&report);
 }
 
