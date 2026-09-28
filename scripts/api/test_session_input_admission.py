@@ -17,17 +17,26 @@ from runtime import BINARY, ProductionSession, ROOT
 
 
 SCENE_SOURCE = ROOT / "assets/scenes/tests/rocket_engine_observables.usda"
+CONTROL_SCENE_SOURCE = ROOT / "assets/scenes/terrain_only.usda"
 SCENARIO_SOURCE = ROOT / "assets/scenarios/tests/session_input_admission.rhai"
 RELEASE_SCENARIO_SOURCE = ROOT / "assets/scenarios/tests/session_control_release_admission.rhai"
+LIFECYCLE_SCENARIO_SOURCE = ROOT / "assets/scenarios/tests/session_lifecycle_safe_stop_capture.rhai"
 TIMEOUT_S = float(os.environ.get("SESSION_INPUT_TIMEOUT", "240"))
 PORT = int(os.environ.get("SESSION_INPUT_API_PORT", "4732"))
 PRODUCER_ID = 8182
 PORT_PRODUCER_ID = 8282
 RELEASE_PORT_PRODUCER_ID = 8383
 RELEASE_CONTROL_PRODUCER_ID = 8484
+LIFECYCLE_PORT_PRODUCER_ID = 8585
 INPUT_NAME = "throttle"
 INPUT_VALUE = 0.375
 PORT_VALUE = 0.625
+LIFECYCLE_PORT_WRITES = {
+    "forward": 0.7,
+    "side": -0.25,
+    "up": 0.4,
+    "speed_boost": 1.0,
+}
 
 
 def response_data(response: dict, operation: str) -> dict:
@@ -156,6 +165,64 @@ def wait_for_input_value(
     )
 
 
+def wait_for_control_endpoint(session: ProductionSession) -> int:
+    deadline = time.monotonic() + TIMEOUT_S
+    last_entities: list[dict] = []
+    required_ports = set(LIFECYCLE_PORT_WRITES)
+    while time.monotonic() < deadline:
+        entities = response_data(session.post({"type": "ListEntities"}), "ListEntities")[
+            "entities"
+        ]
+        last_entities = entities
+        for entity in entities:
+            target_gid = int(entity["api_id"])
+            ports_response = session.post(
+                {
+                    "type": "ExecuteCommand",
+                    "command": "ReadPorts",
+                    "params": {"api_id": target_gid},
+                }
+            )
+            if ports_response.get("error"):
+                continue
+            ports = (ports_response.get("data") or {}).get("ports") or []
+            writable_names = {
+                port.get("name")
+                for port in ports
+                if port.get("direction") == "in"
+            }
+            if required_ports.issubset(writable_names):
+                return target_gid
+        time.sleep(0.25)
+    candidates = [
+        f"{entity.get('name')} (control_bound={entity.get('control_bound')})"
+        for entity in last_entities
+    ]
+    raise RuntimeError(
+        "control scene did not expose the complete avatar command endpoint within "
+        f"{TIMEOUT_S:g}s; entities={candidates}"
+    )
+
+
+def wait_for_port_values(
+    session: ProductionSession, target_gid: int, expected: dict[str, float]
+) -> None:
+    deadline = time.monotonic() + TIMEOUT_S
+    while time.monotonic() < deadline:
+        ports = execute(session, "ReadPorts", {"api_id": target_gid}).get("ports") or []
+        actual = {
+            port.get("name"): port.get("value")
+            for port in ports
+            if port.get("direction") == "in"
+        }
+        if all(actual.get(name) == value for name, value in expected.items()):
+            return
+        time.sleep(0.02)
+    raise RuntimeError(
+        f"live command values did not reach their admitted state: {expected}"
+    )
+
+
 def wait_for_verdict(log_path: Path, offset: int) -> str:
     deadline = time.monotonic() + TIMEOUT_S
     while time.monotonic() < deadline:
@@ -175,8 +242,15 @@ def wait_for_verdict(log_path: Path, offset: int) -> str:
 
 
 def main() -> int:
-    if not SCENE_SOURCE.is_file() or not SCENARIO_SOURCE.is_file() or not RELEASE_SCENARIO_SOURCE.is_file():
-        raise RuntimeError("the Modelica input API fixture or Rhai verifier is missing")
+    fixtures = (
+        SCENE_SOURCE,
+        CONTROL_SCENE_SOURCE,
+        SCENARIO_SOURCE,
+        RELEASE_SCENARIO_SOURCE,
+        LIFECYCLE_SCENARIO_SOURCE,
+    )
+    if not all(source.is_file() for source in fixtures):
+        raise RuntimeError("an input-admission fixture or Rhai verifier is missing")
 
     os.environ.setdefault("LUNCOSIM_EPHEMERAL_SETTINGS", "1")
     os.environ.setdefault("LUNCOSIM_ISOLATED_RUN", "1")
@@ -190,6 +264,9 @@ def main() -> int:
         scene_path = twin_root / scene_rel
         scene_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(SCENE_SOURCE, scene_path)
+        # Give the control-profile fixture a task-owned Twin-relative path.
+        control_scene_rel = Path("sim/scenes/lifecycle_controls.usda")
+        shutil.copy2(CONTROL_SCENE_SOURCE, twin_root / control_scene_rel)
         (twin_root / "twin.toml").write_text(
             'name = "ModelicaInputAdmissionGate"\n'
             'version = "0.1.0"\n'
@@ -484,9 +561,84 @@ def main() -> int:
                 raise RuntimeError("RunScenario returned an empty release-verifier acknowledgement")
             release_verdict = wait_for_verdict(log_path, release_offset)
 
-            print("PASS — Modelica, SetPorts, and control-release fixed-tick admission")
+            execute(session, "ClearSessionInputCapture")
+            execute(
+                session,
+                "LoadScene",
+                {
+                    "path": "twin://ModelicaInputAdmissionGate/"
+                    "sim/scenes/lifecycle_controls.usda"
+                },
+            )
+            lifecycle_target_gid = wait_for_control_endpoint(session)
+            execute(session, "SetTimeTransport", {"playing": True})
+            execute(session, "StartSessionInputCapture")
+            lifecycle_port_ack = execute(
+                session,
+                "SetPorts",
+                {
+                    "target": lifecycle_target_gid,
+                    "writes": [
+                        [name, value]
+                        for name, value in LIFECYCLE_PORT_WRITES.items()
+                    ],
+                    "producer_id": LIFECYCLE_PORT_PRODUCER_ID,
+                },
+            )
+            lifecycle_port_admission = lifecycle_port_ack.get("admission")
+            lifecycle_port_correlation_id = lifecycle_port_ack.get("correlation_id")
+            if (
+                lifecycle_port_ack.get("target_gid") != lifecycle_target_gid
+                or lifecycle_port_ack.get("producer_kind") != "api_transport"
+                or lifecycle_port_ack.get("producer_id") != LIFECYCLE_PORT_PRODUCER_ID
+                or not isinstance(lifecycle_port_admission, dict)
+                or not lifecycle_port_correlation_id
+            ):
+                raise RuntimeError(
+                    "lifecycle SetPorts returned an incomplete live admission: "
+                    f"{lifecycle_port_ack}"
+                )
+            wait_for_port_values(session, lifecycle_target_gid, LIFECYCLE_PORT_WRITES)
+            claim_ack = execute(
+                session, "ClaimControl", {"target": lifecycle_target_gid}
+            )
+            authority_release_ack = execute(
+                session, "ReleaseControlClaim", {"target": lifecycle_target_gid}
+            )
+            if not claim_ack or not authority_release_ack:
+                raise RuntimeError("control-authority transition returned an empty acknowledgement")
+            with LIFECYCLE_SCENARIO_SOURCE.open("r", encoding="utf-8") as source:
+                lifecycle_scenario = source.read()
+            lifecycle_offset = log_path.stat().st_size
+            lifecycle_script = execute(
+                session,
+                "RunScenario",
+                {
+                    "target": lifecycle_target_gid,
+                    "source": lifecycle_scenario,
+                    "params": {
+                        "target_gid": lifecycle_target_gid,
+                        "producer_id": LIFECYCLE_PORT_PRODUCER_ID,
+                        "correlation_id": lifecycle_port_correlation_id,
+                        "admission": lifecycle_port_admission,
+                    },
+                },
+            )
+            if not lifecycle_script:
+                raise RuntimeError(
+                    "RunScenario returned an empty lifecycle verifier acknowledgement"
+                )
+            lifecycle_verdict = wait_for_verdict(log_path, lifecycle_offset)
+
+            print(
+                "PASS — Modelica, SetPorts, control-release, and lifecycle safe-stop capture"
+            )
             print(f"    api_pid={session_pid} port={PORT} binary={BINARY}")
             print(f"    target={target_gid} Modelica={admission} SetPorts={port_admission}")
+            print(
+                f"    lifecycle target={lifecycle_target_gid} "
+                f"SetPorts={lifecycle_port_admission}"
+            )
             print("    Modelica input was observed at its admitted tick before the later SetPorts write")
             print(
                 "    releases="
@@ -495,6 +647,7 @@ def main() -> int:
             print(f"    log={log_path}")
             print(verdict.rstrip())
             print(release_verdict.rstrip())
+            print(lifecycle_verdict.rstrip())
 
     return 0
 

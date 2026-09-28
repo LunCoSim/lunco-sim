@@ -13,7 +13,7 @@ pub const MAX_SESSION_INPUT_RECORDS: usize = 65_536;
 pub const MAX_SESSION_INPUT_ARCHIVE_BYTES: usize = 16 * 1024 * 1024;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"LCSINP\0\0";
-const ARCHIVE_VERSION: u16 = 3;
+const ARCHIVE_VERSION: u16 = 4;
 const FIRST_ARCHIVE_VERSION: u16 = 1;
 const HEADER_BYTES: usize = 8 + 2 + 4 + 4;
 const MAX_ARCHIVE_PAYLOAD_BYTES: usize = MAX_SESSION_INPUT_ARCHIVE_BYTES - HEADER_BYTES;
@@ -37,6 +37,7 @@ enum ArchiveProducer {
     LocalUser {
         session_id: SessionId,
     },
+    RuntimeLifecycle,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -78,6 +79,7 @@ enum ArchivePayload {
     ControlInputRelease {
         correlation_id: u64,
     },
+    ControlSafeStop,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -114,6 +116,7 @@ impl From<&SessionInputRecord> for ArchiveRecord {
             crate::SessionInputProducer::LocalUser { session_id } => {
                 ArchiveProducer::LocalUser { session_id }
             }
+            crate::SessionInputProducer::RuntimeLifecycle => ArchiveProducer::RuntimeLifecycle,
         };
         let payload = match &record.payload {
             crate::SessionInputPayload::PhysicalIntentFrame { intent_ids } => {
@@ -182,6 +185,7 @@ impl From<&SessionInputRecord> for ArchiveRecord {
                     correlation_id: *correlation_id,
                 }
             }
+            crate::SessionInputPayload::ControlSafeStop => ArchivePayload::ControlSafeStop,
         };
 
         Self {
@@ -219,6 +223,7 @@ impl From<ArchiveRecord> for SessionInputRecord {
             ArchiveProducer::LocalUser { session_id } => {
                 crate::SessionInputProducer::LocalUser { session_id }
             }
+            ArchiveProducer::RuntimeLifecycle => crate::SessionInputProducer::RuntimeLifecycle,
         };
         let payload = match record.payload {
             ArchivePayload::PhysicalIntentFrame { intent_ids } => {
@@ -283,6 +288,7 @@ impl From<ArchiveRecord> for SessionInputRecord {
             ArchivePayload::ControlInputRelease { correlation_id } => {
                 crate::SessionInputPayload::ControlInputRelease { correlation_id }
             }
+            ArchivePayload::ControlSafeStop => crate::SessionInputPayload::ControlSafeStop,
         };
 
         Self {
@@ -435,6 +441,16 @@ impl SessionInputCaptureArchive {
                 "session input archive version {version} contains a version three record variant"
             ));
         }
+        if version < 4
+            && wire_records.iter().any(|record| {
+                matches!(&record.producer, ArchiveProducer::RuntimeLifecycle)
+                    || matches!(&record.payload, ArchivePayload::ControlSafeStop)
+            })
+        {
+            return Err(format!(
+                "session input archive version {version} contains a version four lifecycle record variant"
+            ));
+        }
         if wire_records.len() != record_count {
             return Err(format!(
                 "session input archive record count {} does not match decoded count {}",
@@ -526,7 +542,8 @@ fn estimated_encoded_record_bytes(record: &SessionInputRecord) -> usize {
         crate::SessionInputPayload::PortInputRelease { name, .. } => {
             add_text(FIXED_RECORD_BOUND, name)
         }
-        crate::SessionInputPayload::ControlInputRelease { .. } => FIXED_RECORD_BOUND,
+        crate::SessionInputPayload::ControlInputRelease { .. }
+        | crate::SessionInputPayload::ControlSafeStop => FIXED_RECORD_BOUND,
     }
 }
 
@@ -874,6 +891,18 @@ mod tests {
     }
 
     #[test]
+    fn session_input_capture_archive_decodes_existing_version_three_records() {
+        let legacy_records = valid_records();
+        let wire_records: Vec<_> = legacy_records.iter().map(ArchiveRecord::from).collect();
+        let mut bytes = encode_wire_records(&wire_records);
+        bytes[8..10].copy_from_slice(&3_u16.to_le_bytes());
+
+        let decoded = SessionInputCaptureArchive::from_bytes(&bytes)
+            .expect("version three records remain readable after appending lifecycle variants");
+        assert_eq!(decoded.records(), legacy_records.as_slice());
+    }
+
+    #[test]
     fn session_input_capture_archive_rejects_version_two_variants_in_version_one() {
         let record = ArchiveRecord {
             producer: ArchiveProducer::LocalUser {
@@ -919,6 +948,47 @@ mod tests {
             SessionInputCaptureArchive::from_bytes(&bytes)
                 .expect_err("version two cannot claim version three port input records")
                 .contains("version three record variant")
+        );
+    }
+
+    #[test]
+    fn session_input_capture_archive_round_trips_lifecycle_safe_stops() {
+        let record = SessionInputRecord {
+            producer: SessionInputProducer::RuntimeLifecycle,
+            target: lunco_core::GlobalEntityId::from_raw(42),
+            scene_generation: 3,
+            effective_tick: 18,
+            sequence: 1,
+            payload: SessionInputPayload::ControlSafeStop,
+        };
+        let archive = SessionInputCaptureArchive::new(vec![record.clone()])
+            .expect("lifecycle safe-stop forms a valid input record");
+        let bytes = archive.to_bytes().expect("archive encodes");
+        assert_eq!(
+            SessionInputCaptureArchive::from_bytes(&bytes)
+                .expect("version four lifecycle record decodes")
+                .records(),
+            &[record]
+        );
+    }
+
+    #[test]
+    fn session_input_capture_archive_rejects_lifecycle_records_under_version_three() {
+        let record = ArchiveRecord {
+            producer: ArchiveProducer::RuntimeLifecycle,
+            target: lunco_core::GlobalEntityId::from_raw(42),
+            scene_generation: 3,
+            effective_tick: 18,
+            sequence: 1,
+            payload: ArchivePayload::ControlSafeStop,
+        };
+        let mut bytes = encode_wire_records(&[record]);
+        bytes[8..10].copy_from_slice(&3_u16.to_le_bytes());
+
+        assert!(
+            SessionInputCaptureArchive::from_bytes(&bytes)
+                .expect_err("version three cannot claim lifecycle records")
+                .contains("version four lifecycle record variant")
         );
     }
 

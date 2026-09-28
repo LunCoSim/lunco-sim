@@ -48,8 +48,12 @@ the port backend. The ordered session commit then applies or visibly faults
 the admitted write. Simulation-clock Rhai and
 fixed-step controller writes keep their owning execution path. Explicit
 external `ReleasePort`/`ReleaseControl` commands share the admission queue;
-immediate lifecycle safe-stops use the internal `ControlSafeStop` event and
-cancel any older queued port writes for that endpoint.
+immediate lifecycle safe-stops use the internal `ControlSafeStop` event,
+neutralize the endpoint at once, and admit a `runtime_lifecycle` input for the
+next fixed tick when capture is active. The record is captured at the ordered
+fixed-tick commit. A missing stable target, scene generation, tick, or shared
+order stamp fails the capture while preserving the immediate safety action.
+The safe-stop also cancels older queued port writes for that endpoint.
 
 `PortRegistry::port_entities` is the corresponding discovery projection. Each
 backend enumerates the component or authored surface it owns, and the registry

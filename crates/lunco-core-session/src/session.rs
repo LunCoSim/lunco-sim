@@ -661,6 +661,8 @@ pub enum SessionInputProducer {
     DirectCommand { producer_id: u64 },
     /// Local user interaction associated with the current peer session.
     LocalUser { session_id: SessionId },
+    /// Internal simulation-owner lifecycle action, such as an authority safe-stop.
+    RuntimeLifecycle,
 }
 
 impl SessionInputProducer {
@@ -737,6 +739,7 @@ impl SessionInputProducer {
             Self::Rhai { .. } => "rhai",
             Self::DirectCommand { .. } => "direct_command",
             Self::LocalUser { .. } => "local_user",
+            Self::RuntimeLifecycle => "runtime_lifecycle",
         }
     }
 
@@ -748,7 +751,9 @@ impl SessionInputProducer {
                 Some(producer_id)
             }
             Self::Rhai { producer_id, .. } => producer_id,
-            Self::PhysicalController { .. } | Self::LocalUser { .. } => None,
+            Self::PhysicalController { .. } | Self::LocalUser { .. } | Self::RuntimeLifecycle => {
+                None
+            }
         }
     }
 }
@@ -826,6 +831,8 @@ pub enum SessionInputPayload {
         /// Correlation id from the admitted command.
         correlation_id: u64,
     },
+    /// Reapply an authority-derived endpoint safe-stop at its admitted tick.
+    ControlSafeStop,
 }
 
 fn validate_session_input(
@@ -973,6 +980,7 @@ fn validate_session_input(
                 return Err("control input release requires a nonzero correlation id".to_owned());
             }
         }
+        SessionInputPayload::ControlSafeStop => {}
     }
 
     if target.get() == 0 {
@@ -1062,12 +1070,19 @@ fn validate_session_input(
             | SessionInputProducer::Rhai { .. },
             SessionInputPayload::PortInputRelease { .. }
             | SessionInputPayload::ControlInputRelease { .. },
-        ) => {}
+        )
+        | (SessionInputProducer::RuntimeLifecycle, SessionInputPayload::ControlSafeStop) => {}
         (SessionInputProducer::PhysicalController { .. }, _) => {
             return Err("physical controller producer requires a physical intent frame".to_owned());
         }
         (_, SessionInputPayload::PhysicalIntentFrame { .. }) => {
             return Err("physical intent frame requires a physical controller producer".to_owned());
+        }
+        (SessionInputProducer::RuntimeLifecycle, _) => {
+            return Err("runtime lifecycle producer requires a lifecycle payload".to_owned());
+        }
+        (_, SessionInputPayload::ControlSafeStop) => {
+            return Err("control safe-stop requires the runtime lifecycle producer".to_owned());
         }
         (SessionInputProducer::LocalUser { .. }, _) => {
             return Err(
@@ -1595,6 +1610,15 @@ impl SessionInputStream {
         self.last_order = Some(order);
         Arc::make_mut(&mut self.records).push(record);
         Ok(())
+    }
+
+    /// Fail an active capture when its input history can no longer be complete.
+    pub fn fail(&mut self, message: impl Into<String>) {
+        if self.is_recording() {
+            let message = message.into();
+            self.failure = Some(message);
+            self.state = SessionInputStreamState::Failed;
+        }
     }
 
     /// Finish a recording without discarding its records.
@@ -3206,10 +3230,22 @@ mod session_input_stream_tests {
         };
         let mut mismatched_producer = physical_record(10, 1);
         mismatched_producer.producer = SessionInputProducer::DirectCommand { producer_id: 7 };
+        let mut mismatched_lifecycle = physical_record(10, 1);
+        mismatched_lifecycle.producer = SessionInputProducer::RuntimeLifecycle;
+        mismatched_lifecycle.payload = SessionInputPayload::SimulatedIntentChange {
+            intent: "forward".to_owned(),
+            held: true,
+            correlation_id: 19,
+        };
+        let mut mismatched_safe_stop = physical_record(10, 1);
+        mismatched_safe_stop.producer = SessionInputProducer::DirectCommand { producer_id: 7 };
+        mismatched_safe_stop.payload = SessionInputPayload::ControlSafeStop;
 
         for (record, expected_error) in [
             (invalid_payload, "unknown intent"),
             (mismatched_producer, "physical intent frame requires"),
+            (mismatched_lifecycle, "runtime lifecycle producer requires"),
+            (mismatched_safe_stop, "control safe-stop requires"),
         ] {
             let mut stream = SessionInputStream::default();
             stream.begin(4).expect("capture starts");

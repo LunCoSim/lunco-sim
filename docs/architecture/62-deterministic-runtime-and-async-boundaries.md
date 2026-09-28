@@ -462,8 +462,12 @@ behavior pass, and local-embodiment input stays on the interaction cadence.
 Live port-inspector writes and releases use the same queue with a `LocalUser`
 producer identity. `PanelCtx::trigger_command` scopes that session origin over
 deferred workbench dispatch so the cosim owner can admit and capture each
-action. Lifecycle-derived safe-stops and unclassified direct port events remain
-outside this stream.
+action. A control-authority `ControlSafeStop` neutralizes its endpoint
+immediately and, while capture is active, admits a typed `runtime_lifecycle`
+record for the next fixed tick through the same order allocator. The session
+owner captures it at that commit boundary; failure to obtain its stable target,
+committed generation, tick, or order stamp fails capture without delaying the
+safety action. Unclassified direct port events remain outside this stream.
 
 ## 4. Async preparation, priority, and result commit
 
@@ -918,9 +922,10 @@ one running world. It does not provide cross-session replay identity. Any actor
 or model included in a cross-peer/replay guarantee needs its stable
 `GlobalEntityId` or another source-owned, replicated identity.
 
-External held-input changes, discrete edges, live `SetModelInput` changes, and
-raw-file runtime spawns share the bounded session-owned ingress queue and
-assigned per-tick sequence. `SetModelInput` identifies live participants by
+External held-input changes, discrete edges, live `SetModelInput` changes,
+authority safe-stops, and raw-file runtime spawns share the bounded
+session-owned ingress queue and assigned per-tick sequence. `SetModelInput`
+identifies live participants by
 stable `target_gid`; editor-only documents keep their document selector. While
 capture is active, `SessionInputStream` retains their typed payloads,
 correlation ids, producer class and stable caller ID, target, committed
@@ -930,7 +935,9 @@ root, active frame, catalog entry, exact `f64` pose, and reserved spawned-root
 `producer_id`; actorless Rhai requires one, while Twin Rhai retains its route
 and actor identity. Modelica records retain the declared input name, exact
 `f64` value, and command correlation. Document-backed spawns remain
-`ApplyUsdOps` in the Twin journal. The fixed-step controller captures physical
+`ApplyUsdOps` in the Twin journal. A captured `ControlSafeStop` identifies its
+endpoint and `runtime_lifecycle` producer, and the co-simulation owner reapplies
+the safe state at that recorded tick. The fixed-step controller captures physical
 `ActionState<UserIntent>` into a
 by-value `PhysicalIntentFrame` semantic snapshot. When the controller and
 target have stable `GlobalEntityId`s and a committed scene generation, the
@@ -1131,10 +1138,11 @@ The whole-simulation guarantee remains open because:
    The session stream captures API and classified non-Simulation Rhai
    `SetPorts`, `ReleasePort`, and `ReleaseControl` commands, local
    port-inspector actions, explicitly identified direct typed port inputs, and
-   live `SetModelInput` changes at their fixed-tick boundaries. Unclassified
+   live `SetModelInput` changes plus authority-derived `ControlSafeStop`
+   events at their fixed-tick boundaries. Unclassified
    direct `SetPorts`, `ReleasePort`, and `ReleaseControl` events,
-   lifecycle-derived safe-stops, scene lifecycle, other authored commands, and
-   all Rhai/Modelica runtime state still need
+   scene lifecycle, other authored commands, and all Rhai/Modelica runtime
+   state still need
    capture or a replay owner. Adaptive Modelica is not a cross-machine bitwise
    deterministic solver.
 7. `RuntimeCycleSet` is ordering vocabulary rather than an independent cadence

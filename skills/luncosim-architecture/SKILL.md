@@ -129,12 +129,16 @@ consuming fixed tick through the same per-tick allocator. Missing facts or
 duplicate target/session order keys hold input with a structured runtime
 error; ordering does not fall back to Bevy `Entity` bits. An active
 `SessionInputStream` captures sorted canonical intent ids, admitted controls,
-and raw-file spawn records. Spawn records retain producer, correlation, stable
-scene-root and active-frame identities, original f64 pose, admission stamp, and
-reserved root id; acknowledgements expose that stamp. Document-backed
-`SpawnEntity` still authors only `ApplyUsdOps` into the Twin journal. Capture
-remains bounded and in-memory; durable writing, playback, and other typed
-commands remain open.
+authority-derived safe-stops, and raw-file spawn records. A `ControlSafeStop`
+immediately neutralizes its endpoint and, during capture, enters the queue as a
+`runtime_lifecycle` record for the next fixed tick. The co-simulation owner
+reapplies it at that tick; missing target, generation, tick, or order facts fail
+capture without delaying the safety action. Spawn records retain producer,
+correlation, stable scene-root and active-frame identities, original f64 pose,
+admission stamp, and reserved root id; acknowledgements expose that stamp.
+Document-backed `SpawnEntity` still authors only `ApplyUsdOps` into the Twin
+journal. Capture remains bounded and in-memory; baseline manifests, playback,
+and other typed commands remain open.
 The persistent canonical `WorldGrid` has deterministic content provenance, so
 the default active physics frame also has a stable `GlobalEntityId`.
 

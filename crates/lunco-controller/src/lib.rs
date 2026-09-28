@@ -990,7 +990,8 @@ fn commit_controller_session_input(
         | lunco_core_session::SessionInputPayload::ModelicaInputChange { .. }
         | lunco_core_session::SessionInputPayload::PortInputWrites { .. }
         | lunco_core_session::SessionInputPayload::PortInputRelease { .. }
-        | lunco_core_session::SessionInputPayload::ControlInputRelease { .. } => {}
+        | lunco_core_session::SessionInputPayload::ControlInputRelease { .. }
+        | lunco_core_session::SessionInputPayload::ControlSafeStop => {}
     }
 }
 

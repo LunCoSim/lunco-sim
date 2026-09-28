@@ -1471,6 +1471,17 @@ fn on_commit_session_input_ports(
                 apply_release_control(world, target, &registry)
                     .map_err(|message| (correlation_id, "ReleaseControl", message))
             }
+            lunco_core_session::SessionInputPayload::ControlSafeStop => {
+                if let Err(message) = apply_release_control(world, target, &registry) {
+                    world.trigger(lunco_core::RuntimeError {
+                        name: "cosim-session-input".to_owned(),
+                        message: format!(
+                            "ControlSafeStop for target {target_gid} failed at its admitted tick: {message}"
+                        ),
+                    });
+                }
+                return;
+            }
             _ => return,
         };
         if let Err((correlation_id, command, message)) = result {
@@ -1720,13 +1731,88 @@ fn on_control_safe_stop(
     let registry = registry.clone();
     commands.queue(move |world: &mut World| {
         cancel_superseded_port_writes(world, target, None, "control-authority safe stop");
-        if let Err(message) = apply_release_control(world, target, &registry) {
-            world.trigger(lunco_core::RuntimeError {
-                name: "cosim-control-safe-stop".to_owned(),
-                message,
-            });
+        match apply_release_control(world, target, &registry) {
+            Ok(()) => {
+                if let Err(message) = admit_lifecycle_safe_stop(world, target) {
+                    world.trigger(lunco_core::RuntimeError {
+                        name: "session-input-recording".to_owned(),
+                        message,
+                    });
+                }
+            }
+            Err(message) => {
+                fail_session_input_capture(world, format!("control safe-stop failed: {message}"));
+                world.trigger(lunco_core::RuntimeError {
+                    name: "cosim-control-safe-stop".to_owned(),
+                    message,
+                });
+            }
         }
     });
+}
+
+fn admit_lifecycle_safe_stop(world: &mut World, target: Entity) -> Result<(), String> {
+    if !world
+        .get_resource::<lunco_core_session::SessionInputStream>()
+        .is_some_and(lunco_core_session::SessionInputStream::is_recording)
+    {
+        return Ok(());
+    }
+
+    let record = (|| {
+        let target_id = world
+            .get::<GlobalEntityId>(target)
+            .copied()
+            .ok_or_else(|| "lifecycle safe-stop target has no stable GlobalEntityId".to_owned())?;
+        let scene_generation = world
+            .get_resource::<lunco_core::SceneTransitionCoordinator>()
+            .and_then(lunco_core::SceneTransitionCoordinator::completed_generation)
+            .ok_or_else(|| {
+                "lifecycle safe-stop capture requires a committed scene generation".to_owned()
+            })?;
+        let effective_tick = world
+            .get_resource::<lunco_core_runtime::SimTick>()
+            .map(|tick| tick.0)
+            .ok_or_else(|| "lifecycle safe-stop capture requires SimTick".to_owned())?
+            .checked_add(1)
+            .ok_or_else(|| "lifecycle safe-stop effective tick exhausted".to_owned())?;
+        if !world.contains_resource::<lunco_control_core::SimulationInputOrderAllocator>() {
+            return Err(
+                "lifecycle safe-stop capture requires the shared input-order allocator".to_owned(),
+            );
+        }
+        if !world.contains_resource::<lunco_core_session::PendingSessionInputs>() {
+            return Err("lifecycle safe-stop capture queue is unavailable".to_owned());
+        }
+
+        world.resource_scope(
+            |world, mut pending: Mut<lunco_core_session::PendingSessionInputs>| {
+                let mut order =
+                    world.resource_mut::<lunco_control_core::SimulationInputOrderAllocator>();
+                pending.admit(
+                    &mut order,
+                    lunco_core_session::SessionInputProducer::RuntimeLifecycle,
+                    target_id,
+                    scene_generation,
+                    effective_tick,
+                    lunco_core_session::SessionInputPayload::ControlSafeStop,
+                    None,
+                )
+            },
+        )
+    })();
+
+    if let Err(message) = record {
+        fail_session_input_capture(world, message.clone());
+        return Err(message);
+    }
+    Ok(())
+}
+
+fn fail_session_input_capture(world: &mut World, message: String) {
+    if let Some(mut stream) = world.get_resource_mut::<lunco_core_session::SessionInputStream>() {
+        stream.fail(message);
+    }
 }
 
 register_commands!(on_set_ports, on_release_port, on_release_control);
@@ -1735,6 +1821,146 @@ register_commands!(on_set_ports, on_release_port, on_release_control);
 mod control_intent_tests {
     use super::*;
     use std::collections::HashMap;
+
+    fn install_capture_state(app: &mut App, with_committed_scene: bool) {
+        app.init_resource::<lunco_core_session::SessionInputStream>()
+            .init_resource::<lunco_core_session::PendingSessionInputs>()
+            .init_resource::<lunco_control_core::SimulationInputOrderAllocator>()
+            .insert_resource(lunco_core_runtime::SimTick(40));
+        if with_committed_scene {
+            let mut coordinator = lunco_core::SceneTransitionCoordinator::default();
+            let request = lunco_core::SceneTransitionRequest::load("capture.usda", "/World");
+            coordinator.admit(request);
+            coordinator.take_admitted().expect("admitted scene request");
+            let id = coordinator.start(lunco_core::SceneTransition::load("capture.usda", "/World"));
+            assert!(coordinator.complete(id));
+            app.insert_resource(coordinator);
+        }
+        app.world_mut()
+            .resource_mut::<lunco_core_session::SessionInputStream>()
+            .begin(4)
+            .expect("capture starts");
+    }
+
+    #[test]
+    fn lifecycle_safe_stop_is_captured_at_the_next_fixed_tick() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+        install_capture_state(&mut app, true);
+        let target = app
+            .world_mut()
+            .spawn((
+                GlobalEntityId::from_raw(42),
+                lunco_port_core::InputPorts::with_defaults([
+                    ("throttle".to_owned(), 0.75),
+                    ("brake".to_owned(), 0.0),
+                ]),
+            ))
+            .id();
+
+        app.world_mut().trigger(ControlSafeStop { target });
+        app.world_mut().flush();
+
+        let pending = app
+            .world()
+            .resource::<lunco_core_session::PendingSessionInputs>();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            pending.entries().next().unwrap().record().effective_tick,
+            41
+        );
+        let inputs = app
+            .world()
+            .get::<lunco_port_core::InputPorts>(target)
+            .unwrap();
+        assert_eq!(inputs.cmd("throttle"), 0.0);
+        assert_eq!(inputs.cmd("brake"), 1.0);
+        assert!(
+            app.world()
+                .resource::<lunco_core_session::SessionInputStream>()
+                .records()
+                .is_empty()
+        );
+        {
+            let mut inputs = app
+                .world_mut()
+                .get_mut::<lunco_port_core::InputPorts>(target)
+                .unwrap();
+            inputs.values.insert("throttle".to_owned(), 0.75);
+            inputs.values.insert("brake".to_owned(), 0.0);
+        }
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimTick>()
+            .0 = 41;
+        lunco_core_session::commit_due_session_inputs(app.world_mut());
+
+        let stream = app
+            .world()
+            .resource::<lunco_core_session::SessionInputStream>();
+        assert_eq!(
+            stream.state(),
+            lunco_core_session::SessionInputStreamState::Recording
+        );
+        assert_eq!(stream.records().len(), 1);
+        let record = &stream.records()[0];
+        assert_eq!(
+            record.producer,
+            lunco_core_session::SessionInputProducer::RuntimeLifecycle
+        );
+        assert_eq!(record.target, GlobalEntityId::from_raw(42));
+        assert_eq!(record.scene_generation, 1);
+        assert_eq!(record.effective_tick, 41);
+        assert_eq!(record.sequence, 1);
+        assert_eq!(
+            record.payload,
+            lunco_core_session::SessionInputPayload::ControlSafeStop
+        );
+
+        let inputs = app
+            .world()
+            .get::<lunco_port_core::InputPorts>(target)
+            .unwrap();
+        assert_eq!(inputs.cmd("throttle"), 0.0);
+        assert_eq!(inputs.cmd("brake"), 1.0);
+    }
+
+    #[test]
+    fn lifecycle_safe_stop_fails_capture_without_committed_scene_generation() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+        install_capture_state(&mut app, false);
+        let target = app
+            .world_mut()
+            .spawn((
+                GlobalEntityId::from_raw(42),
+                lunco_port_core::InputPorts::new(&["throttle", "brake"]),
+            ))
+            .id();
+
+        app.world_mut().trigger(ControlSafeStop { target });
+        app.world_mut().flush();
+
+        let stream = app
+            .world()
+            .resource::<lunco_core_session::SessionInputStream>();
+        assert_eq!(
+            stream.state(),
+            lunco_core_session::SessionInputStreamState::Failed
+        );
+        assert!(
+            stream
+                .failure()
+                .unwrap()
+                .contains("committed scene generation")
+        );
+        assert!(stream.records().is_empty());
+        let inputs = app
+            .world()
+            .get::<lunco_port_core::InputPorts>(target)
+            .unwrap();
+        assert_eq!(inputs.cmd("throttle"), 0.0);
+        assert_eq!(inputs.cmd("brake"), 1.0);
+    }
 
     #[test]
     fn release_control_latches_intent_until_explicit_release() {
