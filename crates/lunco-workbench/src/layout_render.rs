@@ -1163,6 +1163,12 @@ pub(super) fn render_layout(
                 a.set("panel.bottom", r.response.rect);
             }
         }
+        let center = viewport_ui.available_rect_before_wrap();
+        if center.width() > 4.0 && center.height() > 4.0 {
+            if let Some(mut anchors) = world.get_resource_mut::<HelpAnchors>() {
+                anchors.set("panel.center", center);
+            }
+        }
         // Central area: do NOT call CentralPanel — egui's bottom/side
         // panels reserve their space and the remaining region stays
         // free for the 3D scene that Bevy renders to the full window.
