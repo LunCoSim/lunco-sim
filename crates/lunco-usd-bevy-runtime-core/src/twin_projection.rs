@@ -1609,22 +1609,50 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         // Read the generation before any whole-stage payload. The composed source
         // is serialized only when this event-driven owner observes a new
         // generation, never on the render loop.
-        let (cur_gen, view_layer_is_empty) =
-            match world.resource::<DocumentRegistry<UsdDocument>>().host(doc) {
-                Some(h) => (
-                    h.document().generation(),
-                    h.document().view_data().is_empty(),
-                ),
-                None => {
-                    if let Err(error) = world.resource::<TwinRoots>().clear_overlay(&name, &rel) {
-                        warn!("[usd-e1b] could not clear closed document overlay: {error}");
-                    }
-                    world
-                        .resource_mut::<DocBackedTwinScenes>()
-                        .forget_document(doc);
-                    continue;
+        let (cur_gen, pending_ops) = {
+            let Some(host) = world.resource::<DocumentRegistry<UsdDocument>>().host(doc) else {
+                if let Err(error) = world.resource::<TwinRoots>().clear_overlay(&name, &rel) {
+                    warn!("[usd-e1b] could not clear closed document overlay: {error}");
                 }
+                world
+                    .resource_mut::<DocBackedTwinScenes>()
+                    .forget_document(doc);
+                continue;
             };
+            let document = host.document();
+            let cur_gen = document.generation();
+            let view_layer_is_empty = document.view_data().is_empty();
+            let pending_ops = if view_applied.is_none() {
+                // The first mounted recipe already contains the current base
+                // and runtime layers. Replay only view-layer ops from that
+                // source's empty view baseline; unrelated edits and runtime
+                // restores must not expire this presentation suffix.
+                if view_layer_is_empty {
+                    Some(Vec::new())
+                } else {
+                    document.view_ops_since_source_baseline()
+                }
+            } else {
+                let persistent_cursor = applied.unwrap_or(cur_gen);
+                let view_cursor = view_applied.unwrap_or(persistent_cursor);
+                let history_cursor = persistent_cursor.min(view_cursor);
+                document.ops_since(history_cursor).map(|ops| {
+                    ops.into_iter()
+                        .enumerate()
+                        .filter_map(|(index, op)| {
+                            let generation = history_cursor + index as u64 + 1;
+                            let cursor = if op.edit_target().is_view() {
+                                view_cursor
+                            } else {
+                                persistent_cursor
+                            };
+                            (generation > cursor).then_some(op)
+                        })
+                        .collect::<Vec<_>>()
+                })
+            };
+            (cur_gen, pending_ops)
+        };
         if Some(cur_gen) == applied && Some(cur_gen) == view_applied {
             // The live stage is current. Durable runtime-layer persistence is
             // scheduled independently from DocumentChanged; there is no stage
@@ -1644,45 +1672,11 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             .id();
 
         // The initial scene recipe contains base + runtime, but omits the
-        // disposable view layer. If that layer currently has opinions, retain
-        // the zero cursor so presentation ops that predate the first live-stage
-        // mount are replayed. An empty view layer needs no replay, so its cursor
-        // can start at the same snapshot generation as the persistent layers.
-        let persistent_cursor = applied.unwrap_or(cur_gen);
-        let view_cursor = view_applied.unwrap_or_else(|| {
-            if view_layer_is_empty {
-                persistent_cursor
-            } else {
-                0
-            }
-        });
-        let history_cursor = persistent_cursor.min(view_cursor);
-        // `None` = the op ring overflowed (more edits than capacity since the
-        // oldest cursor) → the composed document is the rebuild source.
-        let ops = {
-            let _span = bevy::log::info_span!("usd_twin_projection_document_op_history").entered();
-            world
-                .resource::<DocumentRegistry<UsdDocument>>()
-                .host(doc)
-                .and_then(|h| h.document().ops_since(history_cursor))
-        };
-        let pending_ops = {
-            let _span = bevy::log::info_span!("usd_twin_projection_filter_pending_ops").entered();
-            ops.map(|ops| {
-                ops.into_iter()
-                    .enumerate()
-                    .filter_map(|(index, op)| {
-                        let generation = history_cursor + index as u64 + 1;
-                        let cursor = if op.edit_target().is_view() {
-                            view_applied.unwrap_or(0)
-                        } else {
-                            persistent_cursor
-                        };
-                        (generation > cursor).then_some(op)
-                    })
-                    .collect::<Vec<_>>()
-            })
-        };
+        // disposable view layer. Its retained operation suffix was selected
+        // against the view source baseline above, independent of persistent
+        // edit volume.
+        // `None` means the relevant journal suffix expired or spans a full
+        // source reset; the composed document remains the authoritative rebuild.
         let has_work = pending_ops
             .as_ref()
             .map(|ops| !ops.is_empty())

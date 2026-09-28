@@ -395,6 +395,13 @@ including local subtree remove/restore, replay incrementally
 source string is identical is an idempotent no-op and does not advance the
 projection generation.
 
+On a Twin's first projection, the loaded stage recipe already contains the
+current base and runtime layers. The document projector replays the disposable
+view layer from its own bounded operation suffix since the current source
+baseline, so runtime restores and persistent edits cannot evict presentation
+ops. If that view suffix itself expired, projection uses the complete composed
+document rebuild path.
+
 An authored standard `inputs:*` edit on a live model instance also advances the
 backend-neutral `lunco_core::ModelStateRevision`. This is only an invalidation
 signal: USD does not know whether the attached tool is Modelica, Rhai, physics,

@@ -83,6 +83,13 @@ or direct filesystem reads to this path. After admission,
 `sync_twin_overlays` owner; do not add a per-frame generation scan or a
 viewport-specific edit/reload path.
 
+On first projection, the `twin://` stage already contains the document's current
+base and runtime layers. Replay transient view edits from the document's bounded
+view-operation suffix since its current source baseline. Do not query the global
+op ring from generation zero: runtime restores are non-op generation changes,
+and persistent edits do not belong in the view replay. If the view suffix has
+expired, rebuild from the complete composed document.
+
 For the mounted primary scene, reference fetches stay parallel but live-stage
 mutation and terminal failure publication follow reference operation order. A
 later completed reference remains prepared until every earlier active

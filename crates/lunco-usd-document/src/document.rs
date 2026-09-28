@@ -1489,10 +1489,15 @@ pub struct UsdDocument {
     /// directly (author-once: the op is the single delta description, applied to
     /// both this save layer and the `!Send` projection stage), so it never has to
     /// re-derive an edit's value by reading it back out of [`composed`](Self::composed).
-    /// Non-op state changes (e.g. [`restore_runtime`](Self::restore_runtime)) push
-    /// a synthetic [`UsdOp::ReplaceSource`] marker so the projector still rebuilds.
-    /// See [`ops_since`](Self::ops_since).
-    op_log: VecDeque<(u64, UsdOp)>,
+    /// Non-op state changes are represented by a gap, so [`ops_since`](Self::ops_since)
+    /// requests a complete snapshot when a cursor spans one.
+    op_log: VecDeque<(u64, std::sync::Arc<UsdOp>)>,
+    /// View-layer operations have an independent bounded journal because the
+    /// initial Twin scene already contains the current base and runtime layers.
+    view_op_log: VecDeque<(u64, std::sync::Arc<UsdOp>)>,
+    /// View revision at which the current source snapshot established an empty
+    /// view baseline. Projection can replay the retained suffix from this point.
+    view_history_start_revision: u64,
     /// Memoized `base ⊕ runtime ⊕ view` composition. The cache is private to this
     /// document instance; its key names the document identity and all layer
     /// revisions, so derived data cannot cross a fork boundary or survive a
@@ -1531,6 +1536,8 @@ impl Clone for UsdDocument {
             last_saved_base_revision: self.last_saved_base_revision,
             changes: self.changes.clone(),
             op_log: self.op_log.clone(),
+            view_op_log: self.view_op_log.clone(),
+            view_history_start_revision: self.view_history_start_revision,
             composed_cache: std::sync::Mutex::new(None),
         }
     }
@@ -1604,6 +1611,8 @@ impl UsdDocument {
             last_saved_base_revision,
             changes: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
             op_log: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
+            view_op_log: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
+            view_history_start_revision: 0,
             composed_cache: std::sync::Mutex::new(None),
         }
     }
@@ -1821,6 +1830,23 @@ impl UsdDocument {
         self.view_revision
     }
 
+    /// Typed view-layer operations since the current source established its
+    /// empty presentation baseline. Persistent-layer edits and runtime restores
+    /// do not consume this bounded history; an expired view suffix requests a
+    /// full composed-stage rebuild.
+    pub fn view_ops_since_source_baseline(&self) -> Option<Vec<UsdOp>> {
+        let expected = self
+            .view_revision
+            .saturating_sub(self.view_history_start_revision);
+        let ops = self
+            .view_op_log
+            .iter()
+            .filter(|(revision, _)| *revision > self.view_history_start_revision)
+            .map(|(_, op)| op.as_ref().clone())
+            .collect::<Vec<_>>();
+        (ops.len() as u64 == expected).then_some(ops)
+    }
+
     /// Source parse diagnostic, when the document was opened with invalid USDA.
     pub fn parse_error(&self) -> Option<&str> {
         self.parse_error.as_deref()
@@ -1935,6 +1961,8 @@ impl UsdDocument {
         fork.id = id;
         fork.view = std::sync::Arc::new(usda_to_data(EMPTY_USDA).unwrap_or_default());
         fork.view_revision = 0;
+        fork.view_op_log.clear();
+        fork.view_history_start_revision = 0;
         fork.origin = DocumentOrigin::untitled(name);
         fork.last_saved_base_revision = None;
         Ok(fork)
@@ -2005,6 +2033,8 @@ impl UsdDocument {
         self.base_revision += 1;
         self.runtime_revision += 1;
         self.view_revision += 1;
+        self.view_op_log.clear();
+        self.view_history_start_revision = self.view_revision;
         self.generation += 1;
         if self.changes.len() == CHANGE_HISTORY_CAPACITY {
             self.changes.pop_front();
@@ -2067,7 +2097,7 @@ impl UsdDocument {
             .op_log
             .iter()
             .filter(|(g, _)| *g > since_generation)
-            .map(|(_, op)| op.clone())
+            .map(|(_, op)| op.as_ref().clone())
             .collect();
         // The authored-operation journal is usable only when it covers every
         // generation. A full reload advances generation without fabricating an
@@ -2079,8 +2109,16 @@ impl UsdDocument {
     /// for [`ops_since`](Self::ops_since). Full reloads intentionally have no
     /// authored operation; a cursor spanning one gets a complete snapshot.
     fn record_op(&mut self, op: UsdOp) {
+        let op = std::sync::Arc::new(op);
         if self.op_log.len() == CHANGE_HISTORY_CAPACITY {
             self.op_log.pop_front();
+        }
+        if op.edit_target().is_view() {
+            if self.view_op_log.len() == CHANGE_HISTORY_CAPACITY {
+                self.view_op_log.pop_front();
+            }
+            self.view_op_log
+                .push_back((self.view_revision, std::sync::Arc::clone(&op)));
         }
         self.op_log.push_back((self.generation, op));
     }
