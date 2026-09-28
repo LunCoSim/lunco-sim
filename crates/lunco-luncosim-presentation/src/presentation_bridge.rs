@@ -166,13 +166,23 @@ fn project_env_settings(
         let Some(stage_asset) = stages.get(stage_id) else {
             continue;
         };
-        let (reader, _generation) = canonical.reader_for(stage_id, stage_asset);
-        for prim in reader.prim_paths() {
-            if reader.type_name(&prim).as_deref()
-                != Some(lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE)
-            {
-                continue;
-            }
+        let (reader, _generation) =
+            if canonical.prepared_plan_is_current(stage_id, &stage_asset.projection_plan) {
+                let _span = bevy::log::info_span!("usd_environment_prepared_plan_reuse").entered();
+                (
+                    lunco_usd_bevy_stage::read::UsdReadSource::Prepared(
+                        stage_asset.projection_plan.as_ref(),
+                    ),
+                    canonical.generation_for(stage_id),
+                )
+            } else {
+                canonical.reader_for(stage_id, stage_asset)
+            };
+        let environment_prims = {
+            let _span = bevy::log::info_span!("usd_environment_type_lookup").entered();
+            reader.prim_paths_matching(&[lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE], &[])
+        };
+        for prim in environment_prims {
             if reader.has_authored_attribute(&prim, "lunco:env:exposureEv100") {
                 if let Some(ev) = reader
                     .real_f32(&prim, "lunco:env:exposureEv100")

@@ -262,10 +262,13 @@ info-changed prims do not contain a policy. Relevant changes trigger a full
 extraction for that stage; missing batches, plan replacement, or generation
 gaps also use that conservative path. Unrelated stage edits skip policy asset
 resolution and registry installation. Live canonical reads remain on their
-owning thread. The async-prepared projection plan indexes prims by
-composed schema type and applied API schema. Startup policy extraction visits
-only `LunCoPolicy` prims, and simulation topology extraction visits only
-physics joints, wheel attachments, and vehicle roots. Initial simulation
+owning thread. When the canonical owner confirms that the exact prepared plan
+is still the current live-stage snapshot, read-only projections reuse its
+composed schema indexes instead of traversing the live stage. The async-prepared
+projection plan indexes prims by composed schema type and applied API schema.
+Startup policy extraction visits only `LunCoPolicy` prims, environment settings
+visit only `LunCoEnvironment` prims, and simulation topology extraction visits
+only physics joints, wheel attachments, and vehicle roots. Initial simulation
 topology, per-prim candidate sets, and authored vehicle output ports are
 prepared from the immutable plan on `AsyncComputeTaskPool`; one indexed query
 finds joint, attachment, vehicle-root, simulation-schema, and `lunco:` property
