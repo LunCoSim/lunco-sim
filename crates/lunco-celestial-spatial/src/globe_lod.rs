@@ -269,6 +269,16 @@ fn dem_boundary_feather_m(
     Ok(collar_m)
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct GlobeHandoffInputKey {
+    dir: DVec3,
+    east: DVec3,
+    north: DVec3,
+    body_radius_m: f64,
+    half_extent: f64,
+    surface_key: u64,
+}
+
 /// The one continuous site/globe ownership record for a body.
 ///
 /// Inside the exact DEM square, the local terrain remains authoritative. The
@@ -287,6 +297,7 @@ pub(crate) struct GlobeHandoff {
     boundary_grid_resolution: usize,
     source: BoundaryBlendSource,
     source_key: u64,
+    input_key: Option<GlobeHandoffInputKey>,
 }
 
 impl PartialEq for GlobeHandoff {
@@ -300,10 +311,29 @@ impl PartialEq for GlobeHandoff {
             && self.collar_m == other.collar_m
             && self.boundary_grid_resolution == other.boundary_grid_resolution
             && self.source_key == other.source_key
+            && self.input_key == other.input_key
     }
 }
 
 impl GlobeHandoff {
+    pub(crate) fn dem_input_key(
+        dir: DVec3,
+        east: DVec3,
+        north: DVec3,
+        body_radius_m: f64,
+        oracle: &SurfaceOracle,
+        half_extent: f64,
+    ) -> GlobeHandoffInputKey {
+        GlobeHandoffInputKey {
+            dir,
+            east,
+            north,
+            body_radius_m,
+            half_extent,
+            surface_key: oracle.surface_key(),
+        }
+    }
+
     pub(crate) fn new(
         dir: DVec3,
         east: DVec3,
@@ -312,6 +342,8 @@ impl GlobeHandoff {
         oracle: Arc<SurfaceOracle>,
         half_extent: f64,
     ) -> Result<Self, &'static str> {
+        let input_key =
+            Self::dem_input_key(dir, east, north, radius_m, oracle.as_ref(), half_extent);
         let border_datum = oracle.grid().border_datum();
         if !radius_m.is_finite() || radius_m <= 0.0 || !border_datum.is_finite() {
             return Err("body radius or DEM border datum is invalid");
@@ -352,7 +384,12 @@ impl GlobeHandoff {
             source_key: oracle.surface_key()
                 ^ border_datum.to_bits().rotate_left(13)
                 ^ render_radius_m.to_bits().rotate_left(29),
+            input_key: Some(input_key),
         })
+    }
+
+    pub(crate) fn matches_dem_input(&self, input_key: GlobeHandoffInputKey) -> bool {
+        self.input_key == Some(input_key)
     }
 
     /// Compose an authored flat site plane with a render shell at its datum.
@@ -399,6 +436,7 @@ impl GlobeHandoff {
             boundary_grid_resolution: 0,
             source,
             source_key: render_radius_m.to_bits() ^ half_extent.to_bits().rotate_left(17),
+            input_key: None,
         }
     }
 
@@ -434,6 +472,63 @@ impl GlobeHandoff {
             source: &self.source,
             boundary_grid_resolution: self.boundary_grid_resolution,
         }
+    }
+}
+
+/// One bounded, body-owned preparation for the DEM boundary collar.
+///
+/// Border statistics and slope sampling touch the full crop boundary, so they
+/// are prepared on the compute pool. Keeping the task on the globe entity
+/// bounds work to one in-flight preparation per body and lets despawning the
+/// body release its task handle with the rest of its presentation state.
+#[derive(Component)]
+pub(crate) struct GlobeHandoffPreparation {
+    input_key: GlobeHandoffInputKey,
+    task: Option<Task<Result<GlobeHandoff, &'static str>>>,
+    result: Option<Result<GlobeHandoff, &'static str>>,
+}
+
+impl GlobeHandoffPreparation {
+    pub(crate) fn spawn_dem(
+        input_key: GlobeHandoffInputKey,
+        dir: DVec3,
+        east: DVec3,
+        north: DVec3,
+        body_radius_m: f64,
+        oracle: Arc<SurfaceOracle>,
+        half_extent: f64,
+    ) -> Self {
+        let task = AsyncComputeTaskPool::get().spawn(async move {
+            GlobeHandoff::new(dir, east, north, body_radius_m, oracle, half_extent)
+        });
+        Self {
+            input_key,
+            task: Some(task),
+            result: None,
+        }
+    }
+
+    pub(crate) fn input_key(&self) -> GlobeHandoffInputKey {
+        self.input_key
+    }
+
+    pub(crate) fn poll(&mut self) {
+        let completed = self
+            .task
+            .as_mut()
+            .and_then(|task| block_on(future::poll_once(task)));
+        if let Some(result) = completed {
+            self.task = None;
+            self.result = Some(result);
+        }
+    }
+
+    pub(crate) fn is_complete(&self) -> bool {
+        self.task.is_none()
+    }
+
+    pub(crate) fn take_result(&mut self) -> Option<Result<GlobeHandoff, &'static str>> {
+        self.result.take()
     }
 }
 

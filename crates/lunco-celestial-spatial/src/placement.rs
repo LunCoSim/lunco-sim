@@ -685,9 +685,40 @@ impl TerrainHandoffChangeTracker<'_, '_> {
     }
 }
 
-/// Build the measured DEM-to-globe collar and its source binding on the visual
-/// cycle. This touches presentation components only; it never changes the
-/// physics oracle or waits for mesh workers.
+fn clear_globe_handoffs(
+    commands: &mut Commands<'_, '_>,
+    globes: &mut Query<
+        '_,
+        '_,
+        (
+            Entity,
+            &CelestialBody,
+            Option<&crate::globe_lod::GlobeHandoff>,
+            Option<&mut crate::globe_lod::GlobeHandoffPreparation>,
+        ),
+    >,
+    mut should_clear: impl FnMut(&CelestialBody) -> bool,
+) {
+    for (entity, globe, handoff, preparation) in globes.iter_mut() {
+        if !should_clear(globe) {
+            continue;
+        }
+        let mut entity_commands = commands.entity(entity);
+        if handoff.is_some() {
+            entity_commands.remove::<crate::globe_lod::GlobeHandoff>();
+        }
+        if preparation
+            .as_ref()
+            .is_some_and(|preparation| preparation.is_complete())
+        {
+            entity_commands.remove::<crate::globe_lod::GlobeHandoffPreparation>();
+        }
+    }
+}
+
+/// Prepare the measured DEM-to-globe collar from the visualization cycle.
+/// Boundary statistics and slope sampling run on the compute pool; this system
+/// only polls completed work and commits a result whose input key is still current.
 pub(crate) fn sync_globe_handoffs(
     mut commands: Commands,
     registry: Res<CelestialBodyRegistry>,
@@ -706,15 +737,24 @@ pub(crate) fn sync_globe_handoffs(
         Option<&lunco_terrain_surface::TerrainGeoref>,
     )>,
     q_flat: Query<&lunco_terrain_surface::FlatSiteSurface>,
-    q_globes: Query<(
+    mut q_globes: Query<(
         Entity,
         &CelestialBody,
         Option<&crate::globe_lod::GlobeHandoff>,
+        Option<&mut crate::globe_lod::GlobeHandoffPreparation>,
     )>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
+    for (_, _, _, preparation) in &mut q_globes {
+        if let Some(mut preparation) = preparation {
+            preparation.poll();
+        }
+    }
+    let has_preparation = q_globes
+        .iter_mut()
+        .any(|(_, _, _, preparation)| preparation.is_some());
     let inputs_changed = changes.has_changes();
-    if *initialized && !registry.is_changed() && !inputs_changed {
+    if *initialized && !registry.is_changed() && !inputs_changed && !has_preparation {
         return;
     }
     *initialized = true;
@@ -723,13 +763,7 @@ pub(crate) fn sync_globe_handoffs(
 
     let site_anchors: Vec<_> = q_site.iter().collect();
     if site_anchors.is_empty() {
-        for (entity, _, handoff) in &q_globes {
-            if handoff.is_some() {
-                commands
-                    .entity(entity)
-                    .remove::<crate::globe_lod::GlobeHandoff>();
-            }
-        }
+        clear_globe_handoffs(&mut commands, &mut q_globes, |_| true);
         return;
     }
 
@@ -737,13 +771,7 @@ pub(crate) fn sync_globe_handoffs(
     let selection = match select_terrain_body(terrain_georefs.iter().copied(), &site_anchors) {
         Ok(selection) => selection,
         Err(TerrainBodySelectionError::MixedBodies) => {
-            for (entity, _, handoff) in &q_globes {
-                if handoff.is_some() {
-                    commands
-                        .entity(entity)
-                        .remove::<crate::globe_lod::GlobeHandoff>();
-                }
-            }
+            clear_globe_handoffs(&mut commands, &mut q_globes, |_| true);
             replace_terrain_diagnostic(
                 &mut diagnostics,
                 producer,
@@ -758,13 +786,7 @@ pub(crate) fn sync_globe_handoffs(
             return;
         }
         Err(TerrainBodySelectionError::SiteAnchorCardinality(count)) => {
-            for (entity, _, handoff) in &q_globes {
-                if handoff.is_some() {
-                    commands
-                        .entity(entity)
-                        .remove::<crate::globe_lod::GlobeHandoff>();
-                }
-            }
+            clear_globe_handoffs(&mut commands, &mut q_globes, |_| true);
             replace_terrain_diagnostic(
                 &mut diagnostics,
                 producer,
@@ -782,13 +804,7 @@ pub(crate) fn sync_globe_handoffs(
     };
     let body = selection.body;
     let Some(desc) = registry.get(body) else {
-        for (entity, _, handoff) in &q_globes {
-            if handoff.is_some() {
-                commands
-                    .entity(entity)
-                    .remove::<crate::globe_lod::GlobeHandoff>();
-            }
-        }
+        clear_globe_handoffs(&mut commands, &mut q_globes, |_| true);
         replace_terrain_diagnostic(
             &mut diagnostics,
             producer,
@@ -858,13 +874,7 @@ pub(crate) fn sync_globe_handoffs(
         }
     };
     if !selection.has_dem && flat_surface.is_none() {
-        for (entity, _, handoff) in &q_globes {
-            if handoff.is_some() {
-                commands
-                    .entity(entity)
-                    .remove::<crate::globe_lod::GlobeHandoff>();
-            }
-        }
+        clear_globe_handoffs(&mut commands, &mut q_globes, |_| true);
         return;
     }
 
@@ -877,13 +887,9 @@ pub(crate) fn sync_globe_handoffs(
         })
         .collect();
     if candidates.len() > 1 {
-        for (entity, globe, handoff) in &q_globes {
-            if globe.ephemeris_id == body && handoff.is_some() {
-                commands
-                    .entity(entity)
-                    .remove::<crate::globe_lod::GlobeHandoff>();
-            }
-        }
+        clear_globe_handoffs(&mut commands, &mut q_globes, |globe| {
+            globe.ephemeris_id == body
+        });
         replace_terrain_diagnostic(
             &mut diagnostics,
             producer,
@@ -943,83 +949,155 @@ pub(crate) fn sync_globe_handoffs(
         }
     };
 
-    for (entity, globe, handoff) in &q_globes {
+    for (entity, globe, handoff, preparation) in &mut q_globes {
+        let mut entity_commands = commands.entity(entity);
         if globe.ephemeris_id != body {
             if handoff.is_some() {
-                commands
-                    .entity(entity)
-                    .remove::<crate::globe_lod::GlobeHandoff>();
+                entity_commands.remove::<crate::globe_lod::GlobeHandoff>();
+            }
+            if preparation
+                .as_ref()
+                .is_some_and(|preparation| preparation.is_complete())
+            {
+                entity_commands.remove::<crate::globe_lod::GlobeHandoffPreparation>();
             }
             continue;
         }
         if half_extent <= 0.0 || half_extent >= desc.radius_m {
             if handoff.is_some() {
-                commands
-                    .entity(entity)
-                    .remove::<crate::globe_lod::GlobeHandoff>();
+                entity_commands.remove::<crate::globe_lod::GlobeHandoff>();
+            }
+            if preparation
+                .as_ref()
+                .is_some_and(|preparation| preparation.is_complete())
+            {
+                entity_commands.remove::<crate::globe_lod::GlobeHandoffPreparation>();
             }
             continue;
         }
         let Some(anchor) = anchor else {
             if handoff.is_some() {
-                commands
-                    .entity(entity)
-                    .remove::<crate::globe_lod::GlobeHandoff>();
+                entity_commands.remove::<crate::globe_lod::GlobeHandoff>();
+            }
+            if preparation
+                .as_ref()
+                .is_some_and(|preparation| preparation.is_complete())
+            {
+                entity_commands.remove::<crate::globe_lod::GlobeHandoffPreparation>();
             }
             continue;
         };
 
         let tangent = LocalTangentFrame::body_fixed(&anchor.geodetic, desc.radius_m);
-        let next = match (oracle.clone(), flat_surface) {
-            (Some(oracle), _) => match crate::globe_lod::GlobeHandoff::new(
+        if let Some(oracle) = oracle.clone() {
+            let input_key = crate::globe_lod::GlobeHandoff::dem_input_key(
+                tangent.up,
+                tangent.east,
+                tangent.north,
+                desc.radius_m,
+                &oracle,
+                half_extent,
+            );
+            if handoff.is_some_and(|handoff| handoff.matches_dem_input(input_key)) {
+                if preparation
+                    .as_ref()
+                    .is_some_and(|preparation| preparation.is_complete())
+                {
+                    entity_commands.remove::<crate::globe_lod::GlobeHandoffPreparation>();
+                }
+                replace_terrain_diagnostic(&mut diagnostics, producer, None);
+                continue;
+            }
+
+            if let Some(mut preparation) = preparation {
+                if preparation.input_key() == input_key {
+                    let Some(result) = preparation.take_result() else {
+                        continue;
+                    };
+                    entity_commands.remove::<crate::globe_lod::GlobeHandoffPreparation>();
+                    match result {
+                        Ok(next) => {
+                            let collar_m = next.collar_m;
+                            commands.entity(entity).try_insert(next);
+                            debug!(
+                                "globe handoff composed at site body {body} (footprint ±{half_extent:.0} m, measured-source collar {collar_m:.0} m)"
+                            );
+                            replace_terrain_diagnostic(&mut diagnostics, producer, None);
+                        }
+                        Err(reason) => {
+                            if handoff.is_some() {
+                                commands
+                                    .entity(entity)
+                                    .remove::<crate::globe_lod::GlobeHandoff>();
+                            }
+                            replace_terrain_diagnostic(
+                                &mut diagnostics,
+                                producer,
+                                Some(terrain_diagnostic(
+                                    producer,
+                                    "dem-handoff-invalid",
+                                    "DemHeightField".to_string(),
+                                    format!(
+                                        "cannot join this cropped DEM to the body sphere: {reason}"
+                                    ),
+                                )),
+                            );
+                        }
+                    }
+                } else if preparation.is_complete() {
+                    entity_commands
+                        .remove::<crate::globe_lod::GlobeHandoffPreparation>()
+                        .insert(crate::globe_lod::GlobeHandoffPreparation::spawn_dem(
+                            input_key,
+                            tangent.up,
+                            tangent.east,
+                            tangent.north,
+                            desc.radius_m,
+                            oracle,
+                            half_extent,
+                        ));
+                }
+                continue;
+            }
+
+            entity_commands.insert(crate::globe_lod::GlobeHandoffPreparation::spawn_dem(
+                input_key,
                 tangent.up,
                 tangent.east,
                 tangent.north,
                 desc.radius_m,
                 oracle,
                 half_extent,
-            ) {
-                Ok(handoff) => handoff,
-                Err(reason) => {
-                    if handoff.is_some() {
-                        commands
-                            .entity(entity)
-                            .remove::<crate::globe_lod::GlobeHandoff>();
-                    }
-                    replace_terrain_diagnostic(
-                        &mut diagnostics,
-                        producer,
-                        Some(terrain_diagnostic(
-                            producer,
-                            "dem-handoff-invalid",
-                            "DemHeightField".to_string(),
-                            format!("cannot join this cropped DEM to the body sphere: {reason}"),
-                        )),
-                    );
-                    continue;
-                }
-            },
-            (None, Some(surface)) => crate::globe_lod::GlobeHandoff::new_flat(
-                tangent.up,
-                tangent.east,
-                tangent.north,
-                desc.radius_m,
-                anchor.geodetic.height_m + surface.top_y_m,
-                half_extent,
-            ),
-            (None, None) => continue,
+            ));
+            continue;
+        }
+
+        if let Some(preparation) = preparation
+            && preparation.is_complete()
+        {
+            entity_commands.remove::<crate::globe_lod::GlobeHandoffPreparation>();
+        }
+        let Some(surface) = flat_surface else {
+            continue;
         };
+        let next = crate::globe_lod::GlobeHandoff::new_flat(
+            tangent.up,
+            tangent.east,
+            tangent.north,
+            desc.radius_m,
+            anchor.geodetic.height_m + surface.top_y_m,
+            half_extent,
+        );
         if handoff != Some(&next) {
             let collar_m = next.collar_m;
             commands.entity(entity).try_insert(next);
             debug!(
-                "globe handoff composed at site body {body} (footprint ±{half_extent:.0} m, measured-source collar {collar_m:.0} m)"
+                "flat globe handoff composed at site body {body} (footprint ±{half_extent:.0} m, collar {collar_m:.0} m)"
             );
         }
         replace_terrain_diagnostic(&mut diagnostics, producer, None);
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

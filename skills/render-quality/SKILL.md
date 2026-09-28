@@ -109,11 +109,12 @@ not measured regional terrain.
 
 Keep body curvature publication before the authoritative DEM build. Run the
 DEM-to-globe handoff and globe LOD in
-`RuntimeCycleSet::Visualization` after terrain builds and UI commands. Raster
-loading and mesh generation must stay on workers; visualization polls without
-waiting and commits completed meshes in stable coordinate order under count and
-byte budgets. Worker timing may affect visual arrival, never the simulation
-oracle.
+`RuntimeCycleSet::Visualization` after terrain builds and UI commands.
+Crop-border statistics, slope sampling, raster loading, and mesh generation stay
+on workers. Visualization keeps one keyed collar preparation per globe, polls
+without waiting, rejects stale results, and installs current handoffs. Globe
+meshes commit in stable coordinate order under count and byte budgets. Worker
+timing may affect visual arrival, never the simulation oracle.
 
 ## High-profile near detail
 

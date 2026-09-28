@@ -44,12 +44,14 @@ USD terrain projection publishes georeferencing, celestial curvature is
 published before `TerrainSurfaceSet::Build`, and deferred commands are applied
 before the build captures its oracle inputs. The DEM-to-globe handoff,
 appearance adoption, and globe LOD run in
-`RuntimeCycleSet::Visualization`, after terrain builds and UI commands. Raster
-loading and tile mesh generation are asynchronous; visualization only polls
-without waiting and commits completed meshes in stable coarse-to-fine coordinate
-order under per-frame count and byte budgets. Worker completion timing can
-change when a visual tile appears, but it cannot change the physical oracle or
-simulation state.
+`RuntimeCycleSet::Visualization`, after terrain builds and UI commands.
+Crop-border statistics and slope sampling, raster loading, and tile mesh
+generation run asynchronously. Visualization keeps at most one keyed collar
+preparation per globe, polls without waiting, rejects stale results, and installs
+a current handoff. Completed globe meshes retain their stable coarse-to-fine
+commit order under per-frame count and byte budgets. Worker completion timing
+can change when a visual handoff or tile appears, but it cannot change the
+physical oracle or simulation state.
 
 The globe cutout is projected in the site's local tangent chart at the crop's
 border datum. Its inner edge is split at authored DEM postings. The generated
