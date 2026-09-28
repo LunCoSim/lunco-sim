@@ -185,12 +185,14 @@ pub struct LoadedPolicy {
     pub policy_file: String,
 }
 
-/// The resolved application bootstrap and the policy sources it receives.
+/// A resolved startup function and its manifest-selected policy sources.
+/// Application startup selection receives hook identities; Twin startup
+/// receives its full resolved policy records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedPolicyBundle {
-    /// The startup function that receives [`policies`](Self::policies), when
-    /// this is a manifest with a startup section. Twin manifests may omit it
-    /// when they contain no policy overrides.
+    /// The startup function that selects or installs policies when this is a
+    /// manifest with a startup section. Twin manifests may omit it when they
+    /// contain no policy overrides.
     pub startup: Option<LoadedStartup>,
     /// Policy source files selected by this manifest.
     pub policies: Vec<LoadedPolicy>,

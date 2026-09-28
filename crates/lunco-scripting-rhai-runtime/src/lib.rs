@@ -46,6 +46,7 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
         {
             app.add_plugins(lunco_scripting_rhai_world::source_asset::RhaiSourceAssetPlugin);
         }
+        lunco_scripting_rhai_world::policy::prepare_application_policies_offthread(app);
         lunco_scripting_rhai_world::tool_libs::register_native_builtins();
         app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>()
             .init_resource::<lunco_scripting_rhai_world::policy::ScriptedPolicyRegistry>()

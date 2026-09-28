@@ -63,6 +63,18 @@ when their owning Twin closes. Reuse authored Rhai source classifications for
 the same manifest and policy revision; asset-content changes do not require a
 second classification pass.
 
+Application policy startup has separate Tracy spans for
+`application_policy_source_prepare_offthread`,
+`application_policy_compile_offthread`,
+`application_policy_prestartup_wait`, and
+`application_policy_activation`. Preparation starts during runtime plugin
+construction; the compile span includes authored installer-order selection.
+`PreStartup` validates that typed order and publishes the prepared hooks before
+Startup consumers. Keep source text and callables in the Rust preparation
+bundle; the application selector receives hook identities only. Attribute
+worker time and residual PreStartup wait separately before changing policy
+lifecycle ordering.
+
 Read-only USD projectors use `CanonicalStages::reader_for` or
 `reader_for_entity`: generation-zero reads consume the worker-prepared plan, and
 later authored generations consume the live canonical stage. Do not call
