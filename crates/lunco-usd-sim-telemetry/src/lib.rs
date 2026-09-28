@@ -19,7 +19,7 @@ use lunco_signal::{SignalMeta, SignalPresentation, SignalRef, SignalRegistry, Si
 use lunco_telemetry::TelemetrySettings;
 use lunco_time::MissionClock;
 use std::borrow::Cow;
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 
 use lunco_usd_bevy_scene::UsdPrimPath;
 
@@ -80,6 +80,7 @@ fn retain_physics_telemetry(
     mut removed_bodies: RemovedComponents<RigidBody>,
     mut removed_wheels: RemovedComponents<WheelRaycast>,
     mut sample_buffer: Local<Vec<PhysicsSample>>,
+    mut queued_signal_sources: Local<HashSet<Entity>>,
     sources: Query<(), Or<(With<RigidBody>, With<WheelRaycast>)>>,
     bodies: Query<
         (
@@ -88,6 +89,7 @@ fn retain_physics_telemetry(
             Option<&LinearVelocity>,
             Option<&AngularVelocity>,
             Option<&GlobalEntityId>,
+            Option<&SignalSource>,
         ),
         With<RigidBody>,
     >,
@@ -109,8 +111,10 @@ fn retain_physics_telemetry(
         &Suspension,
         &avian3d::prelude::RayHits,
         Option<&GlobalEntityId>,
+        Option<&SignalSource>,
     )>,
 ) {
+    queued_signal_sources.clear();
     let Some(settings) = settings else {
         state.previous.clear();
         state.next_sample_time = None;
@@ -196,7 +200,7 @@ fn retain_physics_telemetry(
     // pass without walking every retained history.
     let mut channel_count = signals.scalar_count();
 
-    for (entity, prim, linear, angular, global_owner) in &bodies {
+    for (entity, prim, linear, angular, global_owner, signal_source) in &bodies {
         let metadata_dirty = state
             .metadata_group_paths
             .get(&entity)
@@ -502,12 +506,14 @@ fn retain_physics_telemetry(
             &mut channel_count,
             &mut state.metadata,
             metadata_dirty,
-        ) {
+        ) && signal_source.is_none()
+            && queued_signal_sources.insert(entity)
+        {
             commands.entity(entity).try_insert(SignalSource);
         }
     }
 
-    for (entity, prim, wheel, suspension, hits, global_owner) in &wheels {
+    for (entity, prim, wheel, suspension, hits, global_owner, signal_source) in &wheels {
         let metadata_dirty = state
             .metadata_group_paths
             .get(&entity)
@@ -571,7 +577,9 @@ fn retain_physics_telemetry(
             &mut channel_count,
             &mut state.metadata,
             metadata_dirty,
-        ) {
+        ) && signal_source.is_none()
+            && queued_signal_sources.insert(entity)
+        {
             commands.entity(entity).try_insert(SignalSource);
         }
     }
@@ -628,6 +636,7 @@ impl PhysicsSignalName {
 struct CachedPhysicsSignal {
     signal: SignalRef,
     metadata: Option<SignalMeta>,
+    global_owner: Option<GlobalEntityId>,
 }
 
 /// Borrowed static presentation facts for a sample; owned labels are built only
@@ -757,36 +766,37 @@ fn retain_samples(
             continue;
         }
         let key = (entity, sample.name);
-        if let Entry::Vacant(entry) = metadata.entry(key) {
-            let signal = SignalRef::new(entity, sample.name.as_path().into_owned());
-            let known = signals.scalar_history(&signal).is_some();
-            if !known && *channel_count >= settings.max_channels {
-                warn_once!(
-                    "physics telemetry: max_channels ({}) reached; additional state is not retained",
-                    settings.max_channels
-                );
-                continue;
+        let (cached, known) = match metadata.entry(key) {
+            Entry::Occupied(entry) => {
+                let cached = entry.into_mut();
+                let known = signals.scalar_history(&cached.signal).is_some();
+                if !physics_channel_allowed(known, *channel_count, settings) {
+                    continue;
+                }
+                (cached, known)
             }
-            entry.insert(CachedPhysicsSignal {
-                signal,
-                metadata: None,
-            });
-        }
-        let Some(cached) = metadata.get_mut(&key) else {
-            warn_once!("physics telemetry channel cache entry is unavailable");
-            continue;
+            Entry::Vacant(entry) => {
+                let signal = SignalRef::new(entity, sample.name.as_path().into_owned());
+                let known = signals.scalar_history(&signal).is_some();
+                if !physics_channel_allowed(known, *channel_count, settings) {
+                    continue;
+                }
+                (
+                    entry.insert(CachedPhysicsSignal {
+                        signal,
+                        metadata: None,
+                        global_owner: None,
+                    }),
+                    known,
+                )
+            }
         };
         let signal = &cached.signal;
-        let known = signals.scalar_history(signal).is_some();
-        if !known && *channel_count >= settings.max_channels {
-            warn_once!(
-                "physics telemetry: max_channels ({}) reached; additional state is not retained",
-                settings.max_channels
-            );
-            continue;
-        }
         if let Some(owner) = global_owner {
-            signals.associate_global_owner(signal, owner);
+            if cached.global_owner != Some(owner) {
+                signals.associate_global_owner(signal, owner);
+                cached.global_owner = Some(owner);
+            }
         }
         if metadata_dirty || cached.metadata.is_none() {
             let signal_meta = SignalMeta {
@@ -815,6 +825,22 @@ fn retain_samples(
         }
     }
     retained
+}
+
+#[inline]
+fn physics_channel_allowed(
+    known: bool,
+    channel_count: usize,
+    settings: &TelemetrySettings,
+) -> bool {
+    if !known && channel_count >= settings.max_channels {
+        warn_once!(
+            "physics telemetry: max_channels ({}) reached; additional state is not retained",
+            settings.max_channels
+        );
+        return false;
+    }
+    true
 }
 
 #[cfg(test)]

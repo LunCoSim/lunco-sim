@@ -62,6 +62,9 @@ manifest scans can overlap, but commit in discovery order and discard results
 when their owning Twin closes. Reuse authored Rhai source classifications for
 the same manifest and policy revision; asset-content changes do not require a
 second classification pass.
+Application session metadata such as recents follows the same boundary:
+load, normalize, and persist it on workers, merge typed results on the app
+schedule, serialize writes, and finish the final write during shutdown.
 
 For Modelica startup, separate Rumoca compile time, prepared-solve cache lookup,
 `lower_for_live`, and ordered result commit. When equivalent requests share the
@@ -428,7 +431,11 @@ type lookup for every prim.
 
 For fixed-step telemetry, keep static channel-presentation facts borrowed in
 the per-sample path and allocate their owned signal metadata only when that
-channel's metadata is first created or changes.
+channel's metadata is first created or changes. Reuse one `HashMap::entry` for
+each sample's cached identity lookup and mutation, and update its global-owner
+association only when the owner identity changes. Add the shared `SignalSource`
+owner marker only when the entity first retains a sample; its removal observer
+owns history cleanup, so later batches do not need to queue marker writes.
 
 Dependent USD-stage refresh is owner work behind `sync_twin_overlays`. Snapshot
 the base/runtime revisions, serialize each persistent source snapshot once on

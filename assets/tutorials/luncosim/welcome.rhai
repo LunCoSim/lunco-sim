@@ -31,7 +31,7 @@ fn on_event(me, evt, ctx) {
 
     if this.i >= s.len() {
         end_tour();
-        notify_kind("UI review complete — next is View, Build & Lunica", "success");
+        notify_kind("UI review complete — next is View, Build, Editor & Lunica", "success");
         emit("MISSION_COMPLETE", 0);
     } else { coach_step(s, this.i); }
 }

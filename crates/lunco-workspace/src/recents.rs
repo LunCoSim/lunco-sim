@@ -18,7 +18,7 @@ pub const MAX_RECENT_FILES: usize = 20;
 /// entries retain a lexical absolute/relative spelling with `.` and `..`
 /// resolved, so cleanup remains deterministic without inventing a filesystem
 /// identity for a file that is no longer present.
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Recents {
     /// Recent Twin folders. Capped at [`MAX_RECENT_TWINS`].
     pub twin_paths: Vec<PathBuf>,
