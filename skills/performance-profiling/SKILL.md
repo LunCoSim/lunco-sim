@@ -456,6 +456,11 @@ and target-plan identity before opening the live stage and committing the plan.
 Measure serialization and plan preparation separately from the live-stage
 build, reset owners, and visual projection; do not move the thread-affine stage
 across the worker boundary or let completion order select a commit.
+For a first-mounted document with a non-empty view layer, profile
+`view_ops_since_source_baseline` separately from the global operation journal.
+The initial recipe already contains base and runtime layers; only the bounded
+view suffix needs replay, while an expired view suffix still requires a full
+composed-source rebuild.
 
 For `project_usd_policies`, a cold cache can use the worker-prepared plan as its
 baseline only when every `UsdSceneChangeBatch` from generation zero to the live
