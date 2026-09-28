@@ -86,6 +86,19 @@ already-indexed Twin file inventory, avoiding a second recursive filesystem
 walk during activation; only indexed TOML candidates and their declared Rhai
 sources are read through the asset/storage layer.
 
+On native hosts, the indexed candidate paths cross the shared bounded
+`AsyncWorkAdmission` queue for manifest/source reads and parsing. The scripting
+owner validates the active Twin id, root, and operation before activating that
+typed bundle in `PreUpdate`'s `Lifecycle` lane. A `TwinAssetMounted` policy plan
+for the active Twin waits for that activation; the mounted-root event and its
+other consumers remain immediate. Closing or switching Twins cancels queued
+preparation and fences already-running results. Native preparation holds the
+Twin's `SimulationProgress` key until the policy bundle and its lifecycle hook
+are committed, so the first authoritative tick and full-readiness result cannot
+precede policy activation while the UI remains available. Browser builds
+currently keep their WebStorage-backed synchronous read path because the shared
+queue has no browser worker transport.
+
 The Rhai policy bootstrap runs in `PreStartup`, before startup systems consume
 authored policies. For example, rendering quality is owned by the
 `lunco-render` seam: `render.quality_profile(id: String) -> Map` supplies the

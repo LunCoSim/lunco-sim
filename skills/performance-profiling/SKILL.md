@@ -54,6 +54,15 @@ when their owning Twin closes. Reuse authored Rhai source classifications for
 the same manifest and policy revision; asset-content changes do not require a
 second classification pass.
 
+For Twin-open stalls, profile the active Twin policy loader separately from
+policy activation. Native manifest and Rhai source reads should run through
+bounded `AsyncWorkAdmission`; `twin_policy_source_prepare_offthread` measures
+that preparation and `twin_policy_activate` marks the lifecycle-bound commit.
+Verify that stale completions are discarded after a Twin switch and that the
+active `assets_mounted` plan and first authoritative tick wait for activation,
+with the app/UI schedule continuing. Browser builds still use synchronous
+WebStorage reads because they do not have a worker transport.
+
 One-shot `RunRhai` and tool callbacks share the prepared `ScenarioDriver`
 engine. When profiling a callback stall, separate one-time startup/prelude or
 tool-generation refresh from request execution; do not rebuild the engine for

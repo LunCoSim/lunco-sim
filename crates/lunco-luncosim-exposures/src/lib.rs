@@ -655,6 +655,9 @@ fn simulation_progress_facts(
                     lunco_core_runtime::SimulationProgressOwner::ScriptPreparation => {
                         "ScriptPreparation"
                     }
+                    lunco_core_runtime::SimulationProgressOwner::TwinPolicyPreparation => {
+                        "TwinPolicyPreparation"
+                    }
                 };
                 HookValue::map([
                     ("owner", HookValue::str(owner)),

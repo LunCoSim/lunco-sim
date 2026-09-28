@@ -1494,9 +1494,9 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
     }
 
     /// Run each compiled program's one-shot presentation preparation in the
-    /// Twin visualization cycle. Scene/reference/document/terrain preparation
-    /// remains a prerequisite; Modelica preparation is independent and does
-    /// not hold this visual path.
+    /// Twin visualization cycle. Scene/reference/document/terrain/Twin-policy
+    /// preparation remains a prerequisite; Modelica preparation is independent
+    /// and does not hold this visual path.
     pub fn run_visualization(world: &mut World, language: ScriptLanguage) {
         if !world
             .get_resource::<ScenarioExecutionGate>()
@@ -1517,6 +1517,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                             | lunco_core_runtime::SimulationProgressOwner::SceneReferences
                             | lunco_core_runtime::SimulationProgressOwner::TerrainPreparation
                             | lunco_core_runtime::SimulationProgressOwner::DocumentPreparation
+                            | lunco_core_runtime::SimulationProgressOwner::TwinPolicyPreparation
                     )
                 })
             });

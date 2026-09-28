@@ -54,6 +54,8 @@ pub enum AsyncWorkKind {
     ModelicaNetworkSynthesis,
     /// Compile a Rhai scenario source revision.
     RhaiCompilation,
+    /// Read and parse an indexed Twin policy source set.
+    TwinPolicyPreparation,
     /// Analyze a SysML source revision.
     SysmlAnalysis,
     /// Prepare a USD source, recipe, or immutable projection plan revision.

@@ -49,6 +49,8 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
         lunco_scripting_rhai_world::tool_libs::register_native_builtins();
         app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>()
             .init_resource::<lunco_scripting_rhai_world::policy::ScriptedPolicyRegistry>()
+            .init_resource::<lunco_scripting_rhai_world::policy::PendingTwinPolicyLoad>()
+            .init_resource::<lunco_scripting_rhai_world::policy::PendingTwinAssetMounted>()
             .init_resource::<lunco_scripting_rhai_world::policy::PendingTwinPolicyCommands>()
             .init_resource::<lunco_scripting_rhai_world::world_bridge::PendingWorldScripts>()
             .init_resource::<lunco_scripting_rhai_world::world_bridge::WorldScriptExecutionLimits>()
@@ -66,6 +68,11 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
         .add_observer(lunco_scripting_rhai_world::policy::sync_policies_on_twin_added)
         .add_observer(lunco_scripting_rhai_world::policy::plan_twin_asset_loading)
         .add_observer(lunco_scripting_rhai_world::policy::wind_down_policies_on_twin_closed)
+        .add_systems(
+            PreUpdate,
+            lunco_scripting_rhai_world::policy::poll_pending_twin_policy_load
+                .in_set(lunco_core::RuntimeCycleSet::Lifecycle),
+        )
         .register_deferred_command::<commands::RunRhai>()
         .register_deferred_command::<commands::RunRhaiTool>()
         .register_deferred_command::<commands::RunRhaiToolHook>()

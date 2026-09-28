@@ -524,21 +524,46 @@ pub fn active_policy_bundle() -> Result<LoadedPolicyBundle, String> {
     }
 }
 
-/// Load the active Twin's optional policy set and its separate startup function.
+/// Indexed paths needed to prepare an active Twin's optional policy set.
 ///
-/// Twin policy sources are selected by the uniquely marked `scope = "twin"`
-/// manifest in the indexed Twin file inventory. No application defaults are
-/// substituted here: a Twin with no policy manifest simply contributes no
-/// overrides. Application code decides whether and how to layer the returned
-/// Twin bundle over the application bundle.
-pub fn twin_policy_set(twin: &lunco_twin::Twin) -> Result<Option<LoadedPolicyBundle>, String> {
-    let root = &twin.root;
-    let mut files = Vec::new();
-    for entry in twin.files() {
-        if !is_indexed_policy_candidate_path(&entry.relative_path) {
-            continue;
-        }
-        let path = root.join(&entry.relative_path);
+/// The snapshot contains only policy-manifest candidates, not the Twin's full
+/// file inventory, so it can cross the worker boundary without copying every
+/// indexed path.
+#[derive(Clone, Debug)]
+pub struct TwinPolicySetInputs {
+    root: PathBuf,
+    candidate_paths: Vec<PathBuf>,
+}
+
+impl TwinPolicySetInputs {
+    /// Whether the indexed Twin contains no TOML policy candidates.
+    pub fn is_empty(&self) -> bool {
+        self.candidate_paths.is_empty()
+    }
+}
+
+/// Snapshot policy-manifest candidate paths from the already-indexed Twin.
+pub fn twin_policy_set_inputs(twin: &lunco_twin::Twin) -> TwinPolicySetInputs {
+    TwinPolicySetInputs {
+        root: twin.root.clone(),
+        candidate_paths: twin
+            .files()
+            .iter()
+            .filter(|entry| is_indexed_policy_candidate_path(&entry.relative_path))
+            .map(|entry| entry.relative_path.clone())
+            .collect(),
+    }
+}
+
+/// Read and parse the active Twin's optional policy set from an indexed input
+/// snapshot. Call this on a worker; policy activation remains in the scripting
+/// owner's lifecycle boundary. A Twin with no policy manifest contributes no
+/// overrides.
+pub fn twin_policy_set(inputs: TwinPolicySetInputs) -> Result<Option<LoadedPolicyBundle>, String> {
+    let root = inputs.root;
+    let mut files = Vec::with_capacity(inputs.candidate_paths.len());
+    for relative_path in inputs.candidate_paths {
+        let path = root.join(relative_path);
         let source = lunco_storage::read_text_file_sync(&path)
             .map_err(|error| format!("cannot read asset {}: {error}", path.display()))?;
         files.push((path, source));
@@ -575,7 +600,7 @@ pub fn twin_policy_set(twin: &lunco_twin::Twin) -> Result<Option<LoadedPolicyBun
     let policy_root = manifest_path
         .parent()
         .ok_or_else(|| format!("policy manifest {} has no parent", manifest_path.display()))?;
-    let prefix = relative_asset_prefix(root, &manifest_path)?;
+    let prefix = relative_asset_prefix(&root, &manifest_path)?;
     let bundle = load_policy_bundle(manifest, Some(policy_root), &manifest_path, &prefix)?;
     if bundle.startup.is_none() && !bundle.policies.is_empty() {
         return Err(format!(

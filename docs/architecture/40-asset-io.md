@@ -51,6 +51,12 @@ path safety, then request the selected asset through `AssetServer`; domain
 loaders must not scan Twin folders or select manifest paths in Rust. The asset
 layer still owns the shared index and `twin://` resolution.
 
+The indexed Twin policy loader follows the same inventory boundary and uses
+bounded worker admission on native. Its activation
+and lifecycle hooks remain on the scripting owner's lifecycle lane; see
+[`hook-policies.md`](hook-policies.md#runtime-policy-selection) for its close,
+switch, and browser behavior.
+
 Known engine layout is owned by `lunco-assets-core` as well. Consumers use its
 helpers for Modelica sources, scene tests, shaders, and the runtime manifest
 instead of joining `assets`, `models`, `scenes`, `shaders`, or

@@ -82,6 +82,17 @@ These CPU jobs no longer enter the frame's Bevy task queue directly. Selection,
 mesh upload, visibility, and residency changes still use the `Update`
 visualization cycle.
 
+Active Twin policy manifest and source reads use the shared bounded admission
+queue on native hosts. Only immutable indexed paths cross to the worker; the
+scripting lifecycle owner validates Twin identity, root, and operation before
+committing the typed result. The active Twin's `assets_mounted` policy plan
+waits for activation, while `TwinAssetMounted` remains immediate for other
+consumers. A `TwinPolicyPreparation` progress hold prevents the first
+authoritative tick and full-readiness result from racing ahead of that commit;
+the app/UI schedule continues. Browser builds retain the WebStorage read path
+until a browser worker transport is available; see
+[`hook-policies.md`](hook-policies.md).
+
 Modelica runtime telemetry is event-gated after worker responses and on document
 metadata or telemetry-settings changes. Unchanged render frames do not rescan its
 variables; each recorded sample still carries the solver's landed model time.

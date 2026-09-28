@@ -507,6 +507,8 @@ pub enum SimulationProgressOwner {
     ModelicaPreparation,
     /// Rhai parse/import preparation.
     ScriptPreparation,
+    /// Active Twin Rhai policy source preparation.
+    TwinPolicyPreparation,
 }
 
 /// Stable owner and operation identity for one simulation-progress hold.
@@ -559,6 +561,14 @@ impl SimulationProgressKey {
         Self {
             owner: SimulationProgressOwner::UsdDocumentProjection,
             operation_id: document_id,
+        }
+    }
+
+    /// Key active Twin policy preparation to its owner-allocated operation.
+    pub const fn twin_policy_preparation(operation_id: u64) -> Self {
+        Self {
+            owner: SimulationProgressOwner::TwinPolicyPreparation,
+            operation_id,
         }
     }
 }

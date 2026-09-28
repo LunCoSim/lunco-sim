@@ -13,13 +13,17 @@
 //! derived active cache.
 
 use bevy::prelude::*;
+use lunco_core_runtime::{
+    AsyncWorkAdmission, AsyncWorkKey, AsyncWorkKind, AsyncWorkPriority, SimulationProgress,
+    SimulationProgressKey,
+};
 use lunco_doc_bevy::JournalResource;
 use lunco_hooks::{HookValue, ScriptHook};
 use lunco_twin_journal::MergeStrategy;
 use rhai::{Dynamic, Engine, ImmutableString};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// The reserved policy seam that drives the journal's convergent merge order.
@@ -130,6 +134,61 @@ struct TwinPolicyCommand {
 /// Commands waiting for the generic typed command bridge to apply them.
 #[derive(Resource, Default)]
 pub struct PendingTwinPolicyCommands(Vec<TwinPolicyCommand>);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TwinPolicyLifecycleEvent {
+    Startup,
+    Reload,
+}
+
+impl TwinPolicyLifecycleEvent {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Startup => "startup",
+            Self::Reload => "reload",
+        }
+    }
+}
+
+struct TwinPolicyLoadCompletion {
+    twin: lunco_workspace::TwinId,
+    root: PathBuf,
+    operation: u64,
+    result: Result<Option<lunco_assets_runtime::scripting::LoadedPolicyBundle>, String>,
+}
+
+struct ActiveTwinPolicyLoad {
+    twin: lunco_workspace::TwinId,
+    root: PathBuf,
+    operation: u64,
+    progress_key: SimulationProgressKey,
+    event: TwinPolicyLifecycleEvent,
+    notify_mounted_after_ready: bool,
+    inputs: Option<lunco_assets_runtime::scripting::TwinPolicySetInputs>,
+    work_key: Option<AsyncWorkKey>,
+    capacity_revision: Option<u64>,
+}
+
+/// One active Twin policy-source preparation through shared bounded admission.
+#[derive(Resource, Default)]
+pub struct PendingTwinPolicyLoad {
+    active: Option<ActiveTwinPolicyLoad>,
+    next_operation: u64,
+    completions: Arc<Mutex<Vec<TwinPolicyLoadCompletion>>>,
+}
+
+impl PendingTwinPolicyLoad {
+    fn allocate_operation(&mut self) -> Option<u64> {
+        let operation = self.next_operation.checked_add(1)?;
+        self.next_operation = operation;
+        Some(operation)
+    }
+}
+
+/// The active Twin's asset-mounted event waits here while its authored policy
+/// sources are being prepared off-thread.
+#[derive(Resource, Default)]
+pub struct PendingTwinAssetMounted(Option<lunco_assets_runtime::TwinAssetMounted>);
 
 /// The derived set of active scripted policies on this process.
 #[derive(Resource, Default, Clone)]
@@ -860,11 +919,33 @@ pub fn plan_twin_asset_loading(
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut registry: ResMut<ScriptedPolicyRegistry>,
     mut pending: ResMut<PendingTwinPolicyCommands>,
+    pending_load: Res<PendingTwinPolicyLoad>,
+    mut pending_mount: ResMut<PendingTwinAssetMounted>,
 ) {
     let twin_id = trigger.event().twin;
     let Some(workspace) = workspace.as_deref() else {
         return;
     };
+    let policy_pending = pending_load
+        .active
+        .as_ref()
+        .is_some_and(|loading| loading.twin == twin_id);
+    if workspace.active_twin == Some(twin_id)
+        && (policy_pending || registry.active_twin != Some(twin_id))
+    {
+        pending_mount.0 = Some(trigger.event().clone());
+        return;
+    }
+    plan_twin_asset_loading_for(trigger.event(), workspace, &mut registry, &mut pending);
+}
+
+fn plan_twin_asset_loading_for(
+    mounted: &lunco_assets_runtime::TwinAssetMounted,
+    workspace: &lunco_workspace::WorkspaceResource,
+    registry: &mut ScriptedPolicyRegistry,
+    pending: &mut PendingTwinPolicyCommands,
+) {
+    let twin_id = mounted.twin;
     let Some(twin) = workspace.twin(twin_id) else {
         return;
     };
@@ -892,7 +973,7 @@ pub fn plan_twin_asset_loading(
     );
     let context = HookValue::map([
         ("twin_id", HookValue::Int(twin_id.raw() as i64)),
-        ("name", HookValue::str(trigger.event().name.clone())),
+        ("name", HookValue::str(mounted.name.clone())),
         ("root", HookValue::str(twin.root.display().to_string())),
         (
             "active",
@@ -1714,15 +1795,16 @@ pub fn load_application_policies(
     report
 }
 
-/// Load only the active Twin's optional policy layer.
-pub fn load_twin_policies(
-    twin: &lunco_workspace::Twin,
+/// Commit a worker-prepared Twin policy layer on the scripting lifecycle owner.
+fn activate_twin_policies(
+    root: &Path,
+    bundle: Result<Option<lunco_assets_runtime::scripting::LoadedPolicyBundle>, String>,
     registry: &mut ScriptedPolicyRegistry,
     journal: Option<&JournalResource>,
 ) -> PolicyLoadReport {
     let previous = registry.policies.clone();
-    let twin_bundle = match lunco_assets_runtime::scripting::twin_policy_set(twin) {
-        Ok(twin) => twin,
+    let twin_bundle = match bundle {
+        Ok(bundle) => bundle,
         Err(error) => {
             let report = report_load_error("Twin", error, registry, journal);
             if registry.policies != previous {
@@ -1736,7 +1818,7 @@ pub fn load_twin_policies(
         bundle
     });
     let report = report_for_twin_policies(
-        format!("Twin {}", twin.root.display()),
+        format!("Twin {}", root.display()),
         twin_bundle,
         registry,
         journal,
@@ -1760,8 +1842,15 @@ pub fn load_application_policies_on_startup(
 pub fn sync_policies_on_twin_added(
     trigger: On<lunco_workspace::TwinAdded>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     mut registry: ResMut<ScriptedPolicyRegistry>,
+    mut pending_load: ResMut<PendingTwinPolicyLoad>,
+    mut admission: ResMut<AsyncWorkAdmission>,
+    mut progress: ResMut<SimulationProgress>,
+    mut pending_mount: ResMut<PendingTwinAssetMounted>,
+    mut pending_commands: ResMut<PendingTwinPolicyCommands>,
     journal: Option<Res<JournalResource>>,
+    mut commands: Commands,
     #[cfg(feature = "native-plugins")] mut native_plugins: ResMut<
         crate::native_plugins::NativeTwinPlugins,
     >,
@@ -1776,8 +1865,82 @@ pub fn sync_policies_on_twin_added(
     let Some(twin) = workspace.twin(twin_id) else {
         return;
     };
+    start_twin_policy_load(
+        twin_id,
+        twin,
+        workspace,
+        false,
+        &mut pending_load,
+        &mut admission,
+        &mut progress,
+        &mut pending_mount,
+        &mut pending_commands,
+        &mut registry,
+        journal.as_deref(),
+        roots.as_deref(),
+        &mut commands,
+        #[cfg(feature = "native-plugins")]
+        &mut native_plugins,
+    );
+}
+
+fn start_twin_policy_load(
+    twin_id: lunco_workspace::TwinId,
+    twin: &lunco_workspace::Twin,
+    workspace: &lunco_workspace::WorkspaceResource,
+    notify_mounted_after_ready: bool,
+    pending_load: &mut PendingTwinPolicyLoad,
+    admission: &mut AsyncWorkAdmission,
+    progress: &mut SimulationProgress,
+    pending_mount: &mut PendingTwinAssetMounted,
+    pending_commands: &mut PendingTwinPolicyCommands,
+    registry: &mut ScriptedPolicyRegistry,
+    journal: Option<&JournalResource>,
+    roots: Option<&lunco_assets_core::twin_source::TwinRoots>,
+    commands: &mut Commands<'_, '_>,
+    #[cfg(feature = "native-plugins")]
+    native_plugins: &mut crate::native_plugins::NativeTwinPlugins,
+) {
+    if let Some(existing) = pending_load.active.as_mut() {
+        if existing.twin == twin_id && existing.root == twin.root {
+            existing.notify_mounted_after_ready |= notify_mounted_after_ready;
+            return;
+        }
+    }
+
+    let Some(operation) = pending_load.allocate_operation() else {
+        if let Some(previous) = pending_load.active.take() {
+            if let Some(key) = previous.work_key {
+                admission.cancel_queued(key);
+            }
+            progress.release(previous.progress_key);
+        }
+        lunco_core::trigger_runtime_error(
+            commands,
+            "twin-policy-operation-exhausted",
+            "Twin policy preparation operation id exhausted",
+        );
+        return;
+    };
+
+    // There is one active request slot. Withdraw an older queued request and
+    // fence any already-dispatched result with the new operation id.
+    if let Some(previous) = pending_load.active.take() {
+        if let Some(key) = previous.work_key {
+            admission.cancel_queued(key);
+        }
+        progress.release(previous.progress_key);
+    }
+    if pending_mount
+        .0
+        .as_ref()
+        .is_some_and(|mounted| mounted.twin != twin_id)
+    {
+        pending_mount.0 = None;
+    }
+
     let event = if registry.active_twin == Some(twin_id) {
-        "reload"
+        TwinPolicyLifecycleEvent::Reload
     } else {
         if let Some(previous_id) = registry.active_twin {
             if let Some(previous) = workspace.twin(previous_id) {
@@ -1792,20 +1955,307 @@ pub fn sync_policies_on_twin_added(
         }
         #[cfg(feature = "native-plugins")]
         native_plugins.unload();
-        "startup"
+        let previous = registry.policies.clone();
+        wind_down_twin_policies(registry, journal);
+        if registry.policies != previous {
+            registry.revision = registry.revision.wrapping_add(1);
+        }
+        registry.active_twin = None;
+        registry.status = registry.application_status.clone();
+        TwinPolicyLifecycleEvent::Startup
     };
+
+    let inputs = lunco_assets_runtime::scripting::twin_policy_set_inputs(twin);
+    if inputs.is_empty() {
+        complete_twin_policy_load(
+            twin_id,
+            twin,
+            workspace,
+            event,
+            notify_mounted_after_ready,
+            Ok(None),
+            registry,
+            journal,
+            roots,
+            pending_mount,
+            pending_commands,
+            commands,
+            #[cfg(feature = "native-plugins")]
+            native_plugins,
+        );
+        return;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (operation, admission);
+        // The browser build has no shared worker dispatcher. Preserve its
+        // existing WebStorage-backed policy loading until a browser worker
+        // transport can own source parsing.
+        let bundle = lunco_assets_runtime::scripting::twin_policy_set(inputs);
+        complete_twin_policy_load(
+            twin_id,
+            twin,
+            workspace,
+            event,
+            notify_mounted_after_ready,
+            bundle,
+            registry,
+            journal,
+            roots,
+            pending_mount,
+            pending_commands,
+            commands,
+            #[cfg(feature = "native-plugins")]
+            native_plugins,
+        );
+        return;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let progress_key = SimulationProgressKey::twin_policy_preparation(operation);
+        progress.acquire(progress_key, "Preparing active Twin policy sources");
+        let active = ActiveTwinPolicyLoad {
+            twin: twin_id,
+            root: twin.root.clone(),
+            operation,
+            progress_key,
+            event,
+            notify_mounted_after_ready,
+            inputs: Some(inputs),
+            work_key: None,
+            capacity_revision: None,
+        };
+        pending_load.active = Some(active);
+        if let Some(active) = pending_load.active.as_mut() {
+            submit_twin_policy_load(active, &pending_load.completions, admission);
+        }
+    }
+}
+
+fn submit_twin_policy_load(
+    active: &mut ActiveTwinPolicyLoad,
+    completions: &Arc<Mutex<Vec<TwinPolicyLoadCompletion>>>,
+    admission: &mut AsyncWorkAdmission,
+) {
+    let Some(inputs) = active.inputs.as_ref().cloned() else {
+        return;
+    };
+    let identity = u128::from(active.twin.raw());
+    let key = AsyncWorkKey::new(
+        AsyncWorkKind::TwinPolicyPreparation,
+        active.twin.raw(),
+        identity,
+        0,
+        active.operation,
+    );
+    let completion_queue = Arc::clone(completions);
+    let twin = active.twin;
+    let root = active.root.clone();
+    let operation = active.operation;
+    let job = move || {
+        let _span = bevy::log::info_span!("twin_policy_source_prepare_offthread").entered();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            lunco_assets_runtime::scripting::twin_policy_set(inputs)
+        }))
+        .unwrap_or_else(|_| Err("Twin policy source preparation panicked".to_owned()));
+        completion_queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(TwinPolicyLoadCompletion {
+                twin,
+                root,
+                operation,
+                result,
+            });
+    };
+
+    let capacity_revision = admission.capacity_revision();
+    match admission.submit(AsyncWorkPriority::SimulationRequired, key, job) {
+        Ok(()) => {
+            active.inputs = None;
+            active.work_key = Some(key);
+            active.capacity_revision = None;
+        }
+        Err(lunco_core_runtime::AsyncWorkRejection::QueueFull) => {
+            active.capacity_revision = Some(capacity_revision);
+        }
+        Err(rejection) => {
+            active.inputs = None;
+            active.capacity_revision = None;
+            let detail = match rejection {
+                lunco_core_runtime::AsyncWorkRejection::DuplicateKey => {
+                    "Twin policy preparation operation was already submitted"
+                }
+                lunco_core_runtime::AsyncWorkRejection::QueueFull => {
+                    "Twin policy preparation queue is full"
+                }
+                lunco_core_runtime::AsyncWorkRejection::NativeDispatcherUnavailable => {
+                    "Twin policy preparation requires a worker transport on this host"
+                }
+            };
+            completions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(TwinPolicyLoadCompletion {
+                    twin,
+                    root: active.root.clone(),
+                    operation: active.operation,
+                    result: Err(detail.to_owned()),
+                });
+        }
+    }
+}
+
+fn complete_twin_policy_load(
+    twin_id: lunco_workspace::TwinId,
+    twin: &lunco_workspace::Twin,
+    workspace: &lunco_workspace::WorkspaceResource,
+    event: TwinPolicyLifecycleEvent,
+    notify_mounted_after_ready: bool,
+    bundle: Result<Option<lunco_assets_runtime::scripting::LoadedPolicyBundle>, String>,
+    registry: &mut ScriptedPolicyRegistry,
+    journal: Option<&JournalResource>,
+    roots: Option<&lunco_assets_core::twin_source::TwinRoots>,
+    pending_mount: &mut PendingTwinAssetMounted,
+    pending_commands: &mut PendingTwinPolicyCommands,
+    commands: &mut Commands<'_, '_>,
+    #[cfg(feature = "native-plugins")]
+    native_plugins: &mut crate::native_plugins::NativeTwinPlugins,
+) {
+    let _span = bevy::log::info_span!("twin_policy_activate").entered();
     #[cfg(feature = "native-plugins")]
     log_native_plugin_report(native_plugins.load_for_twin(twin_id, twin));
-    let report = load_twin_policies(twin, &mut registry, journal.as_deref());
+
+    let report = activate_twin_policies(&twin.root, bundle, registry, journal);
     registry.active_twin = Some(twin_id);
     registry.lifecycle = invoke_twin_lifecycle(
-        event,
+        event.as_str(),
         twin_id,
         &twin.root,
         &report,
         lunco_core::RuntimePhase::Start,
     );
     log_report(&report);
+
+    if pending_mount
+        .0
+        .as_ref()
+        .is_some_and(|mounted| mounted.twin == twin_id)
+    {
+        if let Some(mounted) = pending_mount.0.take() {
+            plan_twin_asset_loading_for(&mounted, workspace, registry, pending_commands);
+        }
+    } else if notify_mounted_after_ready {
+        if let Some(name) = roots.and_then(|roots| roots.name_for_root(&twin.root).ok().flatten()) {
+            commands.trigger(lunco_assets_runtime::TwinAssetMounted {
+                twin: twin_id,
+                name,
+            });
+        }
+    }
+}
+
+/// Commit the active Twin's prepared policy sources at the lifecycle boundary.
+pub fn poll_pending_twin_policy_load(
+    mut pending_load: ResMut<PendingTwinPolicyLoad>,
+    mut admission: ResMut<AsyncWorkAdmission>,
+    mut progress: ResMut<SimulationProgress>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
+    mut registry: ResMut<ScriptedPolicyRegistry>,
+    mut pending_mount: ResMut<PendingTwinAssetMounted>,
+    mut pending_commands: ResMut<PendingTwinPolicyCommands>,
+    journal: Option<Res<JournalResource>>,
+    mut commands: Commands,
+    #[cfg(feature = "native-plugins")] mut native_plugins: ResMut<
+        crate::native_plugins::NativeTwinPlugins,
+    >,
+) {
+    let active_operation = pending_load.active.as_ref().map(|active| active.operation);
+    let Some(operation) = active_operation else {
+        pending_load
+            .completions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        return;
+    };
+    let completion = {
+        let mut completions = pending_load
+            .completions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let completed = completions
+            .iter()
+            .position(|completion| completion.operation == operation)
+            .map(|index| completions.remove(index));
+        completions.retain(|completion| completion.operation == operation);
+        completed
+    };
+    let Some(completion) = completion else {
+        let capacity_revision = admission.capacity_revision();
+        let retry = pending_load.active.as_ref().is_some_and(|active| {
+            active.inputs.is_some() && active.capacity_revision != Some(capacity_revision)
+        });
+        if retry {
+            let completions = Arc::clone(&pending_load.completions);
+            if let Some(active) = pending_load.active.as_mut() {
+                submit_twin_policy_load(active, &completions, &mut admission);
+            }
+        }
+        return;
+    };
+    let Some(loading) = pending_load.active.take() else {
+        return;
+    };
+    if completion.operation != loading.operation
+        || completion.twin != loading.twin
+        || completion.root != loading.root
+    {
+        progress.release(loading.progress_key);
+        lunco_core::trigger_runtime_error(
+            &mut commands,
+            "twin-policy-completion-mismatch",
+            "Twin policy preparation returned a mismatched operation identity",
+        );
+        return;
+    }
+    let Some(workspace) = workspace.as_deref() else {
+        progress.release(loading.progress_key);
+        return;
+    };
+    if workspace.active_twin != Some(loading.twin) {
+        progress.release(loading.progress_key);
+        return;
+    }
+    let Some(twin) = workspace.twin(loading.twin) else {
+        progress.release(loading.progress_key);
+        return;
+    };
+    if twin.root != loading.root {
+        progress.release(loading.progress_key);
+        return;
+    }
+
+    complete_twin_policy_load(
+        loading.twin,
+        twin,
+        workspace,
+        loading.event,
+        loading.notify_mounted_after_ready,
+        completion.result,
+        &mut registry,
+        journal.as_deref(),
+        roots.as_deref(),
+        &mut pending_mount,
+        &mut pending_commands,
+        &mut commands,
+        #[cfg(feature = "native-plugins")]
+        &mut native_plugins,
+    );
+    progress.release(loading.progress_key);
 }
 
 /// Run the active Twin's close policy, then restore the application layer.
@@ -1814,16 +2264,40 @@ pub fn wind_down_policies_on_twin_closed(
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     mut registry: ResMut<ScriptedPolicyRegistry>,
+    mut pending_load: ResMut<PendingTwinPolicyLoad>,
+    mut admission: ResMut<AsyncWorkAdmission>,
+    mut progress: ResMut<SimulationProgress>,
+    mut pending_mount: ResMut<PendingTwinAssetMounted>,
+    mut pending_commands: ResMut<PendingTwinPolicyCommands>,
     journal: Option<Res<JournalResource>>,
     mut commands: Commands,
     #[cfg(feature = "native-plugins")] mut native_plugins: ResMut<
         crate::native_plugins::NativeTwinPlugins,
     >,
 ) {
+    let twin_id = trigger.event().twin;
+    if pending_load
+        .active
+        .as_ref()
+        .is_some_and(|loading| loading.twin == twin_id)
+    {
+        if let Some(loading) = pending_load.active.take() {
+            if let Some(key) = loading.work_key {
+                admission.cancel_queued(key);
+            }
+            progress.release(loading.progress_key);
+        }
+    }
+    if pending_mount
+        .0
+        .as_ref()
+        .is_some_and(|mounted| mounted.twin == twin_id)
+    {
+        pending_mount.0 = None;
+    }
     if !trigger.event().was_active {
         return;
     }
-    let twin_id = trigger.event().twin;
     registry.lifecycle = invoke_twin_lifecycle(
         "close",
         twin_id,
@@ -1833,37 +2307,37 @@ pub fn wind_down_policies_on_twin_closed(
     );
     #[cfg(feature = "native-plugins")]
     native_plugins.unload();
+    let previous = registry.policies.clone();
     wind_down_twin_policies(&mut registry, journal.as_deref());
+    if registry.policies != previous {
+        registry.revision = registry.revision.wrapping_add(1);
+    }
     registry.active_twin = None;
     registry.status = registry.application_status.clone();
-    let next = workspace.as_deref().and_then(|workspace| {
-        workspace
-            .active_twin
-            .and_then(|twin_id| workspace.twin(twin_id).map(|twin| (twin_id, twin)))
-    });
+    let Some(workspace) = workspace.as_deref() else {
+        return;
+    };
+    let next = workspace
+        .active_twin
+        .and_then(|next_twin| workspace.twin(next_twin).map(|twin| (next_twin, twin)));
     if let Some((twin_id, twin)) = next {
-        #[cfg(feature = "native-plugins")]
-        log_native_plugin_report(native_plugins.load_for_twin(twin_id, twin));
-        let root = &twin.root;
-        let report = load_twin_policies(twin, &mut registry, journal.as_deref());
-        registry.active_twin = Some(twin_id);
-        registry.lifecycle = invoke_twin_lifecycle(
-            "startup",
+        start_twin_policy_load(
             twin_id,
-            root,
-            &report,
-            lunco_core::RuntimePhase::Start,
+            twin,
+            workspace,
+            true,
+            &mut pending_load,
+            &mut admission,
+            &mut progress,
+            &mut pending_mount,
+            &mut pending_commands,
+            &mut registry,
+            journal.as_deref(),
+            roots.as_deref(),
+            &mut commands,
+            #[cfg(feature = "native-plugins")]
+            &mut native_plugins,
         );
-        log_report(&report);
-        if let Some(name) = roots
-            .as_deref()
-            .and_then(|roots| roots.name_for_root(root).ok().flatten())
-        {
-            commands.trigger(lunco_assets_runtime::TwinAssetMounted {
-                twin: twin_id,
-                name,
-            });
-        }
     }
 }
 
