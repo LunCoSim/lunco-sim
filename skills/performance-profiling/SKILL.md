@@ -271,6 +271,9 @@ once per dirty metadata batch and resolve all variables through that borrowed
 lookup. Do not call the linear `find_component_by_leaf` scan once per variable;
 steady sample batches should use the session's cached metadata without walking
 the document index.
+Cache each runtime producer's stable `SignalRef` identity for the session and
+borrow it when recording an existing channel. Avoid reconstructing and cloning
+signal paths for every due sample.
 For burst channel publication, keep retention depth as a logical limit and let
 the history buffer grow with recorded samples. Do not reserve every channel's
 full retention window when most new channels contain only their initial sample.

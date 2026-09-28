@@ -759,7 +759,7 @@ fn retain_samples(
             metadata.insert(signal.clone(), signal_meta);
         }
         if signals.record_scalar_at_rate(
-            signal,
+            &signal,
             time,
             sample.value,
             settings.default_rate_hz,

@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use lunco_core::GlobalEntityId;
 use lunco_signal::{SignalMeta, SignalRef, SignalRegistry, SignalSource};
 use lunco_telemetry::TelemetrySettings;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use lunco_doc_bevy::DocumentRegistry;
 #[cfg(test)]
@@ -69,17 +69,21 @@ pub struct RuntimeTelemetrySessions {
 #[derive(Default)]
 struct RuntimeTelemetrySession {
     session_id: u64,
-    signals: HashSet<SignalRef>,
+    signals: HashMap<String, RuntimeSignalCache>,
     document_id: Option<lunco_doc::DocumentId>,
     document_generation: Option<u64>,
     /// Last model-time sample attempted for this solver session. The shared
     /// registry remains the final per-channel authority; this batch cursor
     /// only avoids rebuilding the same variable list between due samples.
     last_sample_time: Option<f64>,
-    /// Metadata is catalog state, not a per-sample value. Cache it by solver
-    /// variable and refresh only when the authored layout or document index
-    /// changes, or when a variable is first observed.
-    metadata: HashMap<String, SignalMeta>,
+}
+
+struct RuntimeSignalCache {
+    signal: SignalRef,
+    retained: bool,
+    /// Metadata is catalog state, not a per-sample value. Refresh it only when
+    /// the authored layout or document index changes, or on first observation.
+    metadata: Option<SignalMeta>,
 }
 
 /// Retain the current variables of every live Modelica solver.
@@ -132,14 +136,14 @@ pub fn retain_modelica_runtime_state(
         let document = document_host.map(|host| (model.document, host.generation()));
         let session = sessions.sessions.entry(entity).or_default();
         if session.session_id != model.session_id {
-            for signal in session.signals.drain() {
-                signals.clear_history(&signal);
+            for cached in session.signals.values().filter(|cached| cached.retained) {
+                signals.clear_history(&cached.signal);
             }
+            session.signals.clear();
             session.session_id = model.session_id;
             session.document_id = None;
             session.document_generation = None;
             session.last_sample_time = None;
-            session.metadata.clear();
         }
 
         let metadata_dirty = session.document_id != document.map(|(id, _)| id)
@@ -172,8 +176,39 @@ pub fn retain_modelica_runtime_state(
                 continue;
             }
 
-            let signal = SignalRef::new(entity, name.clone());
-            let known = signals.scalar_history(&signal).is_some();
+            let (cached, known) = match session.signals.get_mut(name) {
+                Some(cached) => {
+                    let known = signals.scalar_history(&cached.signal).is_some();
+                    (cached, known)
+                }
+                None => {
+                    let signal = SignalRef::new(entity, name.as_str());
+                    let known = signals.scalar_history(&signal).is_some();
+                    if !known && channel_count >= settings.max_channels {
+                        warn_once!(
+                            "modelica telemetry: max_channels ({}) reached; additional runtime variables are not retained",
+                            settings.max_channels
+                        );
+                        continue;
+                    }
+                    session.signals.insert(
+                        name.clone(),
+                        RuntimeSignalCache {
+                            signal,
+                            retained: false,
+                            metadata: None,
+                        },
+                    );
+                    (
+                        session
+                            .signals
+                            .get_mut(name)
+                            .expect("runtime signal identity was just retained"),
+                        known,
+                    )
+                }
+            };
+            let signal = &cached.signal;
             if !known && channel_count >= settings.max_channels {
                 warn_once!(
                     "modelica telemetry: max_channels ({}) reached; additional runtime variables are not retained",
@@ -182,7 +217,7 @@ pub fn retain_modelica_runtime_state(
                 continue;
             }
             if let Some(owner) = global_owner {
-                signals.associate_global_owner(&signal, *owner);
+                signals.associate_global_owner(signal, *owner);
             }
 
             // Generated-document metadata can become available after the
@@ -190,31 +225,32 @@ pub fn retain_modelica_runtime_state(
             // Refresh metadata independently of sampling, but only when the
             // authoritative document/layout inputs changed or this variable
             // has not been described in this session yet.
-            if metadata_dirty || !session.metadata.contains_key(name) {
+            if metadata_dirty || cached.metadata.is_none() {
                 if component_names.is_none() {
                     component_names =
                         document_host.map(|host| host.document().index().component_name_lookup());
                 }
                 let meta =
                     model_signal_meta(component_names.as_ref(), model, layout.as_deref(), name);
-                if session.metadata.get(name) != Some(&meta) {
+                if cached.metadata.as_ref() != Some(&meta) {
                     signals.update_meta(signal.clone(), meta.clone());
                 }
-                session.metadata.insert(name.clone(), meta);
+                cached.metadata = Some(meta);
             }
 
             // The shared signal registry owns due-time and time-reversal for
             // every runtime producer. Modelica histories are complete at the
             // recording rate; notification deadband must not remove elapsed
             // simulation-time samples from a graph.
-            if signals.record_scalar_at_rate(
-                signal.clone(),
+            let retained = signals.record_scalar_at_rate(
+                signal,
                 model.current_time,
                 value,
                 settings.default_rate_hz,
                 settings.default_retention,
-            ) {
-                session.signals.insert(signal);
+            );
+            if retained {
+                cached.retained = true;
                 retained_any = true;
                 if !known {
                     channel_count += 1;
