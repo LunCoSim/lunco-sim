@@ -499,19 +499,44 @@ pub fn open_doc_stage(data: &sdf::Data) -> Result<Stage> {
     populate_doc_root(stage, data)
 }
 
-/// Compose current authored opinions with an already-loaded dependency closure.
-/// The resolver owns dependency interpretation; only the root layer is replaced.
-pub fn open_doc_stage_with_recipe(
-    data: &sdf::Data,
+/// Open the current document layers over the resolved authored root.
+///
+/// The document's `runtime` and `view` data are overlays, not edits to the base
+/// layer. Keep them as USD session-layer opinions when composing references and
+/// variants; flattening them into the root changes composition strength and can
+/// hide children contributed by a selected variant.
+pub fn open_doc_stage_with_layers(
+    base: &sdf::Data,
+    runtime: &sdf::Data,
+    view: &sdf::Data,
     recipe: &lunco_usd_compose::recipe::StageRecipe,
 ) -> Result<Stage> {
-    let stage = Stage::builder()
-        .resolver(lunco_usd_compose::LuncoUsdResolver::new(
-            recipe.bytes.clone(),
-        ))
-        .in_memory(recipe.root_id.as_str())
-        .map_err(|e| anyhow!("create composed document stage: {e}"))?;
-    populate_doc_root(stage, data)
+    let root_id = recipe.root_id.clone();
+    let root_anchor = ResolvedPath::new(&root_id);
+    let runtime_asset = ".__luncosim_document_runtime__.usda";
+    let view_asset = ".__luncosim_document_view__.usda";
+    let runtime_id = lunco_usd_compose::canonicalize_at(runtime_asset, Some(&root_anchor));
+    let view_id = lunco_usd_compose::canonicalize_at(view_asset, Some(&root_anchor));
+
+    let mut view_layer = view.clone();
+    let pseudo_root = view_layer
+        .spec_mut(&SdfPath::abs_root())
+        .ok_or_else(|| anyhow!("document view layer has no pseudo-root"))?;
+    pseudo_root.add(
+        sdf::FieldKey::SubLayers.as_str(),
+        sdf::Value::StringVec(vec![runtime_asset.to_owned()]),
+    );
+
+    let mut bytes = recipe.bytes.clone();
+    bytes.insert(root_id.clone(), data_to_usda(base)?.into_bytes());
+    bytes.insert(runtime_id, data_to_usda(runtime)?.into_bytes());
+    bytes.insert(view_id.clone(), data_to_usda(&view_layer)?.into_bytes());
+
+    Stage::builder()
+        .resolver(lunco_usd_compose::LuncoUsdResolver::new(bytes))
+        .session_layer(view_id.clone())
+        .open(&root_id)
+        .map_err(|error| anyhow!("create layered document stage: {error}"))
 }
 
 fn populate_doc_root(stage: Stage, data: &sdf::Data) -> Result<Stage> {

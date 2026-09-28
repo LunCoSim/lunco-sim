@@ -87,7 +87,6 @@ use lunco_api::{
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
-use lunco_usd_authoring::author::open_doc_stage;
 use lunco_usd_avian_reader::collider::{
     AuthoredColliderGeometry, ColliderGeometryPart, authored_collider_geometry_from_usd,
 };
@@ -1230,7 +1229,7 @@ fn execute_query_paths(
             format!("QueryUsdPrim: document {doc} is not open"),
         ));
     };
-    let stage = open_doc_stage(document.composed_arc().as_ref()).map_err(|error| {
+    let stage = document.open_composed_stage().map_err(|error| {
         ApiQueryError::new(
             ApiErrorCode::InternalError,
             format!("QueryUsdPrim: document stage could not be opened: {error}"),

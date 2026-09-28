@@ -2052,14 +2052,12 @@ fn validate_live_attribute_types(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let recipe = document.authoring_recipe().ok_or_else(|| {
+        document.authoring_recipe().ok_or_else(|| {
             format!("USD document {doc} has no resolved composition for typed connection preflight")
         })?;
-        let stage =
-            lunco_usd_authoring::author::open_doc_stage_with_recipe(&document_composed, recipe)
-                .map_err(|error| {
-                    format!("cannot compose USD document for connection preflight: {error}")
-                })?;
+        let stage = document.open_composed_stage().map_err(|error| {
+            format!("cannot compose USD document for connection preflight: {error}")
+        })?;
         let view = StageView::new(&stage);
         validate_attribute_types_in_view(world, ops, &planned_attributes, &view, None)
     }

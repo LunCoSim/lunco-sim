@@ -5,6 +5,7 @@
 //! projection. It does not maintain a second asset graph or infer an active
 //! document from UI state.
 
+use bevy::asset::{AssetServer, Assets};
 use bevy::prelude::{App, Plugin, Vec3, World};
 use lunco_api::queries::{
     ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, api_param_f64,
@@ -15,8 +16,10 @@ use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::{DocumentRegistry, JournalResource};
 use lunco_usd_avian_contracts::AvianMeshApproximation;
 use lunco_usd_bevy_mesh::build_nurbs_collision_mesh_with_refinement_limit;
-use lunco_usd_bevy_stage::{UsdRead, stage_convention};
-use lunco_usd_bevy_twin::{DocBackedTwinScenes, canonical_stage_for_document};
+use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, stage_convention};
+use lunco_usd_bevy_twin::{
+    DocBackedTwinScenes, canonical_stage_for_document, stage_asset_for_document,
+};
 use lunco_usd_data::usd_data::UsdDataExt;
 use openusd::schemas::physics::CollisionApprox;
 use openusd::sdf::{Path as SdfPath, Value as SdfValue};
@@ -30,6 +33,20 @@ fn query_ok(value: ApiValue) -> ApiQueryResult {
 
 fn query_error(code: ApiErrorCode, message: impl Into<String>) -> ApiQueryResult {
     Err(ApiQueryError::new(code, message))
+}
+
+fn document_stage_recipe<'a>(
+    world: &'a World,
+    doc: DocumentId,
+) -> Option<&'a lunco_usd_compose::recipe::StageRecipe> {
+    let backed = world.get_resource::<DocBackedTwinScenes>()?;
+    let asset_server = world.get_resource::<AssetServer>()?;
+    let stage_id = stage_asset_for_document(backed, asset_server, doc)?;
+    world
+        .get_resource::<Assets<UsdStageAsset>>()?
+        .get(stage_id)?
+        .recipe
+        .as_deref()
 }
 
 /// Installs the public USD document query providers.
@@ -1251,12 +1268,76 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
             if authored_here || authored_in_document {
                 return document_layer_response();
             }
-            return query_error(
-                ApiErrorCode::CommandRejected,
-                format!(
-                    "referenced path `{raw_path}` cannot be resolved until its canonical USD stage is mounted"
-                ),
-            );
+            let stage_result = if document.authoring_recipe().is_some() {
+                document.open_composed_stage()
+            } else if let Some(recipe) = document_stage_recipe(world, doc) {
+                document.open_composed_stage_with_recipe(recipe)
+            } else {
+                return query_error(
+                    ApiErrorCode::CommandRejected,
+                    format!(
+                        "referenced path `{raw_path}` cannot be resolved without its loaded USD composition"
+                    ),
+                );
+            };
+            let stage = match stage_result {
+                Ok(stage) => stage,
+                Err(error) => {
+                    return query_error(
+                        ApiErrorCode::InternalError,
+                        format!("cannot compose USD document to resolve `{raw_path}`: {error}"),
+                    );
+                }
+            };
+            let prim = stage.prim(path.clone());
+            let composed_exists = match prim.is_valid() {
+                Ok(exists) => exists,
+                Err(error) => {
+                    return query_error(
+                        ApiErrorCode::InternalError,
+                        format!("OpenUSD could not validate `{raw_path}`: {error}"),
+                    );
+                }
+            };
+            if !composed_exists {
+                return query_ok(api_value!({
+                    "doc_id": doc.raw(),
+                    "path": raw_path,
+                    "edit_target": edit_target.as_str(),
+                    "status": "missing",
+                    "source": "document_composition",
+                    "composed_exists": false,
+                    "authored_here": false,
+                    "authored_in_document": false,
+                    "under_arc": true,
+                    "edit_scope": "missing",
+                    "prim_stack": [],
+                }));
+            }
+            let Ok(stack) = prim.prim_stack() else {
+                return query_error(
+                    ApiErrorCode::InternalError,
+                    format!("OpenUSD could not return the prim stack for `{raw_path}`"),
+                );
+            };
+            return query_ok(api_value!({
+                "doc_id": doc.raw(),
+                "path": raw_path,
+                "edit_target": edit_target.as_str(),
+                "status": "resolved",
+                "source": "document_composition",
+                "composed_exists": true,
+                "authored_here": false,
+                "authored_in_document": false,
+                "under_arc": true,
+                "edit_scope": "local_override",
+                "prim_stack": stack.into_iter().map(|(layer, authored_path)| {
+                    api_value!({
+                        "layer": layer,
+                        "path": authored_path.to_string(),
+                    })
+                }).collect::<Vec<_>>(),
+            }));
         }
         document_layer_response()
     }

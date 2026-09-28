@@ -42,7 +42,10 @@ invalid command into a silent fallback.
 For live route edits, Rhai owns the route policy and calls the generic typed USD
 operation command. The reusable `waypoint_editor` tool authors ordinary USD
 route points, whether their route scope is inline or composed from a separate
-route-plan asset. It uses a local `active=false` opinion when a point comes from
+route-plan asset. Document authoring composes the base, runtime, and view layers
+at their actual strengths before validating selected-variant children; the
+`route_variant_lifecycle` production gate covers add, move, and delete on that
+route shape. It uses a local `active=false` opinion when a point comes from
 a reference arc, and updates the disposable ribbon in the document's `@view@`
 layer under the selected route scope from the committed USD route. An edit can
 use the selected route point to resolve its enclosing route and does not require
