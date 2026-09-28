@@ -86,11 +86,13 @@ retires its pending result. Keep UI and physics responsive while scans are
 pending.
 
 The application-wide recent Twin/file list follows the same boundary. Read the
-config record, decode it, canonicalize its paths, and write any deduplicated
-cleanup on a worker; commit the typed list during `Update`. If a Twin or loose
+config record, decode it, canonicalize its paths, and perform cleanup or later
+saves on a worker; commit the typed list during `Update`. If a Twin or loose
 file opens while the read is pending, keep those new entries ahead of the
 loaded entries. Hold recents persistence until the load commits so startup
-auto-open cannot overwrite the previous session's list.
+auto-open cannot overwrite the previous session's list. Allow one recents write
+at a time, then save the newest list after any pending write finishes. On exit,
+wait for a pending load and the final recents write.
 
 Built-in Rhai source roles are cached for the active manifest and policy
 revision. Source preparation reuses those authored decisions and reconciles

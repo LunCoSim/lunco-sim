@@ -62,6 +62,9 @@ manifest scans can overlap, but commit in discovery order and discard results
 when their owning Twin closes. Reuse authored Rhai source classifications for
 the same manifest and policy revision; asset-content changes do not require a
 second classification pass.
+Application session metadata such as recents follows the same boundary:
+load, normalize, and persist it on workers, merge typed results on the app
+schedule, serialize writes, and finish the final write during shutdown.
 
 For Modelica startup, separate Rumoca compile time, prepared-solve cache lookup,
 `lower_for_live`, and ordered result commit. When equivalent requests share the
