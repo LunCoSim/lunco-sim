@@ -163,6 +163,16 @@ fn point_position(doc, path) {
     result.attrs["xformOp:translate"]
 }
 
+fn point_distance(left, right) {
+    if left == () || right == () || left.len() != 3 || right.len() != 3 {
+        return ();
+    }
+    let dx = left[0] - right[0];
+    let dy = left[1] - right[1];
+    let dz = left[2] - right[2];
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
 fn marker_color(doc, path) {
     let result = query("QueryUsdPrim", #{
         doc_id: doc,
@@ -292,6 +302,8 @@ fn on_start(me, ctx) {
     this.application_admission_accepted = false;
     this.application_admission_context_ok = false;
     this.application_admission_event_tick_matches = false;
+    this.application_admission_event_tick = ();
+    this.application_admission_payload_tick = ();
     this.application_admission_entity_unindexed = false;
     this.application_admission_pause_observed = false;
     this.application_admission_first_tick_checked = false;
@@ -324,6 +336,8 @@ fn on_event(me, evt, ctx) {
             && execution["clock"] == "application"
             && execution["sequence"] != ();
         this.application_admission_event_tick_matches = execution["tick"] == evt.sim_tick;
+        this.application_admission_event_tick = evt.sim_tick;
+        this.application_admission_payload_tick = execution["tick"];
         this.application_admission_entity_unindexed = execution["entity_indexed"] == false;
         this.application_admission_pause_observed = clock_snapshot().virtual_paused;
     }
@@ -665,8 +679,9 @@ fn on_tick(me, ctx) {
         let transient_move = waypoint_editor::on_move(
             context(this.doc, transient_path, [1.0, 1.0, -41.0]),
         );
-        this.checks.push(t_true(transient_move.ok == true,
-            "a newly added route point can be moved before stage projection settles"));
+        this.checks.push(t_true(transient_move.ok != true
+            && transient_move.retryable == true,
+            "an unprojected route point reports a retryable move until its live entity exists"));
         let transient_delete = waypoint_editor::on_delete(
             context(this.doc, transient_path, ()),
         );
@@ -1121,6 +1136,97 @@ fn on_tick(me, ctx) {
             "visited route points turn gray while unvisited points stay green"));
         this.checks.push(t_true(this.reached_index == 0,
             "the sensor event advances the stable current route point"));
+        let manual_edge = intent_pulse(this.subject, "forward");
+        if manual_edge == () || manual_edge.ok == false {
+            this.checks.push(t_true(false,
+                "a possessed rover accepts a semantic manual-control edge"));
+            finish(this);
+            return;
+        }
+        this.phase = 110;
+        return;
+    }
+
+    if this.phase == 110 {
+        let program_active = port(this.subject, "program_active");
+        if this.stopped == 0 || program_active == () || program_active > 0.5 { return; }
+        this.checks.push(t_true(is_controlled(this.subject)
+            && owner_of(this.subject) == local_session_id(),
+            "a possessed rover's non-Action intent yields route guidance without releasing possession"));
+        this.stopped = 0;
+        let resumed = intent_pulse(this.subject, "action");
+        if resumed == () || resumed.ok == false {
+            this.checks.push(t_true(false,
+                "the possessed rover accepts the route-resume action"));
+            finish(this);
+            return;
+        }
+        this.phase = 111;
+        return;
+    }
+
+    if this.phase == 111 {
+        let program_active = port(this.subject, "program_active");
+        if this.started < 2 || program_active == () || program_active < 0.5 { return; }
+        let released = release_control_claim(this.subject);
+        if released == () || released.ok == false {
+            this.checks.push(t_true(false,
+                "the test releases rover possession before exercising non-subject input"));
+            finish(this);
+            return;
+        }
+        this.phase = 112;
+        return;
+    }
+
+    if this.phase == 112 {
+        let program_active = port(this.subject, "program_active");
+        let guidance = port(this.subject, "guidance_throttle");
+        if is_controlled(this.subject) || program_active == () || program_active < 0.5
+            || guidance == () || guidance.abs() < 0.01 { return; }
+        // This synthetic non-subject edge has the same self-targeted shape as
+        // free-avatar input: source and target_gid match, but neither is rover.
+        let free_input = emit("intent.edge", #{
+            intent: "forward",
+            edge: "pressed",
+            target_gid: me,
+        });
+        if !free_input {
+            this.checks.push(t_true(false,
+                "the test publishes the free-avatar forward edge after rover release"));
+            finish(this);
+            return;
+        }
+        this.phase = 113;
+        return;
+    }
+
+    if this.phase == 113 {
+        let program_active = port(this.subject, "program_active");
+        let guidance = port(this.subject, "guidance_throttle");
+        if is_controlled(this.subject) || program_active == () { return; }
+        this.checks.push(t_true(this.stopped == 0 && program_active > 0.5
+            && guidance != () && guidance.abs() > 0.01,
+            "an unpossessed self-targeted forward edge leaves rover route guidance active"));
+        let possession = cmd("AcquireControl", #{
+            target: this.subject,
+            bind_camera: false,
+        });
+        if possession == () || possession.ok == false {
+            this.checks.push(t_true(false,
+                "the test reacquires the rover after checking free-avatar input"));
+            finish(this);
+            return;
+        }
+        this.phase = 114;
+        return;
+    }
+
+    if this.phase == 114 {
+        if !is_controlled(this.subject)
+            || owner_of(this.subject) != local_session_id() { return; }
+        this.checks.push(t_true(true,
+            "reacquiring the rover preserves its active route after free-avatar input"));
         let hud_toggle = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
         this.checks.push(t_true(hud_toggle,
             "the authored program HUD dispatches a generic toggle action"));
@@ -1289,9 +1395,12 @@ fn on_tick(me, ctx) {
         let after_index = child_index(children.children, this.insert_after_path);
         this.checks.push(t_true(target_index >= 0 && after_index > target_index,
             "USD primOrder places an inserted waypoint after its target"));
+        let adjacent_position = point_position(this.doc, ALTERNATE_ROUTE + "/P1");
         let after_position = point_position(this.doc, this.insert_after_path);
-        this.checks.push(t_true(after_position != () && after_position[2] == -20.0,
-            "Add point after extends the final segment by its authored length"));
+        let extension = point_distance(adjacent_position, after_position);
+        this.checks.push(t_true(extension != () && (extension - 5.0).abs() < 0.01
+            && after_position[2] < adjacent_position[2],
+            "Add point after extends five meters outward along the final segment"));
         let ribbon_context = context(
             this.doc, ALTERNATE_ROUTE + "/RouteRibbon/Geometry", [14.0, 1.0, -25.0],
         );
@@ -1388,7 +1497,9 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(this.application_admission_context_ok,
             "the edit and its event retain Application/Repl evaluation context"));
         this.checks.push(t_true(this.application_admission_event_tick_matches,
-            "the application-produced event carries the simulation tick observed at its producer boundary"));
+            "the application-produced event tick matches its producer boundary (payload="
+                + this.application_admission_payload_tick.to_string() + ", event="
+                + this.application_admission_event_tick.to_string() + ")"));
         this.checks.push(t_true(this.application_admission_entity_unindexed,
             "entity lookup has not indexed the referenced prim immediately after the Application/Repl document edit"));
         this.checks.push(t_true(this.application_admission_pause_observed,

@@ -92,6 +92,23 @@ def wait_for_scene(session: ProductionSession, scene: str, timeout: float) -> No
     )
 
 
+def wait_for_scene_time_selection(
+    session: ProductionSession, log_path: Path, timeout: float
+) -> None:
+    """Wait until the scene owner has committed its epoch and reset the clocks."""
+    deadline = time.monotonic() + timeout
+    marker = "[time] scene reset to retained "
+    while time.monotonic() < deadline:
+        if marker in tail(log_path, lines=10000):
+            return
+        if session.process is None or session.process.poll() is not None:
+            raise RuntimeError("production editor exited before scene time selection committed")
+        time.sleep(POLL_INTERVAL_S)
+    raise RuntimeError(
+        f"scene time selection did not commit within {timeout:g}s; log={log_path}"
+    )
+
+
 def run(port: int, timeout: float, scene: str, log_path: Path) -> int:
     verdict = ""
     error = ""
@@ -103,9 +120,14 @@ def run(port: int, timeout: float, scene: str, log_path: Path) -> int:
             windowed=True,
         ) as session:
             wait_for_scene(session, scene, min(timeout, 45.0))
+            # Opening a document precedes its scene-time policy and ResetTime.
+            # Wait for that lifecycle boundary so it cannot overwrite this
+            # test's transport command while asynchronous scene preparation is
+            # still settling.
+            wait_for_scene_time_selection(session, log_path, timeout)
             # Editor acceptance observers advance through on_tick, but a
             # freshly opened editor scene can retain a paused live transport.
-            # Resume it in this isolated test process after the fixture is ready.
+            # Resume it in this isolated test process after scene time settles.
             transport = session.post({
                 "type": "ExecuteCommand",
                 "command": "SetTimeTransport",

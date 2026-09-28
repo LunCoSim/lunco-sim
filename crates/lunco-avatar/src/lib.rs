@@ -52,26 +52,6 @@ use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath, is_preview_only, is_prev
 /// Plugin for managing local avatar logic, input processing, and possession.
 pub struct LunCoAvatarPlugin;
 
-fn trigger_vessel_hard_stop(commands: &mut Commands, vessel_entity: Entity) {
-    commands.trigger(lunco_cosim_core::commands::ControlSafeStop {
-        target: vessel_entity,
-    });
-}
-
-fn stop_previous_vessel(
-    commands: &mut Commands,
-    previous: Option<Entity>,
-    released: &[u64],
-    q_owned: &Query<&lunco_core::GlobalEntityId>,
-) {
-    if let Some(entity) = previous {
-        let old_gid = q_owned.get(entity).ok().map(|gid| gid.get());
-        if old_gid.is_none_or(|gid| !released.contains(&gid)) {
-            trigger_vessel_hard_stop(commands, entity);
-        }
-    }
-}
-
 /// Commit one possession to the authoritative registry after the command has
 /// validated its endpoint and any requested local binding. The generic session
 /// transition owns the authority table; this observer owns the avatar link and
@@ -80,14 +60,14 @@ fn commit_possession_authority(
     commands: &mut Commands,
     authority: &mut PossessionAuthority,
     target: Entity,
-) -> Option<Vec<u64>> {
+) -> Option<()> {
     let origin = authority.guard.0.unwrap_or(authority.session.0);
     let target_gid = authority.q_owned.get(target).ok().map(|gid| gid.get());
     // Clients keep the host's table as the authority and only use the shared
     // table as the authority and only use the shared predicate for optimistic
     // local binding.
     if matches!(*authority.role, lunco_core_session::NetworkRole::Client) {
-        return Some(Vec::new());
+        return Some(());
     }
 
     let change = if let Some(gid) = target_gid {
@@ -106,9 +86,8 @@ fn commit_possession_authority(
     } else {
         lunco_core_session::release_control(&mut authority.registry, origin)
     };
-    let released = change.released.clone();
     commands.trigger(change);
-    Some(released)
+    Some(())
 }
 
 /// Scene-owned USD prims are the identity boundary for vessel claims. Clear
@@ -476,7 +455,6 @@ fn on_release_command(
     mut commands: Commands,
     q_avatar: Query<Option<&ControlLink>, (With<Embodiment>, With<LocalEmbodiment>)>,
     guard: Res<lunco_core_session::SyncApplyGuard>,
-    q_owned: Query<&lunco_core::GlobalEntityId>,
     role: Res<lunco_core_session::NetworkRole>,
     mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
     local: Res<lunco_core_session::LocalSession>,
@@ -484,8 +462,8 @@ fn on_release_command(
 ) {
     let cmd = trigger.event();
     // A wire-applied release carries the remote client's avatar, which is not a
-    // local camera entity. The same command still owns the host-side release and
-    // hard-stop transaction.
+    // local camera entity. It changes session authority without writing the
+    // endpoint's simulation inputs.
     if guard.is_from_sync() {
         if !matches!(*role, lunco_core_session::NetworkRole::Client) {
             let origin = guard.0.unwrap_or(local.0);
@@ -508,41 +486,20 @@ fn on_release_command(
         warn!(target = ?cmd.source, "[release] refused: source is not the local embodiment");
         return;
     }
-    let released = if matches!(*role, lunco_core_session::NetworkRole::Client) {
-        Vec::new()
-    } else {
+    if !matches!(*role, lunco_core_session::NetworkRole::Client) {
         let change = lunco_core_session::release_control(&mut registry, local.0);
-        let freed = change.released.clone();
+        let released = change.released.len();
         commands.trigger(change);
-        if !freed.is_empty() {
-            info!(
-                "[auth] session {} released {} vessel(s)",
-                local.0,
-                freed.len()
-            );
+        if released > 0 {
+            info!("[auth] session {} released {} vessel(s)", local.0, released);
         }
-        freed
-    };
+    }
     // The stick goes back to the guidance law — publish it for the UI that
     // shows WHO is flying (the overlay's AUTO/MANUAL badge).
     if let Some(a) = authority.as_mut() {
         a.piloted = false;
     }
     let avatar_ent = cmd.source;
-    let opt_vessel = q_avatar
-        .get(avatar_ent)
-        .ok()
-        .flatten()
-        .map(|link| link.target);
-
-    // Hard stop the rover upon disengaging control: zero throttle/steer, full brake.
-    if let Some(vessel_entity) = opt_vessel {
-        let old_gid = q_owned.get(vessel_entity).ok().map(|gid| gid.get());
-        if old_gid.is_none_or(|gid| !released.contains(&gid)) {
-            trigger_vessel_hard_stop(&mut commands, vessel_entity);
-        }
-    }
-
     commands.entity(avatar_ent).remove::<ControlLink>();
     commands.trigger(lunco_camera_core::ClearCameraBinding { camera: avatar_ent });
     info!("Released control source {:?}", avatar_ent);
@@ -612,25 +569,19 @@ fn on_possess_command(
     // an implicit lookup.
     if !cmd.bind_camera {
         if let Some(requested) = cmd.source {
-            let Some(previous) = possession_avatars.controller.get(requested).ok() else {
+            if possession_avatars.controller.get(requested).is_err() {
                 warn!(
                     target = ?requested,
                     "[possess] refused: {}",
                     controller_avatar_state_error(Some(requested))
                 );
                 return;
-            };
-            let Some(released) =
-                commit_possession_authority(&mut commands, &mut possession_authority, cmd.target)
-            else {
+            }
+            if commit_possession_authority(&mut commands, &mut possession_authority, cmd.target)
+                .is_none()
+            {
                 return;
-            };
-            stop_previous_vessel(
-                &mut commands,
-                previous.map(|link| link.target),
-                &released,
-                &possession_authority.q_owned,
-            );
+            }
             commands
                 .entity(requested)
                 .try_insert(ControlLink { target: cmd.target });
@@ -662,24 +613,9 @@ fn on_possess_command(
         warn!(target = ?cmd.target, "[possess] refused: {message}");
         return;
     }
-    let previous_vessel = possession_avatars
-        .controller
-        .get(avatar_ent)
-        .ok()
-        .flatten()
-        .map(|link| link.target);
-
-    let Some(released) =
-        commit_possession_authority(&mut commands, &mut possession_authority, cmd.target)
-    else {
+    if commit_possession_authority(&mut commands, &mut possession_authority, cmd.target).is_none() {
         return;
-    };
-    stop_previous_vessel(
-        &mut commands,
-        previous_vessel,
-        &released,
-        &possession_authority.q_owned,
-    );
+    }
     if let Some(a) = authority.as_mut() {
         a.piloted = true;
     }
@@ -780,6 +716,61 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::system::SystemState;
+
+    #[derive(Resource, Default)]
+    struct SafeStopCount(usize);
+
+    fn count_safe_stop(
+        _trigger: On<lunco_cosim_core::commands::ControlSafeStop>,
+        mut count: ResMut<SafeStopCount>,
+    ) {
+        count.0 += 1;
+    }
+
+    #[test]
+    fn possession_release_does_not_stop_the_endpoint() {
+        let mut app = App::new();
+        app.init_resource::<lunco_core_session::SyncApplyGuard>()
+            .init_resource::<NetworkRole>()
+            .init_resource::<LocalSession>()
+            .init_resource::<lunco_core_session::SessionRegistry>()
+            .init_resource::<SafeStopCount>()
+            .add_observer(on_release_command)
+            .add_observer(count_safe_stop);
+
+        let target_gid = 0xA1;
+        let target = app
+            .world_mut()
+            .spawn((
+                lunco_port_core::InputPorts::new(&["forward", "autopilot_target_x"]),
+                lunco_core::GlobalEntityId::from_raw(target_gid),
+            ))
+            .id();
+        let source = app
+            .world_mut()
+            .spawn((Embodiment, LocalEmbodiment, ControlLink { target }))
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_core_session::SessionRegistry>()
+            .claim(lunco_command_contracts::SessionId::LOCAL, target_gid)
+            .expect("the avatar owns the endpoint before release");
+
+        app.world_mut().trigger(ReleaseControlSource { source });
+        app.world_mut().flush();
+
+        assert!(app.world().get::<ControlLink>(source).is_none());
+        assert_eq!(
+            app.world()
+                .resource::<lunco_core_session::SessionRegistry>()
+                .owner_of(target_gid),
+            None
+        );
+        assert_eq!(
+            app.world().resource::<SafeStopCount>().0,
+            0,
+            "ending avatar possession must not dispatch the endpoint lifecycle safe-stop"
+        );
+    }
 
     #[test]
     fn scene_teardown_clears_claims_for_usd_prims_only() {

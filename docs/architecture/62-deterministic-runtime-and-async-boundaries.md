@@ -478,12 +478,14 @@ behavior pass, and local-embodiment input stays on the interaction cadence.
 Live port-inspector writes and releases use the same queue with a `LocalUser`
 producer identity. `PanelCtx::trigger_command` scopes that session origin over
 deferred workbench dispatch so the cosim owner can admit and capture each
-action. A control-authority `ControlSafeStop` neutralizes its endpoint
+action. An explicit endpoint lifecycle `ControlSafeStop` neutralizes its target
 immediately and, while capture is active, admits a typed `runtime_lifecycle`
-record for the next fixed tick through the same order allocator. The session
-owner captures it at that commit boundary; failure to obtain its stable target,
-committed generation, tick, or order stamp fails capture without delaying the
-safety action. Unclassified direct port events remain outside this stream.
+record for the next fixed tick through the same order allocator. Session
+authority transitions do not issue this event or rewrite endpoint simulation
+inputs. The session owner captures lifecycle stops at that commit boundary;
+failure to obtain their stable target, committed generation, tick, or order
+stamp fails capture without delaying the safety action. Unclassified direct
+port events remain outside this stream.
 
 ## 4. Async preparation, priority, and result commit
 
@@ -944,7 +946,7 @@ or model included in a cross-peer/replay guarantee needs its stable
 `GlobalEntityId` or another source-owned, replicated identity.
 
 External held-input changes, discrete edges, live `SetModelInput` changes,
-authority safe-stops, and raw-file runtime spawns share the bounded
+explicit endpoint lifecycle stops, and raw-file runtime spawns share the bounded
 session-owned ingress queue and assigned per-tick sequence. `SetModelInput`
 identifies live participants by
 stable `target_gid`; editor-only documents keep their document selector. While
@@ -1161,7 +1163,7 @@ The whole-simulation guarantee remains open because:
    The session stream captures API and classified non-Simulation Rhai
    `SetPorts`, `ReleasePort`, and `ReleaseControl` commands, local
    port-inspector actions, explicitly identified direct typed port inputs, and
-   live `SetModelInput` changes plus authority-derived `ControlSafeStop`
+   live `SetModelInput` changes plus explicit lifecycle `ControlSafeStop`
    events at their fixed-tick boundaries. Unclassified
    direct `SetPorts`, `ReleasePort`, and `ReleaseControl` events,
    scene lifecycle, other authored commands, and all Rhai/Modelica runtime

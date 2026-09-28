@@ -6,6 +6,8 @@
 
 const TEST_KIND = "editor";
 
+import "lunco://scripting/tools/waypoint_editor" as waypoint_editor;
+
 const ROUTE = "/Traverse/Route";
 const SUBJECT = "/Traverse/Rover";
 // The chassis is coincident with W0's transparent annotation in this Twin.
@@ -17,7 +19,8 @@ const ADD_Y = 700.0;
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [find_path(SUBJECT)], entity_reads: [], entity_writes: [],
-       query_reads: ["ReadExposures"], required_inputs: [] }
+       query_reads: ["InspectSelection", "QueryUsdPrim", "ReadExposures", "ReadPorts",
+           "ResolveUsdTarget"], required_inputs: [] }
 }
 
 fn route_points() {
@@ -39,8 +42,9 @@ fn finish(checks) {
     report_verdict(checks, "NATIVE ROUTE WINDOW INTERACTION", "NATIVE_ROUTE_WINDOW_INTERACTION");
 }
 
-fn fail(message) {
-    report_verdict([t_true(false, message)],
+fn fail(checks, message) {
+    checks.push(t_true(false, message));
+    report_verdict(checks,
         "NATIVE ROUTE WINDOW INTERACTION", "NATIVE_ROUTE_WINDOW_INTERACTION");
 }
 
@@ -58,6 +62,40 @@ fn guidance_is_live(id) {
     value != () && value.abs() > 0.01
 }
 
+fn autopilot_command_state(id) {
+    let values = #{
+        program_active: port(id, "program_active"),
+        autopilot_enable: port(id, "autopilot_enable"),
+        target_x: port(id, "autopilot_target_x"),
+        target_z: port(id, "autopilot_target_z"),
+        speed: port(id, "autopilot_speed"),
+        radius: port(id, "autopilot_radius"),
+        turn_only: port(id, "autopilot_turn_only"),
+    };
+    for name in ["program_active", "autopilot_enable", "target_x", "target_z",
+        "speed", "radius", "turn_only"] {
+        if values[name] == () { return (); }
+    }
+    values
+}
+
+fn pose_distance(left, right) {
+    if left == () || right == () || left.len() != 3 || right.len() != 3 {
+        return ();
+    }
+    let dx = left[0] - right[0];
+    let dy = left[1] - right[1];
+    let dz = left[2] - right[2];
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
+fn autopilot_feedback_matches_pose(id, pose) {
+    if pose == () || pose.len() != 3 { return false; }
+    let x = port(id, "autopilot_position_x");
+    let z = port(id, "autopilot_position_z");
+    x != () && z != () && (x - pose[0]).abs() < 1.0 && (z - pose[2]).abs() < 1.0
+}
+
 fn vessel_hud_visible() {
     let result = query("ReadExposures", #{ surface: "vessel-hud" });
     if result == () || result.surfaces == () { return (); }
@@ -72,6 +110,7 @@ fn on_start(me, ctx) {
     this.phase_elapsed = 0.0;
     this.done = false;
     this.checks = [];
+    this.phase_detail = "scene setup pending";
     this.doc = -1;
     this.subject = -1;
     this.before = ();
@@ -90,6 +129,7 @@ fn on_start(me, ctx) {
     this.stop_requested = false;
     this.menu_requested = false;
     this.action_key = "KeyF";
+    this.forward_key = input_binding("forward");
     this.rover_x = 0.0;
     this.rover_y = 0.0;
     this.last_rover_x = 0.0;
@@ -108,15 +148,28 @@ fn on_start(me, ctx) {
     this.stable_point_samples = 0;
     this.delete_x = 0.0;
     this.delete_y = 0.0;
+    this.autopilot_before_release = ();
+    this.rover_pose_before_release = ();
+    this.pre_release_motion_start = ();
+    this.pre_release_motion_elapsed = 0.0;
+    this.pre_release_speed = 0.0;
+    this.release_elapsed = 0.0;
 }
 
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     this.phase_elapsed += dt();
+    if this.phase == 60 || this.phase == 61 {
+        this.release_elapsed += dt();
+    }
+    if this.phase == 66 {
+        this.pre_release_motion_elapsed += dt();
+    }
     if this.elapsed > 45.0 {
         this.done = true;
-        fail("native route interaction timed out in phase " + this.phase);
+        fail(this.checks, "native route interaction timed out in phase " + this.phase + ": "
+            + this.phase_detail);
         return;
     }
     if this.phase_elapsed < 0.25 { return; }
@@ -126,13 +179,31 @@ fn on_tick(me, ctx) {
         let route = query("QueryUsdPrim", #{ path: ROUTE, children: true });
         this.subject = find_path(SUBJECT);
         if route == () || route.ok == false || route.doc_id == () || this.subject < 0 {
+            this.phase_detail = "route query or rover projection is unavailable: route="
+                + route.to_string() + " subject=" + this.subject.to_string();
             return;
         }
         this.doc = route.doc_id;
         this.before = route_points();
-        if this.before == () || this.before.len() == 0 { return; }
+        if this.before == () || this.before.len() == 0 {
+            let point_details = [];
+            for path in route.children {
+                let point = waypoint_editor::is_route_point(route.doc_id, path);
+                let record = query("QueryUsdPrim", #{ path: path });
+                let active = record != () && record.ok != false && record.active == true;
+                point_details.push(path + "{route_point=" + point.to_string()
+                    + ",active=" + active.to_string() + "}");
+            }
+            this.phase_detail = "route has no active waypoint children doc="
+                + route.doc_id.to_string() + " children=" + point_details.to_string();
+            return;
+        }
         let rover_screen = viewport_position(find_path(ROVER_TARGET));
-        if rover_screen == () || rover_screen.len() != 2 { return; }
+        if rover_screen == () || rover_screen.len() != 2 {
+            this.phase_detail = "rover panel has no viewport projection: "
+                + rover_screen.to_string();
+            return;
+        }
         if this.last_rover_x != 0.0 {
             let dx = rover_screen[0] - this.last_rover_x;
             let dy = rover_screen[1] - this.last_rover_y;
@@ -144,6 +215,8 @@ fn on_tick(me, ctx) {
         }
         this.last_rover_x = rover_screen[0];
         this.last_rover_y = rover_screen[1];
+        this.phase_detail = "rover screen samples=" + this.stable_rover_samples.to_string()
+            + " at " + rover_screen.to_string();
         if this.stable_rover_samples < 3 { return; }
         this.rover_x = rover_screen[0];
         this.rover_y = rover_screen[1];
@@ -230,9 +303,36 @@ fn on_tick(me, ctx) {
         if vessel_hud_visible() != true { return; }
         this.checks.push(t_true(true,
             "the vessel HUD reflects the authoritative active program state"));
+        this.pre_release_motion_start = world_pos(this.subject);
+        if this.pre_release_motion_start == () {
+            this.done = true;
+            fail(this.checks, "could not read rover pose before measuring route motion");
+            return;
+        }
+        this.phase = 66;
+        this.phase_elapsed = 0.0;
+        this.pre_release_motion_elapsed = 0.0;
+        return;
+    }
+
+    if this.phase == 66 {
+        if !port_active(this.subject) || !guidance_is_live(this.subject) { return; }
+        let current_pose = world_pos(this.subject);
+        let distance = pose_distance(this.pre_release_motion_start, current_pose);
+        if distance == () || this.pre_release_motion_elapsed <= 0.0 { return; }
+        this.pre_release_speed = distance / this.pre_release_motion_elapsed;
+        this.rover_pose_before_release = current_pose;
+        this.autopilot_before_release = autopilot_command_state(this.subject);
+        if this.autopilot_before_release == () {
+            this.done = true;
+            fail(this.checks, "could not snapshot active autopilot inputs before release");
+            return;
+        }
         // Possession and route execution have separate lifecycles. Releasing
         // the local avatar must hide its HUD while the route keeps guiding the
         // rover; a plain click must then reacquire that same rover.
+        this.release_elapsed = 0.0;
+        this.phase_elapsed = 0.0;
         send_key("Escape", "Pressed");
         this.phase = 60;
         return;
@@ -250,8 +350,109 @@ fn on_tick(me, ctx) {
             return;
         }
         if vessel_hud_visible() != false { return; }
+        let autopilot_after_release = autopilot_command_state(this.subject);
+        if autopilot_after_release == () {
+            this.done = true;
+            fail(this.checks, "autopilot command ports were unavailable after releasing possession");
+            return;
+        }
+        for name in ["program_active", "autopilot_enable", "target_x", "target_z",
+            "speed", "radius", "turn_only"] {
+            let before = this.autopilot_before_release[name];
+            let after = autopilot_after_release[name];
+            if (before - after).abs() > 1e-9 {
+                this.done = true;
+                fail(this.checks, "releasing possession changed autopilot input " + name + " from "
+                    + before.to_string() + " to " + after.to_string());
+                return;
+            }
+        }
+        this.checks.push(t_true(true,
+            "releasing possession leaves the active route command and target inputs unchanged"));
+        let rover_pose_after_release = world_pos(this.subject);
+        let release_displacement = pose_distance(
+            this.rover_pose_before_release,
+            rover_pose_after_release,
+        );
+        let plausible_speed = this.pre_release_speed * 3.0 + 5.0;
+        let plausible_travel = 2.0 + plausible_speed * this.release_elapsed;
+        if release_displacement == () || release_displacement > plausible_travel {
+            this.done = true;
+            fail(this.checks, "releasing possession teleported the rover by "
+                + release_displacement.to_string() + " m in "
+                + this.release_elapsed.to_string() + " s");
+            return;
+        }
+        this.checks.push(t_true(true,
+            "rover pose remains continuous while the route runs through possession release"));
+        if !autopilot_feedback_matches_pose(this.subject, rover_pose_after_release) {
+            this.done = true;
+            fail(this.checks, "releasing possession cleared the rover position feedback used by route guidance");
+            return;
+        }
+        this.checks.push(t_true(true,
+            "route guidance keeps receiving the rover's current position after release"));
         this.checks.push(t_true(true,
             "releasing possession keeps the route active and hides the vessel HUD"));
+        if this.forward_key == () {
+            this.done = true;
+            fail(this.checks, "the active input profile has no forward key binding");
+            return;
+        }
+        let pressed = input_key_press(this.forward_key);
+        if pressed == () || pressed.ok != true {
+            this.done = true;
+            fail(this.checks, "could not press the configured forward key while unpossessed: "
+                + pressed.to_string());
+            return;
+        }
+        this.phase_detail = "checking route after forward key input while unpossessed";
+        this.phase = 67;
+        return;
+    }
+
+    if this.phase == 67 {
+        if is_controlled(this.subject) || vessel_hud_visible() != false { return; }
+        if !port_active(this.subject) || !guidance_is_live(this.subject) {
+            this.done = true;
+            fail(this.checks,
+                "an unpossessed producer's forward input stopped the rover autopilot");
+            return;
+        }
+        this.checks.push(t_true(true,
+            "pressing the configured forward key while unpossessed cannot stop rover autopilot"));
+        let released = input_key_release(this.forward_key);
+        if released == () || released.ok != true {
+            this.done = true;
+            fail(this.checks, "could not release the configured forward key: "
+                + released.to_string());
+            return;
+        }
+        let input = emit("intent.edge", #{
+            intent: "forward",
+            edge: "pressed",
+            target_gid: me,
+        });
+        if !input {
+            this.done = true;
+            fail(this.checks, "could not deliver the unrelated unpossessed intent edge");
+            return;
+        }
+        this.phase_detail = "checking route after an unrelated unpossessed intent edge";
+        this.phase = 68;
+        return;
+    }
+
+    if this.phase == 68 {
+        if is_controlled(this.subject) || vessel_hud_visible() != false { return; }
+        if !port_active(this.subject) || !guidance_is_live(this.subject) {
+            this.done = true;
+            fail(this.checks,
+                "an unrelated unpossessed intent edge stopped the rover autopilot");
+            return;
+        }
+        this.checks.push(t_true(true,
+            "an unrelated unpossessed intent edge cannot stop the active rover route"));
         let rover_screen = viewport_position(find_path(ROVER_TARGET));
         if rover_screen == () || rover_screen.len() != 2 { return; }
         this.rover_x = rover_screen[0];
@@ -274,6 +475,7 @@ fn on_tick(me, ctx) {
     }
 
     if this.phase == 64 {
+        this.phase_detail = "waiting for rover repossession after the unpossessed-input checks";
         if !is_controlled(this.subject) || !port_active(this.subject)
             || !guidance_is_live(this.subject) || vessel_hud_visible() != true {
             return;
@@ -392,12 +594,13 @@ fn on_tick(me, ctx) {
         }
         if this.added == () {
             this.done = true;
-            fail("native Alt-click did not produce a distinct route point");
+            fail(this.checks, "native Alt-click did not produce a distinct route point");
             return;
         }
         this.checks.push(t_true(true, "native Alt-click appends one authored route point"));
         this.marker = find_path(this.added + "/Dome");
         if this.marker < 0 { return; }
+        if !track_entity_read(this.marker) { return; }
         let marker_screen = viewport_position(this.marker);
         if marker_screen == () || marker_screen.len() != 2 { return; }
         this.checks.push(t_true(true,
@@ -480,13 +683,14 @@ fn on_tick(me, ctx) {
         }
         if this.added_second == () {
             this.done = true;
-            fail("the second native Alt-click did not produce a distinct route point");
+            fail(this.checks, "the second native Alt-click did not produce a distinct route point");
             return;
         }
         this.checks.push(t_true(true,
             "a second native Alt-click appends another authored route point"));
         this.second_marker = find_path(this.added_second + "/Dome");
         if this.second_marker < 0 { return; }
+        if !track_entity_read(this.second_marker) { return; }
         let second_marker_screen = viewport_position(this.second_marker);
         if second_marker_screen == () || second_marker_screen.len() != 2 { return; }
         this.checks.push(t_true(true,

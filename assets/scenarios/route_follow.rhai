@@ -241,18 +241,15 @@ fn discover_subject_programs(doc, scope, subject, depth) {
     programs
 }
 
-// An intent edge is addressed to the controlled subject. During a USD
-// projection handoff the relationship query can be temporarily unavailable,
-// but the typed event still carries its canonical target gid. Queue the
-// transition for the task instead of dropping the operator action at that
-// boundary; the task retries the authority claim when the composed projection
-// is current again.
+// A route only interprets an intent edge from its exact, currently possessed
+// subject. Events from the free avatar or another control surface must not
+// stop a selected autopilot.
 fn intent_targets_route_subject(me, evt, state) {
     let subject = route_subject_for(me, state);
-    if subject >= 0 && evt.source == subject
-        && (state.selected || route_is_selected(me)) { return true; }
-    evt.value != () && evt.value["target_gid"] != ()
-        && evt.value["target_gid"].to_string() == evt.source.to_string()
+    subject >= 0 && evt.source == subject
+        && evt.value != () && evt.value["target_gid"] != ()
+        && evt.value["target_gid"].to_string() == subject.to_string()
+        && is_controlled(subject)
         && (state.selected || route_is_selected(me))
 }
 
@@ -694,8 +691,8 @@ fn runtime_program_action(me, payload, state) {
 
 fn advance_on_sensor(me, evt, state) {
     // Discrete controls arrive through the shared semantic intent path. Action
-    // toggles route guidance; any other pressed/pulsed control intent yields an
-    // active route to the operator, regardless of vehicle kind or key binding.
+    // toggles route guidance; any other pressed/pulsed control intent from the
+    // possessed route subject yields an active route to its operator.
     if evt.name == "intent.edge" && intent_targets_route_subject(me, evt, state)
         && evt.value != ()
         && (evt.value["edge"] == "pressed" || evt.value["edge"] == "pulse") {
@@ -751,9 +748,8 @@ fn start_route(me, state) {
     // Program execution is not avatar possession. The route writes its
     // authored guidance setpoint through the generic control surface while
     // SessionRegistry remains free to represent only the user's possession.
-    // This keeps the HUD and the next possession click tied to the avatar,
-    // while ReleaseControl can still fence one input batch before this policy
-    // publishes the active target again.
+    // Releasing the avatar changes authority and presentation without replacing
+    // the active route command or its target.
     #{ ok: true, subject: subject }
 }
 

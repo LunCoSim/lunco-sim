@@ -174,10 +174,12 @@ parsed Modelica contract does not match the authored scene.
 - The internal controller **yields** to whoever possesses via the **`piloted`** port:
   a read-only cosim port (`PILOTED_BACKEND`, `lunco-cosim/src/ports.rs`) that is `1.0`
   when any session owns the vessel (`SessionRegistry::owner_of(...).is_some()`), else `0`.
-- Wire it (`float inputs:piloted.connect = </Lander.outputs:piloted>`) into the model and gate on it:
-  `cmd = piloted ? pilot_stick : gnc`. Because it's wired it's a live input — **no
-  in-model flag, no rhai toggle, no per-tick check.** Possession is the single source
-  of truth; Rust never reasons about "autopilot" vs "user".
+- Wire it (`float inputs:piloted.connect = </Lander.outputs:piloted>`) into the
+  model as the manual-input authority signal. Gate the pilot stick with it, then
+  combine manual input with authored program/autopilot inputs through the model's
+  explicit authority signals. Do not let a possession change replace or zero an
+  active program's enable, target, or speed inputs. Possession owns the manual
+  input claim; authored model policy owns the command mux.
 - When a bound local control intent arrives while another session owns the target,
   the shared controller requests the existing generic `ClaimControl` transition.
   The authored `control.authority.take` policy decides whether the local session can
@@ -191,23 +193,26 @@ Scene replacement clears possession claims for outgoing USD prims at the shared
 replacement projection may reuse an id without inheriting the previous scene's
 driver; persistent non-scene ids are not cleared by that sweep.
 
-`AcquireControl` and `ReleaseControlSource` are the single owner of the possession transaction:
-they validate the endpoint and local binding before changing `SessionRegistry` or
-`ControlLink`. A handoff releases prior claims for that session (except the selected
-target) and hard-stops each released vessel; release hard-stops the current vessel before
-restoring free flight. Wire-applied commands update host authority only and never bind a
-remote session to the local camera.
+`AcquireControl` and `ReleaseControlSource` are the single owner of the possession
+transaction: they validate the endpoint and local binding before changing
+`SessionRegistry` or `ControlLink`. A handoff releases prior claims for that
+session (except the selected target). Releasing possession removes the local
+control/camera binding and updates the manual-input authority; it does not write
+endpoint ports or stop an authored autopilot. Wire-applied commands update host
+authority only and never bind a remote session to the local camera. Explicit
+endpoint lifecycle stops remain separate from possession release.
 
 ### Guidance policy is separate from user possession
 
 A route or mission program publishes authored guidance through the vessel's
 generic named-port surface and the model's existing guidance/actuation
 contract. It does not call `AcquireControl` or claim a user session. Releasing
-possession may safe the manual input ports for that transaction; the enabled
-program remains active until a manual control intent arrives. The generic
+possession leaves the program's input ports and enable state intact. The generic
 `route_follow` policy stops guidance on a pressed or pulsed non-`Action`
-`intent.edge` for its subject; `Action` remains the route toggle. Other authored
-autopilots should consume the same semantic edge contract to yield. Do not set
+`intent.edge` from its currently possessed subject; input from the free avatar
+or another unpossessed surface cannot stop it. `Action` remains the route
+toggle. Other authored autopilots should consume the same semantic edge
+contract to yield. Do not set
 `Position`, `LinearVelocity`,
 `ModelicaModel.inputs`, or a private actuator component to make a scenario move;
 those bypass the authored input and model contracts.

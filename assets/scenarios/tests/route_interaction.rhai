@@ -27,6 +27,16 @@ fn positions_differ(left, right) {
     (dx * dx + dy * dy + dz * dz).sqrt() > 0.1
 }
 
+fn distance_between(left, right) {
+    if left == () || right == () || left.len() != 3 || right.len() != 3 {
+        return ();
+    }
+    let dx = left[0] - right[0];
+    let dy = left[1] - right[1];
+    let dz = left[2] - right[2];
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
 fn report(me, passed, message) {
     me.done = true;
     me.checks.push(t_true(passed, message));
@@ -66,6 +76,7 @@ fn on_start(me, ctx) {
     this.ghost_observed_move = false;
     this.inserted_after = ();
     this.inserted_before = ();
+    this.inserted_endpoint = ();
 }
 
 fn on_event(me, evt, ctx) {
@@ -683,8 +694,13 @@ fn on_tick(me, ctx) {
             report(this, false, "moved P0 did not retain its authored context target");
             return;
         }
+        let delete_row = 2; // Select, Move, then Delete.
+        if this.before.len() >= 2 {
+            // The fixed fixture's active P0 has both before and after actions.
+            delete_row += 2;
+        }
         this.delete_x = this.screen[0] + 60.0;
-        this.delete_y = this.screen[1] + 100.0;
+        this.delete_y = this.screen[1] + 16.0 + delete_row.to_float() * 21.0;
         input_pointer_move(this.delete_x, this.delete_y);
         this.phase = 34;
         this.phase_elapsed = 0.0;
@@ -810,9 +826,61 @@ fn on_tick(me, ctx) {
         }
         this.checks.push(t_true(true,
             "Add point before orders only the remaining composed points after P2 is deactivated"));
+        let context = #{
+            doc_id: this.doc,
+            route_path: ROUTE,
+            selected_path: this.inserted_after,
+            target_path: this.inserted_after,
+            hit_path: this.inserted_after,
+            prim_paths: [this.inserted_after],
+        };
+        let inserted = waypoint_editor::on_insert_after(context);
+        if inserted == () || inserted.ok != true {
+            this.done = true;
+            report(this, false, "Add point after the final route point failed: "
+                + inserted.to_string());
+            return;
+        }
+        this.inserted_endpoint = inserted.path;
+        this.phase = 40;
+        this.phase_elapsed = 0.0;
+        return;
+    }
+
+    if this.phase == 40 {
+        let read = waypoint_editor::route_positions(this.doc, ROUTE);
+        if read == () || read.ok != true || !read.paths.contains(this.inserted_endpoint) {
+            return;
+        }
+        if read.paths.len() != 4 || read.paths[0] != this.inserted_before
+            || read.paths[1] != ROUTE + "/P1"
+            || read.paths[2] != this.inserted_after
+            || read.paths[3] != this.inserted_endpoint {
+            this.done = true;
+            report(this, false, "endpoint insertion produced unexpected route order: "
+                + read.paths.to_string());
+            return;
+        }
+        let extension = distance_between(
+            read.points[read.points.len() - 2],
+            read.points[read.points.len() - 1],
+        );
+        if extension == () {
+            this.done = true;
+            report(this, false, "endpoint insertion did not produce a measurable position");
+            return;
+        }
+        if (extension - 5.0).abs() > 0.01 {
+            this.done = true;
+            report(this, false, "endpoint insertion extended by " + extension.to_string()
+                + " m instead of 5 m");
+            return;
+        }
+        this.checks.push(t_true(true,
+            "endpoint insertion appends a route point exactly five meters outward"));
         this.done = true;
         report(this, true,
-            "unpossessed edit, possessed native selection, explicit Move, ghost placement, right-click, delete, and before/after insertion passed");
+            "unpossessed edit, possessed native selection, explicit Move, ghost placement, right-click, delete, midpoint before/after insertion, and five-meter endpoint insertion passed");
     }
 }
 

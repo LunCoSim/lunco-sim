@@ -20,18 +20,18 @@ SCENE_SOURCE = ROOT / "assets/scenes/tests/rocket_engine_observables.usda"
 CONTROL_SCENE_SOURCE = ROOT / "assets/scenes/terrain_only.usda"
 SCENARIO_SOURCE = ROOT / "assets/scenarios/tests/session_input_admission.rhai"
 RELEASE_SCENARIO_SOURCE = ROOT / "assets/scenarios/tests/session_control_release_admission.rhai"
-LIFECYCLE_SCENARIO_SOURCE = ROOT / "assets/scenarios/tests/session_lifecycle_safe_stop_capture.rhai"
+AUTHORITY_RELEASE_SCENARIO_SOURCE = ROOT / "assets/scenarios/tests/session_authority_release_preserves_ports.rhai"
 TIMEOUT_S = float(os.environ.get("SESSION_INPUT_TIMEOUT", "240"))
 PORT = int(os.environ.get("SESSION_INPUT_API_PORT", "4732"))
 PRODUCER_ID = 8182
 PORT_PRODUCER_ID = 8282
 RELEASE_PORT_PRODUCER_ID = 8383
 RELEASE_CONTROL_PRODUCER_ID = 8484
-LIFECYCLE_PORT_PRODUCER_ID = 8585
+AUTHORITY_PORT_PRODUCER_ID = 8585
 INPUT_NAME = "throttle"
 INPUT_VALUE = 0.375
 PORT_VALUE = 0.625
-LIFECYCLE_PORT_WRITES = {
+AUTHORITY_PORT_WRITES = {
     "forward": 0.7,
     "side": -0.25,
     "up": 0.4,
@@ -168,7 +168,7 @@ def wait_for_input_value(
 def wait_for_control_endpoint(session: ProductionSession) -> int:
     deadline = time.monotonic() + TIMEOUT_S
     last_entities: list[dict] = []
-    required_ports = set(LIFECYCLE_PORT_WRITES)
+    required_ports = set(AUTHORITY_PORT_WRITES)
     while time.monotonic() < deadline:
         entities = response_data(session.post({"type": "ListEntities"}), "ListEntities")[
             "entities"
@@ -247,7 +247,7 @@ def main() -> int:
         CONTROL_SCENE_SOURCE,
         SCENARIO_SOURCE,
         RELEASE_SCENARIO_SOURCE,
-        LIFECYCLE_SCENARIO_SOURCE,
+        AUTHORITY_RELEASE_SCENARIO_SOURCE,
     )
     if not all(source.is_file() for source in fixtures):
         raise RuntimeError("an input-admission fixture or Rhai verifier is missing")
@@ -570,74 +570,74 @@ def main() -> int:
                     "sim/scenes/lifecycle_controls.usda"
                 },
             )
-            lifecycle_target_gid = wait_for_control_endpoint(session)
+            authority_target_gid = wait_for_control_endpoint(session)
             execute(session, "SetTimeTransport", {"playing": True})
             execute(session, "StartSessionInputCapture")
-            lifecycle_port_ack = execute(
+            authority_port_ack = execute(
                 session,
                 "SetPorts",
                 {
-                    "target": lifecycle_target_gid,
+                    "target": authority_target_gid,
                     "writes": [
                         [name, value]
-                        for name, value in LIFECYCLE_PORT_WRITES.items()
+                        for name, value in AUTHORITY_PORT_WRITES.items()
                     ],
-                    "producer_id": LIFECYCLE_PORT_PRODUCER_ID,
+                    "producer_id": AUTHORITY_PORT_PRODUCER_ID,
                 },
             )
-            lifecycle_port_admission = lifecycle_port_ack.get("admission")
-            lifecycle_port_correlation_id = lifecycle_port_ack.get("correlation_id")
+            authority_port_admission = authority_port_ack.get("admission")
+            authority_port_correlation_id = authority_port_ack.get("correlation_id")
             if (
-                lifecycle_port_ack.get("target_gid") != lifecycle_target_gid
-                or lifecycle_port_ack.get("producer_kind") != "api_transport"
-                or lifecycle_port_ack.get("producer_id") != LIFECYCLE_PORT_PRODUCER_ID
-                or not isinstance(lifecycle_port_admission, dict)
-                or not lifecycle_port_correlation_id
+                authority_port_ack.get("target_gid") != authority_target_gid
+                or authority_port_ack.get("producer_kind") != "api_transport"
+                or authority_port_ack.get("producer_id") != AUTHORITY_PORT_PRODUCER_ID
+                or not isinstance(authority_port_admission, dict)
+                or not authority_port_correlation_id
             ):
                 raise RuntimeError(
-                    "lifecycle SetPorts returned an incomplete live admission: "
-                    f"{lifecycle_port_ack}"
+                    "authority-release SetPorts returned an incomplete live admission: "
+                    f"{authority_port_ack}"
                 )
-            wait_for_port_values(session, lifecycle_target_gid, LIFECYCLE_PORT_WRITES)
+            wait_for_port_values(session, authority_target_gid, AUTHORITY_PORT_WRITES)
             claim_ack = execute(
-                session, "ClaimControl", {"target": lifecycle_target_gid}
+                session, "ClaimControl", {"target": authority_target_gid}
             )
             authority_release_ack = execute(
-                session, "ReleaseControlClaim", {"target": lifecycle_target_gid}
+                session, "ReleaseControlClaim", {"target": authority_target_gid}
             )
             if not claim_ack or not authority_release_ack:
                 raise RuntimeError("control-authority transition returned an empty acknowledgement")
-            with LIFECYCLE_SCENARIO_SOURCE.open("r", encoding="utf-8") as source:
-                lifecycle_scenario = source.read()
-            lifecycle_offset = log_path.stat().st_size
-            lifecycle_script = execute(
+            with AUTHORITY_RELEASE_SCENARIO_SOURCE.open("r", encoding="utf-8") as source:
+                authority_scenario = source.read()
+            authority_offset = log_path.stat().st_size
+            authority_script = execute(
                 session,
                 "RunScenario",
                 {
-                    "target": lifecycle_target_gid,
-                    "source": lifecycle_scenario,
+                    "target": authority_target_gid,
+                    "source": authority_scenario,
                     "params": {
-                        "target_gid": lifecycle_target_gid,
-                        "producer_id": LIFECYCLE_PORT_PRODUCER_ID,
-                        "correlation_id": lifecycle_port_correlation_id,
-                        "admission": lifecycle_port_admission,
+                        "target_gid": authority_target_gid,
+                        "producer_id": AUTHORITY_PORT_PRODUCER_ID,
+                        "correlation_id": authority_port_correlation_id,
+                        "admission": authority_port_admission,
                     },
                 },
             )
-            if not lifecycle_script:
+            if not authority_script:
                 raise RuntimeError(
-                    "RunScenario returned an empty lifecycle verifier acknowledgement"
+                    "RunScenario returned an empty authority-release verifier acknowledgement"
                 )
-            lifecycle_verdict = wait_for_verdict(log_path, lifecycle_offset)
+            authority_verdict = wait_for_verdict(log_path, authority_offset)
 
             print(
-                "PASS — Modelica, SetPorts, control-release, and lifecycle safe-stop capture"
+                "PASS — Modelica, SetPorts, explicit releases, and authority-release port preservation"
             )
             print(f"    api_pid={session_pid} port={PORT} binary={BINARY}")
             print(f"    target={target_gid} Modelica={admission} SetPorts={port_admission}")
             print(
-                f"    lifecycle target={lifecycle_target_gid} "
-                f"SetPorts={lifecycle_port_admission}"
+                f"    authority release target={authority_target_gid} "
+                f"SetPorts={authority_port_admission}"
             )
             print("    Modelica input was observed at its admitted tick before the later SetPorts write")
             print(
@@ -647,7 +647,7 @@ def main() -> int:
             print(f"    log={log_path}")
             print(verdict.rstrip())
             print(release_verdict.rstrip())
-            print(lifecycle_verdict.rstrip())
+            print(authority_verdict.rstrip())
 
     return 0
 

@@ -133,7 +133,8 @@ consuming fixed tick through the same per-tick allocator. Missing facts or
 duplicate target/session order keys hold input with a structured runtime
 error; ordering does not fall back to Bevy `Entity` bits. An active
 `SessionInputStream` captures sorted canonical intent ids, admitted controls,
-authority-derived safe-stops, and raw-file spawn records. A `ControlSafeStop`
+explicit endpoint lifecycle safe-stops, and raw-file spawn records. Session
+authority changes do not rewrite endpoint simulation inputs. A `ControlSafeStop`
 immediately neutralizes its endpoint and, during capture, enters the queue as a
 `runtime_lifecycle` record for the next fixed tick. The co-simulation owner
 reapplies it at that tick; missing target, generation, tick, or order facts fail

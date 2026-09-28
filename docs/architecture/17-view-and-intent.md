@@ -379,8 +379,10 @@ avatar, or camera is. A producer can therefore be an avatar, an autopilot, a
 remote-control adapter, or another specialized controller. `ClaimControl` and
 `ReleaseControlClaim` expose the session transition directly for those
 headless/authored producers; each accepted transition emits
-`ControlAuthorityChanged`, and the co-simulation backend applies safe-stop
-handling to every released endpoint.
+`ControlAuthorityChanged`. Authority updates change who may provide manual
+input, while the co-simulation endpoint keeps its current simulation inputs.
+An explicit `ControlSafeStop` remains available for endpoint lifecycle events
+such as a disconnected controller.
 
 `AcquireControl` is the avatar-level composition of those primitives: its command
 validates the target's writable input surface, asks the session authority to
@@ -394,11 +396,11 @@ The generic command/value surface remains `SetPorts` for a controller that does
 not need an avatar camera. `AcquireControl` uses the same `SessionRegistry`
 transaction rather than maintaining a parallel ownership path.
 
-A possession handoff releases all prior claims for the session except the selected
-target, hard-stops every released vessel, and then commits the new link. Release
-performs the same hard stop before returning the avatar to free flight;
-wire-applied commands update authority without binding a remote avatar to the
-local camera.
+A possession handoff releases prior claims for the session except the selected
+target, then commits the new link. Releasing possession removes the local
+control and camera bindings and updates the authority presentation; it does not
+write rover ports or stop an authored autopilot. Wire-applied commands update
+authority without binding a remote avatar to the local camera.
 
 Free-flight and surface movement are kinematic camera motion and use the shared
 BigSpace/Avian collision contract described in
@@ -459,11 +461,13 @@ follow the persisted semantic input map rather than reading a raw key in the
 simulation.
 
 The generic `route_follow` policy consumes the same target-scoped
-`intent.edge` events: `Action` keeps its route toggle, while a pressed or pulsed
-vehicle control intent stops route guidance and clears any pending start. The
-shared controller keeps applying the bound operator frame on subsequent input
-ticks. A future authored autopilot uses this shared edge contract to yield
-without adding a vehicle-specific Rust path.
+`intent.edge` events only when the event is from the route subject and that
+subject is currently possessed. `Action` keeps its route toggle, while a pressed
+or pulsed vehicle control intent stops route guidance and clears any pending
+start. Input from the free avatar or another unpossessed control surface does
+not affect the route. The shared controller keeps applying the bound operator
+frame on subsequent input ticks. A future authored autopilot uses this shared
+edge contract to yield without adding a vehicle-specific Rust path.
 
 A press in the main scene is also the keyboard-focus handoff: the workbench
 surrenders retained egui editor focus before publishing `EguiFocus`, so a

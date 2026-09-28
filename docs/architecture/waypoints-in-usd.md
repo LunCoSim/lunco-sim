@@ -247,25 +247,27 @@ authorship, converts the active-frame position through the target's real parent
 hierarchy, and updates only its live render transform. It does not edit the USD
 document or trigger projection. Preview creation and cleanup each use one
 transient view-layer edit; only the placement click authors the waypoint's
-canonical `@runtime@` position. Selecting a point alone does not arm movement.
+canonical `@runtime@` position through the existing `MoveEntity` command, which
+owns active-frame conversion and persistence. Selecting a point alone does not
+arm movement.
 The terrain-sampled ribbon is rebuilt after commit, not on each hover event, so
 preview work does not batch-sample terrain or resample curve geometry.
 
-The point context menu adds `Add point before` and `Add point after` when the
-route has at least two active points. Each inserts a new ordinary marker and
-authors USD `primOrder` from the same settled list of active composed route
-points in the runtime operation group, excluding inactive referenced points;
-new point names also reserve authored-but-inactive children, so insertion
-cannot reuse a path whose inactive opinion would keep the new point out of the
-composed route. Existing point paths and route-progress identities do not
-change. Interior
-insertions use the adjacent-point midpoint. Endpoint insertions extend the
-neighboring segment by its authored length. A single-point route has no
-direction to infer, so the menu does not offer these actions yet. Right-clicking
-the ribbon opens `Add route point here`; its generated `BasisCurves` prim
-receives the standard pointer-interaction API in `@view@`, and the action uses
-the ribbon hit's world position, snapping its height to terrain when the
-terrain query has a support point.
+The point context menu labels insertion by its placement: interior actions name
+the neighboring points and midpoint, while endpoint actions name the point and
+the fixed five-meter extension. Each inserts a new ordinary marker and authors
+USD `primOrder` from the same settled list of active composed route points in
+the runtime operation group, excluding inactive referenced points; new point
+names also reserve authored-but-inactive children, so insertion cannot reuse a
+path whose inactive opinion would keep the new point out of the composed route.
+Existing point paths and route-progress identities do not change. Interior
+insertions use the adjacent-point midpoint. Endpoint insertions extend five
+meters outward along the neighboring segment's direction. A single-point route
+has no direction to infer, so the menu does not offer these actions yet.
+Right-clicking the ribbon offers `Add point at cursor on route`; its generated
+`BasisCurves` prim receives the standard pointer-interaction API in `@view@`,
+and the action uses the ribbon hit's world position, snapping its height to
+terrain when the terrain query has a support point.
 
 Rhai owns the gesture's meaning and returns typed semantic actions. Rust owns
 pointer sampling, ordered hit testing, capture, continuous gizmo handle math,
@@ -320,12 +322,13 @@ control link: the route remains active and continues publishing guidance. The
 rover status view follows the avatar's `ControlLink`, so it reports free flight
 after release and driving again after possession.
 
-A pressed or pulsed non-`Action` `intent.edge` addressed to the route subject is
-a manual override: `route_follow` disables guidance, clears any pending start,
-and safe-stops its guidance ports. The shared controller continues applying the
-operator's bound port frame on subsequent input ticks. `Action` remains the
-explicit route toggle; these rules use semantic intents and apply to any
-authored subject profile.
+A pressed or pulsed non-`Action` `intent.edge` from the currently possessed
+route subject is a manual override: `route_follow` disables guidance, clears any
+pending start, and safe-stops its guidance ports. Input from the free avatar or
+another unpossessed control surface leaves the route alone. The shared
+controller continues applying the operator's bound port frame on subsequent
+input ticks. `Action` remains the explicit route toggle; these rules use
+semantic intents and apply to any authored subject profile.
 
 ## Presentation
 

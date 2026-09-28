@@ -53,7 +53,8 @@ neutralize the endpoint at once, and admit a `runtime_lifecycle` input for the
 next fixed tick when capture is active. The record is captured at the ordered
 fixed-tick commit. A missing stable target, scene generation, tick, or shared
 order stamp fails the capture while preserving the immediate safety action.
-The safe-stop also cancels older queued port writes for that endpoint.
+The safe-stop also cancels older queued port writes for that endpoint. Session
+authority changes alone do not issue this event or alter endpoint inputs.
 
 `PortRegistry::port_entities` is the corresponding discovery projection. Each
 backend enumerates the component or authored surface it owns, and the registry

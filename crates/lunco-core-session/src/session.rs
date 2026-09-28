@@ -661,7 +661,7 @@ pub enum SessionInputProducer {
     DirectCommand { producer_id: u64 },
     /// Local user interaction associated with the current peer session.
     LocalUser { session_id: SessionId },
-    /// Internal simulation-owner lifecycle action, such as an authority safe-stop.
+    /// Internal simulation-owner lifecycle action, such as a stop on connection loss.
     RuntimeLifecycle,
 }
 
@@ -831,7 +831,7 @@ pub enum SessionInputPayload {
         /// Correlation id from the admitted command.
         correlation_id: u64,
     },
-    /// Reapply an authority-derived endpoint safe-stop at its admitted tick.
+    /// Reapply an endpoint lifecycle safe-stop at its admitted tick.
     ControlSafeStop,
 }
 

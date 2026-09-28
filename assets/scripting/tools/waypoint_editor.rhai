@@ -1060,17 +1060,24 @@ fn move_route_point(doc, route, point, position) {
     if !target.ok || !target.exists {
         return failure("move target does not exist");
     }
-    let result = apply_ops(doc, "Move route point", [#{ SetTranslate: #{
-        edit_target: "@runtime@",
-        path: point,
-        value: position,
-    }}]);
-    if result.ok {
-        result.path = point;
-        clear_move_preview(doc, route);
+    // Pointer positions are in the active physics frame. MoveEntity is the
+    // shared pose owner that converts them into this prim's parent-local USD
+    // transform and persists the same live move to Runtime.
+    let entity_id = find_path(point);
+    if entity_id < 0 {
+        return #{ ok: false, retryable: true,
+            error: "move target has no live scene projection" };
     }
+    let result = cmd("MoveEntity", #{ entity_id: entity_id, translation: position });
+    if result == () || result.ok != true {
+        return failure(if result == () { "MoveEntity returned no result" } else { result.error });
+    }
+    result.path = point;
+    clear_move_preview(doc, route);
     result
 }
+
+fn route_endpoint_extension_distance() { 5.0 }
 
 fn insertion_position(read, target, before) {
     if read == () || read.ok != true || read.paths.len() < 2 { return (); }
@@ -1096,15 +1103,41 @@ fn insertion_position(read, target, before) {
             (here[2] + adjacent[2]) * 0.5,
         ];
     }
-    // At an endpoint, extend the neighboring segment by the same distance.
-    // The route has at least two points, so this direction is authored data.
     let adjacent = if before { read.points[1] }
         else { read.points[read.points.len() - 2] };
+    let direction = [
+        here[0] - adjacent[0],
+        here[1] - adjacent[1],
+        here[2] - adjacent[2],
+    ];
+    let length = vlen(direction);
+    if length == () || length <= 1e-6 { return (); }
+    let step = route_endpoint_extension_distance();
     [
-        here[0] * 2.0 - adjacent[0],
-        here[1] * 2.0 - adjacent[1],
-        here[2] * 2.0 - adjacent[2],
+        here[0] + direction[0] * step / length,
+        here[1] + direction[1] * step / length,
+        here[2] + direction[2] * step / length,
     ]
+}
+
+fn insertion_action_label(read, target, before) {
+    if read == () || read.ok != true { return (); }
+    let index = -1;
+    for i in 0..read.paths.len() {
+        if read.paths[i] == target { index = i; break; }
+    }
+    if index < 0 { return (); }
+    let current = child_name(target);
+    let extension = " (+" + route_endpoint_extension_distance().to_string() + " m)";
+    if before && index == 0 {
+        return "Add point before " + current + extension;
+    }
+    if !before && index + 1 == read.paths.len() {
+        return "Add point after " + current + extension;
+    }
+    let first = if before { child_name(read.paths[index - 1]) } else { current };
+    let second = if before { current } else { child_name(read.paths[index + 1]) };
+    "Add point between " + first + " and " + second + " (midpoint)"
 }
 
 fn child_name(path) {
@@ -1130,7 +1163,7 @@ fn insert_route_point(context, before) {
     }
     let position = insertion_position(read, target, before);
     if position == () {
-        return failure("insert target is not an active route point");
+        return failure("insert target is active but its endpoint direction cannot be inferred");
     }
     let marker = marker_ops(context.doc_id, route, position, read);
     if marker.ok != true { return failure(marker.error); }
@@ -1545,7 +1578,7 @@ fn on_context(context) {
             world_position: context["world_position"],
         };
         let opened = open_context_menu(context.screen_position, [#{
-            label: "Add route point here",
+            label: "Add point at cursor on route",
             tool: "waypoint_editor",
             hook: "on_add_here",
             args: action_context,
@@ -1568,25 +1601,29 @@ fn on_context(context) {
             args: action_context,
         }];
     items.push(#{
-        label: "Move route point",
+        label: "Move point (click destination)",
         tool: "waypoint_editor",
         hook: "on_move_begin",
         args: action_context,
     });
     let route_read = route_positions(context.doc_id, route);
     if route_read.ok == true && route_read.paths.len() >= 2 {
-        items.push(#{
-            label: "Add point before",
-            tool: "waypoint_editor",
-            hook: "on_insert_before",
-            args: action_context,
-        });
-        items.push(#{
-            label: "Add point after",
-            tool: "waypoint_editor",
-            hook: "on_insert_after",
-            args: action_context,
-        });
+        if insertion_position(route_read, point, true) != () {
+            items.push(#{
+                label: insertion_action_label(route_read, point, true),
+                tool: "waypoint_editor",
+                hook: "on_insert_before",
+                args: action_context,
+            });
+        }
+        if insertion_position(route_read, point, false) != () {
+            items.push(#{
+                label: insertion_action_label(route_read, point, false),
+                tool: "waypoint_editor",
+                hook: "on_insert_after",
+                args: action_context,
+            });
+        }
     }
     items.push(#{
             label: "Delete route point",

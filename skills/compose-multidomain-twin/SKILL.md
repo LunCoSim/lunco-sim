@@ -354,8 +354,9 @@ supply a stable producer id; Twin Rhai uses its actor identity. Local Modelica
 canvas and port-inspector inputs use the local session id. Simulation-clock
 Rhai writes remain derived behavior.
 External `ReleasePort` and `ReleaseControl` commands use the same stable
-producer and fixed-tick admission contract; lifecycle-derived safe-stops remain
-owned by the authority transition. A
+producer and fixed-tick admission contract. Explicit `ControlSafeStop` events
+remain endpoint lifecycle actions, separate from session authority changes;
+releasing possession does not rewrite endpoint inputs. A
 bare editor-only model without a live port keeps its `ModelicaModel.inputs`
 owner. On a generated Modelica root that also carries
 `InputPorts`, `InputPorts` is the authored public command boundary and therefore

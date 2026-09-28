@@ -54,7 +54,6 @@ pub use joint::*;
 pub use ports::*;
 
 use lunco_api::executor::{DeferredCommandAppExt, PendingApiRequest, finish_command_result};
-use lunco_core_session::ControlAuthorityChanged;
 use lunco_cosim_core::{
     BindingRevision, BrokenConnection, ControlWriteFence, CosimDiagnostics, ForceActuator,
     PortHolds, RealtimeSafe, SimComponent, SimConnection, SimStatus, TorqueActuator,
@@ -266,7 +265,6 @@ impl Plugin for CoSimPlugin {
             .add_observer(mark_causal_state_sink::<ForceActuator>)
             .add_observer(mark_causal_state_sink::<TorqueActuator>)
             .add_observer(mark_joint_torque_port)
-            .add_observer(on_control_authority_changed)
             .add_observer(on_control_safe_stop);
         // Every built-in port owner installs its lifecycle hooks in the backend
         // module. Avian groups additionally carry their hooks beside their
@@ -1704,24 +1702,6 @@ fn apply_release_control(
     Ok(())
 }
 
-/// Translate released session authority into the backend's safe-stop command.
-///
-/// Session authority is expressed in stable global ids, while the co-simulation
-/// backend applies the stop to the live endpoint entity. Keeping that translation
-/// here lets every higher-level controller reuse the same authority transition.
-fn on_control_authority_changed(
-    trigger: On<ControlAuthorityChanged>,
-    q_endpoints: Query<(Entity, &lunco_core::GlobalEntityId), With<lunco_port_core::InputPorts>>,
-    mut commands: Commands,
-) {
-    let released = &trigger.event().released;
-    for (entity, gid) in q_endpoints.iter() {
-        if released.contains(&gid.get()) {
-            commands.trigger(ControlSafeStop { target: entity });
-        }
-    }
-}
-
 fn on_control_safe_stop(
     trigger: On<ControlSafeStop>,
     registry: Res<lunco_port_core::ports::PortRegistry>,
@@ -1730,7 +1710,7 @@ fn on_control_safe_stop(
     let target = trigger.event().target;
     let registry = registry.clone();
     commands.queue(move |world: &mut World| {
-        cancel_superseded_port_writes(world, target, None, "control-authority safe stop");
+        cancel_superseded_port_writes(world, target, None, "endpoint lifecycle safe stop");
         match apply_release_control(world, target, &registry) {
             Ok(()) => {
                 if let Err(message) = admit_lifecycle_safe_stop(world, target) {
