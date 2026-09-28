@@ -340,11 +340,12 @@ until that asset-upload budget admits them, so off-thread generation cannot turn
 into an unbounded main-thread upload burst. These are owner-local cursors, not
 compatibility stores or alternate sources of truth.
 
-USD visual projection keeps queued prims in authored-path order and checks
-duplicate-child identity only for each parent admitted within the frame budget.
-It reuses a system-local child-key scratch set across updates and does not
-precompute identities for the whole pending queue or scan every live USD prim
-for a small incremental batch.
+USD visual projection keeps a system-local ordered queue across frames. It
+inserts newly queued prims once, rebuilds the queue only when the active scene
+root changes, and admits prims in authored-path order under the existing frame
+budget. It checks duplicate-child identity only for each admitted parent and
+reuses its child-key scratch set; it does not sort the full pending queue again
+on every frame or scan every live USD prim for a small incremental batch.
 Celestial tile transitions keep reusable current and previous body maps, so
 steady frames do not allocate a replacement map and dirty writes do not clone
 the transition map.

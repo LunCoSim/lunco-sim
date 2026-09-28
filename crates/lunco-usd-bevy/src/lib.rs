@@ -1902,9 +1902,24 @@ fn any_pending_usd_meshes(q: Query<(), With<PendingUsdMesh>>) -> bool {
 
 #[derive(SystemParam)]
 struct UsdVisualProjectionState<'w, 's> {
+    newly_queued: Query<
+        'w,
+        's,
+        (Entity, &'static UsdPrimPath),
+        (
+            With<UsdSceneProjectionQueued>,
+            Added<UsdSceneProjectionQueued>,
+            Without<UsdSceneProjected>,
+            Without<UsdSceneProjectionFailed>,
+            Without<PendingUsdMesh>,
+        ),
+    >,
     children: Query<'w, 's, &'static Children>,
     paths: Query<'w, 's, &'static UsdPrimPath>,
     child_keys: Local<'s, std::collections::HashSet<(Entity, AssetId<UsdStageAsset>, String)>>,
+    queued: Local<'s, std::collections::BTreeSet<(String, Entity)>>,
+    queued_entities: Local<'s, std::collections::HashSet<Entity>>,
+    last_active_root: Local<'s, Option<Entity>>,
 }
 
 /// Project USD prims until the configured wall-clock budget is exhausted.
@@ -1956,6 +1971,24 @@ fn process_queued_usd_visuals(
     settings: Res<UsdVisualProjectionSettings>,
     mut commands: Commands,
 ) {
+    let active_root = mount_state.active_root();
+    if *visual_state.last_active_root != active_root {
+        visual_state.queued.clear();
+        visual_state.queued_entities.clear();
+        for (entity, prim_path, ..) in q.iter() {
+            if visual_state.queued_entities.insert(entity) {
+                visual_state.queued.insert((prim_path.path.clone(), entity));
+            }
+        }
+        *visual_state.last_active_root = active_root;
+    } else {
+        for (entity, prim_path) in &visual_state.newly_queued {
+            if visual_state.queued_entities.insert(entity) {
+                visual_state.queued.insert((prim_path.path.clone(), entity));
+            }
+        }
+    }
+
     let requested_profile = match quality.validated_profile() {
         Ok(profile) => profile,
         Err(reason) => {
@@ -1971,22 +2004,22 @@ fn process_queued_usd_visuals(
     }
     let started = web_time::Instant::now();
     let mut projected = 0usize;
+    let mut visited = 0usize;
 
-    // ECS query iteration reflects entity allocation, not authored USD order.
-    // Allocation can change when referenced layer closures finish on different
-    // frames, and the frame budget can then split the queue at a different
-    // boundary.  That used to make body/collider admission order a function of
-    // async timing, which is enough to change a contact solve even with one
-    // Avian compute thread.  Consume every queue in authored path order; the
-    // path is the stable identity within a stage and is already the key used by
-    // the canonical topology/indexes.
-    let mut queued: Vec<_> = q.iter().collect();
-    queued.sort_by(|left, right| left.1.path.cmp(&right.1.path));
-
-    for (entity, prim_path, vis, tf, is_instance_root, member, instance_projection) in queued {
-        if projected != 0 && started.elapsed() >= settings.frame_budget {
+    while !visual_state.queued.is_empty() {
+        if visited != 0 && started.elapsed() >= settings.frame_budget {
             break;
         }
+        let Some((_, entity)) = visual_state.queued.pop_first() else {
+            break;
+        };
+        visual_state.queued_entities.remove(&entity);
+        visited += 1;
+        let Ok((entity, prim_path, vis, tf, is_instance_root, member, instance_projection)) =
+            q.get(entity)
+        else {
+            continue;
+        };
         if stages.get(&prim_path.stage_handle).is_none() {
             continue;
         }
