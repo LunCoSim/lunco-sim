@@ -63,6 +63,16 @@ open SysML edits before running because tests read saved Twin files. Results
 are cleared when their Twin closes. The panel lives in the existing workbench
 Editor alongside the other native document tools.
 
+The **Traceability** view maps one requirement's declared subject types,
+explicit standard `satisfy` relationships, resolved `verify` cases, Twin test
+registrations, run outcomes, and source-revision-scoped evidence. Do not treat a
+subject type as a satisfy link or infer missing relationships. Source-backed
+nodes navigate to their analyzed declarations, and a mapped test can run from
+the map. The **Structure** view presents a filterable package/part/item/
+interface/port/connection hierarchy from the same prepared analysis and opens
+selected elements at their source lines. It is a hierarchy navigator, not full
+BDD/IBD diagram authoring or a general-purpose SysML editor.
+
 ### Preserve declared collection shape
 
 Read model values through the typed `SysmlModel.value` projection. A structured

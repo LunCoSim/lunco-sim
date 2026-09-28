@@ -99,6 +99,17 @@ for readiness failures, runtime faults, and exhausted limits. Bounded captured
 process output remains available for diagnostics. Unmapped links and
 requirements without `verify` links remain coverage gaps and are not executed.
 
+The **Traceability** view maps one selected requirement through declared
+subject types, explicit standard `satisfy` relationships, resolved `verify`
+cases, Twin test registration, run status, and structured evidence. Subject
+types are displayed separately from satisfy relationships; missing links stay
+visible and are never inferred. Source-backed requirement, model, and
+verification nodes open at their analyzed lines, and mapped tests can run from
+the map. The **Structure** view provides a filterable, navigable hierarchy of
+packages, parts, items, interfaces, ports, and connections from the same
+analysis revision. It supports source navigation without claiming to provide
+full BDD/IBD diagram authoring.
+
 The panel's overall requirement roll-up is `VERIFIED` only when the analyzed
 source has no parser/resolver diagnostics, a formal `require` criterion exists,
 every `verify` link maps to a Twin test, current requirement evidence passes,
