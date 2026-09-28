@@ -130,6 +130,11 @@ pub(crate) fn reconcile_frozen_subtrees(
     escape_paused: Query<(), With<crate::escape::PhysicsEscapePaused>>,
     mut commands: Commands,
 ) {
+    let mut joints_to_freeze = Vec::new();
+    let mut bodies_to_freeze = Vec::new();
+    let mut colliders_to_freeze = Vec::new();
+    let mut freeze_records = Vec::new();
+
     // ── Freeze: everything under a held root that is not frozen yet ──────────
     for root in &held {
         for entity in std::iter::once(root).chain(children.iter_descendants(root)) {
@@ -139,9 +144,10 @@ pub(crate) fn reconcile_frozen_subtrees(
             // The command order is intentional and the chained systems below
             // provide the matching release boundary.
             if joints.contains(entity) {
-                commands
-                    .entity(entity)
-                    .try_insert((JointDisabled, FrozenJointForReadiness { owner: root }));
+                joints_to_freeze.push((
+                    entity,
+                    (JointDisabled, FrozenJointForReadiness { owner: root }),
+                ));
             }
 
             let body = bodies.contains(entity);
@@ -149,23 +155,40 @@ pub(crate) fn reconcile_frozen_subtrees(
             if !body && !collider {
                 continue;
             }
-            let mut e = commands.entity(entity);
             if body {
-                e.try_insert(RigidBodyDisabled);
+                bodies_to_freeze.push((entity, RigidBodyDisabled));
             }
             if collider {
-                e.try_insert(ColliderDisabled);
+                colliders_to_freeze.push((entity, ColliderDisabled));
             }
             // Merge rather than overwrite: on a later frame this entity may gain
             // a collider it did not have when its body was first frozen, and the
             // record must remember both so release undoes both.
             let prior = frozen.get(entity).ok().map(|(_, f)| *f);
-            e.try_insert(FrozenForReadiness {
-                owner: root,
-                body: body || prior.is_some_and(|f| f.body),
-                collider: collider || prior.is_some_and(|f| f.collider),
-            });
+            freeze_records.push((
+                entity,
+                FrozenForReadiness {
+                    owner: root,
+                    body: body || prior.is_some_and(|f| f.body),
+                    collider: collider || prior.is_some_and(|f| f.collider),
+                },
+            ));
         }
+    }
+
+    // Preserve joint-before-body ordering, then apply repeated component types
+    // through Bevy's fallible batch path in held-root traversal order.
+    if !joints_to_freeze.is_empty() {
+        commands.try_insert_batch(joints_to_freeze);
+    }
+    if !bodies_to_freeze.is_empty() {
+        commands.try_insert_batch(bodies_to_freeze);
+    }
+    if !colliders_to_freeze.is_empty() {
+        commands.try_insert_batch(colliders_to_freeze);
+    }
+    if !freeze_records.is_empty() {
+        commands.try_insert_batch(freeze_records);
     }
 
     // ── Release: anything whose owner is no longer held (or is gone) ─────────

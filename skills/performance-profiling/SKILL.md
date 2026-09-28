@@ -394,6 +394,12 @@ IDs. Relationship bundles such as `ChildOf` can use the same fallible batch:
 Bevy runs their relationship hooks per entity, in batch order, while continuing
 past stale entities.
 
+For `reconcile_frozen_subtrees`, profile readiness freeze and release flushes
+separately from the system body. Batch repeated joint, rigid-body, collider, and
+ownership-record inserts in held-root traversal order, with joint disables
+queued before endpoint body disables; retain the chained joint-release boundary
+after body restoration.
+
 For `process_queued_usd_visuals`, include queue preparation in the frame-budget
 review. Reuse its system-local child-key scratch set across updates, and keep
 duplicate-child identity checks scoped to the parent being admitted after the
