@@ -410,6 +410,11 @@ metadata. Insert it only on the first valid physics-pose write; later external
 pose updates still write position/rotation and update the bridge shadow, while
 sleeping bodies wake through Avian's `Sleeping` removal hook.
 
+For `apply_pending_forces`, leave already-zero accumulators untouched so idle
+bodies do not publish a `PendingForces` change every fixed tick. Clear every
+nonzero command after application or while physics is held, and retain the
+terminal non-finite fault path.
+
 For `process_queued_usd_visuals`, include queue preparation in the frame-budget
 review. Reuse its system-local child-key scratch set across updates, and keep
 duplicate-child identity checks scoped to the parent being admitted after the

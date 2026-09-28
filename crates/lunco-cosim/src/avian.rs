@@ -1008,7 +1008,8 @@ fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) -> bool {
     true
 }
 
-/// Apply each entity's accumulated [`PendingForces`] into avian, then clear it.
+/// Apply each entity's nonzero accumulated [`PendingForces`] into avian, then
+/// clear those values. Already-zero accumulators stay unchanged across ticks.
 ///
 /// The single per-tick avian system: it bridges the `force_*` ports (which land
 /// in [`PendingForces`]) to avian's query-shaped `Forces` writer. Avian clears
@@ -1070,9 +1071,9 @@ pub fn apply_pending_forces(
             }
             continue;
         }
-        if physics_live
-            && (pf.f != DVec3::ZERO || pf.f_local != DVec3::ZERO || pf.torque != DVec3::ZERO)
-        {
+        let has_pending_force =
+            pf.f != DVec3::ZERO || pf.f_local != DVec3::ZERO || pf.torque != DVec3::ZERO;
+        if physics_live && has_pending_force {
             if let Ok(mut f) = forces.get_mut(e) {
                 if pf.f != DVec3::ZERO {
                     f.apply_force(pf.f);
@@ -1086,9 +1087,11 @@ pub fn apply_pending_forces(
                 }
             }
         }
-        pf.f = DVec3::ZERO;
-        pf.f_local = DVec3::ZERO;
-        pf.torque = DVec3::ZERO;
+        if has_pending_force {
+            pf.f = DVec3::ZERO;
+            pf.f_local = DVec3::ZERO;
+            pf.torque = DVec3::ZERO;
+        }
     }
 
     // Copy and clear actuator commands before applying them. The copy is
