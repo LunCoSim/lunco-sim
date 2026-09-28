@@ -125,8 +125,10 @@ the identity owner assigns their stable IDs; then the API registry publishes
 path lookups for those identities. Only after those steps can the time spine
 release the next fixed tick. This makes newly admitted referenced entities
 visible through `find_path` on the first resumed tick, without a startup-only
-route or a second scene-ready signal. The production `route_lifecycle` Rhai
-gate exercises reference admission and verifies that first-tick observation.
+route or a second scene-ready signal. The identity owner collects assignments
+in query iteration order and commits the same-component IDs through Bevy's
+fallible batch command before `EntityIndex`. The production `route_lifecycle`
+Rhai gate exercises reference admission and verifies that first-tick observation.
 The owner-level `drain_ref_spawns` test makes a later reference ready before its
 authored predecessor, confirms neither prim is projected while the prefix is
 incomplete, and checks both live-stage commits follow authored order after the

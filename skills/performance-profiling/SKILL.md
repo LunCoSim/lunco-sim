@@ -380,6 +380,12 @@ the same system is nearly free on settled frames. If the outer system is hot,
 attribute time to its internal owner operations before choosing an async
 boundary or cache.
 
+When `system_commands` dominates after a producer, inspect the number and shape
+of its deferred writes. For a large set of entities receiving the same bundle,
+use Bevy's existing batch command when its fallible/overwrite semantics match
+the owner, and preserve the owner's iteration order when it determines stable
+IDs.
+
 For `process_queued_usd_visuals`, include queue preparation in the frame-budget
 review. Reuse its system-local child-key scratch set across updates, and keep
 duplicate-child identity checks scoped to the parent being admitted after the
