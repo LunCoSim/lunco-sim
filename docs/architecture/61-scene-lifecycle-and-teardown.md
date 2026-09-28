@@ -168,12 +168,14 @@ mutation is committed on the main thread. The live OpenUSD stage is still
 incremental edits after the initial snapshot.
 
 `UsdVisualProjectionSettings::frame_budget` bounds prim binding because entity
-allocation and Bevy asset mutation are main-thread responsibilities.
+allocation and Bevy asset mutation are main-thread responsibilities. A prim
+count cap bounds the deferred command batch applied after that system returns;
+the time budget alone cannot bound this flush when many prims bind quickly.
 `child_spawn_budget` and `max_child_spawns_per_update` bound direct-child
-admission separately, including the deferred command flush after the systems
-return. Defaults are 4 ms for prim binding, 1 ms for child admission, and 128
-child entities per update. Each parent records children in stable composed-path
-order and keeps its `UsdSceneAwaitingStage` and `UsdSceneProjectionQueued`
+admission and its separate deferred command flush. Defaults are 4 ms and 128
+prim work items per update, plus 1 ms and 128 child entities per update. Each
+parent records children in stable composed-path order and keeps its
+`UsdSceneAwaitingStage` and `UsdSceneProjectionQueued`
 fences until every direct child has entered the ECS queue. Admission re-reads
 the current composed stage. Bevy child-set changes refresh that parent's live
 child keys, so a structural sink that creates a child while the continuation is

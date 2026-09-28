@@ -337,12 +337,12 @@ pub struct UsdResetXformStack;
 ///
 /// Canonical OpenUSD stages are `!Send` and Bevy render assets are main-thread
 /// resources, so projection cannot be moved wholesale to a worker. This
-/// resource keeps the UI responsive while still admitting a complete scene in
-/// a small number of frames. The budget is measured in wall-clock time because
-/// prim projection cost is not uniform; a prim may still overshoot the budget
-/// because its USD read and child scheduling are atomic. CPU geometry that can
-/// be detached from the `!Send` stage is dispatched to the async compute pool
-/// instead of extending this main-thread slice.
+/// resource paces main-thread work in bounded batches until the scene is
+/// admitted. Time is measured in wall clock because prim projection cost is
+/// not uniform; a prim may overshoot the time budget because its USD read and
+/// binding are atomic. The item limit also bounds the deferred command batch.
+/// CPU geometry that can be detached from the `!Send` stage is dispatched to
+/// the async compute pool instead of extending this main-thread slice.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct UsdVisualProjectionSettings {
     /// Maximum time the projector may start work in one `Update` pass.
@@ -350,6 +350,13 @@ pub struct UsdVisualProjectionSettings {
     /// A zero budget is invalid and is reported by the projector rather than
     /// silently changing the pacing contract.
     pub frame_budget: std::time::Duration,
+    /// Maximum number of queued prims bound in one `Update` pass.
+    ///
+    /// The time budget bounds the projector body, but Bevy applies the
+    /// recorded structural commands after the system returns. This item cap
+    /// keeps that deferred command batch bounded even when individual prims
+    /// bind quickly.
+    pub max_prim_work_items_per_update: usize,
     /// Maximum time spent admitting deferred direct children in one `Update`.
     pub child_spawn_budget: std::time::Duration,
     /// Maximum number of child entities admitted in one `Update`.
@@ -359,10 +366,11 @@ pub struct UsdVisualProjectionSettings {
 impl Default for UsdVisualProjectionSettings {
     fn default() -> Self {
         Self {
-            // Keep structural binding and its deferred command flush within a
-            // small part of a presentation frame. The independent child cap
-            // also bounds work Bevy applies after these systems return.
+            // Bound both prim binding time and the resulting deferred command
+            // batch. The independent child cap bounds its own later command
+            // flush after the admission system returns.
             frame_budget: std::time::Duration::from_millis(4),
+            max_prim_work_items_per_update: 128,
             child_spawn_budget: std::time::Duration::from_millis(1),
             max_child_spawns_per_update: 128,
         }
@@ -2011,11 +2019,12 @@ fn process_queued_usd_visuals(
         }
     };
     if settings.frame_budget.is_zero()
+        || settings.max_prim_work_items_per_update == 0
         || settings.child_spawn_budget.is_zero()
         || settings.max_child_spawns_per_update == 0
     {
         error!(
-            "[usd-bevy] USD visual projection requires non-zero time and child admission budgets; refusing invalid configuration"
+            "[usd-bevy] USD visual projection requires non-zero prim and child work budgets; refusing invalid configuration"
         );
         return;
     }
@@ -2025,6 +2034,9 @@ fn process_queued_usd_visuals(
 
     while !visual_state.queued.is_empty() {
         if visited != 0 && started.elapsed() >= settings.frame_budget {
+            break;
+        }
+        if visited >= settings.max_prim_work_items_per_update {
             break;
         }
         let Some((_, entity)) = visual_state.queued.pop_first() else {
