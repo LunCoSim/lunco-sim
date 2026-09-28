@@ -3564,10 +3564,20 @@ pub fn prepare_builtin_rhai_assets(
     let mut roles = HashMap::new();
     let mut classification_error = None;
     for rel in builtins.handles.keys() {
-        let role = match crate::tool_libs::classify_source(rel) {
-            Ok(role) => role,
-            Err(error) => {
+        let role = match builtins.classified_roles.get(rel) {
+            Some(Ok(role)) => Some(role.clone()),
+            Some(Err(error)) => {
                 let message = format!("Rhai source classification rejected {rel}: {error}");
+                if status.error.as_deref() != Some(&message) {
+                    error!("[rhai] {message}");
+                }
+                classification_error = Some(message);
+                None
+            }
+            None => {
+                let message = format!(
+                    "Rhai source {rel} has no classification result for the current admission revision"
+                );
                 if status.error.as_deref() != Some(&message) {
                     error!("[rhai] {message}");
                 }
@@ -3584,21 +3594,23 @@ pub fn prepare_builtin_rhai_assets(
             _ => None,
         })
         .collect::<std::collections::HashSet<_>>();
-    for (rel, processed) in builtins.processed.clone() {
-        let next_role = roles.get(&rel).cloned().unwrap_or(None);
-        if let Some(crate::tool_libs::ScriptSourceRole::Tool(name)) = processed.role {
+    for (rel, processed) in &builtins.processed {
+        let next_role = roles.get(rel).cloned().unwrap_or(None);
+        if let Some(crate::tool_libs::ScriptSourceRole::Tool(name)) = processed.role.as_ref() {
             if !matches!(
                 next_role,
-                Some(crate::tool_libs::ScriptSourceRole::Tool(ref next)) if next == &name
-            ) && !desired_tool_names.contains(&name)
+                Some(crate::tool_libs::ScriptSourceRole::Tool(ref next)) if next == name
+            ) && !desired_tool_names.contains(name)
             {
-                crate::tool_libs::unregister_standard_tool_library(&name);
+                crate::tool_libs::unregister_standard_tool_library(name);
             }
         }
-        if !builtins.handles.contains_key(&rel) {
-            builtins.processed.remove(&rel);
-        }
     }
+    let builtins = &mut *builtins;
+    let handles = &builtins.handles;
+    builtins
+        .processed
+        .retain(|rel, _| handles.contains_key(rel));
     builtins.prepared_revision = builtins.admission_revision;
     builtins.prepared_asset_revision = asset_revision.0;
     if let Some(message) = classification_error {

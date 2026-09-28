@@ -85,6 +85,10 @@ scans may overlap, their typed results commit in open order, and closing a Twin
 retires its pending result. Keep UI and physics responsive while scans are
 pending.
 
+Built-in Rhai source roles are cached for the active manifest and policy
+revision. Source preparation reuses those authored decisions and reconciles
+retired entries without copying their retained source text.
+
 ### Application interaction clocks are separate
 
 Command dispatch and one-shot REPL evaluation are application work, not

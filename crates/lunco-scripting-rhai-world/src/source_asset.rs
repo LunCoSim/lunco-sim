@@ -158,6 +158,10 @@ pub(crate) struct ProcessedRhaiSource {
 pub struct BuiltinRhaiAssets {
     pub(crate) handles: BTreeMap<String, Handle<RhaiSource>>,
     pub(crate) processed: HashMap<String, ProcessedRhaiSource>,
+    /// Authored roles selected for the current manifest and policy revision.
+    /// Preparation consumes the same decisions instead of invoking the policy
+    /// again for every admitted source.
+    pub(crate) classified_roles: HashMap<String, Result<ScriptSourceRole, String>>,
     /// Monotonic admission revision. The source policy is evaluated only when
     /// the manifest or its hook implementation changes, not once per update.
     pub(crate) admission_revision: u64,
@@ -267,13 +271,20 @@ fn request_builtin_rhai_assets(
     // The manifest is only an inventory. The authored policy owns the
     // extension and path decision, so this loop does not grow a Rust-side
     // allow-list as new source classes are authored.
+    builtins.classified_roles.clear();
     let mut admitted_ids = BTreeSet::new();
     for rel in manifest.rels() {
         let rel = rel.clone();
         let admitted = match crate::tool_libs::classify_source(&rel) {
-            Ok(Some(_)) => true,
+            Ok(Some(role)) => {
+                builtins.classified_roles.insert(rel.clone(), Ok(role));
+                true
+            }
             Ok(None) => false,
             Err(error) => {
+                builtins
+                    .classified_roles
+                    .insert(rel.clone(), Err(error.clone()));
                 // Keep the candidate alive so `prepare_builtin_rhai_assets`
                 // reports the typed classification failure and closes the
                 // runtime. A malformed policy result must not disappear as
