@@ -166,6 +166,10 @@ optional inclusive `range` bounds, the owning `source`, the current control
 `authority`, and `writable`. Consumers must use `writable` and the declared
 bounds before sending `SetPorts`; the command path remains authoritative and
 rejects undeclared inputs rather than creating them.
+Input writes and fast-path input locators use the same precedence-winning
+declared owner. A selected owner's refusal is terminal; it cannot redirect the
+write to a lower-precedence owner. Live `RunLint` reports duplicate public
+names as errors.
 
 `CausalTrace` is the read-only diagnostic path for answering “what happened to
 this action?” after a semantic edge. Its bounded edge ledger is keyed by the
@@ -359,7 +363,7 @@ Commands are typed — each domain crate defines its own command structs. The AP
 | Domain | Command | Description |
 |---|---|---|
 | **Control** | `SetPorts` | Write a vessel's named input ports (`throttle`/`steer`/`brake` for a rover; any FSW/Modelica/hardware port for other vessels). External API callers supply a stable nonzero `producer_id`; live writes are admitted for the next fixed tick and the acknowledgement returns the target, producer, correlation, and admission stamp. |
-| **Control** | `ReleasePort` / `ReleaseControl` | Release one named hold or apply the endpoint safe state. External live API callers supply a stable nonzero `producer_id`; acknowledgements include the fixed-tick admission stamp. |
+| **Control** | `ReleasePort` / `ReleaseControl` | Release one named hold, or all local input holds, at the admitted fixed tick. Release commands do not write replacement values. Twin policy writes explicit stop setpoints with `SetPorts`. External live API callers supply a stable nonzero `producer_id`; acknowledgements include the fixed-tick admission stamp. |
 | **Control** | `ClaimControl` / `ReleaseControlClaim` | Claim or release a stable endpoint for the originating session without binding an avatar camera. |
 | **Control** | `SimulateIntentEdge` | Emit one target-scoped semantic `pressed`, `released`, or `pulse` edge for a shared intent; the consuming Rhai/Modelica policy decides its meaning. |
 | **Control** | `AcquireControl` | Acquire a target control surface, optionally binding the local presentation rig. |
@@ -399,11 +403,16 @@ Commands are typed — each domain crate defines its own command structs. The AP
 Control is a single generic command — `SetPorts` writes the vessel's named input
 ports. A wheeled rover exposes `throttle`/`steer`/`brake`; each accepted value
 persists at the receiver until replacement or an explicit `ReleasePort`/
-`ReleaseControl`. External API calls to `SetPorts`, `ReleasePort`, and
+`ReleaseControl`. A release is an ordered input and applies after earlier
+admitted writes; it does not remove them from the input stream. `ReleaseControl`
+clears local input holds and returns those inputs to authored wiring without
+writing replacement values. External API calls to `SetPorts`, `ReleasePort`, and
 `ReleaseControl` include a stable nonzero `producer_id` and are acknowledged
 when admitted to the next fixed tick; the response carries the exact admission
 stamp. The composed Modelica/Rhai controller reads those inputs and publishes
-final motor and wheel-heading outputs through the authored port graph.
+final motor and wheel-heading outputs through the authored port graph. A
+release removes the local hold and returns the input to authored wiring; it
+does not synthesize neutral or braking values.
 
 ```bash
 curl -X POST http://127.0.0.1:4101/api/commands \

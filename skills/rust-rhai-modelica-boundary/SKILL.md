@@ -105,7 +105,8 @@ the first entity, a fabricated value, or an older behavior.
    priority scheduler. Superseded work may be withdrawn while queued. A running
    job is not preempted; reject its stale result at the owner and release only
    the exact progress operation it owns. Rhai scenario cache misses prepare
-   root-source ASTs through shared admission before `TimeSpineSet`. Coalesce
+   root-source ASTs through shared admission before the fixed runner admits
+   simulation. Coalesce
    identical source, asset, and runtime-revision misses into one immutable AST
    result. Buffer all currently pending results and commit them in stable actor
    order; keep exact progress holds through dependency planning, initialization,

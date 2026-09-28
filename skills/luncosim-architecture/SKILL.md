@@ -133,12 +133,13 @@ consuming fixed tick through the same per-tick allocator. Missing facts or
 duplicate target/session order keys hold input with a structured runtime
 error; ordering does not fall back to Bevy `Entity` bits. An active
 `SessionInputStream` captures sorted canonical intent ids, admitted controls,
-explicit endpoint lifecycle safe-stops, and raw-file spawn records. Session
-authority changes do not rewrite endpoint simulation inputs. A `ControlSafeStop`
-immediately neutralizes its endpoint and, during capture, enters the queue as a
-`runtime_lifecycle` record for the next fixed tick. The co-simulation owner
-reapplies it at that tick; missing target, generation, tick, or order facts fail
-capture without delaying the safety action. Spawn records retain producer,
+lifecycle input-hold releases, and raw-file spawn records. Session authority
+changes do not rewrite endpoint simulation inputs. `ReleaseControlInputs`
+joins the queue for the next fixed tick and clears only local input holds after
+earlier admitted inputs. It does not write endpoint values; Twin policy owns
+any safe setpoint and must issue explicit named `SetPorts` writes. Capture
+retains the ordered lifecycle record when active. Missing target, generation,
+tick, or order facts produce a runtime error and leave existing holds intact. Spawn records retain producer,
 correlation, stable scene-root and active-frame identities, original f64 pose,
 admission stamp, and reserved root id; acknowledgements expose that stamp.
 Document-backed `SpawnEntity` still authors only `ApplyUsdOps` into the Twin
@@ -190,7 +191,7 @@ through the existing status bus. Async data that changes authoritative physics,
 including a mounted DEM download/build, also holds an exact terrain entity key
 through the committed collider/oracle result; on web the hold spans the coarse
 preview and full worker result. The DEM bridge and readiness scan run in
-`PreUpdate` before `TimeSpineSet`, including while a Twin manifest scan is
+`PreUpdate` before `SimulationAdmissionSet`, including while a Twin manifest scan is
 pending, so the first eligible fixed tick cannot precede terrain admission.
 UI and presentation schedules remain live.
 Persistent edits to the mounted primary USD document hold one coalesced
@@ -199,10 +200,10 @@ matching ECS projection commit; disposable view-layer edits do not hold world
 time when their typed operation suffix is available; an unavailable suffix is
 conservatively treated as causal. Change detection admits UI/command edits in
 the `SimulationProgressAdmissionSet` after entity indexing and before the
-`PreUpdate` time spine, and admits edits issued inside a fixed Rhai/event pass
-in that lane in `FixedLast`. The time spine closes leftover fixed-loop overstep
-after the admission lane, preserving the tick that issued the edit and
-preventing a catch-up tick from seeing an unprojected revision. Do not poll
+`PreUpdate` simulation-admission boundary, and admits edits issued inside a
+fixed Rhai/event pass in that lane in `FixedLast`. The fixed runner completes
+the current cycle, then preserves its remaining overstep until the projected
+revision is committed. Do not poll
 document contents on steady frames or release the hold from a stage-only cursor
 before ECS projection completes.
 Physics readiness then admits bodies and joints on fixed steps. An active USD Modelica participant remains
@@ -223,7 +224,7 @@ Compile results must match both worker session and captured document
 generation. A result for an edited source revision is discarded, and an active
 model keeps its compile-run intent until a current result commits. The execution
 owner reconciles active causal models into `SimulationProgress` before
-`TimeSpineSet` and releases each exact entity key only after the matching
+`SimulationAdmissionSet` and releases each exact entity key only after the matching
 compile result has been committed. Intentionally paused and noncausal models do
 not hold world time. Their first normal co-simulation step uses the per-step
 barrier after activation. The root USD loader composes the available dependency
@@ -938,8 +939,10 @@ the compile once that document is current, using the same generation/session
 fences as authored models. USD projection must not send a direct worker compile.
 
 Scene lifecycle projection, stable entity identity assignment, and API/path
-index publication run in that order in `PreUpdate`, before `TimeSpineSet` can
-release simulation. Do not add a separate startup identity pass or readiness
+index publication run in that order in `PreUpdate`, before
+`SimulationAdmissionSet`. `ClockProjectionSet` gates the following virtual
+delta sample, and the fixed runner checks admission before each full tick. Do
+not add a separate startup identity pass or readiness
 poll; a projected reference must resolve by path on the first resumed tick.
 
 Keep acausal conservation connectors (`Pin`, `HeatPort`, `FluidPort`, `Flange`,

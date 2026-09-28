@@ -217,7 +217,8 @@ producer id enter the shared next-fixed-tick queue and are captured as ordered
 named writes; Simulation-clock Rhai writes remain derived behavior. Do not add a
 vehicle-specific setter. External API/direct and non-Simulation Rhai
 `ReleasePort`/`ReleaseControl` commands use the same producer identity and
-ordered session boundary. Battery
+ordered session boundary. Releases clear local holds only; Twin policy sends
+explicit setpoints with `SetPorts`. Battery
 empty events use the authored 0.1% usable-storage reserve in `Battery.mo`, not
 a solver-epsilon comparison.
 

@@ -622,7 +622,7 @@ impl Plugin for LunCoSimSimulationPlugin {
             PreUpdate,
             track_ground_collider_pending
                 .after(lunco_usd_terrain::UsdTerrainSet::Bridge)
-                .before(lunco_time::TimeSpineSet),
+                .before(lunco_time::SimulationAdmissionSet),
         );
         // LogDiagnosticsPlugin is loud (a multi-line summary every second) — gate
         // it on `--log-diag`.
@@ -636,7 +636,7 @@ impl Plugin for LunCoSimSimulationPlugin {
 ///
 /// The USD terrain bridge runs before this system in `PreUpdate`, with command
 /// application at that boundary, so the query sees the authoritative request
-/// before `TimeSpineSet` projects clocks into the next fixed loop. A query over
+/// before `SimulationAdmissionSet` completes scene-readiness admission. A query over
 /// every loaded USD prim is incorrect: most USD prims are not terrain and would
 /// block the simulation on data unrelated to ground physics.
 ///
@@ -720,7 +720,7 @@ mod ground_collider_gate_tests {
             PreUpdate,
             track_ground_collider_pending
                 .after(lunco_usd_terrain::UsdTerrainSet::Bridge)
-                .before(lunco_time::TimeSpineSet),
+                .before(lunco_time::SimulationAdmissionSet),
         );
         let terrain = app
             .world_mut()

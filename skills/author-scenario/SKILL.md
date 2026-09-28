@@ -175,10 +175,10 @@ callback does not depend on viewport query scope. Resolve a route-bearing
 pointer target before a previously selected or controlled subject, especially
 when one subject has multiple route programs. User possession is a
 `ControlLink`/`SessionRegistry` lifecycle, while a route program is guidance
-policy. Releasing possession hides the vessel HUD and applies the generic input
-safe state; an enabled route then republishes its active guidance target without
-claiming the user's session. Repossession restores the HUD without restarting
-the route.
+policy. Releasing possession hides the vessel HUD and releases manual input
+holds; an enabled route then republishes its active guidance target without
+claiming the user's session. Route policy owns any stop setpoint and writes it
+explicitly. Repossession restores the HUD without restarting the route.
 
 Script source edits made by a user go through the `ScriptDocument` host, so
 undo, redo, and the Twin journal see the same typed `ScriptOp`. A file-backed

@@ -121,8 +121,8 @@ placement math. A `position` you pass to `SpawnEntity` is Y-up metres.
 | `SetObjectProperty` | `{entity_id:u64, property, value}` | Set a named property (both strings; value is coerced by property type). |
 | `SelectEntity` | `{…}` | Select (drives the gizmo/inspector). |
 | `SetPorts` | `{target, writes:[[name,val]], producer_id?}` | Set a persistent input intent (e.g. drive a spawned rover); external API/direct and actorless Rhai callers provide a stable nonzero `producer_id` and receive the next-tick admission stamp. Twin Rhai uses its actor identity. For live targets, the local Port Inspector uses the active `LocalUser` session identity and also commits at a fixed tick. Use `ReleasePort` or `ReleaseControl` to release it — see [`author-scenario`](../author-scenario/SKILL.md) for behavior. |
-| `ReleasePort` | `{target, name, producer_id?}` | Release a named hold. External API/direct and actorless Rhai callers provide a stable nonzero `producer_id` and receive the next-tick admission stamp. Twin Rhai uses its actor identity. |
-| `ReleaseControl` | `{target, producer_id?}` | Apply the endpoint safe state. External API/direct and actorless Rhai callers provide a stable nonzero `producer_id` and receive the next-tick admission stamp. Twin Rhai uses its actor identity. |
+| `ReleasePort` | `{target, name, producer_id?}` | Release a named hold at its ordered fixed-tick commit after earlier admitted writes. External API/direct and actorless Rhai callers provide a stable nonzero `producer_id` and receive the admission stamp. Twin Rhai uses its actor identity. |
+| `ReleaseControl` | `{target, producer_id?}` | Release all local input holds after earlier admitted writes. It does not change endpoint values; authored stop policy writes named values through `SetPorts`. External API/direct and actorless Rhai callers provide a stable nonzero `producer_id` and receive the admission stamp. Twin Rhai uses its actor identity. |
 
 Discover the live set with `DiscoverSchema`; discover spawnables with `list_bundled`.
 For scene selection readback, use `query("InspectSelection")`; it returns

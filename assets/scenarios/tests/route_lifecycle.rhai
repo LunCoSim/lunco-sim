@@ -13,8 +13,9 @@ const APPLICATION_ADMISSION_PATH = "/RouteLifecycle/ApplicationAdmissionMarker";
 const APPLICATION_ADMISSION_EVENT = "ROUTE_LIFECYCLE_APPLICATION_EDIT";
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path(SUBJECT_PATH)], entity_reads: [], entity_writes: [],
-       query_reads: ["QueryUsdPrim", "ResolveUsdTarget", "InspectSelection", "ScriptInspect", "ScriptStatus", "ReadExposures"],
+    let subject = find_path(SUBJECT_PATH);
+    #{ modelica_entities: [subject], entity_reads: [subject], entity_writes: [],
+       query_reads: ["QueryUsdPrim", "QueryPhysicsState", "ResolveUsdTarget", "InspectSelection", "ScriptInspect", "ScriptStatus", "ReadExposures"],
        required_inputs: [] }
 }
 
@@ -278,6 +279,10 @@ fn on_start(me, ctx) {
     this.route_read_attempts = 0;
     this.done = false;
     this.checks = [];
+    this.startup_tick_valid = sim_tick() == 0;
+    this.first_behavior_tick_checked = false;
+    this.first_behavior_tick_valid = false;
+    this.first_physics_state_valid = false;
     if !is_unattended() {
         this.checks.push(t_true(this.visualization_prepared == true,
             "visualization preparation runs before simulation lifecycle startup"));
@@ -345,11 +350,36 @@ fn on_event(me, evt, ctx) {
 
 fn finish(me) {
     me.done = true;
+    me.checks.push(t_true(me.startup_tick_valid,
+        "on_start ran at SimTick 0 after startup admission completed"));
+    me.checks.push(t_true(me.first_behavior_tick_checked && me.first_behavior_tick_valid,
+        "the first on_tick ran at SimTick 1"));
+    me.checks.push(t_true(me.first_physics_state_valid,
+        "the first behavior tick observed a finite admitted body with authored mass and inertia"));
     report_verdict(me.checks, "ROUTE LIFECYCLE", "ROUTE_LIFECYCLE");
 }
 
 fn on_tick(me, ctx) {
     if this.done { return; }
+    if !this.first_behavior_tick_checked {
+        this.first_behavior_tick_checked = true;
+        this.first_behavior_tick_valid = sim_tick() == 1;
+        let state = query("QueryPhysicsState", #{ id: find_path(SUBJECT_PATH) });
+        if state != () && state.ok != false {
+            let inertia = state.inertia_principal_kgm2;
+            this.first_physics_state_valid = state.body_mode == "dynamic"
+                && state.physics_state_ready == true
+                && state.physics_state_pending == false
+                && state.physics_initialization_pending == false
+                && state.collider_present == true
+                && state.mass_kg != () && state.mass_kg > 0.0
+                && inertia != () && inertia.len() == 3
+                && inertia[0] > 0.0 && inertia[1] > 0.0 && inertia[2] > 0.0;
+            if !this.first_physics_state_valid {
+                print("ROUTE_FIRST_PHYSICS_STATE_INVALID|" + state.to_string());
+            }
+        }
+    }
     this.elapsed += dt();
     if this.elapsed > 45.0 {
         let detail = "route lifecycle acceptance timed out in phase " + this.phase;

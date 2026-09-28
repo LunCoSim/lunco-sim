@@ -120,10 +120,14 @@ also skip the exclusive graph transaction and its world query while detach
 still completes before joint admission.
 
 The pre-simulation `PreUpdate` order is `Lifecycle` → `IdentityAdmission` →
-`EntityIndex` → `TimeSpineSet`. Lifecycle projection creates the ECS entities;
-the identity owner assigns their stable IDs; then the API registry publishes
-path lookups for those identities. Only after those steps can the time spine
-release the next fixed tick. This makes newly admitted referenced entities
+`EntityIndex` → `SimulationAdmissionSet`. Lifecycle projection creates the ECS
+entities; the identity owner assigns their stable IDs; then the API registry
+publishes path lookups for those identities. `ClockProjectionSet` runs in
+`First`, before `TimeSystems` samples the next virtual delta. The fixed runner
+then checks current transport, scene-time, progress, and coupling admission
+before every complete `FixedMain` cycle. A barrier raised by one cycle stops
+the next cycle and keeps remaining `Time<Fixed>::overstep` queued until the
+owner releases it. This makes newly admitted referenced entities
 visible through `find_path` on the first resumed tick, without a startup-only
 route or a second scene-ready signal. The identity owner collects assignments
 in query iteration order and commits the same-component IDs through Bevy's
@@ -134,13 +138,19 @@ authored predecessor, confirms neither prim is projected while the prefix is
 incomplete, and checks both live-stage commits follow authored order after the
 predecessor becomes ready.
 
-Once scene readiness clears, the scenario gate opens before `TimeSpineSet`; the
-Rhai owner then admits compilation and acquires its progress hold before the
-next fixed tick. That hold continues through dependency planning,
-initialization, and the first `on_start`. Earlier fixed-step warm-up can still
-produce telemetry while scenario execution is held. Those pre-start events are
-not replayed into a later script; `on_start` reads current state from the
-authoritative owner.
+Scene, scene-time, terrain, Modelica initialization, and primary physics
+admission all hold the shared fixed clock until their owners publish readiness.
+USD physics projection follows the same lifecycle boundary: the BigSpace bridge
+seeds body poses in `PreUpdate`, then the joint owner's `JointPreparation` set
+resolves authored joints in `Update` after USD simulation projection and before
+`JointAdmission`.
+Joint topology therefore completes without waiting for a fixed physics cycle;
+the first cycle runs only after all startup owners release their holds.
+Rhai compilation, dependency planning, initialization, and `on_start` run in an
+ordered pre-tick lifecycle pass; the scenario's preparation hold remains active
+until `on_start` completes. A fresh process therefore starts `on_start` at
+`SimTick=0` and admits its first `on_tick` at `SimTick=1`, without advancing a
+physics or Modelica step during scene admission.
 
 Fixed-step time is not a wall-clock service guarantee. In the production GUI,
 Bevy drains `FixedMain` synchronously before `Update`; LunCoSim's rate-scaled
@@ -390,10 +400,10 @@ Persistent edits to the mounted primary document also acquire a coalesced
 `UsdDocumentProjection` key as soon as the document registry revision changes.
 Change detection admits edits from UI/command cycles in the shared
 `SimulationProgressAdmissionSet` after entity indexing and before the `PreUpdate`
-time spine, and admits edits issued inside a fixed Rhai/event pass in the same
-lane in `FixedLast`.
-The fixed clock closes any remaining catch-up overstep after that admission,
-preserving the tick that issued the edit. The key remains held until the exact
+simulation-admission boundary, and admits edits issued inside a fixed
+Rhai/event pass in the same lane in `FixedLast`. The fixed runner completes the
+cycle that issued the edit, then stops before another one while preserving any
+remaining catch-up time in `Time<Fixed>::overstep`. The key remains held until the exact
 or newer document generation is reflected in the ECS projection cursor;
 view-layer edits whose typed operation suffix is available do not hold
 simulation. If that suffix is unavailable, the owner conservatively admits the
@@ -414,7 +424,7 @@ a path-addressed diagnostic, and a persistent progress hold; scene teardown
 clears both before a replacement scene runs. `UsdSceneRuntimePlugin` installs
 the progress resource it needs, so selecting that capability is sufficient.
 The Modelica execution owner also reconciles active, causally required
-participants before the time spine. A participant whose current session still
+participants before the simulation-admission boundary. A participant whose current session still
 needs compilation owns one `ModelicaPreparation` key; compile intent is admitted
 in the lifecycle cycle, which continues while `Time<Virtual>` is held. The
 worker result is committed by the Modelica response handler before the next
@@ -478,14 +488,15 @@ behavior pass, and local-embodiment input stays on the interaction cadence.
 Live port-inspector writes and releases use the same queue with a `LocalUser`
 producer identity. `PanelCtx::trigger_command` scopes that session origin over
 deferred workbench dispatch so the cosim owner can admit and capture each
-action. An explicit endpoint lifecycle `ControlSafeStop` neutralizes its target
-immediately and, while capture is active, admits a typed `runtime_lifecycle`
-record for the next fixed tick through the same order allocator. Session
-authority transitions do not issue this event or rewrite endpoint simulation
-inputs. The session owner captures lifecycle stops at that commit boundary;
-failure to obtain their stable target, committed generation, tick, or order
-stamp fails capture without delaying the safety action. Unclassified direct
-port events remain outside this stream.
+action. The internal `ReleaseControlInputs` lifecycle event joins the shared
+input queue for the next fixed tick and only clears local input holds.
+Previously admitted inputs retain their tick and sequence and commit before
+the release. The session owner captures the lifecycle record at that commit
+when recording is active. Missing target, generation, tick, or order state
+reports a runtime error and leaves existing holds intact. Session authority
+transitions do not issue this event or rewrite endpoint simulation inputs.
+Twin policy writes any stop setpoint explicitly through `SetPorts`.
+Unclassified direct port events remain outside this stream.
 
 ## 4. Async preparation, priority, and result commit
 
@@ -644,7 +655,7 @@ or `Stop` phase. Its retained `policy_status().lifecycle.runtime_context` makes
 the owner stamp inspectable from Rhai and the API. Identical Rhai source misses share one
 immutable compile result. Rhai drains worker results into a scene-wide
 preparation barrier and commits the complete ready set in stable actor order
-before `TimeSpineSet` releases simulation time. Its exact progress holds remain
+before the fixed runner admits simulation time. Its exact progress holds remain
 active through dependency planning, top-level initialization, and the first
 `on_start`; cache hits use the same activation boundary without a worker.
 Scenario compilation captures the transitive literal-import closure from one
@@ -695,11 +706,11 @@ asset-loading task and publish text plus source-matched AST at the asset
 boundary; tools and prelude installation reuse that AST instead of compiling on
 the update thread. The owner buffers completed artifacts until every
 currently admitted scenario compile is ready, then commits by stable actor
-identity before the time spine. After the scene readiness gate opens, the
+identity before the fixed runner admits simulation. After the scene readiness gate opens, the
 scenario's progress hold remains through dependency planning, top-level
-initialization, and the first `on_start`, so later fixed ticks wait for
-activation. Earlier scene warm-up ticks may run while scenario execution is
-closed, as described above. Scenario `this` state and live-world calls remain
+initialization, and the first `on_start`, so fixed ticks wait for activation.
+Scene and physical admission do not consume fixed ticks; the process-wide
+`SimTick` remains monotonic across scene epoch changes. Scenario `this` state and live-world calls remain
 owned by the script activation/execution boundary. A paused Update
 activation still assigns dependency planning, initialization, and `on_start` the
 Simulation clock and current sequence; discrete events retain Lifecycle context.
@@ -872,6 +883,13 @@ runtime solver when checking support contact. Avian island admission still
 waits for the validated initial pose. This keeps startup validation from
 waiting on an admission step that itself depends on validation.
 
+Raycast support footprints are validated against the composed Avian colliders.
+The initial probe uses the hit collider's world normal to identify its support
+surface; it does not depend on `LocalGravity`, which is produced by the first
+fixed simulation cycle after admission. This keeps authored-pose validation
+inside lifecycle preparation without inventing a gravity sample or advancing a
+physics clock to obtain one.
+
 Scene readiness follows the same rule. Initial composition must establish one
 simulation start boundary: asynchronous load duration must not consume
 authoritative ticks. Runtime referenced assets and other new participants must
@@ -946,7 +964,7 @@ or model included in a cross-peer/replay guarantee needs its stable
 `GlobalEntityId` or another source-owned, replicated identity.
 
 External held-input changes, discrete edges, live `SetModelInput` changes,
-explicit endpoint lifecycle stops, and raw-file runtime spawns share the bounded
+lifecycle input-hold releases, and raw-file runtime spawns share the bounded
 session-owned ingress queue and assigned per-tick sequence. `SetModelInput`
 identifies live participants by
 stable `target_gid`; editor-only documents keep their document selector. While
@@ -958,9 +976,11 @@ root, active frame, catalog entry, exact `f64` pose, and reserved spawned-root
 `producer_id`; actorless Rhai requires one, while Twin Rhai retains its route
 and actor identity. Modelica records retain the declared input name, exact
 `f64` value, and command correlation. Document-backed spawns remain
-`ApplyUsdOps` in the Twin journal. A captured `ControlSafeStop` identifies its
-endpoint and `runtime_lifecycle` producer, and the co-simulation owner reapplies
-the safe state at that recorded tick. The fixed-step controller captures physical
+`ApplyUsdOps` in the Twin journal. A `ControlInputsReleased` record identifies
+its endpoint and `runtime_lifecycle` producer, joins the shared ordered queue
+for the next fixed tick, and clears local input holds after previously admitted
+inputs. It does not write endpoint values; authored Twin policy owns stop
+setpoints through explicit `SetPorts` commands. The fixed-step controller captures physical
 `ActionState<UserIntent>` into a
 by-value `PhysicalIntentFrame` semantic snapshot. When the controller and
 target have stable `GlobalEntityId`s and a committed scene generation, the
@@ -1048,33 +1068,24 @@ The whole-simulation guarantee remains open because:
    dependency closure before publishing the stage asset; the lifecycle progress
    key holds through structural projection; active primary references and
    causal Modelica compilation hold exact `SimulationProgress` keys; the USD
-   terrain bridge and progress scan run in `PreUpdate` before `TimeSpineSet`,
+   terrain bridge and progress scan run in `PreUpdate` before `SimulationAdmissionSet`,
    including a pending Twin manifest scan, so authored terrain data and
    collider work hold entity-keyed `SimulationProgress` before the first
    eligible fixed tick and through the web worker's coarse-to-full result; physics
-   admission uses the physics readiness owner; and scenarios open only after
-   their readiness state clears. These owners intentionally control different
-   clocks. CPU render-mesh construction no longer delays authoritative scene
-   admission. The production sensor fixture captures its first simulation
-   behavior call and verifies finite reads from both declared Modelica
-   participants and admitted physics ports. Its Rhai test also attaches two
-   scenario actors: the lower `GlobalEntityId` actor writes a temporary marker,
-   and the higher actor must observe and restore it during `on_start`. The
-   initial altimeter miss remains explicitly invalid until the first Avian ray
-   sample; a present zero is not treated as a valid range. The production
-   harness `scripts/compare_deterministic_startup_dependencies.py` runs the
-   scene twice at Compute width 1 and twice at the default width 24, then
-   compares the exact first-behavior trace for scene generation, actor identity,
-   IMU, altimeter, and contact values. The 2026-09-25 main-integrated build
-   matched at tick 10 across all four runs and passed the authored actor-order
-   verdict at Compute widths 1 and 24, with snapshot digest
-   `8ad6116be742467fe9d20f40e6e4b8e9c88ad59d587917550a08a0a3e7fe6bf5`.
-   Scene-readiness holds varied from 1,164 to 1,370 Update passes; participant
-   readiness took 9 passes, and each run took 1.0–1.2 seconds. This is
-   same-build evidence for one authored dependency graph; it does not force
-   opposite Modelica completion order or establish complete scene closure.
-   The first normal co-simulation step uses the per-step barrier after
-   activation.
+   admission publishes a scene-scoped progress key while body and joint state is
+   pending; and scenario startup waits for scene time, readiness, and external
+   progress holds. The USD bridge seeds authored body poses in `PreUpdate`, and
+   active Modelica participants publish their initialized t=0 output snapshot,
+   so neither owner needs a fixed-step warm-up. Rhai compilation, dependency
+   planning, initialization, and `on_start` complete before the fixed runner
+   admits the first fixed tick. The scene-test runner checks that both `SimTick`
+   and `Time<Fixed>` remain at zero during admission. The production `sensor`
+   and multi-rover Rhai tests now require `on_start` at tick 0 and the first
+   behavior sample at tick 1; their comparison harnesses use raw global ticks.
+   The updated production scenarios have not yet been rerun on a binary built
+   from this tree. The sensor actor-order check, first-sample validity contract,
+   and initial altimeter miss remain covered by its authored scenario. The first
+   normal co-simulation step uses the per-step barrier after activation.
 2. Dynamic references on the mounted primary scene hold admission through
    closure preparation and live projection; preview and additive mounts remain
    independent. Initial USD composition dependencies are fetched and composed
@@ -1163,8 +1174,9 @@ The whole-simulation guarantee remains open because:
    The session stream captures API and classified non-Simulation Rhai
    `SetPorts`, `ReleasePort`, and `ReleaseControl` commands, local
    port-inspector actions, explicitly identified direct typed port inputs, and
-   live `SetModelInput` changes plus explicit lifecycle `ControlSafeStop`
-   events at their fixed-tick boundaries. Unclassified
+   live `SetModelInput` changes plus lifecycle `ControlInputsReleased`
+   events at their fixed-tick boundaries. Lifecycle release clears local
+   input holds; Twin-authored policy owns explicit stop writes. Unclassified
    direct `SetPorts`, `ReleasePort`, and `ReleaseControl` events,
    scene lifecycle, other authored commands, and all Rhai/Modelica runtime
    state still need
@@ -1288,12 +1300,14 @@ These findings and their owner-specific file evidence are maintained in
 7. **First-tick admission and physics profile.** Prove that the first
    authoritative fixed tick follows every owner-specific readiness fact
    required by the active scene and scenario. Keep simulation-required async
-   work on exact `SimulationProgress` keys, physics readiness on the physics
-   gate, and presentation readiness on its own status path. Preserve the
-   schedules needed to finish physics admission and first solver exchange;
-   preparation must remain live while simulation time is held. Measure the
-   serial and any deterministic parallel solver profile before selecting the
-   production default.
+   work on exact `SimulationProgress` keys, including physical body/joint
+   admission, and keep presentation readiness on its own status path. Seed
+   authored poses and admit joints during lifecycle preparation; the Modelica
+   compile snapshot supplies initialized outputs at t=0, so no timed solver
+   exchange is needed before startup. Verify a fresh process calls `on_start`
+   at tick 0 and its first `on_tick` at tick 1. Measure the serial and any
+   deterministic parallel solver profile before selecting the production
+   default.
 8. **Real-time owner isolation.** Route main-world command reads/writes through
    typed tick-stamped requests and immutable snapshots, then move the whole
    authoritative tick to one paced simulation owner. Keep fixed `dt`, report

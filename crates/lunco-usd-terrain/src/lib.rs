@@ -130,7 +130,7 @@ impl TerrainSchemaStatus {
 
 /// Ordered phases of the USD terrain projection.
 ///
-/// The terrain scan runs in `PreUpdate` before [`lunco_time::TimeSpineSet`]. A
+/// The terrain scan runs in `PreUpdate` before [`lunco_time::SimulationAdmissionSet`]. A
 /// newly composed DEM therefore declares its exact simulation hold before the
 /// next fixed loop can advance.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -151,7 +151,7 @@ impl Plugin for UsdTerrainPlugin {
         )
         .configure_sets(
             PreUpdate,
-            UsdTerrainSet::Bridge.before(lunco_time::TimeSpineSet),
+            UsdTerrainSet::Bridge.before(lunco_time::SimulationAdmissionSet),
         );
         app.init_resource::<TerrainSchemaStatus>();
         app.add_systems(

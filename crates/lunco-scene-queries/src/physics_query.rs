@@ -7,7 +7,8 @@
 //! public query path without reaching into private ECS components.
 
 use avian3d::prelude::{
-    AngularVelocity, ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, LinearVelocity,
+    AngularInertia, AngularVelocity, CenterOfMass, ComputedAngularInertia, ComputedCenterOfMass,
+    ComputedMass, LinearVelocity, Mass, NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass,
     RigidBody, Sleeping,
 };
 use bevy::prelude::*;
@@ -223,6 +224,9 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             .get::<avian3d::prelude::RigidBodyDisabled>(entity)
             .is_some();
         let collider = world.get::<avian3d::prelude::Collider>(entity).is_some();
+        let authored_mass = world.get::<Mass>(entity);
+        let authored_inertia = world.get::<AngularInertia>(entity);
+        let authored_center_of_mass = world.get::<CenterOfMass>(entity);
         let mass = world.get::<ComputedMass>(entity);
         let center_of_mass = world.get::<ComputedCenterOfMass>(entity);
         let inertia = world.get::<ComputedAngularInertia>(entity);
@@ -383,7 +387,20 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             "physics_pose_authoritative": pose_authoritative,
             "rigid_body_disabled": disabled,
             "collider_present": collider,
+            "authored_mass_kg": authored_mass.map(|mass| mass.0 as f64),
+            "mass_override_active": world.get::<NoAutoMass>(entity).is_some(),
+            "authored_inertia_principal_kgm2": authored_inertia.map(|inertia| {
+                api_value!([inertia.principal.x, inertia.principal.y, inertia.principal.z])
+            }),
+            "inertia_override_active": world.get::<NoAutoAngularInertia>(entity).is_some(),
+            "authored_center_of_mass_m": authored_center_of_mass
+                .map(|center| api_value!([center.0.x, center.0.y, center.0.z])),
+            "center_of_mass_override_active": world
+                .get::<NoAutoCenterOfMass>(entity)
+                .is_some(),
             "mass_kg": mass.map(|mass| mass.value()),
+            "computed_mass_finite": mass.is_some_and(|mass| mass.is_finite()),
+            "computed_inertia_finite": inertia.is_some_and(|inertia| inertia.is_finite()),
             "center_of_mass_m": center_of_mass
                 .map(|center| api_value!([center.0.x, center.0.y, center.0.z])),
             "inertia_principal_kgm2": inertia.map(|inertia| {

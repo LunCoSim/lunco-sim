@@ -24,6 +24,10 @@ use lunco_doc::DocumentId;
 #[cfg(feature = "rhai")]
 use lunco_scripting::ScriptRegistry;
 #[cfg(feature = "rhai")]
+use lunco_scripting::scenario::{
+    ScenarioExecutionGate, ScenarioPreparationAdmissions,
+};
+#[cfg(feature = "rhai")]
 use lunco_scripting::doc::{
     ScenarioParameters, ScenarioReloadPolicy, ScriptDocument, ScriptLanguage, ScriptOp,
     ScriptedModel,
@@ -411,6 +415,33 @@ impl Default for RunScenario {
 }
 
 #[cfg(feature = "rhai")]
+fn reserve_attached_scenario_preparation(
+    target: Entity,
+    document_id: u64,
+    generation: u64,
+    parameters_revision: u64,
+    gate: &ScenarioExecutionGate,
+    coordinator: &lunco_core::SceneTransitionCoordinator,
+    admissions: &mut ScenarioPreparationAdmissions,
+    progress: &mut lunco_core_runtime::SimulationProgress,
+) {
+    if !gate.enabled {
+        return;
+    }
+    let Some(scene_generation) = coordinator.completed_generation() else {
+        return;
+    };
+    admissions.reserve(
+        target,
+        document_id,
+        generation,
+        parameters_revision,
+        scene_generation,
+        progress,
+    );
+}
+
+#[cfg(feature = "rhai")]
 #[on_command(RunScenario)]
 fn on_run_scenario(
     _t: On<RunScenario>,
@@ -419,9 +450,17 @@ fn on_run_scenario(
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
+    gate: Res<ScenarioExecutionGate>,
+    coordinator: Res<lunco_core::SceneTransitionCoordinator>,
+    mut admissions: ResMut<ScenarioPreparationAdmissions>,
+    mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let target = resolve_scenario_target(Some(cmd.target), &entities, &world_root)?;
+    let parameters_revision = q_existing
+        .get(target)
+        .map(|model| model.parameters_revision.wrapping_add(1))
+        .unwrap_or(0);
     let (doc_id_raw, generation) = attach_rhai_scenario(
         target,
         cmd.source.clone(),
@@ -437,6 +476,16 @@ fn on_run_scenario(
         &q_existing,
         &mut commands,
     )?;
+    reserve_attached_scenario_preparation(
+        target,
+        doc_id_raw,
+        generation,
+        parameters_revision,
+        &gate,
+        &coordinator,
+        &mut admissions,
+        &mut progress,
+    );
     Ok(Ack::with_data(
         OpId::new(),
         lunco_api_core::api_value!({ "document_id": doc_id_raw, "generation": generation }),
@@ -1198,9 +1247,17 @@ fn on_run_timeline(
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
+    gate: Res<ScenarioExecutionGate>,
+    coordinator: Res<lunco_core::SceneTransitionCoordinator>,
+    mut admissions: ResMut<ScenarioPreparationAdmissions>,
+    mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let step_count = timeline_step_count(&cmd.timeline).map_err(|e| format!("RunTimeline: {e}"))?;
+    let parameters_revision = q_existing
+        .get(cmd.target)
+        .map(|model| model.parameters_revision.wrapping_add(1))
+        .unwrap_or(0);
     let (doc_id_raw, generation) = attach_rhai_scenario(
         cmd.target,
         TIMELINE_EXECUTOR_SOURCE.to_string(),
@@ -1215,6 +1272,16 @@ fn on_run_timeline(
         &q_existing,
         &mut commands,
     )?;
+    reserve_attached_scenario_preparation(
+        cmd.target,
+        doc_id_raw,
+        generation,
+        parameters_revision,
+        &gate,
+        &coordinator,
+        &mut admissions,
+        &mut progress,
+    );
     Ok(Ack::with_data(
         OpId::new(),
         lunco_api_core::api_value!({
@@ -1303,6 +1370,10 @@ fn on_run_stored_timeline(
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
+    gate: Res<ScenarioExecutionGate>,
+    coordinator: Res<lunco_core::SceneTransitionCoordinator>,
+    mut admissions: ResMut<ScenarioPreparationAdmissions>,
+    mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let owner = crate::timelines::active_owner(ws.as_deref())
@@ -1321,6 +1392,10 @@ fn on_run_stored_timeline(
         .clone();
     let step_count =
         timeline_step_count(&timeline).map_err(|e| format!("RunStoredTimeline: {e}"))?;
+    let parameters_revision = q_existing
+        .get(cmd.target)
+        .map(|model| model.parameters_revision.wrapping_add(1))
+        .unwrap_or(0);
     let (doc_id_raw, generation) = attach_rhai_scenario(
         cmd.target,
         TIMELINE_EXECUTOR_SOURCE.to_string(),
@@ -1335,6 +1410,16 @@ fn on_run_stored_timeline(
         &q_existing,
         &mut commands,
     )?;
+    reserve_attached_scenario_preparation(
+        cmd.target,
+        doc_id_raw,
+        generation,
+        parameters_revision,
+        &gate,
+        &coordinator,
+        &mut admissions,
+        &mut progress,
+    );
     Ok(Ack::with_data(
         OpId::new(),
         lunco_api_core::api_value!({

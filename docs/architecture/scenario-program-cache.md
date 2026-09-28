@@ -42,7 +42,7 @@ module top-level bodies.
 The owner accepts a result only if scene generation, document generation,
 parameter revision, runtime preparation revision, and every discovered import's
 source text or absence still match. It buffers the complete pending compile set and commits in stable actor order before
-`TimeSpineSet`. Both cache hits and misses hold simulation progress through
+the fixed runner admits simulation. Both cache hits and misses hold simulation progress through
 dependency planning, per-instance initialization, and the first `on_start`.
 The scenario resolver consumes owner-committed module ASTs and fails visibly if
 one was not prepared for the current source. Import evaluation and top-level

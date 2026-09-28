@@ -184,6 +184,13 @@ fn deterministic_state_sample(rover_paths, rovers, capture_modelica_values) {
             && state.body_mode == "dynamic"
             && state.physics_state_ready == true
             && state.physics_state_pending == false
+            && state.physics_pose_seeded == true
+            && state.physics_admission_requested == false
+            && state.physics_initialization_pending == false
+            && state.rigid_body_disabled == false
+            && state.mass_kg != () && state.mass_kg > 0.0
+            && state.computed_mass_finite == true
+            && state.computed_inertia_finite == true
             && state.linear_velocity_mps != ()
             && state.angular_velocity_radps != ();
         if !state_is_valid {
@@ -265,6 +272,13 @@ fn trace_articulated_body_state(tick, rover_path, rover) {
                 record += "|q=" + state_vector(rotation);
                 record += "|v=" + state_vector(state.linear_velocity_mps);
                 record += "|w=" + state_vector(state.angular_velocity_radps);
+                record += "|authoredMass=" + state_scalar(state.authored_mass_kg);
+                record += "|massOverride=" + state_scalar(state.mass_override_active);
+                record += "|inertiaOverride=" + state_scalar(state.inertia_override_active);
+                record += "|computedMassFinite=" + state_scalar(state.computed_mass_finite);
+                record += "|computedInertiaFinite=" + state_scalar(state.computed_inertia_finite);
+                record += "|mass=" + state_scalar(state.mass_kg);
+                record += "|inertia=" + state_vector(state.inertia_principal_kgm2);
                 record += "|contact=" + state_scalar(contact.pair_count);
                 record += "," + state_scalar(contact.touching_pair_count);
                 record += "," + state_scalar(contact.manifold_count);
@@ -296,6 +310,8 @@ fn on_start(me, ctx) {
     this.deterministic_trace_ticks = [];
     this.early_determinism_trace_captured = false;
     this.deterministic_trace_valid = true;
+    this.startup_tick_valid = sim_tick() == 0;
+    this.first_behavior_tick_valid = false;
     this.guidance_checked = false;
     this.guidance_command_ready = false;
     this.next_determinism_sample_s = 6.0;
@@ -425,6 +441,7 @@ fn on_tick(me, ctx) {
 
     if !this.early_determinism_trace_captured {
         this.early_determinism_trace_captured = true;
+        this.first_behavior_tick_valid = sim_tick() == 1;
         let capture_modelica_values = sim_tick() < 10 || sim_tick() > 20;
         let sample = deterministic_state_sample(this.rover_paths, this.rovers,
             capture_modelica_values);
@@ -438,7 +455,8 @@ fn on_tick(me, ctx) {
         this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
         print("D4_TICK_STATE_TRACE_V1|" + sample.row);
     }
-    if this.rovers.len() == 20 && (sim_tick() == 11 || sim_tick() == 80) {
+    if this.rovers.len() == 20 && (sim_tick() == 1 || sim_tick() == 2
+        || sim_tick() == 11 || sim_tick() == 80) {
         for i in 0..this.rovers.len() {
             trace_articulated_body_state(
                 sim_tick(), this.rover_paths[i], this.rovers[i]);
@@ -521,6 +539,10 @@ fn on_tick(me, ctx) {
     let modelica_profile = modelica_worker_step_profile();
     checks.push(t_true(this.authored_pose_valid,
         "authored rover transforms are active and seeded before physics runs"));
+    checks.push(t_true(this.startup_tick_valid,
+        "on_start ran at SimTick 0 after the complete startup admission boundary"));
+    checks.push(t_true(this.first_behavior_tick_valid,
+        "the first on_tick ran at SimTick 1"));
     checks.push(t_true(this.guidance_checked && this.guidance_command_ready,
         "every rover received its authored Modelica guidance setpoint"));
     checks.push(t_true(this.physics_profile_known && this.physics_compute_threads >= 1,

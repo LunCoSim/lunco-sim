@@ -646,6 +646,9 @@ fn simulation_progress_facts(
                     lunco_core_runtime::SimulationProgressOwner::UsdSimulationTopology => {
                         "UsdSimulationTopology"
                     }
+                    lunco_core_runtime::SimulationProgressOwner::UsdPhysicsAdmission => {
+                        "UsdPhysicsAdmission"
+                    }
                     lunco_core_runtime::SimulationProgressOwner::TerrainPreparation => {
                         "TerrainPreparation"
                     }

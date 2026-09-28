@@ -101,9 +101,10 @@ skip it without creating window-message resources.
 `SetPorts` latches each named command value at the shared port receiver, so a
 one-shot API/Rhai write remains deterministic across fixed ticks. External
 commands with stable producer identity return their next-tick admission stamp.
-Use `ReleasePort` for one input or `ReleaseControl` to engage the complete safe
-vehicle state; external release commands use the same admission contract. The
-keyboard path continues to emit its resolved binding batch and therefore
+Use `ReleasePort` for one input or `ReleaseControl` to return all local input
+holds to authored wiring; release commands do not write replacement values.
+Twin policy owns safe values and writes them explicitly through `SetPorts`.
+The keyboard path continues to emit its resolved binding batch and therefore
 replaces or neutralizes its own values as intents change.
 
 The fixed-step vessel controller captures physical `ActionState<UserIntent>` into

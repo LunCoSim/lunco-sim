@@ -108,7 +108,7 @@ impl Default for SimConnection {
 /// the owner explicitly releases that port or the lifecycle boundary clears the
 /// vehicle. Re-setting the same port is latest-wins. This makes a single command
 /// deterministic across fixed ticks and lets a controller release all of its
-/// related ports atomically through the shared safe-stop command.
+/// related ports atomically through `ReleaseControl`.
 #[derive(Resource, Debug, Default)]
 pub struct PortHolds {
     /// `(entity, port) → latest commanded value`.
@@ -119,39 +119,6 @@ pub struct PortHolds {
     /// propagation cache uses this to rebuild held target indices off the
     /// steady fixed-tick path.
     revision: u64,
-}
-
-/// A one-fixed-tick lifecycle fence for deferred control writes.
-///
-/// `SetPorts` reaches its backend through a command-world closure. A control
-/// owner can be retired after it emitted a trigger but before that closure runs;
-/// without this fence the obsolete write can outlive the owner and re-arm its
-/// hold. Lifecycle handlers block the endpoint synchronously, and
-/// [`clear_control_write_fence`] opens it at the next fixed-tick boundary.
-#[derive(Resource, Debug, Default)]
-pub struct ControlWriteFence {
-    blocked: std::collections::HashSet<Entity>,
-}
-
-impl ControlWriteFence {
-    /// Reject deferred writes to `entity` until the next fixed tick.
-    pub fn block(&mut self, entity: Entity) {
-        self.blocked.insert(entity);
-    }
-
-    /// Whether a lifecycle boundary currently rejects writes to `entity`.
-    pub fn blocks(&self, entity: Entity) -> bool {
-        self.blocked.contains(&entity)
-    }
-
-    fn clear(&mut self) {
-        self.blocked.clear();
-    }
-}
-
-/// Open control endpoints at the start of the next fixed tick.
-pub fn clear_control_write_fence(mut fence: ResMut<ControlWriteFence>) {
-    fence.clear();
 }
 
 impl PortHolds {
@@ -241,10 +208,10 @@ impl PortHolds {
     }
 
     /// Return every entity with at least one persisted control intent.
+    /// The result has no stable order; owners admitting ordered actions must
+    /// sort by the entities' authoritative identities.
     pub fn held_entities(&self) -> Vec<Entity> {
-        let mut entities = self.holds.keys().copied().collect::<Vec<_>>();
-        entities.sort_by_key(|entity| entity.to_bits());
-        entities
+        self.holds.keys().copied().collect()
     }
 
     /// Copy live holds into the flat view consumed by presentation code.

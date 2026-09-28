@@ -107,8 +107,10 @@ pub fn reconcile_modelica_preparation_progress(
                 && participants.requires_barrier(entity)
         });
         let run_requested = !model.paused || model.resume_after_compile;
-        let preparation_pending =
-            model.last_error.is_none() && (!model.is_compiled || model.is_compiling);
+        let preparation_pending = model.last_error.is_none()
+            && (!model.is_compiled
+                || model.is_compiling
+                || (!model.paused && model.variables.is_empty()));
 
         if causal_participant && run_requested && preparation_pending {
             progress.acquire(
@@ -309,7 +311,7 @@ fn ordered_modelica_inputs(inputs: &HashMap<String, f64>) -> Vec<(String, f64)> 
 /// only thing in the system that compares the two clocks at all.
 pub fn spawn_modelica_requests(
     channels: Res<ModelicaChannels>,
-    mut fixed_time: ResMut<Time<Fixed>>,
+    fixed_time: ResMut<Time<Fixed>>,
     mut q_models: Query<(
         Entity,
         &mut ModelicaModel,
@@ -525,18 +527,6 @@ pub fn spawn_modelica_requests(
         coupling.shared_clock_participants = shared_clock_models;
         coupling.worst_lag_secs = worst_secs;
         coupling.worst_entity = worst_entity;
-    }
-
-    if coupling_held {
-        // Bevy's fixed runner may have accumulated several fixed periods for
-        // this render frame before this first solver request was dispatched.
-        // The current fixed iteration is the only valid one; discard the
-        // remaining overstep so the runner cannot execute another tick after
-        // the barrier has been raised. `project_time_transport` pauses the virtual
-        // clock before the next frame, which then keeps every FixedUpdate
-        // consumer (SimTick, Rhai, controllers, Modelica, and Avian) stopped
-        // until the result is released in Update.
-        lunco_time::discard_fixed_overstep(&mut fixed_time);
     }
 
     // Rate-limited divergence alarm. A coupled participant keeps the shared

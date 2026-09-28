@@ -170,8 +170,8 @@ fn route_subject_for(me, state) {
     route_subject_state_for(me, state).subject
 }
 
-// ReleaseControl is a discrete control transaction. A disabled route must not
-// enqueue the same fence and actuator reset on every fixed tick.
+// Route policy authors its explicit stop setpoint once. A disabled route must
+// not repeat the same port writes on every fixed tick.
 fn ensure_route_safe_stop(me, state) {
     if state.safe_stopped == true { return #{ ok: true, safe_stopped: true }; }
     let subject = route_subject_for(me, state);
@@ -960,10 +960,9 @@ fn on_event(me, evt, ctx) {
         return;
     }
     if evt.name == "cmd:ReleaseControl" && this.enabled {
-        // Releasing the avatar is a manual-control lifecycle edge, not a
-        // program stop. ReleaseControl applies its generic safe state once;
-        // clear the route's command cache so the next program step republishes
-        // the active waypoint without claiming the user's session.
+        // Releasing the avatar ends only the manual override. Clear the route's
+        // command cache so its next program step republishes the active
+        // waypoint without claiming the user's session.
         this.commanded_path = ();
         this.commanded_revision = ();
         this.commanded_view_key = ();
@@ -1068,7 +1067,7 @@ fn route_task_tick(m) {
     if !this.enabled {
         // An inactive program is a passive policy instance. Another
         // program may be selected for the same subject, so it must not
-        // overwrite that program's command surface with a safe stop.
+        // overwrite that program's command surface with its stop setpoint.
         if !this.selected { return; }
         let safe_stop = ensure_route_safe_stop(m, this);
         if safe_stop.ok == true { this.safe_stopped = true; }

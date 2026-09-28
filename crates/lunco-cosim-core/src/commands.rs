@@ -8,12 +8,13 @@
 use bevy::prelude::*;
 use lunco_core::Command;
 
-/// Internal lifecycle request to apply an endpoint safe state immediately.
-/// This is an owner event rather than a user command; authored external
-/// releases use [`ReleaseControl`] and enter the session input queue.
+/// Release an endpoint's local input holds at the next fixed tick.
+///
+/// This lifecycle event changes input ownership only. The authored wiring and
+/// control law decide the resulting input values.
 #[derive(Event, Clone, Copy, Debug)]
-pub struct ControlSafeStop {
-    /// Endpoint whose control surface must be neutralized.
+pub struct ReleaseControlInputs {
+    /// Endpoint whose local input holds are released.
     pub target: Entity,
 }
 
@@ -65,16 +66,16 @@ pub struct ReleasePort {
     pub producer_id: Option<u64>,
 }
 
-/// Release the complete control intent for an endpoint and apply its safe state.
+/// Release all local input holds for an endpoint and return its inputs to the
+/// authored wiring. This command does not write a replacement value.
 #[Command]
 pub struct ReleaseControl {
-    /// The endpoint whose complete control intent is released.
+    /// The endpoint whose local input holds are released.
     #[authz_target]
     pub target: Entity,
-    /// Stable producer identity for API, actorless Rhai, and direct typed
-    /// releases admitted to the session's next fixed tick. Twin Rhai uses its
-    /// stable actor identity and omits this field. Internal lifecycle releases
-    /// omit it because their cause is owned by another boundary.
+    /// Stable producer identity for external API, actorless Rhai, and direct
+    /// typed releases admitted to the session's next fixed tick. Twin Rhai uses
+    /// its stable actor identity and omits this field.
     #[serde(default)]
     #[reflect(default)]
     pub producer_id: Option<u64>,

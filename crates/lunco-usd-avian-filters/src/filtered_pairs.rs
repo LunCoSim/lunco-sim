@@ -267,8 +267,9 @@ fn collider_owner(
 
 /// Resolves authored pairs to entities and arms avian's pair filter on both ends.
 ///
-/// Runs in the same window as `build_usd_physics_joints` and for the same reason:
-/// avian's broad phase skips any pair already in the contact graph
+/// The authored-joint builder arms the pair during `Update`; this resolver
+/// completes collider-side filtering in Avian's prepare phase before broad
+/// phase. Avian's broad phase skips any pair already in the contact graph
 /// (`bvh_broad_phase.rs`, "Avoid duplicate pairs"), so a filter that arrives after
 /// the first narrow phase does not apply to a contact that already exists. It has
 /// to be armed before the bodies can touch, not merely eventually.

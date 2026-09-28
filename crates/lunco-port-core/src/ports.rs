@@ -39,7 +39,7 @@
 
 use bevy::prelude::*;
 use std::any::TypeId;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, Index, IndexMut};
 use std::sync::Arc;
@@ -830,6 +830,22 @@ pub struct PortCollision {
     pub owners: Vec<PortOwnerInfo>,
 }
 
+/// Why the registry could not apply an input write to its precedence winner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortWriteError {
+    /// No registered owner declares this input name.
+    NoInputOwner,
+    /// The winning input owner has a different causality than the caller requires.
+    DirectionMismatch {
+        /// Causality requested by the caller.
+        expected: PortDirection,
+        /// Causality declared by the winning owner.
+        actual: PortDirection,
+    },
+    /// The precedence-winning owner declined its own declared input.
+    OwnerRejected,
+}
+
 /// A discovered port: identity, causality, current value.
 ///
 /// Returned by [`PortRegistry::entity_ports`] for listing/introspection. The
@@ -1109,6 +1125,29 @@ const INPUT_PORTS_BACKEND: PortBackend = PortBackend {
     }),
 };
 
+fn backend_port_directions(
+    backend: &PortBackend,
+    world: &World,
+    entity: Entity,
+) -> BTreeMap<String, PortDirection> {
+    let mut ports = Vec::new();
+    (backend.list)(world, entity, &mut ports);
+    let mut by_name = BTreeMap::new();
+    for port in ports {
+        by_name
+            .entry(port.name)
+            .and_modify(|direction| {
+                *direction = match (*direction, port.direction) {
+                    (PortDirection::In, PortDirection::In)
+                    | (PortDirection::Out, PortDirection::Out) => *direction,
+                    _ => PortDirection::InOut,
+                };
+            })
+            .or_insert(port.direction);
+    }
+    by_name
+}
+
 impl PortRegistry {
     /// Register a backend. Later registrations have lower precedence on name
     /// collisions. Call from a plugin `build`.
@@ -1264,22 +1303,7 @@ impl PortRegistry {
     pub fn entity_port_owners(&self, world: &World, entity: Entity) -> Vec<PortOwnerInfo> {
         let mut out = Vec::new();
         for (precedence, backend) in self.backends.iter().enumerate() {
-            let mut ports = Vec::new();
-            (backend.list)(world, entity, &mut ports);
-            let mut by_name = BTreeMap::new();
-            for port in ports {
-                by_name
-                    .entry(port.name)
-                    .and_modify(|direction| {
-                        *direction = match (*direction, port.direction) {
-                            (PortDirection::In, PortDirection::In)
-                            | (PortDirection::Out, PortDirection::Out) => *direction,
-                            _ => PortDirection::InOut,
-                        };
-                    })
-                    .or_insert(port.direction);
-            }
-            for (name, direction) in by_name {
+            for (name, direction) in backend_port_directions(backend, world, entity) {
                 let metadata = backend
                     .metadata
                     .map(|describe| describe(world, entity, &name, direction))
@@ -1302,11 +1326,24 @@ impl PortRegistry {
         out
     }
 
+    /// Enumerate the precedence-winning input owner for each public input name.
+    /// Output-only owners do not claim an input name; `InOut` owners do.
+    pub fn input_port_owners(&self, world: &World, entity: Entity) -> Vec<PortOwnerInfo> {
+        let mut claimed = BTreeSet::new();
+        self.entity_port_owners(world, entity)
+            .into_iter()
+            .filter(|owner| {
+                matches!(owner.direction, PortDirection::In | PortDirection::InOut)
+                    && claimed.insert(owner.name.clone())
+            })
+            .collect()
+    }
+
     /// Find public names with more than one runtime owner on `entity`.
     ///
     /// `InOut` owners participate in both the input and output access sides
     /// when mixed with a one-way owner. Two or more `InOut` owners produce one
-    /// `InOut` collision, avoiding duplicate warnings for the same ambiguity.
+    /// `InOut` collision, avoiding duplicate findings for the same ambiguity.
     pub fn entity_port_collisions(&self, world: &World, entity: Entity) -> Vec<PortCollision> {
         let mut by_name: BTreeMap<String, Vec<PortOwnerInfo>> = BTreeMap::new();
         for owner in self.entity_port_owners(world, entity) {
@@ -1460,17 +1497,88 @@ impl PortRegistry {
         })
     }
 
-    /// Write `value` to **input** port `name`. Returns `true` if such an input
-    /// existed and was written. Strict: an undeclared name is rejected (never
-    /// silently created) — what lets the API and propagation master report
-    /// dangling wires. First backend that owns the port wins.
+    /// Write `value` to the precedence-winning declared input owner for `name`.
+    ///
+    /// Owner identity and causality come from the backend's public port list;
+    /// the write is then sent directly to that owner. An owner that declines its
+    /// declared input is an error and does not expose a lower-precedence owner.
+    /// Strictly rejects undeclared names, which lets API and propagation callers
+    /// report dangling ports instead of silently creating them.
     pub fn write_port(&self, world: &mut World, entity: Entity, name: &str, value: f64) -> bool {
-        for backend in &self.backends {
-            if (backend.write_input)(world, entity, name, value) {
-                return true;
+        self.write_input_port(world, entity, name, value).is_ok()
+    }
+
+    /// Write `value` through the precedence-winning input owner and return its
+    /// declared causality. `InOut` remains eligible for ordinary input writes.
+    pub fn write_input_port(
+        &self,
+        world: &mut World,
+        entity: Entity,
+        name: &str,
+        value: f64,
+    ) -> Result<PortDirection, PortWriteError> {
+        self.write_input_port_checked(world, entity, name, value, None)
+    }
+
+    /// Write `value` only when the precedence-winning input owner declares the
+    /// requested causality. The registry resolves and writes through the same
+    /// backend, so a lower-precedence owner cannot receive the named write.
+    pub fn write_input_port_with_direction(
+        &self,
+        world: &mut World,
+        entity: Entity,
+        name: &str,
+        value: f64,
+        expected: PortDirection,
+    ) -> Result<PortDirection, PortWriteError> {
+        self.write_input_port_checked(world, entity, name, value, Some(expected))
+    }
+
+    fn write_input_port_checked(
+        &self,
+        world: &mut World,
+        entity: Entity,
+        name: &str,
+        value: f64,
+        expected: Option<PortDirection>,
+    ) -> Result<PortDirection, PortWriteError> {
+        let Some((backend_index, actual)) = self.resolve_input_owner(world, entity, name) else {
+            return Err(PortWriteError::NoInputOwner);
+        };
+        if let Some(expected) = expected
+            && expected != actual
+        {
+            return Err(PortWriteError::DirectionMismatch {
+                expected,
+                actual,
+            });
+        }
+        let backend = self
+            .backends
+            .get(backend_index)
+            .expect("resolved input owner belongs to this registry");
+        if !(backend.write_input)(world, entity, name, value) {
+            return Err(PortWriteError::OwnerRejected);
+        }
+        Ok(actual)
+    }
+
+    /// Return the first input-capable owner of `name` in registry order.
+    /// Output-only owners do not shadow input owners; `InOut` owners do.
+    fn resolve_input_owner(
+        &self,
+        world: &World,
+        entity: Entity,
+        name: &str,
+    ) -> Option<(usize, PortDirection)> {
+        for (backend_index, backend) in self.backends.iter().enumerate() {
+            if let Some(direction) = backend_port_directions(backend, world, entity).remove(name)
+                && matches!(direction, PortDirection::In | PortDirection::InOut)
+            {
+                return Some((backend_index, direction));
             }
         }
-        false
+        None
     }
 
     // ── Resolve→slot fast path ─────────────────────────────────────────────────
@@ -1508,34 +1616,24 @@ impl PortRegistry {
         None
     }
 
-    /// Resolve an **input** endpoint to a [`ResolvedPort`] for writing. See
+    /// Resolve the precedence-winning declared input endpoint to a
+    /// [`ResolvedPort`] fast-path locator. See
     /// [`resolve_output`](Self::resolve_output).
     ///
-    /// Inputs may be **write-only** (an avian `force_y` reads `None`), so a
-    /// readable-input probe can't detect every owner. We therefore stop at the
-    /// first backend that owns the input *either* readably *or* via its own
-    /// `resolve_input` (the authority for write ownership). Precedence holds for
-    /// our registration order — readable map-backed inputs precede the
-    /// write-only fast-path Avian inputs — so a write-only port's name can't
-    /// shadow an earlier readable input.
+    /// Input ownership comes from the same public port list used by
+    /// [`write_port`](Self::write_port). If the winning owner has no slot
+    /// resolver, this returns `None`; the caller must use the named write path,
+    /// which addresses that same owner and never falls through to a shadowed
+    /// input.
     pub fn resolve_input(&self, world: &World, entity: Entity, name: &str) -> Option<ResolvedPort> {
-        for (i, b) in self.backends.iter().enumerate() {
-            if let Some(resolve) = b.resolve_input {
-                if let Some(slot) = resolve(world, entity, name) {
-                    return Some(ResolvedPort {
-                        backend: i,
-                        slot,
-                        side: ResolvedPortSide::Input,
-                    });
-                }
-            }
-            if (b.read_input)(world, entity, name).is_some() {
-                // Earlier name-only readable owner: the caller's named write
-                // reaches it first, so a lower backend must not claim the name.
-                return None;
-            }
-        }
-        None
+        let (backend_index, _) = self.resolve_input_owner(world, entity, name)?;
+        let backend = self.backends.get(backend_index)?;
+        let slot = (backend.resolve_input?)(world, entity, name)?;
+        Some(ResolvedPort {
+            backend: backend_index,
+            slot,
+            side: ResolvedPortSide::Input,
+        })
     }
 
     /// Resolve a readable **input-side** source to a slot. This is distinct
@@ -1827,6 +1925,140 @@ mod tests {
         read_input_slot: None,
         write_slot: None,
     };
+
+    #[test]
+    fn input_writes_and_fast_resolution_stay_with_the_declared_precedence_owner() {
+        #[derive(Component)]
+        struct StatePort(f64);
+
+        #[derive(Component)]
+        struct ShadowedInput(f64);
+
+        let mut world = World::new();
+        let entity = world.spawn((StatePort(0.25), ShadowedInput(0.75))).id();
+        let mut registry = PortRegistry::default();
+        registry.register(PortBackend {
+            list_entities: |_world, _out| {},
+            topology_key: |_world, _entity| 1,
+            list: |world, entity, out| {
+                if let Some(state) = world.get::<StatePort>(entity) {
+                    out.push(PortRef {
+                        name: "shared".into(),
+                        direction: PortDirection::InOut,
+                        value: state.0,
+                    });
+                }
+            },
+            metadata: None,
+            read_output: |world, entity, name| {
+                (name == "shared")
+                    .then(|| world.get::<StatePort>(entity).map(|state| state.0))
+                    .flatten()
+            },
+            read_input: |world, entity, name| {
+                (name == "shared")
+                    .then(|| world.get::<StatePort>(entity).map(|state| state.0))
+                    .flatten()
+            },
+            write_input: |world, entity, name, value| {
+                if name != "shared" {
+                    return false;
+                }
+                let Some(mut state) = world.get_mut::<StatePort>(entity) else {
+                    return false;
+                };
+                state.0 = value;
+                true
+            },
+            resolve_output: None,
+            resolve_input: None,
+            read_slot: None,
+            read_input_slot: None,
+            write_slot: None,
+        });
+        registry.register(PortBackend {
+            list_entities: |_world, _out| {},
+            topology_key: |_world, _entity| 1,
+            list: |world, entity, out| {
+                if let Some(input) = world.get::<ShadowedInput>(entity) {
+                    out.push(PortRef {
+                        name: "shared".into(),
+                        direction: PortDirection::In,
+                        value: input.0,
+                    });
+                }
+            },
+            metadata: None,
+            read_output: |_, _, _| None,
+            read_input: |world, entity, name| {
+                (name == "shared")
+                    .then(|| world.get::<ShadowedInput>(entity).map(|input| input.0))
+                    .flatten()
+            },
+            write_input: |world, entity, name, value| {
+                if name != "shared" {
+                    return false;
+                }
+                let Some(mut input) = world.get_mut::<ShadowedInput>(entity) else {
+                    return false;
+                };
+                input.0 = value;
+                true
+            },
+            resolve_output: None,
+            resolve_input: Some(|world, entity, name| {
+                (name == "shared" && world.get::<ShadowedInput>(entity).is_some()).then_some(0)
+            }),
+            read_slot: None,
+            read_input_slot: Some(|world, entity, slot| {
+                (slot == 0)
+                    .then(|| world.get::<ShadowedInput>(entity).map(|input| input.0))
+                    .flatten()
+            }),
+            write_slot: Some(|world, entity, slot, value| {
+                if slot != 0 {
+                    return false;
+                }
+                let Some(mut input) = world.get_mut::<ShadowedInput>(entity) else {
+                    return false;
+                };
+                input.0 = value;
+                true
+            }),
+        });
+
+        let owners = registry.input_port_owners(&world, entity);
+        let owner = owners
+            .iter()
+            .find(|owner| owner.name == "shared")
+            .expect("the shared input owner is declared");
+        assert_eq!(owner.direction, PortDirection::InOut);
+        assert_eq!(owner.precedence, 1);
+        assert_eq!(
+            registry.resolve_input(&world, entity, "shared"),
+            None,
+            "the lower In owner's slot cannot bypass the winning InOut owner"
+        );
+        assert_eq!(
+            registry.write_input_port_with_direction(
+                &mut world,
+                entity,
+                "shared",
+                0.0,
+                PortDirection::In,
+            ),
+            Err(super::PortWriteError::DirectionMismatch {
+                expected: PortDirection::In,
+                actual: PortDirection::InOut,
+            })
+        );
+        assert_eq!(world.get::<StatePort>(entity).unwrap().0, 0.25);
+        assert_eq!(world.get::<ShadowedInput>(entity).unwrap().0, 0.75);
+
+        assert!(registry.write_port(&mut world, entity, "shared", 0.5));
+        assert_eq!(world.get::<StatePort>(entity).unwrap().0, 0.5);
+        assert_eq!(world.get::<ShadowedInput>(entity).unwrap().0, 0.75);
+    }
 
     #[test]
     fn generic_input_ports_are_listed_and_written_through_the_registry() {

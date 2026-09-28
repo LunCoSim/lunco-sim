@@ -2587,7 +2587,18 @@ mod tests {
             .register(lunco_port_core::ports::PortBackend {
                 list_entities: |_, _| {},
                 topology_key: |_, _| 0,
-                list: |_, _, _| {},
+                list: |world, entity, out| {
+                    if world
+                        .get::<lunco_core::GlobalEntityId>(entity)
+                        .is_some()
+                    {
+                        out.push(lunco_port_core::ports::PortRef {
+                            name: "frame".into(),
+                            direction: lunco_port_core::ports::PortDirection::In,
+                            value: 0.0,
+                        });
+                    }
+                },
                 metadata: None,
                 read_output: |_, _, _| None,
                 read_input: |_, _, _| None,

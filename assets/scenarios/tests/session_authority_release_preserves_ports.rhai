@@ -30,7 +30,7 @@ fn on_tick(me, params) {
     let stream = query("ReadSessionInputStream", #{});
     if stream == () || stream["records"] == () { return; }
     let port_write = ();
-    let safe_stop = ();
+    let lifecycle_release = ();
     for record in stream["records"] {
         let payload = record["payload"];
         if payload["kind"] == "port_input_writes"
@@ -41,9 +41,9 @@ fn on_tick(me, params) {
                 == this.correlation_id.to_string() {
             port_write = record;
         }
-        if payload["kind"] == "control_safe_stop"
+        if payload["kind"] == "control_inputs_released"
             && record["target"].to_string() == this.target_gid.to_string() {
-            safe_stop = record;
+            lifecycle_release = record;
         }
     }
     if port_write == () { return; }
@@ -82,8 +82,8 @@ fn on_tick(me, params) {
             "the endpoint input write retained its admitted fixed-tick identity"),
         t_true(producer_matches && captured_writes == this.expected_writes,
             "the captured endpoint input write differs from the API request"),
-        t_true(safe_stop == (),
-            "ClaimControl/ReleaseControlClaim must not create a rover safe-stop"),
+        t_true(lifecycle_release == (),
+            "ClaimControl/ReleaseControlClaim must not enqueue a lifecycle input release"),
         t_true(ports_preserved,
             "authority release changed endpoint inputs: " + values.to_string()),
         t_true(stopped["ok"] == true && complete["state"] == "complete",

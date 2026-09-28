@@ -338,14 +338,27 @@ fn on_client_disconnected(
     mut local: ResMut<LocalSession>,
     mut status: ResMut<NetStatus>,
     holds: Option<Res<lunco_cosim_core::PortHolds>>,
+    global_ids: Query<&lunco_core::GlobalEntityId>,
     mut commands: Commands,
 ) {
     if let Some(holds) = holds {
+        let mut stable_targets = Vec::new();
+        let mut missing_id_targets = Vec::new();
         for entity in holds.held_entities() {
-            // The disconnected client cannot issue its normal ReleaseControlSource path.
-            // Clear predicted/local intents now so reconnecting or re-possession
-            // cannot inherit an abandoned command surface.
-            commands.trigger(lunco_cosim_core::commands::ControlSafeStop { target: entity });
+            if let Ok(global_id) = global_ids.get(entity) {
+                stable_targets.push((global_id.get(), entity));
+            } else {
+                missing_id_targets.push(entity);
+            }
+        }
+        stable_targets.sort_unstable_by_key(|(global_id, _)| *global_id);
+        for (_, entity) in stable_targets {
+            // Release predicted/local holds at the next fixed tick so a future
+            // owner starts from authored wiring rather than stale client intent.
+            commands.trigger(lunco_cosim_core::commands::ReleaseControlInputs { target: entity });
+        }
+        for entity in missing_id_targets {
+            commands.trigger(lunco_cosim_core::commands::ReleaseControlInputs { target: entity });
         }
     }
     local.0 = SessionId::LOCAL;

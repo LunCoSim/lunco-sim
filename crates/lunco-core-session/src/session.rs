@@ -661,7 +661,7 @@ pub enum SessionInputProducer {
     DirectCommand { producer_id: u64 },
     /// Local user interaction associated with the current peer session.
     LocalUser { session_id: SessionId },
-    /// Internal simulation-owner lifecycle action, such as a stop on connection loss.
+    /// Internal simulation-owner lifecycle action, such as releasing disconnected input holds.
     RuntimeLifecycle,
 }
 
@@ -825,14 +825,14 @@ pub enum SessionInputPayload {
         /// Correlation id from the admitted command.
         correlation_id: u64,
     },
-    /// Release an endpoint's control intent and apply its safe state at a
-    /// fixed simulation tick.
+    /// Release every local input hold for an endpoint at a fixed simulation
+    /// tick in response to a command.
     ControlInputRelease {
         /// Correlation id from the admitted command.
         correlation_id: u64,
     },
-    /// Reapply an endpoint lifecycle safe-stop at its admitted tick.
-    ControlSafeStop,
+    /// Release every local input hold at a lifecycle boundary.
+    ControlInputsReleased,
 }
 
 fn validate_session_input(
@@ -980,7 +980,7 @@ fn validate_session_input(
                 return Err("control input release requires a nonzero correlation id".to_owned());
             }
         }
-        SessionInputPayload::ControlSafeStop => {}
+        SessionInputPayload::ControlInputsReleased => {}
     }
 
     if target.get() == 0 {
@@ -1071,7 +1071,10 @@ fn validate_session_input(
             SessionInputPayload::PortInputRelease { .. }
             | SessionInputPayload::ControlInputRelease { .. },
         )
-        | (SessionInputProducer::RuntimeLifecycle, SessionInputPayload::ControlSafeStop) => {}
+        | (
+            SessionInputProducer::RuntimeLifecycle,
+            SessionInputPayload::ControlInputsReleased,
+        ) => {}
         (SessionInputProducer::PhysicalController { .. }, _) => {
             return Err("physical controller producer requires a physical intent frame".to_owned());
         }
@@ -1081,8 +1084,10 @@ fn validate_session_input(
         (SessionInputProducer::RuntimeLifecycle, _) => {
             return Err("runtime lifecycle producer requires a lifecycle payload".to_owned());
         }
-        (_, SessionInputPayload::ControlSafeStop) => {
-            return Err("control safe-stop requires the runtime lifecycle producer".to_owned());
+        (_, SessionInputPayload::ControlInputsReleased) => {
+            return Err(
+                "control input lifecycle release requires a runtime lifecycle producer".to_owned(),
+            );
         }
         (SessionInputProducer::LocalUser { .. }, _) => {
             return Err(
@@ -1199,67 +1204,6 @@ impl PendingSessionInputs {
     /// Pending entries in their current queue order, for owner diagnostics.
     pub fn entries(&self) -> impl Iterator<Item = &PendingSessionInput> {
         self.pending.iter()
-    }
-
-    /// Remove pending `SetPorts` writes superseded by an immediate release.
-    /// An explicit release is ordered after every item already admitted to
-    /// this queue, so those older setpoints cannot be allowed to re-arm the
-    /// endpoint after its release boundary.
-    pub fn cancel_port_input_writes(
-        &mut self,
-        target: lunco_core::GlobalEntityId,
-        port: Option<&str>,
-    ) -> Vec<SessionInputRecord> {
-        let mut canceled = Vec::new();
-        let mut index = 0;
-        while index < self.pending.len() {
-            let (remove_input, canceled_record) = {
-                let input = &mut self.pending[index];
-                if input.record.target != target {
-                    (false, None)
-                } else {
-                    let original_record = input.record.clone();
-                    match &mut input.record.payload {
-                        SessionInputPayload::PortInputWrites {
-                            writes,
-                            correlation_id,
-                        } => {
-                            let mut removed_writes = Vec::new();
-                            writes.retain(|(name, value)| {
-                                if port.is_none_or(|port| name == port) {
-                                    removed_writes.push((name.clone(), *value));
-                                    false
-                                } else {
-                                    true
-                                }
-                            });
-                            let has_removed_writes = !removed_writes.is_empty();
-                            let canceled_record = if has_removed_writes {
-                                let mut record = original_record;
-                                record.payload = SessionInputPayload::PortInputWrites {
-                                    writes: removed_writes,
-                                    correlation_id: *correlation_id,
-                                };
-                                Some(record)
-                            } else {
-                                None
-                            };
-                            (writes.is_empty(), canceled_record)
-                        }
-                        _ => (false, None),
-                    }
-                }
-            };
-            if let Some(record) = canceled_record {
-                canceled.push(record);
-            }
-            if remove_input {
-                self.pending.remove(index);
-            } else {
-                index += 1;
-            }
-        }
-        canceled
     }
 
     /// Take inputs whose tick is due, preserving their shared admission order.
@@ -3237,15 +3181,19 @@ mod session_input_stream_tests {
             held: true,
             correlation_id: 19,
         };
-        let mut mismatched_safe_stop = physical_record(10, 1);
-        mismatched_safe_stop.producer = SessionInputProducer::DirectCommand { producer_id: 7 };
-        mismatched_safe_stop.payload = SessionInputPayload::ControlSafeStop;
+        let mut mismatched_lifecycle_release = physical_record(10, 1);
+        mismatched_lifecycle_release.producer =
+            SessionInputProducer::DirectCommand { producer_id: 7 };
+        mismatched_lifecycle_release.payload = SessionInputPayload::ControlInputsReleased;
 
         for (record, expected_error) in [
             (invalid_payload, "unknown intent"),
             (mismatched_producer, "physical intent frame requires"),
             (mismatched_lifecycle, "runtime lifecycle producer requires"),
-            (mismatched_safe_stop, "control safe-stop requires"),
+            (
+                mismatched_lifecycle_release,
+                "control input lifecycle release requires",
+            ),
         ] {
             let mut stream = SessionInputStream::default();
             stream.begin(4).expect("capture starts");
@@ -3305,62 +3253,6 @@ mod session_input_stream_tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending.take_due(11)[0].record().sequence, second.sequence);
         assert!(pending.is_empty());
-    }
-
-    #[test]
-    fn immediate_port_release_cancels_only_older_matching_admitted_writes() {
-        let mut pending = PendingSessionInputs::default();
-        let mut order = lunco_control_core::SimulationInputOrderAllocator::default();
-        let target = lunco_core::GlobalEntityId::from_raw(42);
-        let producer = SessionInputProducer::DirectCommand { producer_id: 7 };
-        for (writes, correlation_id) in [
-            (vec![("throttle", 0.5), ("steer", 0.25)], 19),
-            (vec![("steer", -0.25)], 20),
-            (vec![("throttle", -0.5)], 21),
-        ] {
-            pending
-                .admit(
-                    &mut order,
-                    producer,
-                    target,
-                    3,
-                    10,
-                    SessionInputPayload::PortInputWrites {
-                        writes: writes
-                            .into_iter()
-                            .map(|(name, value)| (name.to_owned(), value))
-                            .collect(),
-                        correlation_id,
-                    },
-                    None,
-                )
-                .expect("typed SetPorts input is admitted");
-        }
-
-        let canceled = pending.cancel_port_input_writes(target, Some("throttle"));
-        assert_eq!(
-            canceled
-                .iter()
-                .map(|record| match &record.payload {
-                    SessionInputPayload::PortInputWrites { correlation_id, .. } => *correlation_id,
-                    _ => unreachable!("cancellation returns port writes only"),
-                })
-                .collect::<Vec<_>>(),
-            vec![19, 21]
-        );
-        assert_eq!(pending.len(), 2);
-        let due = pending.take_due(10);
-        assert_eq!(due.len(), 2);
-        assert!(matches!(
-            &due[0].record().payload,
-            SessionInputPayload::PortInputWrites { writes, .. }
-                if writes == &[("steer".to_owned(), 0.25)]
-        ));
-        assert!(matches!(
-            &due[1].record().payload,
-            SessionInputPayload::PortInputWrites { writes, .. }
-                if writes == &[("steer".to_owned(), -0.25)]
-        ));
     }
 
     #[test]

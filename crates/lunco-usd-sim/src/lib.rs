@@ -1062,6 +1062,8 @@ impl Plugin for UsdSimPlugin {
             (
                 UsdSimSet::ProjectionPrepare.before(UsdSimSet::Projection),
                 UsdSimSet::Projection.before(lunco_spatial::SceneSpatialHandoffSet),
+                UsdSimSet::Projection
+                    .before(lunco_usd_avian_joints::JointPreparation),
                 lunco_usd_avian_joints::JointAdmission.after(UsdSimSet::Projection),
                 UsdSimSet::ActivateDynamicBodies,
             ),
@@ -1133,6 +1135,7 @@ impl Plugin for UsdSimPlugin {
             PreUpdate,
             sync_physics_body_admission_hold
                 .after(activate_dynamic_bodies)
+                .in_set(lunco_core_runtime::SimulationProgressAdmissionSet)
                 .before(lunco_physics::apply_physics_holds),
         );
         // Screen-constant markers. `PostUpdate` before transform propagation:
@@ -5122,17 +5125,21 @@ fn sync_physics_body_admission_hold(
     preview_roots: Query<(), With<UsdPreviewOnly>>,
     mount: Option<Res<lunco_core::SceneMountState>>,
     primary_roots: Query<&UsdPrimPath, With<UsdSceneRoot>>,
-    holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    mut progress: Option<ResMut<lunco_core_runtime::SimulationProgress>>,
+    mut previous_progress_key: Local<Option<lunco_core_runtime::SimulationProgressKey>>,
 ) {
-    let Some(mut holds) = holds else { return };
     // A ready additive document or editor preview must not suspend the running
     // Twin. Only the pending closure below the currently mounted primary root
-    // owns this simulation-wide admission boundary.
+    // owns this simulation-wide admission boundary. Physics holds protect the
+    // solver directly; SimulationProgress keeps every shared fixed-cycle
+    // consumer on the same clock while body poses and joint endpoints settle.
     let primary_root = mount
         .as_deref()
         .and_then(lunco_core::SceneMountState::active_root)
-        .and_then(|root| primary_roots.get(root).ok());
-    let pending_admission = primary_root.is_some_and(|primary| {
+        .filter(|root| primary_roots.get(*root).is_ok());
+    let primary_path = primary_root.and_then(|root| primary_roots.get(root).ok());
+    let pending_admission = primary_path.is_some_and(|primary| {
         pending.iter().any(|(entity, path)| {
             let belongs_to_primary = path.is_some_and(|path| {
                 path.stage_handle.id() == primary.stage_handle.id()
@@ -5145,11 +5152,37 @@ fn sync_physics_body_admission_hold(
             belongs_to_primary && !is_preview_only(entity, &parents, &preview_roots)
         })
     });
-    if holds.holds(lunco_physics::PhysicsHolds::BODY_ADMISSION) != pending_admission {
+
+    if let Some(holds) = holds.as_deref_mut()
+        && holds.holds(lunco_physics::PhysicsHolds::BODY_ADMISSION) != pending_admission
+    {
         holds.set(
             lunco_physics::PhysicsHolds::BODY_ADMISSION,
             pending_admission,
         );
+    }
+
+    let desired_key = if pending_admission {
+        primary_root.map(lunco_core_runtime::SimulationProgressKey::usd_physics_admission)
+    } else {
+        None
+    };
+    if let Some(progress) = progress.as_deref_mut()
+        && (*previous_progress_key != desired_key
+            || desired_key.is_some_and(|key| !progress.contains(key)))
+    {
+        if let Some(previous) = *previous_progress_key
+            && desired_key != Some(previous)
+        {
+            progress.release(previous);
+        }
+        if let Some(key) = desired_key {
+            progress.acquire(
+                key,
+                "Waiting for the mounted scene's physical bodies and joints to be admitted",
+            );
+        }
+        *previous_progress_key = desired_key;
     }
 }
 

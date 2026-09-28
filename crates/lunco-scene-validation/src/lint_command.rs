@@ -124,6 +124,7 @@ pub(crate) fn usd_physics_facts_with_control_info(
     if let H::Map(entries) = &mut facts {
         entries.push(("runtime_connections".to_string(), H::Array(Vec::new())));
         entries.push(("runtime_joints".to_string(), H::Array(Vec::new())));
+        entries.push(("runtime_port_collisions".to_string(), H::Array(Vec::new())));
         entries.push(("control_bindings".to_string(), H::Array(bindings)));
     }
     (facts, info)
@@ -234,16 +235,12 @@ pub fn lint_stage(view: &StageView<'_>) -> Vec<Diagnostic> {
     )
 }
 
-/// Inspect the already projected port surface for one composed USD stage.
-///
-/// `PortRegistry` remains the authority for ownership and precedence; this
-/// bridge only gives its diagnostic result the composed USD identity carried by
-/// `UsdPrimPath`. Runtime routes are not changed and no name-based fallback is
-/// introduced.
-fn live_port_collision_findings(
+/// Project already resolved runtime port-owner collisions into USD lint facts.
+/// The registry supplies ownership; Rhai policy decides finding severity and wording.
+fn live_runtime_port_collision_facts(
     world: &World,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
-) -> Vec<Diagnostic> {
+) -> Vec<H> {
     let Some(registry) = world.get_resource::<lunco_port_core::ports::PortRegistry>() else {
         return Vec::new();
     };
@@ -262,7 +259,7 @@ fn live_port_collision_findings(
         }
     }
 
-    let mut findings = Vec::new();
+    let mut facts = Vec::new();
     for (entity_path, entity) in entities {
         for collision in registry.entity_port_collisions(world, entity) {
             let direction = match collision.direction {
@@ -270,66 +267,31 @@ fn live_port_collision_findings(
                 lunco_port_core::ports::PortCollisionDirection::Output => "output",
                 lunco_port_core::ports::PortCollisionDirection::InOut => "inout",
             };
-            let property_path = |owner: &lunco_port_core::ports::PortOwnerInfo| {
-                let namespace = match owner.direction {
-                    lunco_port_core::ports::PortDirection::In => "inputs",
-                    lunco_port_core::ports::PortDirection::Out => "outputs",
-                    lunco_port_core::ports::PortDirection::InOut => "inputs/outputs",
-                };
-                format!("{entity_path}.{namespace}:{}", collision.name)
-            };
-            let owner_text = |owner: &lunco_port_core::ports::PortOwnerInfo| {
-                let source = if owner.metadata.source.is_empty() {
-                    "unknown backend"
-                } else {
-                    owner.metadata.source.as_str()
-                };
-                format!(
-                    "{source} at {} (registry precedence {})",
-                    property_path(owner),
-                    owner.precedence
-                )
-            };
-            let winner = owner_text(&collision.owners[0]);
-            let shadowed = collision.owners[1..]
+            let owners = collision
+                .owners
                 .iter()
-                .map(|owner| format!("  shadowed: {}", owner_text(owner)))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let access = match collision.direction {
-                lunco_port_core::ports::PortCollisionDirection::Input => {
-                    "writes may be routed to the winner"
-                }
-                lunco_port_core::ports::PortCollisionDirection::Output => {
-                    "reads may be routed to the winner"
-                }
-                lunco_port_core::ports::PortCollisionDirection::InOut => {
-                    "reads and writes may be routed to the winner"
-                }
-            };
-            findings.push(
-                Diagnostic::warning(
-                    format!(
-                    "PORT_OWNER_COLLISION: `{}` has {} {} owners on {}\n  winner: {}\n{}\n  {}; give the owners distinct public port names",
-                    collision.name,
-                    collision.owners.len(),
-                    direction,
-                    entity_path,
-                    winner,
-                    shadowed,
-                    access,
-                    ),
-                    None,
-                    None,
-                )
-                .with_domain(lunco_usd_avian_lint::USD_LINT_DOMAIN)
-                .with_source("runtime-port-ownership")
-                .with_code("port-owner-collision")
-                .with_subject(entity_path.clone()),
-            );
+                .map(|owner| {
+                    let direction = match owner.direction {
+                        lunco_port_core::ports::PortDirection::In => "in",
+                        lunco_port_core::ports::PortDirection::Out => "out",
+                        lunco_port_core::ports::PortDirection::InOut => "inout",
+                    };
+                    H::map([
+                        ("source", H::str(owner.metadata.source.clone())),
+                        ("direction", H::str(direction)),
+                        ("precedence", H::Int(owner.precedence as i64)),
+                    ])
+                })
+                .collect();
+            facts.push(H::map([
+                ("subject", H::str(entity_path.clone())),
+                ("name", H::str(collision.name)),
+                ("direction", H::str(direction)),
+                ("owners", H::Array(owners)),
+            ]));
         }
     }
-    findings
+    facts
 }
 
 /// Validate source endpoints that are intentionally absent from authored USD
@@ -466,6 +428,10 @@ fn lint_stage_with_runtime(
         entries.push((
             "runtime_joints".to_string(),
             H::Array(live_runtime_joint_facts(world, stage_id)),
+        ));
+        entries.push((
+            "runtime_port_collisions".to_string(),
+            H::Array(live_runtime_port_collision_facts(world, stage_id)),
         ));
     }
     lunco_lint::run_lint(lunco_usd_avian_lint::USD_LINT_DOMAIN, facts)
@@ -731,19 +697,11 @@ pub fn on_run_lint(
         );
         if let Some(stage_id) = stage_id {
             commands.queue(move |world: &mut World| {
-                let (findings, collisions) = world
+                let findings = world
                     .get_non_send::<CanonicalStages>()
                     .and_then(|canonical| canonical.get(stage_id))
-                    .map(|stage| {
-                        let view = stage.view();
-                        (
-                            lint_stage_with_runtime(world, stage_id, &view),
-                            live_port_collision_findings(world, stage_id),
-                        )
-                    })
+                    .map(|stage| lint_stage_with_runtime(world, stage_id, &stage.view()))
                     .unwrap_or_default();
-                let mut findings = findings;
-                findings.extend(collisions);
                 if let Some(mut diagnostics) =
                     world.get_resource_mut::<lunco_doc_bevy::DocumentDiagnostics>()
                 {
@@ -797,7 +755,6 @@ pub fn on_run_lint(
             {
                 let view = stage.view();
                 findings.extend(lint_stage_with_runtime(world, id, &view));
-                findings.extend(live_port_collision_findings(world, id));
             }
         }
         if let Some(mut report) = world.get_resource_mut::<lunco_lint::LintReport>() {
@@ -880,202 +837,3 @@ pub fn register(app: &mut App) {
 }
 
 register_commands!(on_run_lint);
-#[cfg(test)]
-mod tests {
-    use super::live_port_collision_findings;
-    use bevy::asset::Handle;
-    use bevy::prelude::*;
-    use lunco_port_core::ports::{PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry};
-    use lunco_usd_bevy_scene::UsdPrimPath;
-    use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStage};
-    use lunco_usd_compose::recipe::StageRecipe;
-
-    #[derive(Component)]
-    struct ModelicaInput;
-
-    #[derive(Component)]
-    struct RuntimeActuator {
-        name: String,
-    }
-
-    fn modelica_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {
-        if world.get::<ModelicaInput>(entity).is_some() {
-            out.push(PortRef {
-                name: "release".into(),
-                direction: PortDirection::In,
-                value: 0.0,
-            });
-        }
-    }
-
-    fn runtime_actuator_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {
-        if let Some(actuator) = world.get::<RuntimeActuator>(entity) {
-            out.push(PortRef {
-                name: actuator.name.clone(),
-                direction: PortDirection::InOut,
-                value: 0.0,
-            });
-        }
-    }
-
-    fn modelica_metadata(
-        _world: &World,
-        _entity: Entity,
-        _name: &str,
-        direction: PortDirection,
-    ) -> PortMetadata {
-        PortMetadata::scalar(direction, None, None, None, "Modelica/OBC", "solver", true)
-    }
-
-    fn runtime_actuator_metadata(
-        _world: &World,
-        _entity: Entity,
-        _name: &str,
-        direction: PortDirection,
-    ) -> PortMetadata {
-        PortMetadata::scalar(
-            direction,
-            None,
-            None,
-            None,
-            "hardware port",
-            "actuator",
-            true,
-        )
-    }
-
-    const MODELICA_BACKEND: PortBackend = PortBackend {
-        list: modelica_list,
-        list_entities: |_world, _out| {},
-        topology_key: |_world, _entity| 0,
-        metadata: Some(modelica_metadata),
-        read_output: |_world, _entity, _name| None,
-        read_input: |_world, _entity, _name| Some(0.0),
-        write_input: |_world, _entity, _name, _value| true,
-        resolve_output: None,
-        resolve_input: None,
-        read_slot: None,
-        read_input_slot: None,
-        write_slot: None,
-    };
-
-    const RUNTIME_ACTUATOR_BACKEND: PortBackend = PortBackend {
-        list: runtime_actuator_list,
-        list_entities: |_world, _out| {},
-        topology_key: |_world, _entity| 0,
-        metadata: Some(runtime_actuator_metadata),
-        read_output: |_world, _entity, _name| Some(0.0),
-        read_input: |_world, _entity, _name| Some(0.0),
-        write_input: |_world, _entity, _name, _value| true,
-        resolve_output: None,
-        resolve_input: None,
-        read_slot: None,
-        read_input_slot: None,
-        write_slot: None,
-    };
-
-    fn composed_fixture() -> CanonicalStage {
-        CanonicalStage::from_recipe(&StageRecipe::from_source(
-            "port_owner_collision.usda",
-            "#usda 1.0\n\
-             def Xform \"Lander1\" {\n\
-                 float inputs:release\n\
-             }\n",
-        ))
-        .expect("duplicate-port fixture composes")
-    }
-
-    fn registry() -> PortRegistry {
-        let mut registry = PortRegistry::default();
-        registry.register(MODELICA_BACKEND);
-        registry.register(RUNTIME_ACTUATOR_BACKEND);
-        registry
-    }
-
-    #[test]
-    fn collision_report_contains_structured_winner_and_shadowed_owner_fields() {
-        let stage = composed_fixture();
-        assert!(
-            stage
-                .view()
-                .prim_paths()
-                .iter()
-                .any(|path| path.to_string() == "/Lander1")
-        );
-
-        let mut world = World::new();
-        world.spawn((
-            UsdPrimPath {
-                stage_handle: Handle::default(),
-                path: "/Lander1".into(),
-            },
-            ModelicaInput,
-            RuntimeActuator {
-                name: "release".into(),
-            },
-        ));
-        world.insert_resource(registry());
-
-        let findings =
-            live_port_collision_findings(&world, Handle::<UsdStageAsset>::default().id());
-        assert_eq!(findings.len(), 1);
-        let finding = &findings[0];
-        assert_eq!(finding.code.as_deref(), Some("port-owner-collision"));
-        assert_eq!(finding.severity, DiagnosticSeverity::Warning);
-        assert_eq!(finding.subject.as_deref(), Some("/Lander1"));
-        assert!(
-            finding
-                .message
-                .contains("PORT_OWNER_COLLISION: `release` has 2 input owners")
-        );
-        assert!(finding.message.contains("Modelica/OBC"));
-        assert!(finding.message.contains("hardware port"));
-        assert!(finding.message.contains("/Lander1.inputs:release"));
-        assert!(finding.message.contains("/Lander1.inputs/outputs:release"));
-        assert!(finding.message.contains("registry precedence 1"));
-        assert!(finding.message.contains("registry precedence 2"));
-        assert!(
-            finding
-                .message
-                .contains("writes may be routed to the winner")
-        );
-    }
-
-    #[test]
-    fn renamed_actuator_has_no_collision_finding() {
-        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source(
-            "port_owner_collision_clean.usda",
-            "#usda 1.0\n\
-             def Xform \"Lander1\" {\n\
-                 float inputs:release\n\
-                 float outputs:dock_release\n\
-             }\n",
-        ))
-        .expect("clean port fixture composes");
-        assert!(
-            stage
-                .view()
-                .prim_paths()
-                .iter()
-                .any(|path| path.to_string() == "/Lander1")
-        );
-
-        let mut world = World::new();
-        world.spawn((
-            UsdPrimPath {
-                stage_handle: Handle::default(),
-                path: "/Lander1".into(),
-            },
-            ModelicaInput,
-            RuntimeActuator {
-                name: "dock_release".into(),
-            },
-        ));
-        world.insert_resource(registry());
-
-        assert!(
-            live_port_collision_findings(&world, Handle::<UsdStageAsset>::default().id(),)
-                .is_empty()
-        );
-    }
-}

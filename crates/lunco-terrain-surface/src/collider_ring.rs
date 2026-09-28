@@ -1626,17 +1626,25 @@ enum InitialContactError {
     NonFinitePenetration,
 }
 
+#[derive(Debug)]
+enum InitialSupportRayError {
+    InvalidContact,
+}
+
 /// Cast an initial-state probe against Avian's authored collider geometry.
 /// `Collider::cast_ray` is the same maintained shape-intersection kernel used
 /// by Avian's normal spatial query; this pass only supplies the pre-step
-/// admission boundary and never runs during ordinary movement.
+/// admission boundary and never runs during ordinary movement. A supporting
+/// contact is identified by the actual hit normal opposing the authored probe
+/// direction, so lifecycle admission does not depend on a gravity sample from
+/// a fixed cycle that admission itself has not allowed to run.
 fn cast_initial_support_ray(
     colliders: &[InitialCollider],
     origin: DVec3,
     direction: Dir3,
     max_distance: f64,
     filter: &SpatialQueryFilter,
-) -> Option<RayHitData> {
+) -> Result<Option<RayHitData>, InitialSupportRayError> {
     let mut closest = None;
     for initial in colliders {
         if filter.excluded_entities.contains(&initial.entity)
@@ -1655,11 +1663,35 @@ fn cast_initial_support_ray(
         ) else {
             continue;
         };
-        if !distance.is_finite()
-            || closest
-                .as_ref()
-                .is_some_and(|hit: &RayHitData| distance >= hit.distance)
-        {
+        if !distance.is_finite() || distance < 0.0 {
+            return Err(InitialSupportRayError::InvalidContact);
+        }
+        let Some(normal) = normal.try_normalize() else {
+            return Err(InitialSupportRayError::InvalidContact);
+        };
+        let alignment = -direction.as_dvec3().dot(normal);
+        if !alignment.is_finite() {
+            return Err(InitialSupportRayError::InvalidContact);
+        }
+        // A side wall or underside is not a support surface for this probe.
+        if alignment <= f64::EPSILON {
+            continue;
+        }
+        let replace_closest = closest.as_ref().is_none_or(|hit: &RayHitData| {
+            match distance.total_cmp(&hit.distance) {
+                std::cmp::Ordering::Less => true,
+                std::cmp::Ordering::Greater => false,
+                std::cmp::Ordering::Equal => {
+                    normal
+                        .x
+                        .total_cmp(&hit.normal.x)
+                        .then_with(|| normal.y.total_cmp(&hit.normal.y))
+                        .then_with(|| normal.z.total_cmp(&hit.normal.z))
+                        .is_lt()
+                }
+            }
+        });
+        if !replace_closest {
             continue;
         }
         closest = Some(RayHitData {
@@ -1668,7 +1700,7 @@ fn cast_initial_support_ray(
             normal,
         });
     }
-    closest
+    Ok(closest)
 }
 
 /// Find actual initial overlap against the colliders that Avian considers
@@ -1780,8 +1812,6 @@ pub(crate) fn validate_initial_physics_poses(
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial_transforms: Query<(Option<&CellCoord>, &Transform)>,
-    local_gravity: Query<&lunco_environment::LocalGravity>,
-    flat_sites: Query<(), With<crate::georef::FlatSiteSurface>>,
     holds: Option<Res<lunco_physics::PhysicsHolds>>,
     mut lifecycle: InitialPhysicsLifecycle,
     mut commands: Commands,
@@ -2053,6 +2083,7 @@ pub(crate) fn validate_initial_physics_poses(
         let mut rigid_penetration = 0.0_f64;
         let mut probe_displacement: Option<f64> = None;
         let mut over_terrain = false;
+        let mut invalid_support_contact = false;
         // Probe-only contact geometry belongs to the same validation pass as
         // rigid members. It is authored in the vehicle frame, transformed once
         // by the solved root pose, and sampled from the same live support query.
@@ -2081,29 +2112,25 @@ pub(crate) fn validate_initial_physics_poses(
                 continue;
             }
             let Some(root_pos) = pos_of.get(&footprint_owner) else {
+                findings.push(lunco_core::RuntimeDiagnostic {
+                    code: "physics-initialization-pose-unavailable".to_string(),
+                    severity: lunco_core::DiagnosticSeverity::Error,
+                    producer: "physics-initialization".to_string(),
+                    subject: subject_label.to_string(),
+                    message: "raycast support owner position is unavailable in the active physics frame; authored pose remains held".to_string(),
+                });
                 continue;
             };
-            let support_up = if let Some(terrain_up) = terrain_up {
-                terrain_up
-            } else if !flat_sites.is_empty() {
-                // `FlatSiteSurface` is an authored ENU-aligned Plane, so its
-                // support normal is the scene +Y axis. This is the surface
-                // contract for static flat ground; the rover need not carry a
-                // per-body LocalGravity component for initial-state validation.
-                DVec3::Y
-            } else {
-                let Ok(gravity) = local_gravity.get(footprint_owner) else {
-                    continue;
-                };
-                if !gravity.0.is_finite() || gravity.0.length_squared() <= f64::EPSILON {
-                    continue;
-                }
-                -gravity.0.normalize()
+            let Some(root_rot) = rotation_of.get(&footprint_owner).copied() else {
+                findings.push(lunco_core::RuntimeDiagnostic {
+                    code: "physics-initialization-pose-unavailable".to_string(),
+                    severity: lunco_core::DiagnosticSeverity::Error,
+                    producer: "physics-initialization".to_string(),
+                    subject: subject_label.to_string(),
+                    message: "raycast support owner rotation is unavailable in the active physics frame; authored pose remains held".to_string(),
+                });
+                continue;
             };
-            let root_rot = rotation_of
-                .get(&footprint_owner)
-                .copied()
-                .unwrap_or(DQuat::IDENTITY);
             let mut filter = SpatialQueryFilter::from_mask(avian3d::prelude::LayerMask(
                 !lunco_core::NON_PHYSICAL_QUERY_LAYERS,
             ));
@@ -2122,12 +2149,39 @@ pub(crate) fn validate_initial_physics_poses(
                     || !contact.probe_length.is_finite()
                     || contact.probe_length <= 0.0
                 {
-                    continue;
+                    invalid_support_contact = true;
+                    findings.push(lunco_core::RuntimeDiagnostic {
+                        code: "physics-initialization-support-contact-invalid".to_string(),
+                        severity: lunco_core::DiagnosticSeverity::Error,
+                        producer: "physics-initialization".to_string(),
+                        subject: subject_label.to_string(),
+                        message: "initial support footprint contains a non-finite or non-positive probe; authored pose remains held".to_string(),
+                    });
+                    break;
                 }
                 let origin = root_pos.0 + root_rot * contact.probe_origin;
+                if !origin.is_finite() {
+                    invalid_support_contact = true;
+                    findings.push(lunco_core::RuntimeDiagnostic {
+                        code: "physics-initialization-support-contact-invalid".to_string(),
+                        severity: lunco_core::DiagnosticSeverity::Error,
+                        producer: "physics-initialization".to_string(),
+                        subject: subject_label.to_string(),
+                        message: "initial support probe origin is non-finite in the active physics frame; authored pose remains held".to_string(),
+                    });
+                    break;
+                }
                 let Ok(direction) = Dir3::new((root_rot * contact.probe_direction).as_vec3())
                 else {
-                    continue;
+                    invalid_support_contact = true;
+                    findings.push(lunco_core::RuntimeDiagnostic {
+                        code: "physics-initialization-support-contact-invalid".to_string(),
+                        severity: lunco_core::DiagnosticSeverity::Error,
+                        producer: "physics-initialization".to_string(),
+                        subject: subject_label.to_string(),
+                        message: "initial support probe direction is degenerate in the active physics frame; authored pose remains held".to_string(),
+                    });
+                    break;
                 };
                 // Use Avian's exact collider geometry, not the analytic oracle.
                 // The streamed collider is a sampled heightfield, so its exact
@@ -2155,21 +2209,30 @@ pub(crate) fn validate_initial_physics_poses(
                     },
                     |(_, _, _, half, _)| (2.0 * *half).max(contact.probe_length),
                 );
-                let Some(hit) = cast_initial_support_ray(
+                let hit = match cast_initial_support_ray(
                     &initial_colliders,
                     origin,
                     direction,
                     max_distance,
                     &filter,
-                ) else {
-                    continue;
+                ) {
+                    Ok(Some(hit)) => hit,
+                    Ok(None) => continue,
+                    Err(InitialSupportRayError::InvalidContact) => {
+                        invalid_support_contact = true;
+                        findings.push(lunco_core::RuntimeDiagnostic {
+                            code: "physics-initialization-support-contact-invalid".to_string(),
+                            severity: lunco_core::DiagnosticSeverity::Error,
+                            producer: "physics-initialization".to_string(),
+                            subject: subject_label.to_string(),
+                            message: "initial support query returned a non-finite contact or degenerate collider normal; authored pose remains held".to_string(),
+                        });
+                        continue;
+                    }
                 };
-                // Measure along the physical support axis, not an assumed global
-                // Y. Airborne probes are valid initial conditions.
-                let alignment = -direction.as_dvec3().dot(support_up);
-                if !alignment.is_finite() || alignment <= f64::EPSILON {
-                    continue;
-                }
+                // Project the probe's authored travel onto the actual collider
+                // normal. Airborne probes are valid initial conditions.
+                let alignment = -direction.as_dvec3().dot(hit.normal);
                 let required = (contact.probe_length - hit.distance) / alignment;
                 // Positive displacement means the authored probe is below the
                 // support surface. Negative displacement means it starts above
@@ -2177,6 +2240,9 @@ pub(crate) fn validate_initial_physics_poses(
                 probe_displacement =
                     Some(probe_displacement.map_or(required, |previous| previous.max(required)));
                 over_terrain = true;
+            }
+            if invalid_support_contact {
+                continue;
             }
         } else {
             // Physical wheels are real bodies, so measure the deepest dynamic

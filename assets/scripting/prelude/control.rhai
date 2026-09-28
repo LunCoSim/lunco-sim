@@ -11,7 +11,7 @@
 // command deterministic rather than a one-tick pulse.
 
 /// Drive a rover: `forward` throttle + `steer` in [-1, 1], brake released.
-/// The complete setpoint persists until another command or `brake`/release.
+/// The complete setpoint persists until another command or a release.
 /// `seq`/`tick` default to 0 — fine for host-local scenarios; networked control
 /// should thread real sequence/tick numbers.
 fn drive(rover, forward, steer) {
@@ -35,16 +35,18 @@ fn intent_pulse(target, intent) {
     intent_edge(target, intent, "pulse")
 }
 
-/// Release a vehicle's complete control intent and apply its safe state. This
-/// zeros throttle, steering, landing thrust, attitude, and RCS inputs, and
-/// engages a rover brake. The safe values persist until a new owner writes them.
-/// `seq`/`tick` are owned by the lifecycle command and are not needed here.
+/// Apply the rover's authored stop setpoint. Other vehicle classes must author
+/// their own stop values through `SetPorts` because safe values belong to the
+/// Twin's control law.
 fn brake(rover) {
-    cmd("ReleaseControl", #{ target: rover })
+    cmd("SetPorts", #{
+        target: rover,
+        writes: [["throttle", 0.0], ["steer", 0.0], ["brake", 1.0]],
+    })
 }
 
-/// Explicitly release the complete vehicle control intent without relying on a
-/// scenario's next tick or on the wiring fabric to neutralize it.
+/// Release every manual port hold and return the endpoint to its authored
+/// wiring. This does not apply a stop setpoint.
 fn release_control(vehicle) {
     cmd("ReleaseControl", #{ target: vehicle })
 }

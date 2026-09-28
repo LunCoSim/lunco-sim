@@ -444,6 +444,7 @@ fn simulation_dependencies(me, ctx) {
 }
 
 fn on_start(me, ctx) {
+    this.start_tick = sim_tick();
     this.t = 0.0;
     this.settle_s = 4.0;
     if this.start_count == () { this.start_count = 0; }
@@ -670,6 +671,7 @@ fn on_tick(me, ctx) {
             contact_acceptance: contact_acceptance,
             system_acceptance: system_acceptance,
             scene_generation: this.scene_generation,
+            start_tick: this.start_tick,
             start_count: this.start_count,
             generation_stable: this.generation_stable,
             actor_identity: this.actor_identity,
@@ -736,6 +738,8 @@ fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first
         "generic readiness/binding diagnostics report an unresolved runtime fault"));
     f.push(t_true(s.scene_generation != () && s.start_count == 1,
         "scenario on_start ran once after a committed scene generation was available"));
+    f.push(t_true(s.start_tick == 0,
+        "scenario on_start ran at SimTick 0 after startup readiness completed"));
     f.push(t_true(s.generation_stable == true,
         "the active scenario retained the same committed scene generation through its run"));
     f.push(t_true(s.spatial_query_ids_ordered == true,
@@ -852,7 +856,7 @@ fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first
     }
     f.push(t_present(first_tick, "first authoritative behavior tick snapshot"));
     if first_tick != () {
-        f.push(t_true(first_tick.tick >= 0 && first_tick.cycle == "simulation"
+        f.push(t_true(first_tick.tick == 1 && first_tick.cycle == "simulation"
             && first_tick.phase == "behavior" && first_tick.clock == "simulation"
             && first_tick.generation == s.scene_generation,
             "first dependency reads ran in the scene generation captured by on_start"));

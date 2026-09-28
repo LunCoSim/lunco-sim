@@ -131,16 +131,6 @@ impl InputPorts {
         self.values.get(name).copied().unwrap_or(0.0)
     }
 
-    /// Move the logical command surface to its safe state without inventing
-    /// undeclared ports. Braking is a rover-specific convention; every other
-    /// declared command is neutralized so lander thrust/attitude and RCS
-    /// commands cannot survive a release.
-    pub fn safe_stop(&mut self) {
-        for (name, value) in self.values.iter_mut() {
-            *value = if name == "brake" { 1.0 } else { 0.0 };
-        }
-        self.brake_active = self.values.get("brake").is_some_and(|v| *v > 0.5);
-    }
 }
 
 /// The [`InputPorts`] governing `entity` — its own, or the nearest ancestor's.
@@ -242,39 +232,6 @@ impl PortSurface {
     }
 }
 
-/// Apply the control lifecycle's safe-stop boundary immediately.
-///
-/// `InputPorts` are the command request, while the wired Modelica/hardware path
-/// reads the derived output [`Port`]s. Waiting for a later producer tick to copy
-/// one into the other leaves an actor's final drive demand live after its lease
-/// has ended. This operation clears every actuator output now and closes the
-/// discrete brake gate when present, so the next co-simulation propagation sees
-/// a neutral vehicle regardless of schedule phase.
-pub fn safe_stop_control_surface(
-    inputs: Option<&mut InputPorts>,
-    outputs: Option<&OutputPorts>,
-    ports: &mut Query<&mut Port>,
-) {
-    if let Some(inputs) = inputs {
-        inputs.safe_stop();
-    }
-    let Some(outputs) = outputs else {
-        return;
-    };
-    safe_stop_outputs(outputs, |entity, value| {
-        if let Ok(mut port) = ports.get_mut(entity) {
-            port.value = value;
-        }
-    });
-}
-
-/// Neutralize all declared control outputs while engaging the discrete brake gate.
-fn safe_stop_outputs(outputs: &OutputPorts, mut write: impl FnMut(Entity, f64)) {
-    for (name, entity) in &outputs.ports {
-        write(*entity, if name == "brake" { 1.0 } else { 0.0 });
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,45 +251,4 @@ mod tests {
         assert!(!inputs.brake_active);
     }
 
-    #[test]
-    fn safe_stop_neutralizes_inputs_and_derived_actuators() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        #[derive(Component)]
-        struct StopTarget;
-
-        fn stop_target(
-            mut target: Query<(&mut InputPorts, &OutputPorts), With<StopTarget>>,
-            mut ports: Query<&mut Port>,
-        ) {
-            for (mut inputs, actuators) in &mut target {
-                safe_stop_control_surface(Some(&mut inputs), Some(actuators), &mut ports);
-            }
-        }
-
-        let mut world = World::new();
-        let left = world.spawn(Port { value: 0.8 }).id();
-        let right = world.spawn(Port { value: -0.4 }).id();
-        let brake = world.spawn(Port { value: 0.0 }).id();
-        let mut inputs = InputPorts::new(&["throttle", "steer", "brake"]);
-        inputs.values.insert("throttle".into(), 0.9);
-        inputs.values.insert("steer".into(), -0.5);
-        let outputs = OutputPorts::new(std::collections::HashMap::from([
-            ("drive_left".into(), left),
-            ("drive_right".into(), right),
-            ("brake".into(), brake),
-        ]));
-
-        let target = world.spawn((inputs, outputs, StopTarget)).id();
-        world.run_system_once(stop_target).unwrap();
-        let inputs = world.get::<InputPorts>(target).unwrap();
-
-        assert_eq!(inputs.cmd("throttle"), 0.0);
-        assert_eq!(inputs.cmd("steer"), 0.0);
-        assert_eq!(inputs.cmd("brake"), 1.0);
-        assert!(inputs.brake_active);
-        assert_eq!(world.get::<Port>(left).unwrap().value, 0.0);
-        assert_eq!(world.get::<Port>(right).unwrap().value, 0.0);
-        assert_eq!(world.get::<Port>(brake).unwrap().value, 1.0);
-    }
 }

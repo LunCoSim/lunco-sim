@@ -501,6 +501,8 @@ pub enum SimulationProgressOwner {
     UsdDependentStageProjection,
     /// Preparation of current USD simulation topology facts.
     UsdSimulationTopology,
+    /// Admission of the mounted scene's physical bodies and joints.
+    UsdPhysicsAdmission,
     /// Authored terrain data and collider preparation.
     TerrainPreparation,
     /// USD document source preparation and revision admission.
@@ -570,6 +572,14 @@ impl SimulationProgressKey {
     pub const fn usd_simulation_topology(stage_root: Entity) -> Self {
         Self {
             owner: SimulationProgressOwner::UsdSimulationTopology,
+            operation_id: stage_root.to_bits(),
+        }
+    }
+
+    /// Key physical admission to the mounted USD scene that owns its bodies.
+    pub fn usd_physics_admission(stage_root: Entity) -> Self {
+        Self {
+            owner: SimulationProgressOwner::UsdPhysicsAdmission,
             operation_id: stage_root.to_bits(),
         }
     }

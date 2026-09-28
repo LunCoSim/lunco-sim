@@ -252,10 +252,14 @@ do not add a family of per-cycle scenario callbacks until a real stateful
 cross-cycle behavior requires isolated instances and typed messages.
 
 Connected co-simulation events are edge-detected on admitted simulation ticks,
-after `SimTickSet` and the full scripting pass. Startup warm-up may produce an
-event before the scenario gate opens; pre-start events are not replayed, so
-`on_start` reads current state from its owner. Later events retain their
-producer stamp and arrive on the next eligible scenario pass.
+after `SimTickSet` and the full scripting pass. Scene, solver, terrain, and
+physics admission hold the shared fixed clock. Rhai compilation, dependency
+planning, initialization, and `on_start` complete before the fixed runner
+admits its first tick, so `on_start` reads the committed initial state at tick 0 and
+the first `on_tick` observes tick 1. Events queued before startup remain
+available to existing scenarios but are not replayed to a newly started one;
+events emitted by `on_start` retain their producer stamp for the next eligible
+scenario pass.
 
 ## 2. Your first script
 
@@ -430,8 +434,9 @@ You'll use these constantly (the complete table is in
 > falls through to a scalar port it is a raw write and has no persistent hold;
 > use `cmd("SetPorts", #{target: id, writes: [[name, value]]})` when wiring must
 > be overridden until an explicit release; use `cmd("ReleasePort", ... )` for
-> one port or `cmd("ReleaseControl", #{target: id})` for the complete vehicle
-> command surface. Direct
+> one port or `cmd("ReleaseControl", #{target: id})` to return every local
+> input hold to authored wiring. Release commands do not write replacement
+> values; send named `SetPorts` values for an explicit setpoint. Direct
 > writes are host-authoritative and unavailable to client-targeted scripts. Use `cmd`
 > for an *operation* with side effects
 > beyond a field write (spawning, swapping a material, anything an observer reacts to).
@@ -526,8 +531,9 @@ in a prelude/tool. Native `Vec3`/`Quat` operations are registered by
 > reflected field surface or the canonical scalar co-simulation port surface.
 > This is a raw write, not a persistent hold; use
 > `cmd("SetPorts", #{target: id, writes: [[name, value]]})` for a persistent
-> command intent, and `cmd("ReleaseControl", #{target: id})` to apply the safe
-> state. External one-shot callers include their stable `producer_id` and wait
+> command intent, and `cmd("ReleaseControl", #{target: id})` to release all
+> local input holds without changing port values. Write any desired safe
+> setpoint explicitly with `SetPorts`. External one-shot callers include their stable `producer_id` and wait
 > for the next fixed tick; Simulation-clock Rhai keeps its authored pass. Direct
 > writes are host-authoritative and unavailable to client-targeted scripts. Use `cmd` for
 > an *operation* with side effects beyond a field write (spawning, swapping a

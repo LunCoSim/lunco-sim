@@ -20,7 +20,7 @@
 //! therefore keeps Avian local and stationary while the render hierarchy
 //! follows the celestial body's rotation.
 //!
-//! ## Sync rules (per body, per physics tick)
+//! ## Sync rules
 //!
 //! READ (`pose_to_position`, Prepare): a body's `Position`/`Rotation` are
 //! recomputed from the cell chain ONLY when its own `(CellCoord, Transform)`
@@ -101,10 +101,9 @@ pub fn report_physics_runtime_fault(
 ///
 /// These exist because the bridge OWNS `Position` initialisation in this app —
 /// avian's `transform_to_position` is switched off below, so
-/// `PhysicsTransformSystems::TransformToPosition` is an empty set and ordering
-/// against it is silently vacuous. Anything that must read a real `Position`
-/// (the authored-joint seat in `build_usd_physics_joints`) has to say
-/// `.after(PhysicsBridgeSystems::Read)` and mean it.
+/// `PhysicsTransformSystems::TransformToPosition` is an empty set. Physics
+/// schedule consumers order after `Read`; lifecycle consumers read only after
+/// the bridge's `PreUpdate` pass and require a seeded `BridgeShadow`.
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PhysicsBridgeSystems {
     /// READ: `(cell, Transform)` → `Position`/`Rotation`. After this has run,
@@ -342,6 +341,17 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
                 .run_if(physics_frame_contract_inputs_changed)
                 .before(lunco_physics::apply_physics_holds),
         );
+        // Seed the authored f64 pose during scene preparation. This is a
+        // lifecycle read/write, not a physics step, so body admission can finish
+        // while the shared fixed clock remains held at its initial tick.
+        app.add_systems(
+            PreUpdate,
+            pose_to_position
+                .run_if(physics_frame_contract_ready)
+                .in_set(PhysicsBridgeSystems::Read)
+                .after(validate_physics_frame_contract)
+                .before(lunco_physics::apply_physics_holds),
+        );
         app.add_systems(
             FixedPostUpdate,
             refresh_physics_frame_contract
@@ -396,9 +406,8 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         app.register_required_components::<CellCoord, SpatialBridgeShadow>();
         // The active Avian frame may change after bodies have been seeded (for
         // example when a live scene adopts its authored body-fixed site grid).
-        // Keep that handoff transactionally visible to both bridge
-        // registrations; a Local would process it twice because the same read
-        // pass runs in FixedPostUpdate and PhysicsSchedule.
+        // Keep that handoff transactionally visible to each scheduled bridge
+        // read pass; a Local would process it twice.
         app.init_resource::<PhysicsFrameTransportState>();
         app.add_systems(
             PhysicsSchedule,
@@ -418,7 +427,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         // Joint construction is also allowed to run while Avian's nested
         // schedule is held for world readiness. Seed only never-seen poses in
         // the enclosing schedule; all change detection remains owned by the
-        // single PhysicsSchedule read pass above.
+        // same read system used during lifecycle preparation above.
         app.add_systems(
             PhysicsSchedule,
             reset_frame_dependent_solver_state
@@ -427,12 +436,10 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
                 .after(PhysicsBridgeSystems::Read)
                 .before(PhysicsStepSystems::First),
         );
-        // The world-readiness hold pauses Avian's inner PhysicsSchedule, but
-        // preparation must still be able to seed poses while that hold is up:
-        // authored joints are one of the things the hold is waiting for. This
-        // is the same read pass, in the enclosing fixed schedule, before the
-        // nested solver invocation. It writes Position/Rotation only; no
-        // integration occurs here.
+        // Read transforms written inside the preceding fixed cycle before the
+        // next nested solver invocation. Lifecycle preparation uses the
+        // separate PreUpdate read above; this pass keeps in-cycle pose edits
+        // ordered before integration without writing solver state itself.
         app.add_systems(
             FixedPostUpdate,
             pose_to_position

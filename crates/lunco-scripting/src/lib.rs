@@ -185,6 +185,7 @@ impl Plugin for LunCoScriptingPlugin {
 
         #[cfg(any(feature = "rhai", feature = "python"))]
         app.init_resource::<scenario::ScenarioExecutionGate>()
+            .init_resource::<scenario::ScenarioPreparationAdmissions>()
             .init_resource::<scenario::ScenarioReadinessArm>()
             .add_observer(scenario::close_scenarios_for_scene_transition)
             .add_observer(scenario::arm_scenarios_after_scene_composition)
@@ -192,7 +193,7 @@ impl Plugin for LunCoScriptingPlugin {
                 PreUpdate,
                 scenario::open_scenarios_when_scene_ready
                     .after(lunco_readiness::ReadinessSet)
-                    .before(lunco_time::TimeSpineSet),
+                    .before(lunco_time::SimulationAdmissionSet),
             );
 
         #[cfg(feature = "python")]

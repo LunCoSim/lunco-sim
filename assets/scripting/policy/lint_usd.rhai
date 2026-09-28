@@ -61,6 +61,11 @@
 //       live-only evidence for runtime provider endpoints. File validation
 //       supplies an empty array because it cannot observe ECS projection.
 //
+//   facts.runtime_port_collisions[] #{ subject, name, direction,
+//                                      owners: [{source, direction, precedence}] }
+//       live-only ownership evidence from the shared PortRegistry. This policy
+//       owns whether the ambiguity is an error and how the repair is explained.
+//
 //   facts.runtime_joints[] #{ entity_bits, subject, linked, pending, native,
 //                             graph, graph_available, detach_requested }
 //       live-only evidence for the one joint-detach lifecycle. `linked` is the
@@ -138,10 +143,11 @@
 //
 // ── WHAT BELONGS HERE ───────────────────────────────────────────────────────
 //
-// A rule earns its place when the mistake is (a) always wrong, (b) invisible at
-// runtime, and (c) decidable from the authored stage alone. Anything that already
-// fails loudly on its own does not: a linter that repeats the log is noise, and
-// noise is how a real finding gets scrolled past.
+// A rule earns its place when the mistake is always wrong, has meaningful
+// authoring repair, and is decidable from the authored stage or the explicit
+// live-owner facts supplied to this policy. Anything that already fails loudly
+// on its own does not: a linter that repeats the log is noise, and noise is how
+// a real finding gets scrolled past.
 
 /// One finding, built FIELD BY FIELD.
 ///
@@ -314,6 +320,7 @@ fn lint_usd(facts) {
     for f in direction_source_contract(facts) { out.push(f); }
     for f in connection_contract(facts) { out.push(f); }
     for f in runtime_connection_contract(facts) { out.push(f); }
+    for f in runtime_port_owner_contract(facts) { out.push(f); }
     for f in runtime_joint_contract(facts) { out.push(f); }
     for f in collision_enabled_without_api(facts) { out.push(f); }
     for f in wheel_realization_collision_contract(facts) { out.push(f); }
@@ -466,6 +473,56 @@ fn runtime_connection_contract(facts) {
                 message,
             ));
         }
+    }
+    out
+}
+
+/// Duplicate public names are ambiguous on the access side that has multiple
+/// owners. The repair is to author distinct names at the owning boundary.
+fn port_owner_namespace(direction) {
+    if direction == "in" { return "inputs"; }
+    if direction == "out" { return "outputs"; }
+    "inputs/outputs"
+}
+
+fn port_owner_line(subject, name, owner) {
+    let source = if owner.source == "" { "unknown backend" } else { owner.source };
+    source + " at " + subject + "." + port_owner_namespace(owner.direction)
+        + ":" + name + " (registry precedence " + owner.precedence.to_string() + ")"
+}
+
+fn port_owner_lines(collision) {
+    let lines = [];
+    for owner in collision.owners {
+        lines.push(port_owner_line(collision.subject, collision.name, owner));
+    }
+    lines
+}
+
+fn port_collision_access(direction) {
+    if direction == "input" { return "writes may be routed to the winner"; }
+    if direction == "output" { return "reads may be routed to the winner"; }
+    "reads and writes may be routed to the winner"
+}
+
+fn port_collision_message(collision, owner_lines) {
+    let message = "PORT_OWNER_COLLISION: `" + collision.name + "` has "
+        + collision.owners.len().to_string() + " " + collision.direction
+        + " owners on " + collision.subject + "\n  winner: " + owner_lines[0];
+    for i in 1..owner_lines.len() {
+        message += "\n  shadowed: " + owner_lines[i];
+    }
+    message + "\n  " + port_collision_access(collision.direction)
+        + "; give the owners distinct public port names"
+}
+
+fn runtime_port_owner_contract(facts) {
+    let out = [];
+    if facts.runtime_port_collisions == () { return out; }
+    for collision in facts.runtime_port_collisions {
+        let owner_lines = port_owner_lines(collision);
+        let message = port_collision_message(collision, owner_lines);
+        out.push(finding("port-owner-collision", "error", collision.subject, message));
     }
     out
 }

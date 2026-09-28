@@ -257,7 +257,7 @@ pub struct SceneTimeState {
     pub transition_id: Option<lunco_core::SceneTransitionId>,
     /// Current lifecycle phase.
     pub phase: SceneTimePhase,
-    /// The selected scene epoch retained as the reset point.
+    /// The selected scene epoch retained for scene installation.
     pub selection: Option<SceneTimeSelectionRecord>,
 }
 
@@ -269,13 +269,13 @@ pub enum SceneTimePhase {
     NoScene,
     /// A scene transition is loading or projecting.
     Loading,
-    /// Rhai selected an epoch and the clock tree reset is being applied.
+    /// Rhai selected an epoch and the scene clock domains are being installed.
     Applying,
     /// The selected epoch is installed and time-dependent consumers may run.
     Ready,
 }
 
-/// Persistent reset point from the last completed scene-time policy decision.
+/// Scene epoch anchor from the last completed scene-time policy decision.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SceneTimeSelectionRecord {
     /// Selected source: `authored` or `computer_time`.
@@ -292,7 +292,7 @@ impl SceneTimeState {
         self.selection = None;
     }
 
-    /// Record the policy result while the clock tree is reset.
+    /// Record the policy result while installing the scene epoch.
     pub fn begin_selection_application(&mut self, selection: &SceneTimeSelection) {
         self.phase = SceneTimePhase::Applying;
         self.selection = Some(SceneTimeSelectionRecord {
@@ -462,54 +462,6 @@ pub fn fixed_step_raw_delta_limit(rate: f64, fixed_timestep: Duration) -> Durati
     budget.min(BASE_VIRTUAL_MAX_DELTA)
 }
 
-/// Close the remainder of the current Bevy fixed-loop burst after a simulation
-/// barrier is raised from inside one fixed iteration.
-///
-/// `Time<Virtual>::pause()` prevents the next render frame from accumulating
-/// fixed time, but Bevy's current `FixedMain` loop may already have additional
-/// `Time<Fixed>::overstep()` queued for this frame. A barrier that lets that
-/// remainder run would advance some fixed consumers after the coupling decision
-/// and others before it. Discarding only the unconsumed overstep preserves the
-/// completed fixed tick and makes the barrier take effect at this boundary.
-pub fn discard_fixed_overstep(fixed: &mut Time<Fixed>) {
-    let remaining = fixed.overstep();
-    if !remaining.is_zero() {
-        fixed.discard_overstep(remaining);
-    }
-}
-
-/// Apply a transport command to Bevy's virtual clock at the command boundary.
-///
-/// The regular time-spine projection still runs in `PreUpdate`, but a command
-/// may be triggered from inside `FixedUpdate`. Waiting for the next frame would
-/// leave the current fixed-loop burst and the physics schedule using the old
-/// admission state. A pause therefore projects immediately and consumes only
-/// the unspent fixed overstep, preserving the tick that already completed while
-/// refusing another one in the same render frame.
-pub fn project_transport_state(
-    transport: &TimeTransport,
-    virtual_time: &mut Time<Virtual>,
-    fixed_time: Option<&mut Time<Fixed>>,
-    causal_hold: bool,
-) {
-    let frozen = !transport.is_running() || causal_hold;
-    let configured = if frozen { 1.0 } else { transport.rate };
-
-    if virtual_time.relative_speed_f64() != configured {
-        virtual_time.set_relative_speed_f64(configured);
-    }
-    if frozen != virtual_time.is_paused() {
-        if frozen {
-            virtual_time.pause();
-            if let Some(fixed_time) = fixed_time {
-                discard_fixed_overstep(fixed_time);
-            }
-        } else {
-            virtual_time.unpause();
-        }
-    }
-}
-
 /// Run condition for systems that mutate the causal simulation. The virtual
 /// clock is mandatory in a composed host; an absent clock fails closed instead
 /// of allowing a subsystem to advance outside the shared time spine.
@@ -523,8 +475,8 @@ fn capture_time_update_timing(
     mut input: ResMut<TimeUpdateTimingInput>,
 ) {
     // `Time<Virtual>::delta` has just been derived by `TimeSystems` in `First`.
-    // Capture the matching real delta, rate, and cap before `PreUpdate` projects
-    // transport changes that will affect the next time update.
+    // Capture the matching real delta, rate, and cap after the clock admission
+    // projection that controlled this sample.
     input.raw_real_delta_secs = real_time.map(|time| time.delta().as_secs_f64());
     input.virtual_max_delta_secs = virtual_time.max_delta().as_secs_f64();
     input.effective_rate = virtual_time.relative_speed_f64();
@@ -571,29 +523,63 @@ fn finish_fixed_tick_timing(
     }
 }
 
-/// Close the current Bevy `FixedMain` catch-up burst when a causal owner
-/// acquires a hold during a fixed tick. `project_time_transport` admits the
-/// next frame, but it cannot stop later iterations of the fixed loop already
-/// running in this frame; dropping only the unconsumed overstep preserves the
-/// tick that raised the hold and leaves the next tick for the owner boundary.
-fn close_fixed_loop_on_progress_hold(
-    transport: Res<TimeTransport>,
-    mut virtual_time: ResMut<Time<Virtual>>,
-    mut fixed_time: ResMut<Time<Fixed>>,
-    coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
-    progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
-    scene_time: Option<Res<SceneTimeState>>,
-) {
-    let causal_hold = coupling.is_some_and(|state| state.held)
-        || progress.is_some_and(|state| state.is_held())
-        || scene_time.is_some_and(|state| !state.is_ready())
-        || virtual_time.is_paused();
-    project_transport_state(
-        &transport,
-        &mut virtual_time,
-        Some(&mut fixed_time),
-        causal_hold,
-    );
+fn fixed_simulation_is_admitted(world: &World) -> bool {
+    let transport_running = world
+        .get_resource::<TimeTransport>()
+        .is_none_or(TimeTransport::is_running);
+    let virtual_running = world
+        .get_resource::<Time<Virtual>>()
+        .is_some_and(|time| !time.is_paused() && time.relative_speed_f64() > 0.0);
+    let coupling_held = world
+        .get_resource::<lunco_core_runtime::SimulationBarrier>()
+        .is_some_and(|state| state.held);
+    let progress_held = world
+        .get_resource::<lunco_core_runtime::SimulationProgress>()
+        .is_some_and(lunco_core_runtime::SimulationProgress::is_held);
+    let scene_time_ready = world
+        .get_resource::<SceneTimeState>()
+        .is_none_or(SceneTimeState::is_ready);
+
+    transport_running && virtual_running && !coupling_held && !progress_held && scene_time_ready
+}
+
+/// Run each admitted fixed tick as one complete causal cycle.
+///
+/// The clock conserves admitted duration across completed and pending time:
+/// each fixed cycle transfers one timestep from `overstep` to `elapsed`. A
+/// solver or scene admission barrier can arise inside a burst, so the remaining
+/// admitted time stays in the shared accumulator until its owner releases the
+/// hold.
+fn run_admitted_fixed_main_schedule(world: &mut World) {
+    let virtual_delta = world.resource::<Time<Virtual>>().delta();
+    world
+        .resource_mut::<Time<Fixed>>()
+        .accumulate_overstep(virtual_delta);
+
+    while fixed_simulation_is_admitted(world) {
+        let Some(timestep) = world
+            .get_resource::<Time<Fixed>>()
+            .map(Time::<Fixed>::timestep)
+        else {
+            break;
+        };
+        if world.resource::<Time<Fixed>>().overstep() < timestep {
+            break;
+        }
+        let mut fixed = world.resource_mut::<Time<Fixed>>();
+        // Bevy represents a completed fixed quantum as a paired accumulator
+        // subtraction and elapsed-time advance. Together they conserve the
+        // total admitted duration.
+        fixed.discard_overstep(timestep);
+        fixed.advance_by(timestep);
+        drop(fixed);
+        *world.resource_mut::<Time>() = world.resource::<Time<Fixed>>().as_generic();
+        let _ = world.try_schedule_scope(bevy::app::FixedMain, |world, schedule| {
+            schedule.run(world)
+        });
+    }
+
+    *world.resource_mut::<Time>() = world.resource::<Time<Virtual>>().as_generic();
 }
 
 fn begin_fixed_loop_timing(tick: Res<SimTick>, mut start: ResMut<SimulationTimingStart>) {
@@ -672,9 +658,9 @@ pub struct TimeTransport {
 }
 
 /// A pause explicitly requested while a scene transaction is waiting for its
-/// teardown/reset boundary. The transport command is synchronous, but the scene
-/// reset is deferred; retaining this intent lets `restart_scene(); pause()` mean
-/// pause the replacement scene rather than letting `ResetTime` overwrite it.
+/// scene-epoch boundary. The transport command is synchronous, but selection is
+/// deferred; retaining this intent lets `restart_scene(); pause()` pause the
+/// replacement scene.
 #[derive(Resource, Debug, Default)]
 pub(crate) struct PendingScenePause(pub bool);
 
@@ -929,10 +915,15 @@ impl WorldTime {
     }
 }
 
-/// System set projecting transport onto Bevy's virtual clock before the fixed
-/// loop admits simulation work.
+/// System set projecting causal admission onto Bevy's clock before `TimeSystems`
+/// samples the next virtual delta.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TimeSpineSet;
+pub struct ClockProjectionSet;
+
+/// PreUpdate boundary after owners have recorded their current lifecycle and
+/// simulation-progress admissions, before the fixed loop evaluates them.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SimulationAdmissionSet;
 
 /// System set publishing the completed physical tick as [`WorldTime`].
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -958,7 +949,6 @@ fn project_time_transport(
     mut virtual_time: ResMut<Time<Virtual>>,
     coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
     progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
-    mut fixed_time: Option<ResMut<Time<Fixed>>>,
     scene_time: Option<Res<SceneTimeState>>,
 ) {
     // Coupling, scene admission, and scene-time selection hold the complete
@@ -985,22 +975,12 @@ fn project_time_transport(
     // system on `resource_changed`) keeps it self-healing — if anything clobbers
     // `relative_speed` out of band, the mismatch is corrected next frame — while
     // avoiding a redundant per-frame write and the spurious change-detection it
-    // would trigger. A progress hold or unresolved scene-time selection also
-    // discards stale fixed overstep before the next fixed loop is admitted.
+    // would trigger. This runs before `TimeSystems` samples a new virtual delta.
     if virtual_time.relative_speed_f64() != configured {
         virtual_time.set_relative_speed_f64(configured);
     }
     if frozen != virtual_time.is_paused() {
-        if frozen {
-            virtual_time.pause();
-        } else {
-            virtual_time.unpause();
-        }
-    }
-    if admission_held || scene_time_pending {
-        if let Some(fixed_time) = fixed_time.as_deref_mut() {
-            discard_fixed_overstep(fixed_time);
-        }
+        if frozen { virtual_time.pause(); } else { virtual_time.unpause(); }
     }
 }
 
@@ -1020,9 +1000,10 @@ impl Plugin for TimePlugin {
             (
                 lunco_core_runtime::SimulationProgressAdmissionSet
                     .after(lunco_core::RuntimeCycleSet::EntityIndex),
-                TimeSpineSet.after(lunco_core_runtime::SimulationProgressAdmissionSet),
+                SimulationAdmissionSet.after(lunco_core_runtime::SimulationProgressAdmissionSet),
             ),
-        );
+        )
+        .configure_sets(First, ClockProjectionSet.before(TimeSystems));
         // `SimTick` lives in `lunco-core`; `init_resource` is idempotent, so this
         // is harmless where another plugin also inserts it and makes the spine
         // self-sufficient where it doesn't.
@@ -1030,6 +1011,11 @@ impl Plugin for TimePlugin {
         // install a second max-delta/rate policy beside the time spine.
         app.init_resource::<Time<Virtual>>()
             .init_resource::<Time<Fixed>>();
+        // First runs before scene-transition observers and PreUpdate admission.
+        // Keep the virtual clock closed through that first time sample so a
+        // startup hold cannot arrive after Bevy has already produced a fixed
+        // delta. The time spine opens it only after the startup state is known.
+        app.world_mut().resource_mut::<Time<Virtual>>().pause();
         app.world_mut()
             .resource_mut::<Time<Virtual>>()
             .set_max_delta(BASE_VIRTUAL_MAX_DELTA);
@@ -1072,18 +1058,26 @@ impl Plugin for TimePlugin {
             .add_systems(FixedFirst, begin_fixed_tick_timing)
             .add_systems(FixedLast, finish_fixed_tick_timing)
             .add_systems(
-                FixedLast,
-                close_fixed_loop_on_progress_hold
-                    .after(finish_fixed_tick_timing)
-                    .after(lunco_core_runtime::SimulationProgressAdmissionSet),
-            )
-            .add_systems(
-                PreUpdate,
+                First,
                 (
-                    project_time_transport.in_set(TimeSpineSet),
-                    apply_fixed_step_budget.after(TimeSpineSet),
+                    project_time_transport.in_set(ClockProjectionSet),
+                    apply_fixed_step_budget
+                        .after(ClockProjectionSet)
+                        .before(TimeSystems),
                 ),
             );
+
+        app.remove_systems_in_set(
+            RunFixedMainLoop,
+            bevy::time::run_fixed_main_schedule,
+            bevy::ecs::schedule::ScheduleCleanupPolicy::RemoveSystemsOnly,
+        )
+        .expect("Bevy TimePlugin fixed runner must be installed before LunCo TimePlugin");
+        app.add_systems(
+            RunFixedMainLoop,
+            run_admitted_fixed_main_schedule
+                .in_set(RunFixedMainLoopSystems::FixedMainLoop),
+        );
 
         app.add_systems(PostUpdate, advance_world_clock.in_set(WorldTimeSet));
         app.add_systems(
@@ -1318,18 +1312,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn fixed_barrier_discards_only_unconsumed_overstep() {
-        let mut fixed = Time::<Fixed>::from_seconds(1.0);
-        fixed.accumulate_overstep(Duration::from_secs(3));
-        assert_eq!(fixed.overstep(), Duration::from_secs(3));
-
-        discard_fixed_overstep(&mut fixed);
-
-        assert_eq!(fixed.overstep(), Duration::ZERO);
-        assert_eq!(fixed.elapsed(), Duration::ZERO);
-    }
-
     #[derive(Resource, Default)]
     struct FixedBurstCount(u32);
 
@@ -1350,7 +1332,7 @@ mod tests {
     }
 
     #[test]
-    fn progress_admission_stops_remaining_fixed_ticks_in_the_current_frame() {
+    fn progress_admission_preserves_unconsumed_fixed_time_until_release() {
         let mut app = App::new();
         app.add_plugins(bevy::time::TimePlugin)
             .add_plugins(TimePlugin)
@@ -1362,23 +1344,61 @@ mod tests {
             .set_timestep(Duration::from_secs(1));
         app.world_mut()
             .resource_mut::<Time<Virtual>>()
+            .unpause();
+        app.world_mut()
+            .resource_mut::<Time<Virtual>>()
             .advance_by(Duration::from_secs(4));
 
-        bevy::time::run_fixed_main_schedule(app.world_mut());
+        app.world_mut().run_schedule(RunFixedMainLoop);
 
         assert_eq!(
             app.world().resource::<FixedBurstCount>().0,
             2,
-            "the admission boundary preserves the tick that acquires the hold and prevents later catch-up ticks"
+            "one admitted fixed cycle completes before the new hold blocks the next cycle"
         );
         assert_eq!(
             app.world().resource::<Time<Fixed>>().overstep(),
-            Duration::ZERO
+            Duration::from_secs(2),
+            "the remaining fixed time stays queued while the owner resolves its barrier"
         );
-        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+        assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), Duration::from_secs(2));
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().elapsed()
+                + app.world().resource::<Time<Fixed>>().overstep(),
+            Duration::from_secs(4),
+            "completed plus pending time equals all admitted fixed time"
+        );
+
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationProgress>()
+            .release(lunco_core_runtime::SimulationProgressKey {
+                owner: lunco_core_runtime::SimulationProgressOwner::SceneReferences,
+                operation_id: 1,
+            });
+        app.world_mut()
+            .resource_mut::<Time<Virtual>>()
+            .advance_by(Duration::ZERO);
+        app.world_mut().run_schedule(RunFixedMainLoop);
+
+        assert_eq!(app.world().resource::<FixedBurstCount>().0, 4);
+        assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), Duration::from_secs(4));
+        assert_eq!(app.world().resource::<Time<Fixed>>().overstep(), Duration::ZERO);
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().elapsed()
+                + app.world().resource::<Time<Fixed>>().overstep(),
+            Duration::from_secs(4),
+            "release advances the preserved balance without changing admitted time"
+        );
     }
 
-    fn acquire_pre_update_progress(mut progress: ResMut<lunco_core_runtime::SimulationProgress>) {
+    fn acquire_pre_update_progress(
+        mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
+        mut admitted: Local<bool>,
+    ) {
+        if *admitted {
+            return;
+        }
+        *admitted = true;
         progress.acquire(
             lunco_core_runtime::SimulationProgressKey {
                 owner: lunco_core_runtime::SimulationProgressOwner::SceneReferences,
@@ -1388,20 +1408,94 @@ mod tests {
         );
     }
 
+    fn acquire_startup_progress(mut progress: ResMut<lunco_core_runtime::SimulationProgress>) {
+        progress.acquire(
+            lunco_core_runtime::SimulationProgressKey {
+                owner: lunco_core_runtime::SimulationProgressOwner::SceneLifecycle,
+                operation_id: 3,
+            },
+            "Test scene startup admission",
+        );
+    }
+
+    fn count_fixed_ticks(mut ticks: ResMut<lunco_core_runtime::SimTick>) {
+        ticks.0 += 1;
+    }
+
     #[test]
-    fn pre_update_progress_admission_precedes_time_spine_projection() {
+    fn startup_hold_is_applied_before_the_first_virtual_delta() {
+        let timestep = Duration::from_millis(16);
+        let hold = lunco_core_runtime::SimulationProgressKey {
+            owner: lunco_core_runtime::SimulationProgressOwner::SceneLifecycle,
+            operation_id: 3,
+        };
         let mut app = App::new();
         app.add_plugins((bevy::time::TimePlugin, TimePlugin))
             .init_resource::<lunco_core_runtime::SimulationProgress>()
-            .add_systems(
-                PreUpdate,
-                acquire_pre_update_progress
-                    .in_set(lunco_core_runtime::SimulationProgressAdmissionSet),
-            );
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(timestep))
+            .add_systems(Startup, acquire_startup_progress)
+            .add_systems(FixedUpdate, count_fixed_ticks);
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .set_timestep(timestep);
 
         app.update();
 
         assert!(app.world().resource::<Time<Virtual>>().is_paused());
+        assert_eq!(app.world().resource::<Time<Virtual>>().delta(), Duration::ZERO);
+        assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), Duration::ZERO);
+        assert_eq!(app.world().resource::<Time<Fixed>>().overstep(), Duration::ZERO);
+        assert_eq!(app.world().resource::<lunco_core_runtime::SimTick>().0, 0);
+
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationProgress>()
+            .release(hold);
+        app.update();
+        assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), timestep);
+        assert_eq!(app.world().resource::<lunco_core_runtime::SimTick>().0, 1);
+    }
+
+    #[test]
+    fn late_progress_admission_holds_the_sampled_time_without_advancing_fixed_state() {
+        let timestep = Duration::from_millis(16);
+        let mut app = App::new();
+        app.add_plugins((bevy::time::TimePlugin, TimePlugin))
+            .init_resource::<lunco_core_runtime::SimulationProgress>()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(timestep))
+            .add_systems(FixedUpdate, count_fixed_ticks);
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .set_timestep(timestep);
+        app.update();
+        app.add_systems(
+            PreUpdate,
+            acquire_pre_update_progress
+                .in_set(lunco_core_runtime::SimulationProgressAdmissionSet),
+        );
+
+        app.update();
+
+        assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+        assert_eq!(app.world().resource::<Time<Virtual>>().delta(), timestep);
+        assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), Duration::ZERO);
+        assert_eq!(app.world().resource::<lunco_core_runtime::SimTick>().0, 0);
+        assert_eq!(app.world().resource::<Time<Fixed>>().overstep(), timestep);
+
+        app.update();
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+        assert_eq!(app.world().resource::<Time<Fixed>>().overstep(), timestep);
+        assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), Duration::ZERO);
+
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationProgress>()
+            .release(lunco_core_runtime::SimulationProgressKey {
+                owner: lunco_core_runtime::SimulationProgressOwner::SceneReferences,
+                operation_id: 2,
+            });
+        app.update();
+        assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), timestep * 2);
+        assert_eq!(app.world().resource::<lunco_core_runtime::SimTick>().0, 2);
+        assert_eq!(app.world().resource::<Time<Fixed>>().overstep(), Duration::ZERO);
     }
 
     #[test]

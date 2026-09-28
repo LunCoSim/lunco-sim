@@ -47,14 +47,19 @@ admission path. A receipt does not claim that the value has already reached
 the port backend. The ordered session commit then applies or visibly faults
 the admitted write. Simulation-clock Rhai and
 fixed-step controller writes keep their owning execution path. Explicit
-external `ReleasePort`/`ReleaseControl` commands share the admission queue;
-immediate lifecycle safe-stops use the internal `ControlSafeStop` event,
-neutralize the endpoint at once, and admit a `runtime_lifecycle` input for the
-next fixed tick when capture is active. The record is captured at the ordered
-fixed-tick commit. A missing stable target, scene generation, tick, or shared
-order stamp fails the capture while preserving the immediate safety action.
-The safe-stop also cancels older queued port writes for that endpoint. Session
-authority changes alone do not issue this event or alter endpoint inputs.
+external `ReleasePort`/`ReleaseControl` commands share the admission queue and
+remove local input holds at their ordered commit without writing replacement
+values. The internal `ReleaseControlInputs` lifecycle event handles
+disconnection at the next fixed tick using the same ordered queue. It only
+clears local holds; authored wiring determines subsequent input values.
+Twin-owned safety behavior writes declared setpoints explicitly with
+`SetPorts`. `PortRegistry` uses the same declared owner resolution for named
+writes and fast-path input locators, so a lower owner cannot receive a write
+after the selected owner refuses it. Session capture retains the lifecycle
+hold-release record at its commit when active. A missing stable target, scene
+generation, tick, or shared order stamp reports a runtime error and keeps the
+existing holds. Session authority changes alone do not issue this event or
+alter endpoint inputs.
 
 `PortRegistry::port_entities` is the corresponding discovery projection. Each
 backend enumerates the component or authored surface it owns, and the registry
