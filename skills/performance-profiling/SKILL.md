@@ -220,6 +220,9 @@ once per dirty metadata batch and resolve all variables through that borrowed
 lookup. Do not call the linear `find_component_by_leaf` scan once per variable;
 steady sample batches should use the session's cached metadata without walking
 the document index.
+For burst channel publication, keep retention depth as a logical limit and let
+the history buffer grow with recorded samples. Do not reserve every channel's
+full retention window when most new channels contain only their initial sample.
 When multiple runtime consumers inspect the same composed owner, acquire its
 canonical reader and child list once, derive owned typed facts for each
 consumer, then release the stage borrow before mutating ECS. Preserve the same

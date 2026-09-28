@@ -320,6 +320,10 @@ pub struct ScalarSample {
 }
 
 /// Ring-buffer-backed history for one scalar signal.
+///
+/// `capacity` is the logical retention limit. The backing deque grows as
+/// samples arrive instead of reserving the entire history when a channel is
+/// first published; large channel batches often begin with only one sample.
 #[derive(Debug, Clone)]
 pub struct ScalarHistory {
     pub samples: VecDeque<ScalarSample>,
@@ -330,7 +334,7 @@ impl ScalarHistory {
     pub fn new(capacity: usize) -> Self {
         let capacity = capacity.max(1);
         Self {
-            samples: VecDeque::with_capacity(capacity),
+            samples: VecDeque::new(),
             capacity,
         }
     }

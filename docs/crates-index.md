@@ -173,7 +173,7 @@ External communication, ECS replication, telemetry extraction, and distributed a
 | **`lunco-api-transport`** | Application-bound API transports: native Axum HTTP listener, asset endpoint, and wasm browser bridge. It adapts the pure wire contract through `lunco-api-codec` to the typed ECS API runtime. |
 | **`lunco-telemetry-core`** | Transport-neutral telemetry contracts, typed event/value bus, reflection registration, black-box logging, and projection of generic core lifecycle facts into telemetry. It does not own sampling or retained history. |
 | **`lunco-telemetry`** | Telemetry channels: per-channel rate + deadband, bound to a `TimeDomain` (so pause/warp come free), retained in `lunco-signal`'s ring buffer, plus the OpenMCT-shaped query surface (catalog / history / recording). |
-| **`lunco-signal`** | The signal DATA model — `SignalRegistry`, `SignalRef`, `ScalarHistory`, and the backend-neutral `SimRegistry`/`SimStream` snapshot publication path. **Render-free by construction**: split out of `lunco-viz` (which links bevy_egui → bevy_render) so a headless run can retain history without a GPU stack. `lunco-viz` re-exports the signal registry. |
+| **`lunco-signal`** | The signal DATA model — `SignalRegistry`, `SignalRef`, `ScalarHistory` with lazily growing retained sample storage, and the backend-neutral `SimRegistry`/`SimStream` snapshot publication path. **Render-free by construction**: split out of `lunco-viz` (which links bevy_egui → bevy_render) so a headless run can retain history without a GPU stack. `lunco-viz` re-exports the signal registry. |
 
 ---
 

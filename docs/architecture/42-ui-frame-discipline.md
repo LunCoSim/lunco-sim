@@ -406,6 +406,11 @@ The shared `PhysicsPerformance` query includes the retained per-step timing
 history for percentile reporting; query it at the end of a measurement window
 instead of scanning the world once per fixed tick.
 
+Telemetry retention depth is a logical limit, not an eager allocation request.
+`ScalarHistory` grows its deque as samples arrive, so a startup burst that
+publishes thousands of new channels does not reserve the full history for every
+empty channel on the app thread.
+
 A `run_if`-gated system that still appears in a steady-state profile means its
 gate isn't closing — that's the bug, not the cost.
 
