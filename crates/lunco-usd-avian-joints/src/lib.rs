@@ -147,7 +147,12 @@ impl Plugin for JointAttachPlugin {
         app.add_plugins(lunco_physics::DeterministicJointSolverPlugin)
             .init_resource::<JointAdmissionBatch>()
             .add_observer(collision_filters::on_remove_joint_collision_pair);
-        app.add_systems(Update, retire_requested_joints.before(JointAdmission));
+        app.add_systems(
+            Update,
+            retire_requested_joints
+                .run_if(any_with_component::<lunco_physics::PhysicsJointDetachRequested>)
+                .before(JointAdmission),
+        );
         app.add_systems(
             Update,
             synchronize_joint_admission_batch

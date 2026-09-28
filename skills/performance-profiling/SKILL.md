@@ -157,6 +157,9 @@ items per update as well as elapsed time. Direct-child admission has its own
 `child_spawn_budget` and `max_child_spawns_per_update`; the parent keeps its
 awaiting/projecting markers until its direct children enter the ECS queue, so
 scene readiness must remain held while batches drain.
+Gate sparse exclusive lifecycle work on an existing pending marker or owner
+queue; an idle Update should not construct and scan a world query for a request
+that did not arrive.
 When a worker prepares facts for a composed plan, result commit must use the
 same prepared-plan identity for any derived cache. If the canonical owner
 records that exact plan as the source of the current live-stage generation,

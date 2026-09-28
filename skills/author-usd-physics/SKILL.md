@@ -57,6 +57,9 @@ boundary and performs one transaction in this order:
 3. release the transient joint collision filter;
 4. despawn the now-disposable joint entity.
 
+The retirement owner only runs when a `PhysicsJointDetachRequested` marker is
+present. Idle updates skip its exclusive graph transaction and world query.
+
 Scene teardown uses the same graph-retirement helper. This shared owner is what
 prevents a component-removal observer and a recursive despawn from unlinking one
 island edge twice. A command or Twin script must never implement a second joint

@@ -97,6 +97,12 @@ Modelica runtime telemetry is event-gated after worker responses and on document
 metadata or telemetry-settings changes. Unchanged render frames do not rescan its
 variables; each recorded sample still carries the solver's landed model time.
 
+Sparse structural lifecycle work is gated by its pending marker before entering
+an exclusive world owner. Joint retirement uses the existing
+`PhysicsJointDetachRequested` component condition, so idle updates skip the
+exclusive graph transaction and its world query while detach still completes
+before joint admission.
+
 The pre-simulation `PreUpdate` order is `Lifecycle` → `IdentityAdmission` →
 `EntityIndex` → `TimeSpineSet`. Lifecycle projection creates the ECS entities;
 the identity owner assigns their stable IDs; then the API registry publishes
