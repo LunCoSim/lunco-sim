@@ -96,19 +96,42 @@ unfinished parse as clean. Source edits themselves only validate and update
 text; they do not parse on the caller's schedule.
 
 The optional `lunco-sysml-ui` application adapter provides a focused
-requirements panel: it browses analyzed Twin sources, jumps to declaration and
-diagnostic lines, and edits through the canonical `SysmlDocument`
-command/save lifecycle. Requirement evidence, per-case test execution, and
-source quality (`require` criteria and resolved `verify` coverage) are shown as
-separate status dimensions. Each Twin-mapped verification can be run from its
-linked requirement; the panel starts the production headless scene-test runner,
-shows elapsed time and live output, and allows cancellation. Completed runs
-retain their summary and captured output for the open Twin session. Tests read
-saved Twin files, so running is disabled while an indexed SysML document or
-local source draft has unsaved edits. Statuses distinguish missing evidence,
-missing `verify` links, missing Twin runner mappings, unrun or stale results,
-and execution errors. A missing formal `require` criterion is a source-quality
-issue, not a test failure.
+requirements panel: it browses analyzed Twin sources, jumps from a failed check
+to its requirement declaration, and edits through the canonical
+`SysmlDocument` command/save lifecycle. Requirement evidence, per-case test
+execution, and model coverage (`require` criteria and resolved `verify` links)
+remain separate status dimensions, with independent filters. Evidence detail
+shows channel, verification identity, source revision, simulation tick, and
+check-level results, including failure messages and actual/expected values when
+the observer supplies them. The view keeps up to 64 detail records per
+requirement and retains aggregate counts for larger result sets. A mapped case
+can run from its linked requirement. **Run selected requirement tests** runs the
+distinct mapped cases for the selected requirement; **Run all mapped tests**
+runs each distinct mapped case once, sequentially, through the production
+headless scene-test runner. A completed suite keeps its source revision, case
+outcomes, and pass/fail/incomplete/cancelled counts. **Show failures** filters
+the list to failed requirements, and **Rerun failed** launches only failed
+cases. The suite can be stopped while it is active.
+
+The runner returns a versioned structured report over the child-process
+boundary. It carries the test verdict, bounded typed requirement evidence, and
+runner-level reasons for readiness failures, runtime faults, or exhausted
+limits. The UI builds check identities and failure explanations from that
+report instead of inferring status from log text. The bounded captured output
+remains available per case. Evidence check details can open the associated
+requirement declaration in the inline source editor. Requirements without a
+resolved `verify` link or a Twin test mapping remain visible as coverage gaps
+and are skipped. Tests read saved Twin files, so running is disabled while an
+indexed SysML document or local source draft has unsaved edits.
+
+The requirement roll-up is intentionally strict: `VERIFIED` requires a formal
+`require` criterion, all `verify` links mapped to Twin tests, current passing
+requirement evidence, and passing results for every mapped test. `FAILED` means
+a current check or linked test failed. `STALE`, `RUNNING`, and `INCOMPLETE` keep
+old, active, and missing proof explicit. This roll-up summarizes supplied
+verification evidence; it does not imply full KerML constraint execution. A
+missing formal `require` criterion is a model-coverage issue, not a test
+failure.
 
 The panel belongs to the existing workbench Editor level, alongside native
 document tools; it does not add a Twin HUD surface or a new workspace. This is a

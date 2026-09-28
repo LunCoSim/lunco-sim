@@ -469,7 +469,7 @@ outside this stream.
 
 | Domain/work | May run async | Must run at the owner boundary |
 |---|---|---|
-| USD | Asset I/O, dependency discovery, immutable layer parsing/composition, and send-safe projection-plan preparation; dependent-stage source snapshots are serialized once per revision and recipe overlays are coalesced through bounded admission | Check source revisions, operation/revision, and target-plan identity; mutate the live, thread-affine stage and publish ECS projection in stable scene order. An active dependent-stage refresh retains its exact progress key through commit |
+| USD | Asset I/O, dependency discovery, immutable layer parsing/composition, and send-safe projection-plan preparation; dependent-stage source snapshots are serialized once per revision and recipe overlays are coalesced through bounded admission; simulation topology classification runs from an exact canonical recipe snapshot through shared bounded admission | Check source revisions, operation/revision, and target-plan identity; mutate the live, thread-affine stage and publish ECS projection in stable scene order. USD simulation topology holds its mounted root's exact progress key until a current-generation index is committed; an active dependent-stage refresh retains its exact key through commit |
 | Modelica | Source I/O, declaration/interface extraction, parsing/lowering, solver construction, and requested numerical step | Check model generation/session/step; publish outputs and propagate ports at the fixed co-simulation boundary |
 | SysML | Source-set I/O, parse, resolve, typed analysis, and requirement report preparation | Publish only the current source revision; verification that reads live simulation values consumes the committed tick snapshot |
 | Rhai | Parse file-backed `.rhai` assets in Bevy's async asset-loading tasks; prepare inline roots and immutable compile artifacts through shared admission | Publish canonical source/AST revisions; validate and commit the dependency closure; evaluate imported module bodies, top-level initialization, and lifecycle hooks against the live world in stable actor order; apply commands at their declared boundary |
@@ -481,6 +481,20 @@ Twin/scene generation, owner identity, source revision, and operation/step id.
 The receiver rejects stale or out-of-order results at the owner. It does not
 retry by polling, substitute a default, or infer a new identity from completion
 time.
+
+The USD simulation projector serializes the exact live canonical root layer and
+its loaded dependency closure on the owner thread because OpenUSD stages are
+thread-affine. It then prepares composed joint, wheel-attachment, vehicle, and
+simulation-candidate facts through shared bounded worker admission. The mounted
+root holds one `UsdSimulationTopology` progress key only until its first
+topology index is committed, so startup cannot begin simulation with missing
+facts. Later generations retain the last committed index while replacement
+facts are prepared; existing simulation keeps advancing and new or reprojected
+simulation prims stay queued until commit. Results are accepted only when the
+stage-asset plan identity and canonical generation still match. A current
+primary-stage preparation failure, including an unavailable worker transport
+on browser hosts, faults and safety-holds that scene; scene teardown releases
+the initial progress key.
 
 Independent preparation is allowed to run in parallel on the existing worker
 pools. Submission uses one shared bounded admission policy with three semantic

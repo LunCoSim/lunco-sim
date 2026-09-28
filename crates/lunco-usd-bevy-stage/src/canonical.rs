@@ -29,7 +29,7 @@ use openusd::usd::{CommittedChange, Stage, StageSinkId};
 
 use crate::read::UsdReadSource;
 use crate::view::StageView;
-use crate::{UsdRead, UsdStageAsset};
+use crate::{UsdRead, UsdStageAsset, UsdStageProjectionPlan};
 
 /// One committed change, owned + `Send`, as drained from the stage sink.
 /// (`CommittedChange` borrows the stage; we copy the paths out so the inbox can
@@ -88,6 +88,21 @@ pub struct CanonicalStage {
     /// generation. Any later live edit makes the snapshot stale by advancing
     /// `generation`.
     prepared_plan: Option<(Arc<crate::UsdStageProjectionPlan>, u64)>,
+}
+
+/// Send-safe authored-layer snapshot of one canonical generation.
+///
+/// The live OpenUSD stage remains thread-affine. This owned recipe captures
+/// the current root layer and loaded dependency closure so readers can prepare
+/// immutable facts on a worker and validate them against the captured
+/// canonical generation before commit.
+pub struct CanonicalStageRecipeSnapshot(StageRecipe);
+
+impl CanonicalStageRecipeSnapshot {
+    /// Prepare the shared composed read plan from this exact layer snapshot.
+    pub fn prepare_projection_plan(&self) -> anyhow::Result<UsdStageProjectionPlan> {
+        UsdStageProjectionPlan::from_recipe(&self.0)
+    }
 }
 
 impl CanonicalStage {
@@ -528,6 +543,18 @@ impl CanonicalStage {
             .as_ref()
             .map(|shared| shared.borrow().clone())
             .unwrap_or_default()
+    }
+
+    /// Snapshot the current authored root layer and its loaded dependency
+    /// closure into an owned recipe suitable for worker preparation.
+    pub fn recipe_snapshot(&self) -> anyhow::Result<CanonicalStageRecipeSnapshot> {
+        let root_source = self.stage.root_layer().export_to_string()?;
+        let mut bytes = self.layer_bytes_snapshot();
+        bytes.insert(self.scene_layer.clone(), root_source.into_bytes());
+        Ok(CanonicalStageRecipeSnapshot(StageRecipe::new(
+            self.scene_layer.clone(),
+            bytes,
+        )))
     }
 
     /// The canonical layer id an `asset_path` reference resolves to on *this*

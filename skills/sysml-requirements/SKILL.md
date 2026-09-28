@@ -50,15 +50,18 @@ the canonical `SysmlDocument` at the declaration or diagnostic location.
 `SaveSysmlDocument` commands. The text editor is read-only when the document is
 not writable or its source revision conflicts with the open draft.
 
-The panel presents three independent status dimensions: structured requirement
-evidence, linked scene-test execution, and source quality (`require` criteria
-and resolved `verify` links). Running a mapped case uses the same production
-headless scene-test runner as the CLI; the panel shows elapsed time and live
-output, supports cancellation, and retains the run summary and output for the
-Twin session. Save or discard open SysML edits before running because tests
-read saved Twin files. Results are cleared when their Twin closes. The panel
-lives in the existing workbench Editor alongside the other native document
-tools.
+The panel presents three independent status dimensions with separate filters:
+structured requirement evidence, linked scene-test execution, and model
+coverage (`require` criteria and resolved `verify` links). Requirement details
+show evidence channel, verification identity, source revision, simulation tick,
+and captured check results. Up to 64 check details are retained per requirement;
+aggregate check and failure counts remain available for larger reports.
+Running a mapped case uses the same production headless scene-test runner as
+the CLI; the panel shows elapsed time and live output, supports cancellation,
+and retains the run summary and output for the Twin session. Save or discard
+open SysML edits before running because tests read saved Twin files. Results
+are cleared when their Twin closes. The panel lives in the existing workbench
+Editor alongside the other native document tools.
 
 ### Preserve declared collection shape
 
@@ -705,18 +708,38 @@ example, stale-source rejection or a safety-critical missing relationship).
 `--validate` alone cannot prove any of these runtime facts.
 
 In the desktop workbench, open **Editor → SysML Requirements** to inspect the
-active Twin, search requirements, filter by test status, and open a linked
-source at its declaration. The detail pane initially selects a requirement
-with a Twin-mapped test when one is available. The panel offers **Run test** for
-each Twin-mapped verification case, displays elapsed time and live output, and
-allows a running test to be cancelled. Save or discard open SysML edits before
-running; the runner reads the saved Twin source.
+active Twin, search requirements, filter by evidence, test, and coverage status,
+and open a linked source at its declaration. A failed structured check also
+offers direct navigation to the associated requirement declaration. The detail
+pane initially selects a requirement with a Twin-mapped test when one is
+available. **Run selected requirement tests** runs the distinct mapped cases
+for the selected requirement. **Run all mapped tests** runs each distinct case
+linked from any requirement once, sequentially. The completed suite retains its
+source revision and outcome counts; **Show failures** filters the list to
+failed requirements and **Rerun failed** runs only failed cases. The active
+suite shows progress and can be stopped. The child runner returns a versioned
+structured report with its verdict, bounded typed check evidence, and
+runner-level reasons for readiness failures, runtime faults, and exhausted
+limits. Failure identity, component/path, message, actual, and expected values
+come from this report rather than output-text parsing. Bounded captured output
+remains available for diagnostics. Requirements without a resolved `verify`
+link or Twin test mapping remain visible as coverage gaps and are skipped. Save
+or discard open SysML edits before running; the runner reads the saved Twin
+source.
+
+The overall status is `VERIFIED` only when a formal `require` criterion exists,
+all `verify` links map to Twin tests, current structured requirement evidence
+passes, and every linked mapped test passes. `FAILED` indicates an observed
+current check or test failure. `STALE`, `RUNNING`, and `INCOMPLETE` keep old,
+active, and missing proof visible. The roll-up summarizes authored evidence; it
+does not imply full KerML constraint execution.
 
 Read the three status dimensions separately; they answer different questions:
 
 - **Requirement evidence** is `PASS`, `FAIL`, `STALE`, or `NO EVIDENCE`, based
-  on structured `<CHANNEL>_EVIDENCE` telemetry for the active Twin and source
-  revision. `NO EVIDENCE` means no current checks were emitted.
+  on structured `<CHANNEL>_EVIDENCE` summaries and check-result events for the
+  active Twin and source revision. `NO EVIDENCE` means no current checks were
+  emitted.
 - **Test execution** is per linked scene test. `PASS` and `FAIL` are current
   runner verdicts; `PARTIAL` means some linked tests passed while others still
   need results. `NOT RUN` means mapped tests have no current result; `RUNNING`
@@ -725,9 +748,13 @@ Read the three status dimensions separately; they answer different questions:
   `RUN ERROR` means the runner could not start or be monitored.
 - **NO VERIFY** means the source has no resolved `verify` link. **NO RUNNER**
   means a link exists without a Twin test mapping.
-- **Source quality** reports whether a formal `require` criterion exists and
+- **Model coverage** reports whether a formal `require` criterion exists and
   how many `verify` links have Twin test mappings. A missing criterion or link
   is a model gap; it does not mean a test failed.
+- **Overall requirement status** combines coverage, current requirement
+  evidence, and mapped test results. Missing criteria, links, evidence, or test
+  results prevent `VERIFIED`; stale inputs remain `STALE` rather than being
+  treated as current.
 - Panel results are in-session evidence for the source revision that was run.
   Rerun after edits; closing the Twin clears its result set.
 
