@@ -102,9 +102,12 @@ to its requirement declaration, and edits through the canonical
 execution, and model coverage (`require` criteria and resolved `verify` links)
 remain separate status dimensions, with independent filters. Evidence detail
 shows channel, verification identity, source revision, simulation tick, and
-check-level results, including failure messages and actual/expected values when
-the observer supplies them. The view keeps up to 64 detail records per
-requirement and retains aggregate counts for larger result sets. A mapped case
+check-level verdicts, explanations, and actual/expected values when the observer
+supplies them. Definitions and usages carry distinct visible roles. Syntax,
+unresolved-name, and package-collision diagnostics make the model visibly
+invalid, prevent a `VERIFIED` roll-up, and disable verification actions. The
+view keeps up to 64 detail records per requirement and retains separate
+pass/fail/inconclusive/error counts for larger result sets. A mapped case
 can run from its linked requirement. **Run selected requirement tests** runs the
 distinct mapped cases for the selected requirement; **Run all mapped tests**
 runs each distinct mapped case once, sequentially, through the production
@@ -113,25 +116,29 @@ outcomes, and pass/fail/incomplete/cancelled counts. **Show failures** filters
 the list to failed requirements, and **Rerun failed** launches only failed
 cases. The suite can be stopped while it is active.
 
-The runner returns a versioned structured report over the child-process
-boundary. It carries the test verdict, bounded typed requirement evidence, and
-runner-level reasons for readiness failures, runtime faults, or exhausted
-limits. The UI builds check identities and failure explanations from that
-report instead of inferring status from log text. The bounded captured output
-remains available per case. Evidence check details can open the associated
+The runner returns report schema 2 over the child-process boundary. It separates
+the four-state verification verdict from runner completion status and includes
+the source revisions observed at start and completion. The UI rejects results
+whose observed revisions do not match the requested source. Runner-level reasons
+for readiness failures, runtime faults, or exhausted limits stay separate from
+authored check results. The UI builds check identities and explanations from
+typed report evidence instead of inferring status from log text. The bounded
+captured output remains available per case. Evidence check details can open the associated
 requirement declaration in the inline source editor. Requirements without a
 resolved `verify` link or a Twin test mapping remain visible as coverage gaps
 and are skipped. Tests read saved Twin files, so running is disabled while an
 indexed SysML document or local source draft has unsaved edits.
 
-The requirement roll-up is intentionally strict: `VERIFIED` requires a formal
-`require` criterion, all `verify` links mapped to Twin tests, current passing
-requirement evidence, and passing results for every mapped test. `FAILED` means
-a current check or linked test failed. `STALE`, `RUNNING`, and `INCOMPLETE` keep
-old, active, and missing proof explicit. This roll-up summarizes supplied
-verification evidence; it does not imply full KerML constraint execution. A
-missing formal `require` criterion is a model-coverage issue, not a test
-failure.
+The requirement roll-up is intentionally strict: `VERIFIED` requires a valid
+analyzed model, a formal `require` criterion, all `verify` links mapped to Twin
+tests, current passing requirement evidence, and passing results for every
+mapped test. `FAILED` means a standard fail; `INCONCLUSIVE`, `ERROR`, and
+`RUN ERROR` preserve insufficient evidence, evaluation errors, and runner errors
+as separate outcomes. `INVALID MODEL`, `STALE`, `RUNNING`, and `INCOMPLETE` keep
+invalid source, old, active, and missing proof explicit. This roll-up summarizes
+supplied verification evidence; it does not imply full KerML constraint
+execution. A missing formal `require` criterion is a model-coverage issue, not a
+test failure.
 
 The panel belongs to the existing workbench Editor level, alongside native
 document tools; it does not add a Twin HUD surface or a new workspace. This is a

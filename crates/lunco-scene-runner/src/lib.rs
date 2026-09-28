@@ -59,8 +59,8 @@
 //!
 //! Via **telemetry**, not by scraping stdout.
 //!
-//! The scenario contract (`assets/scenarios/tests/*.rhai`) ends in
-//! `emit("<CHANNEL>", "PASS" | "FAIL")`, and rhai's `emit` fires a real
+//! Generic scene tests emit `PASS` or `FAIL`; SysML verification policies may
+//! additionally emit `INCONCLUSIVE` or `ERROR`. Rhai's `emit` fires a real
 //! `TelemetryEvent` on the shared bus (`bridge_core::emit` →
 //! `world.trigger(TelemetryEvent { .. })`). An observer here catches it — a
 //! typed, in-process, order-guaranteed signal. Log scraping would have meant
@@ -68,22 +68,21 @@
 //! racing the log writer; there is no reason to do that when the event is
 //! already a first-class thing in the World.
 //!
-//! We match on the PAYLOAD (`TelemetryValue::String("PASS"/"FAIL")`), not on a
-//! hardcoded channel name, because each scene names its own channel
+//! We match on the payload, not on a hardcoded channel name, because each
+//! scene names its own channel
 //! (`DRIVETRAIN_PARITY`, `ACKERMANN_CONTROLLER`, `SIX_INDEPENDENT_MOTION`,
 //! …). The channel name is reported in the summary so it is
 //! never ambiguous WHICH check answered. `--verdict-channel <NAME>` pins it if a
 //! scene ever emits two.
 //!
-//! First verdict wins: the parity scenarios have an early-abort path that emits
-//! `FAIL` before the full comparison runs, and that is a genuine verdict.
+//! First verdict wins: an authored early-abort verdict is final for that run.
 //!
 //! ## Exit codes
 //!
 //! | code | meaning |
 //! |------|---------|
 //! | 0    | a verdict arrived and it was `PASS` |
-//! | 1    | a verdict arrived and it was `FAIL` |
+//! | 1    | a non-pass verdict arrived, or the runner rejected the result |
 //! | 2    | readiness timed out, `--max-ticks` was exhausted with NO verdict, the app asked to exit before one, or the CLI was malformed |
 //!
 //! A hang is a FAILURE, not a pass. A scene whose scenario never reaches its
@@ -149,6 +148,7 @@ use bevy::time::TimeUpdateStrategy;
 use lunco_cosim_core::UsdSourcedCosim;
 use lunco_luncosim_simulation::LunCoSimHeadlessPlugin;
 use lunco_modelica_runtime::ModelicaModel;
+use lunco_sysml_ir::VerificationVerdict;
 use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
 use lunco_usd_document::document::UsdDocument;
 use lunco_usd_sim_cosim::PendingModelicaSource;
@@ -181,19 +181,25 @@ pub struct SceneTestRunReport {
     pub schema_version: u32,
     pub verification: String,
     pub process_exit_code: u8,
-    pub verdict: Option<SceneTestVerdict>,
+    pub process_status: SceneTestProcessStatus,
+    pub expected_source_revision: Option<u64>,
+    pub source_revision_at_start: Option<u64>,
+    pub source_revision_at_end: Option<u64>,
+    pub verdict: Option<VerificationVerdict>,
     pub verdict_channel: Option<String>,
     pub evidence: Vec<SceneTestEvidenceEvent>,
-    pub failed_checks: Vec<SceneTestEvidenceEvent>,
+    pub non_pass_checks: Vec<SceneTestEvidenceEvent>,
     pub runner_diagnostic: Option<String>,
     pub details_truncated: bool,
 }
 
-/// Authored scene-test verdict captured from the telemetry bus.
+/// Scene-test completion status, separate from the standard verdict.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum SceneTestVerdict {
-    Passed,
-    Failed,
+#[serde(rename_all = "snake_case")]
+pub enum SceneTestProcessStatus {
+    VerdictProduced,
+    NoVerdict,
+    RunnerError,
 }
 
 /// Structured verification telemetry retained across the child-process
@@ -239,6 +245,12 @@ struct Cli {
     /// scene must be the registry mapping for this qualified name and the
     /// registry's verdict channel is used unless explicitly overridden.
     verification: Option<String>,
+    /// Source revision supplied by the requirements UI for this run.
+    expected_source_revision: Option<u64>,
+    /// Manifest name owning the selected verification.
+    verification_twin_name: Option<String>,
+    /// Twin root owning the selected verification.
+    verification_twin_root: Option<std::path::PathBuf>,
     /// Compute-pool threads. `1` pins one thread, `0` uses Bevy's default
     /// task-pool allocation (the same policy as GUI DefaultPlugins), `n>1` pins n.
     threads: usize,
@@ -296,21 +308,26 @@ impl Xorshift64Star {
 /// speaks.
 #[derive(Resource, Default)]
 struct Verdict {
-    /// `Some((channel, passed))` once the first PASS/FAIL payload lands.
-    result: Option<(String, bool)>,
+    /// `Some((channel, verdict))` once the first standard verdict lands.
+    result: Option<(String, VerificationVerdict)>,
     /// Set from the CLI so the observer can filter by channel.
     want_channel: Option<String>,
     /// Set for SysML panel runs so the child returns typed check evidence.
     verification: Option<String>,
     evidence: Vec<SceneTestEvidenceEvent>,
-    failed_checks: Vec<SceneTestEvidenceEvent>,
+    non_pass_checks: Vec<SceneTestEvidenceEvent>,
     evidence_bytes: usize,
-    failed_check_bytes: usize,
+    non_pass_check_bytes: usize,
     details_truncated: bool,
 }
 
-const MAX_SCENE_TEST_FAILURE_DETAILS: usize = 256;
-const MAX_SCENE_TEST_FAILURE_BYTES: usize = 32 * 1024;
+#[derive(Resource, Default)]
+struct VerificationSourceRevision {
+    at_start: Option<u64>,
+}
+
+const MAX_SCENE_TEST_NON_PASS_DETAILS: usize = 256;
+const MAX_SCENE_TEST_NON_PASS_BYTES: usize = 32 * 1024;
 const MAX_SCENE_TEST_EVIDENCE_BYTES: usize = 64 * 1024;
 
 fn capture_verification_evidence(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
@@ -326,25 +343,29 @@ fn capture_verification_evidence(trigger: On<TelemetryEvent>, mut verdict: ResMu
     }
 
     if is_result {
-        let failed = matches!(
-            &event.data,
-            TelemetryValue::Map(payload)
-                if matches!(payload.get("result"), Some(TelemetryValue::Map(result))
-                    if matches!(result.get("ok"), Some(TelemetryValue::Bool(false))))
-        );
-        if !failed {
+        let non_pass = match &event.data {
+            TelemetryValue::Map(payload) => match payload.get("result") {
+                Some(TelemetryValue::Map(result)) => match result.get("verdict") {
+                    Some(TelemetryValue::String(verdict)) => verdict != "pass",
+                    _ => !matches!(result.get("ok"), Some(TelemetryValue::Bool(true))),
+                },
+                _ => false,
+            },
+            _ => false,
+        };
+        if !non_pass {
             return;
         }
         let encoded_size = serde_json::to_vec(&event.data).map_or(usize::MAX, |data| data.len());
-        if verdict.failed_checks.len() == MAX_SCENE_TEST_FAILURE_DETAILS
-            || verdict.failed_check_bytes.saturating_add(encoded_size)
-                > MAX_SCENE_TEST_FAILURE_BYTES
+        if verdict.non_pass_checks.len() == MAX_SCENE_TEST_NON_PASS_DETAILS
+            || verdict.non_pass_check_bytes.saturating_add(encoded_size)
+                > MAX_SCENE_TEST_NON_PASS_BYTES
         {
             verdict.details_truncated = true;
             return;
         }
-        verdict.failed_check_bytes += encoded_size;
-        verdict.failed_checks.push(SceneTestEvidenceEvent {
+        verdict.non_pass_check_bytes += encoded_size;
+        verdict.non_pass_checks.push(SceneTestEvidenceEvent {
             name: event.name.clone(),
             sim_tick: event.sim_tick,
             data: event.data.clone(),
@@ -392,6 +413,7 @@ fn parse_args() -> Result<Cli, String> {
     let mut tick_hz = lunco_core_runtime::FIXED_HZ;
     let mut verdict_channel: Option<String> = None;
     let mut verification: Option<String> = None;
+    let mut expected_source_revision: Option<u64> = None;
     let mut threads: usize = 1;
     let mut jitter = 0.0f64;
     let mut seed = DEFAULT_SEED;
@@ -445,6 +467,13 @@ fn parse_args() -> Result<Cli, String> {
             }
             "--verification" => {
                 verification = Some(need(i, "--verification")?);
+                i += 2;
+            }
+            "--source-revision" => {
+                let value = need(i, "--source-revision")?;
+                expected_source_revision = Some(value.parse().map_err(|_| {
+                    format!("--source-revision expects an unsigned integer, got {value:?}")
+                })?);
                 i += 2;
             }
             "--threads" => {
@@ -521,12 +550,18 @@ fn parse_args() -> Result<Cli, String> {
         }
     }
     let scene = scene.ok_or_else(|| format!("--scene is required\n\n{}", usage()))?;
+    if expected_source_revision.is_some() && verification.is_none() {
+        return Err("--source-revision requires --verification".to_owned());
+    }
     Ok(Cli {
         scene,
         max_ticks,
         tick_hz,
         verdict_channel,
         verification,
+        expected_source_revision,
+        verification_twin_name: None,
+        verification_twin_root: None,
         threads,
         jitter,
         seed,
@@ -610,8 +645,8 @@ USAGE:
     --tick-hz HZ             Manual clock step rate (default {hz}, = lunco_core_runtime::FIXED_HZ).
                              Keep it at FIXED_HZ for exactly one physics tick
                              per update.
-    --verdict-channel NAME   Only accept a PASS/FAIL from this telemetry channel.
-                             Default: the first PASS/FAIL payload on any channel.
+    --verdict-channel NAME   Only accept a recognized verdict from this channel.
+                             Default: the first PASS/FAIL/INCONCLUSIVE/ERROR payload.
     --verification NAME      Require the scene to match a Twin manifest's
                              qualified SysML verification mapping and use its
                              declared verdict channel by default.
@@ -735,6 +770,15 @@ fn apply_verification_selection(cli: &mut Cli) -> Result<(), String> {
                     cli.verdict_channel = Some(expected.to_owned());
                 }
             }
+            let twin_name = twin
+                .manifest
+                .as_ref()
+                .map(|manifest| manifest.name.clone())
+                .ok_or_else(|| {
+                    format!("Twin at {} has no manifest name", canonical_root.display())
+                })?;
+            cli.verification_twin_name = Some(twin_name);
+            cli.verification_twin_root = Some(canonical_root);
             return Ok(());
         }
         candidate = root.parent();
@@ -797,7 +841,7 @@ fn catch_expected_runtime_fault(
 
 fn catch_verdict(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
     if verdict.result.is_some() {
-        return; // First verdict wins — the early-abort FAIL is a real verdict.
+        return; // The first authored verdict is final for this run.
     }
     let evt = trigger.event();
     if let Some(want) = &verdict.want_channel {
@@ -808,40 +852,74 @@ fn catch_verdict(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
     let TelemetryValue::String(payload) = &evt.data else {
         return;
     };
-    let passed = match payload.as_str() {
-        "PASS" => true,
-        "FAIL" => false,
+    let result = match payload.as_str() {
+        "PASS" => VerificationVerdict::Pass,
+        "FAIL" => VerificationVerdict::Fail,
+        "INCONCLUSIVE" => VerificationVerdict::Inconclusive,
+        "ERROR" => VerificationVerdict::Error,
         _ => return,
     };
     let name = evt.name.clone();
     info!("[luncosim test] verdict received on channel {name}: {payload}");
-    verdict.result = Some((name, passed));
+    verdict.result = Some((name, result));
 }
 
 fn finish_scene_test(
     app: &App,
     cli: &Cli,
-    process_exit_code: u8,
-    runner_diagnostic: Option<String>,
+    mut process_exit_code: u8,
+    mut process_status: SceneTestProcessStatus,
+    mut runner_diagnostic: Option<String>,
 ) -> u8 {
     let Some(verification) = cli.verification.as_ref() else {
         return process_exit_code;
     };
+    let source_revision_at_start = app
+        .world()
+        .get_resource::<VerificationSourceRevision>()
+        .and_then(|revision| revision.at_start);
+    let (source_revision_at_end, source_revision_error) =
+        match verification_source_revision(app.world(), cli) {
+            Ok(revision) => (revision, None),
+            Err(error) => (None, Some(error)),
+        };
+    let source_problem = source_revision_error
+        .map(|error| format!("Could not verify the SysML source revision at run completion: {error}"))
+        .or_else(|| match (
+            cli.expected_source_revision,
+            source_revision_at_start,
+            source_revision_at_end,
+        ) {
+            (Some(expected), Some(start), _) if expected != start => Some(format!(
+                "SysML source changed before the run: requested revision {expected}, observed {start}."
+            )),
+            (_, Some(start), Some(end)) if start != end => Some(format!(
+                "SysML source changed during the run: revision {start} at start, revision {end} at completion."
+            )),
+            (_, Some(_), Some(_)) => None,
+            _ => Some("The scene-test process could not bind the run to a ready SysML source revision.".to_owned()),
+        });
+    if let Some(problem) = source_problem {
+        process_exit_code = 1;
+        process_status = SceneTestProcessStatus::RunnerError;
+        runner_diagnostic = Some(match runner_diagnostic {
+            Some(existing) => format!("{existing} {problem}"),
+            None => problem,
+        });
+    }
     let verdict = app.world().resource::<Verdict>();
     let report = SceneTestRunReport {
-        schema_version: 1,
+        schema_version: 2,
         verification: verification.clone(),
         process_exit_code,
-        verdict: verdict.result.as_ref().map(|(_, passed)| {
-            if *passed {
-                SceneTestVerdict::Passed
-            } else {
-                SceneTestVerdict::Failed
-            }
-        }),
+        process_status,
+        expected_source_revision: cli.expected_source_revision,
+        source_revision_at_start,
+        source_revision_at_end,
+        verdict: verdict.result.as_ref().map(|(_, verdict)| *verdict),
         verdict_channel: verdict.result.as_ref().map(|(channel, _)| channel.clone()),
         evidence: verdict.evidence.clone(),
-        failed_checks: verdict.failed_checks.clone(),
+        non_pass_checks: verdict.non_pass_checks.clone(),
         runner_diagnostic,
         details_truncated: verdict.details_truncated,
     };
@@ -850,6 +928,43 @@ fn finish_scene_test(
         Err(error) => eprintln!("could not encode structured scene-test report: {error}"),
     }
     process_exit_code
+}
+
+#[cfg(feature = "sysml")]
+fn verification_source_revision(world: &World, cli: &Cli) -> Result<Option<u64>, String> {
+    let Some(name) = cli.verification_twin_name.as_deref() else {
+        return Err("the verification Twin name was not resolved".to_owned());
+    };
+    let Some(root) = cli.verification_twin_root.as_deref() else {
+        return Err("the verification Twin root was not resolved".to_owned());
+    };
+    let workspace = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .ok_or_else(|| "the verification Twin workspace is unavailable".to_owned())?;
+    let (twin_id, twin) = workspace
+        .twins()
+        .find(|(_, twin)| twin.root == root)
+        .ok_or_else(|| {
+            "the verification Twin is not mounted in the scene-test process".to_owned()
+        })?;
+    let analyses = world
+        .get_resource::<lunco_sysml::TwinSysmlAnalyses>()
+        .ok_or_else(|| "SysML analysis is not installed in the scene-test process".to_owned())?;
+    match analyses.state_for(name, twin_id, &twin.root) {
+        Some(lunco_sysml::TwinSysmlAnalysisState::Ready(analysis)) => {
+            Ok(Some(analysis.source_revision()))
+        }
+        Some(lunco_sysml::TwinSysmlAnalysisState::Pending) => Ok(None),
+        Some(lunco_sysml::TwinSysmlAnalysisState::Failed(errors)) => {
+            Err(format!("SysML analysis failed: {}", errors.join("; ")))
+        }
+        None => Err("SysML analysis is not prepared for this Twin identity".to_owned()),
+    }
+}
+
+#[cfg(not(feature = "sysml"))]
+fn verification_source_revision(_world: &World, _cli: &Cli) -> Result<Option<u64>, String> {
+    Err("SysML support is not enabled in the scene-test process".to_owned())
 }
 
 /// Whether every Modelica source in the composed scene has reached a terminal
@@ -1373,11 +1488,12 @@ pub fn run() -> u8 {
         want_channel: cli.verdict_channel.clone(),
         verification: cli.verification.clone(),
         evidence: Vec::new(),
-        failed_checks: Vec::new(),
+        non_pass_checks: Vec::new(),
         evidence_bytes: 0,
-        failed_check_bytes: 0,
+        non_pass_check_bytes: 0,
         details_truncated: false,
     });
+    app.init_resource::<VerificationSourceRevision>();
     app.add_observer(catch_verdict);
     app.add_observer(capture_verification_evidence);
     app.init_resource::<ExpectedFaults>();
@@ -1535,6 +1651,7 @@ pub fn run() -> u8 {
             &app,
             &cli,
             2,
+            SceneTestProcessStatus::RunnerError,
             Some(format!(
                 "Scene materialization did not complete within the {:.1}s readiness timeout.",
                 cli.readiness_timeout.as_secs_f64()
@@ -1550,7 +1667,13 @@ pub fn run() -> u8 {
     pause_modelica_participants(app.world_mut());
     if let Err(error) = set_scene_test_startup_hold(&mut app, true) {
         eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
-        return finish_scene_test(&app, &cli, 2, Some(error.to_string()));
+        return finish_scene_test(
+            &app,
+            &cli,
+            2,
+            SceneTestProcessStatus::RunnerError,
+            Some(error.to_string()),
+        );
     }
     app.insert_resource(TimeUpdateStrategy::ManualDuration(dt));
 
@@ -1587,6 +1710,7 @@ pub fn run() -> u8 {
             &app,
             &cli,
             2,
+            SceneTestProcessStatus::RunnerError,
             Some(format!(
                 "Physics admission did not complete before the {:.1}s readiness timeout.",
                 cli.readiness_timeout.as_secs_f64()
@@ -1639,7 +1763,13 @@ pub fn run() -> u8 {
     if participants_are_ready {
         if let Err(error) = set_scene_test_startup_hold(&mut app, false) {
             eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
-            return finish_scene_test(&app, &cli, 2, Some(error.to_string()));
+            return finish_scene_test(
+                &app,
+                &cli,
+                2,
+                SceneTestProcessStatus::RunnerError,
+                Some(error.to_string()),
+            );
         }
         // The final worker response may have released the coupling barrier in
         // the same update that made the participant set ready.  Do not wait for
@@ -1668,6 +1798,7 @@ pub fn run() -> u8 {
             &app,
             &cli,
             2,
+            SceneTestProcessStatus::RunnerError,
             Some(format!(
                 "Participant readiness did not complete within the {:.1}s readiness timeout.",
                 cli.readiness_timeout.as_secs_f64()
@@ -1684,10 +1815,54 @@ pub fn run() -> u8 {
             &app,
             &cli,
             1,
+            SceneTestProcessStatus::RunnerError,
             Some(format!(
                 "Authored document was dirty before scenario start: {dirty}"
             )),
         );
+    }
+
+    if cli.verification.is_some() {
+        let observed = match verification_source_revision(app.world(), &cli) {
+            Ok(Some(revision)) => revision,
+            Ok(None) => {
+                return finish_scene_test(
+                    &app,
+                    &cli,
+                    2,
+                    SceneTestProcessStatus::RunnerError,
+                    Some(
+                        "SysML analysis was not ready when verification was about to start."
+                            .to_owned(),
+                    ),
+                );
+            }
+            Err(error) => {
+                return finish_scene_test(
+                    &app,
+                    &cli,
+                    2,
+                    SceneTestProcessStatus::RunnerError,
+                    Some(error),
+                );
+            }
+        };
+        app.world_mut()
+            .resource_mut::<VerificationSourceRevision>()
+            .at_start = Some(observed);
+        if let Some(expected) = cli.expected_source_revision
+            && expected != observed
+        {
+            return finish_scene_test(
+                &app,
+                &cli,
+                2,
+                SceneTestProcessStatus::RunnerError,
+                Some(format!(
+                    "SysML source changed before the run: requested revision {expected}, observed {observed}."
+                )),
+            );
+        }
     }
 
     // The scene and its asynchronous participants are ready now. Install the
@@ -1861,7 +2036,13 @@ pub fn run() -> u8 {
                 "luncosim test PASS  scene={}  expected terminal runtime fault kind={} subject={}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
                 cli.scene, fault.kind, fault.subject
             );
-            return finish_scene_test(&app, &cli, 0, None);
+            return finish_scene_test(
+                &app,
+                &cli,
+                if cli.verification.is_some() { 2 } else { 0 },
+                SceneTestProcessStatus::NoVerdict,
+                None,
+            );
         }
         println!(
             "luncosim test FAIL  scene={}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
@@ -1875,6 +2056,7 @@ pub fn run() -> u8 {
             &app,
             &cli,
             1,
+            SceneTestProcessStatus::RunnerError,
             Some(format!(
                 "Terminal runtime fault kind={} subject={} detail={}",
                 fault.kind, fault.subject, fault.detail
@@ -1899,6 +2081,7 @@ pub fn run() -> u8 {
             &app,
             &cli,
             1,
+            SceneTestProcessStatus::RunnerError,
             Some(format!(
                 "The scenario declared expect_runtime_fault({}) but no terminal runtime fault was raised.",
                 expected_runtime
@@ -1981,6 +2164,7 @@ pub fn run() -> u8 {
             &app,
             &cli,
             1,
+            SceneTestProcessStatus::RunnerError,
             Some(format!(
                 "The scenario declared expect_fault({}) but no such connection ever dangled.",
                 missing.join(", ")
@@ -1988,13 +2172,13 @@ pub fn run() -> u8 {
         );
     }
 
-    let (process_exit_code, runner_diagnostic) = match app
+    let (process_exit_code, process_status, runner_diagnostic) = match app
         .world()
         .resource::<Verdict>()
         .result
         .clone()
     {
-        Some((channel, true)) if !broken.is_empty() => {
+        Some((channel, VerificationVerdict::Pass)) if !broken.is_empty() => {
             println!(
                 "luncosim test FAIL  scene={}  channel={channel}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
                 cli.scene
@@ -2010,6 +2194,7 @@ pub fn run() -> u8 {
             );
             (
                 1,
+                SceneTestProcessStatus::RunnerError,
                 Some(format!(
                     "The scenario reported PASS, but {} connection(s) never landed: {}.",
                     broken.len(),
@@ -2017,22 +2202,34 @@ pub fn run() -> u8 {
                 )),
             )
         }
-        Some((channel, true)) => {
+        Some((channel, VerificationVerdict::Pass)) => {
             println!(
                 "luncosim test PASS  scene={}  channel={channel}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
                 cli.scene
             );
-            (0, None)
+            (0, SceneTestProcessStatus::VerdictProduced, None)
         }
-        Some((channel, false)) => {
+        Some((channel, verdict)) => {
+            let (label, diagnostic) = match verdict {
+                VerificationVerdict::Fail => (
+                    "FAIL",
+                    format!("The scenario reported FAIL on channel {channel}."),
+                ),
+                VerificationVerdict::Inconclusive => (
+                    "INCONCLUSIVE",
+                    format!("The scenario reported INCONCLUSIVE on channel {channel}."),
+                ),
+                VerificationVerdict::Error => (
+                    "ERROR",
+                    format!("The scenario reported ERROR on channel {channel}."),
+                ),
+                VerificationVerdict::Pass => unreachable!("PASS was handled above"),
+            };
             println!(
-                "luncosim test FAIL  scene={}  channel={channel}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
-                cli.scene
+                "luncosim test {label}  scene={}  channel={channel}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
+                cli.scene,
             );
-            (
-                1,
-                Some(format!("The scenario reported FAIL on channel {channel}.")),
-            )
+            (1, SceneTestProcessStatus::VerdictProduced, Some(diagnostic))
         }
         None => {
             let why = if early_exit {
@@ -2046,6 +2243,7 @@ pub fn run() -> u8 {
             );
             (
                 2,
+                SceneTestProcessStatus::NoVerdict,
                 Some(if early_exit {
                     "The app exited before the scenario reported a verdict (scene load failure?)."
                         .to_owned()
@@ -2055,7 +2253,13 @@ pub fn run() -> u8 {
             )
         }
     };
-    finish_scene_test(&app, &cli, process_exit_code, runner_diagnostic)
+    finish_scene_test(
+        &app,
+        &cli,
+        process_exit_code,
+        process_status,
+        runner_diagnostic,
+    )
 }
 
 /// Print the authoritative scene-test catalog without constructing Bevy or a

@@ -125,6 +125,7 @@ fn coverage(id, component, requirement, verification) {
 // requirement evaluator and its coverage/provenance tables.
 fn preflight(id, ok, message, actual, expected) {
     #{id: id, kind: "source_preflight", ok: ok == true,
+      verdict: if ok == true { "pass" } else { "error" },
       error: if ok == true { "" } else { message },
       message: message, actual: actual, expected: expected}
 }
@@ -134,9 +135,13 @@ fn finish_preflight(checks, title, channel, root, package_name) {
     for check in checks {
         if check.ok != true { failures.push(check); }
     }
-    let result = #{ok: failures.len() == 0, results: checks,
-        failures: failures, check_count: checks.len(),
-        requirement_count: 0, failure_count: failures.len(),
+    let result = #{ok: failures.len() == 0,
+        verdict: if failures.len() == 0 { "pass" } else { "error" },
+        results: checks, failures: [], non_pass_results: failures,
+        check_count: checks.len(),
+        requirement_count: 0, pass_count: checks.len() - failures.len(),
+        failure_count: 0, inconclusive_count: 0,
+        error_count: failures.len(), non_pass_count: failures.len(),
         metrics: #{root: root, component_package: package_name,
             source_preflight: true}};
     report_structured_verdict(result, title, channel);
@@ -166,10 +171,13 @@ fn finish(source, checks, title, channel, root, package_name, verification) {
     result.source_evidence_failures = evidence_failures;
     if evidence_failures.len() > 0 {
         result.ok = false;
-        if result.failures == () { result.failures = []; }
-        for failure in evidence_failures { result.failures.push(failure); }
-        result.failure_count = if result.failure_count == () { 0 } else { result.failure_count };
-        result.failure_count += evidence_failures.len();
+        result.verdict = "error";
+        if result.non_pass_results == () { result.non_pass_results = []; }
+        for failure in evidence_failures { result.non_pass_results.push(failure); }
+        result.error_count = if result.error_count == () { 0 } else { result.error_count };
+        result.error_count += evidence_failures.len();
+        result.non_pass_count = if result.non_pass_count == () { 0 } else { result.non_pass_count };
+        result.non_pass_count += evidence_failures.len();
     }
     result.metrics = #{clock: clock_snapshot(), root: root,
         component_package: package_name, verification: result.verification,

@@ -157,15 +157,62 @@ fn report_verdict(fails, title, channel) {
     false
 }
 
-/// Emit a machine-readable requirement verdict before printing the stable
-/// PASS/FAIL line.  The generic SysML evaluator returns structured result
-/// maps; this adapter preserves them on the telemetry bus while keeping the
-/// historical string verdict for the test runner and humans.  Any Twin can
-/// use it for component-level evidence without adding a custom Rust runner.
+fn structured_verdict(report) {
+    if report == () || type_of(report) != "map" { return "error"; }
+    if report.verdict != () {
+        if report.verdict == "pass" || report.verdict == "fail"
+            || report.verdict == "inconclusive" || report.verdict == "error" {
+            return report.verdict;
+        }
+        return "error";
+    }
+    if report.error != () && report.error != "" { return "error"; }
+    if report.check_count == 0 && (report.results == () || report.results.is_empty()) {
+        return "inconclusive";
+    }
+    if report.ok == true { return "pass"; }
+    "fail"
+}
+
+fn report_verdict_state(title, verdict, channel, reasons, check_count) {
+    if verdict != "pass" && verdict != "fail"
+        && verdict != "inconclusive" && verdict != "error" {
+        reasons.push("unsupported requirement verdict: " + verdict.to_string());
+        verdict = "error";
+    }
+    let label = if verdict == "error" { "ERROR" }
+        else if verdict == "inconclusive" { "INCONCLUSIVE" }
+        else if verdict == "fail" { "FAIL" } else { "PASS" };
+    if verdict == "pass" {
+        print("TESTS_OK " + check_count);
+        print(title + ": PASS");
+        emit(channel, "PASS");
+        notify_kind(title + ": PASS", "success");
+        return true;
+    }
+    for reason in reasons { print("  " + label + ": " + reason); }
+    print("TESTS_" + label + " " + reasons.len() + "/" + check_count);
+    print(title + ": " + label);
+    emit(channel, label);
+    let kind = if verdict == "inconclusive" { "warn" } else { "error" };
+    notify_kind(title + ": " + label, kind);
+    false
+}
+
+/// Emit structured requirement evidence and a terminal verdict for the
+/// scene-test runner. Any Twin can use this adapter for component-level
+/// evidence without adding a custom Rust runner.
 fn report_structured_verdict(report, title, channel) {
-    let failures = [];
+    let reasons = [];
     let raw_failures = [];
-    let ok = report != () && report.ok == true;
+    let raw_non_pass = [];
+    let verdict = structured_verdict(report);
+    if report != () && report.verdict != ()
+        && report.verdict != "pass" && report.verdict != "fail"
+        && report.verdict != "inconclusive" && report.verdict != "error" {
+        reasons.push("unsupported requirement verdict: " + report.verdict.to_string());
+    }
+    let ok = verdict == "pass";
     let source_revision = ();
     let result_count = 0;
     let check_count = 0;
@@ -179,7 +226,11 @@ fn report_structured_verdict(report, title, channel) {
     let metrics = #{};
     let evidence_result_events = ();
     let evidence_channels = ();
+    let pass_count = 0;
     let failure_count = 0;
+    let inconclusive_count = 0;
+    let error_count = 0;
+    let non_pass_count = 0;
     if report != () {
         if report.source_revision != () { source_revision = report.source_revision; }
         if report.source_files != () { source_files = report.source_files; }
@@ -190,17 +241,10 @@ fn report_structured_verdict(report, title, channel) {
         if report.evidence_channels != () { evidence_channels = report.evidence_channels; }
         if report.results != () {
             result_count = report.results.len();
-            // Preserve the complete typed observation table.  The legacy
-            // PASS/FAIL line remains the runner envelope, while this payload
-            // is the durable per-check evidence consumed by UI/CI clients.
             results = report.results;
         }
-        if report.result_chunks != () {
-            result_chunks = report.result_chunks;
-        }
+        if report.result_chunks != () { result_chunks = report.result_chunks; }
         if report.check_count != () { check_count = report.check_count; }
-        // Keep compatibility with older Twin observers that only supplied
-        // `results`; the generic evaluator now supplies the precise count.
         if check_count == 0 && result_count > 0 { check_count = result_count; }
         if report.verification != () { verification = report.verification; }
         if report.requirement_count != () { requirement_count = report.requirement_count; }
@@ -209,81 +253,102 @@ fn report_structured_verdict(report, title, channel) {
         if report.failures != () {
             for failure in report.failures {
                 if type_of(failure) == "map" {
-                    let line = "";
-                    if failure.requirement != () {
-                        line += "requirement=" + failure.requirement.to_string() + " ";
-                    }
-                    if failure.id != () { line += "check=" + failure.id.to_string() + " "; }
-                    if failure.component != () {
-                        line += "component=" + failure.component.to_string() + " ";
-                    }
-                    if failure.path != () { line += "path=" + failure.path.to_string() + " "; }
-                    if failure.error != () { line += failure.error.to_string(); }
-                    if failure.actual != () {
-                        line += " [actual=" + failure.actual.to_string() + "]";
-                    }
-                    if failure.expected != () {
-                        line += " [expected=" + failure.expected.to_string() + "]";
-                    }
-                    failures.push(line);
                     raw_failures.push(failure);
-                } else {
-                    if failure != "" {
-                        failures.push(failure);
-                        raw_failures.push(failure);
+                    if report.non_pass_results == () {
+                        let line = "";
+                        if failure.requirement != () {
+                            line += "requirement=" + failure.requirement.to_string() + " ";
+                        }
+                        if failure.id != () { line += "check=" + failure.id.to_string() + " "; }
+                        if failure.component != () {
+                            line += "component=" + failure.component.to_string() + " ";
+                        }
+                        if failure.path != () { line += "path=" + failure.path.to_string() + " "; }
+                        if failure.error != () { line += failure.error.to_string(); }
+                        reasons.push(line);
                     }
+                } else if failure != "" && report.non_pass_results == () {
+                    reasons.push(failure.to_string());
                 }
             }
         }
+        if report.non_pass_results != () {
+            for result in report.non_pass_results {
+                raw_non_pass.push(result);
+                if type_of(result) == "map" {
+                    let line = "";
+                    if result.requirement != () {
+                        line += "requirement=" + result.requirement.to_string() + " ";
+                    }
+                    if result.id != () { line += "check=" + result.id.to_string() + " "; }
+                    if result.component != () {
+                        line += "component=" + result.component.to_string() + " ";
+                    }
+                    if result.path != () { line += "path=" + result.path.to_string() + " "; }
+                    if result.error != () { line += result.error.to_string(); }
+                    if result.verdict != () { line += " [" + result.verdict + "]"; }
+                    reasons.push(line);
+                } else if result != "" {
+                    reasons.push(result.to_string());
+                }
+            }
+        }
+        if report.pass_count != () { pass_count = report.pass_count; }
         if report.failure_count != () { failure_count = report.failure_count; }
+        if report.inconclusive_count != () { inconclusive_count = report.inconclusive_count; }
+        if report.error_count != () { error_count = report.error_count; }
+        if report.non_pass_count != () { non_pass_count = report.non_pass_count; }
     }
     if result_count == 0 && report != () && report.streamed == true {
-        // Streamed evaluators intentionally do not retain a flattened result
-        // array. The check count is still the exact result count carried by
-        // the per-observation events.
         result_count = check_count;
     }
     if failure_count == 0 { failure_count = raw_failures.len(); }
-    if failures.is_empty() && !ok {
-        failures.push(if failure_count > 0 {
-            failure_count.to_string() + " requirement observation(s) failed"
-        } else { "requirement evaluation unavailable" });
+    if non_pass_count == 0 { non_pass_count = raw_non_pass.len(); }
+    if pass_count == 0 && check_count > non_pass_count {
+        pass_count = check_count - non_pass_count;
     }
-    // Rhai values have a bounded 64 KiB string/value budget.  A large
-    // component can legitimately produce hundreds of typed observations, so
-    // never attempt to emit the complete result table as one event.  Small
-    // reports retain the historical single-event shape; larger reports carry
-    // the same typed maps as individually bounded events and expose the count
-    // in the summary. Consumers can reconstruct the exact table by grouping
-    // on (channel, source_revision) and ordering by result_index.
+    if reasons.is_empty() && !ok {
+        let message = if report != () && report.error != () && report.error != "" {
+            report.error.to_string()
+        } else if verdict == "fail" && failure_count > 0 {
+            failure_count.to_string() + " requirement observation(s) failed"
+        } else if verdict == "inconclusive" {
+            "requirement evaluation did not produce enough evidence"
+        } else if verdict == "error" {
+            "requirement evaluation encountered an error"
+        } else {
+            "requirement evaluation unavailable"
+        };
+        reasons.push(message);
+    }
     let chunked_results = result_chunks.len() > 1 || check_count > 64;
     let inline_results = !chunked_results && result_count <= 64;
-    // Partitioned observers can send detail records to bounded companion
-    // channels and report those channels here instead of falsely claiming
-    // those records were emitted on this summary channel.
-    let evidence = #{schema_version: 1, ok: ok, title: title, channel: channel,
-        verdict: if ok { "pass" } else { "fail" },
-        verification: verification, requirement_count: requirement_count,
-        check_count: check_count, requirement_names: requirement_names,
-        requirement_summary: requirement_summary,
-        source_revision: source_revision,
-        source_files: source_files, result_count: result_count,
-        failure_count: failure_count, evidence_chunked: !inline_results,
+    let evidence = #{schema_version: 2, ok: ok, title: title, channel: channel,
+        verdict: verdict, verification: verification,
+        requirement_count: requirement_count, check_count: check_count,
+        requirement_names: requirement_names, requirement_summary: requirement_summary,
+        source_revision: source_revision, source_files: source_files,
+        result_count: result_count, pass_count: pass_count,
+        failure_count: failure_count, inconclusive_count: inconclusive_count,
+        error_count: error_count, non_pass_count: non_pass_count,
+        evidence_chunked: !inline_results,
         evidence_result_events: if evidence_result_events != () {
             evidence_result_events
         } else if inline_results { 0 } else { check_count },
         results: if inline_results { results } else { [] },
-        failures: if inline_results { raw_failures } else { [] }, metrics: metrics};
+        failures: if inline_results { raw_failures } else { [] },
+        non_pass_results: if inline_results { raw_non_pass } else { [] },
+        metrics: metrics};
     if evidence_channels != () { evidence.evidence_channels = evidence_channels; }
     emit(channel + "_EVIDENCE", evidence);
     if !inline_results {
         let result_index = 0;
         for chunk in result_chunks {
             for result in chunk {
-                emit(channel + "_EVIDENCE_RESULT", #{schema_version: 1,
+                emit(channel + "_EVIDENCE_RESULT", #{schema_version: 2,
                     title: title, channel: channel, verification: verification,
-                    source_revision: source_revision,
-                    result_count: check_count, failure_count: failure_count,
+                    source_revision: source_revision, result_count: check_count,
+                    failure_count: failure_count, non_pass_count: non_pass_count,
                     result_index: result_index, result: result});
                 result_index += 1;
             }
@@ -291,8 +356,9 @@ fn report_structured_verdict(report, title, channel) {
     }
     print(channel + "_EVIDENCE source_revision=" + source_revision.to_string()
         + " requirements=" + requirement_count + " checks=" + check_count
-        + " failures=" + failure_count);
-    report_verdict(failures, title, channel)
+        + " verdict=" + verdict + " pass=" + pass_count + " failures=" + failure_count
+        + " inconclusive=" + inconclusive_count + " errors=" + error_count);
+    report_verdict_state(title, verdict, channel, reasons, check_count)
 }
 
 /// Fail immediately, before the run wastes its ticks.

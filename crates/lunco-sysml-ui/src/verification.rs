@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
-use lunco_scene_runner::{SceneTestVerdict, parse_scene_test_report};
+use lunco_scene_runner::{SceneTestProcessStatus, SceneTestRunReport, parse_scene_test_report};
 use lunco_sysml::SysmlDocument;
+use lunco_sysml_ir::VerificationVerdict;
 use lunco_workspace::{TwinClosed, TwinId, WorkspaceResource};
 
 use crate::view_model::{RuntimeRequirementEvidence, SysmlRequirementsViewModel};
@@ -42,15 +43,22 @@ pub(crate) struct CancelSysmlVerificationSuite {
 pub(crate) enum VerificationRunOutcome {
     Passed,
     Failed,
+    Inconclusive,
+    Error,
     Cancelled,
     NoVerdict,
-    Error(String),
+    RunError(String),
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct VerificationRunResult {
     pub twin_id: TwinId,
+    /// Source generation requested by the panel when the child was launched.
     pub source_revision: u64,
+    /// Source generation observed by the child at run start, if reported.
+    pub observed_source_revision: Option<u64>,
+    /// Whether the child observed the requested revision at both boundaries.
+    pub source_revision_matches: bool,
     pub name: String,
     pub outcome: VerificationRunOutcome,
     pub summary: String,
@@ -258,6 +266,13 @@ fn start_verification(
             "SysML source changed; refresh before running",
         );
     }
+    if view_model.analysis_has_errors {
+        return store_setup_error(
+            runs,
+            request,
+            "SysML source analysis has syntax, name-resolution, or package-collision errors",
+        );
+    }
     let Some(twin) = workspace.twin(request.twin_id) else {
         return store_setup_error(runs, request, "the requested Twin is no longer open");
     };
@@ -305,6 +320,8 @@ fn start_verification(
         .arg(&scene)
         .arg("--verification")
         .arg(&case.name)
+        .arg("--source-revision")
+        .arg(request.source_revision.to_string())
         .current_dir(&root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -417,8 +434,10 @@ fn store_setup_error(
             VerificationRunResult {
                 twin_id: request.twin_id,
                 source_revision: request.source_revision,
+                observed_source_revision: None,
+                source_revision_matches: false,
                 name: request.name.clone(),
-                outcome: VerificationRunOutcome::Error(message.to_owned()),
+                outcome: VerificationRunOutcome::RunError(message.to_owned()),
                 summary: message.to_owned(),
                 diagnostics: vec![message.to_owned()],
                 output: String::new(),
@@ -482,6 +501,8 @@ fn store_cancelled_queued_case(
         VerificationRunResult {
             twin_id,
             source_revision,
+            observed_source_revision: None,
+            source_revision_matches: false,
             name,
             outcome: VerificationRunOutcome::Cancelled,
             summary: message.clone(),
@@ -532,8 +553,10 @@ fn poll_active_verification(
             let result = VerificationRunResult {
                 twin_id: active.twin_id,
                 source_revision: active.source_revision,
+                observed_source_revision: None,
+                source_revision_matches: false,
                 name: active.name.clone(),
-                outcome: VerificationRunOutcome::Error(
+                outcome: VerificationRunOutcome::RunError(
                     "scene-test output channel is unavailable".to_owned(),
                 ),
                 summary: "The scene-test output channel could not be read.".to_owned(),
@@ -592,8 +615,10 @@ fn poll_active_verification(
                 let result = VerificationRunResult {
                     twin_id: active.twin_id,
                     source_revision: active.source_revision,
+                    observed_source_revision: None,
+                    source_revision_matches: false,
                     name: active.name.clone(),
-                    outcome: VerificationRunOutcome::Error(format!(
+                    outcome: VerificationRunOutcome::RunError(format!(
                         "could not read scene-test process status: {error}"
                     )),
                     summary: "The scene-test process could not be monitored.".to_owned(),
@@ -736,12 +761,21 @@ fn build_run_result(mut active: ActiveRun) -> VerificationRunResult {
         .expect("run result waits for process exit");
     let stderr_error = stderr.as_ref().err().cloned();
     drop(stderr);
-    let (outcome, summary, diagnostics, report) = if active.cancelled {
+    let (
+        outcome,
+        summary,
+        mut diagnostics,
+        report,
+        observed_source_revision,
+        source_revision_matches,
+    ) = if active.cancelled {
         (
             VerificationRunOutcome::Cancelled,
             format!("Cancelled after {:.1} s", elapsed.as_secs_f32()),
             Vec::new(),
             None,
+            None,
+            false,
         )
     } else {
         let parsed_report = match stdout {
@@ -752,76 +786,30 @@ fn build_run_result(mut active: ActiveRun) -> VerificationRunResult {
             Err(error) => {
                 let summary = format!("The scene-test report could not be read: {error}");
                 (
-                    VerificationRunOutcome::Error(summary.clone()),
+                    VerificationRunOutcome::RunError(summary.clone()),
                     summary.clone(),
                     vec![summary],
                     None,
-                )
-            }
-            Ok(Some(report))
-                if report.schema_version != 1
-                    || report.verification != active.name
-                    || status.code() != Some(i32::from(report.process_exit_code)) =>
-            {
-                let message = format!(
-                    "The scene-test report did not match this run (schema {}, verification {}).",
-                    report.schema_version, report.verification
-                );
-                (
-                    VerificationRunOutcome::Error(message.clone()),
-                    message.clone(),
-                    vec![message],
-                    Some(report),
+                    None,
+                    false,
                 )
             }
             Ok(Some(report)) => {
-                let outcome = match report.process_exit_code {
-                    0 => VerificationRunOutcome::Passed,
-                    1 => VerificationRunOutcome::Failed,
-                    2 => VerificationRunOutcome::NoVerdict,
-                    code => VerificationRunOutcome::Error(format!(
-                        "The scene-test runner returned unsupported status {code}."
-                    )),
-                };
-                let channel = report
-                    .verdict_channel
-                    .as_deref()
-                    .map(|channel| format!(" · {channel}"))
-                    .unwrap_or_default();
-                let summary = match (report.process_exit_code, report.verdict) {
-                    (0, Some(SceneTestVerdict::Passed)) => format!("PASS{channel}"),
-                    (1, Some(SceneTestVerdict::Failed)) => format!("FAIL{channel}"),
-                    (1, Some(SceneTestVerdict::Passed)) => {
-                        format!("RUNNER FAIL · scenario reported PASS{channel}")
-                    }
-                    (1, None) => "RUNNER FAIL · no scenario verdict".to_owned(),
-                    (0, None) => "PASS".to_owned(),
-                    (0, Some(SceneTestVerdict::Failed)) => {
-                        format!(
-                            "RUNNER ERROR · exit status PASS but scenario reported FAIL{channel}"
-                        )
-                    }
-                    (2, Some(verdict)) => format!(
-                        "NO VERDICT · scenario reported {}{channel}",
-                        match verdict {
-                            SceneTestVerdict::Passed => "PASS",
-                            SceneTestVerdict::Failed => "FAIL",
-                        }
-                    ),
-                    (2, None) => "NO VERDICT".to_owned(),
-                    (code, _) => format!("RUNNER ERROR · unsupported status {code}"),
-                };
-                let mut diagnostics = Vec::new();
-                if let Some(diagnostic) = &report.runner_diagnostic {
-                    diagnostics.push(diagnostic.clone());
-                }
-                if report.details_truncated {
-                    diagnostics.push(
-                        "Some structured evidence or check details exceeded the report size limit."
-                            .to_owned(),
+                let (outcome, summary, diagnostics, observed_revision, revision_matches) =
+                    classify_scene_test_report(
+                        &report,
+                        &active.name,
+                        active.source_revision,
+                        status.code(),
                     );
-                }
-                (outcome, summary, diagnostics, Some(report))
+                (
+                    outcome,
+                    summary,
+                    diagnostics,
+                    Some(report),
+                    observed_revision,
+                    revision_matches,
+                )
             }
             Ok(None) => {
                 let summary = format!(
@@ -829,15 +817,16 @@ fn build_run_result(mut active: ActiveRun) -> VerificationRunResult {
                     status.code()
                 );
                 (
-                    VerificationRunOutcome::Error(summary.clone()),
+                    VerificationRunOutcome::RunError(summary.clone()),
                     summary.clone(),
                     vec![summary],
                     None,
+                    None,
+                    false,
                 )
             }
         }
     };
-    let mut diagnostics = diagnostics;
     if let Some(error) = stderr_error {
         diagnostics.push(format!("Scene-test stderr capture failed: {error}"));
     }
@@ -866,6 +855,8 @@ fn build_run_result(mut active: ActiveRun) -> VerificationRunResult {
     VerificationRunResult {
         twin_id: active.twin_id,
         source_revision: active.source_revision,
+        observed_source_revision,
+        source_revision_matches,
         name: active.name.clone(),
         outcome,
         summary,
@@ -874,6 +865,165 @@ fn build_run_result(mut active: ActiveRun) -> VerificationRunResult {
         elapsed,
         evidence,
     }
+}
+
+fn classify_scene_test_report(
+    report: &SceneTestRunReport,
+    expected_name: &str,
+    requested_revision: u64,
+    actual_process_exit_code: Option<i32>,
+) -> (
+    VerificationRunOutcome,
+    String,
+    Vec<String>,
+    Option<u64>,
+    bool,
+) {
+    let observed_revision = report.source_revision_at_start;
+    let revision_matches = report.expected_source_revision == Some(requested_revision)
+        && observed_revision == Some(requested_revision)
+        && report.source_revision_at_end == Some(requested_revision);
+    let mut diagnostics = Vec::new();
+    let report_mismatch = report.schema_version != 2
+        || report.verification != expected_name
+        || actual_process_exit_code != Some(i32::from(report.process_exit_code));
+    let revision_problem = !revision_matches;
+    if report_mismatch || revision_problem {
+        let mut reasons = Vec::new();
+        if report.schema_version != 2 {
+            reasons.push(format!(
+                "unsupported report schema {}",
+                report.schema_version
+            ));
+        }
+        if report.verification != expected_name {
+            reasons.push(format!(
+                "report case {} does not match requested case {expected_name}",
+                report.verification
+            ));
+        }
+        if actual_process_exit_code != Some(i32::from(report.process_exit_code)) {
+            reasons.push("report exit code does not match the child process".to_owned());
+        }
+        if report.expected_source_revision != Some(requested_revision) {
+            reasons.push(format!(
+                "child request revision {:?} does not match requested revision {requested_revision}",
+                report.expected_source_revision
+            ));
+        }
+        if observed_revision != Some(requested_revision) {
+            reasons.push(format!(
+                "child observed source revision {:?}, expected {requested_revision}",
+                observed_revision
+            ));
+        }
+        if report.source_revision_at_end != Some(requested_revision) {
+            reasons.push(format!(
+                "child completed on source revision {:?}, expected {requested_revision}",
+                report.source_revision_at_end
+            ));
+        }
+        if let Some(diagnostic) = &report.runner_diagnostic {
+            reasons.push(diagnostic.clone());
+        }
+        let message = reasons.join("; ");
+        diagnostics = reasons;
+        return (
+            VerificationRunOutcome::RunError(message.clone()),
+            format!("RUN ERROR · {message}"),
+            diagnostics,
+            observed_revision,
+            false,
+        );
+    }
+
+    if let Some(diagnostic) = &report.runner_diagnostic {
+        diagnostics.push(diagnostic.clone());
+    }
+    if report.details_truncated {
+        diagnostics.push(
+            "Some structured evidence or check details exceeded the report size limit.".to_owned(),
+        );
+    }
+
+    let channel = report
+        .verdict_channel
+        .as_deref()
+        .map(|channel| format!(" · {channel}"))
+        .unwrap_or_default();
+    let (outcome, label) = match report.process_status {
+        SceneTestProcessStatus::RunnerError => {
+            let message = report
+                .runner_diagnostic
+                .as_deref()
+                .unwrap_or("The scene-test runner failed before producing a trusted result.");
+            return (
+                VerificationRunOutcome::RunError(message.to_owned()),
+                format!("RUN ERROR{channel}"),
+                diagnostics,
+                observed_revision,
+                true,
+            );
+        }
+        SceneTestProcessStatus::NoVerdict => {
+            if report.verdict.is_some() || report.process_exit_code != 2 {
+                let message = "The scene-test report has an inconsistent no-verdict status.";
+                diagnostics.push(message.to_owned());
+                return (
+                    VerificationRunOutcome::RunError(message.to_owned()),
+                    "RUN ERROR".to_owned(),
+                    diagnostics,
+                    observed_revision,
+                    true,
+                );
+            }
+            (VerificationRunOutcome::NoVerdict, "NO VERDICT")
+        }
+        SceneTestProcessStatus::VerdictProduced => {
+            let Some(verdict) = report.verdict else {
+                let message =
+                    "The scene-test report says a verdict was produced but contains none.";
+                diagnostics.push(message.to_owned());
+                return (
+                    VerificationRunOutcome::RunError(message.to_owned()),
+                    "RUN ERROR".to_owned(),
+                    diagnostics,
+                    observed_revision,
+                    true,
+                );
+            };
+            let (outcome, label, expected_exit_code) = match verdict {
+                VerificationVerdict::Pass => (VerificationRunOutcome::Passed, "PASS", 0),
+                VerificationVerdict::Fail => (VerificationRunOutcome::Failed, "FAIL", 1),
+                VerificationVerdict::Inconclusive => {
+                    (VerificationRunOutcome::Inconclusive, "INCONCLUSIVE", 1)
+                }
+                VerificationVerdict::Error => (VerificationRunOutcome::Error, "ERROR", 1),
+            };
+            if report.process_exit_code != expected_exit_code {
+                let message = format!(
+                    "The {} verdict has inconsistent process exit code {}.",
+                    label, report.process_exit_code
+                );
+                diagnostics.push(message.clone());
+                return (
+                    VerificationRunOutcome::RunError(message.clone()),
+                    format!("RUN ERROR{channel}"),
+                    diagnostics,
+                    observed_revision,
+                    true,
+                );
+            }
+            (outcome, label)
+        }
+    };
+    (
+        outcome,
+        format!("{label}{channel}"),
+        diagnostics,
+        observed_revision,
+        true,
+    )
 }
 
 pub(crate) fn clear_sysml_verification_results(
@@ -896,5 +1046,74 @@ pub(crate) fn clear_sysml_verification_results(
         .is_some_and(|active| active.twin_id == twin_id)
     {
         runs.active = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report(verdict: VerificationVerdict, process_exit_code: u8) -> SceneTestRunReport {
+        SceneTestRunReport {
+            schema_version: 2,
+            verification: "Project::VerifyPayload".to_owned(),
+            process_exit_code,
+            process_status: SceneTestProcessStatus::VerdictProduced,
+            expected_source_revision: Some(41),
+            source_revision_at_start: Some(41),
+            source_revision_at_end: Some(41),
+            verdict: Some(verdict),
+            verdict_channel: Some("VERIFY_PAYLOAD".to_owned()),
+            evidence: Vec::new(),
+            non_pass_checks: Vec::new(),
+            runner_diagnostic: None,
+            details_truncated: false,
+        }
+    }
+
+    #[test]
+    fn child_report_preserves_each_verdict_and_exit_code() {
+        for (verdict, exit_code, expected) in [
+            (VerificationVerdict::Pass, 0, VerificationRunOutcome::Passed),
+            (VerificationVerdict::Fail, 1, VerificationRunOutcome::Failed),
+            (
+                VerificationVerdict::Inconclusive,
+                1,
+                VerificationRunOutcome::Inconclusive,
+            ),
+            (VerificationVerdict::Error, 1, VerificationRunOutcome::Error),
+        ] {
+            let report = report(verdict, exit_code);
+            let (outcome, _, _, observed_revision, revision_matches) = classify_scene_test_report(
+                &report,
+                "Project::VerifyPayload",
+                41,
+                Some(i32::from(exit_code)),
+            );
+            assert_eq!(outcome, expected);
+            assert_eq!(observed_revision, Some(41));
+            assert!(revision_matches);
+        }
+    }
+
+    #[test]
+    fn runner_diagnostic_is_retained_when_source_revision_is_unavailable() {
+        let mut report = report(VerificationVerdict::Error, 2);
+        report.process_status = SceneTestProcessStatus::RunnerError;
+        report.source_revision_at_start = None;
+        report.source_revision_at_end = None;
+        let runner_diagnostic = "runner-diagnostic-marker";
+        report.runner_diagnostic = Some(runner_diagnostic.to_owned());
+
+        let (outcome, _, diagnostics, observed_revision, revision_matches) =
+            classify_scene_test_report(&report, "Project::VerifyPayload", 41, Some(2));
+
+        assert!(matches!(outcome, VerificationRunOutcome::RunError(_)));
+        assert_eq!(observed_revision, None);
+        assert!(!revision_matches);
+        assert_eq!(
+            diagnostics.last().map(String::as_str),
+            Some(runner_diagnostic)
+        );
     }
 }
