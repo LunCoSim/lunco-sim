@@ -35,6 +35,7 @@ use lunco_celestial::frames::LPoint;
 use lunco_celestial::geo::{Geodetic, GeodeticAnchor, SiteAnchor};
 use lunco_celestial::kepler::{KeplerOrbit, KeplerianElements};
 use lunco_celestial::transform::LibrationAnchor;
+use lunco_usd_bevy_stage::read::UsdReadObject;
 use openusd::sdf::{Path as SdfPath, Value};
 
 /// Update ordering for authored celestial/link projection.
@@ -247,7 +248,7 @@ fn select_scene_time_on_transition_completed(
     commands.trigger(lunco_time::ApplySceneTimeSelection { selection });
 }
 
-type ComposedReader<'a> = dyn lunco_usd_bevy_stage::read::UsdReadObject + 'a;
+type ComposedReader<'a> = dyn UsdReadObject + 'a;
 
 fn composed_stage_has_celestial_source(reader: &ComposedReader<'_>) -> bool {
     !reader
@@ -911,6 +912,19 @@ fn project_celestial_comms_prims(
                 .try_insert(lunco_environment::CelestialSourceClassification {
                     has_source: composed_stage_has_celestial_source(&reader),
                 });
+        }
+        // Most scene prims carry only standard transform/material properties.
+        // Preserve the completion marker for live arrivals, but avoid probing
+        // every celestial and link attribute when this prim cannot author any
+        // of those facts. DistantLight carries the body-fill convention through
+        // its parent, and EpochAPI still needs its misplaced-root diagnostic.
+        if !is_scene_root
+            && !reader.any_attr_with_prefix(&sdf_path, "lunco:")
+            && reader.type_name(&sdf_path).as_deref() != Some("DistantLight")
+            && !reader.has_api_schema(&sdf_path, "LunCoEpochAPI")
+        {
+            commands.entity(entity).try_insert(CelestialProjected);
+            continue;
         }
         insert_celestial_comms_components(
             &reader,

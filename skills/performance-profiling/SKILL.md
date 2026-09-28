@@ -133,6 +133,10 @@ invalidation, removal, and scene teardown. The same applies to deferred adapter
 steps such as wrapping a Modelica model into its shared port surface. Keep a
 single bootstrap discovery for entities predating plugin installation, and
 retry only work whose authoritative stage/readiness input is still pending.
+The celestial admission projector still marks every arriving prim once, but
+can skip its authored field decoder for ordinary prims. Preserve candidates
+with a `lunco:` property, the scene root, `DistantLight` parent-body fills, and
+non-root `LunCoEpochAPI` diagnostics.
 The idle run condition should inspect the owner set, not scan the population.
 When initial candidate processing spans many owners, queue the bootstrap IDs
 once and drain a fixed-size batch in stable entity order per app update; keep

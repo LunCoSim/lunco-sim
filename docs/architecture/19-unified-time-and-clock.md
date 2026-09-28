@@ -137,6 +137,12 @@ classification. The USD celestial projector publishes that result as
 Sun seeding waits and `SetEnvironmentLight` yaw/pitch requests leave the
 direction unchanged with a warning. Once classified, only a static scene may
 accept those manual direction updates.
+The celestial USD projector marks each scene prim after its one-time admission,
+but only decodes authored celestial/connectivity fields for the root, prims
+with a `lunco:` property, `DistantLight` prims whose parent may be a body, and
+non-root prims carrying `LunCoEpochAPI` so their misplaced-epoch diagnostic is
+preserved. Ordinary prims keep the completion marker without repeated field
+probes.
 Do not seed a static ray that could coexist with a subsequently projected
 finite Sun target. When a celestial source owns the root, withdraw any static
 ray left by an earlier classification pass. Missing or invalid targets clear
