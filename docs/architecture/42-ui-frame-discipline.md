@@ -245,7 +245,10 @@ package — none of these belong on the UI thread every frame. Patterns:
   hierarchy construction and sorting run on one bounded worker task. Repeated
   topology changes coalesce behind a revision fence, stale results are dropped,
   and Twin close clears the published view. Panels continue reading the last
-  completed view while a current build is pending.
+  completed view while a current build is pending. Keep each snapshot fact in
+  the query that already visits its population: marker membership for named
+  tree candidates comes from `Has<T>` fields on that named query, rather than
+  separate whole-population scans whose results are only read for named nodes.
 - **Generation-gated recompute**: the canvas diagram only
   reprojects when the document generation moves; the panel advances
   its `last_seen_gen` to skip echo rebuilds of its own ops.

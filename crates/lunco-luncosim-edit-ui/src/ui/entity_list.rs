@@ -285,6 +285,8 @@ struct NamedTreeCandidate {
     label: String,
     stable_key: String,
     camera_identity: Option<String>,
+    selectable: bool,
+    has_mesh: bool,
 }
 
 struct EntityTreeBuildInput {
@@ -294,8 +296,6 @@ struct EntityTreeBuildInput {
     child_of: HashMap<Entity, Entity>,
     grids: HashSet<Entity>,
     named_candidates: Vec<NamedTreeCandidate>,
-    selectable: HashSet<Entity>,
-    has_mesh: HashSet<Entity>,
 }
 
 #[derive(Resource, Default)]
@@ -465,12 +465,12 @@ pub(crate) fn populate_entity_tree_view(
         Option<&lunco_core::CatalogEntryId>,
         Option<&lunco_usd_bevy_scene::UsdPrimPath>,
         Has<SceneCamera>,
+        Has<lunco_core::SystemManaged>,
+        Has<lunco_core::SelectableRoot>,
+        Has<Mesh3d>,
     )>,
-    system_q: Query<Entity, With<lunco_core::SystemManaged>>,
     child_q: Query<(Entity, &ChildOf)>,
     grid_q: Query<Entity, With<big_space::prelude::Grid>>,
-    selectable_q: Query<Entity, With<lunco_core::SelectableRoot>>,
-    mesh_q: Query<Entity, With<Mesh3d>>,
 ) {
     if build.task.is_some() {
         build.invalidate();
@@ -482,11 +482,6 @@ pub(crate) fn populate_entity_tree_view(
         let _span = bevy::log::info_span!("entity_tree_view_snapshot").entered();
         // System-owned churn is excluded before the immutable snapshot leaves the
         // ECS thread. The hierarchy derivation below uses only owned values.
-        let system: HashSet<Entity> = if settings.show_system {
-            HashSet::new()
-        } else {
-            system_q.iter().collect()
-        };
         let grids: HashSet<Entity> = grid_q.iter().collect();
         let (scope_state, scope_error) = grid_scope_state(
             workspace.as_deref(),
@@ -502,20 +497,34 @@ pub(crate) fn populate_entity_tree_view(
             .collect();
         let named_candidates: Vec<_> = named_q
             .iter()
-            .filter_map(|(entity, name, callsign, catalog_id, path, is_camera)| {
-                if system.contains(&entity) {
-                    return None;
-                }
-                Some(NamedTreeCandidate {
+            .filter_map(
+                |(
                     entity,
-                    label: lunco_core::entity_display_name(Some(name), callsign, catalog_id),
-                    stable_key: stable_key(name, path),
-                    camera_identity: is_camera.then(|| {
-                        path.map(|path| path.path.clone())
-                            .unwrap_or_else(|| name.as_str().to_string())
-                    }),
-                })
-            })
+                    name,
+                    callsign,
+                    catalog_id,
+                    path,
+                    is_camera,
+                    is_system,
+                    selectable,
+                    has_mesh,
+                )| {
+                    if !settings.show_system && is_system {
+                        return None;
+                    }
+                    Some(NamedTreeCandidate {
+                        entity,
+                        label: lunco_core::entity_display_name(Some(name), callsign, catalog_id),
+                        stable_key: stable_key(name, path),
+                        camera_identity: is_camera.then(|| {
+                            path.map(|path| path.path.clone())
+                                .unwrap_or_else(|| name.as_str().to_string())
+                        }),
+                        selectable,
+                        has_mesh,
+                    })
+                },
+            )
             .collect();
         EntityTreeBuildInput {
             show_system: settings.show_system,
@@ -524,8 +533,6 @@ pub(crate) fn populate_entity_tree_view(
             child_of,
             grids,
             named_candidates,
-            selectable: selectable_q.iter().collect(),
-            has_mesh: mesh_q.iter().collect(),
         }
     };
 
@@ -570,20 +577,28 @@ fn derive_entity_tree_view(input: EntityTreeBuildInput) -> EntityTreeView {
         child_of,
         grids,
         named_candidates,
-        selectable,
-        has_mesh,
     } = input;
     let mut scope_entities = HashSet::new();
     let mut scope_ancestors = HashSet::new();
     let mut named: Vec<(Entity, String, String)> = Vec::with_capacity(named_candidates.len());
     let mut camera_identities = Vec::new();
+    let mut selectable = HashSet::new();
+    let mut has_mesh = HashSet::new();
     for candidate in named_candidates {
         let NamedTreeCandidate {
             entity,
             label,
             stable_key,
             camera_identity,
+            selectable: is_selectable,
+            has_mesh: has_mesh_marker,
         } = candidate;
+        if is_selectable {
+            selectable.insert(entity);
+        }
+        if has_mesh_marker {
+            has_mesh.insert(entity);
+        }
         scope_entities.insert(entity);
         collect_scope_ancestors(entity, &child_of, &mut scope_ancestors);
         if scope_error.is_some() || !in_scope(entity, scope_state, &child_of, &grids) {

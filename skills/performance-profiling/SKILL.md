@@ -37,6 +37,12 @@ structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
 
+When a measured UI snapshot builds several indexes from the same entity
+population, combine compatible marker reads into the existing query and avoid
+another full-population traversal for each marker set. Keep queries over
+different populations separate unless measurements show that a broader scan
+costs less.
+
 For startup asset graphs, separate asynchronous source reads from discovery,
 composition, and UI/physics admission. Read all known dependencies in each
 breadth-first frontier through bounded batches, then merge results in stable
