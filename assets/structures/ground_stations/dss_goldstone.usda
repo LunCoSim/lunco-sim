@@ -11,11 +11,14 @@
 # See `structures/ground_stations/README.md`.
 def Xform "DSSGoldstone" (
     prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
+    prepend apiSchemas = "LunCoDirectionTargetAPI"
     kind = "component"
     displayName = "DSN Goldstone · DSS-14"
     doc = "DSN Goldstone (DSS-14 'Mars'), Mojave — 70 m deep-space dish."
 )
 {
+    uniform token lunco:directionTarget:id = "dss_goldstone"
+
 
     double lunco:anchor:lat = 35.4267
     double lunco:anchor:lon = -116.89

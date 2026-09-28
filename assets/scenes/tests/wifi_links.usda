@@ -17,19 +17,9 @@ def Xform "WifiLinksTest" (
 {
     uniform bool lunco:spawnable = false
 
-    # Scene-local link nodes need a solar-frame pose. The anchor is the
-    # authoritative frame for the flat test plot; the solar tree supplies the
-    # common ephemeris frame consumed by the link kernel.
-    double lunco:anchor:lat = 26.13
-    double lunco:anchor:lon = 3.63
-    double lunco:anchor:height = 0.3
-    int lunco:anchor:body = 301
+    # The spawned radios and route nodes use scene-local positions; this fixture
+    # selects no celestial direction or ephemeris frame.
 
-    def "SolarSystem" (
-        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
-    )
-    {
-    }
 
     def Plane "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]

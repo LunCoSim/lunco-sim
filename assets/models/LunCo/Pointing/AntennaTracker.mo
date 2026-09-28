@@ -1,5 +1,5 @@
 within LunCo.Pointing;
-model EarthTracker "Two-axis high-gain antenna: hold the dish on Earth."
+model AntennaTracker "Two-axis high-gain antenna: hold the dish on the connected target."
   extends LunCo.Icons.Pointing;
   // An ASSEMBLY, not a new law: two `ServoAxis` instances (the same component
   // the solar tracker uses) plus one `DishPattern`. The only equations written
@@ -8,7 +8,7 @@ model EarthTracker "Two-axis high-gain antenna: hold the dish on Earth."
   //
   // ── Where the inputs come from ──────────────────────────────────────────
   // Unit direction to the selected target in the ANTENNA MOUNT frame. The
-  // environment wire chooses the target; coordinate conversion is shared.
+  // scene wire chooses the target; coordinate conversion is shared.
   input Real target_mount_x "Target direction, mount-right";
   input Real target_mount_y "Target direction, mount-up";
   input Real target_mount_z "Target direction, mount-back";
@@ -25,9 +25,9 @@ model EarthTracker "Two-axis high-gain antenna: hold the dish on Earth."
   output Real az "dish azimuth setpoint (rad)";
   output Real el "dish elevation setpoint (rad)";
   // Link telemetry for the HUD's COMMS panel.
-  output Real point_error "angle between boresight and Earth (rad)";
+  output Real point_error "angle between boresight and selected target (rad)";
   output Real gain_frac "fraction of peak gain on the link, 0..1";
-  output Real locked "1 while Earth is inside the half-power beam";
+  output Real locked "1 while the selected target is inside the half-power beam";
 equation
   // The composed reflector's physical boresight is +Y at zero joint angles.
   // With the USD joints (yaw about +Y, then elevation about +X), its direction
@@ -47,4 +47,4 @@ equation
   beam.point_error = point_error;
   gain_frac = beam.gain_frac;
   locked = beam.locked;
-end EarthTracker;
+end AntennaTracker;

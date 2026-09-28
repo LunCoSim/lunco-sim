@@ -9,15 +9,10 @@ def Xform "PartsAttached" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     documentation = "Both Skid rover drivetrain variants are driven in a straight line; every descendant part must still be at its authored offset afterwards."
-    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = false
-    double lunco:anchor:lat = 26.13
-    double lunco:anchor:lon = 3.63
-    double lunco:anchor:height = 0.0
-    int lunco:anchor:body = 301
-    double lunco:time:epochJd = 2461395.5
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
@@ -85,10 +80,5 @@ def Xform "PartsAttached" (
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/parts_attached.rhai@
         }
-    }
-    def "SolarSystem" (
-        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
-    )
-    {
     }
 }

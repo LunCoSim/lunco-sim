@@ -627,7 +627,7 @@ The post-gate diagnostic capture
 25.35 seconds and 39 frames. Its CSV decode was stopped after 2m40s of one-core
 CPU use while an unrelated build was active; no post-gate per-zone total is
 claimed. The run remained unready with `USD physics admission` and two pending
-EarthTracker compiles, so its frame time is not FPS acceptance. A separate clean
+AntennaTracker compiles, so its frame time is not FPS acceptance. A separate clean
 20-second High-quality window that reaches readiness remains required before
 claiming a product-performance improvement.
 

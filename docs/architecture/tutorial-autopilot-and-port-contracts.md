@@ -127,7 +127,7 @@ solver / consumer            -> reads only available samples
 ```
 
 Adding authored dummy properties to `probe.usda`, teaching the wire resolver a
-special EarthTracker alias, or returning zero for an absent sample would hide
+special AntennaTracker alias, or returning zero for an absent sample would hide
 the same bug in another form and is not an acceptable compatibility path.
 
 ## 4. Runtime proof and readiness
@@ -145,9 +145,9 @@ replacing a session and verify that its process and port are gone. Do not
 overlap GUI/API sessions or hide a rebuild behind `cargo run`.
 
 The environment-port regression is closed when a fresh production log shows
-the EarthTracker programs bound and compiled without `target_mount_*` missing
+the AntennaTracker programs bound and compiled without `target_mount_*` missing
 port diagnostics. That closure is independent of the lander's physical
-acceptance: a mission can have correct EarthTracker wiring and still fail later
+acceptance: a mission can have correct AntennaTracker wiring and still fail later
 because a body, solver, joint, or autopilot state diverges.
 
 ## 5. Current follow-up boundary

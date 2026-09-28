@@ -21,11 +21,14 @@
 # and the 5° elevation mask is inherited rather than measured for this dish.
 def Xform "Kalyazin" (
     prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
+    prepend apiSchemas = "LunCoDirectionTargetAPI"
     kind = "component"
     displayName = "Kalyazin · RT-64"
     doc = "Kalyazin, Tver oblast — RT-64, 64 m. Radio-astronomy dish used as a deep-space and VLBI backup, not an operational command station."
 )
 {
+    uniform token lunco:directionTarget:id = "kalyazin"
+
 
     double lunco:anchor:lat = 57.22
     double lunco:anchor:lon = 37.90

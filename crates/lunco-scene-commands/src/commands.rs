@@ -1850,7 +1850,7 @@ pub struct SetUsdConnection {
     #[serde(default = "default_float_type")]
     #[reflect(default)]
     pub type_name: String,
-    /// Absolute property paths this attribute connects to (e.g. `["/SandboxScene/Skid_Raycast_1/Comms/EarthTrackerController.outputs:az"]`).
+    /// Absolute property paths this attribute connects to (e.g. `["/SandboxScene/Skid_Raycast_1/Comms/AntennaTrackerController.outputs:az"]`).
     pub sources: Vec<String>,
 }
 

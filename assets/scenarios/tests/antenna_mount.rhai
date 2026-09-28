@@ -66,7 +66,7 @@ fn on_start(me, ctx) {
     // Joints resolve over several ticks — avian must admit both bodies into its
     // island graph, and the physics-transform bridge must have written a real
     // pose — so a verdict taken early measures load order, not the mount. The
-    // tracker also needs a few ticks of Earth direction before the dish moves at
+    // tracker also needs a few ticks of Goldstone direction before the dish moves at
     // all, which is what `slewed` below is reading.
     this.settle_s = 12.0;
     this.phase = "settle";
@@ -143,7 +143,7 @@ fn verdict(s) {
             "on an entity carrying a live RevoluteJoint, so this means the " +
             "joint never ATTACHED — the dish is frozen and nothing says so."));
 
-        // 1 mrad. Earth tracking is a slow slew, so the bar is only meant to
+        // 1 mrad. Station tracking is a slow slew, so the bar is only meant to
         // separate "moving" from "welded": a mount that never attached reads
         // exactly 0.000, not a small number.
         f.push(t_true(m.peak > 0.001,

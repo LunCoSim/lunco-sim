@@ -462,9 +462,8 @@ def Xform "SkidRover" (
     }
 
     # --- Comms ---------------------------------------------------------
-    # Shared Earth-tracking antenna. The component owns both its hinges; being a
-    # child of this rover body is the mount, so nothing is authored here but the
-    # position.
+    # Shared communications antenna. The scene selects and activates a target;
+    # this rover asset keeps the component in its passive no-target default.
     def Xform "Comms" (
         prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )

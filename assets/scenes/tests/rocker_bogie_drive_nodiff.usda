@@ -8,14 +8,8 @@
 def Xform "RockerBogieDrive" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    prepend apiSchemas = "LunCoEpochAPI"
 )
 {
-    double lunco:anchor:lat = 26.13
-    double lunco:anchor:lon = 3.63
-    double lunco:anchor:height = 0.0
-    int lunco:anchor:body = 301
-    double lunco:time:epochJd = 2461395.5
     def Scope "Scenario"
     {
         custom string lunco:scenario = "rocker-bogie-drive-nodiff"
@@ -62,10 +56,5 @@ def Xform "RockerBogieDrive" (
             float drive:angular:physics:stiffness = 0.0
             float drive:angular:physics:damping = 0.0
         }
-    }
-    def "SolarSystem" (
-        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
-    )
-    {
     }
 }

@@ -8,10 +8,17 @@
 def Xform "CommsAntenna" (
     prepend apiSchemas = "LunCoCatalogAPI"
     kind = "component"
-    documentation = "Parabolic Earth-tracking antenna mechanism — Modelica pointing controller, azimuth/elevation head, lathed reflector, feed arm and horn. Owns both its hinges — mount it by referencing it as a child of the body it rides on."
+    documentation = "Two-axis parabolic antenna mechanism with scene-selected pointing. Its articulated mechanism is parked by default; scenes activate it and connect a target when needed."
 )
 {
     uniform bool lunco:spawnable = false
+    # The host supplies one complete target direction when pointing is active.
+    custom double inputs:target_mount_x
+    double inputs:target_mount_x.connect = []
+    custom double inputs:target_mount_y
+    double inputs:target_mount_y.connect = []
+    custom double inputs:target_mount_z
+    double inputs:target_mount_z.connect = []
     def Cylinder "Mast"
     {
         uniform token axis = "Y"
@@ -30,6 +37,7 @@ def Xform "CommsAntenna" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float physics:mass = 0.800000011920929
         float3 physics:diagonalInertia = (0.003000000026077032, 0.004800000227987766, 0.003000000026077032)
+        bool physics:rigidBodyEnabled = false
         bool physics:collisionEnabled = false
         def Xform "DishGimbal" (
             prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
@@ -37,6 +45,7 @@ def Xform "CommsAntenna" (
         {
             float physics:mass = 0.6000000238418579
             float3 physics:diagonalInertia = (0.035999998450279236, 0.017999999225139618, 0.035999998450279236)
+            bool physics:rigidBodyEnabled = false
             bool physics:collisionEnabled = false
             def Cylinder "DishYoke"
             {
@@ -131,28 +140,29 @@ def Xform "CommsAntenna" (
     )
     {
     }
-    def Xform "EarthTrackerController" (
+    def Xform "AntennaTrackerController" (
+        active = false
         prepend apiSchemas = "LunCoProgramAPI"
     )
     {
         uniform token info:implementationSource = "sourceAsset"
-        uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/EarthTracker.mo@
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/AntennaTracker.mo@
         custom double inputs:target_mount_x
-        double inputs:target_mount_x.connect = </CommsAntenna/Environment.outputs:earth_mount_x>
+        double inputs:target_mount_x.connect = </CommsAntenna.inputs:target_mount_x>
         custom double inputs:target_mount_y
-        double inputs:target_mount_y.connect = </CommsAntenna/Environment.outputs:earth_mount_y>
+        double inputs:target_mount_y.connect = </CommsAntenna.inputs:target_mount_y>
         custom double inputs:target_mount_z
-        double inputs:target_mount_z.connect = </CommsAntenna/Environment.outputs:earth_mount_z>
+        double inputs:target_mount_z.connect = </CommsAntenna.inputs:target_mount_z>
     }
-    def PhysicsRevoluteJoint "YawJoint"
+    def PhysicsRevoluteJoint "YawJoint" (active = false)
     {
         rel physics:body0 = </CommsAntenna>
         rel physics:body1 = </CommsAntenna/YawHead>
         uniform token physics:axis = "Y"
         float inputs:angle
-        float inputs:angle.connect = </CommsAntenna/EarthTrackerController.outputs:az>
+        float inputs:angle.connect = </CommsAntenna/AntennaTrackerController.outputs:az>
     }
-    def PhysicsRevoluteJoint "ElevationJoint"
+    def PhysicsRevoluteJoint "ElevationJoint" (active = false)
     {
         rel physics:body0 = </CommsAntenna/YawHead>
         rel physics:body1 = </CommsAntenna/YawHead/DishGimbal>
@@ -160,6 +170,6 @@ def Xform "CommsAntenna" (
         point3f physics:localPos0 = (0.0, 0.0, 0.0)
         point3f physics:localPos1 = (0.0, 0.0, 0.0)
         float inputs:angle
-        float inputs:angle.connect = </CommsAntenna/EarthTrackerController.outputs:el>
+        float inputs:angle.connect = </CommsAntenna/AntennaTrackerController.outputs:el>
     }
 }

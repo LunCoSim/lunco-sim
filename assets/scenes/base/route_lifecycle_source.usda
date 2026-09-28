@@ -73,9 +73,4 @@ def Xform "RouteLifecycleSource" (
             uniform asset info:sourceAsset = @lunco://scenarios/tests/route_lifecycle.rhai@
         }
     }
-    def Xform "SolarSystem" (
-        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
-    )
-    {
-    }
 }

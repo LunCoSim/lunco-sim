@@ -704,7 +704,7 @@ def Xform "SixWheelRover" (
     }
 
     # --- Comms ---------------------------------------------------------
-    # Shared Earth-tracking antenna.
+    # Shared communications antenna, passive until the scene selects a target.
     def Xform "Comms" (
         prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )

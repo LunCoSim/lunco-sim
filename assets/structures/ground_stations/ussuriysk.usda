@@ -17,11 +17,14 @@
 # See `structures/ground_stations/README.md` — the height here is approximate.
 def Xform "Ussuriysk" (
     prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
+    prepend apiSchemas = "LunCoDirectionTargetAPI"
     kind = "component"
     displayName = "Ussuriysk · RT-70"
     doc = "Ussuriysk / Galenki, Primorsky Krai — P-2500 (RT-70), 70 m. Eastern half of the Russian deep-space pair."
 )
 {
+    uniform token lunco:directionTarget:id = "ussuriysk"
+
 
     double lunco:anchor:lat = 44.02
     double lunco:anchor:lon = 131.76

@@ -24,9 +24,8 @@ def Xform "LandingLegsTest" (
 
     uniform bool lunco:spawnable = false
 
-    # The reusable lander includes an Earth tracker; this drop test composes
-    # the celestial source and lunar frame explicitly so the tracker receives
-    # real no-magic Earth direction data while the gear is exercised.
+    # The lunar frame supplies the Moon pose queried by this fixture. The shared
+    # antenna remains parked because the scene selects no ground station.
     double lunco:anchor:lat = 26.13
     double lunco:anchor:lon = 3.63
     double lunco:anchor:height = 0.0
@@ -37,6 +36,7 @@ def Xform "LandingLegsTest" (
     )
     {
     }
+
 
     def Plane "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]

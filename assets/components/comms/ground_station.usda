@@ -28,38 +28,11 @@
 # so a 70 m dish is s = 60.34 and a 64 m dish is s = 55.17. Scaling the head
 # keeps the feed horn at the focus; scaling the reflector alone does not.
 #
-# ── The dish does NOT slew, on purpose ────────────────────────────────────────
+# ── The station dish is scenery by default ────────────────────────────────────
 #
-# `antenna.usda` is an articulated mechanism: two rigid links, an elevation
-# hinge, and a Modelica `EarthTracker` that converts a direction into joint
-# angles. All three are DEACTIVATED here.
-#
-#   - The tracker points at EARTH. These dishes are ON Earth and would need to
-#     point at the Moon — the same controller with a different target, which is
-#     real work and not free.
-#   - A station is scenery for a link the kernel computes from GEOMETRY. The
-#     verdict does not read the dish's pose, so a slewing reflector changes
-#     nothing a student or a script can observe from 384,000 km away.
-#   - Six stations × (2 rigid bodies + 1 Modelica solver) is a real per-frame
-#     cost for a prop nobody can see move.
-#
-# `active = false` removes a prim from the composed stage entirely (the
-# projection walks active/defined/non-abstract prims only), so the joint and the
-# controller cost nothing rather than running and being ignored. The two link
-# bodies additionally carry `physics:rigidBodyEnabled = false`: without their
-# joints they would otherwise be FREE dynamic bodies, and a dish in free fall is
-# a worse bug than a dish that does not track.
-#
-# The antenna component owns BOTH its hinges, so both are deactivated here — the
-# yaw joint alongside the elevation joint and the controller. Nothing about the
-# mount is authored in this file: the component resolves its own mount by
-# ancestry, which is why a station opts OUT explicitly rather than opting in by
-# writing a joint.
-#
-# To make a station track after all: drop the three `active = false` overrides,
-# make `Pedestal` a body it can yaw against (a `PhysicsCollisionAPI` is enough —
-# a standalone collider is static geometry) and parent `Antenna` under it, then
-# give the tracker a lunar target.
+# `antenna.usda` parks its articulated mechanism and exposes an unconnected
+# target_mount_x/y/z input. A scene that needs this dish to point activates the
+# tracker and joints and connects a direction source explicitly.
 def Xform "GroundStation" (
     prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
@@ -199,13 +172,8 @@ def Xform "GroundStation" (
 
         over "YawHead"
         {
-            # Static structure, not a link in an articulation: see the header.
-            bool physics:rigidBodyEnabled = false
-
             over "DishGimbal"
             {
-                bool physics:rigidBodyEnabled = false
-
                 over "DishHead"
                 {
                     # 70 m aperture (1.16 · 60.34). Named stations override this
@@ -228,24 +196,7 @@ def Xform "GroundStation" (
             }
         }
 
-        # Pointing is off — the mechanism is scenery. See the header for why, and
-        # for what to change to turn it back on.
-        over "EarthTrackerController" (
-            active = false
-        )
-        {
-        }
 
-        over "YawJoint" (
-            active = false
-        )
-        {
-        }
 
-        over "ElevationJoint" (
-            active = false
-        )
-        {
-        }
     }
 }

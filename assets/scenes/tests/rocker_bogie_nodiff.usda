@@ -72,36 +72,7 @@ def Xform "RockerBogieTest" (
         prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
     )
     {
-        # This control is also a local mobility test.  Keep the shared antenna
-        # as visual scenery so its mechanism cannot become an unrelated dynamic
-        # body or request an Earth direction that this stage does not author.
-        over "Antenna"
-        {
-            over "YawHead"
-            {
-                bool physics:rigidBodyEnabled = false
-
-                over "DishGimbal"
-                {
-                    bool physics:rigidBodyEnabled = false
-                }
-            }
-            over "EarthTrackerController" (
-                active = false
-            )
-            {
-            }
-            over "YawJoint" (
-                active = false
-            )
-            {
-            }
-            over "ElevationJoint" (
-                active = false
-            )
-            {
-            }
-        }
+        # The shared antenna stays in its passive, no-target default.
         # Disable the differential: zero the authored gear engagement (a local
         # `over` opinion wins over the referenced asset's value).
         over "Differential"

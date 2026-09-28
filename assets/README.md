@@ -71,7 +71,7 @@ that owner is not linked and exposes the capability in `policy_status()`.
 
 | Need | Start with |
 |---|---|
-| local gravity, Sun, or Earth direction | `components/environment/probe.usda` |
+| local gravity and requested direction targets | `components/environment/probe.usda` |
 | solar generation | `components/power/solar_panel.usda` |
 | electrical storage | `components/power/battery.usda` |
 | powered transmitter | `components/comms/transmitter_power.usda` |

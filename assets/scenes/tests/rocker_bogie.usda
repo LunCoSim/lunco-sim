@@ -9,15 +9,10 @@ def Xform "RockerBogieTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     documentation = "The rocker-bogie rover (the kind Mars rovers use) driving over a small step. The linkage should keep the body level as one side lifts."
-    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = false
-    double lunco:anchor:lat = 26.13
-    double lunco:anchor:lon = 3.63
-    double lunco:anchor:height = 0.0
-    int lunco:anchor:body = 301
-    double lunco:time:epochJd = 2461395.5
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
@@ -67,32 +62,6 @@ def Xform "RockerBogieTest" (
     {
         double3 xformOp:translate = (0.0, 1.6, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        over "Antenna"
-        {
-            over "YawHead"
-            {
-                bool physics:rigidBodyEnabled = false
-                over "DishGimbal"
-                {
-                    bool physics:rigidBodyEnabled = false
-                }
-            }
-            over "EarthTrackerController" (
-                active = false
-            )
-            {
-            }
-            over "YawJoint" (
-                active = false
-            )
-            {
-            }
-            over "ElevationJoint" (
-                active = false
-            )
-            {
-            }
-        }
     }
     def Scope "Scenario"
     {
@@ -105,10 +74,5 @@ def Xform "RockerBogieTest" (
             uniform asset info:sourceAsset = @lunco://scenarios/tests/rocker_bogie.rhai@
             float lunco:param:coupled = 1.0
         }
-    }
-    def "SolarSystem" (
-        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
-    )
-    {
     }
 }
