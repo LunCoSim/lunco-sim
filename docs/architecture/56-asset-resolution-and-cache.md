@@ -270,6 +270,10 @@ is the lightweight discovery/read-side plugin. The optional
 `lunco-assets::datasets::DatasetProvisioningPlugin` owns worker lifecycle and
 composes `lunco-assets-download` and `lunco-assets-processing`; the GUI adds it
 explicitly, while headless hosts can install only the registry contract.
+Engine manifest enumeration, file reads, TOML parsing, and installed-artifact
+checks run on Bevy's async-compute pool during startup. The main thread merges
+the prepared typed registry and emits `DatasetScopeReady` only after that scan
+finishes.
 
 **The app never reaches the network on its own.** Launch, scene load and twin
 open must not open a connection. `DatasetRegistry::request(key)` is the only

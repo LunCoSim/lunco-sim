@@ -9,6 +9,8 @@
 //! native I/O.
 
 use bevy::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
+use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 
 use crate::{DatasetRegistry, DatasetScopeRemoved, dataset_failed};
 #[cfg(not(target_arch = "wasm32"))]
@@ -104,30 +106,56 @@ fn scan_open_twins_for_datasets(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn scan_engine_manifests(mut registry: ResMut<DatasetRegistry>, mut commands: Commands) {
-    let manifests = match lunco_assets_core::engine_manifests() {
-        Ok(manifests) => manifests,
-        Err(error) => {
-            registry.record_failure(format!(
+#[derive(Resource, Default)]
+struct PendingEngineManifestScan(Option<Task<Result<DatasetRegistry, String>>>);
+
+#[cfg(not(target_arch = "wasm32"))]
+fn start_engine_manifest_scan(mut pending: ResMut<PendingEngineManifestScan>) {
+    pending.0 = Some(AsyncComputeTaskPool::get().spawn(async move {
+        let _scan_span = bevy::log::info_span!("dataset_engine_manifest_scan").entered();
+        let manifests = lunco_assets_core::engine_manifests().map_err(|error| {
+            format!(
                 "cannot enumerate engine manifests in {}: {error}",
                 lunco_assets_core::manifests_dir().display()
-            ));
-            commands.trigger(DatasetScopeReady {
-                scope: DatasetScope::Engine,
-            });
-            return;
-        }
-    };
-    let mut total = 0;
-    for (group, path) in manifests {
-        match std::fs::read_to_string(&path) {
-            Ok(text) => total += registry.register(&text, &group),
-            Err(error) => {
-                registry.record_failure(format!("cannot read {}: {error}", path.display()))
+            )
+        })?;
+        let mut prepared = DatasetRegistry::default();
+        for (group, path) in manifests {
+            match std::fs::read_to_string(&path) {
+                Ok(text) => {
+                    prepared.register(&text, &group);
+                }
+                Err(error) => {
+                    prepared.record_failure(format!("cannot read {}: {error}", path.display()))
+                }
             }
         }
+        Ok(prepared)
+    }));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn commit_engine_manifest_scan(
+    mut pending: ResMut<PendingEngineManifestScan>,
+    mut registry: ResMut<DatasetRegistry>,
+    mut commands: Commands,
+) {
+    let result = pending
+        .0
+        .as_mut()
+        .and_then(|task| future::block_on(future::poll_once(task)));
+    let Some(result) = result else {
+        return;
+    };
+    pending.0 = None;
+
+    match result {
+        Ok(prepared) => {
+            let total = registry.merge_prepared(prepared);
+            info!("[datasets] {total} declared dataset(s) from assets/manifests");
+        }
+        Err(error) => registry.record_failure(error),
     }
-    info!("[datasets] {total} declared dataset(s) from assets/manifests");
     commands.trigger(DatasetScopeReady {
         scope: DatasetScope::Engine,
     });
@@ -141,7 +169,9 @@ impl Plugin for DatasetRegistryPlugin {
         app.add_observer(on_twin_closed);
         app.add_systems(Update, drain_registry_failures);
         #[cfg(not(target_arch = "wasm32"))]
-        app.add_systems(Startup, scan_engine_manifests);
+        app.init_resource::<PendingEngineManifestScan>()
+            .add_systems(Startup, start_engine_manifest_scan)
+            .add_systems(Update, commit_engine_manifest_scan);
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Update, scan_open_twins_for_datasets);
     }

@@ -372,6 +372,56 @@ impl DatasetRegistry {
         added
     }
 
+    /// Merge a registry prepared on a worker while preserving conflicts with
+    /// declarations that were admitted on the main thread in the meantime.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn merge_prepared(&mut self, mut prepared: Self) -> usize {
+        self.pending_failures.append(&mut prepared.pending_failures);
+        let mut added = 0;
+        for entry in prepared.entries.drain(..) {
+            if self.entries.iter().any(|current| current.id == entry.id) {
+                self.record_failure(format!(
+                    "duplicate dataset key '{}' within scope '{}' — ignored",
+                    entry.key,
+                    entry.scope.label()
+                ));
+                continue;
+            }
+            let output_path = if let Some(process) = &entry.spec.process {
+                let twin_root = match &entry.scope {
+                    DatasetScope::Twin { root, .. } => Some(root.as_path()),
+                    DatasetScope::Engine => None,
+                };
+                match process_output_path(
+                    process,
+                    Some(&entry.scope.cache_root(entry.spec.shared)),
+                    twin_root,
+                ) {
+                    Ok(path) => Some(path),
+                    Err(error) => {
+                        self.record_failure(format!(
+                            "dataset '{}' in scope '{}' has an invalid processed output: {error}",
+                            entry.key,
+                            entry.scope.label()
+                        ));
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+            if let Some(conflict) =
+                self.process_output_conflict(&entry.key, &entry.path, output_path.as_deref())
+            {
+                self.record_failure(conflict);
+                continue;
+            }
+            self.entries.push(entry);
+            added += 1;
+        }
+        added
+    }
+
     fn process_output_conflict(
         &self,
         key: &str,

@@ -46,6 +46,9 @@ contexts. The USD layer-closure owner and its reload receipts are documented in
 [`21-domain-usd`](../../docs/architecture/21-domain-usd.md#composition-closure-and-partial-scene-loading).
 Keep CPU-heavy source compilation off asset I/O workers too: register literal
 dependencies first, then prepare source ASTs on the existing async-compute pool.
+Startup discovery must keep filesystem enumeration, manifest reads and parsing,
+and installed-artifact checks off the app thread. Merge the resulting typed
+registry snapshot and publish readiness on the owning app schedule.
 
 One-shot `RunRhai` and tool callbacks share the prepared `ScenarioDriver`
 engine. When profiling a callback stall, separate one-time startup/prelude or

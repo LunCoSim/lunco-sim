@@ -76,6 +76,12 @@ Only use unconditional-every-frame systems for genuinely continuous
 work: the renderer, physics stepping, tool animation ticks, smooth
 camera easing. Everything else is reactive.
 
+Startup filesystem discovery is worker preparation too. Enumerating engine
+dataset manifests, reading and parsing their TOML, and checking artifact
+presence run on the async-compute pool; the app thread only merges the typed
+registry snapshot and publishes `DatasetScopeReady` when the task completes.
+Keep UI and physics responsive while that startup work is pending.
+
 ### Application interaction clocks are separate
 
 Command dispatch and one-shot REPL evaluation are application work, not
