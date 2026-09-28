@@ -18,7 +18,8 @@ use lunco_mobility::{Suspension, WheelRaycast};
 use lunco_signal::{SignalMeta, SignalPresentation, SignalRef, SignalRegistry, SignalSource};
 use lunco_telemetry::TelemetrySettings;
 use lunco_time::MissionClock;
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::collections::{HashMap, hash_map::Entry};
 
 use lunco_usd_bevy_scene::UsdPrimPath;
 
@@ -49,7 +50,7 @@ pub struct PhysicsTelemetryState {
     next_sample_time: Option<f64>,
     last_sample_time: Option<f64>,
     sample_rate_hz: Option<f64>,
-    metadata: HashMap<SignalRef, SignalMeta>,
+    metadata: HashMap<(Entity, PhysicsSignalName), CachedPhysicsSignal>,
     metadata_group_paths: HashMap<Entity, String>,
 }
 
@@ -161,7 +162,7 @@ fn retain_physics_telemetry(
         }
         state.previous.remove(&entity);
         state.metadata_group_paths.remove(&entity);
-        state.metadata.retain(|signal, _| signal.entity != entity);
+        state.metadata.retain(|(source, _), _| *source != entity);
     };
     for entity in removed_bodies.read() {
         retire(entity);
@@ -399,7 +400,7 @@ fn retain_physics_telemetry(
         }
         if let Some(mass) = mass.filter(|value| value.is_finite()) {
             samples.push(PhysicsSample::scalar(
-                "mass".to_string(),
+                "mass",
                 mass.value(),
                 "kg",
                 "Computed rigid-body mass including admitted colliders.",
@@ -599,11 +600,34 @@ fn vector_channels(
 }
 
 struct PhysicsSample {
-    name: String,
+    name: PhysicsSignalName,
     value: f64,
     unit: &'static str,
     description: &'static str,
     presentation: PhysicsSamplePresentation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum PhysicsSignalName {
+    Path(&'static str),
+    Component {
+        group: &'static str,
+        component: &'static str,
+    },
+}
+
+impl PhysicsSignalName {
+    fn as_path(self) -> Cow<'static, str> {
+        match self {
+            Self::Path(path) => Cow::Borrowed(path),
+            Self::Component { group, component } => Cow::Owned(format!("{group}.{component}")),
+        }
+    }
+}
+
+struct CachedPhysicsSignal {
+    signal: SignalRef,
+    metadata: Option<SignalMeta>,
 }
 
 /// Borrowed static presentation facts for a sample; owned labels are built only
@@ -645,13 +669,13 @@ impl PhysicsSamplePresentation {
 
 impl PhysicsSample {
     fn scalar(
-        name: impl Into<String>,
+        name: &'static str,
         value: f64,
         unit: &'static str,
         description: &'static str,
     ) -> Self {
         Self {
-            name: name.into(),
+            name: PhysicsSignalName::Path(name),
             value,
             unit,
             description,
@@ -666,18 +690,17 @@ impl PhysicsSample {
         unit: &'static str,
         description: &'static str,
     ) -> Self {
-        Self::named_component(
-            format!("{group}.{component}"),
-            group,
-            component,
+        Self {
+            name: PhysicsSignalName::Component { group, component },
             value,
             unit,
             description,
-        )
+            presentation: PhysicsSamplePresentation::Component { group, component },
+        }
     }
 
     fn named_component(
-        name: impl Into<String>,
+        name: &'static str,
         group: &'static str,
         component: &'static str,
         value: f64,
@@ -685,7 +708,7 @@ impl PhysicsSample {
         description: &'static str,
     ) -> Self {
         Self {
-            name: name.into(),
+            name: PhysicsSignalName::Path(name),
             value,
             unit,
             description,
@@ -694,7 +717,7 @@ impl PhysicsSample {
     }
 
     fn summary(
-        name: impl Into<String>,
+        name: &'static str,
         group: &'static str,
         label: &'static str,
         formula: &'static str,
@@ -703,7 +726,7 @@ impl PhysicsSample {
         description: &'static str,
     ) -> Self {
         Self {
-            name: name.into(),
+            name: PhysicsSignalName::Path(name),
             value,
             unit,
             description,
@@ -725,7 +748,7 @@ fn retain_samples(
     time: f64,
     samples: impl IntoIterator<Item = PhysicsSample>,
     channel_count: &mut usize,
-    metadata: &mut HashMap<SignalRef, SignalMeta>,
+    metadata: &mut HashMap<(Entity, PhysicsSignalName), CachedPhysicsSignal>,
     metadata_dirty: bool,
 ) -> bool {
     let mut retained = false;
@@ -733,8 +756,28 @@ fn retain_samples(
         if !sample.value.is_finite() {
             continue;
         }
-        let signal = SignalRef::new(entity, sample.name);
-        let known = signals.scalar_history(&signal).is_some();
+        let key = (entity, sample.name);
+        if let Entry::Vacant(entry) = metadata.entry(key) {
+            let signal = SignalRef::new(entity, sample.name.as_path().into_owned());
+            let known = signals.scalar_history(&signal).is_some();
+            if !known && *channel_count >= settings.max_channels {
+                warn_once!(
+                    "physics telemetry: max_channels ({}) reached; additional state is not retained",
+                    settings.max_channels
+                );
+                continue;
+            }
+            entry.insert(CachedPhysicsSignal {
+                signal,
+                metadata: None,
+            });
+        }
+        let Some(cached) = metadata.get_mut(&key) else {
+            warn_once!("physics telemetry channel cache entry is unavailable");
+            continue;
+        };
+        let signal = &cached.signal;
+        let known = signals.scalar_history(signal).is_some();
         if !known && *channel_count >= settings.max_channels {
             warn_once!(
                 "physics telemetry: max_channels ({}) reached; additional state is not retained",
@@ -743,9 +786,9 @@ fn retain_samples(
             continue;
         }
         if let Some(owner) = global_owner {
-            signals.associate_global_owner(&signal, owner);
+            signals.associate_global_owner(signal, owner);
         }
-        if metadata_dirty || !metadata.contains_key(&signal) {
+        if metadata_dirty || cached.metadata.is_none() {
             let signal_meta = SignalMeta {
                 description: Some(sample.description.to_string()),
                 unit: Some(sample.unit.to_string()),
@@ -756,10 +799,10 @@ fn retain_samples(
                 ..Default::default()
             };
             signals.update_meta(signal.clone(), signal_meta.clone());
-            metadata.insert(signal.clone(), signal_meta);
+            cached.metadata = Some(signal_meta);
         }
         if signals.record_scalar_at_rate(
-            &signal,
+            signal,
             time,
             sample.value,
             settings.default_rate_hz,
@@ -818,7 +861,7 @@ mod tests {
             "World-frame linear-velocity component.",
         );
 
-        assert_eq!(samples[0].name, "linear_velocity.x");
+        assert_eq!(samples[0].name.as_path().as_ref(), "linear_velocity.x");
         assert_eq!(
             samples[0].presentation.to_signal_presentation(),
             SignalPresentation::Component {
@@ -826,7 +869,7 @@ mod tests {
                 component: "x".into(),
             }
         );
-        assert_eq!(samples[2].name, "linear_velocity.z");
+        assert_eq!(samples[2].name.as_path().as_ref(), "linear_velocity.z");
     }
 
     #[test]
@@ -943,7 +986,7 @@ mod tests {
         let state = app.world().resource::<PhysicsTelemetryState>();
         assert!(!state.previous.contains_key(&body));
         assert!(!state.metadata_group_paths.contains_key(&body));
-        assert!(state.metadata.keys().all(|key| key.entity != body));
+        assert!(state.metadata.keys().all(|(entity, _)| *entity != body));
         assert!(
             app.world()
                 .resource::<SignalRegistry>()
