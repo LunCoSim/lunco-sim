@@ -4108,16 +4108,23 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         }
         bridge_core::rng_begin(self_gid as u64, time_bridge::logical_sequence(), 5);
         let (hook_ast, eval_ast) = st.program.hook_target();
-        call_hook(
-            &self.engine,
-            &mut st.scope,
-            hook_ast,
-            eval_ast,
-            "on_visualization",
-            self_gid,
-            &mut st.this,
-            &st.params,
-        )
+        let span = bevy::log::info_span!(
+            "rhai_user_visualization_hook",
+            entity = ?entity,
+            gid = self_gid
+        );
+        span.in_scope(|| {
+            call_hook(
+                &self.engine,
+                &mut st.scope,
+                hook_ast,
+                eval_ast,
+                "on_visualization",
+                self_gid,
+                &mut st.this,
+                &st.params,
+            )
+        })
         .map(|(message, position)| rhai_diagnostic(message, position))
     }
 
@@ -4148,16 +4155,24 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // mask bit — no AST scan). The built-in drivers below run regardless.
         let (hook_ast, eval_ast) = st.program.hook_target();
         let user = if st.program.mask.has(hook) {
-            call_hook(
-                &self.engine,
-                &mut st.scope,
-                hook_ast,
-                eval_ast,
-                name,
-                self_gid,
-                &mut st.this,
-                &st.params,
-            )
+            let span = bevy::log::info_span!(
+                "rhai_user_scenario_hook",
+                hook = name,
+                entity = ?entity,
+                gid = self_gid
+            );
+            span.in_scope(|| {
+                call_hook(
+                    &self.engine,
+                    &mut st.scope,
+                    hook_ast,
+                    eval_ast,
+                    name,
+                    self_gid,
+                    &mut st.this,
+                    &st.params,
+                )
+            })
         } else {
             None
         };
@@ -4187,26 +4202,48 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
             Vec::new()
         };
         if matches!(hook, ScenarioHook::Tick) {
-            driver_err = tick_native_task(&self.engine, st, self_gid, &pending_events);
+            let span = bevy::log::info_span!(
+                "rhai_native_task_tick",
+                entity = ?entity,
+                gid = self_gid,
+                event_count = pending_events.len()
+            );
+            driver_err =
+                span.in_scope(|| tick_native_task(&self.engine, st, self_gid, &pending_events));
         }
         for name in drivers {
             let args = if *name == "__run_mission" {
+                let event_projection_span = bevy::log::info_span!(
+                    "rhai_mission_event_projection",
+                    entity = ?entity,
+                    gid = self_gid,
+                    event_count = pending_events.len()
+                );
                 vec![
                     Dynamic::from_int(self_gid),
-                    build_event_identities(&pending_events),
+                    event_projection_span.in_scope(|| build_event_identities(&pending_events)),
                     st.params.clone(),
                 ]
             } else {
                 vec![Dynamic::from_int(self_gid), st.params.clone()]
             };
-            let e = call_prelude_driver(
-                &self.engine,
-                &mut st.scope,
-                &st.program.ast,
-                name,
-                &mut st.this,
-                args,
+            let span = bevy::log::info_span!(
+                "rhai_prelude_scenario_driver",
+                driver = name,
+                entity = ?entity,
+                gid = self_gid,
+                event_count = pending_events.len()
             );
+            let e = span.in_scope(|| {
+                call_prelude_driver(
+                    &self.engine,
+                    &mut st.scope,
+                    &st.program.ast,
+                    name,
+                    &mut st.this,
+                    args,
+                )
+            });
             driver_err = driver_err.or(e);
         }
         // Harvest subscriptions declared during `on_start` into the entity's
@@ -4505,16 +4542,24 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         let (hook_ast, eval_ast) = st.program.hook_target();
         let user = if st.program.mask.event && st.filter.matches(&event.name, event.source) {
             let evt = bridge_core::build_event(&RhaiBuilder, event);
-            call_event_hook(
-                &self.engine,
-                &mut st.scope,
-                hook_ast,
-                eval_ast,
-                self_gid,
-                &mut st.this,
-                &st.params,
-                evt,
-            )
+            let span = bevy::log::info_span!(
+                "rhai_user_event_hook",
+                event = %event.name,
+                entity = ?entity,
+                gid = self_gid
+            );
+            span.in_scope(|| {
+                call_event_hook(
+                    &self.engine,
+                    &mut st.scope,
+                    hook_ast,
+                    eval_ast,
+                    self_gid,
+                    &mut st.this,
+                    &st.params,
+                    evt,
+                )
+            })
         } else {
             None
         };
