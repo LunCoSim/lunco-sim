@@ -106,7 +106,14 @@ the cursor and tooltip, and add the complete diagnostic as an optional body
 under that row. Emit the existing typed action for Attention; do not create
 level-specific row layouts or source-specific styling. StatusBus
 coalesces consecutive identical discrete snapshots before this shared reader;
-do not hide producer floods in a renderer-specific filter.
+do not hide producer floods in a renderer-specific filter. Active progress
+opens the compact state of this same popup, showing the source and a truncated
+first-line summary of the owner-written message. Keep the complete message in
+the tooltip/history and do not infer phase from free-form text. “Recent status
+details” expands it in place, pins the longest-running progress row above
+recent events, and keeps the expanded view open when work completes. The
+compact state closes on completion; do not stack it with the history view or
+auto-close a history view the user expanded.
 
 Tutorial HUDs, rings, coach/recovery cards, and completion prompts use
 `lunco_workbench_guided_ui::GUIDED_OVERLAY_ORDER` (`egui::Order::Middle`);

@@ -1177,11 +1177,9 @@ pub(crate) fn perspective_help_anchor(id: PerspectiveId) -> String {
     format!("menu.perspective.{}", id.as_str())
 }
 
-/// Render a single panel inside its own egui container (side-panel mode).
-/// Mirrors PanelTabViewer's lookup-and-take-back pattern.
-/// Render the bottom status strip. Reads from [`lunco_status_core::status_bus::StatusBus`]
-/// (cross-cutting; populated by source library load, compile, sim, etc.) and
-/// renders a click-to-expand popup with recent history.
+/// Render the bottom status strip and its shared progress/history popup.
+/// Active progress opens a compact notice; expanding it replaces that notice
+/// with recent history and pins the current operation at the top.
 pub(crate) fn render_status_bar_inner(
     ui: &mut egui::Ui,
     world: &mut World,
@@ -1190,6 +1188,11 @@ pub(crate) fn render_status_bar_inner(
     use lunco_status_core::status_bus::{StatusBarAction, StatusBus, StatusLevel};
 
     let popup_id = ui.make_persistent_id("lunco_workbench_status_bar_popup");
+    let popup_view_id = ui.make_persistent_id("lunco_workbench_status_popup_view");
+    let mut popup_view = ui
+        .ctx()
+        .data_mut(|data| data.get_temp::<StatusPopupView>(popup_view_id))
+        .unwrap_or_default();
     let runtime_fault = world
         .get_resource::<lunco_core::RuntimeFaults>()
         .and_then(|faults| faults.first.clone());
@@ -1220,9 +1223,10 @@ pub(crate) fn render_status_bar_inner(
         level: StatusLevel,
         progress_pct: Option<f64>,
     }
-    let (latest, history): (
+    let (latest, history, primary_progress): (
         Option<LatestSnapshot>,
         Vec<(StatusEventKey, lunco_status_core::status_bus::StatusEvent)>,
+        Option<lunco_status_core::status_bus::StatusEvent>,
     ) = {
         let bus = world.resource::<StatusBus>();
         let latest = bus.display_latest().map(|e| LatestSnapshot {
@@ -1250,8 +1254,12 @@ pub(crate) fn render_status_bar_inner(
                 .map(|event| (StatusEventKey::Progress(event.scope, event.source), event)),
         );
         history.sort_by_key(|(_, event)| event.at);
-        (latest, history)
+        let primary_progress = bus.active_progress().min_by_key(|event| event.at).cloned();
+        (latest, history, primary_progress)
     };
+    let primary_progress_key = primary_progress
+        .as_ref()
+        .map(|event| StatusEventKey::Progress(event.scope, event.source));
     let perf_stats = world.resource::<PerfStats>().clone();
     // Engine frame health advances with rendered frames, including before a
     // Twin is active. Its shared snapshot owns this history; simulation
@@ -1288,8 +1296,23 @@ pub(crate) fn render_status_bar_inner(
             .is_some_and(|workspace| workspace.active_twin.is_some());
     let scene_popup_id = ui.make_persistent_id("lunco_workbench_loaded_scene_popup");
     let recent_events_width = status_popup_width(ui.ctx().content_rect().width());
-    let popup_width = recent_events_width;
     let mut status_action = None;
+    let mut expand_status_history = false;
+    let mut ignore_popup_outside_click = false;
+
+    // The compact progress notice and the history view share one popup id and
+    // anchor. A completion closes only the automatically-opened notice; the
+    // history view remains open if the user expanded it.
+    let popup_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
+    if should_auto_open_fault {
+        popup_view = StatusPopupView::History;
+    } else if primary_progress.is_some() && !popup_open {
+        popup_view = StatusPopupView::Progress;
+        egui::Popup::open_id(ui.ctx(), popup_id);
+    } else if primary_progress.is_none() && popup_open && popup_view == StatusPopupView::Progress {
+        egui::Popup::close_id(ui.ctx(), popup_id);
+        popup_view = StatusPopupView::History;
+    }
 
     ui.horizontal(|ui| {
         let bar_width = ui.available_width();
@@ -1410,8 +1433,29 @@ pub(crate) fn render_status_bar_inner(
                 .on_hover_text("Click to view recent status events")
                 .clicked()
         {
-            egui::Popup::toggle_id(ui.ctx(), popup_id);
+            if egui::Popup::is_id_open(ui.ctx(), popup_id) && popup_view == StatusPopupView::History
+            {
+                egui::Popup::close_id(ui.ctx(), popup_id);
+            } else {
+                ignore_popup_outside_click = popup_view == StatusPopupView::Progress;
+                popup_view = StatusPopupView::History;
+                egui::Popup::open_id(ui.ctx(), popup_id);
+            }
         }
+
+        // A newly reported runtime fault always opens the history after click
+        // handling, so a click in the same frame cannot close the fault notice.
+        if should_auto_open_fault {
+            popup_view = StatusPopupView::History;
+            ignore_popup_outside_click = true;
+            egui::Popup::open_id(ui.ctx(), popup_id);
+        }
+
+        let popup_width = if popup_view == StatusPopupView::Progress {
+            status_progress_card_width(ui.ctx().content_rect().width())
+        } else {
+            recent_events_width
+        };
 
         if scene_visible {
             ui.separator();
@@ -1514,15 +1558,10 @@ pub(crate) fn render_status_bar_inner(
             }
         }
 
-        // egui::Popup is the post-0.31 API. `open_memory(None)` ties
-        // the open state to egui's memory keyed by `popup_id`, so the
-        // `toggle_popup` call above flips it.
-        // A terminal runtime fault means simulation cannot proceed. Open the
-        // existing status history surface once for each newly recorded fault.
-        // Do this after the click handler so a simultaneous click cannot close it.
-        if should_auto_open_fault {
-            egui::Popup::open_id(ui.ctx(), popup_id);
-        }
+        // Keep the view mode with egui's temporary UI state. It is not
+        // persisted as application or Twin state.
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(popup_view_id, popup_view));
 
         egui::Popup::from_response(&response)
             .id(popup_id)
@@ -1530,49 +1569,108 @@ pub(crate) fn render_status_bar_inner(
             .align(egui::RectAlign::TOP_START)
             .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
             .open_memory(None)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .close_behavior(
+                if popup_view == StatusPopupView::Progress || ignore_popup_outside_click {
+                    egui::PopupCloseBehavior::IgnoreClicks
+                } else {
+                    egui::PopupCloseBehavior::CloseOnClickOutside
+                },
+            )
             .frame(
                 egui::Frame::new()
                     .fill(theme.tokens.overlay_backdrop)
                     .stroke(egui::Stroke::new(1.0, theme.tokens.overlay_border))
-                    .corner_radius(6.0)
-                    .inner_margin(egui::Margin::same(8)),
+                    .corner_radius(theme.rounding.window)
+                    .inner_margin(egui::Margin::same(
+                        theme.spacing.window_padding.round() as i8
+                    )),
             )
             .show(|ui| {
                 ui.set_min_width(popup_width);
                 ui.set_max_width(popup_width);
-                ui.set_max_height(360.0);
-                ui.heading("Recent status events");
-                ui.separator();
-                let mut popup_attention_source = None;
-                egui::ScrollArea::vertical()
-                    .id_salt("recent_status_history")
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        if history.is_empty() {
-                            ui.label(egui::RichText::new("(no events yet)").weak());
-                            return;
-                        }
-                        // Newest first.
-                        for (key, ev) in history.iter().rev() {
-                            if render_status_event_row(
-                                ui,
-                                ev,
-                                theme,
-                                ui.make_persistent_id(("workbench_status_event", key)),
-                            ) {
-                                popup_attention_source = Some(ev.source);
+                if popup_view == StatusPopupView::Progress {
+                    if let Some(progress) = primary_progress.as_ref() {
+                        expand_status_history = render_status_progress_notice(ui, progress, theme);
+                    }
+                } else {
+                    ui.set_max_height(360.0);
+                    ui.heading("Recent status events");
+                    ui.separator();
+                    let mut popup_attention_source = None;
+                    egui::ScrollArea::vertical()
+                        .id_salt("recent_status_history")
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            if let Some(progress) = primary_progress.as_ref() {
+                                ui.label(egui::RichText::new("Current progress").weak().small());
+                                render_status_event_row(
+                                    ui,
+                                    progress,
+                                    theme,
+                                    ui.make_persistent_id((
+                                        "workbench_status_event",
+                                        StatusEventKey::Progress(progress.scope, progress.source),
+                                    )),
+                                );
+                                ui.separator();
                             }
-                        }
-                    });
-                if let Some(source) = popup_attention_source {
-                    status_action = Some(StatusBarAction { source });
+                            if history.is_empty() {
+                                ui.label(egui::RichText::new("(no events yet)").weak());
+                                return;
+                            }
+                            // Newest first, after the pinned active operation.
+                            for (key, ev) in history.iter().rev() {
+                                if Some(*key) == primary_progress_key {
+                                    continue;
+                                }
+                                if render_status_event_row(
+                                    ui,
+                                    ev,
+                                    theme,
+                                    ui.make_persistent_id(("workbench_status_event", key)),
+                                ) {
+                                    popup_attention_source = Some(ev.source);
+                                }
+                            }
+                        });
+                    if let Some(source) = popup_attention_source {
+                        status_action = Some(StatusBarAction { source });
+                    }
                 }
             });
     });
+    if expand_status_history {
+        popup_view = StatusPopupView::History;
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(popup_view_id, popup_view));
+    }
     if let Some(action) = status_action {
         trigger_or_defer(world, action);
     }
+}
+
+/// Render the compact active-progress state of the shared status popup.
+fn render_status_progress_notice(
+    ui: &mut egui::Ui,
+    event: &lunco_status_core::status_bus::StatusEvent,
+    theme: &lunco_theme::Theme,
+) -> bool {
+    ui.spacing_mut().item_spacing.y = theme.spacing.item_spacing;
+    ui.horizontal(|ui| {
+        ui.spinner();
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new(event.source).strong());
+            ui.add(egui::Label::new(status_message_summary(&event.message)).truncate())
+                .on_hover_text(&event.message);
+        });
+    });
+    let bar = if let Some(progress) = event.progress_pct() {
+        egui::ProgressBar::new((progress / 100.0) as f32).show_percentage()
+    } else {
+        egui::ProgressBar::new(0.0).animate(true)
+    };
+    ui.add(bar.desired_height(theme.spacing.item_spacing));
+    ui.link("Recent status details").clicked()
 }
 
 const STATUS_EVENT_LEVEL_WIDTH: f32 = 56.0;
@@ -1888,6 +1986,13 @@ pub fn menu_popup_max_width(content_width: f32, requested_max_width: f32) -> f32
 
 type RuntimeFaultKey = (String, String, String);
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum StatusPopupView {
+    #[default]
+    History,
+    Progress,
+}
+
 fn should_auto_open_status_popup(
     previous: Option<&RuntimeFaultKey>,
     current: Option<&RuntimeFaultKey>,
@@ -1918,6 +2023,15 @@ fn status_popup_width(content_width: f32) -> f32 {
     (available * STATUS_POPUP_VIEWPORT_RATIO)
         .clamp(STATUS_POPUP_MIN_WIDTH, STATUS_POPUP_MAX_WIDTH)
         .min(available)
+}
+
+const STATUS_PROGRESS_CARD_MAX_WIDTH: f32 = 380.0;
+
+fn status_progress_card_width(content_width: f32) -> f32 {
+    (content_width - STATUS_POPUP_VIEWPORT_MARGIN)
+        .max(0.0)
+        .min(STATUS_PROGRESS_CARD_MAX_WIDTH)
+        .max(1.0)
 }
 
 fn settings_submenu_max_width(content_width: f32) -> f32 {
