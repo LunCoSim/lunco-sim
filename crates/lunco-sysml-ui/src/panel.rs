@@ -1095,6 +1095,9 @@ impl SysmlRequirementsPanel {
         let selected = self.selected_structure_element == Some(handle);
         let id = ui.make_persistent_id(("sysml_structure_node", handle));
         let default_open = !query.is_empty() || depth == 0;
+        let mut select_from_header = false;
+        let mut open_source_from_header = None;
+        let mut open_source_clicked = false;
         lunco_workbench_widgets::tree::branch(
             ui,
             id,
@@ -1103,8 +1106,9 @@ impl SysmlRequirementsPanel {
             |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("Open").clicked() {
-                        self.selected_structure_element = Some(handle);
-                        *open_source = source_location(view_model, &node.element);
+                        select_from_header = true;
+                        open_source_clicked = true;
+                        open_source_from_header = source_location(view_model, &node.element);
                     }
 
                     let title = format!(
@@ -1120,7 +1124,7 @@ impl SysmlRequirementsPanel {
                         ui.available_width(),
                     );
                     if response.clicked() {
-                        self.selected_structure_element = Some(handle);
+                        select_from_header = true;
                     }
                     response.clicked()
                 })
@@ -1141,6 +1145,12 @@ impl SysmlRequirementsPanel {
                 }
             },
         );
+        if select_from_header {
+            self.selected_structure_element = Some(handle);
+        }
+        if open_source_clicked {
+            *open_source = open_source_from_header;
+        }
     }
 
     fn has_unsaved_source_edits(

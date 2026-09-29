@@ -105,14 +105,17 @@ queue has no browser worker transport.
 The Rhai policy bootstrap commits in `PreStartup`, before startup systems
 consume authored policies. On native, runtime plugin construction starts one
 bounded application-policy preparation on `AsyncComputeTaskPool`: manifest
-discovery, asset reads, hook compilation, and evaluation of the authored hook
+discovery, asset reads, optional-owner filtering, hook compilation,
+owner-contract and entry-arity validation, and evaluation of the authored hook
 order happen there while the remaining plugins are installed. `PreStartup`
-validates that typed selection and commits the prepared hooks before any
-`Startup` consumer. A missing worker pool or failed preparation is reported
-through the application policy status; activation does not silently repeat
-the I/O, compilation, or selection on the app thread. The application startup
-function sees hook identities, while a Twin startup retains access to its full
-resolved records. For example, rendering quality is owned by the
+validates that typed selection and its manifest records, then commits the
+already-validated callables in authored order before any `Startup` consumer. A
+missing worker pool or failed preparation is reported through the application
+policy status; activation does not silently repeat I/O, owner filtering,
+compilation, hook validation, or selection on the app thread. The application
+startup function sees hook identities, while a Twin
+startup retains access to its full resolved records. For example, rendering
+quality is owned by the
 `lunco-render` seam: `render.quality_profile(id: String) -> Map` supplies the
 complete typed settings for one stable profile id, while
 `render.default_quality_profile() -> String` chooses the initial id for fresh
