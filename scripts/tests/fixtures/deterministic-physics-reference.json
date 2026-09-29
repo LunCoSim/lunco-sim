@@ -5442,15 +5442,15 @@
       }
     }
   },
-  "recorded_at_utc": "2026-09-29T09:17:17.295330+00:00",
+  "recorded_at_utc": "2026-09-29T09:28:17.609256+00:00",
   "schema": "luncosim-deterministic-physics-reference-v3",
   "source": {
     "binary": {
       "name": "luncosim",
-      "sha256": "1806b7931752f78955552d92634050245ab02da57c6ebbdc53ac99f1645bcc4d"
+      "sha256": "3d7155c16b5e31e21ef8989c223da552ec0b4383c91b8229b7bf2d59f597e58e"
     },
-    "git_commit": "bed6f2afb4b17820830d5d790a93ab38cb926e34",
-    "git_tree": "da96038c43419d5e8dfe0d3c047445cf47637366",
+    "git_commit": "f68e09ee2b3dbf378a6ab43de9d25730b095e43b",
+    "git_tree": "490453a57b3c319fe278c902bfc0347493173abb",
     "host": {
       "cargo": "cargo 1.95.0-nightly (f298b8c82 2026-02-24)",
       "machine": "x86_64",
@@ -5467,7 +5467,7 @@
       "assets/scenes/tests/multi_rover_stress_8.usda": "5caa9ae3710939764a280c579fd4558abb9ad16ec04a50367f393ede58b9cb72",
       "scripts/compare_deterministic_physics_profiles.py": "c02b5376e1bb24945b588ea11a058f6f4f5da129078277ecdea1e3e24f9389c6"
     },
-    "tracked_source_sha256": "7ec77ecc6cffa831e5e89eab489a14b3a67000ef0d99241f193d08679ee044eb",
+    "tracked_source_sha256": "d89c5a282da487d57ffe59cc35728ee32dce92923813da3e88a3a8a7e55ab0b2",
     "tracked_worktree_clean": true
   }
 }
