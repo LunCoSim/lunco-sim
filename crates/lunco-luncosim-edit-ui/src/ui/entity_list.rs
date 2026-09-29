@@ -900,14 +900,15 @@ fn render_node(
     depth: usize,
     view: &EntityTreeView,
     selected: &lunco_scene_selection::SelectedEntities,
+    shift_held: bool,
     to_select: &mut Option<(Entity, bool)>,
     to_focus: &mut Option<Entity>,
 ) {
     let label = view
         .labels
         .get(&entity)
-        .cloned()
-        .unwrap_or_else(|| "Unnamed entity".to_string());
+        .map(String::as_str)
+        .unwrap_or("Unnamed entity");
 
     match view.kids.get(&entity) {
         None => {
@@ -915,9 +916,10 @@ fn render_node(
                 select_label(
                     ui,
                     entity,
-                    &label,
+                    label,
                     view.camera_identities.get(&entity).map(String::as_str),
                     selected,
+                    shift_held,
                     to_select,
                     to_focus,
                 )
@@ -938,16 +940,26 @@ fn render_node(
                     select_label(
                         ui,
                         entity,
-                        &label,
+                        label,
                         view.camera_identities.get(&entity).map(String::as_str),
                         selected,
+                        shift_held,
                         &mut header_select,
                         &mut header_focus,
                     )
                 },
                 |ui| {
                     for &child in children {
-                        render_node(ui, child, depth + 1, view, selected, to_select, to_focus);
+                        render_node(
+                            ui,
+                            child,
+                            depth + 1,
+                            view,
+                            selected,
+                            shift_held,
+                            to_select,
+                            to_focus,
+                        );
                     }
                 },
             );
@@ -970,25 +982,29 @@ fn select_label(
     label: &str,
     full_identity: Option<&str>,
     selected: &lunco_scene_selection::SelectedEntities,
+    shift_held: bool,
     to_select: &mut Option<(Entity, bool)>,
     to_focus: &mut Option<Entity>,
 ) -> bool {
-    let hint = match full_identity {
-        Some(identity) => format!(
-            "{identity}  ·  click to select · Shift+Click to multiselect · double-click to focus"
-        ),
-        None => "Click to select · Shift+Click to multiselect · double-click to focus".to_owned(),
-    };
     let width = ui.available_width();
-    let resp = lunco_workbench_widgets::tree::selectable_label(
+    let response = lunco_workbench_widgets::tree::selectable_label(
         ui,
         selected.entities.contains(&entity),
         label,
         width,
-    )
-    .on_hover_text(hint);
-
-    let shift_held = ui.input(|i| i.modifiers.shift);
+    );
+    let resp = if response.hovered() {
+        match full_identity {
+            Some(identity) => response.on_hover_text(format!(
+                "{identity}  ·  click to select · Shift+Click to multiselect · double-click to focus"
+            )),
+            None => response.on_hover_text(
+                "Click to select · Shift+Click to multiselect · double-click to focus",
+            ),
+        }
+    } else {
+        response
+    };
 
     if resp.clicked() {
         *to_select = Some((entity, shift_held));
@@ -1019,6 +1035,7 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         .resource::<lunco_scene_selection::SelectedEntities>()
         .cloned()
         .unwrap_or_default();
+    let shift_held = ui.input(|i| i.modifiers.shift);
 
     let mut to_select: Option<(Entity, bool)> = None;
     let mut to_focus: Option<Entity> = None;
@@ -1039,7 +1056,16 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 for &root in &view.roots {
-                    render_node(ui, root, 0, view, &selected, &mut to_select, &mut to_focus);
+                    render_node(
+                        ui,
+                        root,
+                        0,
+                        view,
+                        &selected,
+                        shift_held,
+                        &mut to_select,
+                        &mut to_focus,
+                    );
                 }
             });
         if selected

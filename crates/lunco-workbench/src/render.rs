@@ -279,6 +279,19 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             TabId::Singleton(id) => id,
             TabId::Instance { kind, .. } => kind,
         };
+        // Keep one named child zone per visible panel so a slow workbench
+        // frame can be attributed to its UI owner in Tracy.
+        let panel_span = match *tab {
+            TabId::Singleton(id) => {
+                bevy::log::info_span!("workbench_panel_render", panel = %id.as_str())
+            }
+            TabId::Instance { kind, instance } => bevy::log::info_span!(
+                "workbench_panel_render",
+                panel = %kind.as_str(),
+                instance
+            ),
+        };
+        let _panel_span = panel_span.enter();
         publish_panel_anchor(self.world, panel_id, panel_rect);
 
         // Publish the active tab's authoritative screen rect before rendering

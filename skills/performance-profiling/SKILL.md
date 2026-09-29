@@ -50,6 +50,8 @@ For Builder telemetry, inspect `telemetry_catalog_snapshot` separately from
 owner ancestry; grouping and sorting belong on the worker. Compare the first
 Builder frame with settled `render_workbench` and `EguiPrimaryContextPass`
 samples so a one-time catalog build is not reported as a steady per-frame cost.
+Use the `workbench_panel_render` child zones to separate the active panel costs
+inside `render_workbench` before optimizing a specific Builder surface.
 
 For startup asset graphs, separate asynchronous source reads from discovery,
 composition, and UI/physics admission. Read all known dependencies in each

@@ -9,7 +9,9 @@
 //! creates a fresh `VizId` and a matching `VisualizationConfig`. A
 //! small per-panel toolbar exposes an X-axis picker, the current
 //! Y-binding chips (each with ×), and an "+ Add signal" dropdown
-//! populated from the `SignalRegistry`. Without this toolbar, new
+//! populated from the `SignalRegistry` when opened. Picker entries are
+//! cached by catalog revision while labels continue to use live owner names.
+//! Without this toolbar, new
 //! plots appeared frozen to users because the only signal-picker
 //! (Telemetry's checkboxes) targeted the default plot exclusively.
 //!
@@ -111,6 +113,17 @@ impl LinePlotStyle {
 /// The full path remains available in telemetry tooltips and persistence keeps
 /// the entity identity; this is solely the concise plot presentation.
 fn component_parameter_label(wb: &PanelCtx, signal: &SignalRef) -> String {
+    let meta = wb
+        .resource::<SignalRegistry>()
+        .and_then(|registry| registry.meta(signal));
+    component_parameter_label_with_meta(wb, signal, meta)
+}
+
+fn component_parameter_label_with_meta(
+    wb: &PanelCtx,
+    signal: &SignalRef,
+    meta: Option<&SignalMeta>,
+) -> String {
     let owner = wb
         .get::<Name>(signal.entity)
         .map(|name| {
@@ -121,9 +134,6 @@ fn component_parameter_label(wb: &PanelCtx, signal: &SignalRef) -> String {
             )
         })
         .unwrap_or_else(|| "Unnamed entity".to_string());
-    let meta = wb
-        .resource::<SignalRegistry>()
-        .and_then(|registry| registry.meta(signal));
     let channel = crate::signal::display_channel_label(
         &signal.path,
         meta.and_then(|metadata| metadata.group_path.as_deref()),
@@ -149,7 +159,7 @@ fn binding_label(wb: &PanelCtx, binding: &SignalBinding, meta: Option<&SignalMet
     let label = binding
         .label
         .clone()
-        .unwrap_or_else(|| component_parameter_label(wb, &binding.source));
+        .unwrap_or_else(|| component_parameter_label_with_meta(wb, &binding.source, meta));
     let unit = meta
         .and_then(|m| m.unit.as_deref())
         .filter(|unit| !unit.is_empty() && *unit != "1");
@@ -170,6 +180,57 @@ fn signal_hint(meta: Option<&SignalMeta>) -> Option<String> {
         parts.push(description.to_owned());
     }
     (!parts.is_empty()).then(|| parts.join("\n"))
+}
+
+#[derive(Debug)]
+struct ToolbarSignal {
+    source: SignalRef,
+    meta: Option<SignalMeta>,
+    hint: Option<String>,
+}
+
+#[derive(Debug)]
+struct ToolbarSignalCatalog {
+    registry_address: usize,
+    revision: u64,
+    signals: Vec<ToolbarSignal>,
+}
+
+/// Build the signal-picker entries only when a picker is open, then reuse them
+/// until the signal catalog changes.
+fn toolbar_signal_catalog(
+    ctx: &egui::Context,
+    registry: &SignalRegistry,
+) -> std::sync::Arc<ToolbarSignalCatalog> {
+    let registry_address = registry as *const SignalRegistry as usize;
+    let revision = registry.catalog_revision();
+    let cache_id = egui::Id::new("line_plot_toolbar_signal_catalog");
+    type CachedCatalog = std::sync::Arc<ToolbarSignalCatalog>;
+    if let Some(cached) = ctx.data(|data| data.get_temp::<CachedCatalog>(cache_id)) {
+        if cached.registry_address == registry_address && cached.revision == revision {
+            return cached;
+        }
+    }
+
+    let signals = registry
+        .iter_signals()
+        .filter(|&(_, kind)| kind == SignalType::Scalar)
+        .map(|(signal, _)| {
+            let meta = registry.meta(signal).cloned();
+            ToolbarSignal {
+                source: signal.clone(),
+                hint: signal_hint(meta.as_ref()),
+                meta,
+            }
+        })
+        .collect();
+    let catalog = std::sync::Arc::new(ToolbarSignalCatalog {
+        registry_address,
+        revision,
+        signals,
+    });
+    ctx.data_mut(|data| data.insert_temp(cache_id, catalog.clone()));
+    catalog
 }
 
 /// Keep the optional phase-space X axis on the same stable-identity lifecycle
@@ -405,17 +466,19 @@ impl LinePlot {
         // classic "no usable X signal → time on X" fallback.
         let mut x_samples: Option<Option<Vec<ScalarSample>>> = None;
 
-        // Build the egui_plot `Line`s up-front so we can release the
-        // registry borrow before calling `plot.show()` (which wants a
-        // long-lived borrow on `ctx.ui`).
+        // Snapshot point buffers and their current labels/colors before the
+        // plot takes a long-lived borrow on `ctx.ui`.
         //
         // Tessellation is dirty-checked: the (history fingerprint,
         // x fingerprint, log_y, pixel width) key is compared against a
         // per-binding cache in egui context data; only a moved key
-        // re-copies the history, re-logs, and re-decimates. Steady
-        // frames clone the cached (pixel-bounded) point vec only —
-        // that owned copy is the one egui_plot's `PlotPoints` demands.
-        let lines: Vec<Line> = y_bindings
+        // re-copies the history, re-logs, and re-decimates. Steady frames
+        // clone only the cache Arc; egui_plot borrows its point slice.
+        let series_to_plot: Vec<(
+            std::sync::Arc<(SeriesKey, Vec<egui_plot::PlotPoint>)>,
+            String,
+            egui::Color32,
+        )> = y_bindings
             .iter()
             .filter_map(|b| {
                 let hist = registry.scalar_history(&b.source)?;
@@ -429,7 +492,7 @@ impl LinePlot {
                     px_w: remaining.x.max(1.0) as u32,
                 };
                 let cache_id = egui::Id::new(("line_plot_series", config.id.raw())).with(&b.source);
-                let cached: Option<std::sync::Arc<(SeriesKey, Vec<[f64; 2]>)>> =
+                let cached: Option<std::sync::Arc<(SeriesKey, Vec<egui_plot::PlotPoint>)>> =
                     ctx.ui.ctx().data(|d| d.get_temp(cache_id));
                 let series = match cached {
                     Some(c) if c.0 == key => c,
@@ -464,6 +527,7 @@ impl LinePlot {
                                 pts = dec;
                             }
                         }
+                        let pts = pts.into_iter().map(egui_plot::PlotPoint::from).collect();
                         let fresh = std::sync::Arc::new((key, pts));
                         ctx.ui
                             .ctx()
@@ -481,11 +545,11 @@ impl LinePlot {
                 let color = b
                     .color
                     .unwrap_or_else(|| crate::signal::color_for_signal(&theme, &b.source.path));
-                Some(Line::new(label, PlotPoints::new(series.1.clone())).color(color))
+                Some((series, label, color))
             })
             .collect();
 
-        if lines.is_empty() {
+        if series_to_plot.is_empty() {
             let muted = ctx
                 .wb
                 .resource::<lunco_theme::Theme>()
@@ -596,8 +660,10 @@ impl LinePlot {
         }
 
         plot.show(ctx.ui, |plot_ui| {
-            for line in lines {
-                plot_ui.line(line);
+            for (series, label, color) in &series_to_plot {
+                plot_ui.line(
+                    Line::new(label.clone(), PlotPoints::from(series.1.as_slice())).color(*color),
+                );
             }
         });
     }
@@ -620,48 +686,13 @@ fn render_toolbar(
     config: &VisualizationConfig,
     actions: impl FnOnce(&mut egui::Ui, &mut PanelCtx),
 ) -> Option<Edit> {
-    // Snapshot available signals + current style so we can render
-    // without holding a long-lived registry borrow.
-    let registry = ctx.wb.resource::<SignalRegistry>();
-    let (available, current_y_paths): (Vec<SignalRef>, std::collections::HashSet<SignalRef>) = {
-        let available: Vec<SignalRef> = registry
-            .map(|r| {
-                r.iter_signals()
-                    .filter(|&(_, t)| t == SignalType::Scalar)
-                    .map(|(s, _)| s.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let current: std::collections::HashSet<SignalRef> = config
-            .inputs
-            .iter()
-            .filter(|b| b.role == ROLE_Y.role)
-            .map(|b| b.source.clone())
-            .collect();
-        (available, current)
-    };
-    let style = LinePlotStyle::load_cached(ctx.ui.ctx(), config);
-    let muted = ctx
-        .wb
-        .resource::<lunco_theme::Theme>()
-        .map(|t| t.tokens.text_subdued)
-        .unwrap_or(egui::Color32::DARK_GRAY);
-
-    // Resolve registry metadata for a signal at most once per toolbar render.
-    // Keep owned metadata here so the row can also issue a mutable host action
-    // without holding an immutable borrow of the SignalRegistry through the
-    // egui closure. The previous version asked the registry for `meta(&source)`
-    // twice per Y chip and once more per addable.
-    let metadata: HashMap<SignalRef, SignalMeta> = available
+    let current_y_paths: std::collections::HashSet<SignalRef> = config
+        .inputs
         .iter()
-        .filter_map(|sig| {
-            registry
-                .and_then(|r| r.meta(sig))
-                .cloned()
-                .map(|meta| (sig.clone(), meta))
-        })
+        .filter(|b| b.role == ROLE_Y.role)
+        .map(|b| b.source.clone())
         .collect();
-    let meta_of = |sig: &SignalRef| metadata.get(sig);
+    let style = LinePlotStyle::load_cached(ctx.ui.ctx(), config);
 
     let mut edit: Option<Edit> = None;
     let mut removed: Option<SignalRef> = None;
@@ -690,14 +721,18 @@ fn render_toolbar(
                 {
                     edit = Some(Edit::SetX(None));
                 }
-                for sig in &available {
-                    let selected = style.x_signal.as_ref() == Some(sig);
-                    if ui
-                        .selectable_label(selected, component_parameter_label(ctx.wb, sig))
-                        .clicked()
-                        && !selected
-                    {
-                        edit = Some(Edit::SetX(Some(sig.clone())));
+                if let Some(registry) = ctx.wb.resource::<SignalRegistry>() {
+                    let catalog = toolbar_signal_catalog(ui.ctx(), registry);
+                    for signal in &catalog.signals {
+                        let selected = style.x_signal.as_ref() == Some(&signal.source);
+                        let label = component_parameter_label_with_meta(
+                            ctx.wb,
+                            &signal.source,
+                            signal.meta.as_ref(),
+                        );
+                        if ui.selectable_label(selected, label).clicked() && !selected {
+                            edit = Some(Edit::SetX(Some(signal.source.clone())));
+                        }
                     }
                 }
             });
@@ -716,7 +751,10 @@ fn render_toolbar(
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     for b in config.inputs.iter().filter(|b| b.role == ROLE_Y.role) {
-                        let meta = meta_of(&b.source);
+                        let meta = ctx
+                            .wb
+                            .resource::<SignalRegistry>()
+                            .and_then(|registry| registry.meta(&b.source));
                         let chip = ui
                             .small_button(format!("{} x", binding_label(ctx.wb, b, meta)))
                             .on_hover_text("Remove from this plot");
@@ -747,35 +785,44 @@ fn render_toolbar(
                 edit = Some(Edit::SetLogY(log_y));
             }
             ui.separator();
-            let addables: Vec<&SignalRef> = available
-                .iter()
-                .filter(|s| !current_y_paths.contains(s))
-                .collect();
-            if !addables.is_empty() {
-                egui::ComboBox::from_id_salt(("lp_add", config.id.raw()))
-                    .selected_text("Add")
-                    .width(120.0)
-                    .show_ui(ui, |ui| {
-                        for sig in addables {
-                            let meta = meta_of(sig);
-                            let button = ui.button(component_parameter_label(ctx.wb, sig));
-                            let button = if let Some(hint) = signal_hint(meta) {
-                                button.on_hover_text(hint)
-                            } else {
-                                button
-                            };
-                            if button.clicked() {
-                                edit = Some(Edit::AddY(sig.clone()));
-                            }
+            egui::ComboBox::from_id_salt(("lp_add", config.id.raw()))
+                .selected_text("Add")
+                .width(120.0)
+                .show_ui(ui, |ui| {
+                    let Some(registry) = ctx.wb.resource::<SignalRegistry>() else {
+                        ui.label("SignalRegistry not installed.");
+                        return;
+                    };
+                    let catalog = toolbar_signal_catalog(ui.ctx(), registry);
+                    let mut has_addable = false;
+                    for signal in &catalog.signals {
+                        if current_y_paths.contains(&signal.source) {
+                            continue;
                         }
-                    });
-            } else if current_y_paths.is_empty() {
-                ui.label(
-                    egui::RichText::new("no signals yet")
-                        .color(muted)
-                        .size(10.0),
-                );
-            }
+                        has_addable = true;
+                        let label = component_parameter_label_with_meta(
+                            ctx.wb,
+                            &signal.source,
+                            signal.meta.as_ref(),
+                        );
+                        let button = ui.button(label);
+                        let button = if let Some(hint) = &signal.hint {
+                            button.on_hover_text(hint)
+                        } else {
+                            button
+                        };
+                        if button.clicked() {
+                            edit = Some(Edit::AddY(signal.source.clone()));
+                        }
+                    }
+                    if !has_addable {
+                        ui.label(if catalog.signals.is_empty() {
+                            "No scalar signals are available yet."
+                        } else {
+                            "All scalar signals are already plotted."
+                        });
+                    }
+                });
         });
     });
     if let Some(r) = removed {
