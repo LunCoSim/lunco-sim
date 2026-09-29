@@ -747,9 +747,6 @@ impl PhysicsHolds {
     /// this reason; integration resumes only after the complete pending
     /// admission set is ready.
     pub const BODY_ADMISSION: &'static str = "body-admission";
-    /// Solver participants are priming their first live exchange for the
-    /// deterministic initial condition. The scene-test runner owns this reason.
-    pub const INITIAL_CONDITION: &'static str = "initial-condition";
     /// A scripted cutscene / offline recording is choosing when the world moves.
     ///
     /// Held, physics is frozen but `Time<Virtual>` keeps running, so `FixedUpdate` —

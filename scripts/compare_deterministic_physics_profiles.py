@@ -66,9 +66,9 @@ def scenario_trace_tick(trace: str) -> str:
     try:
         tick = int(rover_state_records(trace)[0])
     except ValueError as error:
-        raise RuntimeError("Rhai state trace has an invalid scenario-relative tick") from error
+        raise RuntimeError("Rhai state trace has an invalid simulation tick") from error
     if tick < 0:
-        raise RuntimeError(f"Rhai state trace has negative scenario-relative tick {tick}")
+        raise RuntimeError(f"Rhai state trace has negative simulation tick {tick}")
     return str(tick)
 
 
@@ -82,7 +82,7 @@ def validate_startup_trace(output: str, label: str) -> None:
     startup_tick = scenario_trace_tick(lifecycle_traces[0])
     if startup_tick != "0":
         raise RuntimeError(
-            f"{label}: initial scenario trace used tick={startup_tick}, expected relative tick 0"
+            f"{label}: initial scenario trace used tick={startup_tick}, expected global SimTick=0"
         )
     behavior_traces = EARLY_TRACE_PATTERN.findall(output)
     if len(behavior_traces) != 1:
@@ -93,7 +93,7 @@ def validate_startup_trace(output: str, label: str) -> None:
     first_behavior_tick = scenario_trace_tick(behavior_traces[0])
     if first_behavior_tick != "1":
         raise RuntimeError(
-            f"{label}: first on_tick ran at relative tick={first_behavior_tick}, expected 1"
+            f"{label}: first on_tick ran at global SimTick={first_behavior_tick}, expected 1"
         )
     final_stages = FINAL_STAGE_PATTERN.findall(output)
     if len(final_stages) != 1:
@@ -1685,7 +1685,7 @@ def main() -> int:
         scenario_trace_tick(traces[0]) != early_tick for traces in early_traces
     ):
         raise RuntimeError(
-            "the first behavior snapshot was not captured at scenario-relative tick 1"
+            "the first behavior snapshot was not captured at global SimTick 1"
         )
     tick_traces = [
         TRACE_PATTERN.findall(output)

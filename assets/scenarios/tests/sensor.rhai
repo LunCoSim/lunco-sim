@@ -436,7 +436,7 @@ fn simulation_dependencies(me, ctx) {
     this.dependency_mutation_rejected = mutation_rejected;
     #{ modelica_entities: [imu, altimeter],
        entity_reads: [box, marker_entity],
-       entity_writes: [],
+       entity_writes: [box],
        query_reads: ["EntitiesInRadius", "CosimStatus", "ScriptStatus",
            "ListTelemetryChannels", "QueryTelemetryHistory", "SimulationTimingProfile",
            "GetReadiness", "BindingStatus", "RuntimeDiagnostics"],
@@ -464,6 +464,8 @@ fn on_start(me, ctx) {
         enabled: true,
     });
     this.telemetry_probe_setup_ok = scenario_command_succeeded(telemetry_probe);
+    this.telemetry_probe_setup_error = "";
+    try { this.telemetry_probe_setup_error = telemetry_probe.error; } catch (error) { }
     this.telemetry_probe_count = 0;
     this.spatial_query_order_checked = false;
     this.spatial_query_ids_ordered = false;
@@ -702,6 +704,8 @@ fn on_tick(me, ctx) {
             undeclared_query_entity_rejected: this.undeclared_query_entity_rejected,
             undeclared_entity_write_rejected: this.undeclared_entity_write_rejected,
             telemetry_probe_setup_ok: this.telemetry_probe_setup_ok,
+            telemetry_probe_setup_error: this.telemetry_probe_setup_error,
+            telemetry_probe_name: this.telemetry_probe_name,
             telemetry_probe_count: this.telemetry_probe_count,
             spatial_query_ids_ordered: this.spatial_query_ids_ordered,
             modelica_step_diagnostics: step_diagnostics,
@@ -738,8 +742,8 @@ fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first
         "generic readiness/binding diagnostics report an unresolved runtime fault"));
     f.push(t_true(s.scene_generation != () && s.start_count == 1,
         "scenario on_start ran once after a committed scene generation was available"));
-    f.push(t_true(s.start_tick != () && s.start_tick >= 0,
-        "scenario on_start captured its admitted global SimTick baseline"));
+    f.push(t_true(s.start_tick == 0,
+        "scenario on_start ran at the shared SimTick zero baseline"));
     f.push(t_true(s.generation_stable == true,
         "the active scenario retained the same committed scene generation through its run"));
     f.push(t_true(s.spatial_query_ids_ordered == true,
@@ -788,7 +792,9 @@ fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first
     f.push(t_true(s.undeclared_entity_write_rejected == true,
         "a simulation scenario wrote a reflected entity field without declaring it"));
     f.push(t_true(s.telemetry_probe_setup_ok == true && s.telemetry_probe_count.to_float() >= 2.0,
-        "the production telemetry query did not observe fixed-clock samples from the authored channel"));
+        "the production telemetry query did not observe fixed-clock samples from the authored channel (setup error: "
+            + s.telemetry_probe_setup_error + ", sample count: "
+            + s.telemetry_probe_count.to_string() + ")"));
     f.push(t_present(modelica_step_diagnostics, "Modelica worker step diagnostics"));
     f.push(t_true(s.cosim_status_values_omitted == true,
         "compact CosimStatus did not omit full Modelica input/output maps"));
@@ -856,10 +862,11 @@ fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first
     }
     f.push(t_present(first_tick, "first authoritative behavior tick snapshot"));
     if first_tick != () {
-        f.push(t_true(first_tick.tick == s.start_tick + 1 && first_tick.cycle == "simulation"
+        f.push(t_true(first_tick.tick == 1 && s.start_tick == 0
+            && first_tick.cycle == "simulation"
             && first_tick.phase == "behavior" && first_tick.clock == "simulation"
             && first_tick.generation == s.scene_generation,
-            "first dependency reads ran one admitted tick after on_start in its captured scene generation"));
+            "first dependency reads ran at shared SimTick one after on_start at zero in its scene generation"));
         f.push(t_true(first_tick.physics_compute_threads >= 1,
             "first dependency reads observed the admitted physics compute profile"));
         f.push(t_true(first_tick.actor_identity == s.actor_identity,

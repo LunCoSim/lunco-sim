@@ -254,15 +254,18 @@ cross-cycle behavior requires isolated instances and typed messages.
 Connected co-simulation events are edge-detected on admitted simulation ticks,
 after `SimTickSet` and the full scripting pass. Scene, solver, terrain, and
 physics admission hold the shared fixed clock. Rhai compilation and dependency
-planning complete before scenario startup. Hosts that need no fixed-step
-priming call `on_start` at global tick 0; the production scene-test runner keeps
-the scenario gate closed while it admits physics and completes each Modelica
-participant's first exchange, so its global tick may already be greater than
-zero. Capture `sim_tick()` in `on_start` when a scenario needs a relative
-timeline; the first `on_tick` then observes that baseline plus one. Events
-queued before startup remain available to existing scenarios but are not
-replayed to a newly started one; events emitted by `on_start` retain their
-producer stamp for the next eligible scenario pass.
+planning complete before scenario startup. The production scene-test runner
+keeps the shared clock at zero during materialization, compilation, and
+admission, then requires `on_start` at global `SimTick=0` and the first
+`on_tick` at `SimTick=1`. It does not advance Modelica or physics separately to
+prime an exchange. A long-running interactive Twin can activate after the
+process-wide clock has advanced; if authored behavior intentionally measures
+time from activation, it may record `sim_tick()` in `on_start` for that
+mission-local timeline. Tests of startup ordering must inspect global ticks
+directly and must not normalize away an admission advance. Events queued before
+startup remain available to existing scenarios but are not replayed to a newly
+started one; events emitted by `on_start` retain their producer stamp for the
+next eligible scenario pass.
 
 ## 2. Your first script
 

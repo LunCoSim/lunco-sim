@@ -1089,21 +1089,17 @@ The whole-simulation guarantee remains open because:
    admission publishes a scene-scoped progress key while body and joint state is
    pending; and scenario startup waits for scene time, readiness, and external
    progress holds. The USD bridge seeds authored body poses in `PreUpdate`.
-   Scene tests first pump wall-time materialization at zero fixed duration, then
-   hold scenarios closed while fixed ticks admit Avian body/joint state and
-   exchange each Modelica participant's first initialized outputs. This priming
-   advances monotonic process-wide `SimTick`; the runner snapshots its value
-   immediately before opening the scenario lifecycle gate and measures
-   `max_ticks` from that baseline. Rhai `on_start` therefore records the global
-   startup tick, and the first `on_tick` runs at baseline plus one. Sensor and
-   multi-rover acceptance traces use scenario-relative ticks for repeatable
-   comparisons while retaining global tick evidence in scenario state or the
-   startup-baseline diagnostic. The updated production scenarios have not yet
-   been rerun on a binary built from this tree.
-   The updated production scenarios have not yet been rerun on a binary built
-   from this tree. The sensor actor-order check, first-sample validity contract,
-   and initial altimeter miss remain covered by its authored scenario. The first
-   normal co-simulation step uses the per-step barrier after activation.
+   Scene tests pump materialization, participant compilation, and physical
+   admission with a zero-duration manual clock. Compilation publishes each
+   Modelica solver's initialized time-zero state; preparation does not run a
+   Modelica exchange or advance any shared simulation clock. The runner checks
+   `SimTick=0`, zero fixed elapsed time, and zero fixed overstep before opening
+   the scenario lifecycle gate. Rhai `on_start` therefore runs at global
+   `SimTick=0`; the first live Modelica exchange, physics integration, and
+   behavior sample enter through the shared fixed tick at `SimTick=1`. The
+   normal simulation barrier holds later clock progress until worker results
+   arrive. The production `sensor` gate checks this zero/one boundary, actor
+   ordering, first-sample validity, and the initial altimeter miss.
 2. Dynamic references on the mounted primary scene hold admission through
    closure preparation and live projection; preview and additive mounts remain
    independent. Initial USD composition dependencies are fetched and composed
@@ -1342,13 +1338,15 @@ These findings and their owner-specific file evidence are maintained in
    required by the active scene and scenario. Keep simulation-required async
    work on exact `SimulationProgress` keys, including physical body/joint
    admission, and keep presentation readiness on its own status path. Seed
-   authored poses before solver admission and complete the first Modelica
-   exchange while the scenario gate is closed. Scene-test `on_start` records
-   the process-wide `SimTick` baseline after this priming; its first `on_tick`
-   must observe baseline plus one, while comparison traces use scenario-relative
-   ticks. Hosts without fixed-step priming may start at global tick zero. Measure
-   the serial and any deterministic parallel solver profile before selecting
-   the production default.
+   authored poses and install each compiled Modelica solver at its initialized
+   time-zero state before opening the scenario gate. Keep every shared
+   simulation clock at zero throughout preparation; do not prime Modelica while
+   holding only Avian physics or reset any clock afterward. The first live
+   Modelica exchange, physics integration, and behavior sample share `SimTick=1`
+   under the normal fixed-step barrier. Production scene tests assert
+   `on_start` at `SimTick=0` and the first `on_tick` at `SimTick=1`. Measure the
+   serial and any deterministic parallel solver profile before selecting the
+   production default.
 8. **Real-time owner isolation.** Route main-world command reads/writes through
    typed tick-stamped requests and immutable snapshots, then move the whole
    authoritative tick to one paced simulation owner. Keep fixed `dt`, report

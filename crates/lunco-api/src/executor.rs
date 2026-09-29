@@ -664,6 +664,13 @@ fn collect_authz_target_values(
             {
                 return Ok(());
             }
+            // The command-value adapter represents `Some(entity)` as the raw
+            // entity id and `None` as Unit. Accept that wire shape here as well
+            // as the explicit enum-map form used by generic reflected values.
+            if let Some(target) = api_value_u64(value) {
+                targets.push(target);
+                return Ok(());
+            }
             let nested = match value {
                 ApiValue::Map(entries) => entries
                     .iter()
@@ -1727,6 +1734,7 @@ mod id_codec_tests {
     #[derive(Reflect)]
     struct TColl {
         many: Vec<Entity>,
+        #[reflect(@lunco_core::AuthzTarget)]
         maybe: Option<Entity>,
         inner: TInner,
     }
@@ -1807,6 +1815,27 @@ mod id_codec_tests {
         );
         assert_eq!(
             authz_target_gids_value(&params, TypeId::of::<TDrive>(), &reg),
+            Ok(Vec::new())
+        );
+
+        let optional = ApiValue::map([("maybe", api_value_from_u64(gid.get()))]);
+        assert_eq!(
+            authz_target_gids_value(&optional, TypeId::of::<TColl>(), &reg),
+            Ok(vec![gid.get()])
+        );
+
+        let explicit_some = ApiValue::map([(
+            "maybe",
+            ApiValue::map([("Some", api_value_from_u64(gid.get()))]),
+        )]);
+        assert_eq!(
+            authz_target_gids_value(&explicit_some, TypeId::of::<TColl>(), &reg),
+            Ok(vec![gid.get()])
+        );
+
+        let none = ApiValue::map([("maybe", ApiValue::Unit)]);
+        assert_eq!(
+            authz_target_gids_value(&none, TypeId::of::<TColl>(), &reg),
             Ok(Vec::new())
         );
     }
