@@ -1398,11 +1398,9 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
             shader_picker_for_part(ui, ctx, part);
             shader_tools_ui(ui, ctx, part);
 
-            // One subtree pass yields both the shader holder and the
-            // distinct PBR material handles (CQ-204: was two independent
-            // `subtree` walks of the same part — `first_shader_holder` +
-            // `collect_std_handles`).
-            let (pbr_parts, shader_holder) = part_materials(ctx, part);
+            // Reuse the selected root's material-bearing entities to find the
+            // chosen part's surfaces without another child-tree traversal.
+            let (pbr_parts, shader_holder) = part_materials(ctx, part, &parts);
             if let Some(holder) = shader_holder {
                 egui::CollapsingHeader::new("Shader Parameters")
                     .default_open(true)
@@ -2820,20 +2818,25 @@ fn joint_control_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, j: JointReadout)
     }
 }
 
-/// Walk `root`'s subtree once, returning its PBR-surface **entities** and the
-/// first [`ShaderLook`]-bearing entity. Replaces the former
-/// `collect_std_handles` + `first_shader_holder`, which each ran an
-/// independent `subtree` walk of the same root (CQ-204).
+/// Select the PBR surfaces and first [`ShaderLook`]-bearing entity below
+/// `root` from the selected scene root's material-bearing entities.
 ///
 /// Surfaces are addressed by ENTITY and classified by their appearance **intent**
 /// ([`PbrLook`] / [`ShaderLook`]), never by a bound material: the material is
 /// derived from the intent (`lunco-render-bevy` re-binds on `Changed<…Look>`), it is
 /// *shared* across every entity with the same look — so an in-place asset write would
 /// bleed onto all of them — and naming it would drag `bevy_pbr` into this crate.
-fn part_materials(ctx: &PanelCtx, root: Entity) -> (Vec<Entity>, Option<Entity>) {
+fn part_materials(
+    ctx: &PanelCtx,
+    root: Entity,
+    scene_parts: &[Entity],
+) -> (Vec<Entity>, Option<Entity>) {
     let mut parts: Vec<Entity> = Vec::new();
     let mut shader_holder: Option<Entity> = None;
-    for e in subtree(ctx, root) {
+    for &e in scene_parts {
+        if !is_same_or_descendant(ctx, root, e) {
+            continue;
+        }
         if ctx.get::<PbrLook>(e).is_some() {
             parts.push(e);
         }
@@ -2842,6 +2845,19 @@ fn part_materials(ctx: &PanelCtx, root: Entity) -> (Vec<Entity>, Option<Entity>)
         }
     }
     (parts, shader_holder)
+}
+
+/// Whether `entity` is `root` or has `root` in its parent chain.
+fn is_same_or_descendant(ctx: &PanelCtx, root: Entity, mut entity: Entity) -> bool {
+    loop {
+        if entity == root {
+            return true;
+        }
+        let Some(parent) = ctx.get::<ChildOf>(entity).map(ChildOf::parent) else {
+            return false;
+        };
+        entity = parent;
+    }
 }
 
 /// Material-bearing entities in `root`'s subtree.

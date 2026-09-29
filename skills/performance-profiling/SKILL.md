@@ -58,6 +58,9 @@ which categories have a reader.
 In the Inspector's material part selector, keep the entity index separate from
 its display text. Format the active label only for the selected part and format
 the other labels only while the dropdown is open.
+When deriving a chosen part's material controls, filter the selected root's
+existing material-bearing entity list instead of walking that part's child tree
+again.
 For live line plots, do not copy and decimate a full history in every UI frame.
 Keep one bounded build per binding, snapshot changed histories at a limited
 presentation cadence, transform immutable sample snapshots on the async-compute
