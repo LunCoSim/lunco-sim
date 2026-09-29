@@ -47,6 +47,10 @@ tree and current expansion state, then use `ScrollArea::show_rows` to create
 widgets only for rows in the viewport. Keep foldout state keyed by stable
 entity/group identity and preserve selection, drag, and tooltip behavior on
 painted rows.
+Gate panel-owned view models with `WorkbenchSnapshot::is_panel_visible`, and
+order their systems after `WorkbenchSnapshotPublishSet`. Hidden dock tabs have
+no reader and should not rebuild view data each frame; keep separate cleanup
+work transition-driven when a panel closes.
 For live line plots, do not copy and decimate a full history in every UI frame.
 Keep one bounded build per binding, snapshot changed histories at a limited
 presentation cadence, transform immutable sample snapshots on the async-compute

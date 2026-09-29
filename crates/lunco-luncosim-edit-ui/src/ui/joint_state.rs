@@ -6,8 +6,8 @@
 //! wheel state into [`JointStateView`]; the panel ([`JointStatePanel`]) is a
 //! pure reader via [`PanelCtx::resource`]. The producer returns before any
 //! joint or wheel scan while nothing is selected — while a vessel *is*
-//! selected the values are live physics and change every tick, so it
-//! intentionally runs each frame (same bounded-by-vessel scale as the
+//! selected the values are live physics and change every tick, so it updates
+//! each frame while its panel is visible (same bounded-by-vessel scale as the
 //! `joint_viz` gizmo pass).
 //!
 //! Row sources, per joint kind:
@@ -31,9 +31,11 @@ use bevy_egui::egui;
 use lunco_mobility::WheelRaycast;
 use lunco_physics::joint::JointTorqueActuator;
 use lunco_port_core::Port;
-use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchSnapshot};
 
 use lunco_scene_selection::SelectedEntities;
+
+const JOINT_STATE_PANEL_ID: PanelId = PanelId("sandbox_joint_state");
 
 // ─────────────────────────────────────────────────────────────────────
 // View-model
@@ -89,6 +91,10 @@ pub struct JointStateView {
     pub vessel_name: String,
     /// One row per joint / wheel, revolute joints first, then raycast wheels.
     pub rows: Vec<JointStateRow>,
+}
+
+pub(super) fn joint_state_visible(workbench: Option<Res<WorkbenchSnapshot>>) -> bool {
+    workbench.is_some_and(|snapshot| snapshot.is_panel_visible(JOINT_STATE_PANEL_ID))
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -166,10 +172,9 @@ fn row_name(
     "Unnamed joint".to_string()
 }
 
-/// Producer for [`JointStateView`]: fills the view for the SELECTED vessel
-/// only. Registered via `add_view_model_every_frame`: live joint values change
-/// every physics tick, while the selection guard below keeps the no-selection
-/// path O(1) before any joint or wheel query is iterated.
+/// Producer for [`JointStateView`]: fills the view for the selected vessel only
+/// while the Joint State panel is visible. Live joint values change every
+/// physics tick, while a hidden panel has no consumer and does no scene scan.
 #[allow(clippy::too_many_arguments)]
 pub fn populate_joint_state_view(
     mut view: ResMut<JointStateView>,
@@ -282,7 +287,7 @@ pub struct JointStatePanel;
 
 impl Panel for JointStatePanel {
     fn id(&self) -> PanelId {
-        PanelId("sandbox_joint_state")
+        JOINT_STATE_PANEL_ID
     }
     fn title(&self) -> String {
         "Joint State".into()

@@ -10,13 +10,19 @@ use lunco_control_core::ControlLink;
 use lunco_core::GlobalEntityId;
 use lunco_embodiment_core::roles::TheLocalEmbodiment;
 use lunco_scene_selection::SelectedEntities;
-use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchSnapshot};
+
+const COMMAND_DECK_PANEL_ID: PanelId = PanelId("command_deck");
 
 #[derive(Resource, Default, Clone)]
 pub struct CommandDeckView {
     pub selected: Option<Entity>,
     pub selected_label: String,
     pub driving: bool,
+}
+
+pub(super) fn command_deck_visible(workbench: Option<Res<WorkbenchSnapshot>>) -> bool {
+    workbench.is_some_and(|snapshot| snapshot.is_panel_visible(COMMAND_DECK_PANEL_ID))
 }
 
 pub fn populate_command_deck_view(
@@ -56,7 +62,7 @@ pub struct CommandDeck;
 
 impl Panel for CommandDeck {
     fn id(&self) -> PanelId {
-        PanelId("command_deck")
+        COMMAND_DECK_PANEL_ID
     }
 
     fn title(&self) -> String {

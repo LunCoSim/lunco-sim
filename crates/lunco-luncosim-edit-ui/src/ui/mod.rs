@@ -718,12 +718,17 @@ impl Plugin for SceneEditUiPlugin {
             connection_canvas::editor_canvas_changed,
         );
 
-        // Command Deck view-model: selection + possession + behaviour-spec
-        // readout for the currently-selected vessel. Cheap O(1) single-entity
-        // lookups each `Update` (the sanctioned live-readout exception to §7),
-        // so no change-gate — same shape as the avatar status producer.
+        // Command Deck view-model: selection + possession for its visible
+        // panel. A hidden panel has no reader, so do not allocate its label or
+        // query control state in the frame loop.
         app.init_resource::<command_deck::CommandDeckView>();
-        app.add_view_model_every_frame(command_deck::populate_command_deck_view);
+        app.add_systems(
+            Update,
+            command_deck::populate_command_deck_view
+                .in_set(ViewModelSet)
+                .after(lunco_workbench_core::WorkbenchSnapshotPublishSet)
+                .run_if(command_deck::command_deck_visible),
+        );
 
         // One generic human-facing evidence surface. It reads the existing
         // selection, possession, camera, runtime-diagnostic, and diagnostic
@@ -736,13 +741,17 @@ impl Plugin for SceneEditUiPlugin {
             authoring_review::authoring_review_view_due,
         );
 
-        // Joint State view-model: the selected vessel's joints and wheels are
-        // live physics (θ / ω / τ change every tick), so this is an explicit
-        // every-frame producer — bounded by the vessel's joint count, the same
-        // scale as the joint_viz gizmo pass. Its first branch returns before
-        // iterating any joint or wheel query when nothing is selected.
+        // Joint State view-model: live physics readouts are rebuilt only while
+        // their panel is visible. Hidden dock tabs have no consumer and must
+        // not scan the scene's joints and wheels every app frame.
         app.init_resource::<joint_state::JointStateView>();
-        app.add_view_model_every_frame(joint_state::populate_joint_state_view);
+        app.add_systems(
+            Update,
+            joint_state::populate_joint_state_view
+                .in_set(ViewModelSet)
+                .after(lunco_workbench_core::WorkbenchSnapshotPublishSet)
+                .run_if(joint_state::joint_state_visible),
+        );
 
         // Debug-viz settings menu rows (joint + wheel-force gizmos).
         app.add_systems(Startup, register_debug_viz_settings);
