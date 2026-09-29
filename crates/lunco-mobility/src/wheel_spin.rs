@@ -50,7 +50,6 @@ pub(crate) fn update_wheel_spin(
     mut q_wheels: Query<(
         Entity,
         &mut WheelRaycast,
-        &Transform,
         &RayHits,
         &Suspension,
         &WheelBodyMount,
@@ -96,7 +95,7 @@ pub(crate) fn update_wheel_spin(
     if dt <= 0.0 {
         return;
     }
-    for (entity, mut wheel, local_tf, hits, suspension, mount) in q_wheels.iter_mut() {
+    for (entity, mut wheel, hits, suspension, mount) in q_wheels.iter_mut() {
         // A ray can report a zero-normal hit when its origin is inside a
         // collider. Suspension rejects that as non-contact; the spin solver
         // must use the same contact selection or it will solve grip against a
@@ -163,8 +162,7 @@ pub(crate) fn update_wheel_spin(
             // resolved body pose and authored body-local mount —
             // never from `global_tf.translation()`, whose render frame drifted
             // the slip lever once the rover drove off origin (CQ-201).
-            let wheel_local_rotation =
-                mount.local.rotation.as_dquat() * local_tf.rotation.as_dquat();
+            let wheel_local_rotation = mount.local.rotation.as_dquat() * wheel.heading_rotation;
             let (hub_pos, hub_rot) = wheel_hub_pose(
                 GridPos(pos.0),
                 GridRot(rot.0),
@@ -321,14 +319,14 @@ pub(crate) fn update_wheel_spin(
             (0.0, 0.0)
         };
         wheel.tire_force = basis.0 * f_long + basis.1 * f_lat;
-        // Compose the visual mesh rotation from the canonical spin state: steer
-        // yaw (from the wheel entity's local transform) · roll about the axle ·
-        // cylinder-on-its-side base. Rebuilding from the wrapped absolute angle
+        // Compose the visual mesh rotation from the fixed-step wheel state:
+        // steering rotation · roll about the axle · cylinder-on-its-side base.
+        // Rebuilding from the wrapped absolute angle
         // every tick means no incremental quaternion drift and no jitter at the
         // 2π wrap — the same `spin_quat()` any other system would read.
         if let Some(visual_entity) = wheel.visual_entity {
             if let Ok(mut visual_tf) = q_visual.get_mut(visual_entity) {
-                let steer = local_tf.rotation;
+                let steer = wheel.heading_rotation.as_quat();
                 let base = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
                 let rotation = (steer * wheel.spin_quat() * base).normalize();
                 if visual_tf.rotation != rotation {
@@ -431,6 +429,7 @@ mod tests {
                 speed_port: port,
                 heading_port: port,
                 heading_axis: DVec3::Y,
+                heading_rotation: bevy::math::DQuat::IDENTITY,
                 wheel_radius: 0.5,
                 wheel_width: 0.28,
                 visual_entity: Some(visual),
@@ -535,6 +534,7 @@ mod tests {
                     speed_port,
                     heading_port: port,
                     heading_axis: DVec3::Y,
+                    heading_rotation: bevy::math::DQuat::IDENTITY,
                     wheel_radius: 0.4,
                     wheel_width: 0.28,
                     visual_entity: Some(visual),

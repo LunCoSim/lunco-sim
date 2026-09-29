@@ -87,10 +87,17 @@ from the stable logical stage source, instance root, and authored prim path.
 Joint solving, motor warm-start, custom prismatic correction, raycast and jointed tire forces,
 and raycast mass-property folds consume stable key order. The production
 `multi_rover_stress_20` Rhai gate compares physics and Modelica state across
-repeated single-thread and default-pool runs; two four-run matrices matched all
-recorded snapshots on the same build. This is fixture-specific evidence. Do not
-claim whole-simulation replay determinism while the remaining reviewed gaps
-are open.
+repeated single-thread and default-pool runs. It records six full
+lifecycle/checkpoint states, the first behavior state at tick 1, an explicit
+final-stage state, and articulated-body samples at ticks 1, 11, 80, and final;
+it does not emit per-tick traces. The comparator requires exact final physics,
+Modelica, and articulated equality before checking earlier selected states.
+Use `--record-reference PATH` to save the selected states for the 4/8/20-rover,
+Compute, jitter/seed, and 30 Hz profiles, then
+`--compare-reference PATH` on another machine. The reference records source,
+input, binary, and machine metadata and requires exact equality
+(`numeric_tolerance=0`). This remains fixture-specific evidence. Do not claim
+whole-simulation replay determinism while the remaining reviewed gaps are open.
 
 Reflected commands sent through `ApiCommandEvent` retain whether they came from
 an API transport or a Rhai evaluation; generated `CommandOccurred` facts carry
