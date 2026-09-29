@@ -1075,8 +1075,10 @@ The whole-simulation guarantee remains open because:
 
 1. Scene start composes owner-specific deterministic boundaries rather than one
    global readiness bit. The root USD loader fetches and composes its available
-   dependency closure before publishing the stage asset; the lifecycle progress
-   key holds through structural projection; active primary references and
+   dependency closure before publishing the stage asset; incomplete closures
+   are admitted through the required deterministic `usd.scene_composition`
+   Rhai policy after structural projection and before the lifecycle progress
+   key releases its hold; active primary references and
    causal Modelica compilation hold exact `SimulationProgress` keys; the USD
    terrain bridge and progress scan run in `PreUpdate` before `SimulationAdmissionSet`,
    including a pending Twin manifest scan, so authored terrain data and

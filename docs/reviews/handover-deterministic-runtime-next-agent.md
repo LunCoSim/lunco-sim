@@ -865,3 +865,40 @@ enough to promise same-state continuation from an arbitrary capture tick.
   binary before another runtime check. The next broad replay gap remains a
   truthful genesis-only capture boundary or owner-supported solver snapshots;
   the current Modelica worker does not expose portable solver checkpoints.
+
+## Incomplete USD composition policy and async ordering (2026-09-29)
+
+- `codex/lunar-soil` was fast-forwarded from `2540d231b` to local `main` at
+  `c7d991eac` (three commits); no push was made. Changes in those commits did
+  not overlap the USD policy or composition-order work. Preserve the separate
+  untracked `scripts/perf/` directory.
+- The scene lifecycle now owns required deterministic
+  `usd.scene_composition(facts: Map) -> Map`. It runs only for unresolved
+  fetched arcs after structural projection and before releasing the scene
+  simulation hold. The shipped application Rhai policy returns
+  `allow_partial`, matching the existing warning plus partial-stage default;
+  a Twin policy may return `reject_scene`. Rejection, missing policy, policy
+  fault, or malformed result tears down the partial primary stage and fails the
+  scene transition. Architecture and `author-hook-policy` guidance describe
+  the contract.
+- `cargo test -j 4 -p lunco-usd-bevy-stage
+  reverse_async_completion_keeps_authored_recipe_order_and_identity` passed.
+  It forced closure reads to finish in reverse order, verified authored-order
+  application, and compared equal `StageContentClosure` identities.
+  `cargo check -j 4 -p lunco-usd-bevy-runtime-core --lib` and
+  `cargo check -j 4 -p lunco-usd-bevy-runtime-core --tests` passed; the latter
+  reported the existing unused `mut` in `twin_projection.rs:4277`.
+- `python3 scripts/validate_skills.py`, the application policy TOML/wiring
+  check, and `git diff --check` passed. No `LUNCOSIM_BIN` or checkout
+  production binary was available. A runtime-core test build was stopped as
+  this checkout's new `target/` reached 1.8 GiB with only 2.9 GiB remaining;
+  `cargo clean` restored disk space before the successful focused checks. The
+  authored Rhai hook-policy test was not run through the production test
+  binary. A final `cargo clean` after the checks removed another 1.9 GiB and
+  left 4.0 GiB free.
+- Still open: production `LoadScene` tests exercising both Rhai allow and Twin
+  reject policies against a missing USD arc, and full AssetServer composition
+  closure acceptance. The async test covers the production ordered join helper
+  and recipe identity, not a live AssetServer source transaction. The broader
+  replay, cross-machine numeric, browser-worker, and performance gaps remain
+  open as recorded above.

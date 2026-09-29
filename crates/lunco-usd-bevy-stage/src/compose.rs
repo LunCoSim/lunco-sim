@@ -327,6 +327,54 @@ pub fn build_stage_with_resolver(recipe: &StageRecipe) -> Result<(Stage, SharedL
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{cell::RefCell, rc::Rc, task::Poll};
+
+    fn controlled_read(
+        request_order: usize,
+        pending_polls: usize,
+        completion_order: Rc<RefCell<Vec<usize>>>,
+    ) -> impl Future<Output = (usize, String, Vec<u8>)> {
+        let mut pending_polls = pending_polls;
+        let layer_id = format!("root/branch-{request_order}.usda");
+        let bytes = vec![request_order as u8, 0x5a];
+        std::future::poll_fn(move |context| {
+            if pending_polls == 0 {
+                completion_order.borrow_mut().push(request_order);
+                Poll::Ready((request_order, layer_id.clone(), bytes.clone()))
+            } else {
+                pending_polls -= 1;
+                context.waker().wake_by_ref();
+                Poll::Pending
+            }
+        })
+    }
+
+    fn closure_after_controlled_reads(
+        delays: [usize; 4],
+    ) -> (
+        Vec<usize>,
+        Vec<usize>,
+        lunco_usd_compose::recipe::StageContentClosure,
+    ) {
+        let completion_order = Rc::new(RefCell::new(Vec::new()));
+        let reads = delays
+            .into_iter()
+            .enumerate()
+            .map(|(order, delay)| controlled_read(order, delay, completion_order.clone()));
+        let ordered_reads = bevy::tasks::futures_lite::future::block_on(join_all_ordered(reads));
+        let applied_order = ordered_reads
+            .iter()
+            .map(|(request_order, _, _)| *request_order)
+            .collect();
+        let mut bytes = HashMap::from([("root.usda".to_owned(), b"root".to_vec())]);
+        for (_, layer_id, layer_bytes) in ordered_reads {
+            bytes.insert(layer_id, layer_bytes);
+        }
+        let closure = StageRecipe::new("root.usda", bytes)
+            .content_closure()
+            .expect("the controlled reads contain the complete layer closure");
+        (completion_order.borrow().clone(), applied_order, closure)
+    }
 
     #[test]
     fn only_not_found_reads_are_recoverable() {
@@ -341,6 +389,20 @@ mod tests {
 
         assert!(is_missing_asset_read(&not_found));
         assert!(!is_missing_asset_read(&denied));
+    }
+
+    #[test]
+    fn reverse_async_completion_keeps_authored_recipe_order_and_identity() {
+        let (reverse_completion, reverse_application, reverse_closure) =
+            closure_after_controlled_reads([3, 2, 1, 0]);
+        let (authored_completion, authored_application, authored_closure) =
+            closure_after_controlled_reads([0, 1, 2, 3]);
+
+        assert_eq!(reverse_completion, [3, 2, 1, 0]);
+        assert_eq!(authored_completion, [0, 1, 2, 3]);
+        assert_eq!(reverse_application, [0, 1, 2, 3]);
+        assert_eq!(authored_application, [0, 1, 2, 3]);
+        assert_eq!(reverse_closure, authored_closure);
     }
 }
 
