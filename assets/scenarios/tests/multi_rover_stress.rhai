@@ -342,6 +342,31 @@ fn trace_articulated_body_state(tick, rover_path, rover) {
     }
 }
 
+fn state_row_difference(expected_row, actual_row) {
+    let expected_fields = expected_row.split("|");
+    let actual_fields = actual_row.split("|");
+    let common_fields = if expected_fields.len() < actual_fields.len() {
+        expected_fields.len()
+    } else {
+        actual_fields.len()
+    };
+    for i in 0..common_fields {
+        if expected_fields[i] != actual_fields[i] {
+            return "field expected [" + expected_fields[i]
+                + "] actual [" + actual_fields[i] + "]";
+        }
+    }
+    if expected_fields.len() > actual_fields.len() {
+        return "field expected [" + expected_fields[common_fields]
+            + "] actual [<missing>]";
+    }
+    if actual_fields.len() > expected_fields.len() {
+        return "field expected [<missing>] actual ["
+            + actual_fields[common_fields] + "]";
+    }
+    "rows differ without a differing field"
+}
+
 fn reference_value_failure(profile, kind, tick, identity, actual) {
     let expected = query("ReadDeterminismReference", #{
         profile: profile,
@@ -364,7 +389,8 @@ fn reference_value_failure(profile, kind, tick, identity, actual) {
     if actual != expected.value {
         return "exact state differs for " + kind
             + " tick " + tick.to_string() + " identity " + identity
-            + " (numeric_tolerance=0)";
+            + " (numeric_tolerance=0); "
+            + state_row_difference(expected.value, actual);
     }
     ""
 }
@@ -393,7 +419,9 @@ fn modelica_reference_failure(profile, kind, tick, identity, variables) {
     let expected_fields = expected.value.split(";");
     if fields.len() != expected_fields.len() {
         return "Modelica variable count differs for tick " + tick.to_string()
-            + " identity " + identity;
+            + " identity " + identity + ": expected "
+            + expected_fields.len().to_string() + " actual "
+            + fields.len().to_string();
     }
     for i in 0..fields.len() {
         let field = fields[i];
@@ -401,7 +429,8 @@ fn modelica_reference_failure(profile, kind, tick, identity, variables) {
         if actual != expected_fields[i] {
             return "Modelica state differs at tick " + tick.to_string()
                 + " identity " + identity + " variable " + field
-                + " (numeric_tolerance=0)";
+                + " (numeric_tolerance=0); expected [" + expected_fields[i]
+                + "] actual [" + actual + "]";
         }
     }
     ""
@@ -670,12 +699,24 @@ fn on_start(me, ctx) {
         }
         if initial.physics_records.len() > 0 {
             let record = initial.physics_records[0];
+            let reference_row = query("ReadDeterminismReference", #{
+                profile: this.determinism_profile,
+                kind: "physics",
+                tick: sim_tick().to_string(),
+                identity: record.identity,
+            });
             let mismatch = reference_value_failure(this.determinism_profile,
                 "physics", sim_tick(), record.identity,
-                record.row + "|deliberate-mismatch");
+                if reference_row != () && reference_row.ok != false
+                    && reference_row.found == true {
+                    reference_row.value + "|deliberate-mismatch"
+                } else {
+                    "unavailable"
+                });
             let expected_mismatch = "exact state differs for physics tick "
                 + sim_tick().to_string() + " identity " + record.identity
-                + " (numeric_tolerance=0)";
+                + " (numeric_tolerance=0); field expected [<missing>] "
+                + "actual [deliberate-mismatch]";
             this.determinism_mismatch_rejected = mismatch == expected_mismatch;
         }
     }

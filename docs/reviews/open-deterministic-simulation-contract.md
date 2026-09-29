@@ -65,6 +65,16 @@ whole-session replay, controlled asynchronous completion-order coverage outside
 the production join helper, broader scene types, and physics throughput remain
 open.
 
+Reference mismatches now report the first differing labeled state field with
+its expected and actual values; Modelica mismatches report the variable and
+both serialized values. The production negative control alters a known-good
+reference row and checks that diagnostic. On 2026-09-29, the default-feature
+production build at `abc365ea6` passed `scene-4-serial` with 24 Rhai assertions
+in 780 ticks. A run on another machine returned a terminal scene-test failure
+after 780 ticks, but its log did not include the Rhai INFO assertion. The
+profile launchers now enable scoped Rhai INFO output. Cross-machine state
+comparison remains open until the failed field is known and reproduced.
+
 ## Findings
 
 | ID | Severity | Finding and evidence | Status |
