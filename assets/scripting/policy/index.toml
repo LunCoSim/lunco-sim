@@ -33,6 +33,13 @@ deterministic = true
 required = true
 
 [[policies]]
+hook = "usd.scene_composition"
+source = "usd_scene_composition.rhai"
+entry = "scene_composition_admission"
+deterministic = true
+required = true
+
+[[policies]]
 hook = "physics.body_escape"
 source = "physics_escape.rhai"
 entry = "escaped_body_policy"

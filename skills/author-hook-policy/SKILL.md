@@ -170,6 +170,17 @@ missing-policy status, rejected deterministic inline binding, and exact
 unbinding. Keep Rust coverage to the low-level `HookValue` conversion and
 registry mechanics; do not embed long USD or load Twin assets in Rust tests.
 
+The primary USD scene lifecycle also owns required deterministic
+`usd.scene_composition(facts: Map) -> Map` for incomplete composition closures.
+Its facts contain the scene address and ordered unresolved arcs. The shipped
+application policy returns `#{action: "allow_partial"}` to preserve the
+existing partial-load behavior; a Twin may replace it with `reject_scene`.
+The owner invokes it after structural projection but before releasing the
+simulation hold. Rejection tears down the partial primary scene, and missing,
+faulting, or malformed policy results fail admission visibly. Keep the loader's
+missing-arc warning and the policy's admission decision as separate owner
+responsibilities.
+
 ## Handoff
 
 Report the owner-side declaration, manifest/source files, reflected signature,

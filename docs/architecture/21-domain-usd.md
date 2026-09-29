@@ -537,6 +537,17 @@ transport is available. A missing sublayer, reference, or payload does not
 discard already available siblings. The loader publishes the available stage, leaves
 the missing authored arc unresolved as required by OpenUSD, and records a
 scene-scoped `RuntimeDiagnostics` warning with both logical layer identifiers.
+After structural projection settles and before the scene transition releases its
+simulation hold, `usd.scene_composition` receives the root address and the
+ordered list of missing `{referring_layer, dependency}` pairs. The shipped
+required Rhai policy chooses `allow_partial`, preserving this behavior by
+default. An active Twin policy may replace that decision with `reject_scene`;
+the runtime then tears down the partial primary stage and fails the transition
+before an authoritative physics cycle can consume it. A missing, faulting, or
+malformed policy result fails admission visibly. Complete closures do not call
+the policy. The loader remains responsible for fetching the available closure
+and reporting missing arcs; the scene lifecycle owner consumes the policy
+decision.
 
 Other failures remain visible and terminal at their owner: unsafe traversal,
 permission or storage errors, malformed required input, and exceeded closure

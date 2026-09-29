@@ -13,6 +13,7 @@ use lunco_core::{
     SceneTransitionIntent, SceneTransitionRequest, on_command, register_commands,
 };
 use lunco_cosim_core::SimConnection;
+use lunco_hooks::HookValue;
 use lunco_spatial::{OriginAnchor, WorldGrid};
 use lunco_usd_avian_contracts::ScenePhysicsOwned;
 use lunco_usd_bevy_scene::{
@@ -21,6 +22,94 @@ use lunco_usd_bevy_scene::{
 use lunco_usd_bevy_stage::{
     UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
 };
+
+const INCOMPLETE_COMPOSITION_POLICY_HOOK: &str = "usd.scene_composition";
+
+lunco_hooks::declare_hook! {
+    id: INCOMPLETE_COMPOSITION_POLICY_HOOK,
+    owner: "lunco-usd-bevy-runtime-core",
+    description: "Choose whether a scene with unresolved USD composition dependencies may be admitted.",
+    signature: [facts: Map],
+    output: Map,
+    deterministic: true,
+    required: true,
+    installable: true,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IncompleteCompositionDecision {
+    AllowPartial,
+    RejectScene,
+}
+
+fn incomplete_composition_decision(
+    value: &HookValue,
+) -> Result<IncompleteCompositionDecision, &'static str> {
+    let Some(action) = value.get("action").and_then(HookValue::as_str) else {
+        return Err("expected map with action=allow_partial|reject_scene");
+    };
+    match action {
+        "allow_partial" => Ok(IncompleteCompositionDecision::AllowPartial),
+        "reject_scene" => Ok(IncompleteCompositionDecision::RejectScene),
+        _ => Err("unknown action; expected allow_partial|reject_scene"),
+    }
+}
+
+fn incomplete_composition_runtime_context(
+    path: &str,
+    coordinator: &SceneTransitionCoordinator,
+) -> Result<lunco_core::RuntimeExecutionContext, &'static str> {
+    let route = if path.starts_with("twin://") {
+        let generation = coordinator
+            .lifecycle_generation()
+            .ok_or("the loading Twin has no active lifecycle generation")?;
+        lunco_core::RuntimeRoute::twin(lunco_core::RuntimeCycle::Lifecycle, generation)
+    } else {
+        lunco_core::RuntimeRoute::application(lunco_core::RuntimeCycle::Lifecycle)
+    };
+    Ok(lunco_core::RuntimeExecutionContext {
+        route: Some(route),
+        phase: lunco_core::RuntimePhase::Preparation,
+        clock: lunco_core::RuntimeClock::None,
+        time_seconds: None,
+        delta_seconds: None,
+        sequence: None,
+        producer: None,
+    })
+}
+
+fn evaluate_incomplete_composition_policy(
+    path: &str,
+    diagnostics: &[lunco_usd_compose::recipe::StageDependencyDiagnostic],
+    coordinator: &SceneTransitionCoordinator,
+) -> Result<IncompleteCompositionDecision, String> {
+    let context =
+        incomplete_composition_runtime_context(path, coordinator).map_err(str::to_owned)?;
+    let missing_dependencies = HookValue::Array(
+        diagnostics
+            .iter()
+            .map(|diagnostic| {
+                HookValue::map([
+                    (
+                        "referring_layer",
+                        HookValue::str(&diagnostic.referring_layer),
+                    ),
+                    ("dependency", HookValue::str(&diagnostic.dependency)),
+                ])
+            })
+            .collect(),
+    );
+    let facts = HookValue::map([
+        ("scene_path", HookValue::str(path)),
+        ("missing_dependencies", missing_dependencies),
+    ]);
+    let result =
+        lunco_hooks::invoke_with_context(INCOMPLETE_COMPOSITION_POLICY_HOOK, &[facts], context)
+            .ok_or_else(|| "required Rhai policy is unavailable".to_owned())?
+            .map_err(|error| error.to_string())?;
+    incomplete_composition_decision(&result)
+        .map_err(|error| format!("malformed policy result: {error}"))
+}
 
 /// Scene transition transaction: set when a scene load is dispatched, cleared
 /// once the stage and its queued structural projections have drained. Async
@@ -103,9 +192,11 @@ fn record_scene_load_terminal_outcome(
     mut outcomes: MessageReader<SceneStageAssetOutcome>,
     in_flight: Option<Res<SceneLoadInFlight>>,
     coordinator: Res<SceneTransitionCoordinator>,
+    stages: Option<Res<Assets<UsdStageAsset>>>,
     q_awaiting: Query<&UsdPrimPath, With<UsdSceneAwaitingStage>>,
     q_projecting: Query<&UsdPrimPath, With<UsdSceneProjectionQueued>>,
     q_lights: Query<&bevy::light::DirectionalLight>,
+    scene_entities: SceneEntities,
     mut pending: ResMut<PendingSceneStageOutcome>,
     mut commands: Commands,
 ) {
@@ -191,6 +282,50 @@ fn record_scene_load_terminal_outcome(
         .any(|prim| prim.stage_handle.id() == g.stage_id);
     if still_awaiting || still_projecting {
         return;
+    }
+
+    let missing_dependencies = stages
+        .as_deref()
+        .and_then(|stages| stages.get(g.stage_id))
+        .and_then(|stage| stage.recipe.as_deref())
+        .map(|recipe| recipe.dependency_diagnostics.as_slice())
+        .unwrap_or_default();
+    if !missing_dependencies.is_empty() {
+        let admission_error = match evaluate_incomplete_composition_policy(
+            &g.path,
+            missing_dependencies,
+            &coordinator,
+        ) {
+            Ok(IncompleteCompositionDecision::AllowPartial) => None,
+            Ok(IncompleteCompositionDecision::RejectScene) => {
+                let first_missing = missing_dependencies
+                    .first()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "no dependency details were supplied".to_owned());
+                Some(format!(
+                    "scene `{}` was rejected by the `{INCOMPLETE_COMPOSITION_POLICY_HOOK}` policy with {} unresolved USD composition dependencies; first: {first_missing}",
+                    g.path,
+                    missing_dependencies.len()
+                ))
+            }
+            Err(policy_error) => Some(format!(
+                "scene `{}` could not be admitted because `{INCOMPLETE_COMPOSITION_POLICY_HOOK}` failed: {policy_error}",
+                g.path
+            )),
+        };
+        if let Some(error) = admission_error {
+            warn!("[scene] {error}");
+            clear_scene_entities(&mut commands, &scene_entities);
+            pending.outcome = None;
+            commands.remove_resource::<SceneLoadInFlight>();
+            commands.remove_resource::<FailedSceneLoad>();
+            commands.trigger(SceneTransitionFailed {
+                id: g.transition_id,
+                transition,
+                error,
+            });
+            return;
+        }
     }
 
     if q_lights.is_empty() {
@@ -958,8 +1093,9 @@ register_commands!(on_clear_scene, on_restart_scene,);
 mod tests {
     use super::*;
     use lunco_core::{
-        SceneTransition, SceneTransitionAdmission, SceneTransitionAdmitted,
-        SceneTransitionCompleted, SceneTransitionCoordinator, SceneTransitionRequest,
+        RuntimeClock, RuntimeCycle, RuntimePhase, RuntimeScope, SceneTransition,
+        SceneTransitionAdmission, SceneTransitionAdmitted, SceneTransitionCompleted,
+        SceneTransitionCoordinator, SceneTransitionRequest,
     };
     use lunco_usd_bevy_scene::UsdSceneGeometryPending;
 
@@ -1113,6 +1249,83 @@ mod tests {
 
     #[derive(Resource, Default)]
     struct AdmittedRequests(Vec<SceneTransitionRequest>);
+
+    #[test]
+    fn incomplete_composition_result_accepts_only_declared_actions() {
+        assert_eq!(
+            incomplete_composition_decision(&HookValue::map([(
+                "action",
+                HookValue::str("allow_partial"),
+            )])),
+            Ok(IncompleteCompositionDecision::AllowPartial)
+        );
+        assert_eq!(
+            incomplete_composition_decision(&HookValue::map([(
+                "action",
+                HookValue::str("reject_scene"),
+            )])),
+            Ok(IncompleteCompositionDecision::RejectScene)
+        );
+        assert!(incomplete_composition_decision(&HookValue::Unit).is_err());
+        assert!(
+            incomplete_composition_decision(&HookValue::map([
+                ("action", HookValue::str("guess"),)
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn incomplete_composition_policy_receives_the_active_scene_lifecycle_route() {
+        let mut coordinator = SceneTransitionCoordinator::default();
+        let transition = SceneTransition::load("twin://policy-test/scenes/partial.usda", "/World");
+        let generation = coordinator.start(transition).get();
+        let context = incomplete_composition_runtime_context(
+            "twin://policy-test/scenes/partial.usda",
+            &coordinator,
+        )
+        .expect("active Twin load has a lifecycle generation");
+        let route = context
+            .route
+            .expect("the lifecycle owner supplies its route");
+        assert_eq!(route.scope, RuntimeScope::Twin);
+        assert_eq!(route.cycle, RuntimeCycle::Lifecycle);
+        assert_eq!(route.generation, generation);
+        assert_eq!(context.phase, RuntimePhase::Preparation);
+        assert_eq!(context.clock, RuntimeClock::None);
+        assert_eq!(context.time_seconds, None);
+        assert_eq!(context.delta_seconds, None);
+        assert_eq!(context.sequence, None);
+        assert_eq!(context.producer, None);
+    }
+
+    #[test]
+    fn incomplete_composition_policy_requires_a_lifecycle_generation_for_twins() {
+        let coordinator = SceneTransitionCoordinator::default();
+        assert!(
+            incomplete_composition_runtime_context(
+                "twin://policy-test/scenes/partial.usda",
+                &coordinator,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn incomplete_composition_policy_routes_engine_assets_to_the_application() {
+        let coordinator = SceneTransitionCoordinator::default();
+        let context = incomplete_composition_runtime_context(
+            "lunco://scenes/tests/partial.usda",
+            &coordinator,
+        )
+        .expect("application-owned scene uses an application lifecycle route");
+        let route = context.route.expect("lifecycle context is classified");
+        assert_eq!(route.scope, RuntimeScope::Application);
+        assert_eq!(route.cycle, RuntimeCycle::Lifecycle);
+        assert_eq!(route.generation, 0);
+        assert_eq!(context.phase, RuntimePhase::Preparation);
+        assert_eq!(context.clock, RuntimeClock::None);
+    }
 
     #[test]
     fn queued_transition_starts_after_the_projection_frame_flushes() {
