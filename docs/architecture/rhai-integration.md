@@ -679,11 +679,12 @@ policy out of the Rust engine core:
 
 1. **Sequencing** — `seq`/`par_*`/`repeat`/`wait_*` are data nodes executed by the
    behavior kernel; Rhai authors the policy and callbacks.
-2. **Events and Sensors** — `TelemetryEvent` reaches `on_event`; Avian overlap
-   Sensors publish generic `enter:<zone>` events. A route point authors a visible
-   dome and a ground-anchored invisible trigger, both using the same standard USD
-   `radius`; route programs do not scale markers or poll a duplicate arrival
-   tolerance.
+2. **Events and Sensors** — `TelemetryEvent` reaches `on_event`; every Avian
+   sensor transition publishes `SENSOR_ENTER` / `SENSOR_EXIT`, keyed by sensor
+   GID with the moving body's GID as value. A non-empty `TriggerZone` label also
+   publishes `enter:<zone>` / `exit:<zone>` for authored named-geofence policy.
+   Rhai maps generic sensor identity to lesson or mission events; the physics
+   bridge does not decide that a waypoint was reached.
 3. **Task programs** — Rhai owns sequencing, route policy, and callbacks while
    the generic behavior kernel executes the authored task data; USD owns route
    identity and geometry.

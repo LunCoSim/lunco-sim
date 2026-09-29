@@ -851,12 +851,13 @@ def Xform "RoutePoint" (
 }
 ```
 
-The dome is visual only. The `Trigger` uses standard USD `radius`, collision, and
-the registered `lunco:triggerZone` property to provide the non-solid Sensor
-footprint. The generic sensor emits `enter:<zone>`; the scene-level route program
-consumes that event, advances its route cursor, and emits `route_point_reached`
-for mission policy. No vessel-owned waypoint state or Rust waypoint projection is
-needed.
+The dome is visual only. The `Trigger` applies `LunCoTriggerZoneAPI` and uses
+standard USD `radius` and collision properties for the non-solid Sensor
+footprint. Avian emits `SENSOR_ENTER`/`SENSOR_EXIT` with sensor and body identity;
+the non-empty `lunco:triggerZone` label also emits `enter:<zone>`/`exit:<zone>`. The
+scene-level route program consumes the named event, advances its route cursor,
+and emits `route_point_reached` for mission policy. No vessel-owned waypoint
+state or Rust waypoint projection is needed.
 
 For a visual review, use the authored `assets/scenes/tests/waypoint_visual.usda`
 companion with the production binary selected by `LUNCOSIM_BIN`. In a source

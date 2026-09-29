@@ -56,7 +56,7 @@ the timeline as data.
 | Attribute literal → typed value | `parse_attribute_value` (`usd-core/src/author.rs:186`) | UI only supplies a string |
 | Camera switch (single target) | explicit selection (`SetActiveCamera` for the director, `SetUserCamera`/`ObserveAvatar` for the operator) → `ActivateCamera` → `lunco_viewport_core::SceneViewport::active_camera`, reconciled each frame (`usd-bevy-camera/src/camera_switch.rs`) | one viewport authority |
 | Mounted follower cameras | `def Camera` under a body → `MountedCamera`, re-aimed each frame via `lunco:cameraLookAt` (`usd-bevy-camera/src/camera_mount.rs`) | |
-| Event bus (jump-target source) | `TelemetryEvent { name, source, … }` (XTCE/YAMCS-aligned); `emit()`/`wait_for()`; `TriggerZone`/`portEvents` authored markers | |
+| Event bus (jump-target source) | `TelemetryEvent { name, source, … }`; `SENSOR_ENTER`/`SENSOR_EXIT` carry sensor and body identity; `TriggerZone` adds named geofence pulses; `emit()`/`wait_for()` | |
 | Declarative timeline data | Typed step maps with exactly one operation word (`move_to`, `move_to_entity`, `possess`, `brake`, `cmd`, `emit`, `wait`, or `wait_event`), persisted in `<twin>/timelines/*.json`; `RunTimeline`/`Register`/`List`/`Get` (`lunco-scripting-rhai-runtime/src/commands.rs`) | |
 | 1-D transport widget (the seed) | `animation_transport_section` — play/pause/rewind + scrub slider + rate (`lunco-luncosim-edit-inspector-ui/src/inspector.rs`) | |
 | Reactive multi-instance panel host | `VizPanel` / `Panel2DCtx` read-only ctx + `defer` write (`lunco-viz/src/panel.rs,view.rs`) | pattern to copy |

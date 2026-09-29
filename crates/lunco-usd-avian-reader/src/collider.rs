@@ -373,12 +373,9 @@ pub fn collect_child_colliders_from_usd(
         // deliberately not part of an ancestor body's compound collider: doing
         // both would create a second, solid copy attached to the rigid body and
         // the vehicle would be pushed by the touchdown volume before contact.
-        // `lunco:triggerZone` is the authored semantic contract; this is not a
-        // path/name exception.
-        if reader
-            .text(&child_path, "lunco:triggerZone")
-            .is_some_and(|zone| !zone.trim().is_empty())
-        {
+        // Applying LunCoTriggerZoneAPI is the sensor contract; its optional
+        // label does not affect collider ownership.
+        if reader.has_api_schema(&child_path, "LunCoTriggerZoneAPI") {
             continue;
         }
         // `guide` is annotation — a debug axis, a sensor cone, a planned path. It

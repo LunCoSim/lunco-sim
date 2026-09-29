@@ -72,6 +72,15 @@ Never branch on the Rust build profile (`is_debug()` or `debug_assertions`). The
 authored `lint.rhai` policy rejects that coupling; use `is_unattended()` when
 attended and automated execution need different behavior.
 
+For physical waypoint arrival, author an Avian sensor in USD and map its generic
+`SENSOR_ENTER` event to a lesson event in Rhai. Match `evt.source` to the exact
+sensor with `sensor_entered(evt, sensor_id)`, then validate that `evt.value`
+identifies the intended subject or one of its colliders before emitting the
+lesson event. Use `SensorOccupants` in `on_start` to handle an existing contact.
+Objectives and task waits consume the lesson event; distance thresholds do not
+define arrival. Do not add a tutorial-specific `TriggerZone` label to a shared
+sensor asset.
+
 Example objective:
 
 ```rhai
@@ -84,8 +93,7 @@ fn mission(me, ctx) {
         objective("reach_flag", #{
             text: "Drive to the glowing flag",
             requires: ["possess"],
-            done: |m| distance(find("/World/Rover"), find("/World/Flag")) < 6.0,
-            dwell: 0.4,
+            requires_event: "flag_reached",
         }),
     ]
 }

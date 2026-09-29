@@ -141,10 +141,28 @@ fn exited(evt, self_id) {
     evt.name == "COLLISION_END" && collision_other(evt, self_id) != ()
 }
 
-// Named trigger volumes — a Sensor authored with a Name fires, IN ADDITION to
-// the generic COLLISION_START/END, an `enter:<name>` / `exit:<name>` pulse whose
-// value is the ENTERING entity's gid. So a scenario reacts to a zone by name,
-// not by reverse-mapping gids:
+// Avian sensor transitions — every Sensor contact with a moving body emits
+// SENSOR_ENTER / SENSOR_EXIT. `source` is the sensor's stable GID and `value`
+// is the entering/leaving body's stable GID. Use this identity-based contract
+// when policy needs to validate a particular sensor without authored labels.
+//
+// A sensor with a non-empty TriggerZone label also emits the named
+// `enter:<name>` / `exit:<name>` event. Named geofence policy can use the label
+// when it is part of the authored route contract.
+
+/// True when `evt` is an entry into `sensor_id` by a moving body.
+fn sensor_entered(evt, sensor_id) {
+    evt.name == "SENSOR_ENTER" && evt.source == sensor_id
+}
+
+/// True when `evt` is an exit from `sensor_id` by a moving body.
+fn sensor_exited(evt, sensor_id) {
+    evt.name == "SENSOR_EXIT" && evt.source == sensor_id
+}
+
+// Named trigger volumes — a labeled sensor fires an additional `enter:<name>` /
+// `exit:<name>` pulse whose value is the entrant's gid. A scenario can react to
+// a geofence by name without reverse-mapping gids:
 //
 //   fn on_event(me, evt, ctx) {
 //       if entered_zone(evt, "pad_2") { possess(evt.value); }   // evt.value = who entered
