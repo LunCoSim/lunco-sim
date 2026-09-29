@@ -88,8 +88,8 @@ on the panel package or a copied panel id. Cached user layouts still restore as
 saved; contributions apply when a perspective builds its default layout.
 
 The workbench status history is one shared presentation surface: render Info,
-Progress, Warn, Error, and Attention through the same responsive
-level/source/message/progress/action row. Its popup is compact, sized to roughly
+Warn, Error, and Attention through the same responsive
+level/source/message/action row. Its popup is compact, sized to roughly
 half the available parent window and clamped to 420–960 logical px;
 the message column consumes the remaining inner width rather than an arbitrary
 fixed fraction. A new terminal RuntimeFault opens the popup automatically, but
@@ -105,15 +105,22 @@ Diagnostic rows keep the shared column geometry, expose row activation through
 the cursor and tooltip, and add the complete diagnostic as an optional body
 under that row. Emit the existing typed action for Attention; do not create
 level-specific row layouts or source-specific styling. StatusBus
-coalesces consecutive identical discrete snapshots before this shared reader;
-do not hide producer floods in a renderer-specific filter. Active progress
-opens the compact state of this same popup, showing the source and a truncated
-first-line summary of the owner-written message. Keep the complete message in
-the tooltip/history and do not infer phase from free-form text. “Recent status
-details” expands it in place, pins the longest-running progress row above
-recent events, and keeps the expanded view open when work completes. The
-compact state closes on completion; do not stack it with the history view or
-auto-close a history view the user expanded.
+coalesces consecutive identical discrete snapshots before this shared reader.
+Keep the expanded history view discrete: do not append active progress to its
+event list. Hide the entire event summary from the strip while that history
+view is open, including its fallback to the latest discrete event; preserve
+the strip click target so it can close the popup. Active
+progress opens the compact state of this same popup when it belongs on the
+surface, showing the source and a truncated first-line summary of the
+owner-written message. Keep the complete message in the tooltip and do not
+infer phase from free-form text. Terrain tile streaming, optional terrain
+refinement, and post-projection scene geometry stay published for readiness
+consumers but drive the workbench loading notice only during an admitted or
+active scene transition. This prevents camera movement after scene load from
+reopening the loading notice. “Recent status details” expands the popup in
+place and keeps the expanded view open when work completes. The compact state
+closes on completion; do not stack it with the history view or auto-close a
+history view the user expanded.
 
 Tutorial HUDs, rings, coach/recovery cards, and completion prompts use
 `lunco_workbench_guided_ui::GUIDED_OVERLAY_ORDER` (`egui::Order::Middle`);

@@ -273,11 +273,15 @@ pub const CAMERA_SOURCE: &str = "camera";
 /// The bus source name USD scene spawning publishes under.
 ///
 /// Shared for the same reason as [`TERRAIN_SOURCE`]: the publisher
-/// (`lunco-luncosim-ui`'s `report_scene_spawn_status`, mirroring
+/// (`lunco-luncosim-presentation`'s `report_scene_spawn_status`, mirroring
 /// `lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight` + `UsdSceneAwaitingStage`) and the
 /// screenshot readiness gate must agree on the spelling, and a silent
 /// disagreement degrades into recordings that open on a half-spawned scene.
 pub const SCENE_SOURCE: &str = "scene";
+
+/// The status source for scene geometry still being generated after structural
+/// projection has completed. Visual-readiness consumers still wait for it.
+pub const SCENE_VISUAL_SOURCE: &str = "scene-visuals";
 
 /// The status source for a textured USD DomeLight's image projection. The
 /// projection is render-visible work, so offline recording must wait for it in
@@ -701,7 +705,22 @@ impl StatusBus {
     /// newer actionable event exists. Falls back to the most recent
     /// discrete history event when no progress is active.
     pub fn display_latest(&self) -> Option<&StatusEvent> {
-        let progress = self.active_progress.values().min_by_key(|e| e.at);
+        self.display_latest_with_progress_filter(|_| true)
+    }
+
+    /// Select the latest event while excluding progress irrelevant to a
+    /// presentation surface. Excluded progress remains available to other bus
+    /// consumers, and actionable-event precedence and history fallback remain
+    /// the same as [`Self::display_latest`].
+    pub fn display_latest_with_progress_filter(
+        &self,
+        mut include_progress: impl FnMut(&StatusEvent) -> bool,
+    ) -> Option<&StatusEvent> {
+        let progress = self
+            .active_progress
+            .values()
+            .filter(|event| include_progress(*event))
+            .min_by_key(|event| event.at);
         let latest = self.history.back();
         match (progress, latest) {
             (Some(progress), Some(latest))

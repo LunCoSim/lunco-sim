@@ -538,6 +538,15 @@ wall-clock physics cadence and UI isolation are required, measure the whole
 simulation-owner boundary and consume immutable snapshots from the UI/render
 side; separate cycle labels alone do not provide thread isolation.
 
+When `tick_rhai_scenarios` or `tick_rhai_scenario_visualization` has an outlier,
+compare the nested `rhai_user_scenario_hook`, `rhai_user_event_hook`,
+`rhai_native_task_tick`, `rhai_mission_event_projection`,
+`rhai_prelude_scenario_driver`, and `rhai_user_visualization_hook` spans. Their
+fields identify the scripted entity, hook/driver, and queued-event count. If
+the outer scenario system is slow while these spans stay short, the time is in
+driver traversal or elsewhere in the exclusive fixed pass; do not attribute it
+to Rhai evaluation or move authoritative World access to a worker on that basis.
+
 For exclusive systems that borrow `&mut World`, inspect individual Tracy event
 timestamps and durations, not just aggregate averages. Align long calls with
 Twin-open and readiness milestones: one startup outlier can stall UI even when

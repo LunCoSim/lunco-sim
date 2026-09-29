@@ -152,6 +152,8 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
+use lunco_api::{ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, api_param_str};
+use lunco_api_core::{ApiErrorCode, ApiValue};
 use lunco_cosim_core::UsdSourcedCosim;
 use lunco_luncosim_simulation::LunCoSimHeadlessPlugin;
 use lunco_modelica_runtime::ModelicaModel;
@@ -159,6 +161,8 @@ use lunco_sysml_ir::VerificationVerdict;
 use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
 use lunco_usd_document::document::UsdDocument;
 use lunco_usd_sim_cosim::PendingModelicaSource;
+use serde::Deserialize;
+use std::collections::BTreeMap;
 
 /// Safety bound on the manual step loop. 20 000 ticks ≈ 333 s of simulated time
 /// at 60 Hz — an order of magnitude more than any current parity scenario needs
@@ -265,6 +269,8 @@ struct Cli {
     jitter: f64,
     /// Seed for the jitter PRNG. Irrelevant when `jitter == 0.0`.
     seed: u64,
+    /// Optional exact-state baseline supplied to the authored Rhai test.
+    determinism_reference: Option<std::path::PathBuf>,
     /// Wall-clock budget for scene and participant readiness.
     readiness_timeout: Duration,
     /// Optional prim path to select and measure selection AABB bounds for.
@@ -326,6 +332,306 @@ struct Verdict {
     evidence_bytes: usize,
     non_pass_check_bytes: usize,
     details_truncated: bool,
+}
+
+const DETERMINISM_REFERENCE_SCHEMA: &str = "luncosim-deterministic-physics-reference-v4";
+
+#[derive(Resource, Deserialize)]
+struct DeterminismReference {
+    schema: String,
+    comparison: DeterminismComparison,
+    profiles: BTreeMap<String, DeterminismProfile>,
+}
+
+#[derive(Deserialize)]
+struct DeterminismComparison {
+    final_stage_required: bool,
+    numeric_tolerance: f64,
+    selected_articulated_checkpoint_ticks: Vec<String>,
+    selected_lifecycle_checkpoints: usize,
+}
+
+#[derive(Deserialize)]
+struct DeterminismProfile {
+    parameters: DeterminismParameters,
+    effective_compute_width: usize,
+    first_behavior_tick: String,
+    physics_checkpoints: Vec<PhysicsCheckpoint>,
+    modelica_checkpoints: Vec<ModelicaCheckpoint>,
+    articulated_checkpoints: Vec<ArticulatedCheckpoint>,
+    #[serde(rename = "final")]
+    final_state: FinalState,
+}
+
+#[derive(Deserialize)]
+struct DeterminismParameters {
+    jitter: f64,
+    rover_count: usize,
+    scene: String,
+    seed: u64,
+    thread_setting: String,
+    tick_hz: f64,
+}
+
+#[derive(Deserialize)]
+struct PhysicsCheckpoint {
+    tick: String,
+    physics: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ModelicaCheckpoint {
+    tick: String,
+    systems: Vec<ModelicaSystem>,
+}
+
+#[derive(Deserialize)]
+struct ModelicaSystem {
+    lane_x: String,
+    variables: String,
+}
+
+#[derive(Deserialize)]
+struct ArticulatedCheckpoint {
+    tick: String,
+    rovers: Vec<ArticulatedRover>,
+}
+
+#[derive(Deserialize)]
+struct ArticulatedRover {
+    rover_path: String,
+    bodies: String,
+}
+
+#[derive(Deserialize)]
+struct FinalState {
+    tick: String,
+    physics: Vec<String>,
+    modelica: Vec<ModelicaSystem>,
+    articulated: Vec<ArticulatedRover>,
+}
+
+#[derive(Resource)]
+struct SceneTestParameters {
+    scene: String,
+    threads: usize,
+    jitter: f64,
+    seed: u64,
+    tick_hz: f64,
+}
+
+fn load_determinism_reference(path: &std::path::Path) -> Result<DeterminismReference, String> {
+    let file = std::fs::File::open(path).map_err(|error| {
+        format!(
+            "could not open determinism reference {}: {error}",
+            path.display()
+        )
+    })?;
+    let reference: DeterminismReference = serde_json::from_reader(file).map_err(|error| {
+        format!(
+            "could not decode determinism reference {}: {error}",
+            path.display()
+        )
+    })?;
+    if reference.schema != DETERMINISM_REFERENCE_SCHEMA {
+        return Err(format!(
+            "unsupported determinism reference schema {:?}; expected {DETERMINISM_REFERENCE_SCHEMA}",
+            reference.schema
+        ));
+    }
+    if reference.profiles.is_empty() {
+        return Err("determinism reference has no profiles".to_owned());
+    }
+    Ok(reference)
+}
+
+struct SceneTestParametersProvider;
+
+impl ApiQueryProvider for SceneTestParametersProvider {
+    fn name(&self) -> &'static str {
+        "SceneTestParameters"
+    }
+
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
+        let Some(parameters) = world.get_resource::<SceneTestParameters>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "SceneTestParameters resource is not present",
+            ));
+        };
+        Ok(Some(ApiValue::map([
+            ("ok", ApiValue::Bool(true)),
+            ("scene", ApiValue::str(parameters.scene.clone())),
+            ("threads", ApiValue::UInt(parameters.threads as u64)),
+            ("jitter", ApiValue::Float(parameters.jitter)),
+            ("seed", ApiValue::UInt(parameters.seed)),
+            ("tick_hz", ApiValue::Float(parameters.tick_hz)),
+        ])))
+    }
+}
+
+struct ReadDeterminismReferenceProvider;
+
+impl ApiQueryProvider for ReadDeterminismReferenceProvider {
+    fn name(&self) -> &'static str {
+        "ReadDeterminismReference"
+    }
+
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(reference) = world.get_resource::<DeterminismReference>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "pass --determinism-reference PATH to compare this scene",
+            ));
+        };
+        let profile_key = api_param_str(params, "profile").ok_or_else(|| {
+            ApiQueryError::new(ApiErrorCode::DeserializationError, "profile is required")
+        })?;
+        let kind = api_param_str(params, "kind").ok_or_else(|| {
+            ApiQueryError::new(ApiErrorCode::DeserializationError, "kind is required")
+        })?;
+        let profile = reference.profiles.get(profile_key).ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::EntityNotFound,
+                format!("determinism profile `{profile_key}` is not present in the reference"),
+            )
+        })?;
+
+        if kind == "metadata" {
+            return Ok(Some(reference_metadata(reference, profile)));
+        }
+
+        let tick = api_param_str(params, "tick").ok_or_else(|| {
+            ApiQueryError::new(ApiErrorCode::DeserializationError, "tick is required")
+        })?;
+        let identity = api_param_str(params, "identity").ok_or_else(|| {
+            ApiQueryError::new(ApiErrorCode::DeserializationError, "identity is required")
+        })?;
+        let value = match kind {
+            "physics" => profile
+                .physics_checkpoints
+                .iter()
+                .find(|checkpoint| checkpoint.tick == tick)
+                .and_then(|checkpoint| {
+                    checkpoint
+                        .physics
+                        .iter()
+                        .find(|row| row.split('|').next() == Some(identity))
+                }),
+            "modelica" => profile
+                .modelica_checkpoints
+                .iter()
+                .find(|checkpoint| checkpoint.tick == tick)
+                .and_then(|checkpoint| {
+                    checkpoint
+                        .systems
+                        .iter()
+                        .find(|system| system.lane_x == identity)
+                })
+                .map(|system| &system.variables),
+            "articulated" => profile
+                .articulated_checkpoints
+                .iter()
+                .find(|checkpoint| checkpoint.tick == tick)
+                .and_then(|checkpoint| {
+                    checkpoint
+                        .rovers
+                        .iter()
+                        .find(|rover| rover.rover_path == identity)
+                })
+                .map(|rover| &rover.bodies),
+            "final_physics" if profile.final_state.tick == tick => profile
+                .final_state
+                .physics
+                .iter()
+                .find(|row| row.split('|').next() == Some(identity)),
+            "final_modelica" if profile.final_state.tick == tick => profile
+                .final_state
+                .modelica
+                .iter()
+                .find(|system| system.lane_x == identity)
+                .map(|system| &system.variables),
+            "final_articulated" if profile.final_state.tick == tick => profile
+                .final_state
+                .articulated
+                .iter()
+                .find(|rover| rover.rover_path == identity)
+                .map(|rover| &rover.bodies),
+            _ => None,
+        };
+        Ok(Some(ApiValue::map([
+            ("ok", ApiValue::Bool(true)),
+            ("found", ApiValue::Bool(value.is_some())),
+            (
+                "value",
+                value.map_or(ApiValue::Unit, |value| ApiValue::str(value.clone())),
+            ),
+        ])))
+    }
+}
+
+fn reference_metadata(reference: &DeterminismReference, profile: &DeterminismProfile) -> ApiValue {
+    ApiValue::map([
+        ("ok", ApiValue::Bool(true)),
+        (
+            "comparison",
+            ApiValue::map([
+                (
+                    "final_stage_required",
+                    ApiValue::Bool(reference.comparison.final_stage_required),
+                ),
+                (
+                    "numeric_tolerance",
+                    ApiValue::Float(reference.comparison.numeric_tolerance),
+                ),
+                (
+                    "selected_articulated_checkpoint_ticks",
+                    ApiValue::Array(
+                        reference
+                            .comparison
+                            .selected_articulated_checkpoint_ticks
+                            .iter()
+                            .cloned()
+                            .map(ApiValue::str)
+                            .collect(),
+                    ),
+                ),
+                (
+                    "selected_lifecycle_checkpoints",
+                    ApiValue::UInt(reference.comparison.selected_lifecycle_checkpoints as u64),
+                ),
+            ]),
+        ),
+        (
+            "parameters",
+            ApiValue::map([
+                ("scene", ApiValue::str(profile.parameters.scene.clone())),
+                (
+                    "rover_count",
+                    ApiValue::UInt(profile.parameters.rover_count as u64),
+                ),
+                (
+                    "thread_setting",
+                    ApiValue::str(profile.parameters.thread_setting.clone()),
+                ),
+                ("tick_hz", ApiValue::Float(profile.parameters.tick_hz)),
+                ("jitter", ApiValue::Float(profile.parameters.jitter)),
+                ("seed", ApiValue::UInt(profile.parameters.seed)),
+            ]),
+        ),
+        (
+            "effective_compute_width",
+            ApiValue::UInt(profile.effective_compute_width as u64),
+        ),
+        (
+            "first_behavior_tick",
+            ApiValue::str(profile.first_behavior_tick.clone()),
+        ),
+        (
+            "final_tick",
+            ApiValue::str(profile.final_state.tick.clone()),
+        ),
+    ])
 }
 
 #[derive(Resource, Default)]
@@ -393,6 +699,34 @@ fn capture_verification_evidence(trigger: On<TelemetryEvent>, mut verdict: ResMu
     });
 }
 
+fn install_scene_test_queries(
+    app: &mut App,
+    cli: &Cli,
+    reference: Option<DeterminismReference>,
+) -> Result<(), String> {
+    app.init_resource::<ApiQueryRegistry>();
+    app.insert_resource(SceneTestParameters {
+        scene: cli.scene.clone(),
+        threads: cli.threads,
+        jitter: cli.jitter,
+        seed: cli.seed,
+        tick_hz: cli.tick_hz,
+    });
+    if let Some(reference) = reference {
+        app.insert_resource(reference);
+    }
+
+    let mut registry = app.world_mut().resource_mut::<ApiQueryRegistry>();
+    for name in ["SceneTestParameters", "ReadDeterminismReference"] {
+        if registry.get(name).is_some() {
+            return Err(format!("scene-test query `{name}` is already registered"));
+        }
+    }
+    registry.register(SceneTestParametersProvider);
+    registry.register(ReadDeterminismReferenceProvider);
+    Ok(())
+}
+
 fn parse_args() -> Result<Cli, String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut scene: Option<String> = None;
@@ -407,6 +741,7 @@ fn parse_args() -> Result<Cli, String> {
     let mut threads: usize = 1;
     let mut jitter = 0.0f64;
     let mut seed = DEFAULT_SEED;
+    let mut determinism_reference = None;
     let mut readiness_timeout = Duration::from_secs(DEFAULT_READINESS_TIMEOUT_SECS);
     #[cfg(feature = "ui")]
     let mut select_prim: Option<String> = None;
@@ -492,6 +827,13 @@ fn parse_args() -> Result<Cli, String> {
                     .map_err(|_| format!("--seed expects an unsigned integer, got {v:?}"))?;
                 i += 2;
             }
+            "--determinism-reference" => {
+                determinism_reference = Some(std::path::PathBuf::from(need(
+                    i,
+                    "--determinism-reference",
+                )?));
+                i += 2;
+            }
             "--readiness-timeout" => {
                 let v = need(i, "--readiness-timeout")?;
                 let seconds: u64 = v.parse().map_err(|_| {
@@ -555,6 +897,7 @@ fn parse_args() -> Result<Cli, String> {
         threads,
         jitter,
         seed,
+        determinism_reference,
         readiness_timeout,
         #[cfg(feature = "ui")]
         select_prim,
@@ -663,6 +1006,8 @@ DIAGNOSTIC AXES (default settings match the gate profile):
                              sequence, not necessarily the simulation outcome.
     --seed U64               Seed for the jitter PRNG (default {seed}).
                              Same seed => same jitter dt sequence.
+    --determinism-reference PATH
+                             Load a typed JSON state reference for Rhai comparisons.
     --readiness-timeout SECS Wall-clock budget for scene materialization and
                              asynchronous Modelica/physics readiness (default
                              {readiness_timeout}s). A timeout is a no-verdict
@@ -1335,6 +1680,16 @@ pub fn run() -> u8 {
         eprintln!("verification selection failed: {error}");
         return 2;
     }
+    let determinism_reference = match cli.determinism_reference.as_deref() {
+        Some(path) => match load_determinism_reference(path) {
+            Ok(reference) => Some(reference),
+            Err(error) => {
+                eprintln!("determinism reference failed: {error}");
+                return 2;
+            }
+        },
+        None => None,
+    };
 
     let dt = Duration::from_secs_f64(1.0 / cli.tick_hz);
 
@@ -1351,6 +1706,10 @@ pub fn run() -> u8 {
         Some(cli.scene.clone()),
     );
     app.add_plugins(LunCoSimHeadlessPlugin::default());
+    if let Err(error) = install_scene_test_queries(&mut app, &cli, determinism_reference) {
+        eprintln!("scene-test query setup failed: {error}");
+        return 2;
+    }
     // The component runner has already resolved the manifest-selected scene.
     // Re-assert that resolved value at the application boundary immediately
     // before startup schedules are built. This keeps the runner independent of

@@ -777,13 +777,12 @@ fn report_terrain_generation_status(
     );
 }
 
-/// Mirror USD scene-spawn progress into the workbench
-/// [`StatusBus`](lunco_status_core::status_bus::StatusBus) under
-/// [`SCENE_SOURCE`](lunco_status_core::status_bus::SCENE_SOURCE), the twin of
-/// [`report_terrain_stream_status`].
+/// Mirror structural USD scene-spawn progress under
+/// [`SCENE_SOURCE`](lunco_status_core::status_bus::SCENE_SOURCE) and post-
+/// projection mesh work under
+/// [`SCENE_VISUAL_SOURCE`](lunco_status_core::status_bus::SCENE_VISUAL_SOURCE).
 ///
-/// Two signals, because they cover different windows and neither subsumes the
-/// other:
+/// These signals cover different windows and none subsumes the others:
 ///
 /// * [`SceneLoadInFlight`](lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight) — present from
 ///   `LoadScene` until the stage and its structural projection have drained.
@@ -796,9 +795,10 @@ fn report_terrain_generation_status(
 ///   CPU-generated geometry is still being committed from the async mesh pool.
 ///   This is a separate visual-streaming phase, not a second scene load.
 ///
-/// Consumed by the offline recorder's readiness gate as well as the status bar;
-/// see the registration site for why the mirror lives here rather than in
-/// `lunco-workbench`.
+/// The offline recorder reads these shared progress entries as readiness
+/// blockers. The workbench uses transition state to decide whether terrain or
+/// post-projection visual streaming belongs in its scene-loading notice; keeping
+/// both consumers on this shared mirror avoids dropping readiness signals.
 fn report_scene_spawn_status(
     in_flight: Option<Res<lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight>>,
     progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
@@ -812,6 +812,7 @@ fn report_scene_spawn_status(
 ) {
     let Some(mut bus) = bus else { return };
     const SOURCE: &str = lunco_status_core::status_bus::SCENE_SOURCE;
+    const VISUAL_SOURCE: &str = lunco_status_core::status_bus::SCENE_VISUAL_SOURCE;
     let pending = awaiting.iter().count();
     let projecting = projecting.iter().count();
     let pending_meshes = pending_meshes.iter().count();
@@ -819,6 +820,7 @@ fn report_scene_spawn_status(
         coordinator.active(),
         Some(lunco_core::SceneTransition::Clear)
     ) {
+        bus.remove_progress(VISUAL_SOURCE);
         bus.set_progress(SOURCE, "unloading current scene", 0, 0);
         return;
     }
@@ -835,8 +837,10 @@ fn report_scene_spawn_status(
         };
         // `total = 0` is the bus's "indeterminate" encoding — the number of
         // descendants can grow as each projected prim exposes its children.
+        bus.remove_progress(VISUAL_SOURCE);
         bus.set_progress(SOURCE, message, 0, 0);
     } else if pending > 0 {
+        bus.remove_progress(VISUAL_SOURCE);
         bus.set_progress(
             SOURCE,
             format!("projecting scene ({projecting} queued, {pending} pending)"),
@@ -845,12 +849,14 @@ fn report_scene_spawn_status(
         );
     } else if pending_meshes > 0 {
         bus.set_progress(
-            SOURCE,
+            VISUAL_SOURCE,
             format!("streaming scene visuals ({pending_meshes} meshes pending)"),
             0,
             0,
         );
+        bus.remove_progress(SOURCE);
     } else {
+        bus.remove_progress(VISUAL_SOURCE);
         let Some(progress) = progress.as_deref() else {
             bus.remove_progress(SOURCE);
             return;

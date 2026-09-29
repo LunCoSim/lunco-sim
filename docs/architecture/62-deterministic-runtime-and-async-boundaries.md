@@ -858,7 +858,10 @@ This hook runs before mutable top-level initialization, so derive its result
 from `me`, scenario parameters, identity metadata, and permitted scene-generation
 queries rather than top-level initialization effects. Once all declared inputs are Ready, the owner
 commits the Modelica participant set, runs top-level initialization in the
-`Initialization` phase, and dispatches `on_start` in stable actor order.
+`Initialization` phase, and dispatches `on_start` in stable actor order. The
+top-level body runs with the scenario's stable entity identity and deterministic
+initialization random stream, so its `query_reads` declarations authorize the
+same broad providers used by later scenario hooks.
 After an ordered simulation command materializes a new entity, the caller can
 extend its committed directional plan with `track_entity_read` or
 `track_entity_write` before accessing that live id. A tracked id that is or
@@ -1222,8 +1225,8 @@ The whole-simulation guarantee remains open because:
    `FixedUpdate`, `physics_elapsed_s` covers the previous completed Avian step
    and equals `(sim_tick - 1) * fixed_dt_s`; a hold may clear `physics_dt_s`, so
    elapsed time is the cycle-count check. The production Rhai replay gate checks
-   clock arithmetic within `1e-9` seconds and compares serialized physics and
-   Modelica state traces exactly (`numeric_tolerance=0`). The scene-test
+   clock arithmetic within `1e-9` seconds and compares selected physics and
+   Modelica state exactly (`numeric_tolerance=0`). The scene-test
    `--threads 0` profile uses Bevy's default `TaskPoolOptions`, matching GUI
    `DefaultPlugins`; the normal
    headless server entry point currently pins one Compute thread. Bevy's default
@@ -1241,33 +1244,24 @@ The whole-simulation guarantee remains open because:
    suspension and tire forces, jointed tire forces, and raycast wheel
    mass-property folds use that key order. Missing, duplicate, or empty keys
    raise a runtime fault and hold physics. The production
-   `multi_rover_stress.rhai` gate checks six full lifecycle/checkpoint states,
-   the first `on_tick` sample at tick 1, and an explicit final-stage record; it
-   emits no per-tick trace. Each selected state contains full rover physics and
-   Modelica variables. Articulated-body state is sampled at ticks 1, 11, 80,
-   and the final tick for the 4/8/20-rover fixtures. The comparator checks the
-   exact final physics, Modelica, and articulated states first, then compares
-   earlier checkpoints exactly. The production scene-test matrix leaves
-   `--tick-hz` unset, verifies its default fixed step is 60 Hz, and advances
-   through manual clock updates without wall-time pacing. By default the
-   comparator checks the committed portable fixture at
-   `scripts/tests/fixtures/deterministic-physics-reference.json`;
-   `--compare-reference PATH` selects a different baseline and
-   `--record-reference PATH` writes a new one. The source fingerprint covers
-   every tracked tree entry except the reference fixture itself, so committing
-   the fixture does not invalidate its source identity. The reference records
-   source and machine metadata for the 4/8/20-rover, serial/default Compute,
-   and seeded jitter profiles. Comparison requires exact final-stage and
-   checkpoint equality (`numeric_tolerance=0`). A Windows attempt at commit
-   `889b7e908` completed the first 20-rover scene with the runner's PASS summary
-   at tick 780, but the comparator stopped before trace/reference comparison
-   because it required Rhai `TESTS_OK` and `MULTI-ROVER STRESS: PASS` log text
-   that was absent from captured output. The production runner's terminal PASS
-   summary carries the typed verdict; both determinism comparators now validate
-   that summary against the expected scene and channel, and the physics profile
-   also matches its tick count to the authored final-stage trace. Repeat the
-   Windows run before claiming cross-machine state equality. This remains
-   fixture-specific evidence, not whole-simulation replay determinism. The current profile
+   `multi_rover_stress.rhai` gate compares selected states directly against
+   `scripts/tests/fixtures/deterministic-physics-reference.json`. The scene-test
+   runner decodes that file into typed records at the
+   `--determinism-reference PATH` process boundary and exposes one requested
+   value through the existing Rhai query bridge. Rhai selects the profile from
+   typed runner parameters, compares six physics checkpoints, sparse Modelica
+   and articulated checkpoints, and the explicit final physics, Modelica, and
+   articulated state with exact equality (`numeric_tolerance=0`). It retains
+   only checkpoint tick numbers and the first mismatch; it also verifies an
+   altered physics row is rejected and emits no trace or result bundle.
+   `report_verdict` and the scene-test process exit code are the
+   completion contract. The Bash and PowerShell matrices in
+   `scripts/test-deterministic-physics-profiles.sh` and
+   `scripts/test-deterministic-physics-profiles.ps1` invoke production
+   `luncosim test` processes and check their exit statuses. They leave
+   `--tick-hz` unset, so the fixed step remains 60 Hz; the runner advances the
+   manual clock without wall-time pacing. This remains fixture-specific evidence, not
+   whole-simulation replay determinism. The current profile
    records effective pool width but does not select a deterministic Avian
    solver profile; that guarantee still needs a measured production choice or
    deterministic reductions. In the same ordered

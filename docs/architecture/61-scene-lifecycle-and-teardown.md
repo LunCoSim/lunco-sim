@@ -58,8 +58,11 @@ counters.
 
 `lunco-core-runtime::SimulationProgress` holds the causal clock from the start
 edge through the asset and structural-projection terminal edge. CPU mesh builds
-and other presentation streaming continue independently; the presentation
-status bus reports them after scene admission. `TimeTransport` keeps the user's
+and other presentation streaming continue independently; scene geometry still
+pending after structural projection is reported under `SCENE_VISUAL_SOURCE`.
+Visual-readiness consumers keep reading that source after scene admission, while
+the workbench treats terrain and scene-visual progress as a loading notice only
+for an admitted or active scene transition. `TimeTransport` keeps the user's
 play and rate intent while the gate pauses `Time<Virtual>`. Physics readiness
 stays in its existing owner and continues to control physics admission; the
 scene progress gate covers lifecycle work that must not consume simulation

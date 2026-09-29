@@ -217,8 +217,10 @@ become successful no-ops.
 
 `simulation_dependencies` runs before mutable initialization and may use only
 stable identities, parameters, and its declared read surface. The top-level
-module body then initializes per-instance scope, followed by `on_start` before
-that activation pass advances its task or tick hook. `on_start` is the current
+module body then initializes per-instance scope with its stable scenario
+identity, so declared `query_reads` work during initialization as well as in
+later hooks. It is followed by `on_start` before that activation pass advances
+its task or tick hook. `on_start` is the current
 ready boundary: it runs after scene admission and required owner inputs are
 ready. Scenario events are delivered by the owner's eligible pass; their
 producer stamp remains visible, while `execution_context()` describes the
