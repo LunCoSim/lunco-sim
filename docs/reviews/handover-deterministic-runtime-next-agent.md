@@ -929,26 +929,31 @@ enough to promise same-state continuation from an arbitrary capture tick.
   whole-session replay, browser workers, and broader scene coverage remain
   open. The unrelated untracked `scripts/perf/` work remains untouched.
 
-## D4 comparator diagnostics and refreshed production matrix (2026-09-29)
+## D4 typed verdict details and refreshed production matrix (2026-09-29)
 
-- Commit `3a016371d` enables scoped Rhai INFO output in both determinism profile
-  launchers. Commit `671c0969a` adds first-field expected/actual details for
-  physics and articulated rows and exact variable/value details for Modelica.
-  Its Rhai negative control starts from a known-good reference row, alters it,
-  and checks the field-level diagnostic.
-- The task branch and local `main` are both at `671c0969a`, six commits ahead
-  of `origin/main`; no push was made. The open deterministic-simulation review
-  records the current acceptance evidence. The unrelated untracked
-  `scripts/perf/` work remains preserved.
-- The default-feature build from Rust source `abc365ea6` was reused because
-  these two commits only change Rhai, scripts, and documentation. The updated
-  Rhai scenario passed the complete shell profile matrix and printed
+- `multi_rover_stress.rhai` reports the first differing state field, expected
+  and actual values for physics/articulated rows, and Modelica variable/value
+  pairs. Its Rhai negative control starts with a valid reference row, alters
+  one field, and verifies the exact failure message.
+- `report_verdict` sends status, check count, and failed assertions as a typed
+  telemetry map. `luncosim test` prints those authored details alongside its
+  process verdict, so failure output does not depend on logging environment
+  variables. The profile launchers do not modify `RUST_LOG` or parse logs.
+- The default-feature `cargo build --bin luncosim -j 4` passed. The
+  `scene-4-serial` production profile passed at 780 ticks against the checked-in
+  reference. A controlled run with an intentionally wrong seed exited 1 and,
+  with `RUST_LOG=off`, printed its Rhai-authored failure messages through
+  `luncosim test detail:`. This verifies both the structured pass and failure
+  paths without log output.
+- The complete shell profile matrix previously reached
   `DETERMINISTIC_PHYSICS_PROFILES_OK`: 4/8/20-rover serial/default-Compute
   profiles plus four jitter/seed profiles, each with 780 ticks and exact
   reference/final-stage comparisons. This is same-host determinism acceptance,
   not sustained performance evidence.
 - The other computer's scene-4-serial run returned a terminal failure after
-  780 ticks, but its default logging omitted the Rhai assertion. The wrapper
-  now enables that output. Root-cause diagnosis still needs the failing field,
-  exact `HEAD`, and reference-file hash from that computer. No cross-machine
-  numerical mismatch is claimed without those facts.
+  780 ticks but provided no assertion detail, build revision, or reference
+  hash. Cross-machine comparison has not identified a numerical mismatch yet.
+  Rerun the single profile from the current branch to obtain the state field,
+  expected and actual values, exact `HEAD`, and reference SHA-256.
+- This work is for local `main` integration only; no push is authorized. The
+  unrelated untracked `scripts/perf/` work remains preserved.

@@ -66,8 +66,10 @@
 //!
 //! Via **telemetry**, not by scraping stdout.
 //!
-//! Generic scene tests emit `PASS` or `FAIL`; SysML verification policies may
-//! additionally emit `INCONCLUSIVE` or `ERROR`. Rhai's `emit` fires a real
+//! Scene-test helpers emit a typed telemetry map with the verdict, check count,
+//! and authored failure messages; status-only scenarios may emit a status
+//! string. SysML verification policies may additionally emit
+//! `INCONCLUSIVE`, `ERROR`, or `UNVERIFIED`. Rhai's `emit` fires a real
 //! `TelemetryEvent` on the shared bus (`bridge_core::emit` →
 //! `world.trigger(TelemetryEvent { .. })`). An observer here catches it — a
 //! typed, in-process, order-guaranteed signal. Log scraping would have meant
@@ -323,6 +325,10 @@ impl Xorshift64Star {
 struct Verdict {
     /// `Some((channel, verdict))` once the first standard verdict lands.
     result: Option<(String, VerificationVerdict)>,
+    /// Authored failure messages carried by a structured telemetry verdict.
+    failure_details: Vec<String>,
+    failure_detail_bytes: usize,
+    failure_details_truncated: bool,
     /// Set from the CLI so the observer can filter by channel.
     want_channel: Option<String>,
     /// Set for SysML panel runs so the child returns typed check evidence.
@@ -639,9 +645,46 @@ struct VerificationSourceRevision {
     at_start: Option<u64>,
 }
 
-const MAX_SCENE_TEST_NON_PASS_DETAILS: usize = 256;
-const MAX_SCENE_TEST_NON_PASS_BYTES: usize = 32 * 1024;
+const MAX_SCENE_TEST_DETAILS: usize = 256;
+const MAX_SCENE_TEST_DETAIL_BYTES: usize = 32 * 1024;
 const MAX_SCENE_TEST_EVIDENCE_BYTES: usize = 64 * 1024;
+
+fn parse_verdict_payload(payload: &TelemetryValue) -> Option<(VerificationVerdict, Vec<String>)> {
+    let (status, details) = match payload {
+        TelemetryValue::String(status) => (status.as_str(), Vec::new()),
+        TelemetryValue::Map(fields) => {
+            let TelemetryValue::String(status) = fields.get("verdict")? else {
+                return None;
+            };
+            let TelemetryValue::Array(details) = fields.get("failures")? else {
+                return None;
+            };
+            match fields.get("check_count")? {
+                TelemetryValue::I64(count) if *count >= 0 => {}
+                TelemetryValue::U64(_) => {}
+                _ => return None,
+            }
+            let details = details
+                .iter()
+                .map(|detail| match detail {
+                    TelemetryValue::String(detail) => Some(detail.clone()),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            (status.as_str(), details)
+        }
+        _ => return None,
+    };
+    let verdict = match status {
+        "PASS" => VerificationVerdict::Pass,
+        "FAIL" => VerificationVerdict::Fail,
+        "INCONCLUSIVE" => VerificationVerdict::Inconclusive,
+        "ERROR" => VerificationVerdict::Error,
+        "UNVERIFIED" => VerificationVerdict::Unverified,
+        _ => return None,
+    };
+    Some((verdict, details))
+}
 
 fn capture_verification_evidence(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
     if verdict.verification.is_none() {
@@ -670,9 +713,9 @@ fn capture_verification_evidence(trigger: On<TelemetryEvent>, mut verdict: ResMu
             return;
         }
         let encoded_size = serde_json::to_vec(&event.data).map_or(usize::MAX, |data| data.len());
-        if verdict.non_pass_checks.len() == MAX_SCENE_TEST_NON_PASS_DETAILS
+        if verdict.non_pass_checks.len() == MAX_SCENE_TEST_DETAILS
             || verdict.non_pass_check_bytes.saturating_add(encoded_size)
-                > MAX_SCENE_TEST_NON_PASS_BYTES
+                > MAX_SCENE_TEST_DETAIL_BYTES
         {
             verdict.details_truncated = true;
             return;
@@ -1124,12 +1167,11 @@ fn apply_verification_selection(cli: &mut Cli) -> Result<(), String> {
     ))
 }
 
-/// Catch the scenario's verdict off the shared telemetry bus.
+/// Catch the scenario's typed verdict off the shared telemetry bus.
 ///
-/// `emit(name, "PASS"|"FAIL")` in rhai lands here as a triggered
-/// `TelemetryEvent` with a `TelemetryValue::String` payload. Anything else on
-/// the bus (zone enters, `lander_touchdown`, sampled parameters) is ignored —
-/// only a literal `PASS`/`FAIL` string is a verdict.
+/// Test helpers emit a map containing the status, check count, and failure
+/// messages. Scenarios with status-only verdicts may emit a status string.
+/// Other telemetry events are ignored.
 /// Ports the scenario declared it EXPECTS to dangle, via `expect_fault(port)`.
 ///
 /// A fixture scene can be deliberately malformed — `lint_selftest` authors wires that
@@ -1184,20 +1226,31 @@ fn catch_verdict(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
             return;
         }
     }
-    let TelemetryValue::String(payload) = &evt.data else {
+    let Some((result, details)) = parse_verdict_payload(&evt.data) else {
         return;
     };
-    let result = match payload.as_str() {
-        "PASS" => VerificationVerdict::Pass,
-        "FAIL" => VerificationVerdict::Fail,
-        "INCONCLUSIVE" => VerificationVerdict::Inconclusive,
-        "ERROR" => VerificationVerdict::Error,
-        "UNVERIFIED" => VerificationVerdict::Unverified,
-        _ => return,
-    };
     let name = evt.name.clone();
-    info!("[luncosim test] verdict received on channel {name}: {payload}");
+    let label = match result {
+        VerificationVerdict::Pass => "PASS",
+        VerificationVerdict::Fail => "FAIL",
+        VerificationVerdict::Inconclusive => "INCONCLUSIVE",
+        VerificationVerdict::Error => "ERROR",
+        VerificationVerdict::Unverified => "UNVERIFIED",
+    };
+    info!("[luncosim test] verdict received on channel {name}: {label}");
     verdict.result = Some((name, result));
+    for detail in details {
+        let next_bytes = verdict.failure_detail_bytes.saturating_add(detail.len());
+        if verdict.failure_details.len() == MAX_SCENE_TEST_DETAILS
+            || next_bytes > MAX_SCENE_TEST_DETAIL_BYTES
+        {
+            verdict.failure_details_truncated = true;
+            verdict.details_truncated = true;
+            break;
+        }
+        verdict.failure_detail_bytes = next_bytes;
+        verdict.failure_details.push(detail);
+    }
 }
 
 fn finish_scene_test(
@@ -1741,6 +1794,9 @@ pub fn run() -> u8 {
     app.insert_resource(TimeUpdateStrategy::ManualDuration(dt));
     app.insert_resource(Verdict {
         result: None,
+        failure_details: Vec::new(),
+        failure_detail_bytes: 0,
+        failure_details_truncated: false,
         want_channel: cli.verdict_channel.clone(),
         verification: cli.verification.clone(),
         evidence: Vec::new(),
@@ -2490,6 +2546,13 @@ pub fn run() -> u8 {
                 "luncosim test {label}  scene={}  channel={channel}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
                 cli.scene,
             );
+            let verdict = app.world().resource::<Verdict>();
+            for detail in &verdict.failure_details {
+                println!("  luncosim test detail: {detail}");
+            }
+            if verdict.failure_details_truncated {
+                println!("  luncosim test detail: additional failure details were omitted");
+            }
             (1, SceneTestProcessStatus::VerdictProduced, Some(diagnostic))
         }
         None => {
@@ -2546,4 +2609,55 @@ fn list_scene_tests() -> u8 {
         println!("{}\t{scene}", test.kind.as_str());
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{VerificationVerdict, parse_verdict_payload};
+    use lunco_telemetry_core::TelemetryValue;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn structured_scene_verdict_preserves_authored_failure_details() {
+        let payload = TelemetryValue::Map(BTreeMap::from([
+            ("verdict".into(), TelemetryValue::String("FAIL".into())),
+            ("check_count".into(), TelemetryValue::I64(2)),
+            (
+                "failures".into(),
+                TelemetryValue::Array(vec![TelemetryValue::String(
+                    "tick 1 rover /Rovers/Rover_0 position.x expected 1 actual 2".into(),
+                )]),
+            ),
+        ]));
+
+        assert_eq!(
+            parse_verdict_payload(&payload),
+            Some((
+                VerificationVerdict::Fail,
+                vec!["tick 1 rover /Rovers/Rover_0 position.x expected 1 actual 2".into()],
+            ))
+        );
+    }
+
+    #[test]
+    fn status_only_scene_verdict_has_no_authored_details() {
+        assert_eq!(
+            parse_verdict_payload(&TelemetryValue::String("PASS".into())),
+            Some((VerificationVerdict::Pass, Vec::new()))
+        );
+    }
+
+    #[test]
+    fn malformed_structured_scene_verdict_is_ignored() {
+        let payload = TelemetryValue::Map(BTreeMap::from([
+            ("verdict".into(), TelemetryValue::String("FAIL".into())),
+            ("check_count".into(), TelemetryValue::I64(1)),
+            (
+                "failures".into(),
+                TelemetryValue::Array(vec![TelemetryValue::Bool(true)]),
+            ),
+        ]));
+
+        assert_eq!(parse_verdict_payload(&payload), None);
+    }
 }

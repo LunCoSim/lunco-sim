@@ -42,10 +42,10 @@ state directly against one requested reference row. It retains only the six
 checkpoint tick numbers and the first mismatch; final state is checked
 separately at the end of the run. The runner reads JSON at the explicit
 --determinism-reference PATH process boundary and exposes typed values through
-the existing Rhai query API. No serialized Rhai result event or log parser is
-part of the verdict path. Both profile launchers enable scoped Rhai INFO output
-so a failed profile prints the authored assertion that caused its terminal
-nonzero verdict while preserving the caller's other log filters.
+the existing Rhai query API. `report_verdict` returns status, check count, and
+failure messages through one typed telemetry map; the scene-test runner prints
+the authored details with its process result. The profile launchers need no
+log-filter changes or log parsing to expose a mismatch.
 
 The bridge regression found that `PreUpdate` read the render-interpolated
 `Transform` of an already-seeded body before `FixedFirst` restored the solved
@@ -74,10 +74,11 @@ build at `abc365ea6` ran the updated Rhai gate at `671c0969a`. The complete
 `DETERMINISTIC_PHYSICS_PROFILES_OK`: all ten 4/8/20-rover serial/default-Compute
 and jitter/seed profiles compared exact state and final stages at 780 ticks.
 The other-machine scene-4-serial run reached 780 ticks but failed the scene
-verdict; its output omitted the Rhai INFO failure detail. Both profile launchers
-now enable scoped Rhai INFO output. Cross-machine state comparison remains open
-until the remote failed field, build revision, and reference identity are
-available.
+verdict, but provided no assertion detail, build revision, or reference hash.
+The typed verdict now carries Rhai's first expected/actual state difference to
+the runner's stdout independently of log settings. Cross-machine state
+comparison remains open until the updated run provides the failing field, build
+revision, and reference identity.
 
 ## Findings
 

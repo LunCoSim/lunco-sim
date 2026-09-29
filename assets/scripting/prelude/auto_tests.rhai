@@ -1,9 +1,10 @@
 // ── Automated tests — how a scene test asserts and reports PASS / FAIL ─────
 //
 // A scenario is a tick hook on a live sim, not a process, so it has no exit
-// code. `scene_test` takes its verdict from TELEMETRY instead: the last thing a
-// test scenario does is `emit(channel, "PASS"|"FAIL")`, and the runner's exit
-// code follows it. These helpers are that contract, in one place.
+// code. `scene_test` takes a typed verdict from TELEMETRY: the last thing a
+// test scenario does is emit its status, check count, and failed check messages.
+// The runner's exit code follows that event, and its output includes the same
+// authored failure details without requiring a log filter.
 //
 // WHY THIS IS PRELUDE. Every test scenario needs the same six checks and the
 // same report format, and each copy of them drifts. Use these; do not paste a
@@ -133,26 +134,35 @@ fn expect_runtime_fault(kind) {
     emit("EXPECT_RUNTIME_FAULT", kind);
 }
 
-/// Print the failures, print the greppable verdict line, emit it on `channel`,
-/// and raise a toast. Call ONCE, last. Returns true on pass.
+/// Emit the typed verdict that `luncosim test` consumes.
+fn emit_test_verdict(channel, verdict, failures, check_count) {
+    emit(channel, #{
+        verdict: verdict,
+        check_count: check_count,
+        failures: failures,
+    });
+}
+
+/// Print the failures, emit their typed verdict on `channel`, and raise a toast.
+/// Call ONCE, last. Returns true on pass.
 ///
 /// `title` is the human label ("LANDING LEGS"); `channel` is the telemetry
-/// channel `scene_test --verdict-channel` reads ("LANDING_LEGS"). The LAST line
-/// printed is `<title>: PASS|FAIL`, which is what a log grep looks for.
+/// channel `scene_test --verdict-channel` reads ("LANDING_LEGS"). The final
+/// telemetry event carries the status and each failed check as typed values.
 fn report_verdict(fails, title, channel) {
     let real = [];
     for f in fails { if f != "" { real.push(f); } }
     if real.is_empty() {
         print("TESTS_OK " + fails.len());
         print(title + ": PASS");
-        emit(channel, "PASS");
+        emit_test_verdict(channel, "PASS", [], fails.len());
         notify_kind(title + ": PASS", "success");
         return true;
     }
     for f in real { print("  FAIL: " + f); }
     print("TESTS_FAIL " + real.len() + "/" + fails.len());
     print(title + ": FAIL");
-    emit(channel, "FAIL");
+    emit_test_verdict(channel, "FAIL", real, fails.len());
     notify_kind(title + ": FAIL", "error");
     false
 }
@@ -189,14 +199,14 @@ fn report_verdict_state(title, verdict, channel, reasons, check_count) {
     if verdict == "pass" {
         print("TESTS_OK " + check_count);
         print(title + ": PASS");
-        emit(channel, "PASS");
+        emit_test_verdict(channel, "PASS", [], check_count);
         notify_kind(title + ": PASS", "success");
         return true;
     }
     for reason in reasons { print("  " + label + ": " + reason); }
     print("TESTS_" + label + " " + reasons.len() + "/" + check_count);
     print(title + ": " + label);
-    emit(channel, label);
+    emit_test_verdict(channel, label, reasons, check_count);
     let kind = if verdict == "inconclusive" || verdict == "unverified" {
         "warn"
     } else { "error" };
@@ -386,7 +396,7 @@ fn fail_fast(reason, title, channel) {
     print("  FAIL: " + reason);
     print("TESTS_FAIL 1/1");
     print(title + ": FAIL");
-    emit(channel, "FAIL");
+    emit_test_verdict(channel, "FAIL", [reason], 1);
     notify_kind(title + ": FAIL — " + reason, "error");
     false
 }

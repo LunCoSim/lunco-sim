@@ -114,19 +114,10 @@ $profiles = @(
 
 $previousAssetRoot = $env:LUNCO_ASSET_ROOT
 $hadAssetRoot = Test-Path Env:LUNCO_ASSET_ROOT
-$previousRustLog = $env:RUST_LOG
-$hadRustLog = Test-Path Env:RUST_LOG
 $failedExitCode = 0
 Push-Location $root
 try {
     $env:LUNCO_ASSET_ROOT = Join-Path $root 'assets'
-    $baseRustLog = if ([string]::IsNullOrWhiteSpace($previousRustLog)) {
-        'warn'
-    }
-    else {
-        $previousRustLog
-    }
-    $env:RUST_LOG = "$baseRustLog,lunco_scripting_rhai_world::world_bridge=info"
     foreach ($runProfile in $profiles) {
         Write-Host "`nDeterminism profile: $($runProfile.Name)"
         $arguments = @(
@@ -153,12 +144,6 @@ finally {
     }
     else {
         Remove-Item Env:LUNCO_ASSET_ROOT -ErrorAction SilentlyContinue
-    }
-    if ($hadRustLog) {
-        $env:RUST_LOG = $previousRustLog
-    }
-    else {
-        Remove-Item Env:RUST_LOG -ErrorAction SilentlyContinue
     }
 }
 

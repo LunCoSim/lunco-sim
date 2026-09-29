@@ -576,8 +576,9 @@ fn on_start(me, ctx) {
 
     let group = find_path("/MultiRoverStress/Rovers");
     if group == () || group < 0 {
-        print("MULTI-ROVER STRESS: FAIL — /MultiRoverStress/Rovers is absent");
-        emit("MULTI_ROVER_STRESS", "FAIL");
+        let failure = "/MultiRoverStress/Rovers is absent";
+        print("MULTI-ROVER STRESS: FAIL — " + failure);
+        emit_test_verdict("MULTI_ROVER_STRESS", "FAIL", [failure], 1);
         this.phase = "done";
         return;
     }
@@ -672,9 +673,10 @@ fn on_start(me, ctx) {
     // A one-rover run is not a stress matrix. The exact 4/8/20 cardinality is
     // authored by each USD fixture; discovery keeps this reader reusable.
     if this.rovers.len() < 4 {
-        print("MULTI-ROVER STRESS: FAIL — discovered only " + this.rovers.len() +
-              " rover(s); minimum matrix cardinality is four");
-        emit("MULTI_ROVER_STRESS", "FAIL");
+        let failure = "discovered only " + this.rovers.len() +
+            " rover(s); minimum matrix cardinality is four";
+        print("MULTI-ROVER STRESS: FAIL — " + failure);
+        emit_test_verdict("MULTI_ROVER_STRESS", "FAIL", [failure], 1);
         this.phase = "done";
         return;
     }

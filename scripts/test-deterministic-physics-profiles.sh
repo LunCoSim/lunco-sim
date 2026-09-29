@@ -4,7 +4,6 @@ set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 binary="${LUNCOSIM_BIN:-$root/target/debug/luncosim}"
 reference="${LUNCOSIM_DETERMINISM_REFERENCE:-$root/scripts/tests/fixtures/deterministic-physics-reference.json}"
-rhailog="${RUST_LOG:-warn},lunco_scripting_rhai_world::world_bridge=info"
 
 if [[ "$binary" == */* ]]; then
     [[ -x "$binary" ]] || { printf 'luncosim binary is not executable: %s\n' "$binary" >&2; exit 2; }
@@ -18,7 +17,7 @@ cd "$root"
 run_profile() {
     local name="$1" scene="$2" threads="$3" jitter="$4" seed="$5"
     printf '\nDeterminism profile: %s\n' "$name"
-    RUST_LOG="$rhailog" LUNCO_ASSET_ROOT="$root/assets" "$binary" test \
+    LUNCO_ASSET_ROOT="$root/assets" "$binary" test \
         --scene "$scene" \
         --threads "$threads" \
         --jitter "$jitter" \

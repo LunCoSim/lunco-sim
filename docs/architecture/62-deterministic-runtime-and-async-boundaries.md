@@ -1254,8 +1254,11 @@ The whole-simulation guarantee remains open because:
    articulated state with exact equality (`numeric_tolerance=0`). It retains
    only checkpoint tick numbers and the first mismatch; it also verifies an
    altered physics row is rejected and emits no trace or result bundle.
-   `report_verdict` and the scene-test process exit code are the
-   completion contract. The Bash and PowerShell matrices in
+   `report_verdict` emits the status, check count, and authored failure
+   messages in a typed telemetry map. The scene-test runner prints those
+   details with its verdict and returns the matching process exit code, so
+   failure diagnosis does not depend on Rhai log visibility. The Bash and
+   PowerShell matrices in
    `scripts/test-deterministic-physics-profiles.sh` and
    `scripts/test-deterministic-physics-profiles.ps1` invoke production
    `luncosim test` processes and check their exit statuses. They leave
