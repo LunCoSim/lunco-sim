@@ -452,7 +452,7 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "clock_snapshot",
         "clock_snapshot()",
         "map",
-        "READ. Snapshot of fixed, virtual, physics, mission, wall, clock-tree, transport, and co-simulation clocks. `sim_tick` is the deterministic master; wall time is diagnostic-only.",
+        "READ. Snapshot of fixed, virtual, physics, mission, wall, clock-tree, transport, and co-simulation clocks, including active physics-hold reasons. `sim_tick` is the deterministic master; wall time is diagnostic-only.",
     ),
     (
         "execution_context",

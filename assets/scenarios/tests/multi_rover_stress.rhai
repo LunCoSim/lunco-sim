@@ -155,7 +155,43 @@ fn deterministic_state_sample(rover_paths, rovers, capture_modelica_values) {
     if rover_paths.len() != rovers.len() {
         return #{ valid: false, row: sim_tick().to_string() + "|invalid-roster" };
     }
-    let valid = true;
+    let clocks = clock_snapshot();
+    if clocks == () || clocks.fixed_dt_s == () || clocks.fixed_delta_s == ()
+        || clocks.fixed_elapsed_s == ()
+        || clocks.physics_dt_s == () || clocks.physics_elapsed_s == ()
+        || clocks.physics_paused == () || clocks.physics_holds_available != true
+        || clocks.physics_hold_reasons == () {
+        return #{ valid: false, row: sim_tick().to_string() + "|invalid-clocks" };
+    }
+    let tick = sim_tick();
+    let expected_fixed_elapsed = tick.to_float() * clocks.fixed_dt_s;
+    let expected_fixed_delta = if tick > 0 { clocks.fixed_dt_s } else { 0.0 };
+    let previous_physics_tick = if tick > 0 { (tick - 1).to_float() } else { 0.0 };
+    let expected_physics_elapsed = previous_physics_tick * clocks.fixed_dt_s;
+    let no_physics_holds = clocks.physics_hold_reasons.len() == 0;
+    let clocks_synchronized = close_scalar(
+        clocks.fixed_elapsed_s, expected_fixed_elapsed, 0.000000001)
+        && close_scalar(clocks.fixed_delta_s, expected_fixed_delta, 0.000000001)
+        && close_scalar(clocks.physics_elapsed_s, expected_physics_elapsed, 0.000000001)
+        && clocks.physics_paused == false
+        && no_physics_holds;
+    let valid = clocks_synchronized;
+    let hold_names = "";
+    for reason in clocks.physics_hold_reasons {
+        if hold_names != "" { hold_names += ","; }
+        hold_names += state_scalar(reason);
+    }
+    if !clocks_synchronized {
+        print("D4_CLOCK_SYNC_FAIL|tick=" + tick.to_string()
+            + "|fixedDt=" + state_scalar(clocks.fixed_dt_s)
+            + "|fixedDelta=" + state_scalar(clocks.fixed_delta_s)
+            + "|fixedElapsed=" + state_scalar(clocks.fixed_elapsed_s)
+            + "|physicsDelta=" + state_scalar(clocks.physics_dt_s)
+            + "|physicsElapsed=" + state_scalar(clocks.physics_elapsed_s)
+            + "|physicsPaused=" + state_scalar(clocks.physics_paused)
+            + "|barrierHeld=" + state_scalar(clocks.barrier_held)
+            + "|physicsHolds=" + hold_names);
+    }
     let row = sim_tick().to_string();
     for i in 0..rovers.len() {
         let path = rover_paths[i];
@@ -199,6 +235,14 @@ fn deterministic_state_sample(rover_paths, rovers, capture_modelica_values) {
             continue;
         }
         row += ";" + path;
+        row += "|clock=" + state_scalar(clocks.fixed_dt_s)
+            + "," + state_scalar(clocks.fixed_delta_s)
+            + "," + state_scalar(clocks.fixed_elapsed_s)
+            + "," + state_scalar(clocks.physics_dt_s)
+            + "," + state_scalar(clocks.physics_elapsed_s)
+            + "," + state_scalar(clocks.physics_paused)
+            + "," + state_scalar(clocks.barrier_held);
+        row += "|physicsHolds=" + hold_names;
         row += "|p=" + state_vector(position);
         row += "|q=" + state_vector(rotation);
         row += "|localTf=" + state_scalar(local_x) + "," + state_scalar(local_y)
@@ -309,6 +353,9 @@ fn on_start(me, ctx) {
     this.targets = [];
     this.deterministic_trace_ticks = [];
     this.early_determinism_trace_captured = false;
+    this.last_observed_tick = 0;
+    this.first_missing_tick = ();
+    this.on_tick_sequence_valid = true;
     this.deterministic_trace_valid = true;
     this.startup_tick_valid = sim_tick() == 0;
     this.first_behavior_tick_valid = false;
@@ -436,6 +483,16 @@ fn on_start(me, ctx) {
 }
 
 fn on_tick(me, ctx) {
+    let current_tick = sim_tick();
+    if current_tick != this.last_observed_tick + 1 {
+        this.on_tick_sequence_valid = false;
+        if this.first_missing_tick == () {
+            this.first_missing_tick = this.last_observed_tick + 1;
+            print("D4_ON_TICK_GAP|expected=" + this.first_missing_tick.to_string()
+                + "|observed=" + current_tick.to_string());
+        }
+    }
+    this.last_observed_tick = current_tick;
     if this.phase == "done" { return; }
     this.t += dt();
 
@@ -449,7 +506,8 @@ fn on_tick(me, ctx) {
         print("D4_EARLY_STATE_TRACE_V1|" + sample.row);
     }
     if sim_tick() <= 30 || (sim_tick() <= 150 && sim_tick() % 10 == 0) {
-        let capture_modelica_values = sim_tick() >= 10 && sim_tick() <= 20;
+        let capture_modelica_values = (this.rovers.len() <= 8 && sim_tick() > 1)
+            || (sim_tick() >= 10 && sim_tick() <= 20);
         let sample = deterministic_state_sample(this.rover_paths, this.rovers,
             capture_modelica_values);
         this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
@@ -543,6 +601,9 @@ fn on_tick(me, ctx) {
         "on_start ran at SimTick 0 after the complete startup admission boundary"));
     checks.push(t_true(this.first_behavior_tick_valid,
         "the first on_tick ran at SimTick 1"));
+    checks.push(t_true(this.on_tick_sequence_valid,
+        "on_tick observed every admitted SimTick exactly once; first gap="
+            + state_scalar(this.first_missing_tick)));
     checks.push(t_true(this.guidance_checked && this.guidance_command_ready,
         "every rover received its authored Modelica guidance setpoint"));
     checks.push(t_true(this.physics_profile_known && this.physics_compute_threads >= 1,
