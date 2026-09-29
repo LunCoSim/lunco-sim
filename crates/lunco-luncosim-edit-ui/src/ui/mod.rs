@@ -691,11 +691,23 @@ impl Plugin for SceneEditUiPlugin {
         app.add_observer(entity_list::on_twin_closed);
         app.add_systems(
             Update,
-            entity_list::poll_entity_tree_view_build.run_if(entity_list::entity_tree_task_pending),
+            entity_list::poll_entity_tree_view_build
+                .run_if(entity_list::entity_tree_task_pending)
+                .before(ViewModelSet),
+        );
+        app.add_systems(
+            Update,
+            entity_list::mark_entity_tree_view_dirty
+                .run_if(lunco_core_runtime::gate::tracked(
+                    "entity_tree_topology_changed",
+                    entity_list::scene_topology_changed,
+                ))
+                .after(entity_list::poll_entity_tree_view_build)
+                .before(ViewModelSet),
         );
         app.add_view_model(
             entity_list::populate_entity_tree_view,
-            entity_list::scene_topology_changed.or_else(entity_list::entity_tree_build_due),
+            entity_list::entity_tree_build_due,
         );
 
         // The universal port table is a live diagnostic/control surface. Its

@@ -116,6 +116,10 @@ search for phase-space curves where X can reverse.
 For the entity tree, derive parent and grid facts through indexed lookups along
 named candidates' deduplicated ancestor closure instead of copying every scene
 entity's `ChildOf` and `Grid` membership into the snapshot.
+Keep topology invalidation separate from the query-heavy snapshot producer:
+mark the revision dirty when scene facts change, then gate snapshot work until
+no prior worker is active. This lets a revision change reject an in-flight tree
+result without re-entering the full ECS query system just to discard it.
 For Builder telemetry, inspect `telemetry_catalog_snapshot_start`,
 `telemetry_catalog_snapshot`, and `telemetry_catalog_build_worker` separately.
 The start span captures channel identities and owner ancestry once;

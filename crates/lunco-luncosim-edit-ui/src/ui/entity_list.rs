@@ -353,11 +353,11 @@ fn compute_shown(
     vis
 }
 
-/// Change-driven producer for [`EntityTreeView`]. A **normal** Bevy system with
+/// Snapshot producer for [`EntityTreeView`]. A **normal** Bevy system with
 /// cached `Query` params — no per-frame `QueryState` rebuild — gated by
-/// [`scene_topology_changed`] so the whole harvest only runs when the scene
-/// actually changes. This is the entire cost the old per-frame `render` paid; it
-/// now runs ~once per topology change instead of every frame.
+/// [`entity_tree_build_due`]. Topology changes mark the build dirty separately,
+/// so a pending worker never re-enters this query-heavy system just to discard
+/// its result.
 pub(crate) fn populate_entity_tree_view(
     mut build: ResMut<EntityTreeBuildState>,
     settings: Res<EntityListSettings>,
@@ -379,10 +379,8 @@ pub(crate) fn populate_entity_tree_view(
     )>,
 ) {
     if build.task.is_some() {
-        build.invalidate();
         return;
     }
-    build.invalidate();
 
     let input = {
         let _span = bevy::log::info_span!("entity_tree_view_snapshot").entered();
@@ -662,7 +660,7 @@ fn derive_entity_tree_view(input: EntityTreeBuildInput) -> EntityTreeView {
     view
 }
 
-/// Run condition for [`populate_entity_tree_view`]: rebuild only when the scene
+/// Run condition for [`mark_entity_tree_view_dirty`]: report when the scene
 /// topology that the tree depends on changes — a **named** node's hierarchy is
 /// added or modified (`Changed` includes `Added`), the interesting marker sets
 /// gain members, or any of those components are removed (covers despawns). The
@@ -676,6 +674,13 @@ fn derive_entity_tree_view(input: EntityTreeBuildInput) -> EntityTreeView {
 /// Tracked automatically by `add_view_model` — see [`lunco_core_runtime::gate::tracked`].
 pub(crate) fn entity_tree_build_due(build: Res<EntityTreeBuildState>) -> bool {
     build.dirty && build.task.is_none()
+}
+
+/// Record a topology invalidation without entering the query-heavy snapshot
+/// producer. The worker revision changes immediately, so any in-flight result
+/// is rejected when it completes.
+pub(crate) fn mark_entity_tree_view_dirty(mut build: ResMut<EntityTreeBuildState>) {
+    build.invalidate();
 }
 
 pub(crate) fn scene_topology_changed(
