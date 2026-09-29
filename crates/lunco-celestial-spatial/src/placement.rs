@@ -1080,14 +1080,32 @@ pub(crate) fn sync_globe_handoffs(
         let Some(surface) = flat_surface else {
             continue;
         };
-        let next = crate::globe_lod::GlobeHandoff::new_flat(
+        let next = match crate::globe_lod::GlobeHandoff::new_flat(
             tangent.up,
             tangent.east,
             tangent.north,
             desc.radius_m,
             anchor.geodetic.height_m + surface.top_y_m,
             half_extent,
-        );
+        ) {
+            Ok(next) => next,
+            Err(reason) => {
+                commands
+                    .entity(entity)
+                    .remove::<crate::globe_lod::GlobeHandoff>();
+                replace_terrain_diagnostic(
+                    &mut diagnostics,
+                    producer,
+                    Some(terrain_diagnostic(
+                        producer,
+                        "flat-handoff-invalid",
+                        "FlatSiteSurface".to_string(),
+                        format!("cannot join the authored flat site to the body sphere: {reason}"),
+                    )),
+                );
+                continue;
+            }
+        };
         if handoff != Some(&next) {
             let collar_m = next.collar_m;
             commands.entity(entity).try_insert(next);

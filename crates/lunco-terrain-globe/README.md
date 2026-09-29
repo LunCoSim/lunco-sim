@@ -18,12 +18,13 @@ whole celestial bodies seen from orbit.
 >
 > The local DEM owns its georeferenced square. For rendering, its border datum
 > sets the globe shell radius; celestial and physics state keep the canonical
-> body radius. A crop-specific collar continues measured edge relief and slope,
-> then joins that analytic sphere. It uses only the site's cropped DEM and does
-> not require a body-wide elevation asset. The exact cutout edge is split at
-> authored DEM postings, while LOD bounds resolution across the full collar.
-> Tile selection is cached and mesh baking is asynchronous in the visualization
-> cycle. See
+> body radius. The local surface oracle preserves composed DEM relief across
+> the complete crop. One asynchronously prepared visual collar starts at the
+> exact crop boundary, continues its measured edge profile, and reaches the
+> datum-aligned sphere outside the crop. Physics and terrain queries remain
+> bounded to the crop. Globe tiles cut out the collar footprint and resume on
+> that sphere with bounded edge sampling, independent of DEM posting density
+> and camera-driven globe LOD. See
 > the design narrative in
 > [`docs/architecture/terrain-substrate.md`](../../docs/architecture/terrain-substrate.md).
 

@@ -59,8 +59,8 @@ pub struct TerrainBodyCurvature {
 /// sites append this AFTER the layer stack's contributions so every authored
 /// relief modifier receives the same physical curvature transform.
 ///
-/// `datum_m` is the site's own ground elevation — [`HeightGrid::border_datum`]
-/// of the raster base — and is used only to compute the local body radius.
+/// `datum_m` is the site's ground elevation, used only to compute its local
+/// body radius. The cropped DEM values are not altered or faded.
 pub fn curvature_contribution(radius_m: f64, datum_m: f64) -> HeightContribution {
     let m = lunco_terrain_core::BodyCurvature::new(radius_m, datum_m);
     let mut key = lunco_precompute::Fnv1a::new();
@@ -455,6 +455,57 @@ mod tests {
         );
         assert!(o.has_modifiers());
         assert_ne!(o.content_key(), 0);
+    }
+
+    #[test]
+    fn site_curvature_preserves_dem_relief_and_grid() {
+        let mut grid = HeightGrid::new_flat(9, 100.0);
+        grid.heights.fill(-1_918.0);
+        grid.heights[4 * grid.res + 4] = -1_888.0;
+        grid.heights[4 * grid.res + 8] = -1_906.0;
+        let base = Arc::new(grid);
+        let raw_heights = base.heights.clone();
+        let datum = base.border_datum();
+        let radius_m = 1_737_400.0;
+        let contributions = vec![curvature_contribution(radius_m, datum)];
+        let oracle = SurfaceOracle::new(base.clone(), contributions);
+        let sag = |x: f64, z: f64| {
+            let site_radius = radius_m + datum;
+            (site_radius * site_radius - x * x - z * z).sqrt() - site_radius
+        };
+
+        assert!((oracle.height_at(0.0, 0.0) + 1_888.0).abs() < 1.0e-9);
+        assert_eq!(
+            oracle.grid().heights,
+            raw_heights,
+            "the retained DEM is unchanged"
+        );
+        for (x, z) in [(50.0, 0.0), (99.0, 0.0), (100.0, 0.0), (-100.0, 40.0)] {
+            let expected = HeightSource::height_at(base.as_ref(), x, z) + sag(x, z);
+            assert!(
+                (oracle.height_at(x, z) - expected).abs() < 1.0e-9,
+                "cropped DEM relief changed at ({x}, {z})"
+            );
+        }
+        let collider_surface = oracle.detail_limited_region(25.0, [-100.0, -100.0], [100.0, 100.0]);
+        assert_eq!(
+            collider_surface.height_at(100.0, 0.0),
+            oracle.height_at(100.0, 0.0)
+        );
+        let materialized = oracle.materialize();
+        assert_eq!(
+            materialized.heights[4 * materialized.res + 8],
+            oracle.height_at(100.0, 0.0)
+        );
+        assert_eq!(
+            oracle.grid().heights,
+            raw_heights,
+            "materializing the derived surface must not mutate the DEM"
+        );
+        assert_ne!(
+            oracle.surface_key(),
+            SurfaceOracle::bare(flat(9, 100.0)).surface_key()
+        );
     }
 
     #[test]

@@ -99,19 +99,20 @@ The application applies the override when the active Twin settings change,
 not in the frame loop. An invalid value is reported and holds globe LOD
 reconciliation; correct the Twin setting before diagnosing a coverage failure.
 For a terrain-to-globe join, use the crop that already backs the local terrain.
-Its border datum sets the render-only globe shell radius; celestial placement
-and physics keep the canonical radius. Visualization samples the DEM edge and
-one-sided slope, continues them through a local collar, and smoothly reaches
-the analytic sphere. Terrain queries and physics keep using the local oracle.
-Keep the cutout split at authored DEM postings and refine the complete collar
-under the existing tile budget. The sphere beyond the crop is a visual closure,
-not measured regional terrain.
+Its retained DEM data stays unchanged, and its border datum sets the render-only
+globe shell radius; celestial placement and physics keep the canonical radius.
+Keep the composed terrain exact throughout the crop. One worker-prepared visual
+collar starts on the measured crop boundary and blends its edge profile to the
+matching sphere outside the crop. Queries and colliders remain bounded to the
+DEM. Globe tiles clip against the collar's outer boundary with bounded edge
+sampling; keep camera-driven globe LOD independent of DEM posting density. The
+sphere beyond the crop is visual closure, not measured regional terrain.
 
 Keep body curvature publication before the authoritative DEM build. Run the
 DEM-to-globe handoff and globe LOD in
 `RuntimeCycleSet::Visualization` after terrain builds and UI commands.
-Crop-border statistics, slope sampling, raster loading, and mesh generation stay
-on workers. Visualization keeps one keyed collar preparation per globe, polls
+Raster loading and mesh generation stay off the visualization and physics
+threads. Visualization keeps one keyed collar preparation per globe, polls
 without waiting, rejects stale results, and installs current handoffs. Globe
 meshes commit in stable coordinate order under count and byte budgets. Worker
 timing may affect visual arrival, never the simulation oracle.

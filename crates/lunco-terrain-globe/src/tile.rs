@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use bevy_mesh::{Indices, PrimitiveTopology};
 use lunco_materials::ATTRIBUTE_GLOBE_DIRECTION;
 use lunco_terrain_core::{
-    HeightSource, square_boundary_posting_spacing, square_boundary_sample_coordinate,
+    HeightSource, square_boundary_height_at, square_boundary_sample_coordinate,
 };
 
 /// The exact local DEM footprint in the body's tangent-plane coordinates.
@@ -27,19 +27,248 @@ pub struct GlobeHandoff {
     pub collar_m: f64,
 }
 
-/// A globe tile's local source-driven handoff. The DEM is clipped out of the
-/// globe inside the exact authored square; the source supplies the boundary and
-/// collar heights for the surviving globe triangles.
+/// The square removed from globe tiles beneath a local terrain edge stitch.
 #[derive(Clone, Copy)]
-pub struct GlobeSurfacePatch<'a> {
-    pub handoff: GlobeHandoff,
-    pub source: &'a dyn HeightSource,
-    /// Number of source grid samples along each DEM edge, including both ends.
-    /// Flat sites use zero because their boundary is linear.
-    pub boundary_grid_resolution: usize,
+pub struct GlobeCutout {
+    pub dir: DVec3,
+    pub east: DVec3,
+    pub north: DVec3,
+    pub site_radius_m: f64,
+    pub half_extent: f64,
 }
 
-/// Generate a mesh for a single QuadSphere tile.
+impl GlobeCutout {
+    fn coordinates(self, direction: DVec3) -> Option<[f64; 2]> {
+        let denominator = direction.dot(self.dir);
+        (denominator > 0.0).then_some([
+            direction.dot(self.east) * self.site_radius_m,
+            direction.dot(self.north) * self.site_radius_m,
+        ])
+    }
+
+    fn contains(self, direction: DVec3) -> bool {
+        self.coordinates(direction)
+            .is_some_and(|[x, z]| x.abs() <= self.half_extent && z.abs() <= self.half_extent)
+    }
+}
+
+pub const GLOBE_CUTOUT_EDGE_SEGMENTS: usize = 32;
+
+/// Build the one local collar mesh that joins a finite tangent-plane surface
+/// to its globe. The inner ring follows the measured DEM postings exactly;
+/// the outer ring follows the same sampled sphere boundary used to cut globe
+/// tiles. Radial interpolation is independent of globe LOD.
+pub fn create_square_handoff_collar_mesh(
+    handoff: GlobeHandoff,
+    source: &dyn HeightSource,
+    boundary_grid_resolution: usize,
+    radial_segments: usize,
+) -> Result<Mesh, &'static str> {
+    if !handoff.radius_m.is_finite()
+        || handoff.radius_m <= 0.0
+        || !handoff.site_radius_m.is_finite()
+        || handoff.site_radius_m <= 0.0
+        || !handoff.half_extent.is_finite()
+        || handoff.half_extent <= 0.0
+        || !handoff.collar_m.is_finite()
+        || handoff.collar_m <= 0.0
+        || boundary_grid_resolution < 2
+        || radial_segments == 0
+    {
+        return Err("collar dimensions or boundary sampling are invalid");
+    }
+
+    let outer_extent = handoff.half_extent + handoff.collar_m;
+    if !outer_extent.is_finite() {
+        return Err("collar outer extent is not finite");
+    }
+    let outer_resolution = GLOBE_CUTOUT_EDGE_SEGMENTS + 1;
+    let ring_count = radial_segments + 1;
+    let resolutions = (0..ring_count)
+        .map(|ring| {
+            collar_ring_resolution(
+                boundary_grid_resolution,
+                outer_resolution,
+                ring,
+                radial_segments,
+            )
+        })
+        .collect::<Vec<_>>();
+    let ring_vertex_counts = resolutions
+        .iter()
+        .map(|resolution| 4 * (resolution - 1))
+        .collect::<Vec<_>>();
+    let mut vertex_count = 0usize;
+    for &count in &ring_vertex_counts {
+        vertex_count = vertex_count
+            .checked_add(count)
+            .ok_or("collar mesh exceeds supported index capacity")?;
+    }
+    let index_count = ring_vertex_counts
+        .windows(2)
+        .try_fold(0usize, |sum, pair| {
+            pair[0]
+                .checked_add(pair[1])
+                .and_then(|indices| indices.checked_mul(3))
+                .and_then(|indices| sum.checked_add(indices))
+        })
+        .ok_or("collar mesh exceeds supported index capacity")?;
+    if vertex_count > u32::MAX as usize || index_count > u32::MAX as usize * 3 {
+        return Err("collar mesh exceeds supported index capacity");
+    }
+
+    let mut positions = Vec::with_capacity(vertex_count);
+    let mut normals = Vec::with_capacity(vertex_count);
+    let mut directions = Vec::with_capacity(vertex_count);
+    let center = handoff.dir * handoff.radius_m;
+    let position_at = |x: f64, z_south: f64| {
+        collar_position(&handoff, source, x, -z_south, boundary_grid_resolution)
+    };
+
+    let mut ring_starts = Vec::with_capacity(ring_count);
+    for (radial, &resolution) in resolutions.iter().enumerate() {
+        let t = collar_radial_fraction(radial, radial_segments);
+        let extent = handoff.half_extent + handoff.collar_m * t;
+        let perimeter = square_perimeter_coordinates(extent, resolution);
+        ring_starts.push(positions.len());
+        for (x, z_south) in perimeter {
+            let position = position_at(x, z_south);
+            let normal = position.normalize_or_zero();
+            if !position.is_finite() || !normal.is_finite() || normal.length_squared() < 0.9 {
+                return Err("collar mesh contains non-finite geometry");
+            }
+            let offset = position - center;
+            let direction = normal;
+            let offset = offset.as_vec3().to_array();
+            let normal = normal.as_vec3().to_array();
+            let direction = direction.as_vec3().to_array();
+            if !offset
+                .iter()
+                .chain(&normal)
+                .chain(&direction)
+                .all(|value| value.is_finite())
+            {
+                return Err("collar geometry exceeds the rendering precision range");
+            }
+            positions.push(offset);
+            normals.push(normal);
+            directions.push(direction);
+        }
+    }
+
+    let mut indices = Vec::with_capacity(index_count);
+    for radial in 0..radial_segments {
+        connect_square_rings(
+            ring_starts[radial],
+            ring_vertex_counts[radial],
+            ring_starts[radial + 1],
+            ring_vertex_counts[radial + 1],
+            &mut indices,
+        );
+    }
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(ATTRIBUTE_GLOBE_DIRECTION, directions);
+    mesh.insert_indices(Indices::U32(indices));
+    Ok(mesh)
+}
+
+fn collar_ring_resolution(
+    inner_resolution: usize,
+    outer_resolution: usize,
+    ring: usize,
+    radial_segments: usize,
+) -> usize {
+    let t = collar_radial_fraction(ring, radial_segments);
+    if inner_resolution >= outer_resolution {
+        outer_resolution
+            + ((inner_resolution - outer_resolution) as f64 * (1.0 - t).powi(2)).ceil() as usize
+    } else {
+        inner_resolution
+            + ((outer_resolution - inner_resolution) as f64 * t.powi(2)).ceil() as usize
+    }
+}
+
+fn collar_radial_fraction(ring: usize, radial_segments: usize) -> f64 {
+    let linear = ring as f64 / radial_segments as f64;
+    linear * linear
+}
+
+fn square_perimeter_coordinates(extent: f64, resolution: usize) -> Vec<(f64, f64)> {
+    let mut perimeter = Vec::with_capacity(4 * (resolution - 1));
+    let sample = |index, extent| {
+        square_boundary_sample_coordinate(index, resolution, extent)
+            .expect("validated square boundary sample")
+    };
+    for index in 0..resolution {
+        perimeter.push((sample(index, extent), -extent));
+    }
+    for index in 1..resolution {
+        perimeter.push((extent, sample(index, extent)));
+    }
+    for index in (0..resolution - 1).rev() {
+        perimeter.push((sample(index, extent), extent));
+    }
+    for index in (1..resolution - 1).rev() {
+        perimeter.push((-extent, sample(index, extent)));
+    }
+    perimeter
+}
+
+fn connect_square_rings(
+    inner_start: usize,
+    inner_count: usize,
+    outer_start: usize,
+    outer_count: usize,
+    indices: &mut Vec<u32>,
+) {
+    let mut inner = 0usize;
+    let mut outer = 0usize;
+    while inner < inner_count || outer < outer_count {
+        let a = (inner_start + inner % inner_count) as u32;
+        let c = (outer_start + outer % outer_count) as u32;
+        if inner == inner_count {
+            let d = (outer_start + (outer + 1) % outer_count) as u32;
+            indices.extend_from_slice(&[a, d, c]);
+            outer += 1;
+            continue;
+        }
+        if outer == outer_count {
+            let b = (inner_start + (inner + 1) % inner_count) as u32;
+            indices.extend_from_slice(&[a, b, c]);
+            inner += 1;
+            continue;
+        }
+        let next_inner = (inner + 1) as u128 * outer_count as u128;
+        let next_outer = (outer + 1) as u128 * inner_count as u128;
+        match next_inner.cmp(&next_outer) {
+            std::cmp::Ordering::Less => {
+                let b = (inner_start + (inner + 1) % inner_count) as u32;
+                indices.extend_from_slice(&[a, b, c]);
+                inner += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                let d = (outer_start + (outer + 1) % outer_count) as u32;
+                indices.extend_from_slice(&[a, d, c]);
+                outer += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                let b = (inner_start + (inner + 1) % inner_count) as u32;
+                let d = (outer_start + (outer + 1) % outer_count) as u32;
+                indices.extend_from_slice(&[a, b, c, b, d, c]);
+                inner += 1;
+                outer += 1;
+            }
+        }
+    }
+}
+
+/// Generate a mesh for one camera-selected QuadSphere tile.
 pub fn create_quadsphere_tile_mesh(
     _body_ent: Entity,
     face: u8,
@@ -49,22 +278,17 @@ pub fn create_quadsphere_tile_mesh(
     radius: f64,
     res: u32,
     tile_center: DVec3,
-    patch: Option<GlobeSurfacePatch<'_>>,
+    cutout: Option<GlobeCutout>,
 ) -> Mesh {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut indices = Vec::new();
     let mut directions = Vec::new();
-    let boundary_grid = patch.and_then(|patch| {
-        HandoffBoundaryGrid::new(
-            patch.handoff,
-            patch.boundary_grid_resolution,
-            patch.handoff.collar_m,
-        )
+    let cutout_samples = cutout.map(|cutout| {
+        square_boundary_sample_coordinates(cutout.half_extent, GLOBE_CUTOUT_EDGE_SEGMENTS + 1)
     });
     let tiles_at_level = 1 << level;
     let step = 2.0 / tiles_at_level as f64;
-    let tile_vertex_spacing_m = (radius * step / f64::from(res.max(1))).max(1.0);
     let start_u = -1.0 + (i as f64) * step;
     let start_v = -1.0 + (j as f64) * step;
 
@@ -73,13 +297,7 @@ pub fn create_quadsphere_tile_mesh(
             let u = start_u + (x as f64 / res as f64) * step;
             let v = start_v + (y as f64 / res as f64) * step;
             let pos_sphere = cube_to_sphere(face, u, v);
-            let (position, normal) = surface_vertex(
-                pos_sphere,
-                radius,
-                tile_center,
-                patch.as_ref(),
-                tile_vertex_spacing_m,
-            );
+            let (position, normal) = radial_sphere_vertex(pos_sphere, radius, tile_center);
             positions.push(position);
             normals.push(normal);
             directions.push(pos_sphere);
@@ -112,8 +330,7 @@ pub fn create_quadsphere_tile_mesh(
         }
     }
 
-    if let Some(patch) = patch.filter(|patch| handoff_intersects_tile(&patch.handoff, &directions))
-    {
+    if let Some(cutout) = cutout.filter(|cutout| cutout_intersects_tile(*cutout, &directions)) {
         let original_indices = std::mem::take(&mut indices);
         let original_directions = std::mem::take(&mut directions);
         let mut clipped_positions = Vec::new();
@@ -126,55 +343,30 @@ pub fn create_quadsphere_tile_mesh(
                 original_directions[tri[1] as usize],
                 original_directions[tri[2] as usize],
             ];
-            if dirs.iter().all(|&d| patch.handoff.contains(d)) {
+            if dirs.iter().all(|&d| cutout.contains(d)) {
                 continue;
             }
 
-            let polygons = if let Some(boundary_grid) = &boundary_grid {
-                let Some(bounds) = triangle_bounds_in_square(
-                    &dirs,
-                    &boundary_grid.outer_handoff,
-                    boundary_grid.outer_extent,
-                ) else {
-                    let first = clipped_positions.len() as u32;
-                    for dir in dirs {
-                        let (position, normal) = surface_vertex(
-                            dir,
-                            radius,
-                            tile_center,
-                            Some(&patch),
-                            tile_vertex_spacing_m,
-                        );
-                        clipped_positions.push(position);
-                        clipped_normals.push(normal);
-                        clipped_directions.push(dir);
-                    }
-                    clipped_indices.extend_from_slice(&[first, first + 1, first + 2]);
-                    continue;
-                };
-                clip_triangle_to_handoff_regions(&dirs, &patch.handoff, boundary_grid, bounds)
-            } else {
-                (0..5u8)
-                    .map(|region| {
-                        (
-                            clip_triangle_to_region(&dirs, &patch.handoff, region),
-                            false,
-                        )
-                    })
-                    .collect()
-            };
+            let polygons = (0..5u8)
+                .map(|region| {
+                    let polygon = clip_triangle_to_region(&dirs, &cutout, region);
+                    let split = subdivide_square_boundary_at_samples(
+                        &polygon,
+                        &dirs,
+                        &cutout,
+                        cutout.half_extent,
+                        cutout_samples.as_deref().unwrap_or_default(),
+                    );
+                    let needs_interior_fan = split.len() > polygon.len();
+                    (split, needs_interior_fan)
+                })
+                .collect::<Vec<_>>();
             for (polygon, interior_fan) in polygons {
                 for triangle in triangulate_clipped_polygon(&polygon, interior_fan) {
                     let first = clipped_positions.len() as u32;
                     for v in triangle {
                         let dir = interpolate_dir(&dirs, v.bary);
-                        let (position, normal) = surface_vertex(
-                            dir,
-                            radius,
-                            tile_center,
-                            Some(&patch),
-                            tile_vertex_spacing_m,
-                        );
+                        let (position, normal) = radial_sphere_vertex(dir, radius, tile_center);
                         clipped_positions.push(position);
                         clipped_normals.push(normal);
                         clipped_directions.push(dir);
@@ -215,390 +407,40 @@ struct ClipVertex {
     bary: [f64; 3],
 }
 
-struct HandoffBoundaryGrid {
-    posting_spacing: f64,
-    inner_samples: Vec<f64>,
-    outer_extent: f64,
-    outer_handoff: GlobeHandoff,
-    outer_samples: Vec<f64>,
-}
-
-impl HandoffBoundaryGrid {
-    fn new(handoff: GlobeHandoff, resolution: usize, collar_m: f64) -> Option<Self> {
-        let (posting_spacing, inner_samples) =
-            match square_boundary_posting_spacing(handoff.half_extent, resolution) {
-                Some(spacing) => (
-                    spacing,
-                    square_boundary_sample_coordinates(handoff.half_extent, resolution),
-                ),
-                None if resolution == 0 => {
-                    let spacing = (collar_m / 8.0).max(1.0);
-                    (
-                        spacing,
-                        vec![-handoff.half_extent, 0.0, handoff.half_extent],
-                    )
-                }
-                None => return None,
-            };
-        let outer_extent = handoff.half_extent + collar_m;
-        let outer_spacing = (collar_m / 8.0).max(posting_spacing);
-        let outer_segments = ((2.0 * outer_extent) / outer_spacing).ceil().max(1.0) as usize;
-        let outer_handoff = GlobeHandoff {
-            half_extent: outer_extent,
-            ..handoff
-        };
-        let outer_samples = (0..=outer_segments)
-            .map(|segment| {
-                -outer_extent + (2.0 * outer_extent * segment as f64 / outer_segments as f64)
-            })
-            .collect();
-        Some(Self {
-            posting_spacing,
-            inner_samples,
-            outer_extent,
-            outer_handoff,
-            outer_samples,
-        })
-    }
-}
-
-impl GlobeHandoff {
-    fn coordinates(self, direction: DVec3) -> Option<[f64; 2]> {
-        let denominator = direction.dot(self.dir);
-        if denominator <= 0.0 {
-            return None;
-        }
-        Some([
-            direction.dot(self.east) / denominator * self.site_radius_m,
-            direction.dot(self.north) / denominator * self.site_radius_m,
-        ])
-    }
-
-    pub fn contains(self, direction: DVec3) -> bool {
-        let Some([x, z]) = self.coordinates(direction) else {
-            return false;
-        };
-        x.abs() <= self.half_extent && z.abs() <= self.half_extent
-    }
-
-    fn collar_distance(self, direction: DVec3) -> Option<f64> {
-        let [x, z] = self.coordinates(direction)?;
-        Some(
-            (x.abs() - self.half_extent)
-                .max(0.0)
-                .hypot((z.abs() - self.half_extent).max(0.0)),
-        )
-    }
-}
-
-/// Evaluate one source sample on the cube-sphere ray that owns the vertex.
-///
-/// The local DEM is authored in a tangent chart, while the planetary tiles are
-/// parameterized by radial directions. Convert the tangent-chart height graph
-/// to a radius along that same ray. This preserves the DEM boundary position and
-/// keeps every outer vertex on the cube-sphere direction; translating vertices
-/// sideways between the two charts would warp the collar into ridges.
-fn surface_vertex(
-    direction: DVec3,
-    radius: f64,
-    tile_center: DVec3,
-    patch: Option<&GlobeSurfacePatch<'_>>,
-    tile_vertex_spacing_m: f64,
-) -> ([f32; 3], [f32; 3]) {
-    let globe_position = direction * radius;
-    let Some(patch) = patch else {
-        return (
-            (globe_position - tile_center).as_vec3().into(),
-            direction.as_vec3().into(),
-        );
-    };
-    let Some([x, z_body_north]) = patch.handoff.coordinates(direction) else {
-        return (
-            (globe_position - tile_center).as_vec3().into(),
-            direction.as_vec3().into(),
-        );
-    };
-    let Some(collar_distance) = patch.handoff.collar_distance(direction) else {
-        return (
-            (globe_position - tile_center).as_vec3().into(),
-            direction.as_vec3().into(),
-        );
-    };
-    if collar_distance > patch.handoff.collar_m {
-        return (
-            (globe_position - tile_center).as_vec3().into(),
-            direction.as_vec3().into(),
-        );
-    }
-
-    // Scene +Z is south in ENU, while the tile chart stores body-fixed north.
-    // The local overlay source converts chart heights onto this exact radial ray.
-    let position = surface_position(
-        &patch.handoff,
-        patch.source,
-        direction,
-        radius,
-        x,
-        z_body_north,
-    );
-    let posting_spacing =
-        square_boundary_posting_spacing(patch.handoff.half_extent, patch.boundary_grid_resolution);
-    let normal_spacing = if let Some(posting_spacing) = posting_spacing {
-        posting_spacing
-    } else {
-        tile_vertex_spacing_m
-    };
-    let normal = surface_normal(
-        &patch.handoff,
-        patch.source,
-        radius,
-        x,
-        z_body_north,
-        normal_spacing,
-        posting_spacing.is_some(),
-    );
+fn radial_sphere_vertex(direction: DVec3, radius: f64, tile_center: DVec3) -> ([f32; 3], [f32; 3]) {
+    let position = direction * radius;
     (
-        (position - tile_center).as_vec3().into(),
-        normal.as_vec3().into(),
+        (position - tile_center).as_vec3().to_array(),
+        direction.as_vec3().to_array(),
     )
 }
 
-/// Convert the local chart graph sample to the radial point on its owning ray.
-fn surface_position(
+/// Evaluate the shared datum-aligned sphere in the local tangent chart. The
+/// exterior collar converges to this same analytic shell.
+fn collar_position(
     handoff: &GlobeHandoff,
     source: &dyn HeightSource,
-    direction: DVec3,
-    radius: f64,
-    site_x: f64,
-    site_z_north: f64,
-) -> DVec3 {
-    let source_height = source.height_at(site_x, -site_z_north);
-    let radial_cosine = direction.dot(handoff.dir);
-    direction * ((radius + source_height) / radial_cosine)
-}
-
-/// Derive the normal from the composed position function at the tile's sampling
-/// scale. The exact DEM edge uses its one-sided posting normal; coarse globe
-/// vertices must not inherit a posting-scale normal that their geometry cannot
-/// represent.
-fn surface_normal(
-    handoff: &GlobeHandoff,
-    source: &dyn HeightSource,
-    radius: f64,
     x: f64,
-    z_body_north: f64,
-    epsilon: f64,
-    has_dem_boundary: bool,
+    z_north: f64,
+    boundary_grid_resolution: usize,
 ) -> DVec3 {
-    let position_at = |x: f64, z_body_north: f64| {
-        let direction = (handoff.dir
-            + handoff.east * (x / handoff.site_radius_m)
-            + handoff.north * (z_body_north / handoff.site_radius_m))
-            .normalize();
-        surface_position(handoff, source, direction, radius, x, z_body_north)
-    };
-    let boundary_tolerance = (handoff.half_extent.abs() * 1.0e-9).max(1.0e-6);
-    let east_boundary = (has_dem_boundary
-        && (x.abs() - handoff.half_extent).abs() <= boundary_tolerance)
-        .then_some(x.signum());
-    let north_boundary = (has_dem_boundary
-        && (z_body_north.abs() - handoff.half_extent).abs() <= boundary_tolerance)
-        .then_some(z_body_north.signum());
-    let east_derivative = match east_boundary {
-        Some(sign) if sign > 0.0 => {
-            position_at(x, z_body_north) - position_at(x - epsilon, z_body_north)
-        }
-        Some(_) => position_at(x + epsilon, z_body_north) - position_at(x, z_body_north),
-        None => position_at(x + epsilon, z_body_north) - position_at(x - epsilon, z_body_north),
-    };
-    let north_derivative = match north_boundary {
-        Some(sign) if sign > 0.0 => {
-            position_at(x, z_body_north) - position_at(x, z_body_north - epsilon)
-        }
-        Some(_) => position_at(x, z_body_north + epsilon) - position_at(x, z_body_north),
-        None => position_at(x, z_body_north + epsilon) - position_at(x, z_body_north - epsilon),
-    };
-    let normal = north_derivative.cross(east_derivative).normalize_or_zero();
-    if normal.dot(handoff.dir) < 0.0 {
-        -normal
+    let height = if boundary_grid_resolution >= 2 {
+        square_boundary_height_at(
+            source,
+            x,
+            -z_north,
+            handoff.half_extent,
+            boundary_grid_resolution,
+        )
+        .unwrap_or_else(|| source.height_at(x, -z_north))
     } else {
-        normal
-    }
+        source.height_at(x, -z_north)
+    };
+    handoff.dir * (handoff.radius_m + height) + handoff.east * x + handoff.north * z_north
 }
 
 fn interpolate_dir(dirs: &[DVec3; 3], bary: [f64; 3]) -> DVec3 {
     (dirs[0] * bary[0] + dirs[1] * bary[1] + dirs[2] * bary[2]).normalize()
-}
-
-fn triangle_bounds_in_square(
-    dirs: &[DVec3; 3],
-    handoff: &GlobeHandoff,
-    extent: f64,
-) -> Option<[f64; 4]> {
-    let polygon = clip_triangle_to_rectangle(dirs, handoff, [-extent, extent, -extent, extent]);
-    if polygon.len() < 3 {
-        return None;
-    }
-    let mut bounds = [
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-    ];
-    for vertex in polygon {
-        let [x, z] = handoff.coordinates(interpolate_dir(dirs, vertex.bary))?;
-        bounds[0] = bounds[0].min(x);
-        bounds[1] = bounds[1].max(x);
-        bounds[2] = bounds[2].min(z);
-        bounds[3] = bounds[3].max(z);
-    }
-    Some(bounds)
-}
-
-fn clip_triangle_to_handoff_regions(
-    dirs: &[DVec3; 3],
-    handoff: &GlobeHandoff,
-    boundary_grid: &HandoffBoundaryGrid,
-    bounds: [f64; 4],
-) -> Vec<(Vec<ClipVertex>, bool)> {
-    let inner_extent = handoff.half_extent;
-    let outer_extent = boundary_grid.outer_extent;
-    let outer_handoff = &boundary_grid.outer_handoff;
-    let mut polygons = Vec::with_capacity(13);
-
-    // Keep the globe outside the full transition annulus in the existing
-    // disjoint regions, including the hemisphere behind the tangent plane.
-    for region in 0..5u8 {
-        let clipped = clip_triangle_to_region(dirs, outer_handoff, region);
-        if clipped.len() < 3 {
-            continue;
-        }
-        let polygon = subdivide_square_boundary_at_samples(
-            &clipped,
-            dirs,
-            outer_handoff,
-            outer_extent,
-            &boundary_grid.outer_samples,
-        );
-        let split = polygon.len() > clipped.len();
-        polygons.push((polygon, split));
-    }
-
-    // Split the transition annulus at measured DEM edge postings. Mesh LOD
-    // controls the annulus cell size; it does not inherit DEM posting density
-    // across the full collar width.
-    let inner_samples = &boundary_grid.inner_samples;
-    let z_intervals = sample_interval_range(inner_samples, bounds[2], bounds[3]);
-    let x_intervals = sample_interval_range(inner_samples, bounds[0], bounds[1]);
-    let left_strip = bounds[0] <= -inner_extent && bounds[1] >= -outer_extent;
-    let right_strip = bounds[1] >= inner_extent && bounds[0] <= outer_extent;
-    let bottom_strip = bounds[2] <= -inner_extent && bounds[3] >= -outer_extent;
-    let top_strip = bounds[3] >= inner_extent && bounds[2] <= outer_extent;
-    let mut collar_rectangles = Vec::with_capacity(2 * (z_intervals.len() + x_intervals.len()) + 4);
-    for index in z_intervals {
-        let min_z = inner_samples[index];
-        let max_z = inner_samples[index + 1];
-        if left_strip {
-            collar_rectangles.push([-outer_extent, -inner_extent, min_z, max_z]);
-        }
-        if right_strip {
-            collar_rectangles.push([inner_extent, outer_extent, min_z, max_z]);
-        }
-    }
-    for index in x_intervals {
-        let min_x = inner_samples[index];
-        let max_x = inner_samples[index + 1];
-        if bottom_strip {
-            collar_rectangles.push([min_x, max_x, -outer_extent, -inner_extent]);
-        }
-        if top_strip {
-            collar_rectangles.push([min_x, max_x, inner_extent, outer_extent]);
-        }
-    }
-    for [min_x, max_x, min_z, max_z] in [
-        [-outer_extent, -inner_extent, -outer_extent, -inner_extent],
-        [inner_extent, outer_extent, -outer_extent, -inner_extent],
-        [-outer_extent, -inner_extent, inner_extent, outer_extent],
-        [inner_extent, outer_extent, inner_extent, outer_extent],
-    ] {
-        if bounds_intersect_rectangle(bounds, [min_x, max_x, min_z, max_z]) {
-            collar_rectangles.push([min_x, max_x, min_z, max_z]);
-        }
-    }
-    for [min_x, max_x, min_z, max_z] in collar_rectangles {
-        let clipped = clip_triangle_to_rectangle(dirs, handoff, [min_x, max_x, min_z, max_z]);
-        if clipped.len() < 3 {
-            continue;
-        }
-        let inner_split = subdivide_square_boundary(
-            &clipped,
-            dirs,
-            handoff,
-            inner_extent,
-            &boundary_grid.inner_samples,
-        );
-        let outer_split = subdivide_square_boundary_at_samples(
-            &inner_split,
-            dirs,
-            outer_handoff,
-            outer_extent,
-            &boundary_grid.outer_samples,
-        );
-        let collar_edge_spacing = (handoff.collar_m / 8.0).max(boundary_grid.posting_spacing);
-        let polygon = subdivide_polygon_edges(&outer_split, dirs, handoff, collar_edge_spacing);
-        polygons.push((polygon, true));
-    }
-    polygons
-}
-
-fn sample_interval_range(samples: &[f64], min: f64, max: f64) -> std::ops::Range<usize> {
-    if samples.len() < 2 || max < samples[0] || min > samples[samples.len() - 1] {
-        return 0..0;
-    }
-    let min = min.max(samples[0]);
-    let max = max.min(samples[samples.len() - 1]);
-    let first = samples
-        .partition_point(|sample| *sample < min)
-        .saturating_sub(1)
-        .min(samples.len() - 2);
-    let end = samples
-        .partition_point(|sample| *sample <= max)
-        .min(samples.len() - 1)
-        .max(first + 1);
-    first..end
-}
-
-fn bounds_intersect_rectangle(bounds: [f64; 4], [min_x, max_x, min_z, max_z]: [f64; 4]) -> bool {
-    bounds[1] >= min_x && bounds[0] <= max_x && bounds[3] >= min_z && bounds[2] <= max_z
-}
-
-fn clip_triangle_to_rectangle(
-    dirs: &[DVec3; 3],
-    handoff: &GlobeHandoff,
-    [min_x, max_x, min_z, max_z]: [f64; 4],
-) -> Vec<ClipVertex> {
-    clip_triangle_to_half_planes(
-        dirs,
-        handoff,
-        0,
-        &[
-            (0.0, 0.0, 0.0), // front hemisphere
-            (-1.0, 0.0, min_x),
-            (1.0, 0.0, -max_x),
-            (0.0, -1.0, min_z),
-            (0.0, 1.0, -max_z),
-        ],
-    )
-}
-
-fn subdivide_square_boundary(
-    polygon: &[ClipVertex],
-    dirs: &[DVec3; 3],
-    handoff: &GlobeHandoff,
-    extent: f64,
-    samples: &[f64],
-) -> Vec<ClipVertex> {
-    subdivide_square_boundary_at_samples(polygon, dirs, handoff, extent, samples)
 }
 
 fn square_boundary_sample_coordinates(extent: f64, grid_resolution: usize) -> Vec<f64> {
@@ -610,7 +452,7 @@ fn square_boundary_sample_coordinates(extent: f64, grid_resolution: usize) -> Ve
 fn subdivide_square_boundary_at_samples(
     polygon: &[ClipVertex],
     dirs: &[DVec3; 3],
-    handoff: &GlobeHandoff,
+    handoff: &GlobeCutout,
     extent: f64,
     samples: &[f64],
 ) -> Vec<ClipVertex> {
@@ -651,22 +493,13 @@ fn subdivide_square_boundary_at_samples(
             samples.partition_point(|target| *target <= min_value + segment_tolerance);
         let end_sample = samples.partition_point(|target| *target < max_value - segment_tolerance);
         let add_sample = |target: f64, subdivided: &mut Vec<ClipVertex>| {
-            // Gnomonic square boundaries are linear half-planes in the
-            // unnormalised barycentric direction, so this intersection is
-            // exact along the source triangle edge.
+            // The orthographic square edge is curved in direction space.
+            // Solve its intersection along this source triangle edge so the
+            // added globe vertex lands on the collar's exact chart boundary.
             let c = -target;
-            let fs = region_value(start, dirs, handoff, 0, a, b, c);
-            let fe = region_value(end, dirs, handoff, 0, a, b, c);
-            let denominator = fs - fe;
-            if !denominator.is_finite() || denominator.abs() <= f64::EPSILON {
-                return;
-            }
-            let t = (fs / denominator).clamp(0.0, 1.0);
-            subdivided.push(ClipVertex {
-                bary: std::array::from_fn(|component| {
-                    start.bary[component] + (end.bary[component] - start.bary[component]) * t
-                }),
-            });
+            subdivided.push(intersect_chart_boundary(
+                start, end, dirs, handoff, 0, a, b, c,
+            ));
         };
         if first_sample >= end_sample {
             continue;
@@ -684,46 +517,9 @@ fn subdivide_square_boundary_at_samples(
     subdivided
 }
 
-fn subdivide_polygon_edges(
-    polygon: &[ClipVertex],
-    dirs: &[DVec3; 3],
-    handoff: &GlobeHandoff,
-    max_edge_length: f64,
-) -> Vec<ClipVertex> {
-    if polygon.len() < 2 || !max_edge_length.is_finite() || max_edge_length <= 0.0 {
-        return polygon.to_vec();
-    }
-    let mut subdivided = Vec::with_capacity(polygon.len());
-    for (index, start) in polygon.iter().copied().enumerate() {
-        let end = polygon[(index + 1) % polygon.len()];
-        subdivided.push(start);
-        let Some([start_x, start_z]) = handoff.coordinates(interpolate_dir(dirs, start.bary))
-        else {
-            continue;
-        };
-        let Some([end_x, end_z]) = handoff.coordinates(interpolate_dir(dirs, end.bary)) else {
-            continue;
-        };
-        let length = (end_x - start_x).hypot(end_z - start_z);
-        if !length.is_finite() || length <= max_edge_length {
-            continue;
-        }
-        let segments = (length / max_edge_length).ceil() as usize;
-        for segment in 1..segments {
-            let t = segment as f64 / segments as f64;
-            subdivided.push(ClipVertex {
-                bary: std::array::from_fn(|component| {
-                    start.bary[component] + (end.bary[component] - start.bary[component]) * t
-                }),
-            });
-        }
-    }
-    subdivided
-}
-
 fn clip_triangle_to_half_planes(
     dirs: &[DVec3; 3],
-    handoff: &GlobeHandoff,
+    handoff: &GlobeCutout,
     region: u8,
     cuts: &[(f64, f64, f64)],
 ) -> Vec<ClipVertex> {
@@ -752,12 +548,9 @@ fn clip_triangle_to_half_planes(
             let start_inside = fs <= 0.0;
             let end_inside = fe <= 0.0;
             if start_inside != end_inside {
-                let t = fs / (fs - fe);
-                next.push(ClipVertex {
-                    bary: std::array::from_fn(|component| {
-                        start.bary[component] + (end.bary[component] - start.bary[component]) * t
-                    }),
-                });
+                next.push(intersect_chart_boundary(
+                    start, end, dirs, handoff, region, a, b, c,
+                ));
             }
             if end_inside {
                 next.push(end);
@@ -768,6 +561,41 @@ fn clip_triangle_to_half_planes(
         polygon = next;
     }
     polygon
+}
+
+fn intersect_chart_boundary(
+    start: ClipVertex,
+    end: ClipVertex,
+    dirs: &[DVec3; 3],
+    handoff: &GlobeCutout,
+    region: u8,
+    a: f64,
+    b: f64,
+    c: f64,
+) -> ClipVertex {
+    let start_inside = region_value(start, dirs, handoff, region, a, b, c) <= 0.0;
+    let mut low = 0.0;
+    let mut high = 1.0;
+    for _ in 0..52 {
+        let t = (low + high) * 0.5;
+        let midpoint = ClipVertex {
+            bary: std::array::from_fn(|component| {
+                start.bary[component] + (end.bary[component] - start.bary[component]) * t
+            }),
+        };
+        let midpoint_inside = region_value(midpoint, dirs, handoff, region, a, b, c) <= 0.0;
+        if midpoint_inside == start_inside {
+            low = t;
+        } else {
+            high = t;
+        }
+    }
+    let t = (low + high) * 0.5;
+    ClipVertex {
+        bary: std::array::from_fn(|component| {
+            start.bary[component] + (end.bary[component] - start.bary[component]) * t
+        }),
+    }
 }
 
 fn triangulate_clipped_polygon(polygon: &[ClipVertex], interior_fan: bool) -> Vec<[ClipVertex; 3]> {
@@ -786,10 +614,8 @@ fn triangulate_clipped_polygon(polygon: &[ClipVertex], interior_fan: bool) -> Ve
         .collect()
 }
 
-/// Find the area centroid in the original triangle's barycentric plane. A
-/// clipped polygon with posting samples along the DEM edge must not use that
-/// edge's first corner as the fan hub: doing so stretches every inserted edge
-/// segment into long triangles across the coarse globe cell.
+/// Find the area centroid in the original triangle's barycentric plane so
+/// bounded samples along the cutout edge do not create long fan triangles.
 fn polygon_centroid(polygon: &[ClipVertex]) -> Option<ClipVertex> {
     if polygon.len() < 3 {
         return None;
@@ -816,16 +642,14 @@ fn polygon_centroid(polygon: &[ClipVertex]) -> Option<ClipVertex> {
         .then_some(ClipVertex { bary })
 }
 
-/// Conservative tile-level rejection for the full source handoff. The patch
-/// must reach every globe tile in the collar, not only tiles crossing the DEM
-/// cutout, or adjacent tile edges can use different surface parameterizations.
-fn handoff_intersects_tile(handoff: &GlobeHandoff, directions: &[DVec3]) -> bool {
+/// Conservative tile-level rejection for the square cutout.
+fn cutout_intersects_tile(cutout: GlobeCutout, directions: &[DVec3]) -> bool {
     let mut min_x = f64::INFINITY;
     let mut max_x = f64::NEG_INFINITY;
     let mut min_z = f64::INFINITY;
     let mut max_z = f64::NEG_INFINITY;
     for &direction in directions {
-        let Some([x, z]) = handoff.coordinates(direction) else {
+        let Some([x, z]) = cutout.coordinates(direction) else {
             return true;
         };
         min_x = min_x.min(x);
@@ -833,16 +657,15 @@ fn handoff_intersects_tile(handoff: &GlobeHandoff, directions: &[DVec3]) -> bool
         min_z = min_z.min(z);
         max_z = max_z.max(z);
     }
-    let patched_extent = handoff.half_extent + handoff.collar_m;
-    !(max_x < -patched_extent
-        || min_x > patched_extent
-        || max_z < -patched_extent
-        || min_z > patched_extent)
+    !(max_x < -cutout.half_extent
+        || min_x > cutout.half_extent
+        || max_z < -cutout.half_extent
+        || min_z > cutout.half_extent)
 }
 
 fn clip_triangle_to_region(
     dirs: &[DVec3; 3],
-    handoff: &GlobeHandoff,
+    handoff: &GlobeCutout,
     region: u8,
 ) -> Vec<ClipVertex> {
     let cuts: &[(f64, f64, f64)] = match region {
@@ -875,32 +698,23 @@ fn clip_triangle_to_region(
 fn region_value(
     vertex: ClipVertex,
     dirs: &[DVec3; 3],
-    handoff: &GlobeHandoff,
+    handoff: &GlobeCutout,
     region: u8,
     a: f64,
     b: f64,
     c: f64,
 ) -> f64 {
-    // Keep the unnormalised barycentric direction for the clipping predicate.
-    // Every boundary is homogeneous in the direction vector, so this is linear
-    // along an edge and its intersection parameter is exact. Normalising here
-    // would make the predicate nonlinear in barycentrics and place the cutout
-    // boundary at the wrong point near the horizon.
     let raw = dirs[0] * vertex.bary[0] + dirs[1] * vertex.bary[1] + dirs[2] * vertex.bary[2];
     if region == 4 {
         return raw.dot(handoff.dir);
     }
-    let denominator = raw.dot(handoff.dir);
     if a == 0.0 && b == 0.0 && c == 0.0 {
-        return -denominator;
+        return -raw.dot(handoff.dir);
     }
-    // Multiply the gnomonic half-plane by its positive denominator. This keeps
-    // the clipping function finite when an edge crosses the tangent horizon;
-    // using `INFINITY` for the back endpoint made `inf / inf` produce NaN
-    // intersection barycentrics.
-    a * raw.dot(handoff.east) * handoff.site_radius_m
-        + b * raw.dot(handoff.north) * handoff.site_radius_m
-        + c * denominator
+    let direction = raw.normalize_or_zero();
+    let x = direction.dot(handoff.east) * handoff.site_radius_m;
+    let z = direction.dot(handoff.north) * handoff.site_radius_m;
+    a * x + b * z + c
 }
 
 #[cfg(test)]
@@ -908,83 +722,344 @@ mod tests {
     use super::*;
     use bevy::mesh::VertexAttributeValues;
 
-    #[test]
-    fn posting_collar_interval_search_scales_with_the_local_triangle_bounds() {
-        let samples = square_boundary_sample_coordinates(500.0, 513);
-        let narrow = sample_interval_range(&samples, samples[256], samples[259]);
-        let broad = sample_interval_range(&samples, samples[0], samples[512]);
+    const RADIUS: f64 = 100_000.0;
+    const HALF_EXTENT: f64 = 10_000.0;
+    const COLLAR: f64 = 20_000.0;
 
-        assert!(narrow.len() <= 5);
-        assert_eq!(broad.len(), 512);
+    #[derive(Clone, Copy)]
+    struct EdgeToSphere;
+
+    impl HeightSource for EdgeToSphere {
+        fn height_at(&self, x: f64, z_south: f64) -> f64 {
+            (RADIUS * RADIUS - x * x - z_south * z_south).sqrt() - RADIUS
+        }
     }
 
-    fn handoff(half_extent: f64) -> GlobeHandoff {
+    fn handoff() -> GlobeHandoff {
         GlobeHandoff {
             dir: DVec3::X,
-            east: DVec3::Z,
-            north: DVec3::Y,
-            radius_m: 100.0,
-            site_radius_m: 100.0,
+            east: DVec3::Y,
+            north: DVec3::Z,
+            radius_m: RADIUS,
+            site_radius_m: RADIUS,
+            half_extent: HALF_EXTENT,
+            collar_m: COLLAR,
+        }
+    }
+
+    fn chart_direction(cutout: GlobeCutout, x: f64, z: f64) -> DVec3 {
+        let radial = (1.0 - (x * x + z * z) / cutout.site_radius_m.powi(2)).sqrt();
+        cutout.dir * radial
+            + cutout.east * (x / cutout.site_radius_m)
+            + cutout.north * (z / cutout.site_radius_m)
+    }
+
+    fn cutout_for(center: DVec3, half_extent: f64) -> GlobeCutout {
+        let helper = if center.y.abs() < 0.9 {
+            DVec3::Y
+        } else {
+            DVec3::X
+        };
+        let east = helper.cross(center).normalize();
+        let north = center.cross(east).normalize();
+        GlobeCutout {
+            dir: center,
+            east,
+            north,
+            site_radius_m: RADIUS,
             half_extent,
-            collar_m: half_extent,
         }
     }
 
-    #[derive(Clone, Copy)]
-    struct Flat(f64);
-
-    impl HeightSource for Flat {
-        fn height_at(&self, _x: f64, _z: f64) -> f64 {
-            self.0
+    fn point_in_polygon(point: [f64; 2], polygon: &[ClipVertex]) -> bool {
+        if polygon.len() < 3 {
+            return false;
         }
+        let signed_area: f64 = polygon
+            .iter()
+            .enumerate()
+            .map(|(index, vertex)| {
+                let next = polygon[(index + 1) % polygon.len()].bary;
+                vertex.bary[1] * next[2] - next[1] * vertex.bary[2]
+            })
+            .sum();
+        let orientation = signed_area.signum();
+        polygon.iter().enumerate().all(|(index, vertex)| {
+            let next = polygon[(index + 1) % polygon.len()].bary;
+            let a = [vertex.bary[1], vertex.bary[2]];
+            let b = [next[1], next[2]];
+            orientation * ((b[0] - a[0]) * (point[1] - a[1]) - (b[1] - a[1]) * (point[0] - a[0]))
+                >= -1.0e-12
+        })
     }
 
-    #[derive(Clone, Copy)]
-    struct Sphere(f64);
+    #[test]
+    fn one_collar_mesh_matches_dem_edge_and_radial_globe_boundary() {
+        let handoff = handoff();
+        let source = EdgeToSphere;
+        let resolution = 5;
+        let radial_segments = 4;
+        let ring_resolutions = (0..=radial_segments)
+            .map(|ring| {
+                collar_ring_resolution(
+                    resolution,
+                    GLOBE_CUTOUT_EDGE_SEGMENTS + 1,
+                    ring,
+                    radial_segments,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mesh = create_square_handoff_collar_mesh(handoff, &source, resolution, radial_segments)
+            .expect("valid finite crop collar");
+        let VertexAttributeValues::Float32x3(positions) = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .expect("collar positions")
+        else {
+            panic!("collar positions have an unexpected format");
+        };
+        let VertexAttributeValues::Float32x3(normals) = mesh
+            .attribute(Mesh::ATTRIBUTE_NORMAL)
+            .expect("collar normals")
+        else {
+            panic!("collar normals have an unexpected format");
+        };
+        let VertexAttributeValues::Float32x3(directions) = mesh
+            .attribute(ATTRIBUTE_GLOBE_DIRECTION)
+            .expect("collar directions")
+        else {
+            panic!("collar directions have an unexpected format");
+        };
 
-    impl HeightSource for Sphere {
-        fn height_at(&self, x: f64, z: f64) -> f64 {
-            self.0 / (1.0 + (x * x + z * z) / self.0.powi(2)).sqrt() - self.0
+        let center = handoff.dir * handoff.radius_m;
+        let inner_corner = center + DVec3::from_array(positions[0].map(f64::from));
+        let inner_height = source.height_at(-HALF_EXTENT, -HALF_EXTENT);
+        let expected_inner = handoff.dir * (RADIUS + inner_height) - handoff.east * HALF_EXTENT
+            + handoff.north * HALF_EXTENT;
+        assert!((inner_corner - expected_inner).length() < 2.0e-3);
+
+        let outer_start = ring_resolutions[..radial_segments]
+            .iter()
+            .map(|ring_resolution| 4 * (ring_resolution - 1))
+            .sum::<usize>();
+        let outer_count = 4 * GLOBE_CUTOUT_EDGE_SEGMENTS;
+        let outer_extent = HALF_EXTENT + COLLAR;
+        let cutout = GlobeCutout {
+            dir: handoff.dir,
+            east: handoff.east,
+            north: handoff.north,
+            site_radius_m: handoff.site_radius_m,
+            half_extent: outer_extent,
+        };
+        let expected_perimeter =
+            square_perimeter_coordinates(outer_extent, GLOBE_CUTOUT_EDGE_SEGMENTS + 1);
+        assert_eq!(expected_perimeter.len(), outer_count);
+        for (index, &(x, z_south)) in expected_perimeter.iter().enumerate() {
+            let position =
+                center + DVec3::from_array(positions[outer_start + index].map(f64::from));
+            assert!((position.length() - RADIUS).abs() < 2.0e-3);
+            let expected = chart_direction(cutout, x, -z_south) * RADIUS;
+            assert!(
+                (position - expected).length() < 2.0e-3,
+                "outer collar/cutout mismatch at {index}: position={position:?}, expected={expected:?}"
+            );
+            let normal = DVec3::from_array(normals[outer_start + index].map(f64::from));
+            assert!(
+                normal.dot(position.normalize()) > 0.98,
+                "outer collar normal mismatch at {index}: normal={normal:?}, position={position:?}"
+            );
+        }
+
+        let outer_mid_index = outer_start + GLOBE_CUTOUT_EDGE_SEGMENTS / 2;
+        let outer_mid = center + DVec3::from_array(positions[outer_mid_index].map(f64::from));
+        let outer_mid_direction = DVec3::from_array(directions[outer_mid_index].map(f64::from));
+        let expected_globe = chart_direction(cutout, 0.0, HALF_EXTENT + COLLAR) * RADIUS;
+        assert!((outer_mid - expected_globe).length() < 2.0e-3);
+        assert!(outer_mid_direction.distance(expected_globe.normalize()) < 1.0e-6);
+
+        let indices = mesh.indices().expect("collar indices");
+        let Indices::U32(indices) = indices else {
+            panic!("collar mesh must use 32-bit indices");
+        };
+        for triangle in indices.chunks_exact(3) {
+            let point =
+                |index: u32| center + DVec3::from_array(positions[index as usize].map(f64::from));
+            let a = point(triangle[0]);
+            let b = point(triangle[1]);
+            let c = point(triangle[2]);
+            assert!((b - a).cross(c - a).dot(handoff.dir) > 0.0);
         }
     }
 
     #[test]
-    fn handoff_uses_the_authored_tangent_square() {
-        let c = handoff(10.0);
-        assert!(c.contains(DVec3::new(1.0, 0.05, 0.05).normalize()));
-        assert!(!c.contains(DVec3::new(1.0, 0.2, 0.0).normalize()));
-        assert!(!c.contains(DVec3::new(1.0, 0.0, -0.2).normalize()));
+    fn collar_rings_concentrate_samples_at_the_measured_edge() {
+        assert!((collar_radial_fraction(1, 16) - 1.0 / 256.0).abs() < f64::EPSILON);
+        assert_eq!(collar_radial_fraction(16, 16), 1.0);
+        let near_edge = collar_ring_resolution(512, 33, 1, 16);
+        let outer = collar_ring_resolution(512, 33, 16, 16);
+        assert!(near_edge > 500, "near-edge resolution was {near_edge}");
+        assert_eq!(outer, 33);
     }
 
     #[test]
-    fn globe_tiles_inside_the_collar_receive_the_surface_patch() {
-        let handoff = GlobeHandoff {
+    fn collar_mesh_rejects_invalid_dimensions_and_non_finite_source_geometry() {
+        let handoff = handoff();
+        assert!(create_square_handoff_collar_mesh(handoff, &EdgeToSphere, 1, 4).is_err());
+        let mut invalid = handoff;
+        invalid.collar_m = f64::NAN;
+        assert!(create_square_handoff_collar_mesh(invalid, &EdgeToSphere, 5, 4).is_err());
+    }
+
+    #[test]
+    fn globe_cutout_uses_fixed_edge_sampling_independent_of_dem_resolution() {
+        let samples = square_boundary_sample_coordinates(
+            HALF_EXTENT + COLLAR,
+            GLOBE_CUTOUT_EDGE_SEGMENTS + 1,
+        );
+        assert_eq!(samples.len(), GLOBE_CUTOUT_EDGE_SEGMENTS + 1);
+        assert_eq!(samples[0], -(HALF_EXTENT + COLLAR));
+        assert_eq!(samples[samples.len() - 1], HALF_EXTENT + COLLAR);
+        assert!(
+            (samples[1]
+                - samples[0]
+                - 2.0 * (HALF_EXTENT + COLLAR) / GLOBE_CUTOUT_EDGE_SEGMENTS as f64)
+                .abs()
+                < 1.0e-9
+        );
+    }
+
+    #[test]
+    fn square_cutout_partitions_the_globe_triangles_without_gaps_or_overlap() {
+        let cutout = GlobeCutout {
             dir: DVec3::X,
-            east: DVec3::Z,
-            north: DVec3::Y,
-            radius_m: 100.0,
+            east: DVec3::Y,
+            north: DVec3::Z,
             site_radius_m: 100.0,
             half_extent: 10.0,
-            collar_m: 100.0,
         };
-        let source = Flat(0.0);
-        let patch = GlobeSurfacePatch {
-            handoff,
-            source: &source,
-            boundary_grid_resolution: 0,
+        let direction_at = |x: f64, z: f64| chart_direction(cutout, x, z);
+        let dirs = [
+            direction_at(-25.0, -20.0),
+            direction_at(25.0, -20.0),
+            direction_at(0.0, 25.0),
+        ];
+        let samples =
+            square_boundary_sample_coordinates(cutout.half_extent, GLOBE_CUTOUT_EDGE_SEGMENTS + 1);
+        let polygons = (0..5u8)
+            .map(|region| {
+                let polygon = clip_triangle_to_region(&dirs, &cutout, region);
+                let split = subdivide_square_boundary_at_samples(
+                    &polygon,
+                    &dirs,
+                    &cutout,
+                    cutout.half_extent,
+                    &samples,
+                );
+                (split.clone(), split.len() > polygon.len())
+            })
+            .filter(|(polygon, _)| polygon.len() >= 3)
+            .collect::<Vec<_>>();
+
+        for first in 1..40 {
+            for second in 1..40 - first {
+                let bary = [
+                    first as f64 / 40.0,
+                    second as f64 / 40.0,
+                    1.0 - (first + second) as f64 / 40.0,
+                ];
+                let direction = interpolate_dir(&dirs, bary);
+                let [x, z] = cutout.coordinates(direction).expect("front-side sample");
+                if (x.abs() - cutout.half_extent).abs() < 0.1
+                    || (z.abs() - cutout.half_extent).abs() < 0.1
+                {
+                    continue;
+                }
+                let count = polygons
+                    .iter()
+                    .filter(|(polygon, _)| point_in_polygon([bary[1], bary[2]], polygon))
+                    .count();
+                let inside_cutout = x.abs() < cutout.half_extent && z.abs() < cutout.half_extent;
+                assert_eq!(
+                    count,
+                    usize::from(!inside_cutout),
+                    "cutout sample ({x}, {z})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cutout_tile_mesh_remains_radial_and_outward_wound() {
+        let center = cube_to_sphere(0, 0.0, 0.0);
+        let cutout = cutout_for(center, 20_000.0);
+        let mesh = create_quadsphere_tile_mesh(
+            Entity::PLACEHOLDER,
+            0,
+            0,
+            0,
+            0,
+            RADIUS,
+            8,
+            center * RADIUS,
+            Some(cutout),
+        );
+        let VertexAttributeValues::Float32x3(positions) = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .expect("tile positions")
+        else {
+            panic!("tile positions have an unexpected format");
         };
-        let in_collar = DVec3::new(1.0, 0.0, 0.5).normalize();
-        let beyond_collar = DVec3::new(1.0, 0.0, 1.5).normalize();
+        let VertexAttributeValues::Float32x3(normals) = mesh
+            .attribute(Mesh::ATTRIBUTE_NORMAL)
+            .expect("tile normals")
+        else {
+            panic!("tile normals have an unexpected format");
+        };
+        let Indices::U32(indices) = mesh.indices().expect("tile indices") else {
+            panic!("tile mesh must use 32-bit indices");
+        };
+        assert!(!indices.is_empty());
+        for triangle in indices.chunks_exact(3) {
+            let a =
+                DVec3::from_array(positions[triangle[0] as usize].map(f64::from)) + center * RADIUS;
+            let b =
+                DVec3::from_array(positions[triangle[1] as usize].map(f64::from)) + center * RADIUS;
+            let c =
+                DVec3::from_array(positions[triangle[2] as usize].map(f64::from)) + center * RADIUS;
+            let geometric = (b - a).cross(c - a);
+            if geometric.length_squared() < 1.0e-8 {
+                continue;
+            }
+            let supplied = DVec3::from_array(normals[triangle[0] as usize].map(f64::from))
+                + DVec3::from_array(normals[triangle[1] as usize].map(f64::from))
+                + DVec3::from_array(normals[triangle[2] as usize].map(f64::from));
+            assert!(geometric.dot(supplied) > 0.0);
+            assert!((a.length() - RADIUS).abs() < 0.05);
+        }
+    }
 
-        assert!(!handoff.contains(in_collar));
-        assert!(handoff_intersects_tile(&handoff, &[in_collar]));
-        assert!(!handoff_intersects_tile(&handoff, &[beyond_collar]));
-
-        let (patched, _) = surface_vertex(in_collar, 100.0, DVec3::ZERO, Some(&patch), 1.0);
-        let (sphere, _) = surface_vertex(in_collar, 100.0, DVec3::ZERO, None, 1.0);
-        let patched = DVec3::from_array(patched.map(f64::from));
-        let sphere = DVec3::from_array(sphere.map(f64::from));
-        assert!((patched - sphere).length() > 1.0);
+    #[test]
+    fn cutout_covering_a_selected_tile_removes_its_globe_triangles() {
+        let face = 0;
+        let level = 3;
+        let i = 3;
+        let j = 3;
+        let step = 2.0 / f64::from(1 << level);
+        let start_u = -1.0 + f64::from(i) * step;
+        let start_v = -1.0 + f64::from(j) * step;
+        let center = cube_to_sphere(face, start_u + step * 0.5, start_v + step * 0.5);
+        let cutout = cutout_for(center, RADIUS * step * 0.75);
+        let mesh = create_quadsphere_tile_mesh(
+            Entity::PLACEHOLDER,
+            face,
+            level,
+            i,
+            j,
+            RADIUS,
+            8,
+            center * RADIUS,
+            Some(cutout),
+        );
+        assert!(mesh.indices().is_some_and(Indices::is_empty));
     }
 
     #[test]
@@ -1002,779 +1077,23 @@ mod tests {
             tile_center,
             None,
         );
+        let directions = mesh
+            .attribute(ATTRIBUTE_GLOBE_DIRECTION)
+            .expect("body-fixed globe direction attribute");
+        assert!(matches!(directions, VertexAttributeValues::Float32x3(_)));
         let VertexAttributeValues::Float32x3(positions) = mesh
             .attribute(Mesh::ATTRIBUTE_POSITION)
             .expect("globe positions")
         else {
             panic!("globe positions have an unexpected format");
         };
-        let VertexAttributeValues::Float32x3(directions) = mesh
-            .attribute(ATTRIBUTE_GLOBE_DIRECTION)
-            .expect("body-fixed globe directions")
-        else {
-            panic!("globe directions have an unexpected format");
+        let VertexAttributeValues::Float32x3(directions) = directions else {
+            unreachable!();
         };
-        assert_eq!(positions.len(), directions.len());
-        assert!(
-            mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_none(),
-            "a globe must not retain the tessellation-dependent equirectangular UV path"
-        );
-        for (position, supplied) in positions.iter().zip(directions) {
-            let body_position = tile_center + DVec3::from_array(position.map(f64::from));
-            let expected = body_position.normalize();
-            let supplied = DVec3::from_array(supplied.map(f64::from));
-            assert!((supplied.length() - 1.0).abs() < 1.0e-6);
-            assert!(
-                supplied.distance(expected) < 1.0e-6,
-                "direction {supplied:?} does not parameterise body point {body_position:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_tile_wholly_inside_the_cutout_has_no_globe_triangles() {
-        let mesh = create_quadsphere_tile_mesh(
-            Entity::PLACEHOLDER,
-            0,
-            0,
-            0,
-            0,
-            100.0,
-            2,
-            DVec3::ZERO,
-            Some(GlobeSurfacePatch {
-                handoff: handoff(1.0e9),
-                source: &Flat(0.0),
-                boundary_grid_resolution: 0,
-            }),
-        );
-        assert!(mesh.indices().is_none_or(|indices| indices.is_empty()));
-    }
-
-    #[test]
-    fn far_side_tiles_remain_when_a_front_cutout_is_present() {
-        let mesh = create_quadsphere_tile_mesh(
-            Entity::PLACEHOLDER,
-            1,
-            0,
-            0,
-            0,
-            100.0,
-            2,
-            DVec3::ZERO,
-            Some(GlobeSurfacePatch {
-                handoff: handoff(1.0),
-                source: &Flat(0.0),
-                boundary_grid_resolution: 0,
-            }),
-        );
-        assert!(mesh.indices().is_some_and(|indices| indices.len() == 24));
-    }
-
-    #[test]
-    fn clipping_across_the_tangent_horizon_stays_finite() {
-        let c = handoff(10.0);
-        let dirs = [
-            DVec3::X,
-            DVec3::new(-1.0, 0.1, 0.0).normalize(),
-            DVec3::new(1.0, 0.2, 0.0).normalize(),
-        ];
-        let mut vertices = 0;
-        for region in 0..5 {
-            for vertex in clip_triangle_to_region(&dirs, &c, region) {
-                assert!(vertex.bary.iter().all(|value| value.is_finite()));
-                let direction = interpolate_dir(&dirs, vertex.bary);
-                assert!(direction.is_finite());
-                if let Some([x, z]) = c.coordinates(direction) {
-                    let strictly_inside =
-                        x.abs() < c.half_extent - 1.0e-9 && z.abs() < c.half_extent - 1.0e-9;
-                    assert!(
-                        !strictly_inside,
-                        "region {region} clipped vertex remained in cutout: {x}, {z}, bary={:?}",
-                        vertex.bary
-                    );
-                }
-                vertices += 1;
-            }
-        }
-        assert!(vertices > 0);
-    }
-
-    #[test]
-    fn clipped_regions_partition_globe_triangles_without_gaps() {
-        let latitude = 0.42_f64;
-        let longitude = -1.13_f64;
-        let dir = DVec3::new(
-            latitude.cos() * longitude.cos(),
-            latitude.sin(),
-            latitude.cos() * longitude.sin(),
-        );
-        let east = DVec3::new(-longitude.sin(), 0.0, longitude.cos());
-        let handoff = GlobeHandoff {
-            dir,
-            east,
-            north: dir.cross(east).normalize(),
-            radius_m: 10_000.0,
-            site_radius_m: 9_982.0,
-            half_extent: 1_200.0,
-            collar_m: 1_200.0,
-        };
-        let boundary_grid =
-            HandoffBoundaryGrid::new(handoff, 17, handoff.collar_m).expect("measured boundary");
-        let uncut_triangle = vec![
-            ClipVertex {
-                bary: [1.0, 0.0, 0.0],
-            },
-            ClipVertex {
-                bary: [0.0, 1.0, 0.0],
-            },
-            ClipVertex {
-                bary: [0.0, 0.0, 1.0],
-            },
-        ];
-        let point_in_polygon = |bary: [f64; 3], polygon: &[ClipVertex]| {
-            let point = [bary[1], bary[2]];
-            polygon.iter().enumerate().all(|(index, vertex)| {
-                let next = polygon[(index + 1) % polygon.len()].bary;
-                let a = [vertex.bary[1], vertex.bary[2]];
-                let b = [next[1], next[2]];
-                (b[0] - a[0]) * (point[1] - a[1]) - (b[1] - a[1]) * (point[0] - a[0]) >= -1.0e-12
-            })
-        };
-
-        for face in 0..6u8 {
-            for level in 0..=2u32 {
-                let tiles = 1 << level;
-                let step = 2.0 / tiles as f64;
-                for j in 0..tiles {
-                    for i in 0..tiles {
-                        let start_u = -1.0 + i as f64 * step;
-                        let start_v = -1.0 + j as f64 * step;
-                        for y in 0..4 {
-                            for x in 0..4 {
-                                let u0 = start_u + x as f64 / 4.0 * step;
-                                let u1 = start_u + (x + 1) as f64 / 4.0 * step;
-                                let v0 = start_v + y as f64 / 4.0 * step;
-                                let v1 = start_v + (y + 1) as f64 / 4.0 * step;
-                                let corners = [
-                                    cube_to_sphere(face, u0, v0),
-                                    cube_to_sphere(face, u1, v0),
-                                    cube_to_sphere(face, u0, v1),
-                                    cube_to_sphere(face, u1, v1),
-                                ];
-                                let triangles = if face == 2 || face == 3 {
-                                    [
-                                        [corners[0], corners[2], corners[1]],
-                                        [corners[1], corners[2], corners[3]],
-                                    ]
-                                } else {
-                                    [
-                                        [corners[0], corners[1], corners[2]],
-                                        [corners[1], corners[3], corners[2]],
-                                    ]
-                                };
-                                for dirs in triangles {
-                                    let polygons = if dirs
-                                        .iter()
-                                        .all(|direction| handoff.contains(*direction))
-                                    {
-                                        Vec::new()
-                                    } else if let Some(bounds) = triangle_bounds_in_square(
-                                        &dirs,
-                                        &boundary_grid.outer_handoff,
-                                        boundary_grid.outer_extent,
-                                    ) {
-                                        clip_triangle_to_handoff_regions(
-                                            &dirs,
-                                            &handoff,
-                                            &boundary_grid,
-                                            bounds,
-                                        )
-                                        .into_iter()
-                                        .map(|(polygon, _)| polygon)
-                                        .collect::<Vec<_>>()
-                                    } else {
-                                        vec![uncut_triangle.clone()]
-                                    };
-                                    for b0 in 1..12 {
-                                        for b1 in 1..12 - b0 {
-                                            let bary = [
-                                                b0 as f64 / 12.0,
-                                                b1 as f64 / 12.0,
-                                                1.0 - (b0 + b1) as f64 / 12.0,
-                                            ];
-                                            let point = interpolate_dir(&dirs, bary);
-                                            let Some([x, z]) = handoff.coordinates(point) else {
-                                                assert!(
-                                                    polygons.iter().any(
-                                                        |polygon| point_in_polygon(bary, polygon)
-                                                    ),
-                                                    "back-hemisphere point was clipped: face={face}, level={level}, bary={bary:?}"
-                                                );
-                                                continue;
-                                            };
-                                            if (x.abs() - handoff.half_extent).abs() < 1.0
-                                                || (z.abs() - handoff.half_extent).abs() < 1.0
-                                            {
-                                                continue;
-                                            }
-                                            let covered = polygons
-                                                .iter()
-                                                .any(|polygon| point_in_polygon(bary, polygon));
-                                            let inside = x.abs() < handoff.half_extent
-                                                && z.abs() < handoff.half_extent;
-                                            assert_eq!(
-                                                covered, !inside,
-                                                "clipped coverage mismatch: face={face}, level={level}, x={x}, z={z}, bary={bary:?}"
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn transition_collar_clipping_keeps_every_triangle_point_outside_the_site_square() {
-        let handoff = GlobeHandoff {
-            dir: DVec3::X,
-            east: DVec3::Z,
-            north: DVec3::Y,
-            radius_m: 100.0,
-            site_radius_m: 100.0,
-            half_extent: 10.0,
-            collar_m: 50.0,
-        };
-        let direction_at = |x: f64, z: f64| {
-            (handoff.dir
-                + handoff.east * (x / handoff.site_radius_m)
-                + handoff.north * (z / handoff.site_radius_m))
-                .normalize()
-        };
-        let dirs = [
-            direction_at(-100.0, -100.0),
-            direction_at(100.0, -100.0),
-            direction_at(0.0, 100.0),
-        ];
-        let boundary_grid =
-            HandoffBoundaryGrid::new(handoff, 9, handoff.collar_m).expect("measured boundary");
-        let bounds = triangle_bounds_in_square(
-            &dirs,
-            &boundary_grid.outer_handoff,
-            boundary_grid.outer_extent,
-        )
-        .expect("triangle crosses the handoff square");
-        let polygons = clip_triangle_to_handoff_regions(&dirs, &handoff, &boundary_grid, bounds);
-        let point_in_polygon = |bary: [f64; 3], polygon: &[ClipVertex]| {
-            let point = [bary[1], bary[2]];
-            polygon.iter().enumerate().all(|(index, vertex)| {
-                let next = polygon[(index + 1) % polygon.len()].bary;
-                let a = [vertex.bary[1], vertex.bary[2]];
-                let b = [next[1], next[2]];
-                (b[0] - a[0]) * (point[1] - a[1]) - (b[1] - a[1]) * (point[0] - a[0]) >= -1.0e-12
-            })
-        };
-
-        for denominator in 2..32 {
-            for first in 1..denominator {
-                for second in 1..denominator - first {
-                    let bary = [
-                        first as f64 / denominator as f64,
-                        second as f64 / denominator as f64,
-                        1.0 - (first + second) as f64 / denominator as f64,
-                    ];
-                    let direction = interpolate_dir(&dirs, bary);
-                    let Some([x, z]) = handoff.coordinates(direction) else {
-                        continue;
-                    };
-                    if (x.abs() - handoff.half_extent).abs() < 0.1
-                        || (z.abs() - handoff.half_extent).abs() < 0.1
-                    {
-                        continue;
-                    }
-                    let covered = polygons
-                        .iter()
-                        .any(|(polygon, _)| point_in_polygon(bary, polygon));
-                    let inside_site =
-                        x.abs() < handoff.half_extent && z.abs() < handoff.half_extent;
-                    assert_eq!(
-                        covered, !inside_site,
-                        "posting-collar clipping mismatch at tangent point ({x}, {z}), bary={bary:?}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn clipped_site_boundary_uses_authored_grid_samples() {
-        let handoff = handoff(10.0);
-        let dirs = [
-            DVec3::new(1.0, -0.3, -0.3).normalize(),
-            DVec3::new(1.0, -0.3, 0.3).normalize(),
-            DVec3::new(1.0, 0.3, 0.3).normalize(),
-        ];
-        let grid_resolution = 9;
-        let spacing_m = square_boundary_posting_spacing(handoff.half_extent, grid_resolution)
-            .expect("measured posting spacing");
-        let samples = square_boundary_sample_coordinates(handoff.half_extent, grid_resolution);
-        let mut boundary_segments = 0;
-        let mut inserted_samples = 0;
-
-        for region in 0..4u8 {
-            let original = clip_triangle_to_region(&dirs, &handoff, region);
-            if original.len() < 3 {
-                continue;
-            }
-            let polygon = subdivide_square_boundary(
-                &original,
-                &dirs,
-                &handoff,
-                handoff.half_extent,
-                &samples,
-            );
-            for inserted in polygon.iter().filter(|vertex| {
-                !original.iter().any(|original| {
-                    original
-                        .bary
-                        .iter()
-                        .zip(vertex.bary)
-                        .all(|(a, b)| (a - b).abs() < 1.0e-12)
-                })
-            }) {
-                let [x, z] = handoff
-                    .coordinates(interpolate_dir(&dirs, inserted.bary))
-                    .expect("inserted source sample coordinate");
-                let grid_index = |value: f64| ((value + handoff.half_extent) / spacing_m).round();
-                let tolerance = 1.0e-6;
-                if (x.abs() - handoff.half_extent).abs() < 1.0e-7 {
-                    let index = grid_index(z);
-                    assert!((z - (-handoff.half_extent + index * spacing_m)).abs() < tolerance);
-                    inserted_samples += 1;
-                } else if (z.abs() - handoff.half_extent).abs() < 1.0e-7 {
-                    let index = grid_index(x);
-                    assert!((x - (-handoff.half_extent + index * spacing_m)).abs() < tolerance);
-                    inserted_samples += 1;
-                }
-            }
-            for index in 0..polygon.len() {
-                let start = handoff
-                    .coordinates(interpolate_dir(&dirs, polygon[index].bary))
-                    .expect("front-side boundary coordinate");
-                let end = handoff
-                    .coordinates(interpolate_dir(
-                        &dirs,
-                        polygon[(index + 1) % polygon.len()].bary,
-                    ))
-                    .expect("front-side boundary coordinate");
-                let tolerance = 1.0e-6;
-                if (start[0].abs() - handoff.half_extent).abs() < tolerance
-                    && (end[0].abs() - handoff.half_extent).abs() < tolerance
-                    && start[1].abs() <= handoff.half_extent + tolerance
-                    && end[1].abs() <= handoff.half_extent + tolerance
-                {
-                    assert!((end[1] - start[1]).abs() <= spacing_m + tolerance);
-                    boundary_segments += 1;
-                } else if (start[1].abs() - handoff.half_extent).abs() < tolerance
-                    && (end[1].abs() - handoff.half_extent).abs() < tolerance
-                    && start[0].abs() <= handoff.half_extent + tolerance
-                    && end[0].abs() <= handoff.half_extent + tolerance
-                {
-                    assert!((end[0] - start[0]).abs() <= spacing_m + tolerance);
-                    boundary_segments += 1;
-                }
-            }
-        }
-
-        assert!(boundary_segments >= 4);
-        assert!(inserted_samples > 0);
-    }
-
-    #[test]
-    fn transition_regions_cover_the_seam_once_with_bounded_edges() {
-        let mut handoff = handoff(20.0);
-        handoff.radius_m = 1_000.0;
-        handoff.site_radius_m = 1_000.0;
-        let direction_at = |x: f64, z: f64| {
-            (handoff.dir
-                + handoff.east * (x / handoff.site_radius_m)
-                + handoff.north * (z / handoff.site_radius_m))
-                .normalize()
-        };
-        let dirs = [
-            direction_at(-80.0, -50.0),
-            direction_at(80.0, -50.0),
-            direction_at(0.0, 90.0),
-        ];
-        let grid_resolution = 5;
-        let boundary_grid = HandoffBoundaryGrid::new(handoff, grid_resolution, handoff.collar_m)
-            .expect("measured posting spacing");
-        let spacing = boundary_grid.posting_spacing;
-        let inner_samples =
-            square_boundary_sample_coordinates(handoff.half_extent, grid_resolution);
-        let bounds = triangle_bounds_in_square(
-            &dirs,
-            &boundary_grid.outer_handoff,
-            boundary_grid.outer_extent,
-        )
-        .expect("triangle crosses the handoff square");
-        let polygons = clip_triangle_to_handoff_regions(&dirs, &handoff, &boundary_grid, bounds);
-        let point_in_polygon = |bary: [f64; 3], polygon: &[ClipVertex]| {
-            let point = [bary[1], bary[2]];
-            polygon.iter().enumerate().all(|(index, vertex)| {
-                let next = polygon[(index + 1) % polygon.len()].bary;
-                let a = [vertex.bary[1], vertex.bary[2]];
-                let b = [next[1], next[2]];
-                (b[0] - a[0]) * (point[1] - a[1]) - (b[1] - a[1]) * (point[0] - a[0]) >= -1.0e-12
-            })
-        };
-
-        assert!(polygons.iter().any(|(_, fan)| *fan));
-        for x_step in 1..40 {
-            for y_step in 1..40 - x_step {
-                let bary = [
-                    x_step as f64 / 40.0,
-                    y_step as f64 / 40.0,
-                    1.0 - (x_step + y_step) as f64 / 40.0,
-                ];
-                let Some([x, z]) = handoff.coordinates(interpolate_dir(&dirs, bary)) else {
-                    continue;
-                };
-                if (x.abs() - handoff.half_extent).abs() < 0.1
-                    || (z.abs() - handoff.half_extent).abs() < 0.1
-                    || inner_samples
-                        .iter()
-                        .any(|sample| (x - sample).abs() < 0.1 || (z - sample).abs() < 0.1)
-                {
-                    continue;
-                }
-                let covered = polygons
-                    .iter()
-                    .filter(|(polygon, _)| point_in_polygon(bary, polygon))
-                    .count();
-                let in_dem = x.abs() < handoff.half_extent && z.abs() < handoff.half_extent;
-                assert_eq!(covered, usize::from(!in_dem), "x={x}, z={z}, bary={bary:?}");
-            }
-        }
-
-        let outer_extent = handoff.half_extent + handoff.collar_m;
-        let max_edge_spacing = (handoff.collar_m / 8.0).max(spacing);
-        for (polygon, interior_fan) in polygons.iter().filter(|(_, fan)| *fan) {
-            for triangle in triangulate_clipped_polygon(polygon, *interior_fan) {
-                let positions = triangle.map(|vertex| {
-                    handoff
-                        .coordinates(interpolate_dir(&dirs, vertex.bary))
-                        .expect("collar vertices are in front of the tangent plane")
-                });
-                if positions.iter().any(|[x, z]| {
-                    x.abs() > outer_extent + 1.0e-6 || z.abs() > outer_extent + 1.0e-6
-                }) {
-                    continue;
-                }
-                for edge in 0..3 {
-                    let a = positions[edge];
-                    let b = positions[(edge + 1) % 3];
-                    assert!(
-                        (a[0] - b[0]).hypot(a[1] - b[1])
-                            <= max_edge_spacing * std::f64::consts::SQRT_2 * 1.01,
-                        "collar triangle edge exceeds its mesh spacing: {a:?} to {b:?}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn posting_split_polygon_triangulates_from_its_interior() {
-        let polygon = [
-            ClipVertex {
-                bary: [1.0, 0.0, 0.0],
-            },
-            ClipVertex {
-                bary: [0.75, 0.25, 0.0],
-            },
-            ClipVertex {
-                bary: [0.5, 0.5, 0.0],
-            },
-            ClipVertex {
-                bary: [0.25, 0.75, 0.0],
-            },
-            ClipVertex {
-                bary: [0.0, 1.0, 0.0],
-            },
-            ClipVertex {
-                bary: [0.0, 0.5, 0.5],
-            },
-        ];
-        let center = polygon_centroid(&polygon).expect("non-degenerate clipped polygon");
-        let center_2d = [center.bary[1], center.bary[2]];
-        assert!(center_2d[0] > 0.0 && center_2d[0] < 1.0);
-        assert!(center_2d[1] > 0.0 && center_2d[1] < 0.5);
-
-        let signed_area = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
-            (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-        };
-        let triangles_area: f64 = (0..polygon.len())
-            .map(|index| {
-                let a = [polygon[index].bary[1], polygon[index].bary[2]];
-                let b = [
-                    polygon[(index + 1) % polygon.len()].bary[1],
-                    polygon[(index + 1) % polygon.len()].bary[2],
-                ];
-                let area = signed_area(center_2d, a, b);
-                assert!(area > 0.0, "interior fan reversed an edge: {area}");
-                area * 0.5
-            })
-            .sum();
-        let polygon_area = 0.5
-            * polygon
-                .iter()
-                .enumerate()
-                .map(|(index, vertex)| {
-                    let next = polygon[(index + 1) % polygon.len()].bary;
-                    vertex.bary[1] * next[2] - next[1] * vertex.bary[2]
-                })
-                .sum::<f64>();
-        assert!((triangles_area - polygon_area).abs() < 1.0e-12);
-    }
-
-    #[test]
-    fn adjacent_cutout_regions_share_grid_aligned_square_corners() {
-        let handoff = handoff(10.0);
-        let dirs = [
-            DVec3::new(1.0, -0.2, 0.2).normalize(),
-            DVec3::new(1.0, 0.2, -0.2).normalize(),
-            DVec3::new(1.0, 0.2, 0.2).normalize(),
-        ];
-        let corner_direction = (handoff.dir + handoff.east * 0.1 + handoff.north * 0.1).normalize();
-        let has_corner = |polygon: &[ClipVertex]| {
-            polygon.iter().any(|vertex| {
-                let direction = interpolate_dir(&dirs, vertex.bary);
-                (direction - corner_direction).length() < 1.0e-10
-            })
-        };
-
-        let right = clip_triangle_to_region(&dirs, &handoff, 1);
-        let samples = square_boundary_sample_coordinates(handoff.half_extent, 9);
-        let right =
-            subdivide_square_boundary(&right, &dirs, &handoff, handoff.half_extent, &samples);
-        let top = clip_triangle_to_region(&dirs, &handoff, 3);
-
-        assert!(
-            has_corner(&right),
-            "right region must split at the square corner"
-        );
-        assert!(
-            has_corner(&top),
-            "top region must use the same square corner"
-        );
-    }
-
-    #[test]
-    fn source_handoff_meets_site_and_radial_globe_at_collar_edges() {
-        let c = GlobeHandoff {
-            dir: DVec3::X,
-            east: DVec3::Z,
-            north: DVec3::Y,
-            radius_m: 100.0,
-            site_radius_m: 80.0,
-            half_extent: 10.0,
-            collar_m: 10.0,
-        };
-        let source = Flat(-20.0);
-        let patch = GlobeSurfacePatch {
-            handoff: c,
-            source: &source,
-            boundary_grid_resolution: 0,
-        };
-        let direction_at_site_x = |x: f64| DVec3::new(1.0, 0.0, x / c.site_radius_m).normalize();
-        let (inner, _) = surface_vertex(
-            direction_at_site_x(10.0),
-            100.0,
-            DVec3::ZERO,
-            Some(&patch),
-            1.0,
-        );
-        let inner = DVec3::new(inner[0] as f64, inner[1] as f64, inner[2] as f64);
-        let expected_inner = DVec3::X * 80.0 + DVec3::Z * 10.0;
-        assert!((inner - expected_inner).length() < 1.0e-5);
-
-        let cutout_edge = direction_at_site_x(c.half_extent);
-        let edge_coords = c.coordinates(cutout_edge).expect("site cutout coordinates");
-        assert!((edge_coords[0] - c.half_extent).abs() < 1.0e-12);
-        assert!(c.contains(cutout_edge));
-
-        // Every point stays on its cube-sphere ray. In the flat site region this
-        // reproduces the tangent-plane point; the collar changes only its radial
-        // distance, never its horizontal parameterization.
-        let midpoint_direction = direction_at_site_x(15.0);
-        let (midpoint, _) =
-            surface_vertex(midpoint_direction, 100.0, DVec3::ZERO, Some(&patch), 1.0);
-        let midpoint = DVec3::new(midpoint[0] as f64, midpoint[1] as f64, midpoint[2] as f64);
-        let expected_midpoint = DVec3::X * 80.0 + DVec3::Z * 15.0;
-        assert!((midpoint - expected_midpoint).length() < 1.0e-5);
-
-        let sphere = Sphere(100.0);
-        let patch = GlobeSurfacePatch {
-            handoff: c,
-            source: &sphere,
-            boundary_grid_resolution: 0,
-        };
-        let outer_direction = direction_at_site_x(20.0);
-        let (outer, _) = surface_vertex(outer_direction, 100.0, DVec3::ZERO, Some(&patch), 1.0);
-        let outer = DVec3::new(outer[0] as f64, outer[1] as f64, outer[2] as f64);
-        assert!((outer - outer_direction * 100.0).length() < 1.0e-5);
-    }
-
-    #[test]
-    fn clipped_triangles_keep_outward_winding() {
-        let dir = DVec3::new(1.0, 1.0, 1.0).normalize();
-        let east = DVec3::new(1.0, -1.0, 0.0).normalize();
-        let north = dir.cross(east).normalize();
-        let patch = GlobeSurfacePatch {
-            handoff: GlobeHandoff {
-                dir,
-                east,
-                north,
-                radius_m: 100.0,
-                site_radius_m: 100.0,
-                half_extent: 40.0,
-                collar_m: 40.0,
-            },
-            source: &Flat(0.0),
-            boundary_grid_resolution: 0,
-        };
-
-        for face in 0..6 {
-            let mesh = create_quadsphere_tile_mesh(
-                Entity::PLACEHOLDER,
-                face,
-                1,
-                0,
-                0,
-                100.0,
-                8,
-                DVec3::ZERO,
-                Some(patch),
-            );
-            let VertexAttributeValues::Float32x3(positions) = mesh
-                .attribute(Mesh::ATTRIBUTE_POSITION)
-                .expect("globe mesh positions")
-            else {
-                panic!("globe positions have an unexpected format");
-            };
-            let VertexAttributeValues::Float32x3(normals) = mesh
-                .attribute(Mesh::ATTRIBUTE_NORMAL)
-                .expect("globe mesh normals")
-            else {
-                panic!("globe normals have an unexpected format");
-            };
-            let Some(Indices::U32(indices)) = mesh.indices() else {
-                panic!("globe mesh indices");
-            };
-
-            for triangle in indices.chunks_exact(3) {
-                let a = DVec3::from_array(positions[triangle[0] as usize].map(f64::from));
-                let b = DVec3::from_array(positions[triangle[1] as usize].map(f64::from));
-                let c = DVec3::from_array(positions[triangle[2] as usize].map(f64::from));
-                let geometric = (b - a).cross(c - a);
-                if geometric.length_squared() < 1.0e-12 {
-                    continue;
-                }
-                let supplied = DVec3::from_array(normals[triangle[0] as usize].map(f64::from))
-                    + DVec3::from_array(normals[triangle[1] as usize].map(f64::from))
-                    + DVec3::from_array(normals[triangle[2] as usize].map(f64::from));
-                assert!(
-                    geometric.dot(supplied) > 0.0,
-                    "face {face} has inward clipped triangle: {:?}",
-                    triangle
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn clipped_mesh_stays_on_the_body_shell_at_the_tangent_horizon() {
-        let latitude = 0.37_f64;
-        let longitude = -0.84_f64;
-        let dir = DVec3::new(
-            latitude.cos() * longitude.cos(),
-            latitude.sin(),
-            latitude.cos() * longitude.sin(),
-        );
-        let east = DVec3::new(-longitude.sin(), 0.0, longitude.cos());
-        let north = dir.cross(east).normalize();
-        let radius = 1_000_000.0;
-        let patch = GlobeSurfacePatch {
-            handoff: GlobeHandoff {
-                dir,
-                east,
-                north,
-                radius_m: radius,
-                site_radius_m: radius,
-                half_extent: 1_000.0,
-                collar_m: 1_500.0,
-            },
-            source: &Sphere(radius),
-            boundary_grid_resolution: 0,
-        };
-
-        for face in 0..6 {
-            let tile_center = cube_to_sphere(face, 0.0, 0.0) * radius;
-            let mesh = create_quadsphere_tile_mesh(
-                Entity::PLACEHOLDER,
-                face,
-                0,
-                0,
-                0,
-                radius,
-                32,
-                tile_center,
-                Some(patch),
-            );
-            let VertexAttributeValues::Float32x3(positions) = mesh
-                .attribute(Mesh::ATTRIBUTE_POSITION)
-                .expect("globe mesh positions")
-            else {
-                panic!("globe positions have an unexpected format");
-            };
-            let VertexAttributeValues::Float32x3(normals) = mesh
-                .attribute(Mesh::ATTRIBUTE_NORMAL)
-                .expect("globe mesh normals")
-            else {
-                panic!("globe normals have an unexpected format");
-            };
-            let Some(Indices::U32(indices)) = mesh.indices() else {
-                panic!("globe mesh indices");
-            };
-            for position in positions {
-                let body_position = tile_center + DVec3::from_array(position.map(f64::from));
-                assert!(
-                    (body_position.length() - radius).abs() < 5_000.0,
-                    "face {face} generated a horizon spike at {body_position:?} (r={})",
-                    body_position.length()
-                );
-            }
-            for triangle in indices.chunks_exact(3) {
-                let a = DVec3::from_array(positions[triangle[0] as usize].map(f64::from));
-                let b = DVec3::from_array(positions[triangle[1] as usize].map(f64::from));
-                let c = DVec3::from_array(positions[triangle[2] as usize].map(f64::from));
-                let geometric = (b - a).cross(c - a);
-                if geometric.length_squared() < 1.0e-12 {
-                    continue;
-                }
-                let supplied = DVec3::from_array(normals[triangle[0] as usize].map(f64::from))
-                    + DVec3::from_array(normals[triangle[1] as usize].map(f64::from))
-                    + DVec3::from_array(normals[triangle[2] as usize].map(f64::from));
-                assert!(
-                    geometric.dot(supplied) > 0.0,
-                    "face {face} has inward clipped triangle: {triangle:?}"
-                );
-            }
+        for (position, direction) in positions.iter().zip(directions) {
+            let position = DVec3::from_array(position.map(f64::from)) + tile_center;
+            let direction = DVec3::from_array(direction.map(f64::from));
+            assert!(position.normalize().distance(direction) < 1.0e-6);
         }
     }
 }

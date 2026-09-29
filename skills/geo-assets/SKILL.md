@@ -52,13 +52,15 @@ interactive window therefore have one policy and one cache/path resolver.
 ## Joining a cropped DEM to the rendered globe
 
 The site keeps its own cropped DEM as the only elevation input for its handoff.
-For rendering, the crop's border datum sets the visible globe shell radius;
-celestial and physics state keep the canonical body radius. Visualization
-samples the crop's measured edge heights and one-sided slopes, then builds a
-crop-specific collar that joins the finite DEM patch to the analytic sphere.
-The collar closes the render surface outside the crop; it does not add measured
-terrain to the DEM oracle or change physics. No body-wide raster asset is
-required for this handoff.
+The DEM asset and retained base grid remain unchanged, and the composed local
+surface preserves their relief throughout the crop. The crop's border datum
+sets the visible globe shell radius; celestial and physics state keep the
+canonical body radius. A worker-prepared exterior collar continues the measured
+edge profile from the exact crop boundary to the analytic sphere. This collar
+is visual closure outside the crop; terrain queries and colliders remain on the
+local surface. Globe tiles cut out the collar footprint with bounded
+orthographic edge sampling. Do not copy the collar into each tile or make
+global LOD follow DEM posting density. No body-wide raster asset is required.
 
 The active crop supplies its own georeference, posting spacing, border datum,
 and measured edge profile, so this works with Twin-local crops at different

@@ -18,20 +18,24 @@ tangent-plane DEM onto the body sphere. Its authoritative height is:
 h_in + sag
 ```
 
-This preserves every local DEM sample and applies only the physical
-body-curvature transform. A site handoff uses only its installed cropped DEM.
+The DEM asset and retained cropped base grid stay unchanged. The shared local
+oracle applies body curvature and the authored terrain layers, but keeps every
+sample inside the crop faithful to that composed DEM surface. A site handoff
+uses only its installed cropped DEM.
 For rendering, the active crop's border datum sets the visible globe shell
 radius; the celestial body's canonical radius and all physical state remain
-unchanged. The handoff measures the crop's edge heights and one-sided slopes,
-continues them for one local posting, and feathers the remaining edge relief
-into that datum-aligned sphere over a crop-specific collar. This avoids making
-an unsupported body-scale ramp from a local absolute elevation to zero.
+unchanged. The visual globe handoff starts at the exact crop boundary and uses a
+generated exterior collar to meet that datum-aligned sphere. DEM meshes,
+terrain queries, and colliders inside the crop retain the same composed
+surface; the raw DEM grid is never rewritten.
 
-The render shell and collar close the finite crop; they do not describe measured
-terrain outside it. The collar width is derived from the largest crop-edge
-relief and slope at a bounded grade. Each Twin derives the shell datum and
-transition from its own crop. No body-wide raster, download, or Apollo-specific
-identity is part of this contract.
+The render shell closes the finite crop; it does not describe measured terrain
+outside it. The square collar extends outside the crop by a bounded width
+derived from its half-width and posting size. It continues the measured edge
+profile and one-sided edge slope, then smoothly reaches the sphere; the crop
+interior is not feathered. Each Twin derives its shell datum, posting spacing,
+and collar geometry from its own crop. No body-wide raster, download, or
+Apollo-specific identity is part of this contract.
 
 The handoff is parameterized by the active crop's georeference, grid spacing,
 border datum, and measured boundary profile; it has no site or Twin identity
@@ -45,21 +49,20 @@ published before `TerrainSurfaceSet::Build`, and deferred commands are applied
 before the build captures its oracle inputs. The DEM-to-globe handoff,
 appearance adoption, and globe LOD run in
 `RuntimeCycleSet::Visualization`, after terrain builds and UI commands.
-Crop-border statistics and slope sampling, raster loading, and tile mesh
-generation run asynchronously. Visualization keeps at most one keyed collar
-preparation per globe, polls without waiting, rejects stale results, and installs
-a current handoff. Completed globe meshes retain their stable coarse-to-fine
+Raster loading and tile mesh generation run asynchronously. Visualization keeps
+at most one keyed collar preparation per globe, polls without waiting, rejects
+stale results, and installs a current handoff. Completed globe meshes retain their stable coarse-to-fine
 commit order under per-frame count and byte budgets. Worker completion timing
 can change when a visual handoff or tile appears, but it cannot change the
-physical oracle or simulation state.
+derived surface or simulation state.
 
-The globe cutout is projected in the site's local tangent chart at the crop's
-border datum. Its inner edge is split at authored DEM postings. The generated
-annulus continues those edge samples and slopes, then meets the datum-aligned
-sphere at the outer edge with matching height and slope. Both the cutout and
-full collar are clipped into each affected globe tile in the existing async
-mesh bake. LOD refines the collar to a bounded fraction of its width; it does
-not force high resolution across the whole body.
+The globe cutout and local terrain use the same orthographic tangent chart.
+One square collar mesh is prepared asynchronously: its inner ring matches the
+measured crop boundary and its outer ring lies on the analytic sphere. Globe
+triangles are clipped against the collar's outer square with bounded edge
+sampling, independent of DEM posting density. Camera-driven globe LOD remains
+unchanged, and no tile duplicates the collar geometry. The collar is a visual
+closure only; physics and terrain queries stay bounded to the DEM crop.
 
 The visible shell radius changes with the active crop datum, while celestial
 placement, gravity, terrain queries, and physics retain the canonical body
@@ -69,8 +72,10 @@ the geometry contract, not shader settings.
 
 ### Authoring guidance
 
-The authored DEM square is preserved through its boundary; a Twin needs only
-the cropped DEM used by its terrain. Do not place scene-owned terrain content
+The DEM asset and retained crop are preserved; a Twin needs only the cropped
+DEM used by its terrain. The exterior render collar connects its exact square
+perimeter to the global sphere without changing terrain heights in the crop.
+Do not place scene-owned terrain content
 outside the measured local raster unless a separate authored source provides
 it. A non-DEM site
 must explicitly mark its standard, ENU-aligned finite Plane with

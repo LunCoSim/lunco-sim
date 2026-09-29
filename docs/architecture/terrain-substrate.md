@@ -291,12 +291,15 @@ works* — height-as-function, composition, error-driven detail, content-address
   **globe** (`lunco-terrain-globe` cube-sphere) is a radial `HeightSource`; the
   **surface** (`lunco-terrain-surface` DEM inset pinned to a georef'd lat/lon) is
   a tangent-plane `HeightSource` — and craters/carves/over-zoom are modifiers on
-  *that* node. In Visualization, `lunco-celestial-spatial` projects the retained
-  site oracle into globe tiles and builds a deterministic collar from that
-  crop's own edge samples and slopes. The crop border datum sets the render-only
-  globe shell radius; celestial and physical state keep the canonical radius.
-  This joins the finite crop to an analytic sphere without changing the local
-  physics oracle or requiring a body-wide raster.
+  *that* node. The local oracle keeps its composed DEM heights throughout the
+  finite crop. In Visualization, one worker-prepared exterior collar continues
+  the measured crop boundary and joins it to a datum-aligned render sphere. The
+  crop border datum sets that render-only shell radius; celestial and physical
+  state keep the canonical radius. Globe tiles clip against the collar's outer
+  square in the same orthographic tangent chart with bounded edge sampling, so
+  camera-driven globe LOD does not track DEM posting density. Physics and
+  terrain queries remain bounded to the crop. This closes the finite crop
+  without modifying its DEM or requiring a body-wide raster.
   **`CompositeHeightSource`**
   ([`core/source.rs`](../../crates/lunco-terrain-core/src/source.rs)) remains a
   generic pure blending primitive; it does not select or load terrain assets.
