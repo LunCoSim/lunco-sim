@@ -1380,7 +1380,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
         let stored = ctx
             .resource::<lunco_scene_selection::SelectionTarget>()
             .and_then(|t| t.part)
-            .filter(|p| parts.iter().any(|(e, _)| e == p));
+            .filter(|part| parts.contains(part));
         let mut target = stored.or_else(|| default_part(ctx, &parts));
         if stored.is_none() {
             if let Some(t) = target {
@@ -2844,38 +2844,42 @@ fn part_materials(ctx: &PanelCtx, root: Entity) -> (Vec<Entity>, Option<Entity>)
     (parts, shader_holder)
 }
 
-/// Material-bearing parts of `root`'s subtree, each labelled by the shared
-/// entity presentation policy.
-fn editable_parts(ctx: &PanelCtx, root: Entity) -> Vec<(Entity, String)> {
+/// Material-bearing entities in `root`'s subtree.
+fn editable_parts(ctx: &PanelCtx, root: Entity) -> Vec<Entity> {
     let ents = subtree(ctx, root);
     let mut out = Vec::new();
     for e in ents {
         let has_shader = ctx.get::<ShaderLook>(e).is_some();
         let has_std = ctx.get::<PbrLook>(e).is_some();
         if has_shader || has_std {
-            let label = lunco_core::entity_display_name(
-                ctx.get::<Name>(e),
-                ctx.get::<lunco_core::markers::Callsign>(e),
-                ctx.get::<lunco_core::CatalogEntryId>(e),
-            );
-            let label = if label.is_empty() {
-                "Unnamed entity".to_string()
-            } else {
-                label
-            };
-            out.push((e, label));
+            out.push(e);
         }
     }
     out
 }
 
+/// Resolve the label for one material-bearing entity when the Part control
+/// needs to display it.
+fn editable_part_label(ctx: &PanelCtx, entity: Entity) -> String {
+    let label = lunco_core::entity_display_name(
+        ctx.get::<Name>(entity),
+        ctx.get::<lunco_core::markers::Callsign>(entity),
+        ctx.get::<lunco_core::CatalogEntryId>(entity),
+    );
+    if label.is_empty() {
+        "Unnamed entity".to_string()
+    } else {
+        label
+    }
+}
+
 /// Default part to edit: the first part WITHOUT a shader (the PBR body).
-fn default_part(ctx: &PanelCtx, parts: &[(Entity, String)]) -> Option<Entity> {
+fn default_part(ctx: &PanelCtx, parts: &[Entity]) -> Option<Entity> {
     parts
         .iter()
-        .map(|(e, _)| *e)
-        .find(|e| ctx.get::<ShaderLook>(*e).is_none())
-        .or_else(|| parts.first().map(|(e, _)| *e))
+        .copied()
+        .find(|entity| ctx.get::<ShaderLook>(*entity).is_none())
+        .or_else(|| parts.first().copied())
 }
 
 /// *Part* dropdown for a multi-part component. Writes the choice into
@@ -2884,20 +2888,25 @@ fn default_part(ctx: &PanelCtx, parts: &[(Entity, String)]) -> Option<Entity> {
 fn parts_selector(
     ui: &mut egui::Ui,
     ctx: &mut PanelCtx,
-    parts: &[(Entity, String)],
+    parts: &[Entity],
     current: Option<Entity>,
 ) -> Option<Entity> {
     let cur_label = current
-        .and_then(|c| parts.iter().find(|(e, _)| *e == c).map(|(_, l)| l.clone()))
+        .filter(|entity| parts.contains(entity))
+        .map(|entity| editable_part_label(ctx, entity))
         .unwrap_or_else(|| "—".to_string());
 
     let mut chosen: Option<Entity> = None;
     egui::ComboBox::from_label("Part")
         .selected_text(cur_label)
         .show_ui(ui, |ui| {
-            for (e, label) in parts {
-                if ui.selectable_label(current == Some(*e), label).clicked() {
-                    chosen = Some(*e);
+            for &entity in parts {
+                let label = editable_part_label(ctx, entity);
+                if ui
+                    .selectable_label(current == Some(entity), label)
+                    .clicked()
+                {
+                    chosen = Some(entity);
                 }
             }
         });

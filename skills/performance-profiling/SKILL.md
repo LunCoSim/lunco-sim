@@ -55,6 +55,9 @@ In the Builder Spawn palette, enumerate distinct category labels without
 cloning one label per catalog entry, then borrow spawn entries only while their
 category is expanded. Do not build cloned entry groups before egui determines
 which categories have a reader.
+In the Inspector's material part selector, keep the entity index separate from
+its display text. Format the active label only for the selected part and format
+the other labels only while the dropdown is open.
 For live line plots, do not copy and decimate a full history in every UI frame.
 Keep one bounded build per binding, snapshot changed histories at a limited
 presentation cadence, transform immutable sample snapshots on the async-compute
