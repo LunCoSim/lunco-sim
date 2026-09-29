@@ -341,9 +341,12 @@ The same ownership rule applies to the measured presentation paths:
   result commit, and each request snapshots only class metadata used by its
   own network.
 - **Graphs** retain the history-to-plot point buffer in the visualization
-  owner, keyed by the history fingerprint. A plot host may clone points at the
-  `egui_plot` owned-data boundary, but it must not recopy the SignalRegistry
-  ring buffer merely because the panel painted again.
+  owner, keyed by the history fingerprint. A due rebuild captures shared
+  `ScalarHistory` chunks and copies only its bounded open tail on the UI thread;
+  the async worker flattens and derives its point buffer, including decimation
+  where required. Plot hosts may clone points at the `egui_plot` owned-data
+  boundary, but must not copy the full SignalRegistry retention window on a
+  paint or history refresh.
 - **Status sparklines** use the same retained `SignalRegistry` history as every
   other telemetry visualization. `lunco-viz` derives and caches decimated points
   and summary statistics from a `(SignalRef, history fingerprint, width)` key;
@@ -478,9 +481,11 @@ history for percentile reporting; query it at the end of a measurement window
 instead of scanning the world once per fixed tick.
 
 Telemetry retention depth is a logical limit, not an eager allocation request.
-`ScalarHistory` grows its deque as samples arrive, so a startup burst that
-publishes thousands of new channels does not reserve the full history for every
-empty channel on the app thread.
+`ScalarHistory` grows in immutable shared chunks plus a bounded mutable tail as
+samples arrive, so a startup burst that publishes thousands of new channels
+does not reserve the full history for every empty channel on the app thread.
+Background consumers capture `ScalarHistory::snapshot()` and flatten it on the
+worker instead of cloning the full retention window on the UI thread.
 
 A `run_if`-gated system that still appears in a steady-state profile means its
 gate isn't closing — that's the bug, not the cost.

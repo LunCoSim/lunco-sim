@@ -630,7 +630,7 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
                     })
                     .filter_map(|(signal, _)| {
                         let history = signals.scalar_history(signal)?;
-                        let latest = history.samples.back()?;
+                        let latest = history.back()?;
                         Some((signal, latest, signals.meta(signal)))
                     })
                     .map(|(signal, latest, meta)| {

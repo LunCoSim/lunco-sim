@@ -1236,7 +1236,7 @@ fn render_visible_telemetry_row(
         VisibleTelemetryRow::Channel { row, depth, stripe } => {
             let latest = registry
                 .scalar_history(&row.sig)
-                .and_then(|history| history.samples.back())
+                .and_then(ScalarHistory::back)
                 .map(|sample| sample.value);
             let label_text =
                 row_text_cache.label_text(row, theme, display_settings.show_generated_names);
@@ -1396,8 +1396,8 @@ struct HistFingerprint {
 fn hist_fingerprint(h: &ScalarHistory) -> HistFingerprint {
     HistFingerprint {
         len: h.len(),
-        first_t: h.samples.front().map_or(0, |s| s.time.to_bits()),
-        last_t: h.samples.back().map_or(0, |s| s.time.to_bits()),
+        first_t: h.front().map_or(0, |s| s.time.to_bits()),
+        last_t: h.back().map_or(0, |s| s.time.to_bits()),
     }
 }
 
@@ -2142,7 +2142,7 @@ impl Panel for TelemetryBrowserPanel {
         let unit = metadata.and_then(|m| m.unit.as_deref());
         let description = metadata.and_then(|m| m.description.as_deref());
         let hist = registry.scalar_history(sel);
-        let latest = hist.and_then(|h| h.samples.back()).copied();
+        let latest = hist.and_then(ScalarHistory::back).copied();
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(&sel.path)

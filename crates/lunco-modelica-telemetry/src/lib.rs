@@ -386,7 +386,7 @@ mod tests {
             .resource::<SignalRegistry>()
             .scalar_history(&signal)
             .expect("runtime Modelica state must be inspectable");
-        let sample = history.samples.back().expect("initial state sample");
+        let sample = history.back().expect("initial state sample");
         assert_eq!((sample.time, sample.value), (0.0, 0.95));
         assert_eq!(
             app.world()
@@ -589,7 +589,7 @@ mod tests {
             .scalar_history(&signal)
             .unwrap();
         assert_eq!(history.len(), 1);
-        let sample = history.samples.back().expect("new session sample");
+        let sample = history.back().expect("new session sample");
         assert_eq!((sample.time, sample.value), (0.0, 8.0));
     }
 }

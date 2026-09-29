@@ -297,8 +297,8 @@ struct HistoryFingerprint {
 fn history_fingerprint(h: &crate::signal::ScalarHistory) -> HistoryFingerprint {
     HistoryFingerprint {
         len: h.len(),
-        first_t: h.samples.front().map_or(0, |s| s.time.to_bits()),
-        last_t: h.samples.back().map_or(0, |s| s.time.to_bits()),
+        first_t: h.front().map_or(0, |s| s.time.to_bits()),
+        last_t: h.back().map_or(0, |s| s.time.to_bits()),
     }
 }
 

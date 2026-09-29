@@ -81,7 +81,11 @@ For live line plots, do not copy and decimate a full history in every UI frame.
 Keep one bounded build per binding, snapshot changed histories at a limited
 presentation cadence, transform immutable sample snapshots on the async-compute
 pool, and keep painting the last completed point buffer while the next build
-runs. Include source identity, style, and pixel width in the cache key.
+runs. `ScalarHistory::snapshot()` shares completed chunks and copies only its
+bounded open tail on the caller; flatten and decimate that snapshot on the
+worker. Auxiliary Graphs overlays should use the same snapshot cache and keep
+painting their last completed buffer while a new one is built. Include source
+identity, style, and pixel width in the cache key.
 For the entity tree, derive parent and grid facts through indexed lookups along
 named candidates' deduplicated ancestor closure instead of copying every scene
 entity's `ChildOf` and `Grid` membership into the snapshot.

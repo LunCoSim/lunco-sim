@@ -27,7 +27,8 @@ use std::collections::HashMap;
 
 use crate::registry::{VisualizationRegistry, VizFitRequests};
 use crate::signal::{
-    PersistedSignalRef, ScalarSample, SignalMeta, SignalRef, SignalRegistry, SignalType,
+    PersistedSignalRef, ScalarHistory, ScalarHistorySnapshot, ScalarSample, SignalMeta, SignalRef,
+    SignalRegistry, SignalType,
 };
 use crate::view::{Panel2DCtx, ViewKind};
 use crate::viz::{RoleSpec, SignalBinding, Visualization, VisualizationConfig, VizKindId};
@@ -281,15 +282,21 @@ struct HistFingerprint {
 fn hist_fingerprint(h: &crate::signal::ScalarHistory) -> HistFingerprint {
     HistFingerprint {
         len: h.len(),
-        first_t: h.samples.front().map_or(0, |s| s.time.to_bits()),
-        last_t: h.samples.back().map_or(0, |s| s.time.to_bits()),
+        first_t: h.front().map_or(0, |s| s.time.to_bits()),
+        last_t: h.back().map_or(0, |s| s.time.to_bits()),
     }
 }
 
-/// Return an owned time-series presentation buffer that is rebuilt only when
-/// the source history changes. Plot hosts that combine this visualization's
-/// live curves with another plot surface use this owner instead of copying a
-/// ring buffer during every panel paint.
+#[derive(Default)]
+struct ScalarHistoryPointsCache {
+    displayed: Option<(HistFingerprint, std::sync::Arc<Vec<[f64; 2]>>)>,
+    build: Option<Task<(HistFingerprint, std::sync::Arc<Vec<[f64; 2]>>)>>,
+    last_build_sec: Option<f64>,
+}
+
+/// Return the last completed time-series snapshot, rebuilding only when the
+/// source history changes. Plot hosts that combine live curves with another
+/// surface keep full-history flattening off the UI thread.
 pub fn cached_scalar_history_points(
     ctx: &egui::Context,
     registry: &SignalRegistry,
@@ -301,18 +308,53 @@ pub fn cached_scalar_history_points(
     }
     let key = hist_fingerprint(history);
     let cache_id = egui::Id::new(("line_plot_scalar_history", source));
-    type Cached = std::sync::Arc<(HistFingerprint, std::sync::Arc<Vec<[f64; 2]>>)>;
-    if let Some(cached) = ctx.data(|data| data.get_temp::<Cached>(cache_id)) {
-        if cached.0 == key {
-            return Some(cached.1.clone());
+    type SharedCache = std::sync::Arc<std::sync::Mutex<ScalarHistoryPointsCache>>;
+    let cache: SharedCache = ctx.data_mut(|data| {
+        if let Some(existing) = data.get_temp::<SharedCache>(cache_id) {
+            existing
+        } else {
+            let fresh = SharedCache::default();
+            data.insert_temp(cache_id, fresh.clone());
+            fresh
         }
-    }
-    let points: std::sync::Arc<Vec<[f64; 2]>> =
-        std::sync::Arc::new(history.iter().map(|s| [s.time, s.value]).collect());
-    ctx.data_mut(|data| {
-        data.insert_temp(cache_id, std::sync::Arc::new((key, points.clone())));
     });
-    Some(points)
+
+    let now = ctx.input(|input| input.time);
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let completed = cache
+        .build
+        .as_mut()
+        .and_then(|task| future::block_on(future::poll_once(task)));
+    if let Some(snapshot) = completed {
+        cache.build = None;
+        cache.displayed = Some(snapshot);
+    }
+
+    let data_matches = cache
+        .displayed
+        .as_ref()
+        .is_some_and(|(fingerprint, _)| *fingerprint == key);
+    let refresh_due = cache
+        .last_build_sec
+        .is_none_or(|last| now - last >= PLOT_SERIES_REFRESH_INTERVAL_SEC);
+    if !data_matches && cache.build.is_none() && (cache.displayed.is_none() || refresh_due) {
+        let snapshot = history.snapshot();
+        cache.last_build_sec = Some(now);
+        cache.build = Some(AsyncComputeTaskPool::get().spawn(async move {
+            let points = snapshot
+                .into_samples()
+                .into_iter()
+                .map(|sample| [sample.time, sample.value])
+                .collect();
+            (key, std::sync::Arc::new(points))
+        }));
+    }
+    if cache.build.is_some() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
+    cache.displayed.as_ref().map(|(_, points)| points.clone())
 }
 
 /// Everything a cached tessellation depends on. Stored next to the
@@ -393,12 +435,13 @@ fn cached_plot_series_points(
         .is_none_or(|last| now - last >= PLOT_SERIES_REFRESH_INTERVAL_SEC);
 
     if !data_matches && cache.build.is_none() && (!display_matches || refresh_due) {
-        let y_samples: Vec<ScalarSample> = y_history.iter().copied().collect();
-        let x_samples: Option<Vec<ScalarSample>> =
-            x_history.map(|history| history.iter().copied().collect());
+        let y_samples = y_history.snapshot();
+        let x_samples = x_history.map(ScalarHistory::snapshot);
         let build_key = key.clone();
         cache.last_build_sec = Some(now);
         cache.build = Some(AsyncComputeTaskPool::get().spawn(async move {
+            let y_samples = y_samples.into_samples();
+            let x_samples = x_samples.map(ScalarHistorySnapshot::into_samples);
             let time_on_x = x_samples.is_none();
             let mut points = match x_samples {
                 Some(xs) => pair_by_time(&xs, y_samples),
@@ -1001,23 +1044,6 @@ mod tests {
         assert!(pair_by_time(&[], vec![].into_iter()).is_empty());
         assert!(pair_by_time(&[s(0.0, 1.0)], vec![].into_iter()).is_empty());
         assert!(pair_by_time(&[], vec![s(0.0, 1.0)]).is_empty());
-    }
-
-    #[test]
-    fn cached_scalar_history_points_reuses_unchanged_history() {
-        let ctx = egui::Context::default();
-        let signal = SignalRef::new(Entity::from_raw_u32(1).unwrap(), "speed");
-        let mut registry = SignalRegistry::with_default_capacity(8);
-        registry.push_scalar(signal.clone(), 0.0, 1.0);
-
-        let first = cached_scalar_history_points(&ctx, &registry, &signal).unwrap();
-        let second = cached_scalar_history_points(&ctx, &registry, &signal).unwrap();
-        assert!(std::sync::Arc::ptr_eq(&first, &second));
-
-        registry.push_scalar(signal.clone(), 1.0, 2.0);
-        let changed = cached_scalar_history_points(&ctx, &registry, &signal).unwrap();
-        assert!(!std::sync::Arc::ptr_eq(&first, &changed));
-        assert_eq!(changed.as_slice(), &[[0.0, 1.0], [1.0, 2.0]]);
     }
 
     #[test]

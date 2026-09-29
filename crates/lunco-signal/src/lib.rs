@@ -25,6 +25,7 @@ use lunco_core::GlobalEntityId;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 pub mod sim;
 
@@ -320,14 +321,52 @@ pub struct ScalarSample {
     pub value: f64,
 }
 
-/// Ring-buffer-backed history for one scalar signal.
+const SCALAR_HISTORY_CHUNK_SIZE: usize = 256;
+
+/// Immutable sample view captured for background processing.
 ///
-/// `capacity` is the logical retention limit. The backing deque grows as
-/// samples arrive instead of reserving the entire history when a channel is
-/// first published; large channel batches often begin with only one sample.
+/// Completed chunks are shared with the live history. Capturing a snapshot
+/// copies only the bounded, still-open tail; consumers can flatten it on a
+/// worker without copying the full retention window on the caller's thread.
+#[derive(Debug, Clone)]
+pub struct ScalarHistorySnapshot {
+    chunks: Vec<Arc<[ScalarSample]>>,
+    first_chunk_offset: usize,
+    tail: Arc<[ScalarSample]>,
+    len: usize,
+}
+
+impl ScalarHistorySnapshot {
+    /// Move the retained samples into an ordered contiguous buffer.
+    pub fn into_samples(self) -> Vec<ScalarSample> {
+        let Self {
+            chunks,
+            first_chunk_offset,
+            tail,
+            len,
+        } = self;
+        let mut samples = Vec::with_capacity(len);
+        for (index, chunk) in chunks.iter().enumerate() {
+            let offset = if index == 0 { first_chunk_offset } else { 0 };
+            samples.extend_from_slice(&chunk[offset..]);
+        }
+        samples.extend_from_slice(&tail);
+        samples
+    }
+}
+
+/// Chunked ring-buffer history for one scalar signal.
+///
+/// `capacity` is the logical retention limit. Completed sample chunks are
+/// immutable and shared with plot workers; only the bounded tail remains
+/// mutable. The live iteration order and retention semantics match a ring
+/// buffer while snapshots avoid copying the full history on the UI thread.
 #[derive(Debug, Clone)]
 pub struct ScalarHistory {
-    pub samples: VecDeque<ScalarSample>,
+    chunks: VecDeque<Arc<[ScalarSample]>>,
+    first_chunk_offset: usize,
+    tail: VecDeque<ScalarSample>,
+    len: usize,
     pub capacity: usize,
 }
 
@@ -335,16 +374,37 @@ impl ScalarHistory {
     pub fn new(capacity: usize) -> Self {
         let capacity = capacity.max(1);
         Self {
-            samples: VecDeque::new(),
+            chunks: VecDeque::new(),
+            first_chunk_offset: 0,
+            tail: VecDeque::new(),
+            len: 0,
             capacity,
         }
     }
 
     pub fn push(&mut self, sample: ScalarSample) {
-        while self.samples.len() >= self.capacity {
-            self.samples.pop_front();
+        if self.len >= self.capacity {
+            self.pop_front();
         }
-        self.samples.push_back(sample);
+        self.tail.push_back(sample);
+        self.len += 1;
+        if self.tail.len() == SCALAR_HISTORY_CHUNK_SIZE {
+            let samples: Vec<_> = self.tail.drain(..).collect();
+            self.chunks.push_back(Arc::from(samples));
+        }
+    }
+
+    fn pop_front(&mut self) {
+        if let Some(chunk) = self.chunks.front() {
+            self.first_chunk_offset += 1;
+            if self.first_chunk_offset == chunk.len() {
+                self.chunks.pop_front();
+                self.first_chunk_offset = 0;
+            }
+        } else {
+            self.tail.pop_front();
+        }
+        self.len -= 1;
     }
 
     /// Change the retention depth, dropping the oldest samples if it shrank.
@@ -354,25 +414,61 @@ impl ScalarHistory {
     /// zero-length buffer.
     pub fn set_capacity(&mut self, capacity: usize) {
         self.capacity = capacity.max(1);
-        while self.samples.len() > self.capacity {
-            self.samples.pop_front();
+        while self.len > self.capacity {
+            self.pop_front();
         }
     }
 
     pub fn clear(&mut self) {
-        self.samples.clear();
+        self.chunks.clear();
+        self.first_chunk_offset = 0;
+        self.tail.clear();
+        self.len = 0;
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &ScalarSample> {
-        self.samples.iter()
+        let first_chunk_offset = self.first_chunk_offset;
+        self.chunks
+            .iter()
+            .enumerate()
+            .flat_map(move |(index, chunk)| {
+                let offset = if index == 0 { first_chunk_offset } else { 0 };
+                chunk.get(offset..).unwrap_or(&[]).iter()
+            })
+            .chain(self.tail.iter())
     }
 
     pub fn len(&self) -> usize {
-        self.samples.len()
+        self.len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.samples.is_empty()
+        self.len == 0
+    }
+
+    pub fn front(&self) -> Option<&ScalarSample> {
+        self.chunks
+            .front()
+            .and_then(|chunk| chunk.get(self.first_chunk_offset))
+            .or_else(|| self.tail.front())
+    }
+
+    pub fn back(&self) -> Option<&ScalarSample> {
+        self.tail
+            .back()
+            .or_else(|| self.chunks.back().and_then(|chunk| chunk.last()))
+    }
+
+    /// Capture shared completed chunks and a bounded copy of the mutable tail.
+    pub fn snapshot(&self) -> ScalarHistorySnapshot {
+        let chunks = self.chunks.iter().cloned().collect();
+        let tail = Arc::from(self.tail.iter().copied().collect::<Vec<_>>());
+        ScalarHistorySnapshot {
+            chunks,
+            first_chunk_offset: self.first_chunk_offset,
+            tail,
+            len: self.len,
+        }
     }
 }
 
@@ -508,7 +604,7 @@ impl SignalRegistry {
 
         let previous = self
             .scalar_history(&sig)
-            .and_then(|history| history.samples.back())
+            .and_then(ScalarHistory::back)
             .copied();
         let previous = match previous {
             Some(sample) if time >= sample.time => Some(sample),
@@ -551,7 +647,7 @@ impl SignalRegistry {
 
         let previous = self
             .scalar_history(sig)
-            .and_then(|history| history.samples.back())
+            .and_then(ScalarHistory::back)
             .copied();
         if let Some(previous) = previous {
             if time < previous.time {
@@ -949,7 +1045,7 @@ mod tests {
         assert!(reg.retain_scalar_if_changed(signal.clone(), 0.0, 3.0, 10.0, deadband, 8,));
         let history = reg.scalar_history(&signal).unwrap();
         assert_eq!(history.len(), 1);
-        assert_eq!(history.samples.back().unwrap().value, 3.0);
+        assert_eq!(history.back().unwrap().value, 3.0);
     }
 
     #[test]
@@ -961,6 +1057,6 @@ mod tests {
         assert!(reg.record_scalar_at_rate(&signal, 0.11, 1.0, 10.0, 8));
         let history = reg.scalar_history(&signal).unwrap();
         assert_eq!(history.len(), 2);
-        assert_eq!(history.samples.back().unwrap().time, 0.11);
+        assert_eq!(history.back().unwrap().time, 0.11);
     }
 }
