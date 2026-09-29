@@ -329,8 +329,31 @@ pub(crate) fn snapshot_for_layout_if_changed(
     layout: &WorkbenchLayout,
     current: &WorkbenchSnapshot,
 ) -> Option<WorkbenchSnapshot> {
-    let next = publish_workbench_snapshot(layout);
-    (current != &next).then_some(next)
+    let same = current.matches_layout_projection(
+        layout.active_perspective,
+        layout.focused_tab().copied(),
+        layout.dock.iter_all_tabs().map(|(_, tab)| *tab),
+        layout
+            .dock
+            .iter_all_nodes()
+            .filter_map(|(_, node)| match node {
+                egui_dock::Node::Leaf(leaf) => leaf.tabs.get(leaf.active.0).map(|tab| {
+                    (
+                        *tab,
+                        match tab {
+                            TabId::Singleton(id) => *id,
+                            TabId::Instance { kind, .. } => *kind,
+                        },
+                    )
+                }),
+                _ => None,
+            }),
+        layout
+            .perspectives
+            .iter()
+            .map(|perspective| perspective.id()),
+    );
+    (!same).then(|| publish_workbench_snapshot(layout))
 }
 
 fn sync_workbench_snapshot(layout: Res<WorkbenchLayout>, mut snapshot: ResMut<WorkbenchSnapshot>) {

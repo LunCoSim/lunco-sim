@@ -351,6 +351,11 @@ The same ownership rule applies to the measured presentation paths:
 - **Dock anchors** publish all authored slot unions from one dock-tree walk.
   Adding another anchor group must extend that pass rather than add another
   full layout traversal.
+- **Workbench layout snapshots** compare borrowed tab, visible-tab, and
+  perspective iterators against the published snapshot before building owned
+  vectors. The stable `Update` check must not allocate a replacement merely
+  because egui mutably borrows the dock each frame; panel and docked-panel
+  lists are derived from those canonical inputs when they actually change.
 - **Universal port inspection** uses `PortRegistry::port_entities`: each
   registered backend enumerates its own authoritative component/surface
   candidates, and the registry deduplicates them. The Builder Ports panel must

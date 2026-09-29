@@ -54,6 +54,53 @@ impl WorkbenchSnapshot {
         self.docked_panels = docked_panels;
     }
 
+    /// Compare the canonical layout inputs without allocating a replacement
+    /// snapshot. The visible-panel and docked-panel lists are derived from the
+    /// ordered visible-tab and tab iterators by the shell's publisher.
+    pub fn matches_layout_projection(
+        &self,
+        active_perspective: Option<PerspectiveId>,
+        focused_tab: Option<TabId>,
+        tabs: impl IntoIterator<Item = TabId>,
+        visible_tabs: impl IntoIterator<Item = (TabId, PanelId)>,
+        registered_perspectives: impl IntoIterator<Item = PerspectiveId>,
+    ) -> bool {
+        self.active_perspective == active_perspective
+            && self.focused_tab == focused_tab
+            && self.tabs.iter().copied().eq(tabs)
+            && self.visible_tabs.len() == self.visible_panels.len()
+            && self
+                .visible_tabs
+                .iter()
+                .copied()
+                .zip(self.visible_panels.iter().copied())
+                .eq(visible_tabs)
+            && self.docked_panels_match_tabs()
+            && self
+                .registered_perspectives
+                .iter()
+                .copied()
+                .eq(registered_perspectives)
+    }
+
+    fn docked_panels_match_tabs(&self) -> bool {
+        let mut docked = self.docked_panels.iter().copied();
+        for (index, tab) in self.tabs.iter().copied().enumerate() {
+            let panel = panel_id(tab);
+            if self.tabs[..index]
+                .iter()
+                .copied()
+                .any(|previous| panel_id(previous) == panel)
+            {
+                continue;
+            }
+            if docked.next() != Some(panel) {
+                return false;
+            }
+        }
+        docked.next().is_none()
+    }
+
     /// Return the active perspective, if one is selected.
     pub fn active_perspective(&self) -> Option<PerspectiveId> {
         self.active_perspective
@@ -117,6 +164,13 @@ impl WorkbenchSnapshot {
         self.registered_perspectives
             .iter()
             .any(|registered| registered.as_str() == id)
+    }
+}
+
+fn panel_id(tab: TabId) -> PanelId {
+    match tab {
+        TabId::Singleton(id) => id,
+        TabId::Instance { kind, .. } => kind,
     }
 }
 
