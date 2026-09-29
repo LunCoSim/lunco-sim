@@ -400,6 +400,23 @@ fn interface_geometry_observation(doc, spec) {
     let deck_record = records.records[0];
     let transition_record = records.records[1];
     let ramp_record = records.records[2];
+    let doc_id = deck_record.doc_id;
+    let document_generation = deck_record.document_generation;
+    let stage_generation = deck_record.stage_generation;
+    if doc_id == () || document_generation == () || stage_generation == () {
+        return unavailable(subject, "interface_geometry",
+            "composed collider snapshot is missing document or stage generation provenance",
+            "QueryUsdPrims");
+    }
+    for record in [transition_record, ramp_record] {
+        if record.doc_id != doc_id
+            || record.document_generation != document_generation
+            || record.stage_generation != stage_generation {
+            return unavailable(subject, "interface_geometry",
+                "QueryUsdPrims returned collider records from conflicting document or stage generations",
+                "QueryUsdPrims");
+        }
+    }
     let deck_geometry = deck_record.collision_geometry;
     let transition_geometry = transition_record.collision_geometry;
     let ramp_geometry = ramp_record.collision_geometry;
@@ -457,11 +474,15 @@ fn interface_geometry_observation(doc, spec) {
     let deck_lateral_span = deck_lateral[1] - deck_lateral[0];
     let deck_top = -1.0e30;
     let transition_top = -1.0e30;
+    let ramp_top = -1.0e30;
     for vertex in deck_geometry.vertices {
         if vertex[face_axis] > deck_top { deck_top = vertex[face_axis]; }
     }
     for vertex in transition_geometry.vertices {
         if vertex[face_axis] > transition_top { transition_top = vertex[face_axis]; }
+    }
+    for vertex in ramp_geometry.vertices {
+        if vertex[face_axis] > ramp_top { ramp_top = vertex[face_axis]; }
     }
     #{
         ok: true,
@@ -474,12 +495,17 @@ fn interface_geometry_observation(doc, spec) {
         side: side,
         frame: "canonical_stage",
         units: "m",
+        provider: "usd",
+        doc_id: doc_id,
+        document_generation: document_generation,
+        stage_generation: stage_generation,
         axes: #{travel: travel_axis, face: face_axis, lateral: lateral_axis},
         snapshot: "single QueryUsdPrims response",
         footprints: #{deck: deck, transition: transition, ramp: ramp},
         measured_overlap_m: overlap,
         measured_transition_length_m: transition_travel[1] - transition_travel[0],
         deck_top_step_m: (deck_top - transition_top).abs(),
+        transition_ramp_top_step_m: (transition_top - ramp_top).abs(),
         signed_hinge_gap_m: signed_hinge_gap,
         hinge_gap_m: signed_hinge_gap.abs(),
         lateral_coverage_m: lateral_coverage,

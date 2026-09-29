@@ -71,6 +71,27 @@ lesson's resolved source across `RestartScene`, then recreates its host and HUD
 on the restarted scene; a failed restart clears that lesson and reports the
 typed failure.
 
+## Twin-owned scripts and resources
+
+`SceneTeardown` retires programs projected from the outgoing scene. `TwinClosed`
+retires longer-lived resources admitted by that Twin: asset-backed tutorial
+scenarios, their source handles and documents, timelines, tool libraries,
+Modelica compiler source sets, and Twin-owned HUD state. A Twin tutorial gets
+its own script host instead of replacing an application-owned `WorldRoot`
+scenario. Each script stores the stable Twin ID separately from the scene
+generation, so its final `on_stop` still routes to the outgoing Twin after the
+workspace has switched. Pending asset and compiler work is canceled or fenced
+at that same owner boundary.
+
+Core and application scripts keep their own owner scope and stable generation
+across Twin scene transitions. Scene teardown clears the old guided presentation
+but only closes programs explicitly marked as scene-owned; Twin teardown only
+closes programs explicitly marked with that Twin ID. A shared source or a
+currently active Twin does not make an unmarked application script Twin-owned.
+The application Tutorials menu captures the active Twin at selection time and
+starts that tutorial instance under that Twin's lifecycle owner; this does not
+change the scope or lifetime of the application tool module.
+
 Scene-time selection runs once at the completed load/restart edge, after the
 stage dependency load and queued structural projection have drained. A
 completion notification without a matching loading phase is ignored; reloading

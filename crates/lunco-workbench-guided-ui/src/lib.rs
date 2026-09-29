@@ -44,6 +44,9 @@ pub const GUIDED_SCRIM_ORDER: egui::Order = egui::Order::Background;
 /// the commands never panic on a missing resource; only the draw is ui-gated.
 #[derive(Resource, Default, Clone, Debug)]
 pub struct GuidedOverlay {
+    /// Twin whose scenario currently owns this presentation, or `None` for an
+    /// application/core presentation.
+    pub owner_twin: Option<lunco_workspace::TwinId>,
     /// One-line instruction shown at the top of the HUD card. Empty = hidden.
     pub hint: String,
     /// Pre-formatted objectives checklist block (one objective per line, with a
@@ -70,6 +73,77 @@ pub struct GuidedOverlay {
     /// Recoverable presentation error shown above the lesson instead of
     /// tearing down its host or the loaded world.
     pub recovery: Option<GuidedRecovery>,
+}
+
+impl GuidedOverlay {
+    /// Clear every presentation field and its owner identity together.
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
+fn command_owner_twin(
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+) -> Result<Option<lunco_workspace::TwinId>, String> {
+    let context = lunco_scripting_bridge_core::execution_context();
+    let Some(route) = context.route else {
+        return Ok(None);
+    };
+    if route.scope != lunco_core::RuntimeScope::Twin {
+        return Ok(None);
+    }
+    let raw = route
+        .owner_id
+        .ok_or_else(|| "Twin guided HUD command has no owner identity".to_owned())?;
+    let twin = lunco_workspace::TwinId::new(raw);
+    let Some(workspace) = workspace else {
+        return Err(format!("Twin {raw} guided HUD command has no workspace"));
+    };
+    if workspace.active_twin != Some(twin) || workspace.twin(twin).is_none() {
+        return Err(format!(
+            "Twin {raw} guided HUD command came from a closed or inactive Twin"
+        ));
+    }
+    Ok(Some(twin))
+}
+
+fn begin_command_owner(
+    hud: &mut GuidedOverlay,
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+) -> bool {
+    match command_owner_twin(workspace) {
+        Ok(owner) => {
+            if hud.owner_twin != owner {
+                hud.clear();
+                hud.owner_twin = owner;
+            }
+            true
+        }
+        Err(error) => {
+            warn!("[guided-hud] {error}");
+            false
+        }
+    }
+}
+
+fn clear_twin_overlay_on_close(
+    trigger: On<lunco_workspace::TwinClosed>,
+    mut hud: ResMut<GuidedOverlay>,
+) {
+    clear_overlay_for_twin(&mut hud, trigger.event().twin);
+}
+
+fn clear_overlay_for_twin(hud: &mut GuidedOverlay, twin: lunco_workspace::TwinId) {
+    if hud.owner_twin == Some(twin) {
+        hud.clear();
+    }
+}
+
+fn clear_overlay_on_scene_transition(
+    _trigger: On<lunco_core::SceneTransitionStarted>,
+    mut hud: ResMut<GuidedOverlay>,
+) {
+    hud.clear();
 }
 
 /// A guided presentation problem that does not invalidate the simulation.
@@ -211,6 +285,11 @@ pub struct SetTourStep {
 #[Command(default)]
 pub struct ClearTour {}
 
+/// Clear every field of the current guided presentation while retaining its
+/// execution owner. Rhai tutorial launchers use this before replacing a lesson.
+#[Command(default)]
+pub struct ClearGuidedOverlay {}
+
 /// Stop the active guided from the coach card itself. The guided crate
 /// owns the lifecycle command; this event keeps the overlay independent of
 /// that crate while making Stop available wherever the coach card appears.
@@ -262,17 +341,38 @@ fn on_guided_skip(_trigger: On<GuidedSkip>, mut world: DeferredWorld) {
 }
 
 #[on_command(SetHint)]
-fn on_set_hint(trigger: On<SetHint>, mut hud: ResMut<GuidedOverlay>) {
+fn on_set_hint(
+    trigger: On<SetHint>,
+    mut hud: ResMut<GuidedOverlay>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+) {
+    if !begin_command_owner(&mut hud, workspace.as_deref()) {
+        return;
+    }
     hud.hint = cmd.text.clone();
 }
 
 #[on_command(SetObjectives)]
-fn on_set_objectives(trigger: On<SetObjectives>, mut hud: ResMut<GuidedOverlay>) {
+fn on_set_objectives(
+    trigger: On<SetObjectives>,
+    mut hud: ResMut<GuidedOverlay>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+) {
+    if !begin_command_owner(&mut hud, workspace.as_deref()) {
+        return;
+    }
     hud.objectives = cmd.text.clone();
 }
 
 #[on_command(SetGuidedHudActions)]
-fn on_set_guided_hud_actions(trigger: On<SetGuidedHudActions>, mut hud: ResMut<GuidedOverlay>) {
+fn on_set_guided_hud_actions(
+    trigger: On<SetGuidedHudActions>,
+    mut hud: ResMut<GuidedOverlay>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+) {
+    if !begin_command_owner(&mut hud, workspace.as_deref()) {
+        return;
+    }
     let cmd = trigger.event();
     hud.action_tool = cmd.tool.clone();
     hud.action_hook = cmd.hook.clone();
@@ -280,21 +380,42 @@ fn on_set_guided_hud_actions(trigger: On<SetGuidedHudActions>, mut hud: ResMut<G
 }
 
 #[on_command(Spotlight)]
-fn on_spotlight(trigger: On<Spotlight>, mut hud: ResMut<GuidedOverlay>) {
+fn on_spotlight(
+    trigger: On<Spotlight>,
+    mut hud: ResMut<GuidedOverlay>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+) {
+    if !begin_command_owner(&mut hud, workspace.as_deref()) {
+        return;
+    }
     hud.spotlight = Some((cmd.anchor.clone(), cmd.text.clone()));
     hud.reported_missing_anchor = None;
     hud.recovery = None;
 }
 
 #[on_command(ClearSpotlight)]
-fn on_clear_spotlight(trigger: On<ClearSpotlight>, mut hud: ResMut<GuidedOverlay>) {
+fn on_clear_spotlight(
+    trigger: On<ClearSpotlight>,
+    mut hud: ResMut<GuidedOverlay>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+) {
+    if !begin_command_owner(&mut hud, workspace.as_deref()) {
+        return;
+    }
     hud.spotlight = None;
     hud.reported_missing_anchor = None;
     hud.recovery = None;
 }
 
 #[on_command(SetTourStep)]
-fn on_set_tour_step(trigger: On<SetTourStep>, mut hud: ResMut<GuidedOverlay>) {
+fn on_set_tour_step(
+    trigger: On<SetTourStep>,
+    mut hud: ResMut<GuidedOverlay>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+) {
+    if !begin_command_owner(&mut hud, workspace.as_deref()) {
+        return;
+    }
     hud.tour = Some(TourStep {
         index: cmd.index.max(0) as usize,
         total: cmd.total.max(0) as usize,
@@ -307,10 +428,34 @@ fn on_set_tour_step(trigger: On<SetTourStep>, mut hud: ResMut<GuidedOverlay>) {
 }
 
 #[on_command(ClearTour)]
-fn on_clear_tour(trigger: On<ClearTour>, mut hud: ResMut<GuidedOverlay>) {
+fn on_clear_tour(
+    trigger: On<ClearTour>,
+    mut hud: ResMut<GuidedOverlay>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+) {
+    if !begin_command_owner(&mut hud, workspace.as_deref()) {
+        return;
+    }
     hud.tour = None;
     hud.reported_missing_anchor = None;
     hud.recovery = None;
+}
+
+#[on_command(ClearGuidedOverlay)]
+fn on_clear_guided_overlay(
+    _trigger: On<ClearGuidedOverlay>,
+    mut hud: ResMut<GuidedOverlay>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+) {
+    let owner = match command_owner_twin(workspace.as_deref()) {
+        Ok(owner) => owner,
+        Err(error) => {
+            warn!("[guided-hud] {error}");
+            return;
+        }
+    };
+    hud.clear();
+    hud.owner_twin = owner;
 }
 
 register_commands!(
@@ -321,6 +466,7 @@ register_commands!(
     on_clear_spotlight,
     on_set_tour_step,
     on_clear_tour,
+    on_clear_guided_overlay,
 );
 
 fn register_guided_navigation(app: &mut App) {
@@ -1257,7 +1403,9 @@ pub struct GuidedOverlayPlugin;
 
 impl Plugin for GuidedOverlayPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<GuidedOverlay>();
+        app.init_resource::<GuidedOverlay>()
+            .add_observer(clear_twin_overlay_on_close)
+            .add_observer(clear_overlay_on_scene_transition);
         register_all_commands(app);
         register_guided_navigation(app);
         // HUD / tour / spotlight are per-client presentation — client-local, so a
@@ -1269,7 +1417,8 @@ impl Plugin for GuidedOverlayPlugin {
             .mark_client_local::<Spotlight>()
             .mark_client_local::<ClearSpotlight>()
             .mark_client_local::<SetTourStep>()
-            .mark_client_local::<ClearTour>();
+            .mark_client_local::<ClearTour>()
+            .mark_client_local::<ClearGuidedOverlay>();
         // The persistent objectives card is view-independent: it remains
         // visible when the user changes perspective. Spotlight/tour content
         // follows the authored track perspective and its anchors are view-local.
@@ -1318,5 +1467,59 @@ mod tests {
     fn guided_presentation_stays_below_application_menus() {
         assert!(GUIDED_SCRIM_ORDER < GUIDED_OVERLAY_ORDER);
         assert!(GUIDED_OVERLAY_ORDER < egui::Order::Foreground);
+    }
+
+    #[test]
+    fn closing_a_twin_clears_every_field_owned_by_that_twin_only() {
+        let twin = lunco_workspace::TwinId::new(17);
+        let other_twin = lunco_workspace::TwinId::new(23);
+        let mut hud = GuidedOverlay {
+            owner_twin: Some(twin),
+            hint: "step one".into(),
+            objectives: "objective".into(),
+            action_tool: "lesson".into(),
+            action_hook: "advance".into(),
+            actions: vec![GuidedHudAction {
+                id: "next".into(),
+                label: "Next".into(),
+                enabled: true,
+            }],
+            spotlight: Some(("panel.center".into(), "look here".into())),
+            tour: Some(TourStep {
+                index: 1,
+                total: 3,
+                anchor: "panel.center".into(),
+                title: "Step one".into(),
+                body: "Follow the panel".into(),
+            }),
+            reported_missing_anchor: Some("panel.missing".into()),
+            recovery: Some(GuidedRecovery {
+                anchor: "panel.missing".into(),
+                detail: "The panel is unavailable".into(),
+            }),
+        };
+
+        clear_overlay_for_twin(&mut hud, other_twin);
+        assert_eq!(hud.owner_twin, Some(twin));
+        assert_eq!(hud.hint, "step one");
+        clear_overlay_for_twin(&mut hud, twin);
+
+        assert_eq!(hud.owner_twin, None);
+        assert!(hud.hint.is_empty());
+        assert!(hud.objectives.is_empty());
+        assert!(hud.action_tool.is_empty());
+        assert!(hud.action_hook.is_empty());
+        assert!(hud.actions.is_empty());
+        assert!(hud.spotlight.is_none());
+        assert!(hud.tour.is_none());
+        assert!(hud.reported_missing_anchor.is_none());
+        assert!(hud.recovery.is_none());
+
+        let mut application_hud = GuidedOverlay {
+            hint: "application help".into(),
+            ..Default::default()
+        };
+        clear_overlay_for_twin(&mut application_hud, twin);
+        assert_eq!(application_hud.hint, "application help");
     }
 }

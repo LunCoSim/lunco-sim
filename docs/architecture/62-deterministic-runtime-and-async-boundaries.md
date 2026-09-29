@@ -325,9 +325,22 @@ advances only after the matching active transition succeeds and emits
 generation in force. Scenario lifecycle reads this value for compile fences
 and execution routes. Other Twin-scoped cycle owners use the same source instead
 of keeping private scene counters. Before a successful scene commit, there is
-no Twin execution route. Scenario drivers idle while the readiness gate is
-closed and when their language has no attached scenarios; a missing generation
-faults only when live scenario work needs a Twin route.
+no scene-bound Twin scenario route. Discrete Twin lifecycle callbacks carry the
+stable owner ID and use generation zero until a scene generation exists.
+Scenario execution waits for the readiness gate.
+Application-owned scenarios keep generation zero and may finish source
+preparation across a Twin transition; Twin- and scene-owned scenarios use the
+committed scene generation. A missing generation faults only when live
+scene/Twin scenario work needs that route.
+
+Scenario ownership is explicit on the host entity. `TwinOwnedScript` carries a
+stable `TwinId`; `SceneOwnedScript` marks a program projected from the current
+USD scene. The two markers may coexist. An unmarked application scenario has
+neither marker, so a Twin transition cannot restart or close it. Core Rhai
+policy runtimes also remain outside the scenario driver's Twin teardown.
+`on_stop` uses the stored outgoing Twin ID before its source document and asset
+handles are released. Twin tutorial assets use isolated hosts, preventing their
+replacement from stopping an application scenario on `WorldRoot`.
 
 Systems declare their cycle and read that cycle's clock. A synchronous helper,
 Rhai function, or nested registered hook inherits the caller's context. An
@@ -636,6 +649,13 @@ one FIFO mailbox; the worker commits actor results in submission order and
 fences compile artifacts by entity session and library generation. This keeps
 Rumoca's stateful work off the Modelica command owner while preserving one
 compiler session and deterministic source-root-before-dependent-compile order.
+Application roots and Twin roots have separate owners. Twin root identities
+include the stable Twin ID, and `TwinClosed` submits unload operations through
+the same actor FIFO. Monotonic per-root operation IDs fence late file reads,
+queued installs, and unload completions; removing a root recomputes the
+compiler's effective root set and defaults from the remaining contributions.
+If the Modelica channel is temporarily unavailable, unloads remain queued ahead
+of later root installs. Application roots stay installed across Twin closure.
 Immutable DAE lowering and persistent solve-cache reads, decoding, encoding,
 and writes run on the bounded solve-preparation pool. The command owner only
 commits the ready solve model. Actor admission is bounded across submitted
@@ -706,9 +726,9 @@ explicitly. The production Rhai contract at
 requirement facts and the unmounted-Twin diagnostic. Source-asset changes admit
 a new revision, and `TwinClosed` retires queued work and fences late results for
 that Twin. An empty selected set commits an empty analysis without dispatching
-a worker. The `twin.lifecycle` hook receives `Twin/Lifecycle` with the mounted
-`TwinId` as its generation, no elapsed clock, and an explicit `Start`, `Event`,
-or `Stop` phase. Its retained `policy_status().lifecycle.runtime_context` makes
+a worker. The `twin.lifecycle` hook receives `Twin/Lifecycle` with generation
+zero and the mounted `TwinId` in `owner_id`, no elapsed clock, and an explicit
+`Start`, `Event`, or `Stop` phase. Its retained `policy_status().lifecycle.runtime_context` makes
 the owner stamp inspectable from Rhai and the API. Identical Rhai source misses share one
 immutable compile result. Rhai drains worker results into a scene-wide
 preparation barrier and commits the complete ready set in stable actor order

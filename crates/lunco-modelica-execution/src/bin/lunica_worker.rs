@@ -73,6 +73,7 @@ mod wasm {
             ModelicaCommand::Reset { entity, .. } => format!("Reset entity={entity:?}"),
             ModelicaCommand::Despawn { entity } => format!("Despawn entity={entity:?}"),
             ModelicaCommand::LoadSourceRoot { id, .. } => format!("LoadSourceRoot id={id}"),
+            ModelicaCommand::UnloadSourceRoot { id, .. } => format!("UnloadSourceRoot id={id}"),
         }
     }
 

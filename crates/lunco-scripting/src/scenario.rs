@@ -128,6 +128,17 @@ fn has_scenario_models(world: &mut World, language: ScriptLanguage) -> bool {
         .any(|model| model.language == Some(language))
 }
 
+fn has_scene_owned_scenario_models(world: &mut World, language: ScriptLanguage) -> bool {
+    let mut models = world.query::<(
+        &ScriptedModel,
+        Option<&crate::TwinOwnedScript>,
+        Option<&crate::SceneOwnedScript>,
+    )>();
+    models.iter(world).any(|(model, twin, scene)| {
+        model.language == Some(language) && (twin.is_some() || scene.is_some())
+    })
+}
+
 /// Stable actor identity comes directly from the source-owned component. The
 /// API registry is an Update-synchronized lookup index and can lag a newly
 /// projected entity at a lifecycle boundary.
@@ -743,6 +754,10 @@ struct Fsm {
     gid: i64,
     /// Scene generation at which this scenario last entered `on_start`.
     scene_generation: u64,
+    /// Stable Twin identity captured from the host's ownership marker. This is
+    /// independent of scene generation and survives entity removal until its
+    /// final stop hook has run.
+    owner_twin: Option<lunco_workspace::TwinId>,
     /// Event sequence at which this program started. Older queued events belong
     /// to the prior lifecycle state and must not be replayed to this program.
     start_event_sequence: u64,
@@ -969,6 +984,7 @@ fn publish_scenario_stop_error(
 
 fn scenario_execution_context(
     world: &World,
+    owner_twin: Option<lunco_workspace::TwinId>,
     simulation_cycle: bool,
     scene_generation: Option<u64>,
 ) -> lunco_core::RuntimeExecutionContext {
@@ -1001,7 +1017,13 @@ fn scenario_execution_context(
         (lunco_core::RuntimeClock::None, None, None)
     };
     lunco_core::RuntimeExecutionContext {
-        route: scene_generation.map(|generation| lunco_core::RuntimeRoute::twin(cycle, generation)),
+        route: Some(match (owner_twin, scene_generation) {
+            (Some(twin), Some(generation)) => {
+                lunco_core::RuntimeRoute::twin_owned(cycle, generation, twin.raw())
+            }
+            (Some(twin), None) => lunco_core::RuntimeRoute::twin_owned(cycle, 0, twin.raw()),
+            (None, _) => lunco_core::RuntimeRoute::application(cycle),
+        }),
         phase: lunco_core::RuntimePhase::Unclassified,
         clock,
         time_seconds,
@@ -1009,6 +1031,53 @@ fn scenario_execution_context(
         sequence,
         producer: None,
     }
+}
+
+fn scenario_visualization_context(
+    world: &World,
+    entity: Entity,
+    scene_generation: u64,
+) -> lunco_core::RuntimeExecutionContext {
+    let owner_twin = scenario_twin_owner(world, entity);
+    let generation = scenario_scope_generation(world, entity, scene_generation);
+    let mut context = scenario_execution_context(world, owner_twin, false, Some(generation));
+    context.route = Some(match owner_twin {
+        Some(twin) => lunco_core::RuntimeRoute::twin_owned(
+            lunco_core::RuntimeCycle::Visualization,
+            generation,
+            twin.raw(),
+        ),
+        None => lunco_core::RuntimeRoute::application(lunco_core::RuntimeCycle::Visualization),
+    });
+    context.phase = lunco_core::RuntimePhase::Visualization;
+    context.clock = lunco_core::RuntimeClock::Presentation;
+    context
+}
+
+fn scenario_twin_owner(world: &World, entity: Entity) -> Option<lunco_workspace::TwinId> {
+    world
+        .get::<crate::TwinOwnedScript>(entity)
+        .map(|owner| owner.twin)
+}
+
+fn scenario_uses_scene_generation(world: &World, entity: Entity) -> bool {
+    world.get::<crate::TwinOwnedScript>(entity).is_some()
+        || world.get::<crate::SceneOwnedScript>(entity).is_some()
+}
+
+fn scenario_scope_generation(world: &World, entity: Entity, scene_generation: u64) -> u64 {
+    if scenario_uses_scene_generation(world, entity) {
+        scene_generation
+    } else {
+        0
+    }
+}
+
+fn scenario_scene_generation_is_current(world: &World, entity: Entity, expected: u64) -> bool {
+    if !scenario_uses_scene_generation(world, entity) {
+        return expected == 0;
+    }
+    committed_scene_generation(world) == Some(expected)
 }
 
 fn report_missing_scenario_generation(world: &mut World) {
@@ -1079,22 +1148,25 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
     /// released only by their exact current completion or explicit retirement.
     pub fn prepare_compiles(world: &mut World, language: ScriptLanguage) {
         world.init_resource::<ScenarioPreparationAdmissions>();
-        if !world
+        let execution_enabled = world
             .get_resource::<ScenarioExecutionGate>()
-            .is_none_or(|gate| gate.enabled)
-        {
-            Self::cancel_pending_compiles(world);
-            return;
+            .is_none_or(|gate| gate.enabled);
+        if !execution_enabled {
+            Self::cancel_scene_owned_compiles(world);
         }
         if !has_scenario_models(world, language) {
             Self::cancel_pending_compiles(world);
             return;
         }
-        let Some(scene_generation) = committed_scene_generation(world) else {
-            Self::cancel_pending_compiles(world);
+        let committed_generation = committed_scene_generation(world);
+        if execution_enabled
+            && committed_generation.is_none()
+            && has_scene_owned_scenario_models(world, language)
+        {
             report_missing_scenario_generation(world);
-            return;
-        };
+        }
+        let scene_generation_available = committed_generation.is_some();
+        let scene_generation = committed_generation.unwrap_or(0);
 
         let is_client = matches!(
             world.get_resource::<lunco_core_session::NetworkRole>(),
@@ -1108,7 +1180,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             let mut query = world.query::<(Entity, &ScriptedModel, Option<&ScriptAuthority>)>();
             query
                 .iter(world)
-                .filter(|(_, model, _)| model.language == Some(language))
+                .filter(|(entity, model, _)| {
+                    model.language == Some(language)
+                        && (scene_generation_available
+                            || !scenario_uses_scene_generation(world, *entity))
+                        && (execution_enabled || !scenario_uses_scene_generation(world, *entity))
+                })
                 .map(|(entity, model, authority)| {
                     (
                         entity,
@@ -1172,7 +1249,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         .is_some_and(|model| {
                             model.parameters_revision == completion.parameters_revision
                         })
-                    && committed_scene_generation(world) == Some(completion.scene_generation)
+                    && scenario_scene_generation_is_current(
+                        world,
+                        completion.entity,
+                        completion.scene_generation,
+                    )
                     && runtime_revision == completion.runtime_revision;
                 let input_is_current = input_is_current
                     && driver.runtime.source_dependency_revision(completion.entity)
@@ -1200,6 +1281,8 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 .map(lunco_core_runtime::AsyncWorkAdmission::capacity_revision)
                 .unwrap_or(0);
             for (entity, paused, raw, authority, reload_policy, parameters_revision) in &models {
+                let script_scene_generation =
+                    scenario_scope_generation(world, *entity, scene_generation);
                 let Some(raw) = *raw else {
                     cancel_scenario_preparation_admission(world, *entity);
                     retire_pending_compile(world, &mut driver, *entity, true);
@@ -1249,7 +1332,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
 
                 let scene_restart = *reload_policy == crate::doc::ScenarioReloadPolicy::Restart
                     && prior.is_some_and(|state| {
-                        state.started && state.scene_generation != scene_generation
+                        state.started && state.scene_generation != script_scene_generation
                     });
                 let needs_recompile = prior.is_none_or(|state| {
                     state.attempted_generation != Some(generation)
@@ -1262,7 +1345,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     state.pending_compile.as_ref().is_some_and(|pending| {
                         pending.generation == generation
                             && pending.parameters_revision == *parameters_revision
-                            && pending.scene_generation == scene_generation
+                            && pending.scene_generation == script_scene_generation
                             && pending.runtime_revision == runtime_revision
                             && pending.source_dependency_revision == source_dependency_revision
                     })
@@ -1281,7 +1364,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 let gid = scenario_self_id(world, *entity);
                 retire_pending_compile(world, &mut driver, *entity, false);
 
-                let context = scenario_execution_context(world, false, Some(scene_generation));
+                let context = scenario_execution_context(
+                    world,
+                    scenario_twin_owner(world, *entity),
+                    false,
+                    Some(script_scene_generation),
+                );
                 let mut stop_error = None;
                 let (started, compiled) = driver
                     .fsm
@@ -1315,7 +1403,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 state.attempted_generation = Some(generation);
                 state.parameters_revision = *parameters_revision;
                 state.preparation_revision = Some(runtime_revision);
-                state.scene_generation = scene_generation;
+                state.scene_generation = script_scene_generation;
                 state.pending_transition_error = stop_error;
                 state.newly_compiled = false;
 
@@ -1333,7 +1421,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                             raw,
                             generation,
                             *parameters_revision,
-                            scene_generation,
+                            script_scene_generation,
                             progress.as_deref_mut(),
                         )
                     },
@@ -1341,7 +1429,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 let operation_id = progress_key.operation_id;
                 let key = lunco_core_runtime::AsyncWorkKey::new(
                     work_kind,
-                    scene_generation,
+                    script_scene_generation,
                     ((raw as u128) << 64) | u128::from(entity.to_bits()),
                     generation,
                     operation_id,
@@ -1354,7 +1442,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     progress_key,
                     generation,
                     parameters_revision: *parameters_revision,
-                    scene_generation,
+                    scene_generation: script_scene_generation,
                     runtime_revision,
                     source_dependency_revision,
                     queued: false,
@@ -1381,7 +1469,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                             gid,
                             generation,
                             parameters_revision: *parameters_revision,
-                            scene_generation,
+                            scene_generation: script_scene_generation,
                             runtime_revision,
                             source_dependency_revision,
                             result: Err(Diagnostic::error(
@@ -1414,7 +1502,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                                 gid,
                                 generation,
                                 parameters_revision: *parameters_revision,
-                                scene_generation,
+                                scene_generation: script_scene_generation,
                                 runtime_revision,
                                 source_dependency_revision,
                                 result: Ok(prepared),
@@ -1429,7 +1517,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                             gid,
                             generation,
                             *parameters_revision,
-                            scene_generation,
+                            script_scene_generation,
                             runtime_revision,
                             source_dependency_revision,
                             job,
@@ -1495,7 +1583,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                             .is_some_and(|model| {
                                 model.parameters_revision == completion.parameters_revision
                             })
-                        && committed_scene_generation(world) == Some(completion.scene_generation)
+                        && scenario_scene_generation_is_current(
+                            world,
+                            completion.entity,
+                            completion.scene_generation,
+                        )
                         && driver.runtime.preparation_revision() == completion.runtime_revision;
                     let input_is_current = input_is_current
                         && driver.runtime.source_dependency_revision(completion.entity)
@@ -1512,6 +1604,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         Ok(prepared) => {
                             let context = scenario_execution_context(
                                 world,
+                                scenario_twin_owner(world, completion.entity),
                                 false,
                                 Some(completion.scene_generation),
                             );
@@ -1578,6 +1671,40 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         });
     }
 
+    /// Retire only scene/Twin preparation when the scene execution gate closes.
+    /// Application-owned programs can keep preparing across a Twin transition.
+    pub fn cancel_scene_owned_compiles(world: &mut World) {
+        let entities: Vec<_> = {
+            let mut query = world.query::<(
+                Entity,
+                Option<&crate::TwinOwnedScript>,
+                Option<&crate::SceneOwnedScript>,
+            )>();
+            query
+                .iter(world)
+                .filter(|(_, twin_owner, scene_owner)| {
+                    twin_owner.is_some() || scene_owner.is_some()
+                })
+                .map(|(entity, _, _)| entity)
+                .collect::<Vec<_>>()
+        };
+        for entity in &entities {
+            cancel_scenario_preparation_admission(world, *entity);
+        }
+        if !world.contains_resource::<Self>() {
+            return;
+        }
+        world.resource_scope(|world, mut driver: Mut<Self>| {
+            for entity in entities {
+                let remove_dependencies = !driver
+                    .fsm
+                    .get(&entity)
+                    .is_some_and(|state| state.initialized);
+                retire_pending_compile(world, &mut driver, entity, remove_dependencies);
+            }
+        });
+    }
+
     /// Invalidate every attached program after a shared runtime contract, such
     /// as the authored Rhai prelude, has changed. The scene entities remain
     /// attached; their programs are rebuilt on the next enabled pass.
@@ -1617,6 +1744,26 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
     /// scene. Scene and tutorial teardown call this method before removing the
     /// owning entity.
     pub fn stop_entity(world: &mut World, entity: Entity) {
+        Self::stop_entity_with_twin_owner(world, entity, None);
+    }
+
+    /// Stop one scenario admitted by `twin` while preserving the outgoing
+    /// identity in its `on_stop` execution route. The Twin may already have
+    /// left `WorkspaceResource` when `TwinClosed` is delivered.
+    pub fn stop_entity_for_twin(world: &mut World, entity: Entity, twin: lunco_workspace::TwinId) {
+        Self::stop_entity_with_twin_owner(world, entity, Some(twin));
+    }
+
+    fn stop_entity_with_twin_owner(
+        world: &mut World,
+        entity: Entity,
+        twin: Option<lunco_workspace::TwinId>,
+    ) {
+        let owner_twin = twin.or_else(|| {
+            world
+                .get::<crate::TwinOwnedScript>(entity)
+                .map(|owner| owner.twin)
+        });
         let Some(driver) = world.get_resource::<ScenarioDriver<R>>() else {
             return;
         };
@@ -1633,8 +1780,17 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             };
             document_id = state.document_id;
             let generation = committed_scene_generation(world);
-            let context = scenario_execution_context(world, false, generation)
+            let owner_twin = owner_twin.or(state.owner_twin);
+            let mut context = scenario_execution_context(world, owner_twin, false, generation)
                 .with_phase(lunco_core::RuntimePhase::Stop);
+            if let Some(twin) = owner_twin {
+                let scene_generation = context.route.map_or(0, |route| route.generation);
+                context.route = Some(lunco_core::RuntimeRoute::twin_owned(
+                    lunco_core::RuntimeCycle::Lifecycle,
+                    scene_generation,
+                    twin.raw(),
+                ));
+            }
             let _scope = bridge_core::WorldScope::enter(world, context);
             // The entity is still present, but the scene/tutor owns the
             // transition. Its final cleanup is host-authoritative, matching
@@ -1657,6 +1813,49 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         if let Some(diagnostic) = stop_error {
             publish_scenario_stop_error(world, document_id, diagnostic);
         }
+    }
+
+    /// Stop and detach persistent scenarios owned by one Twin. Returns their
+    /// entities so backend adapters can release their own source handles after
+    /// the generic lifecycle and document ownership have been retired.
+    pub fn stop_twin_owned_scripts(
+        world: &mut World,
+        twin: lunco_workspace::TwinId,
+    ) -> Vec<Entity> {
+        let targets: Vec<_> = {
+            let mut query =
+                world.query::<(Entity, &crate::TwinOwnedScript, Option<&ScriptedModel>)>();
+            query
+                .iter(world)
+                .filter(|(_, owner, _)| owner.twin == twin)
+                .map(|(entity, owner, model)| {
+                    (
+                        entity,
+                        owner.close_document,
+                        model.and_then(|model| model.document_id),
+                    )
+                })
+                .collect()
+        };
+        let mut stopped = Vec::with_capacity(targets.len());
+        for (entity, close_document, document_id) in targets {
+            Self::stop_entity_for_twin(world, entity, twin);
+            if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+                entity_mut
+                    .remove::<ScriptedModel>()
+                    .remove::<ScriptAuthority>()
+                    .remove::<crate::TwinOwnedScript>()
+                    .remove::<crate::SceneOwnedScript>();
+            }
+            if close_document
+                && let Some(document_id) = document_id
+                && let Some(mut registry) = world.get_resource_mut::<ScriptRegistry>()
+            {
+                registry.documents.remove(&DocumentId::new(document_id));
+            }
+            stopped.push(entity);
+        }
+        stopped
     }
 
     /// Exclusive-system body: drive every non-paused `ScriptedModel { language }`
@@ -1702,9 +1901,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         {
             return;
         }
-        let Some(scene_generation) = committed_scene_generation(world) else {
-            return;
-        };
+        let committed_generation = committed_scene_generation(world);
+        if committed_generation.is_none() && has_scene_owned_scenario_models(world, language) {
+            report_missing_scenario_generation(world);
+        }
+        let scene_generation_available = committed_generation.is_some();
+        let scene_generation = committed_generation.unwrap_or(0);
         let visualization_inputs_ready = world
             .get_resource::<lunco_core_runtime::SimulationProgress>()
             .is_none_or(|progress| {
@@ -1738,7 +1940,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 let mut query = world.query::<(Entity, &ScriptedModel, Option<&ScriptAuthority>)>();
                 query
                     .iter(world)
-                    .filter(|(_, model, _)| model.language == Some(language))
+                    .filter(|(entity, model, _)| {
+                        model.language == Some(language)
+                            && (scene_generation_available
+                                || !scenario_uses_scene_generation(world, *entity))
+                    })
                     .map(|(entity, model, authority)| {
                         (
                             entity,
@@ -1770,18 +1976,6 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         };
         models.sort_unstable_by_key(|model| scenario_actor_order_key(world, model.0));
 
-        let context = lunco_core::RuntimeExecutionContext {
-            route: Some(lunco_core::RuntimeRoute::twin(
-                lunco_core::RuntimeCycle::Visualization,
-                scene_generation,
-            )),
-            phase: lunco_core::RuntimePhase::Visualization,
-            clock: lunco_core::RuntimeClock::Presentation,
-            time_seconds: None,
-            delta_seconds: None,
-            sequence: None,
-            producer: None,
-        };
         world.resource_scope(|world, mut driver: Mut<ScenarioDriver<R>>| {
             let runtime_revision = driver.runtime.preparation_revision();
             for (entity, document_id, document_generation, parameters_revision, authority) in
@@ -1794,6 +1988,9 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     continue;
                 };
                 let source_dependency_revision = driver.runtime.source_dependency_revision(*entity);
+                let script_scene_generation =
+                    scenario_scope_generation(world, *entity, scene_generation);
+                let context = scenario_visualization_context(world, *entity, scene_generation);
                 let Some(state) = driver.fsm.get_mut(entity) else {
                     continue;
                 };
@@ -1802,7 +1999,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     || state.visualization_complete
                     || state.document_id != Some(raw)
                     || state.generation != document_generation
-                    || state.scene_generation != scene_generation
+                    || state.scene_generation != script_scene_generation
                     || state.preparation_revision != Some(runtime_revision)
                     || state.attempted_dependency_revision != Some(source_dependency_revision)
                     || state.parameters_revision != *parameters_revision
@@ -1851,21 +2048,18 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         if !has_driver_state && !has_scenario_models(world, language) {
             return;
         }
-        let Some(scene_generation) = committed_scene_generation(world) else {
+        let committed_generation = committed_scene_generation(world);
+        if committed_generation.is_none() && has_scene_owned_scenario_models(world, language) {
             report_missing_scenario_generation(world);
-            return;
-        };
+        }
+        let scene_generation_available = committed_generation.is_some();
+        let scene_generation = committed_generation.unwrap_or(0);
         let run_tick = pass == ScenarioPass::FixedTick;
         let startup_pass = pass == ScenarioPass::Startup;
         let pass_start_event_sequence = world
             .get_resource::<ScriptEventInbox>()
             .map(|inbox| inbox.next_sequence)
             .unwrap_or_default();
-        let pass_context = scenario_execution_context(world, run_tick, Some(scene_generation));
-        // Each lifecycle pass runs under its own context, while dependency
-        // planning, initialization, and `on_start` inherit the current logical
-        // simulation sequence.
-        let activation_context = scenario_execution_context(world, true, Some(scene_generation));
         // 1. Snapshot (entity, doc_id, gid, source revision, parameter revision),
         //    releasing every
         //    World borrow before we execute scripts. `live` = all THIS-LANGUAGE
@@ -1938,7 +2132,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 .collect();
             live = models
                 .iter()
-                .filter(|(_, _, l, _, _, _, _)| *l == Some(language))
+                .filter(|(entity, _, l, _, _, _, _)| {
+                    *l == Some(language)
+                        && (scene_generation_available
+                            || !scenario_uses_scene_generation(world, *entity))
+                })
                 .map(|(e, ..)| *e)
                 .collect();
 
@@ -1948,7 +2146,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 if lang != Some(language) {
                     continue;
                 }
+                if !scene_generation_available && scenario_uses_scene_generation(world, entity) {
+                    continue;
+                }
                 let Some(raw) = doc_id else { continue };
+                let script_scene_generation =
+                    scenario_scope_generation(world, entity, scene_generation);
                 let (generation, maybe_src, directives, directives_changed, prior_diag) = {
                     let registry = world.resource::<ScriptRegistry>();
                     let Some(host) = registry.documents.get(&DocumentId::new(raw)) else {
@@ -1989,7 +2192,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                                 || state.preparation_revision != Some(preparation_revision)
                                 || (reload_policy == crate::doc::ScenarioReloadPolicy::Restart
                                     && state.started
-                                    && state.scene_generation != scene_generation)
+                                    && state.scene_generation != script_scene_generation)
                         });
                     let maybe_src = needs_recompile.then(|| {
                         let parameters = world
@@ -2075,7 +2278,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     maybe_src,
                     authority,
                     reload_policy,
-                    scene_generation,
+                    script_scene_generation,
                     directives,
                 ));
             }
@@ -2152,11 +2355,14 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         }
 
         world.resource_scope(|world, mut driver: Mut<ScenarioDriver<R>>| {
-            let _scope = bridge_core::WorldScope::enter(world, pass_context);
+            let maintenance_context = scenario_execution_context(world, None, false, None);
+            let _scope = bridge_core::WorldScope::enter(world, maintenance_context);
             let _phase = bridge_core::ExecutionContextScope::enter(
-                pass_context.with_phase(lunco_core::RuntimePhase::Preparation),
+                maintenance_context.with_phase(lunco_core::RuntimePhase::Preparation),
             );
             driver.runtime.maintain();
+            drop(_phase);
+            drop(_scope);
             let ScenarioDriver { runtime, fsm, .. } = &mut *driver;
 
             // Live client hooks are restricted to the client-local command
@@ -2177,6 +2383,20 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 directives,
                 ) in work
             {
+                let owner_twin = scenario_twin_owner(world, entity);
+                let pass_context = scenario_execution_context(
+                    world,
+                    owner_twin,
+                    run_tick,
+                    Some(scene_generation),
+                );
+                let activation_context = scenario_execution_context(
+                    world,
+                    owner_twin,
+                    true,
+                    Some(scene_generation),
+                );
+                let _scope = bridge_core::WorldScope::enter(world, pass_context);
                 // Gate this entity's hook `cmd()`s against the launching session
                 // (§3.4). `None` for a host-trusted launch → ungated. Covers the
                 // hot-reload `on_stop` below too (still inside this iteration).
@@ -2241,6 +2461,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 // owner state directly; it must not replay a stale event batch.
                 let receive_events = st.started && maybe_src.is_none();
                 st.gid = gid;
+                st.owner_twin = owner_twin;
                 let mut initialization_diag: Option<Diagnostic> = None;
                 let recompiled = st.newly_compiled;
                 if maybe_src.is_some() {
@@ -2507,8 +2728,15 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             for entity in dead {
                 if let Some(st) = fsm.remove(&entity) {
                     if st.started && st.compiled {
+                        let dead_context = scenario_execution_context(
+                            world,
+                            st.owner_twin,
+                            false,
+                            Some(st.scene_generation),
+                        );
+                        let _scope = bridge_core::WorldScope::enter(world, dead_context);
                         let _phase = bridge_core::ExecutionContextScope::enter(
-                            pass_context.with_phase(lunco_core::RuntimePhase::Stop),
+                            dead_context.with_phase(lunco_core::RuntimePhase::Stop),
                         );
                         if let Some(diagnostic) = runtime.call_hook(entity, ScenarioHook::Stop, st.gid) {
                             if let Some(raw) = st.document_id {
@@ -3439,9 +3667,70 @@ mod lifecycle_readiness_tests {
     }
 
     #[test]
-    fn missing_scene_generation_faults_and_skips_scenario_execution() {
+    fn application_scenario_runs_without_a_scene_generation() {
         let mut world = World::new();
         world.init_resource::<lunco_core::RuntimeFaults>();
+        world.insert_resource(ScriptRegistry::default());
+        world.insert_resource(DocumentDiagnostics::default());
+        world.resource_mut::<ScriptRegistry>().insert_document(
+            DocumentId::new(71),
+            ScriptDocument::new(71, ScriptLanguage::Rhai, "application scenario"),
+        );
+        world.spawn(ScriptedModel {
+            document_id: Some(71),
+            language: Some(ScriptLanguage::Rhai),
+            ..Default::default()
+        });
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let contexts = Arc::new(Mutex::new(Vec::new()));
+        world.insert_resource(ScenarioDriver::with_runtime(RecordingRuntime(
+            calls.clone(),
+            contexts.clone(),
+            Arc::new(Mutex::new(false)),
+        )));
+
+        run_scenarios(&mut world);
+
+        assert!(
+            world
+                .resource::<lunco_core::RuntimeFaults>()
+                .first
+                .is_none()
+        );
+        assert!(calls.lock().unwrap().contains(&RecordedCall::Compile));
+        assert!(contexts.lock().unwrap().iter().any(|context| {
+            context.route.is_some_and(|route| {
+                route.scope == lunco_core::RuntimeScope::Application
+                    && route.generation == 0
+                    && route.owner_id.is_none()
+            })
+        }));
+    }
+
+    #[test]
+    fn scene_owned_scenario_requires_a_committed_scene_generation() {
+        let mut world = World::new();
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        world.insert_resource(ScriptRegistry::default());
+        world.insert_resource(DocumentDiagnostics::default());
+        world.resource_mut::<ScriptRegistry>().insert_document(
+            DocumentId::new(72),
+            ScriptDocument::new(72, ScriptLanguage::Rhai, "scene scenario"),
+        );
+        world.spawn((
+            ScriptedModel {
+                document_id: Some(72),
+                language: Some(ScriptLanguage::Rhai),
+                ..Default::default()
+            },
+            crate::SceneOwnedScript,
+        ));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        world.insert_resource(ScenarioDriver::with_runtime(RecordingRuntime(
+            calls.clone(),
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(false)),
+        )));
 
         run_scenarios(&mut world);
 
@@ -3449,8 +3738,9 @@ mod lifecycle_readiness_tests {
             .resource::<lunco_core::RuntimeFaults>()
             .first
             .as_ref()
-            .expect("missing owner generation is visible as a runtime fault");
+            .expect("scene-owned work without a committed generation must fault");
         assert_eq!(fault.kind, "scenario-generation-missing");
+        assert!(!calls.lock().unwrap().contains(&RecordedCall::Compile));
     }
 
     #[test]
@@ -3958,11 +4248,18 @@ mod lifecycle_readiness_tests {
             ScriptDocument::new(81, ScriptLanguage::Rhai, "scenario"),
         );
         let entity = world
-            .spawn(ScriptedModel {
-                document_id: Some(81),
-                language: Some(ScriptLanguage::Rhai),
-                ..Default::default()
-            })
+            .spawn((
+                ScriptedModel {
+                    document_id: Some(81),
+                    language: Some(ScriptLanguage::Rhai),
+                    ..Default::default()
+                },
+                crate::TwinOwnedScript {
+                    twin: lunco_workspace::TwinId::new(17),
+                    close_document: false,
+                },
+                crate::SceneOwnedScript,
+            ))
             .id();
         let calls = Arc::new(Mutex::new(Vec::new()));
         let contexts = Arc::new(Mutex::new(Vec::new()));
@@ -4452,5 +4749,168 @@ mod lifecycle_readiness_tests {
                 && context.sequence.is_none()
                 && context.producer == Some(lunco_core::RuntimeProducerStamp::simulation(0, 6))
         }));
+    }
+
+    #[test]
+    fn twin_shutdown_stops_only_owned_scripts_with_the_outgoing_owner_route() {
+        let first = lunco_workspace::TwinId::new(17);
+        let second = lunco_workspace::TwinId::new(23);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let contexts = Arc::new(Mutex::new(Vec::new()));
+        let mut world = World::new();
+        world.insert_resource(ScriptRegistry::default());
+        world.insert_resource(scene_coordinator_at_generation(4));
+        world.insert_resource(ScenarioDriver::with_runtime(RecordingRuntime(
+            calls.clone(),
+            contexts.clone(),
+            Arc::new(Mutex::new(false)),
+        )));
+
+        let first_entity = world
+            .spawn((
+                ScriptedModel {
+                    document_id: Some(901),
+                    language: Some(ScriptLanguage::Rhai),
+                    ..Default::default()
+                },
+                super::super::TwinOwnedScript {
+                    twin: first,
+                    close_document: true,
+                },
+                super::super::SceneOwnedScript,
+            ))
+            .id();
+        let second_entity = world
+            .spawn((
+                ScriptedModel {
+                    document_id: Some(902),
+                    language: Some(ScriptLanguage::Rhai),
+                    ..Default::default()
+                },
+                super::super::TwinOwnedScript {
+                    twin: second,
+                    close_document: true,
+                },
+            ))
+            .id();
+        let app_entity = world
+            .spawn(ScriptedModel {
+                document_id: Some(903),
+                language: Some(ScriptLanguage::Rhai),
+                ..Default::default()
+            })
+            .id();
+        for (entity, document_id) in [(first_entity, 901), (second_entity, 902), (app_entity, 903)]
+        {
+            world.resource_mut::<ScriptRegistry>().insert_document(
+                DocumentId::new(document_id),
+                ScriptDocument::new(document_id, ScriptLanguage::Rhai, ""),
+            );
+            world
+                .resource_mut::<ScenarioDriver<RecordingRuntime>>()
+                .fsm
+                .insert(
+                    entity,
+                    Fsm {
+                        document_id: Some(document_id),
+                        started: true,
+                        compiled: true,
+                        gid: i64::try_from(document_id).expect("test document id fits gid"),
+                        ..Default::default()
+                    },
+                );
+        }
+
+        let stopped =
+            ScenarioDriver::<RecordingRuntime>::stop_twin_owned_scripts(&mut world, first);
+
+        assert_eq!(stopped, vec![first_entity]);
+        assert!(world.get::<ScriptedModel>(first_entity).is_none());
+        assert!(
+            world
+                .get::<super::super::SceneOwnedScript>(first_entity)
+                .is_none()
+        );
+        assert!(world.get::<ScriptedModel>(second_entity).is_some());
+        assert!(world.get::<ScriptedModel>(app_entity).is_some());
+        assert!(
+            world
+                .get::<super::super::TwinOwnedScript>(second_entity)
+                .is_some()
+        );
+        assert!(
+            world
+                .resource::<ScriptRegistry>()
+                .documents
+                .contains_key(&DocumentId::new(902))
+        );
+        assert!(
+            world
+                .resource::<ScriptRegistry>()
+                .documents
+                .contains_key(&DocumentId::new(903))
+        );
+        assert!(
+            !world
+                .resource::<ScriptRegistry>()
+                .documents
+                .contains_key(&DocumentId::new(901))
+        );
+        assert_eq!(*calls.lock().unwrap(), vec![RecordedCall::Stop]);
+        assert!(contexts.lock().unwrap().iter().any(|context| {
+            context.route.is_some_and(|route| {
+                route.scope == lunco_core::RuntimeScope::Twin
+                    && route.owner_id == Some(first.raw())
+                    && route.generation == 4
+            })
+        }));
+    }
+
+    #[test]
+    fn application_scenarios_keep_scope_across_twin_scene_generations() {
+        let twin = lunco_workspace::TwinId::new(17);
+        let mut world = World::new();
+        world.insert_resource(scene_coordinator_at_generation(6));
+        let application = world.spawn(ScriptedModel::default()).id();
+        let twin_script = world
+            .spawn((
+                ScriptedModel::default(),
+                crate::TwinOwnedScript {
+                    twin,
+                    close_document: true,
+                },
+            ))
+            .id();
+        let scene_script = world
+            .spawn((ScriptedModel::default(), crate::SceneOwnedScript))
+            .id();
+
+        assert_eq!(scenario_scope_generation(&world, application, 6), 0);
+        assert!(scenario_scene_generation_is_current(&world, application, 0));
+        assert!(!scenario_scene_generation_is_current(
+            &world,
+            application,
+            6
+        ));
+        assert_eq!(scenario_scope_generation(&world, twin_script, 6), 6);
+        assert_eq!(scenario_scope_generation(&world, scene_script, 6), 6);
+
+        let app_route = scenario_execution_context(&world, None, false, Some(6))
+            .route
+            .expect("application route");
+        let twin_route = scenario_execution_context(
+            &world,
+            scenario_twin_owner(&world, twin_script),
+            false,
+            Some(6),
+        )
+        .route
+        .expect("Twin route");
+        assert_eq!(app_route.scope, lunco_core::RuntimeScope::Application);
+        assert_eq!(app_route.generation, 0);
+        assert_eq!(app_route.owner_id, None);
+        assert_eq!(twin_route.scope, lunco_core::RuntimeScope::Twin);
+        assert_eq!(twin_route.generation, 6);
+        assert_eq!(twin_route.owner_id, Some(twin.raw()));
     }
 }

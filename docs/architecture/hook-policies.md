@@ -178,12 +178,12 @@ hook for its own authored behavior. A missing optional lifecycle policy is a
 valid unconfigured state, and a lifecycle fault is reported without crashing
 or silently selecting another implementation.
 
-Every `twin.lifecycle` invocation carries `Twin/Lifecycle` with the mounted
-Twin's nonzero `TwinId` as its generation, `RuntimeClock::None`, and the phase
-`Start`, `Event`, or `Stop`. `TwinId` is allocated monotonically for each mount
-within the owning workspace, so a later mount of the same path has a distinct
-route. `policy_status().lifecycle.runtime_context` retains the exact context
-used for the latest delivery.
+Every `twin.lifecycle` invocation carries `Twin/Lifecycle` with generation
+zero and the mounted Twin's stable ID in `owner_id`, `RuntimeClock::None`, and
+the phase `Start`, `Event`, or `Stop`. `TwinId` is allocated monotonically for
+each mount within the owning workspace, so a later mount of the same path has a
+distinct owner. `policy_status().lifecycle.runtime_context` retains the exact
+context used for the latest delivery.
 
 The generic asset layer owns asynchronous JSON reads and publishes
 `JsonAssetScopeLoading` and `JsonAssetScopeChanged` events for the engine

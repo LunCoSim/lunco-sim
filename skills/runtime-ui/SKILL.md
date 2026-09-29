@@ -273,6 +273,15 @@ HUD also exposes a surface-specific reset that removes its per-Twin override.
 Manifest reconciliation prunes unknown surface ids, and `TwinClosed` clears the
 in-memory layout scope.
 
+The script-driven `GuidedOverlay` is owner-tagged presentation state. A HUD
+command issued from a Twin route must carry its stable Twin ID; a stale or
+inactive owner is rejected. `TwinClosed` clears every field only when that
+Twin owns the overlay, and scene replacement clears all old presentation state
+before the next scenario starts. Core/Application scripts keep their runtime
+scope; clearing presentation does not restart them. Tutorial launchers call
+`ClearGuidedOverlay` before replacing a lesson so actions, spotlight, coach
+step, missing-anchor diagnostic, and recovery card cannot leak between lessons.
+
 `interactive: true` enables input ownership for visible HUI controls that carry
 an authored `on_press` action. The runtime adds `Pickable` to those visible
 controls and feeds each computed Bevy UI rectangle into the existing

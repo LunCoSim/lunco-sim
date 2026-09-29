@@ -496,6 +496,7 @@ mod tests {
                 scope: RuntimeScope::Twin,
                 cycle: RuntimeCycle::Simulation,
                 generation: 17,
+                owner_id: None,
             }),
             phase: RuntimePhase::Behavior,
             clock: RuntimeClock::Simulation,

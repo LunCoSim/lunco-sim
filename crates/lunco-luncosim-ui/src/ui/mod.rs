@@ -329,8 +329,7 @@ impl Plugin for LunCoSimUiPlugin {
             .add_observer(
                 |t: On<lunco_usd_bevy_runtime_core::scene::LoadScene>,
                  current: Option<ResMut<CurrentScenePath>>,
-                 current_name: Option<ResMut<CurrentSceneName>>,
-                 hud: Option<ResMut<lunco_workbench_guided_ui::GuidedOverlay>>| {
+                 current_name: Option<ResMut<CurrentSceneName>>| {
                     if let Some(mut current) = current {
                         current.0 = t.event().path.clone();
                     }
@@ -340,25 +339,6 @@ impl Plugin for LunCoSimUiPlugin {
                             .and_then(|f| f.to_str())
                             .unwrap_or(&t.event().path)
                             .to_string();
-                    }
-                    // The overlay belongs to the scene that was on screen. A
-                    // scene switch leaves hints, objectives, a spotlight ring or
-                    // a half-finished coach card pointing at entities that no
-                    // longer exist, and the "continue to the next lesson?" popup
-                    // floating over a world it was never about.
-                    //
-                    // Cleared HERE — synchronously, on the LoadScene TRIGGER —
-                    // rather than from a change-detection system: a lesson's
-                    // `on_start` calls `load_scene` FIRST and then publishes its
-                    // own hint/coach step, so anything that ran a frame later
-                    // would wipe the incoming lesson's overlay instead of the
-                    // outgoing one's. A still-running mission re-publishes its
-                    // objectives on the next tick, so only stale state is lost.
-                    if let Some(mut hud) = hud {
-                        hud.hint.clear();
-                        hud.objectives.clear();
-                        hud.spotlight = None;
-                        hud.tour = None;
                     }
                 },
             )
@@ -536,6 +516,7 @@ fn on_runtime_ui_action(
                 tool: "runtime_ui".to_owned(),
                 hook: "on_action".to_owned(),
                 args: action_args.clone(),
+                owner_twin_id: None,
             });
             commands.trigger(lunco_telemetry_core::TelemetryEvent {
                 name: "runtime.ui.action".to_owned(),
@@ -562,6 +543,7 @@ fn on_guided_hud_action(
         tool: action.tool.clone(),
         hook: action.hook.clone(),
         args: lunco_telemetry_core::TelemetryValue::String(action.action.clone()),
+        owner_twin_id: None,
     });
 }
 

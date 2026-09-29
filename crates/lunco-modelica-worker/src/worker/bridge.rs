@@ -625,13 +625,39 @@ pub fn handle_modelica_responses(
     let mut faults = faults;
     let mut step_diagnostics = step_diagnostics;
     while let Ok(result) = channels.rx.try_recv() {
+        if let Some(root_id) = result.unloaded_source_root_id.as_ref() {
+            if let Some(error) = result.error.as_ref() {
+                let detail = format!(
+                    "Modelica source root `{root_id}` unload operation {:?} failed: {error}",
+                    result.source_root_operation_id
+                );
+                bevy::log::error!("[source-roots] {detail}");
+                notices.write(ModelicaNotice {
+                    level: NoticeLevel::Error,
+                    text: detail.clone(),
+                });
+                if let Some(faults) = faults.as_deref_mut() {
+                    faults.raise(
+                        "modelica-source-root-unload-failed",
+                        None,
+                        "Modelica source-root registry",
+                        detail,
+                    );
+                }
+            }
+            continue;
+        }
         // Source-root load ack: route to the registry and short-
         // circuit before any of the sim-result handling below
         // (which keys on `result.entity` — LoadSourceRoot uses
         // `Entity::PLACEHOLDER`).
         if let Some(root_id) = result.loaded_source_root_id.as_ref() {
             if let Some(roots) = source_roots.as_deref_mut() {
-                if let Some(entry) = roots.roots.get_mut(root_id) {
+                if let Some(entry) = roots
+                    .roots
+                    .get_mut(root_id)
+                    .filter(|entry| Some(entry.operation_id) == result.source_root_operation_id)
+                {
                     if let Some(err) = result.error.as_ref() {
                         bevy::log::warn!("[source-roots] `{}` load failed: {}", root_id, err,);
                         entry.state = lunco_modelica_source_roots::LoadState::Failed(err.clone());

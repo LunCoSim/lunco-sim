@@ -89,6 +89,7 @@ pub fn draw_scene_context_menu(
             tool: item.tool,
             hook: item.hook,
             args: item.args,
+            owner_twin_id: None,
         });
         state.pending = None;
         return;

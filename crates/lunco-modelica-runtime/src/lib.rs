@@ -125,7 +125,15 @@ pub enum ModelicaCommand {
     },
     LoadSourceRoot {
         id: String,
+        /// Source-root operation identity assigned by the registry. A newer
+        /// load or unload for the same id fences late preparation results.
+        operation_id: u64,
         payload: LoadSourceRootPayload,
+    },
+    UnloadSourceRoot {
+        id: String,
+        /// Monotonic registry operation identity that fences older loads.
+        operation_id: u64,
     },
 }
 
@@ -184,6 +192,12 @@ pub struct ModelicaResult {
     pub compiled_model_name: Option<String>,
     #[serde(default)]
     pub loaded_source_root_id: Option<String>,
+    /// Source-set unload acknowledgement from the Modelica worker.
+    #[serde(default)]
+    pub unloaded_source_root_id: Option<String>,
+    /// Registry operation identity associated with a source-root result.
+    #[serde(default)]
+    pub source_root_operation_id: Option<u64>,
     #[serde(default)]
     pub compile_diagnostics: Vec<lunco_doc::Diagnostic>,
     /// Solver execution duration for a completed live worker step, in ns.
@@ -224,6 +238,8 @@ impl Default for ModelicaResult {
             experiment_solver: None,
             compiled_model_name: None,
             loaded_source_root_id: None,
+            unloaded_source_root_id: None,
+            source_root_operation_id: None,
             compile_diagnostics: Vec::new(),
             worker_step_duration_ns: None,
             worker_backlog_count: None,

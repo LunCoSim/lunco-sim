@@ -19,6 +19,7 @@ lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core", optiona
 # auto-record into the canonical Twin journal — same "sync by default" bridge
 # Modelica/USD use. `attach_journal_recorder` (in lunco-doc-bevy) needs the trait.
 lunco-twin-journal = { path = "../lunco-twin-journal" }
+lunco-workspace = { path = "../lunco-workspace" }
 # Optional Python one-shot execution is exposed as a typed `#[Command]`
 # (`RunPython`) by the language-neutral command module. The API discovers it by
 # reflection (AppTypeRegistry) — no direct `lunco-api` dependency is needed.

@@ -517,7 +517,12 @@ impl SolvePreparationPool {
         id
     }
 
-    fn submit_source_root(&mut self, id: String, payload: LoadSourceRootPayload) -> u64 {
+    fn submit_source_root(
+        &mut self,
+        id: String,
+        source_root_operation_id: u64,
+        payload: LoadSourceRootPayload,
+    ) -> u64 {
         let operation_id = self.allocate_id();
         let tx = self.tx.clone();
         self.pool.spawn(move || {
@@ -543,6 +548,8 @@ impl SolvePreparationPool {
                 .send(WorkerPreparationResult::SourceRoot(
                     SourceRootPreparationResult {
                         id: operation_id,
+                        root_id: id,
+                        source_root_operation_id,
                         prepared: result,
                     },
                 ))
@@ -634,6 +641,8 @@ struct SolvePreparationResult {
 #[cfg(not(target_arch = "wasm32"))]
 struct SourceRootPreparationResult {
     id: u64,
+    root_id: String,
+    source_root_operation_id: u64,
     prepared: PreparedSourceRoot,
 }
 
@@ -973,7 +982,8 @@ fn stage_preparation_result(
         WorkerPreparationResult::Compiler(result) => {
             let id = match &result {
                 CompilerCompletion::Compile { id, .. }
-                | CompilerCompletion::SourceRoot { id, .. } => *id,
+                | CompilerCompletion::SourceRoot { id, .. }
+                | CompilerCompletion::SourceRootUnload { id, .. } => *id,
             };
             ready_compiler.insert(id, result).is_some()
         }
@@ -1037,6 +1047,7 @@ fn dispatch_ready_source_roots(
     compiler_order: &mut VecDeque<u64>,
     pending_solve_preparations: usize,
     pending_installs: &mut HashSet<u64>,
+    latest_source_root_operations: &HashMap<String, u64>,
     tx: &Sender<ModelicaResult>,
 ) {
     loop {
@@ -1046,8 +1057,19 @@ fn dispatch_ready_source_roots(
         let Some(result) = pop_ready_in_order(order, ready) else {
             return;
         };
-        let root_id = result.prepared.source_set_id().to_owned();
-        match compiler.submit_source_root(result.prepared) {
+        let SourceRootPreparationResult {
+            root_id,
+            source_root_operation_id,
+            prepared,
+            ..
+        } = result;
+        if latest_source_root_operations.get(&root_id) != Some(&source_root_operation_id) {
+            log::debug!(
+                "[modelica-runtime] discarded stale source-root preparation `{root_id}` operation={source_root_operation_id}"
+            );
+            continue;
+        }
+        match compiler.submit_source_root(prepared, source_root_operation_id) {
             Ok(operation_id) => {
                 compiler_order.push_back(operation_id);
                 pending_installs.insert(operation_id);
@@ -1055,11 +1077,76 @@ fn dispatch_ready_source_roots(
             Err((error, _prepared)) => {
                 let _ = tx.send(ModelicaResult {
                     loaded_source_root_id: Some(root_id),
+                    source_root_operation_id: Some(source_root_operation_id),
                     error: Some(error),
                     ..Default::default()
                 });
             }
         }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn admit_worker_command(
+    command: ModelicaCommand,
+    compile_lane: &mut VecDeque<ModelicaCommand>,
+    step_lane: &mut VecDeque<ModelicaCommand>,
+    compiler: &mut CompilerActor,
+    compiler_order: &mut VecDeque<u64>,
+    pending_source_root_installs: &mut HashSet<u64>,
+    latest_source_root_operations: &mut HashMap<String, u64>,
+    tx: &Sender<ModelicaResult>,
+) {
+    match command {
+        ModelicaCommand::LoadSourceRoot {
+            id,
+            operation_id,
+            payload,
+        } => {
+            if !record_source_root_operation(latest_source_root_operations, &id, operation_id) {
+                log::debug!(
+                    "[modelica-runtime] discarded stale source-root load `{id}` operation={operation_id}"
+                );
+                return;
+            }
+            enqueue_command(
+                ModelicaCommand::LoadSourceRoot {
+                    id,
+                    operation_id,
+                    payload,
+                },
+                compile_lane,
+                step_lane,
+                tx,
+            );
+        }
+        ModelicaCommand::UnloadSourceRoot { id, operation_id } => {
+            if !record_source_root_operation(latest_source_root_operations, &id, operation_id) {
+                log::debug!(
+                    "[modelica-runtime] discarded stale source-root unload `{id}` operation={operation_id}"
+                );
+                return;
+            }
+            match compiler.submit_source_root_unload(id.clone(), operation_id) {
+                Ok(actor_operation_id) => {
+                    compiler_order.push_back(actor_operation_id);
+                    pending_source_root_installs.insert(actor_operation_id);
+                }
+                Err(error) => {
+                    log::error!("[modelica-runtime] failed to queue unload for `{id}`: {error}");
+                    retire_source_root_operation(latest_source_root_operations, &id, operation_id);
+                    let _ = tx.send(ModelicaResult {
+                        unloaded_source_root_id: Some(id),
+                        source_root_operation_id: Some(operation_id),
+                        error: Some(format!(
+                            "failed to queue Modelica source-root unload: {error}"
+                        )),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        command => enqueue_command(command, compile_lane, step_lane, tx),
     }
 }
 
@@ -1081,11 +1168,16 @@ fn commit_ready_compiler_completions(
     cached_models: &mut HashMap<Entity, CachedModel>,
     realtime_models: &std::collections::HashSet<Entity>,
     step_lane: &mut VecDeque<ModelicaCommand>,
+    latest_source_root_operations: &mut HashMap<String, u64>,
     tx: &Sender<ModelicaResult>,
 ) {
     while let Some(completion) = pop_ready_in_order(order, ready) {
         match completion {
-            CompilerCompletion::SourceRoot { id, commit } => {
+            CompilerCompletion::SourceRoot {
+                id,
+                source_root_operation_id,
+                commit,
+            } => {
                 pending_installs.remove(&id);
                 let library_changed =
                     commit.inserted_file_count > 0 || commit.library_revision != *library_revision;
@@ -1103,7 +1195,57 @@ fn commit_ready_compiler_completions(
                 );
                 let _ = tx.send(ModelicaResult {
                     loaded_source_root_id: Some(commit.root_id),
+                    source_root_operation_id: Some(source_root_operation_id),
                     error: commit.error,
+                    ..Default::default()
+                });
+            }
+            CompilerCompletion::SourceRootUnload {
+                id,
+                root_id,
+                source_root_operation_id,
+                removed,
+                error,
+                library_defaults: updated_defaults,
+                library_revision: updated_revision,
+                ..
+            } => {
+                pending_installs.remove(&id);
+                if let Some(error) = error {
+                    retire_source_root_operation(
+                        latest_source_root_operations,
+                        &root_id,
+                        source_root_operation_id,
+                    );
+                    log::error!(
+                        "[modelica-runtime] failed to unload Modelica source root `{root_id}` operation={source_root_operation_id}: {error}"
+                    );
+                    let _ = tx.send(ModelicaResult {
+                        unloaded_source_root_id: Some(root_id),
+                        source_root_operation_id: Some(source_root_operation_id),
+                        error: Some(error),
+                        ..Default::default()
+                    });
+                    continue;
+                }
+                retire_source_root_operation(
+                    latest_source_root_operations,
+                    &root_id,
+                    source_root_operation_id,
+                );
+                let library_changed = removed || updated_revision != *library_revision;
+                if library_changed {
+                    *library_gen = library_gen.wrapping_add(1);
+                    prepared_solve_cache.clear();
+                }
+                *library_defaults = updated_defaults;
+                *library_revision = updated_revision;
+                log::info!(
+                    "[modelica-runtime] unloaded Modelica source root `{root_id}` operation={source_root_operation_id} (removed={removed})"
+                );
+                let _ = tx.send(ModelicaResult {
+                    unloaded_source_root_id: Some(root_id),
+                    source_root_operation_id: Some(source_root_operation_id),
                     ..Default::default()
                 });
             }
@@ -2004,8 +2146,8 @@ fn reset_ok(
 /// Build the terminal response for a command that cannot complete. The
 /// response retains the command's lifecycle shape: a Compile failure closes
 /// compilation, a Step failure closes its exact transaction, and a source-root
-/// failure resolves the root load. A placeholder-only response cannot clear
-/// any of those state machines.
+/// failure resolves its matching load or unload operation. A placeholder-only
+/// response cannot clear any of those state machines.
 pub fn failed_result_for_command(
     cmd: &ModelicaCommand,
     message: impl Into<String>,
@@ -2047,12 +2189,46 @@ pub fn failed_result_for_command(
             result.session_id = *session_id;
             result.is_reset = true;
         }
-        ModelicaCommand::LoadSourceRoot { id, .. } => {
+        ModelicaCommand::LoadSourceRoot {
+            id, operation_id, ..
+        } => {
             result.loaded_source_root_id = Some(id.clone());
+            result.source_root_operation_id = Some(*operation_id);
+        }
+        ModelicaCommand::UnloadSourceRoot { id, operation_id } => {
+            result.unloaded_source_root_id = Some(id.clone());
+            result.source_root_operation_id = Some(*operation_id);
         }
         ModelicaCommand::Despawn { .. } => {}
     }
     result
+}
+
+fn record_source_root_operation(
+    latest: &mut HashMap<String, u64>,
+    root_id: &str,
+    operation_id: u64,
+) -> bool {
+    if latest
+        .get(root_id)
+        .is_some_and(|current| *current >= operation_id)
+    {
+        return false;
+    }
+    latest.insert(root_id.to_owned(), operation_id);
+    true
+}
+
+fn retire_source_root_operation(
+    latest: &mut HashMap<String, u64>,
+    root_id: &str,
+    operation_id: u64,
+) -> bool {
+    if latest.get(root_id) != Some(&operation_id) {
+        return false;
+    }
+    latest.remove(root_id);
+    true
 }
 
 /// Build the terminal response for a command that panicked inside the solver
@@ -2493,6 +2669,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
     let mut compiler_order = VecDeque::new();
     let mut ready_compiler_completions = HashMap::new();
     let mut pending_source_root_installs = HashSet::new();
+    let mut latest_source_root_operations = HashMap::<String, u64>::new();
     let mut solve_preparation_order = VecDeque::new();
     let mut ready_solve_preparations = HashMap::new();
     let mut source_root_preparation_order = VecDeque::new();
@@ -2514,7 +2691,16 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                 && compiler_order.is_empty()
             {
                 match rx.recv() {
-                    Ok(cmd) => enqueue_command(cmd, &mut compile_lane, &mut step_lane, &tx),
+                    Ok(cmd) => admit_worker_command(
+                        cmd,
+                        &mut compile_lane,
+                        &mut step_lane,
+                        &mut compiler,
+                        &mut compiler_order,
+                        &mut pending_source_root_installs,
+                        &mut latest_source_root_operations,
+                        &tx,
+                    ),
                     Err(_) => return,
                 }
             } else {
@@ -2533,7 +2719,16 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         Err(_) => return,
                     },
                     recv(rx) -> message => match message {
-                        Ok(cmd) => enqueue_command(cmd, &mut compile_lane, &mut step_lane, &tx),
+                        Ok(cmd) => admit_worker_command(
+                            cmd,
+                            &mut compile_lane,
+                            &mut step_lane,
+                            &mut compiler,
+                            &mut compiler_order,
+                            &mut pending_source_root_installs,
+                            &mut latest_source_root_operations,
+                            &tx,
+                        ),
                         Err(_) => return,
                     },
                 }
@@ -2558,6 +2753,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
             &mut compiler_order,
             pending_compile_works.len(),
             &mut pending_source_root_installs,
+            &latest_source_root_operations,
             &tx,
         );
         commit_ready_compiler_completions(
@@ -2577,6 +2773,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
             &mut cached_models,
             &realtime_models,
             &mut step_lane,
+            &mut latest_source_root_operations,
             &tx,
         );
         commit_ready_solve_preparations(
@@ -2599,7 +2796,16 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
         const MAX_COMMANDS_PER_ROUND: usize = 64;
         for _ in 0..MAX_COMMANDS_PER_ROUND {
             let Ok(cmd) = rx.try_recv() else { break };
-            enqueue_command(cmd, &mut compile_lane, &mut step_lane, &tx);
+            admit_worker_command(
+                cmd,
+                &mut compile_lane,
+                &mut step_lane,
+                &mut compiler,
+                &mut compiler_order,
+                &mut pending_source_root_installs,
+                &mut latest_source_root_operations,
+                &tx,
+            );
         }
 
         // A result can arrive while the bounded command batch is being
@@ -2619,6 +2825,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
             &mut compiler_order,
             pending_compile_works.len(),
             &mut pending_source_root_installs,
+            &latest_source_root_operations,
             &tx,
         );
         commit_ready_compiler_completions(
@@ -2638,6 +2845,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
             &mut cached_models,
             &realtime_models,
             &mut step_lane,
+            &mut latest_source_root_operations,
             &tx,
         );
         commit_ready_solve_preparations(
@@ -2758,7 +2966,16 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                     Err(_) => return,
                 },
                 recv(rx) -> message => match message {
-                    Ok(cmd) => enqueue_command(cmd, &mut compile_lane, &mut step_lane, &tx),
+                    Ok(cmd) => admit_worker_command(
+                        cmd,
+                        &mut compile_lane,
+                        &mut step_lane,
+                        &mut compiler,
+                        &mut compiler_order,
+                        &mut pending_source_root_installs,
+                        &mut latest_source_root_operations,
+                        &tx,
+                    ),
                     Err(_) => return,
                 },
             }
@@ -2786,7 +3003,8 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                 | ModelicaCommand::UpdateParameters { entity, .. }
                 | ModelicaCommand::Reset { entity, .. }
                 | ModelicaCommand::Despawn { entity } => Some(*entity),
-                ModelicaCommand::LoadSourceRoot { .. } => None,
+                ModelicaCommand::LoadSourceRoot { .. }
+                | ModelicaCommand::UnloadSourceRoot { .. } => None,
             };
             let panic_result = panic_result_for_command(
                 &cmd,
@@ -3198,9 +3416,35 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             }
                         }
                     }
-                    ModelicaCommand::LoadSourceRoot { id, payload } => {
-                        let operation_id = solve_preparation_pool.submit_source_root(id, payload);
-                        source_root_preparation_order.push_back(operation_id);
+                    ModelicaCommand::LoadSourceRoot {
+                        id,
+                        operation_id,
+                        payload,
+                    } => {
+                        if latest_source_root_operations.get(&id) == Some(&operation_id) {
+                            let preparation_id = solve_preparation_pool.submit_source_root(
+                                id,
+                                operation_id,
+                                payload,
+                            );
+                            source_root_preparation_order.push_back(preparation_id);
+                        } else {
+                            log::debug!(
+                                "[modelica-runtime] discarded superseded source-root load `{id}` operation={operation_id}"
+                            );
+                        }
+                    }
+                    ModelicaCommand::UnloadSourceRoot { id, operation_id } => {
+                        latest_source_root_operations.insert(id.clone(), operation_id);
+                        match compiler.submit_source_root_unload(id.clone(), operation_id) {
+                            Ok(operation) => {
+                                compiler_order.push_back(operation);
+                                pending_source_root_installs.insert(operation);
+                            }
+                            Err(error) => log::error!(
+                                "[modelica-runtime] failed to queue unload for `{id}`: {error}"
+                            ),
+                        }
                     }
                 }
             }));
@@ -3259,6 +3503,7 @@ fn command_label(cmd: &ModelicaCommand) -> String {
         ModelicaCommand::Reset { entity, .. } => format!("Reset entity={entity:?}"),
         ModelicaCommand::Despawn { entity } => format!("Despawn entity={entity:?}"),
         ModelicaCommand::LoadSourceRoot { id, .. } => format!("LoadSourceRoot id={id}"),
+        ModelicaCommand::UnloadSourceRoot { id, .. } => format!("UnloadSourceRoot id={id}"),
     }
 }
 
@@ -3275,7 +3520,9 @@ fn cmd_entity(cmd: &ModelicaCommand) -> Entity {
         // from is_squashable), so the placeholder is only consulted
         // by the result-fence logic which keys on a different
         // structural shape.
-        ModelicaCommand::LoadSourceRoot { .. } => Entity::PLACEHOLDER,
+        ModelicaCommand::LoadSourceRoot { .. } | ModelicaCommand::UnloadSourceRoot { .. } => {
+            Entity::PLACEHOLDER
+        }
     }
 }
 
@@ -3287,7 +3534,7 @@ fn cmd_session(cmd: &ModelicaCommand) -> u64 {
         ModelicaCommand::UpdateParameters { session_id, .. } => *session_id,
         ModelicaCommand::Reset { session_id, .. } => *session_id,
         ModelicaCommand::Despawn { .. } => 0,
-        ModelicaCommand::LoadSourceRoot { .. } => 0,
+        ModelicaCommand::LoadSourceRoot { .. } | ModelicaCommand::UnloadSourceRoot { .. } => 0,
     }
 }
 
@@ -3360,6 +3607,9 @@ pub struct ModelicaWorkerState {
     /// M3: bumped on every LoadSourceRoot (and compiler reset) to invalidate
     /// cached compiled artifacts — same contract as the native worker's local.
     library_gen: u64,
+    /// Latest registry operation per source-set id, fencing transported
+    /// source-root messages whose owner has already closed.
+    latest_source_root_operations: HashMap<String, u64>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -3913,7 +4163,21 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             w.cached_models.remove(&entity);
             w.sim_streams.remove(&entity);
         }
-        ModelicaCommand::LoadSourceRoot { id, payload } => {
+        ModelicaCommand::LoadSourceRoot {
+            id,
+            operation_id,
+            payload,
+        } => {
+            if !record_source_root_operation(
+                &mut w.latest_source_root_operations,
+                &id,
+                operation_id,
+            ) {
+                log::debug!(
+                    "[modelica-worker] discarded stale LoadSourceRoot `{id}` operation={operation_id}"
+                );
+                return;
+            }
             // Wasm path: matches the native handler. The worker thread merges the
             // library into its session after the host has supplied source text.
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
@@ -3940,7 +4204,37 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             };
             send(ModelicaResult {
                 loaded_source_root_id: Some(id),
+                source_root_operation_id: Some(operation_id),
                 error: err,
+                ..Default::default()
+            });
+        }
+        ModelicaCommand::UnloadSourceRoot { id, operation_id } => {
+            if !record_source_root_operation(
+                &mut w.latest_source_root_operations,
+                &id,
+                operation_id,
+            ) {
+                log::debug!(
+                    "[modelica-worker] discarded stale UnloadSourceRoot `{id}` operation={operation_id}"
+                );
+                return;
+            }
+            if let Some(compiler) = w.compiler.as_mut() {
+                let removed = compiler.remove_source_root(&id);
+                if removed {
+                    w.library_gen = w.library_gen.wrapping_add(1);
+                    w.compiled_artifacts.clear();
+                    w.prepared_solve_cache.clear();
+                }
+                log::info!(
+                    "[modelica-worker] unloaded Modelica source root `{id}` (removed={removed})"
+                );
+            }
+            retire_source_root_operation(&mut w.latest_source_root_operations, &id, operation_id);
+            send(ModelicaResult {
+                unloaded_source_root_id: Some(id),
+                source_root_operation_id: Some(operation_id),
                 ..Default::default()
             });
         }
@@ -4254,6 +4548,7 @@ mod macro_step_tests {
         let root = panic_result_for_command(
             &ModelicaCommand::LoadSourceRoot {
                 id: "Modelica".into(),
+                operation_id: 1,
                 payload: LoadSourceRootPayload::InMemory {
                     label: "test".into(),
                     files: Vec::new(),
@@ -4262,6 +4557,64 @@ mod macro_step_tests {
             "panic",
         );
         assert_eq!(root.loaded_source_root_id.as_deref(), Some("Modelica"));
+
+        let unload = panic_result_for_command(
+            &ModelicaCommand::UnloadSourceRoot {
+                id: "twin:17:lesson:modelica:0".into(),
+                operation_id: 2,
+            },
+            "panic",
+        );
+        assert_eq!(
+            unload.unloaded_source_root_id.as_deref(),
+            Some("twin:17:lesson:modelica:0")
+        );
+        assert_eq!(unload.source_root_operation_id, Some(2));
+        assert!(unload.error.is_some());
+    }
+
+    #[test]
+    fn source_root_operation_fence_accepts_only_newer_operations() {
+        let mut latest = HashMap::new();
+        assert!(record_source_root_operation(
+            &mut latest,
+            "twin:17:lesson",
+            4
+        ));
+        assert!(!record_source_root_operation(
+            &mut latest,
+            "twin:17:lesson",
+            4
+        ));
+        assert!(!record_source_root_operation(
+            &mut latest,
+            "twin:17:lesson",
+            3
+        ));
+        assert!(record_source_root_operation(
+            &mut latest,
+            "twin:17:lesson",
+            5
+        ));
+        assert!(record_source_root_operation(
+            &mut latest,
+            "application:controls",
+            1
+        ));
+        assert_eq!(latest.get("twin:17:lesson"), Some(&5));
+        assert!(!retire_source_root_operation(
+            &mut latest,
+            "twin:17:lesson",
+            4
+        ));
+        assert_eq!(latest.get("twin:17:lesson"), Some(&5));
+        assert!(retire_source_root_operation(
+            &mut latest,
+            "twin:17:lesson",
+            5
+        ));
+        assert!(!latest.contains_key("twin:17:lesson"));
+        assert!(latest.contains_key("application:controls"));
     }
 
     #[test]

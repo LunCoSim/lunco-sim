@@ -374,6 +374,9 @@ fn publish_rhai_sources(
                 match identities.retire_removed(*id) {
                     Some(SourceAssetRetirement::Current(canonical)) => {
                         if sources.remove(&canonical) {
+                            if let Some(driver) = driver.as_deref_mut() {
+                                driver.runtime.retire_source_asset(&canonical);
+                            }
                             debug!("[rhai] retired script source: {canonical}");
                         }
                     }

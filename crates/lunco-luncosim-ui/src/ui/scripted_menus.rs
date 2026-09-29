@@ -51,8 +51,9 @@ pub(crate) fn on_script_ui_request(
         .map(|menu| {
             let label = menu.label.clone();
             let items = menu.items.clone();
+            let provider_twin_id = *twin_id;
             let callback: MenuCallback = Arc::new(move |ui, ctx| {
-                draw_items(ui, ctx, &items);
+                draw_items(ui, ctx, &items, provider_twin_id);
             });
             (label, callback)
         })
@@ -67,7 +68,12 @@ pub(crate) fn clear_scripted_menus_on_twin_closed(
     menus.clear_scripted_twin(trigger.event().twin.raw());
 }
 
-fn draw_items(ui: &mut egui::Ui, ctx: &mut MenuCtx, items: &[ScriptWorkbenchMenuItem]) {
+fn draw_items(
+    ui: &mut egui::Ui,
+    ctx: &mut MenuCtx,
+    items: &[ScriptWorkbenchMenuItem],
+    provider_twin_id: Option<u64>,
+) {
     ui.set_width(lunco_workbench::menu_popup_max_width(
         ui.ctx().content_rect().width(),
         SCRIPT_MENU_MAX_WIDTH,
@@ -75,10 +81,15 @@ fn draw_items(ui: &mut egui::Ui, ctx: &mut MenuCtx, items: &[ScriptWorkbenchMenu
     egui::ScrollArea::vertical()
         .max_height(SCRIPT_MENU_MAX_HEIGHT)
         .auto_shrink([false, true])
-        .show(ui, |ui| draw_items_inner(ui, ctx, items));
+        .show(ui, |ui| draw_items_inner(ui, ctx, items, provider_twin_id));
 }
 
-fn draw_items_inner(ui: &mut egui::Ui, ctx: &mut MenuCtx, items: &[ScriptWorkbenchMenuItem]) {
+fn draw_items_inner(
+    ui: &mut egui::Ui,
+    ctx: &mut MenuCtx,
+    items: &[ScriptWorkbenchMenuItem],
+    provider_twin_id: Option<u64>,
+) {
     if items.is_empty() {
         ui.label(egui::RichText::new("No entries available").weak().italics());
         return;
@@ -97,13 +108,18 @@ fn draw_items_inner(ui: &mut egui::Ui, ctx: &mut MenuCtx, items: &[ScriptWorkben
                         tool: action.tool.clone(),
                         hook: action.hook.clone(),
                         args: action.args.clone(),
+                        owner_twin_id: provider_twin_id.or_else(|| {
+                            ctx.resource::<lunco_workspace::WorkspaceResource>()
+                                .and_then(|workspace| workspace.active_twin)
+                                .map(lunco_workspace::TwinId::raw)
+                        }),
                     });
                 }
                 ui.close();
             }
         } else {
             let response = ui.menu_button(&item.label, |ui| {
-                draw_items(ui, ctx, &item.children);
+                draw_items(ui, ctx, &item.children, provider_twin_id);
             });
             if let Some(tooltip) = item.tooltip.as_deref() {
                 response.response.on_hover_text(tooltip);

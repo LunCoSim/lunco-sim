@@ -138,7 +138,9 @@ explicit `lunco://` identity before publishing source text or its prepared AST.
 Named sources keep their scheme, including `twin://`. Scenario roots, imports,
 the source registry, prepared AST cache, and unload events all use this same
 identity, so the text and AST for one file cannot be published under different
-keys. Startup tools, Twin tools, and file-backed scenarios commit this complete
+keys. `AssetEvent::Removed` retires the canonical source and its prepared AST;
+an old asset removal cannot evict a newer registration under the same URI.
+Startup tools, Twin tools, and file-backed scenarios commit this complete
 loaded graph at their owner boundary before binding or lifecycle activation;
 they do not depend on `AssetEvent::Added` being consumed in the same update as
 the asset server reports readiness. Later asset events publish revisions and
