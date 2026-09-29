@@ -114,7 +114,12 @@ For cross-run determinism, each production scene test must emit its sampled
 state from Rhai through public queries and reach its own authored verdict. A
 narrow production harness may launch separate scene-test processes with the
 same explicit seed and controlled execution profiles, then compare Rhai traces
-at identical global `SimTick` values. A fresh-scene startup test asserts that
+at identical global `SimTick` values. Keep saved evidence bounded to selected
+checkpoints; do not emit a per-tick state log. Include an explicit final-stage
+record and require exact final physics, Modelica, and articulated-state equality
+before comparing earlier checkpoints. The multi-rover harness can write a
+portable reference with `--record-reference PATH` and compare it with
+`--compare-reference PATH`; both use exact numeric equality. A fresh-scene startup test asserts that
 `on_start` observes tick 0 and the first `on_tick` observes tick 1; startup
 readiness must hold the shared clock until those callbacks can begin in order.
 For USD Modelica networks, the startup gate also covers member-source resolution,

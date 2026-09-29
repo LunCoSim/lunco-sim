@@ -36,12 +36,56 @@ should be gated by a revision/change event. Structural edits should invalidate
 structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
+The shell's steady `WorkbenchSnapshot` check compares borrowed dock and
+perspective iterators before materializing owned vectors; preserve that
+allocation-free stable path when changing layout publication.
 
 When a measured UI snapshot builds several indexes from the same entity
 population, combine compatible marker reads into the existing query and avoid
 another full-population traversal for each marker set. Keep queries over
 different populations separate unless measurements show that a broader scan
 costs less.
+For large Builder hierarchies, derive a lightweight row index from the cached
+tree and current expansion state, retain that index across repaints, then use
+`ScrollArea::show_rows` to create widgets only for rows in the viewport. Rebuild
+the index only after a source revision, active filter/scope change, or a branch
+disclosure change reported by the shared tree helper. Keep foldout state keyed
+by stable entity/group identity and preserve selection, drag, and tooltip
+behavior on painted rows. Immediate-mode widgets are expected to be repainted;
+the domain tree and entry records should be borrowed or shared, not cloned into
+panel-owned snapshots. Borrow selected-entity state during paint and retain an
+owned selection snapshot only when it changes; compare egui temporary values
+through borrowed type-map access instead of cloning a cached vector every frame.
+Gate panel-owned view models with `WorkbenchSnapshot::is_panel_visible`, and
+order their systems after `WorkbenchSnapshotPublishSet`. Hidden dock tabs have
+no reader and should not rebuild view data each frame; keep separate cleanup
+work transition-driven when a panel closes.
+In the Builder Spawn palette, use the catalog owner's revisioned
+category-to-entry index. Borrow category labels and spawn entries, and retain
+formatted display labels only until that revision changes. Do not rescan all
+entries for each open category or build cloned entry groups before egui
+determines which categories have a reader.
+For Builder Ports, retain matching and expanded/collapsed entity indexes by
+topology revision, filter, and expansion state; update the sampling request
+only when the expanded entity set changes.
+In the Inspector's material part selector, keep the entity index separate from
+its display text. Format the active label only for the selected part and format
+the other labels only while the dropdown is open. Retain the material-bearing
+entity index for projected USD roots by selected root and `UsdStageRevision`;
+rebuild it only when either changes. Recompute for non-USD roots or when the
+revision resource is unavailable.
+When deriving a chosen part's material controls, filter the selected root's
+existing material-bearing entity list instead of walking that part's child tree
+again.
+For live line plots, do not copy and decimate a full history in every UI frame.
+Keep one bounded build per binding, snapshot changed histories at a limited
+presentation cadence, transform immutable sample snapshots on the async-compute
+pool, and keep painting the last completed point buffer while the next build
+runs. `ScalarHistory::snapshot()` shares completed chunks and copies only its
+bounded open tail on the caller; flatten and decimate that snapshot on the
+worker. Auxiliary Graphs overlays should use the same snapshot cache and keep
+painting their last completed buffer while a new one is built. Include source
+identity, style, and pixel width in the cache key.
 For the entity tree, derive parent and grid facts through indexed lookups along
 named candidates' deduplicated ancestor closure instead of copying every scene
 entity's `ChildOf` and `Grid` membership into the snapshot.
@@ -50,6 +94,8 @@ For Builder telemetry, inspect `telemetry_catalog_snapshot` separately from
 owner ancestry; grouping and sorting belong on the worker. Compare the first
 Builder frame with settled `render_workbench` and `EguiPrimaryContextPass`
 samples so a one-time catalog build is not reported as a steady per-frame cost.
+Use the `workbench_panel_render` child zones to separate the active panel costs
+inside `render_workbench` before optimizing a specific Builder surface.
 
 For startup asset graphs, separate asynchronous source reads from discovery,
 composition, and UI/physics admission. Read all known dependencies in each

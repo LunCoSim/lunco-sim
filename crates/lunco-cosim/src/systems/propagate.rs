@@ -686,10 +686,11 @@ fn propagate_connections_with_cache(
     // Generated Modelica islands are the important case: their interface is
     // provisional while compiling, not an authoring error. These buffers retain
     // capacity between ticks and are swapped with the published snapshots below.
-    // Manual holds outrank the fabric — see `lunco_cosim_core::PortHolds`. They are
-    // explicit control intents, so they remain live across fixed ticks and are
-    // cleared only by ReleasePort, ReleaseControl, lifecycle input release, or
-    // scene teardown.
+    // Controller holds outrank authored-program setpoints, which outrank the
+    // wiring fabric — see `lunco_cosim_core::PortHolds`. Both are explicit
+    // intents that remain live across fixed ticks. Explicit port/control release
+    // clears requested holds; authority lifecycle release clears controller
+    // holds only; scene teardown clears both layers.
     let holds = world.get_resource::<PortHolds>();
     let hold_revision = holds.map_or(0, PortHolds::revision);
     if rewired || scratch.held_revision != Some(hold_revision) {

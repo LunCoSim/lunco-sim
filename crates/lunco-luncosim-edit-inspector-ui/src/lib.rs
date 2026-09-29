@@ -40,7 +40,7 @@ impl Plugin for SceneEditInspectorUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SelectionTarget>();
 
-        app.register_panel(inspector::Inspector)
+        app.register_panel(inspector::Inspector::default())
             .register_panel(inspector::EnvironmentPanel);
 
         app.init_resource::<lunco_luncosim_edit_inspector_core::InspectorView>()

@@ -147,6 +147,8 @@ producer must not rebuild a projection in the background.
 `WorkbenchSnapshot::is_panel_visible` is the shared visibility boundary for
 that decision; selecting the panel makes its normal producer cadence eligible
 again. `is_panel_docked` remains the layout-presence query for shell operations.
+The dock adapter borrows registered panel objects in place during a paint pass;
+it does not remove and reinsert each visible tab through the panel registry.
 The snapshot also publishes exact visible `TabId`s for instance panels, and
 `WorkbenchSnapshotPublishSet` orders consumers after that publication. USD
 preview cameras remain active only while their Visual singleton/instance tab is
@@ -212,6 +214,9 @@ the physics solver empties. Never block that queue:
 - **No per-frame allocations in the common path.** `String` clones
   and `Vec` rebuilds that happen on a no-op path are the most
   common offenders — pre-allocate, reuse, or skip entirely.
+- Workbench visualization configs are immutable `Arc` snapshots while a panel
+  paints. Registry edits use copy-on-write, so plot panels do not deep-clone
+  signal bindings and style data on every frame.
 - The Workbench keeps its immutable theme snapshot and derived egui visuals
   behind the theme revision. A stable frame reuses that snapshot and does not
   reapply context-wide visuals. The runtime-UI render acknowledgement follows
@@ -262,12 +267,37 @@ package — none of these belong on the UI thread every frame. Patterns:
   with indexed entity lookups, and collect grid membership along those same
   paths; do not materialize `ChildOf` and `Grid` facts for unrelated scene
   entities. Validate the selected active grid with a direct entity lookup.
+- **Builder tree rows**: retain each panel's flattened visible-row index and
+  rebuild it only when its source revision, filter/scope options, or expansion
+  state changes. The shared `tree::branch` reports disclosure changes so the
+  panel can invalidate its index without querying every branch on every paint.
+  Reuse the row vector's capacity. `ScrollArea::show_rows` still creates the
+  interactive egui widgets for the viewport each frame; those widgets consume
+  borrowed/`Arc`-shared source rows, and live selection and sample values remain
+  paint inputs. Do not clone a complete domain tree or entry list into a panel.
+  Borrow selected-entity state during paint and retain an owned selection
+  snapshot only when it changes; compare egui temporary values through borrowed
+  type-map access instead of cloning a cached vector every frame.
+- **Spawn palette**: `SpawnCatalog` owns a sorted category-to-entry-index map
+  and advances its revision when catalog contents change. The palette borrows
+  category labels and entry rows through that index, then keeps formatted row
+  labels only until the catalog revision changes. Opening a category does not
+  scan all catalog entries or copy entry records.
+- **Builder Ports tree**: retain expanded and collapsed entity row indexes by
+  port topology revision, filter text, and expansion set. Reuse the vectors and
+  expansion scratch set between repaints. Publish the expanded-entity sample
+  request only when that set changes; live port values keep their bounded
+  sample cadence.
 - **Telemetry catalog**: snapshot channel metadata and the label/path/parent
   facts for signal owners and their ancestor closure when the registry catalog
   revision or focus fingerprint changes. Deduplication, grouping, and sorting
   run on one async-compute task; a result publishes only while both keys still
   match. The panel displays a pending state instead of building or joining the
   catalog in `Panel::render`, and sample updates do not invalidate its tree.
+  Its flattened open-row index is also retained across repaints and invalidated
+  by catalog/focus/filter/display changes or a branch disclosure change. Cached
+  rows share immutable descriptors; latest sample values are still read for
+  painted channels.
 - **Generation-gated recompute**: the canvas diagram only
   reprojects when the document generation moves; the panel advances
   its `last_seen_gen` to skip echo rebuilds of its own ops.
@@ -311,9 +341,12 @@ The same ownership rule applies to the measured presentation paths:
   result commit, and each request snapshots only class metadata used by its
   own network.
 - **Graphs** retain the history-to-plot point buffer in the visualization
-  owner, keyed by the history fingerprint. A plot host may clone points at the
-  `egui_plot` owned-data boundary, but it must not recopy the SignalRegistry
-  ring buffer merely because the panel painted again.
+  owner, keyed by the history fingerprint. A due rebuild captures shared
+  `ScalarHistory` chunks and copies only its bounded open tail on the UI thread;
+  the async worker flattens and derives its point buffer, including decimation
+  where required. Plot hosts may clone points at the `egui_plot` owned-data
+  boundary, but must not copy the full SignalRegistry retention window on a
+  paint or history refresh.
 - **Status sparklines** use the same retained `SignalRegistry` history as every
   other telemetry visualization. `lunco-viz` derives and caches decimated points
   and summary statistics from a `(SignalRef, history fingerprint, width)` key;
@@ -326,6 +359,11 @@ The same ownership rule applies to the measured presentation paths:
 - **Dock anchors** publish all authored slot unions from one dock-tree walk.
   Adding another anchor group must extend that pass rather than add another
   full layout traversal.
+- **Workbench layout snapshots** compare borrowed tab, visible-tab, and
+  perspective iterators against the published snapshot before building owned
+  vectors. The stable `Update` check must not allocate a replacement merely
+  because egui mutably borrows the dock each frame; panel and docked-panel
+  lists are derived from those canonical inputs when they actually change.
 - **Universal port inspection** uses `PortRegistry::port_entities`: each
   registered backend enumerates its own authoritative component/surface
   candidates, and the registry deduplicates them. The Builder Ports panel must
@@ -352,6 +390,12 @@ The same ownership rule applies to the measured presentation paths:
   camera reconciler legitimately mutably borrows that resource every frame;
   that borrow tick is not a presentation change. Joint readouts remain bounded
   to their declared 10 Hz refresh cadence.
+- **Inspector material parts** retains the selected USD root's
+  material-bearing entity index by root identity and `UsdStageRevision`. Stage
+  projection changes rebuild that subtree-derived index. Non-USD roots or a
+  missing revision resource disable reuse. Material values remain live paint
+  inputs, while display labels are formatted only for the active part or an
+  open selector.
 
 The same rule applies below the UI boundary. The Modelica engine-sync pass is
 woken by the document registry revision and still compares document generations
@@ -437,9 +481,11 @@ history for percentile reporting; query it at the end of a measurement window
 instead of scanning the world once per fixed tick.
 
 Telemetry retention depth is a logical limit, not an eager allocation request.
-`ScalarHistory` grows its deque as samples arrive, so a startup burst that
-publishes thousands of new channels does not reserve the full history for every
-empty channel on the app thread.
+`ScalarHistory` grows in immutable shared chunks plus a bounded mutable tail as
+samples arrive, so a startup burst that publishes thousands of new channels
+does not reserve the full history for every empty channel on the app thread.
+Background consumers capture `ScalarHistory::snapshot()` and flatten it on the
+worker instead of cloning the full retention window on the UI thread.
 
 A `run_if`-gated system that still appears in a steady-state profile means its
 gate isn't closing — that's the bug, not the cost.

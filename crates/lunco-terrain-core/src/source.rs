@@ -11,9 +11,9 @@
 //! streaming/LOD/collider machinery can be developed and tested with **no
 //! external asset**. Swapping in a DEM source later changes only this trait impl.
 //!
-//! [`CompositeHeightSource`] is the pure heart of the **orbit→surface bridge**: a
-//! high-detail site source inside a georeferenced region, a coarse globe source
-//! outside, blended at the edge — one continuous surface from orbit to the ground.
+//! [`CompositeHeightSource`] is a reusable pure blend between two height
+//! sources. Application-specific terrain handoffs own their georeferencing,
+//! edge continuation, and rendering policy in the relevant domain crate.
 
 use crate::quadtree::Square;
 
@@ -241,12 +241,9 @@ impl HeightSource for AnalyticHeightSource {
     }
 }
 
-/// The pure core of the **orbit→surface bridge**. Returns the high-detail `site`
-/// source inside a georeferenced square `region` (XZ, metres), the coarse `globe`
-/// source outside it, with a smooth crossover collar of width `blend_m` just
-/// outside the region edge. Descending from orbit to a site, the streamer samples
-/// ONE continuous height field — DEM detail in close, planetary elevation out
-/// wide — instead of two disjoint terrains.
+/// A reusable blend between a `site` source in a georeferenced square `region`
+/// (XZ, metres) and a caller-supplied `globe` source. The smooth crossover
+/// begins at the region boundary and has width `blend_m`.
 ///
 /// The georef (lat/lon → this XZ `region`) and datum alignment are the caller's
 /// job: `site` and `globe` must report heights in the **same vertical datum**
@@ -261,8 +258,8 @@ pub struct CompositeHeightSource<S, G> {
     pub globe: G,
     /// The georeferenced region (XZ, metres) where `site` applies.
     pub region: Square,
-    /// Width (metres) of the blend collar just outside the region edge. `0` = a
-    /// hard switch at the boundary.
+    /// Width (metres) of the site-to-globe blend outside `region`. `0` = a
+    /// hard switch at the region boundary.
     pub blend_m: f64,
 }
 
@@ -285,7 +282,7 @@ impl<S: HeightSource, G: HeightSource> HeightSource for CompositeHeightSource<S,
             return self.site.height_at(x, z); // fully inside → site
         }
         if self.blend_m <= 0.0 || d >= self.blend_m {
-            return self.globe.height_at(x, z); // beyond the collar → globe
+            return self.globe.height_at(x, z); // beyond the crossover → globe
         }
         // Crossover collar: smoothstep site→globe (C1 at both ends, so the seam is
         // continuous in value and slope).

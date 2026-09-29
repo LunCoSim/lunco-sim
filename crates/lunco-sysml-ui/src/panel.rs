@@ -1,11 +1,14 @@
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy_egui::egui;
+use egui_extras::{Column, TableBuilder};
 use lunco_doc::{Document, FileBacked};
 use lunco_doc_bevy::{DocumentRegistry, OpenFile};
 use lunco_sysml::{ApplySysmlOps, SaveSysmlDocument, SysmlApiOp, SysmlDocument};
 use lunco_sysml_ast::SysmlElementHandle;
 use lunco_sysml_ir::VerificationVerdict;
+use lunco_workbench_core::source::OpenTwinSource;
 use lunco_workbench_core::{
     Panel, PanelCtx, PanelId, PanelMenuGroup, PanelScrollPolicy, PanelSlot, PerspectiveId,
 };
@@ -88,6 +91,10 @@ impl SourceEditor {
 
 enum PanelAction {
     OpenFile(String),
+    OpenTwinSource {
+        twin_root: String,
+        relative_path: String,
+    },
     ApplySource {
         doc_id: lunco_doc::DocumentId,
         parent_generation: u64,
@@ -132,6 +139,7 @@ enum TestFilter {
     Failed,
     SuiteFailures,
     NeedsResult,
+    NotRun,
     Stale,
     Unmapped,
 }
@@ -162,6 +170,42 @@ enum RequirementsWorkspaceView {
     Structure,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RequirementDraftSource {
+    twin_id: lunco_workspace::TwinId,
+    logical_uri: String,
+}
+
+#[derive(bevy::prelude::Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SysmlRequirementPanelState {
+    twin_id: Option<lunco_workspace::TwinId>,
+    selected_requirement: Option<String>,
+    draft_source: Option<RequirementDraftSource>,
+    unsaved_source: bool,
+    pending_source: Option<(lunco_workspace::TwinId, String, usize)>,
+    open_traceability: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum RequirementSortColumn {
+    #[default]
+    Id,
+    Kind,
+    Source,
+    Evidence,
+    TwinTest,
+    Coverage,
+    Status,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RequirementQuickFilter {
+    NeedsCriterion,
+    NeedsVerify,
+    NeedsTwinMapping,
+    NotRun,
+}
+
 /// Compact requirements browser for the active Twin, with source navigation
 /// and an inline editor backed by the canonical SysML document registry.
 #[derive(Default)]
@@ -175,6 +219,8 @@ pub struct SysmlRequirementsPanel {
     active_view: RequirementsWorkspaceView,
     trace_search: String,
     structure_search: String,
+    sort_column: RequirementSortColumn,
+    sort_descending: bool,
     editor: Option<SourceEditor>,
 }
 
@@ -208,49 +254,192 @@ impl Panel for SysmlRequirementsPanel {
             .resource::<lunco_theme::Theme>()
             .cloned()
             .unwrap_or_else(lunco_theme::Theme::dark);
+        let mut panel_state = ctx
+            .resource::<SysmlRequirementPanelState>()
+            .cloned()
+            .unwrap_or_default();
         let actions = {
             let view_model = ctx.resource::<SysmlRequirementsViewModel>();
             let documents = ctx.resource::<DocumentRegistry<SysmlDocument>>();
             let runs = ctx.resource::<SysmlVerificationRuns>();
-            self.render_panel(ui, view_model, documents, runs, &theme)
+            self.render_panel(ui, view_model, documents, runs, &theme, &mut panel_state)
         };
-        for action in actions {
-            match action {
-                PanelAction::OpenFile(path) => ctx.trigger(OpenFile { path }),
-                PanelAction::ApplySource {
-                    doc_id,
-                    parent_generation,
-                    source,
-                } => ctx.trigger(ApplySysmlOps {
-                    doc_id,
-                    ops: vec![SysmlApiOp::ReplaceSource { source }],
-                    parent_generation: Some(parent_generation),
-                }),
-                PanelAction::Save(doc_id) => ctx.trigger(SaveSysmlDocument { doc_id }),
-                PanelAction::RunVerification {
+        panel_state.twin_id = self.view_twin_id;
+        panel_state.selected_requirement = self.view_twin_id.and(self.selected_requirement.clone());
+        panel_state.draft_source = self.editor.as_ref().and_then(|editor| {
+            editor.has_local_draft().then(|| {
+                editor.twin_id.map(|twin_id| RequirementDraftSource {
                     twin_id,
-                    source_revision,
-                    name,
-                } => ctx.trigger(RunSysmlVerification {
-                    twin_id,
-                    source_revision,
-                    name,
-                }),
-                PanelAction::CancelVerification { twin_id, name } => {
-                    ctx.trigger(CancelSysmlVerification { twin_id, name })
+                    logical_uri: editor.logical_uri.clone(),
+                })
+            })?
+        });
+        if ctx.resource::<SysmlRequirementPanelState>() != Some(&panel_state) {
+            ctx.set_resource(panel_state);
+        }
+        dispatch_panel_actions(ctx, actions);
+    }
+}
+
+/// Stable dock id for the selected requirement's detail pane.
+const SYSML_REQUIREMENT_DETAILS_PANEL_ID: PanelId = PanelId("sysml_requirement_details");
+
+#[derive(Default)]
+pub(super) struct SysmlRequirementDetailsPanel;
+
+impl Panel for SysmlRequirementDetailsPanel {
+    fn id(&self) -> PanelId {
+        SYSML_REQUIREMENT_DETAILS_PANEL_ID
+    }
+
+    fn title(&self) -> String {
+        "Requirement details".into()
+    }
+
+    fn menu_group(&self) -> PanelMenuGroup {
+        PanelMenuGroup::Editor
+    }
+
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::RightInspectorBottom
+    }
+
+    fn visible_in_perspective(&self, perspective: PerspectiveId) -> Option<PanelSlot> {
+        (perspective == PerspectiveId("editor")).then_some(PanelSlot::RightInspectorBottom)
+    }
+
+    fn preferred_perspective(&self) -> Option<PerspectiveId> {
+        Some(PerspectiveId("editor"))
+    }
+
+    fn scroll_policy(&self) -> PanelScrollPolicy {
+        PanelScrollPolicy::SelfManaged
+    }
+
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        let theme = ctx
+            .resource::<lunco_theme::Theme>()
+            .cloned()
+            .unwrap_or_else(lunco_theme::Theme::dark);
+        let Some(view_model) = ctx.resource::<SysmlRequirementsViewModel>() else {
+            ui.label("SysML requirements view is not available.");
+            return;
+        };
+        match &view_model.state {
+            AnalysisState::NoActiveTwin => {
+                ui.label("Open a Twin to inspect its requirements.");
+                return;
+            }
+            AnalysisState::Waiting => {
+                muted(ui, &theme, "Waiting for SysML source analysis…");
+                return;
+            }
+            AnalysisState::NoSources => {
+                ui.label("This Twin has no indexed .sysml or .kerml sources.");
+                return;
+            }
+            AnalysisState::Failed(errors) => {
+                for error in errors {
+                    ui.colored_label(theme.tokens.error, error);
                 }
-                PanelAction::RunVerificationSuite {
-                    twin_id,
-                    source_revision,
-                    names,
-                } => ctx.trigger(RunSysmlVerificationSuite {
-                    twin_id,
-                    source_revision,
-                    names,
-                }),
-                PanelAction::CancelVerificationSuite { twin_id } => {
-                    ctx.trigger(CancelSysmlVerificationSuite { twin_id })
-                }
+                return;
+            }
+            AnalysisState::Ready => {}
+        }
+
+        let mut panel_state = ctx
+            .resource::<SysmlRequirementPanelState>()
+            .cloned()
+            .unwrap_or_default();
+        let selected = (panel_state.twin_id == view_model.twin_id)
+            .then_some(panel_state.selected_requirement.as_deref())
+            .flatten()
+            .and_then(|name| {
+                view_model
+                    .requirements
+                    .iter()
+                    .find(|requirement| requirement.qualified_name == name)
+            });
+        let has_draft_for_another_source = panel_state
+            .draft_source
+            .as_ref()
+            .zip(selected)
+            .is_some_and(|(draft, requirement)| {
+                Some(draft.twin_id) != view_model.twin_id
+                    || draft.logical_uri != requirement.logical_uri
+            });
+        let mut actions = Vec::new();
+        let mut open_traceability = false;
+        let source = SysmlRequirementsPanel::render_requirement_detail(
+            ui,
+            view_model,
+            selected,
+            ctx.resource::<SysmlVerificationRuns>(),
+            panel_state.unsaved_source && panel_state.twin_id == view_model.twin_id,
+            has_draft_for_another_source,
+            &theme,
+            &mut actions,
+            &mut open_traceability,
+        );
+        if open_traceability {
+            panel_state.open_traceability = true;
+        }
+        if let (Some((source, line)), Some(twin_id)) = (source, view_model.twin_id) {
+            panel_state.pending_source = Some((twin_id, source.logical_uri, line));
+        }
+        if ctx.resource::<SysmlRequirementPanelState>() != Some(&panel_state) {
+            ctx.set_resource(panel_state);
+        }
+        dispatch_panel_actions(ctx, actions);
+    }
+}
+
+fn dispatch_panel_actions(ctx: &mut PanelCtx, actions: Vec<PanelAction>) {
+    for action in actions {
+        match action {
+            PanelAction::OpenFile(path) => ctx.trigger(OpenFile { path }),
+            PanelAction::OpenTwinSource {
+                twin_root,
+                relative_path,
+            } => ctx.trigger(OpenTwinSource {
+                twin_root,
+                relative_path,
+                pinned: true,
+                focus: Some(true),
+            }),
+            PanelAction::ApplySource {
+                doc_id,
+                parent_generation,
+                source,
+            } => ctx.trigger(ApplySysmlOps {
+                doc_id,
+                ops: vec![SysmlApiOp::ReplaceSource { source }],
+                parent_generation: Some(parent_generation),
+            }),
+            PanelAction::Save(doc_id) => ctx.trigger(SaveSysmlDocument { doc_id }),
+            PanelAction::RunVerification {
+                twin_id,
+                source_revision,
+                name,
+            } => ctx.trigger(RunSysmlVerification {
+                twin_id,
+                source_revision,
+                name,
+            }),
+            PanelAction::CancelVerification { twin_id, name } => {
+                ctx.trigger(CancelSysmlVerification { twin_id, name })
+            }
+            PanelAction::RunVerificationSuite {
+                twin_id,
+                source_revision,
+                names,
+            } => ctx.trigger(RunSysmlVerificationSuite {
+                twin_id,
+                source_revision,
+                names,
+            }),
+            PanelAction::CancelVerificationSuite { twin_id } => {
+                ctx.trigger(CancelSysmlVerificationSuite { twin_id })
             }
         }
     }
@@ -264,9 +453,15 @@ impl SysmlRequirementsPanel {
         documents: Option<&DocumentRegistry<SysmlDocument>>,
         runs: Option<&SysmlVerificationRuns>,
         theme: &lunco_theme::Theme,
+        panel_state: &mut SysmlRequirementPanelState,
     ) -> Vec<PanelAction> {
         let Some(view_model) = view_model else {
             ui.label("SysML requirements view is not available.");
+            panel_state.twin_id = None;
+            panel_state.selected_requirement = None;
+            panel_state.draft_source = None;
+            panel_state.pending_source = None;
+            panel_state.open_traceability = false;
             return Vec::new();
         };
         let mut actions = Vec::new();
@@ -274,6 +469,14 @@ impl SysmlRequirementsPanel {
             self.view_twin_id = view_model.twin_id;
             self.active_view = RequirementsWorkspaceView::Requirements;
             self.selected_structure_element = None;
+            panel_state.pending_source = None;
+            panel_state.open_traceability = false;
+        }
+        if panel_state.twin_id == view_model.twin_id {
+            if panel_state.open_traceability {
+                self.active_view = RequirementsWorkspaceView::Traceability;
+                panel_state.open_traceability = false;
+            }
         }
         self.render_header(ui, view_model, theme);
 
@@ -337,8 +540,9 @@ impl SysmlRequirementsPanel {
         }
 
         let unsaved_source = self.has_unsaved_source_edits(view_model, documents);
+        panel_state.unsaved_source = unsaved_source;
         self.render_workspace_tabs(ui, theme);
-        let edit_source = match self.active_view {
+        let mut edit_source = match self.active_view {
             RequirementsWorkspaceView::Requirements if view_model.requirements.is_empty() => {
                 ui.label("No requirement declarations were found in the analyzed source set.");
                 ui.separator();
@@ -374,6 +578,16 @@ impl SysmlRequirementsPanel {
                 self.render_structure_workspace(ui, view_model, theme)
             }
         };
+        if panel_state.twin_id == view_model.twin_id
+            && let Some((twin_id, logical_uri, line)) = panel_state.pending_source.take()
+            && Some(twin_id) == view_model.twin_id
+            && let Some(source) = view_model
+                .source_files
+                .iter()
+                .find(|source| source.logical_uri == logical_uri)
+        {
+            edit_source = Some((source.clone(), line));
+        }
         if let Some(source) = edit_source {
             let (source, line) = source;
             let same_source = self.editor.as_ref().is_some_and(|editor| {
@@ -453,20 +667,7 @@ impl SysmlRequirementsPanel {
                 self.selected_source
                     .as_deref()
                     .is_none_or(|source| requirement.logical_uri == source)
-                    && (search.is_empty()
-                        || requirement.qualified_name.to_lowercase().contains(&search)
-                        || requirement.display_name.to_lowercase().contains(&search)
-                        || requirement
-                            .documentation
-                            .iter()
-                            .any(|text| text.to_lowercase().contains(&search))
-                        || requirement.relative_path.as_ref().is_some_and(|path| {
-                            path.to_string_lossy().to_lowercase().contains(&search)
-                        })
-                        || requirement
-                            .verification_cases
-                            .iter()
-                            .any(|name| name.to_lowercase().contains(&search)))
+                    && requirement_matches_search(requirement, &search)
                     && requirement_matches_filters(requirement, view_model, runs, self.filters)
             })
             .map(|(index, _)| index)
@@ -488,44 +689,9 @@ impl SysmlRequirementsPanel {
                 })
                 .map(|requirement| requirement.qualified_name.clone());
         }
-        let selected = self.selected_requirement.as_deref().and_then(|name| {
-            view_model
-                .requirements
-                .iter()
-                .find(|requirement| requirement.qualified_name == name)
-        });
-        let mut edit_source = None;
-        if ui.available_width() >= 760.0 {
-            ui.columns(2, |columns| {
-                columns[0].heading("Requirements");
-                self.render_requirement_list(&mut columns[0], view_model, &filtered, runs, theme);
-                columns[1].heading("Requirement details");
-                edit_source = self.render_requirement_detail(
-                    &mut columns[1],
-                    view_model,
-                    selected,
-                    runs,
-                    unsaved_source,
-                    theme,
-                    actions,
-                );
-            });
-        } else {
-            ui.heading("Requirements");
-            self.render_requirement_list(ui, view_model, &filtered, runs, theme);
-            ui.separator();
-            ui.heading("Requirement details");
-            edit_source = self.render_requirement_detail(
-                ui,
-                view_model,
-                selected,
-                runs,
-                unsaved_source,
-                theme,
-                actions,
-            );
-        }
-        edit_source
+        ui.heading("Requirements");
+        self.render_requirement_list(ui, view_model, &filtered, runs, theme);
+        None
     }
 
     fn render_traceability_workspace(
@@ -1106,97 +1272,84 @@ impl SysmlRequirementsPanel {
             .iter()
             .filter(|requirement| {
                 !requirement.verification_cases.is_empty()
-                    && requirement.verification_cases.iter().any(|name| {
-                        !view_model
-                            .verification_cases
-                            .iter()
-                            .any(|case| case.name == *name)
-                    })
+                    && requirement
+                        .verification_cases
+                        .iter()
+                        .any(|name| !verification_case_is_mapped(name, view_model))
             })
             .count();
+        let definitions = view_model
+            .requirements
+            .iter()
+            .filter(|requirement| requirement.role == RequirementRole::Definition)
+            .count();
+        let usages = view_model.requirements.len().saturating_sub(definitions);
+        let not_run = view_model
+            .requirements
+            .iter()
+            .filter(|requirement| {
+                execution_summary(requirement, view_model, runs).state == ExecutionState::NotRun
+            })
+            .count();
+        let mut quick_filter = None;
         ui.horizontal_wrapped(|ui| {
-            let definitions = view_model
-                .requirements
-                .iter()
-                .filter(|requirement| requirement.role == RequirementRole::Definition)
-                .count();
-            let usages = view_model.requirements.len() - definitions;
-            ui.strong(format!("{usages} usages · {definitions} definitions"));
+            ui.strong("Inventory");
+            ui.label(format!("{usages} requirement usages"));
             ui.separator();
-            status_counts(ui, "Requirement evidence", &evidence_counts);
+            ui.label(format!("{definitions} definitions"));
             ui.separator();
-            status_counts(ui, "Test status by requirement", &execution_counts);
-            ui.separator();
-            ui.strong("Model coverage");
-            if missing_criteria > 0 {
-                ui.colored_label(
-                    theme.tokens.warning,
-                    format!("{missing_criteria} require missing"),
-                );
-            }
-            if no_verify > 0 {
-                ui.colored_label(theme.tokens.warning, format!("{no_verify} no verify link"));
-            }
-            if unmapped_verify > 0 {
-                ui.colored_label(
-                    theme.tokens.warning,
-                    format!("{unmapped_verify} verify link unmapped"),
-                );
-            }
-        });
-        let rollup_counts = [
-            (
-                RequirementRollupState::Verified,
-                "verified",
-                theme.tokens.success,
-            ),
-            (RequirementRollupState::Failed, "failed", theme.tokens.error),
-            (RequirementRollupState::Error, "error", theme.tokens.error),
-            (
-                RequirementRollupState::Inconclusive,
-                "inconclusive",
-                theme.tokens.warning,
-            ),
-            (
-                RequirementRollupState::RunError,
-                "run error",
-                theme.tokens.error,
-            ),
-            (
-                RequirementRollupState::InvalidModel,
-                "invalid model",
-                theme.tokens.error,
-            ),
-            (RequirementRollupState::Stale, "stale", theme.tokens.warning),
-            (
-                RequirementRollupState::Running,
-                "running",
-                theme.tokens.text_subdued,
-            ),
-            (
-                RequirementRollupState::Incomplete,
-                "incomplete",
-                theme.tokens.warning,
-            ),
-        ]
-        .map(|(state, label, color)| {
-            let count = view_model
-                .requirements
-                .iter()
-                .filter(|requirement| {
-                    requirement_rollup_state(requirement, view_model, runs) == state
-                })
-                .count();
-            (label, count, color)
+            ui.label(format!("{} source files", view_model.source_files.len()));
         });
         ui.horizontal_wrapped(|ui| {
-            status_counts(ui, "Overall requirement status", &rollup_counts);
-            muted(
+            if quick_filter_button(
                 ui,
                 theme,
-                "VERIFIED requires complete coverage, current passing evidence, and passing mapped tests.",
-            );
+                missing_criteria,
+                "no formal require",
+                theme.tokens.text_subdued,
+            ) {
+                quick_filter = Some(RequirementQuickFilter::NeedsCriterion);
+            }
+            if quick_filter_button(ui, theme, no_verify, "no verify link", theme.tokens.warning) {
+                quick_filter = Some(RequirementQuickFilter::NeedsVerify);
+            }
+            if quick_filter_button(
+                ui,
+                theme,
+                unmapped_verify,
+                "unmapped Twin tests",
+                theme.tokens.warning,
+            ) {
+                quick_filter = Some(RequirementQuickFilter::NeedsTwinMapping);
+            }
+            if quick_filter_button(
+                ui,
+                theme,
+                not_run,
+                "tests not run",
+                theme.tokens.text_subdued,
+            ) {
+                quick_filter = Some(RequirementQuickFilter::NotRun);
+            }
         });
+        if let Some(quick_filter) = quick_filter {
+            self.apply_quick_filter(quick_filter);
+        }
+        egui::CollapsingHeader::new("Status breakdown")
+            .default_open(false)
+            .show(ui, |ui| {
+                self.render_status_breakdown(
+                    ui,
+                    view_model,
+                    runs,
+                    &evidence_counts,
+                    &execution_counts,
+                    missing_criteria,
+                    no_verify,
+                    unmapped_verify,
+                    theme,
+                );
+            });
         ui.horizontal_wrapped(|ui| {
             let names = mapped_verification_names(view_model);
             if let Some(twin_id) = view_model.twin_id
@@ -1345,12 +1498,7 @@ impl SysmlRequirementsPanel {
                 .iter()
                 .filter(|case| case.outcome == VerificationRunOutcome::Failed)
                 .map(|case| case.name.clone())
-                .filter(|name| {
-                    view_model
-                        .verification_cases
-                        .iter()
-                        .any(|case| case.name == *name)
-                })
+                .filter(|name| verification_case_is_mapped(name, view_model))
                 .collect();
             let can_run = cfg!(not(target_arch = "wasm32"))
                 && !runs.is_some_and(SysmlVerificationRuns::has_active_run)
@@ -1428,13 +1576,11 @@ impl SysmlRequirementsPanel {
         egui::CollapsingHeader::new("Status guide")
             .default_open(false)
             .show(ui, |ui| {
-                ui.label("Evidence is the structured result emitted by the Twin's requirement checks: PASS, FAIL, INCONCLUSIVE, or ERROR. STALE means the source revision differs from the analyzed revision; NO EVIDENCE means no check result is available.");
-                ui.label("Case verdicts are PASS, FAIL, INCONCLUSIVE, or ERROR. NO VERDICT and RUN ERROR describe runner outcomes; PARTIAL means linked cases need a passing result.");
-                ui.label("VERIFIED requires a `require` criterion, mapped `verify` links, current passing requirement evidence, and passing linked tests. FAILED means a current check or test failed; STALE and INCOMPLETE identify out-of-date or missing proof. This does not claim full KerML constraint execution.");
-                ui.label("Failures from last suite follows the most recent suite report, including failures that are now marked STALE.");
-                ui.label("NOT RUN has no current result; RUNNING is active; QUEUED is waiting in a bulk run; CANCELLED ended without a verdict; STALE belongs to an older source revision.");
-                ui.label("Model coverage counts formal `require` criteria and resolved `verify` links separately from evidence and test runs.");
-                ui.label("NO VERIFY means no resolved link; NO RUNNER means a link has no Twin scene-test mapping. NO VERDICT and RUN ERROR describe the run itself.");
+                ui.label("Evidence is the Twin's structured requirement-check result. STALE belongs to an older source revision; NO EVIDENCE means no result is available.");
+                ui.label("Test status describes linked scene-test execution. NO VERIFY means no resolved link; NO RUNNER means a link has no Twin scene-test mapping.");
+                ui.label("NO VERDICT and RUN ERROR describe runner outcomes; PARTIAL means linked cases still need a passing result. NOT RUN, RUNNING, QUEUED, and CANCELLED describe execution state.");
+                ui.label("Model coverage counts formal `require` criteria and resolved `verify` links separately from evidence and test runs. No formal `require` is not a failed check; qualitative definitions may rely on linked verification.");
+                ui.label("VERIFIED requires complete coverage, current passing evidence, and passing mapped tests. FAILED means a current check or test failed; STALE and INCOMPLETE identify outdated or missing proof. This is not full KerML constraint execution.");
             });
         if view_model.stale_verification {
             let evidence_revision = view_model
@@ -1472,6 +1618,119 @@ impl SysmlRequirementsPanel {
                 },
             );
         }
+    }
+
+    fn render_status_breakdown(
+        &self,
+        ui: &mut egui::Ui,
+        view_model: &SysmlRequirementsViewModel,
+        runs: Option<&SysmlVerificationRuns>,
+        evidence_counts: &[(&str, usize, egui::Color32)],
+        execution_counts: &[(&str, usize, egui::Color32)],
+        missing_criteria: usize,
+        no_verify: usize,
+        unmapped_verify: usize,
+        theme: &lunco_theme::Theme,
+    ) {
+        ui.horizontal_wrapped(|ui| {
+            status_counts(ui, "Requirement evidence", evidence_counts);
+            ui.separator();
+            status_counts(ui, "Test status by requirement", execution_counts);
+            ui.separator();
+            ui.strong("Model coverage");
+            if missing_criteria > 0 {
+                ui.colored_label(
+                    theme.tokens.text_subdued,
+                    format!("{missing_criteria} without formal require"),
+                );
+            }
+            if no_verify > 0 {
+                ui.colored_label(theme.tokens.warning, format!("{no_verify} no verify link"));
+            }
+            if unmapped_verify > 0 {
+                ui.colored_label(
+                    theme.tokens.warning,
+                    format!("{unmapped_verify} verify link unmapped"),
+                );
+            }
+        });
+
+        let rollup_counts = [
+            (
+                RequirementRollupState::Verified,
+                "verified",
+                theme.tokens.success,
+            ),
+            (RequirementRollupState::Failed, "failed", theme.tokens.error),
+            (RequirementRollupState::Error, "error", theme.tokens.error),
+            (
+                RequirementRollupState::Inconclusive,
+                "inconclusive",
+                theme.tokens.warning,
+            ),
+            (
+                RequirementRollupState::RunError,
+                "run error",
+                theme.tokens.error,
+            ),
+            (
+                RequirementRollupState::InvalidModel,
+                "invalid model",
+                theme.tokens.error,
+            ),
+            (RequirementRollupState::Stale, "stale", theme.tokens.warning),
+            (
+                RequirementRollupState::Running,
+                "running",
+                theme.tokens.text_subdued,
+            ),
+            (
+                RequirementRollupState::Incomplete,
+                "incomplete",
+                theme.tokens.warning,
+            ),
+        ]
+        .map(|(state, label, color)| {
+            let count = view_model
+                .requirements
+                .iter()
+                .filter(|requirement| {
+                    requirement_rollup_state(requirement, view_model, runs) == state
+                })
+                .count();
+            (label, count, color)
+        });
+        ui.horizontal_wrapped(|ui| {
+            status_counts(ui, "Overall requirement status", &rollup_counts);
+            muted(
+                ui,
+                theme,
+                "VERIFIED requires complete coverage, current passing evidence, and passing mapped tests.",
+            );
+        });
+    }
+
+    fn apply_quick_filter(&mut self, quick_filter: RequirementQuickFilter) {
+        self.search.clear();
+        self.selected_source = None;
+        self.filters = match quick_filter {
+            RequirementQuickFilter::NeedsCriterion => RequirementFilters {
+                coverage: CoverageFilter::MissingRequire,
+                ..Default::default()
+            },
+            RequirementQuickFilter::NeedsVerify => RequirementFilters {
+                coverage: CoverageFilter::MissingVerify,
+                ..Default::default()
+            },
+            RequirementQuickFilter::NeedsTwinMapping => RequirementFilters {
+                coverage: CoverageFilter::UnmappedVerify,
+                ..Default::default()
+            },
+            RequirementQuickFilter::NotRun => RequirementFilters {
+                tests: TestFilter::NotRun,
+                ..Default::default()
+            },
+        };
     }
 
     fn render_filters(
@@ -1519,6 +1778,19 @@ impl SysmlRequirementsPanel {
                         }
                     }
                 });
+            if ui
+                .add_enabled(
+                    !self.search.is_empty()
+                        || self.selected_source.is_some()
+                        || self.filters != RequirementFilters::default(),
+                    egui::Button::new("Clear filters"),
+                )
+                .clicked()
+            {
+                self.search.clear();
+                self.selected_source = None;
+                self.filters = RequirementFilters::default();
+            }
         });
         ui.horizontal_wrapped(|ui| {
             egui::ComboBox::from_id_salt("sysml_requirement_evidence_filter")
@@ -1551,6 +1823,7 @@ impl SysmlRequirementsPanel {
                     TestFilter::Failed => "Tests: failed",
                     TestFilter::SuiteFailures => "Tests: last suite failures",
                     TestFilter::NeedsResult => "Tests: needs a pass",
+                    TestFilter::NotRun => "Tests: not run",
                     TestFilter::Stale => "Tests: stale",
                     TestFilter::Unmapped => "Tests: no runnable test",
                 })
@@ -1560,6 +1833,7 @@ impl SysmlRequirementsPanel {
                         (TestFilter::Failed, "Failed tests"),
                         (TestFilter::SuiteFailures, "Failures from last suite"),
                         (TestFilter::NeedsResult, "Needs a passing result"),
+                        (TestFilter::NotRun, "Not run"),
                         (TestFilter::Stale, "Stale test results"),
                         (TestFilter::Unmapped, "No runnable test"),
                     ] {
@@ -1574,14 +1848,17 @@ impl SysmlRequirementsPanel {
             egui::ComboBox::from_id_salt("sysml_requirement_coverage_filter")
                 .selected_text(match self.filters.coverage {
                     CoverageFilter::All => "Any model coverage",
-                    CoverageFilter::MissingRequire => "Coverage: require missing",
+                    CoverageFilter::MissingRequire => "Coverage: no formal require",
                     CoverageFilter::MissingVerify => "Coverage: verify missing",
                     CoverageFilter::UnmappedVerify => "Coverage: verify unmapped",
                 })
                 .show_ui(ui, |ui| {
                     for (filter, label) in [
                         (CoverageFilter::All, "Any model coverage"),
-                        (CoverageFilter::MissingRequire, "Missing `require` criteria"),
+                        (
+                            CoverageFilter::MissingRequire,
+                            "No formal `require` criterion",
+                        ),
                         (CoverageFilter::MissingVerify, "No `verify` link"),
                         (CoverageFilter::UnmappedVerify, "Unmapped `verify` link"),
                     ] {
@@ -1594,21 +1871,23 @@ impl SysmlRequirementsPanel {
                     }
                 });
         });
+        let search = self.search.trim().to_lowercase();
+        let visible_count = view_model
+            .requirements
+            .iter()
+            .filter(|requirement| {
+                self.selected_source
+                    .as_deref()
+                    .is_none_or(|source| requirement.logical_uri == source)
+                    && requirement_matches_search(requirement, &search)
+                    && requirement_matches_filters(requirement, view_model, runs, self.filters)
+            })
+            .count();
         muted(
             ui,
             theme,
             &format!(
-                "{} of {} requirements · {} source files",
-                view_model
-                    .requirements
-                    .iter()
-                    .filter(|requirement| requirement_matches_filters(
-                        requirement,
-                        view_model,
-                        runs,
-                        self.filters,
-                    ))
-                    .count(),
+                "{visible_count} of {} requirement elements · {} source files",
                 view_model.requirements.len(),
                 view_model.source_files.len(),
             ),
@@ -1623,104 +1902,299 @@ impl SysmlRequirementsPanel {
         runs: Option<&SysmlVerificationRuns>,
         theme: &lunco_theme::Theme,
     ) {
-        let row_height =
-            ui.text_style_height(&egui::TextStyle::Body) * 3.0 + theme.spacing.item_spacing;
-        egui::ScrollArea::vertical()
-            .id_salt("sysml_requirements_rows")
-            .auto_shrink([false; 2])
-            .show_rows(ui, row_height, filtered.len(), |ui, range| {
-                for index in range {
-                    let requirement = &view_model.requirements[filtered[index]];
-                    let selected = self.selected_requirement.as_deref()
-                        == Some(requirement.qualified_name.as_str());
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            if ui
-                                .selectable_label(selected, requirement.display_name.clone())
-                                .on_hover_text(&requirement.qualified_name)
-                                .clicked()
-                            {
-                                self.selected_requirement =
-                                    Some(requirement.qualified_name.clone());
-                            }
-                            let (role, role_color) =
-                                requirement_role_label(requirement.role, theme);
-                            ui.colored_label(role_color, role);
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    let rollup =
-                                        requirement_rollup_state(requirement, view_model, runs);
-                                    let (rollup_label, rollup_color, rollup_explanation) =
-                                        requirement_rollup_label(rollup, theme);
-                                    ui.colored_label(rollup_color, rollup_label)
-                                        .on_hover_text(rollup_explanation);
-                                    ui.separator();
-                                    let execution =
-                                        execution_summary(requirement, view_model, runs);
-                                    ui.colored_label(
-                                        execution_color(execution.state, theme),
-                                        execution_label(&execution),
-                                    )
-                                    .on_hover_text(execution_explanation(execution.state));
-                                },
-                            );
-                        });
-                        let source_location = requirement
-                            .relative_path
-                            .as_ref()
-                            .map(|path| {
-                                format!("{}:{}", path.display(), requirement.line.unwrap_or(1))
-                            })
-                            .unwrap_or_else(|| requirement.logical_uri.clone());
-                        let execution = execution_summary(requirement, view_model, runs);
-                        let (evidence_label, evidence_color, evidence_explanation) =
-                            evidence_status(requirement, view_model, runs, theme);
-                        let (quality_label, quality_color) =
-                            model_coverage_label(requirement, view_model, theme);
-                        ui.horizontal_wrapped(|ui| {
-                            muted(ui, theme, &source_location);
-                            ui.colored_label(
-                                execution_color(execution.state, theme),
-                                format!("Tests {}/{}", execution.passed, execution.mapped),
-                            );
-                            ui.colored_label(evidence_color, evidence_label)
-                                .on_hover_text(evidence_explanation);
-                            ui.colored_label(quality_color, quality_label);
-                        });
+        let mut ordered = filtered.to_vec();
+        ordered.sort_by(|left, right| {
+            let left = &view_model.requirements[*left];
+            let right = &view_model.requirements[*right];
+            let ordering = compare_requirements(left, right, view_model, runs, self.sort_column);
+            let ordering = if self.sort_descending {
+                ordering.reverse()
+            } else {
+                ordering
+            };
+            ordering.then_with(|| left.qualified_name.cmp(&right.qualified_name))
+        });
+
+        let mut next_sort = None;
+        let mut selected_requirement = self.selected_requirement.clone();
+        let row_height = ui.text_style_height(&egui::TextStyle::Body) + 8.0;
+        egui::ScrollArea::horizontal()
+            .id_salt("sysml_requirements_table_horizontal")
+            .show(ui, |ui| {
+                let table_width = (ui.available_width()
+                    - ui.spacing().scroll.allocated_width()
+                    - ui.spacing().item_spacing.x * 6.0)
+                    .max(0.0);
+                let minimum_width_scale = (table_width / 500.0).min(1.0) * 0.95;
+                let table = TableBuilder::new(ui)
+            .id_salt("sysml_requirements_table")
+            .striped(true)
+            .resizable(true)
+            .sense(egui::Sense::click())
+            .column(
+                Column::initial(table_width * 0.20)
+                    .at_least(96.0 * minimum_width_scale)
+                    .clip(true),
+            )
+            .column(
+                Column::initial(table_width * 0.09)
+                    .at_least(42.0 * minimum_width_scale)
+                    .clip(true),
+            )
+            .column(
+                Column::initial(table_width * 0.11)
+                    .at_least(56.0 * minimum_width_scale)
+                    .clip(true),
+            )
+            .column(
+                Column::initial(table_width * 0.14)
+                    .at_least(72.0 * minimum_width_scale)
+                    .clip(true),
+            )
+            .column(
+                Column::initial(table_width * 0.14)
+                    .at_least(72.0 * minimum_width_scale)
+                    .clip(true),
+            )
+            .column(
+                Column::initial(table_width * 0.16)
+                    .at_least(80.0 * minimum_width_scale)
+                    .clip(true),
+            )
+            .column(
+                Column::initial(table_width * 0.16)
+                    .at_least(82.0 * minimum_width_scale)
+                    .clip(true),
+            )
+            .header(26.0, |mut header| {
+                for (column, label) in [
+                    (RequirementSortColumn::Id, "ID"),
+                    (RequirementSortColumn::Kind, "Kind"),
+                    (RequirementSortColumn::Source, "Source"),
+                    (RequirementSortColumn::Evidence, "Evidence"),
+                    (RequirementSortColumn::TwinTest, "Twin test"),
+                    (RequirementSortColumn::Coverage, "Coverage"),
+                    (RequirementSortColumn::Status, "Status"),
+                ] {
+                    header.col(|ui| {
+                        let active = self.sort_column == column;
+                        let marker = if active {
+                            if self.sort_descending { " ▼" } else { " ▲" }
+                        } else {
+                            ""
+                        };
+                        if ui
+                            .small_button(format!("{label}{marker}"))
+                            .on_hover_text(
+                                "Click to sort. Drag a column divider to resize; double-click it to fit.",
+                            )
+                            .clicked()
+                        {
+                            next_sort = Some(column);
+                        }
                     });
                 }
             });
+                table.body(|body| {
+            body.rows(row_height, ordered.len(), |mut row| {
+                let requirement = &view_model.requirements[ordered[row.index()]];
+                let selected = selected_requirement.as_deref()
+                    == Some(requirement.qualified_name.as_str());
+                row.set_selected(selected);
+                row.col(|ui| {
+                    ui.add(egui::Label::new(&requirement.display_name).truncate())
+                        .on_hover_text(&requirement.qualified_name);
+                });
+                row.col(|ui| {
+                    let (label, color) = requirement_role_label(requirement.role, theme);
+                    let compact_label = match requirement.role {
+                        RequirementRole::Definition => "DEF",
+                        RequirementRole::Usage => "USE",
+                    };
+                    ui.colored_label(color, compact_label).on_hover_text(label);
+                });
+                row.col(|ui| {
+                    let source = requirement_source_location(requirement);
+                    let source_label = requirement_source_cell_label(requirement);
+                    ui.add(egui::Label::new(source_label).truncate())
+                        .on_hover_text(source);
+                });
+                row.col(|ui| {
+                    let (label, color, explanation) =
+                        evidence_status(requirement, view_model, runs, theme);
+                    ui.colored_label(color, label).on_hover_text(explanation);
+                });
+                row.col(|ui| {
+                    let execution = execution_summary(requirement, view_model, runs);
+                    ui.colored_label(
+                        execution_color(execution.state, theme),
+                        execution_label(&execution),
+                    )
+                    .on_hover_text(execution_explanation(execution.state));
+                });
+                row.col(|ui| {
+                    let (full_label, color) = model_coverage_label(requirement, view_model, theme);
+                    let label = model_coverage_table_label(requirement, view_model);
+                    ui.add(egui::Label::new(egui::RichText::new(label).color(color)).truncate())
+                        .on_hover_text(format!(
+                            "{full_label}. Formal `require` criteria and resolved `verify` links describe model coverage, not test PASS/FAIL."
+                        ));
+                });
+                row.col(|ui| {
+                    let state = requirement_rollup_state(requirement, view_model, runs);
+                    let (label, color, explanation) = requirement_rollup_label(state, theme);
+                    ui.colored_label(color, label).on_hover_text(explanation);
+                });
+                if row.response().clicked() {
+                    selected_requirement = Some(requirement.qualified_name.clone());
+                }
+            });
+        });
+            });
+        self.selected_requirement = selected_requirement;
+        if let Some(column) = next_sort {
+            if self.sort_column == column {
+                self.sort_descending = !self.sort_descending;
+            } else {
+                self.sort_column = column;
+                self.sort_descending = false;
+            }
+        }
     }
 
     fn render_requirement_detail(
-        &mut self,
         ui: &mut egui::Ui,
         view_model: &SysmlRequirementsViewModel,
         requirement: Option<&RequirementView>,
         runs: Option<&SysmlVerificationRuns>,
         unsaved_source: bool,
+        has_draft_for_another_source: bool,
         theme: &lunco_theme::Theme,
         actions: &mut Vec<PanelAction>,
+        open_traceability: &mut bool,
     ) -> Option<(SourceFileView, usize)> {
         let Some(requirement) = requirement else {
             ui.label("Select a requirement to inspect its source and verification links.");
             return None;
         };
-        egui::ScrollArea::vertical()
+        let selected_source = egui::ScrollArea::vertical()
             .id_salt("sysml_requirement_details")
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 let mut selected_source = None;
                 let mut open_requirement_source = false;
+                let source = view_model
+                    .source_files
+                    .iter()
+                    .find(|source| source.logical_uri == requirement.logical_uri)
+                    .cloned();
+                let source_line = requirement.line.unwrap_or(1);
                 ui.heading(&requirement.display_name);
                 let (role, role_color) = requirement_role_label(requirement.role, theme);
                 ui.colored_label(role_color, role);
                 muted(ui, theme, &requirement.qualified_name);
+                if let Some(path) = &requirement.relative_path {
+                    ui.horizontal(|ui| {
+                        muted(ui, theme, &format!("{}:{source_line}", path.display()));
+                        if let Some(source_file) = source.clone() {
+                            let button = ui.add_enabled(
+                                !has_draft_for_another_source,
+                                egui::Button::new(format!("Open source at line {source_line}")),
+                            );
+                            if button.clicked() {
+                                selected_source = Some((source_file, source_line));
+                            }
+                            if has_draft_for_another_source {
+                                let _ = button
+                                    .on_hover_text("Save or discard the open source draft first");
+                            }
+                        } else {
+                            muted(ui, theme, "Source file is not in the current Twin index.");
+                        }
+                    });
+                } else {
+                    muted(ui, theme, &requirement.logical_uri);
+                }
                 for text in &requirement.documentation {
                     ui.add_space(theme.spacing.item_spacing);
                     ui.label(text);
                 }
+                egui::CollapsingHeader::new("Engineering trace")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        let mapped = mapped_verification_count(requirement, view_model);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.strong(format!("Subjects · {}", requirement.subjects.len()));
+                            if requirement.subjects.is_empty() {
+                                muted(ui, theme, "none linked");
+                            } else {
+                                for subject in &requirement.subjects {
+                                    let target = subject
+                                        .target
+                                        .as_ref()
+                                        .map(|target| target.display_name.as_str())
+                                        .unwrap_or(if subject.ambiguous_target {
+                                            "ambiguous target"
+                                        } else {
+                                            "unresolved target"
+                                        });
+                                    let subject_type = subject
+                                        .type_name
+                                        .as_ref()
+                                        .map(|type_name| format!("{}: {type_name}", subject.name))
+                                        .unwrap_or_else(|| subject.name.clone());
+                                    ui.label(format!("{subject_type} → {target}"));
+                                }
+                            }
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.strong(format!("Satisfied by · {}", requirement.satisfied_by.len()));
+                            if requirement.satisfied_by.is_empty() {
+                                muted(ui, theme, "no model elements linked");
+                            } else {
+                                for element in &requirement.satisfied_by {
+                                    ui.label(&element.display_name)
+                                        .on_hover_text(&element.qualified_name);
+                                }
+                            }
+                        });
+                        for verification in &requirement.verification_cases {
+                            let mapped_case =
+                                verification_case_is_mapped(verification, view_model);
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(verification);
+                                ui.colored_label(
+                                    if mapped_case {
+                                        theme.tokens.success
+                                    } else {
+                                        theme.tokens.warning
+                                    },
+                                    if mapped_case { "Twin test mapped" } else { "No Twin test mapping" },
+                                );
+                            });
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.small_button("Open full traceability").clicked() {
+                                *open_traceability = true;
+                            }
+                            if mapped < requirement.verification_cases.len() {
+                                if let Some(twin_root) = &view_model.twin_root {
+                                    if ui
+                                        .small_button("Open Twin test mapping")
+                                        .on_hover_text("Open twin.toml to inspect registered scene tests.")
+                                        .clicked()
+                                    {
+                                        actions.push(PanelAction::OpenTwinSource {
+                                            twin_root: twin_root.to_string_lossy().into_owned(),
+                                            relative_path: lunco_twin::MANIFEST_FILENAME.to_owned(),
+                                        });
+                                    }
+                                } else {
+                                    muted(ui, theme, "Twin source root is unavailable.");
+                                }
+                            }
+                        });
+                    });
                 ui.separator();
                 let rollup = requirement_rollup_state(requirement, view_model, runs);
                 let (rollup_label, rollup_color, rollup_explanation) =
@@ -2009,58 +2483,13 @@ impl SysmlRequirementsPanel {
                     }
                 }
                 ui.separator();
-                let source = view_model
-                    .source_files
-                    .iter()
-                    .find(|source| source.logical_uri == requirement.logical_uri)
-                    .cloned();
-                if let Some(path) = &requirement.relative_path {
-                    let line = requirement.line.unwrap_or(1);
-                    if open_requirement_source
-                        && let Some(source) = source.clone()
-                    {
-                        selected_source = Some((source, line));
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{}:{line}", path.display()));
-                        if let Some(source) = source.clone() {
-                            let current_draft_for_other_file =
-                                self.editor.as_ref().is_some_and(|editor| {
-                                    editor.has_local_draft()
-                                        && (editor.logical_uri != source.logical_uri
-                                            || editor.twin_id != view_model.twin_id)
-                                });
-                            let button = ui.add_enabled(
-                                !current_draft_for_other_file,
-                                egui::Button::new(format!("Open at line {line}")),
-                            );
-                            if button.clicked() {
-                                selected_source = Some((source, line));
-                            }
-                            if current_draft_for_other_file {
-                                let _ = button
-                                    .on_hover_text("Save or discard the open source draft first");
-                            }
-                        }
-                    });
-                    if source.is_none() {
-                        muted(
-                            ui,
-                            theme,
-                            "The analyzed source file is not in the current Twin index.",
-                        );
-                    }
-                } else {
-                    muted(ui, theme, &requirement.logical_uri);
-                    muted(
-                        ui,
-                        theme,
-                        "This source location cannot be mapped to an editable Twin file.",
-                    );
+                if open_requirement_source && let Some(source) = source {
+                    selected_source = Some((source, source_line));
                 }
                 selected_source
             })
-            .inner
+            .inner;
+        selected_source
     }
 
     fn editor_for_source(
@@ -2335,12 +2764,25 @@ fn has_mapped_verification(
     requirement: &RequirementView,
     view_model: &SysmlRequirementsViewModel,
 ) -> bool {
-    requirement.verification_cases.iter().any(|name| {
-        view_model
-            .verification_cases
-            .iter()
-            .any(|case| case.name == *name)
-    })
+    mapped_verification_count(requirement, view_model) > 0
+}
+
+fn mapped_verification_count(
+    requirement: &RequirementView,
+    view_model: &SysmlRequirementsViewModel,
+) -> usize {
+    requirement
+        .verification_cases
+        .iter()
+        .filter(|name| verification_case_is_mapped(name, view_model))
+        .count()
+}
+
+fn verification_case_is_mapped(name: &str, view_model: &SysmlRequirementsViewModel) -> bool {
+    view_model
+        .verification_cases
+        .iter()
+        .any(|case| case.name == name)
 }
 
 fn mapped_verification_names(view_model: &SysmlRequirementsViewModel) -> Vec<String> {
@@ -2348,12 +2790,7 @@ fn mapped_verification_names(view_model: &SysmlRequirementsViewModel) -> Vec<Str
         .requirements
         .iter()
         .flat_map(|requirement| requirement.verification_cases.iter())
-        .filter(|name| {
-            view_model
-                .verification_cases
-                .iter()
-                .any(|case| case.name.as_str() == name.as_str())
-        })
+        .filter(|name| verification_case_is_mapped(name, view_model))
         .cloned()
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -2367,12 +2804,7 @@ fn mapped_names_for_requirement(
     requirement
         .verification_cases
         .iter()
-        .filter(|name| {
-            view_model
-                .verification_cases
-                .iter()
-                .any(|case| case.name.as_str() == name.as_str())
-        })
+        .filter(|name| verification_case_is_mapped(name, view_model))
         .cloned()
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -2434,11 +2866,7 @@ fn execution_summary(
         cancelled: 0,
     };
     for name in &requirement.verification_cases {
-        if !view_model
-            .verification_cases
-            .iter()
-            .any(|case| case.name == *name)
-        {
+        if !verification_case_is_mapped(name, view_model) {
             continue;
         }
         summary.mapped += 1;
@@ -2937,16 +3365,7 @@ fn requirement_rollup_state(
     } else if evidence == EvidenceState::Stale || execution == ExecutionState::Stale {
         RequirementRollupState::Stale
     } else {
-        let mapped = requirement
-            .verification_cases
-            .iter()
-            .filter(|name| {
-                view_model
-                    .verification_cases
-                    .iter()
-                    .any(|case| case.name.as_str() == name.as_str())
-            })
-            .count();
+        let mapped = mapped_verification_count(requirement, view_model);
         let complete_coverage = requirement.has_required_constraint
             && !requirement.verification_cases.is_empty()
             && mapped == requirement.verification_cases.len();
@@ -2966,20 +3385,11 @@ fn model_coverage_label(
     theme: &lunco_theme::Theme,
 ) -> (String, egui::Color32) {
     let linked = requirement.verification_cases.len();
-    let mapped = requirement
-        .verification_cases
-        .iter()
-        .filter(|name| {
-            view_model
-                .verification_cases
-                .iter()
-                .any(|case| case.name.as_str() == name.as_str())
-        })
-        .count();
+    let mapped = mapped_verification_count(requirement, view_model);
     let criterion = if requirement.has_required_constraint {
         "require ✓"
     } else {
-        "require missing"
+        "no formal require"
     };
     let links = if linked == 0 {
         "verify missing".to_owned()
@@ -2987,17 +3397,60 @@ fn model_coverage_label(
         format!("verify {mapped}/{linked} mapped")
     };
     let complete = requirement.has_required_constraint && linked > 0 && mapped == linked;
+    let informational_definition = requirement.role == RequirementRole::Definition
+        && !requirement.has_required_constraint
+        && linked > 0
+        && mapped == linked;
     (
         format!("{criterion} · {links}"),
         if complete {
             theme.tokens.success
+        } else if informational_definition {
+            theme.tokens.text_subdued
         } else {
             theme.tokens.warning
         },
     )
 }
 
+fn model_coverage_table_label(
+    requirement: &RequirementView,
+    view_model: &SysmlRequirementsViewModel,
+) -> String {
+    let linked = requirement.verification_cases.len();
+    let mapped = mapped_verification_count(requirement, view_model);
+    let criterion = if requirement.has_required_constraint {
+        "req ✓"
+    } else {
+        "req —"
+    };
+    let links = if linked == 0 {
+        "ver —".to_owned()
+    } else {
+        format!("ver {mapped}/{linked}")
+    };
+    format!("{criterion} · {links}")
+}
+
 /// Applies the three independent status dimensions as a combined list filter.
+fn requirement_matches_search(requirement: &RequirementView, query: &str) -> bool {
+    query.is_empty()
+        || requirement.qualified_name.to_lowercase().contains(query)
+        || requirement.display_name.to_lowercase().contains(query)
+        || requirement
+            .documentation
+            .iter()
+            .any(|text| text.to_lowercase().contains(query))
+        || requirement
+            .relative_path
+            .as_ref()
+            .is_some_and(|path| path.to_string_lossy().to_lowercase().contains(query))
+        || requirement
+            .verification_cases
+            .iter()
+            .any(|name| name.to_lowercase().contains(query))
+}
+
 fn requirement_matches_filters(
     requirement: &RequirementView,
     view_model: &SysmlRequirementsViewModel,
@@ -3006,16 +3459,7 @@ fn requirement_matches_filters(
 ) -> bool {
     let evidence = evidence_state(requirement, view_model, runs);
     let test = execution_summary(requirement, view_model, runs).state;
-    let mapped_count = requirement
-        .verification_cases
-        .iter()
-        .filter(|name| {
-            view_model
-                .verification_cases
-                .iter()
-                .any(|case| case.name.as_str() == name.as_str())
-        })
-        .count();
+    let mapped_count = mapped_verification_count(requirement, view_model);
     let coverage_matches = match filters.coverage {
         CoverageFilter::All => true,
         CoverageFilter::MissingRequire => !requirement.has_required_constraint,
@@ -3049,6 +3493,7 @@ fn requirement_matches_filters(
                 | ExecutionState::NoVerdict
                 | ExecutionState::RunError
         ),
+        TestFilter::NotRun => test == ExecutionState::NotRun,
         TestFilter::Stale => test == ExecutionState::Stale,
         TestFilter::Unmapped => {
             matches!(test, ExecutionState::NoRunner | ExecutionState::NoVerify)
@@ -3084,6 +3529,155 @@ fn status_counts(ui: &mut egui::Ui, category: &str, counts: &[(&str, usize, egui
             ui.colored_label(*color, format!("{count} {label}"));
         }
     }
+}
+
+fn requirement_source_location(requirement: &RequirementView) -> String {
+    requirement
+        .relative_path
+        .as_ref()
+        .map(|path| format!("{}:{}", path.display(), requirement.line.unwrap_or(1)))
+        .unwrap_or_else(|| requirement.logical_uri.clone())
+}
+
+fn requirement_source_cell_label(requirement: &RequirementView) -> String {
+    requirement
+        .relative_path
+        .as_ref()
+        .and_then(|path| path.file_name())
+        .map(|name| {
+            format!(
+                "{}:{}",
+                name.to_string_lossy(),
+                requirement.line.unwrap_or(1)
+            )
+        })
+        .unwrap_or_else(|| requirement_source_location(requirement))
+}
+
+fn compare_requirements(
+    left: &RequirementView,
+    right: &RequirementView,
+    view_model: &SysmlRequirementsViewModel,
+    runs: Option<&SysmlVerificationRuns>,
+    column: RequirementSortColumn,
+) -> Ordering {
+    match column {
+        RequirementSortColumn::Id => left.qualified_name.cmp(&right.qualified_name),
+        RequirementSortColumn::Kind => {
+            requirement_role_rank(left.role).cmp(&requirement_role_rank(right.role))
+        }
+        RequirementSortColumn::Source => {
+            requirement_source_location(left).cmp(&requirement_source_location(right))
+        }
+        RequirementSortColumn::Evidence => evidence_sort_rank(left, view_model, runs)
+            .cmp(&evidence_sort_rank(right, view_model, runs)),
+        RequirementSortColumn::TwinTest => execution_sort_rank(left, view_model, runs)
+            .cmp(&execution_sort_rank(right, view_model, runs)),
+        RequirementSortColumn::Coverage => {
+            coverage_sort_rank(left, view_model).cmp(&coverage_sort_rank(right, view_model))
+        }
+        RequirementSortColumn::Status => {
+            rollup_sort_rank(left, view_model, runs).cmp(&rollup_sort_rank(right, view_model, runs))
+        }
+    }
+}
+
+fn requirement_role_rank(role: RequirementRole) -> u8 {
+    match role {
+        RequirementRole::Definition => 0,
+        RequirementRole::Usage => 1,
+    }
+}
+
+fn evidence_sort_rank(
+    requirement: &RequirementView,
+    view_model: &SysmlRequirementsViewModel,
+    runs: Option<&SysmlVerificationRuns>,
+) -> u8 {
+    match evidence_state(requirement, view_model, runs) {
+        EvidenceState::Fail => 0,
+        EvidenceState::Error => 1,
+        EvidenceState::Inconclusive => 2,
+        EvidenceState::Stale => 3,
+        EvidenceState::NoEvidence => 4,
+        EvidenceState::Pass => 5,
+    }
+}
+
+fn execution_sort_rank(
+    requirement: &RequirementView,
+    view_model: &SysmlRequirementsViewModel,
+    runs: Option<&SysmlVerificationRuns>,
+) -> u8 {
+    match execution_summary(requirement, view_model, runs).state {
+        ExecutionState::Fail => 0,
+        ExecutionState::Error => 1,
+        ExecutionState::RunError => 2,
+        ExecutionState::NoVerdict => 3,
+        ExecutionState::NoRunner => 4,
+        ExecutionState::NoVerify => 5,
+        ExecutionState::NotRun => 6,
+        ExecutionState::Stale => 7,
+        ExecutionState::Cancelled => 8,
+        ExecutionState::Partial => 9,
+        ExecutionState::Inconclusive => 10,
+        ExecutionState::Running => 11,
+        ExecutionState::Pass => 12,
+    }
+}
+
+fn coverage_sort_rank(
+    requirement: &RequirementView,
+    view_model: &SysmlRequirementsViewModel,
+) -> u8 {
+    if !requirement.has_required_constraint {
+        return 0;
+    }
+    if requirement.verification_cases.is_empty() {
+        return 1;
+    }
+    let mapped = mapped_verification_count(requirement, view_model);
+    if mapped < requirement.verification_cases.len() {
+        2
+    } else {
+        3
+    }
+}
+
+fn rollup_sort_rank(
+    requirement: &RequirementView,
+    view_model: &SysmlRequirementsViewModel,
+    runs: Option<&SysmlVerificationRuns>,
+) -> u8 {
+    match requirement_rollup_state(requirement, view_model, runs) {
+        RequirementRollupState::Failed => 0,
+        RequirementRollupState::Error => 1,
+        RequirementRollupState::RunError => 2,
+        RequirementRollupState::InvalidModel => 3,
+        RequirementRollupState::Inconclusive => 4,
+        RequirementRollupState::Stale => 5,
+        RequirementRollupState::Running => 6,
+        RequirementRollupState::Incomplete => 7,
+        RequirementRollupState::Verified => 8,
+    }
+}
+
+fn quick_filter_button(
+    ui: &mut egui::Ui,
+    theme: &lunco_theme::Theme,
+    count: usize,
+    label: &str,
+    color: egui::Color32,
+) -> bool {
+    ui.add_enabled(
+        count > 0,
+        egui::Button::new(egui::RichText::new(format!("{count} {label}")).color(color))
+            .min_size(egui::vec2(155.0, 34.0))
+            .fill(theme.tokens.node_card)
+            .stroke(egui::Stroke::new(1.0, theme.tokens.node_border)),
+    )
+    .on_hover_text(format!("Show requirement elements with {label}."))
+    .clicked()
 }
 
 fn trace_card<R>(

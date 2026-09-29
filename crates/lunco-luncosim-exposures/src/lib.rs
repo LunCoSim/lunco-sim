@@ -1045,7 +1045,7 @@ fn resolve_authored_telemetry(
             }
             let value = signals
                 .scalar_history(&signal)
-                .and_then(|history| history.samples.back())?
+                .and_then(lunco_signal::ScalarHistory::back)?
                 .value;
             let unit = (!parameter.unit.is_empty())
                 .then_some(parameter.unit.clone())

@@ -304,9 +304,9 @@ fn collect_live_extras(
 fn render_line_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     let config = match ctx
         .resource::<VisualizationRegistry>()
-        .and_then(|r| r.get(viz_id))
+        .and_then(|r| r.get_shared(viz_id))
     {
-        Some(c) => c.clone(),
+        Some(config) => config,
         None => return,
     };
     let viz = LinePlot;
@@ -359,7 +359,7 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
                                 format!("Live · {channel}")
                             });
                             let mut data = Vec::new();
-                            for s in &hist.samples {
+                            for s in hist.iter() {
                                 all_times.push(s.time);
                                 data.push((s.time, s.value));
                             }

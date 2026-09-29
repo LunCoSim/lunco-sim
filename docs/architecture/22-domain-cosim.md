@@ -107,10 +107,16 @@ available ports:
 The registry resolves each named write from the owners' declared port lists.
 `write_port`, direction-constrained writes, and `resolve_input` share that
 winner; once selected, an owner refusal is terminal and cannot fall through to
-a shadowed port. Output-only owners do not shadow input writes. `ReleasePort`,
-`ReleaseControl`, and the lifecycle release clear input holds without writing
-values; authored control policy uses named `SetPorts` writes for explicit
-setpoints.
+a shadowed port. Output-only owners do not shadow input writes. `ReleasePort`
+and `ReleaseControl` clear named or all local setpoint holds without writing
+values. `PortHolds` retains controller and authored-program setpoints in
+separate layers. `SetPorts` assigns Twin/Simulation Rhai writes to the program
+layer; controller, UI, and external command writes use the controller layer.
+Controller input takes precedence over authored program guidance, which takes
+precedence over the wiring fabric. The
+`ReleaseControlInputs` lifecycle release clears only controller-owned holds,
+so an autopilot's authored program setpoints survive possession release.
+Authored control policy uses named `SetPorts` writes for explicit setpoints.
 
 | Kind | Ports |
 |---|---|
@@ -143,7 +149,7 @@ rollback replay schedule invoke this same function and share that cache, so
 replay does not introduce a second wiring table or a second source-reader
 implementation.
 
-Manual `PortHolds` are indexed by entity, then port name. Effective hold changes
+Layered `PortHolds` are indexed by entity, then port name. Effective hold changes
 advance a revision. Propagation maps active holds to compiled target indices only
 when that revision or the compiled wiring changes, retaining a target-aligned
 scalar buffer across physics ticks. It does not clone the hold map, hash names,

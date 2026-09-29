@@ -379,16 +379,14 @@ impl Panel for UsdPrimTreePanel {
 }
 
 fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-    let selected = ctx
-        .resource::<lunco_scene_selection::SelectedEntities>()
-        .cloned()
-        .unwrap_or_default();
-
     let mut to_select: Option<Entity> = None;
     let mut to_display_mode: Option<(String, UsdPrimDisplayMode)> = None;
-    let primary = selected.primary();
-
     let focused_preview = {
+        let empty_selection = lunco_scene_selection::SelectedEntities::default();
+        let selected = ctx
+            .resource::<lunco_scene_selection::SelectedEntities>()
+            .unwrap_or(&empty_selection);
+        let primary = selected.primary();
         let Some(viewport) = ctx.resource::<UsdViewportState>() else {
             return;
         };
@@ -408,11 +406,13 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         }
         let scroll_id = ui.make_persistent_id(("usd_prim_tree_scroll", preview.0));
         let selection_id = ui.make_persistent_id(("usd_prim_tree_selection", preview.0));
-        let selection_changed = ui
-            .ctx()
-            .data(|data| data.get_temp::<Vec<Entity>>(selection_id))
-            .as_ref()
-            != Some(&selected.entities);
+        let selection_changed = ui.ctx().data(|data| {
+            data.get_temp_raw(egui::util::id_type_map::RawKey::new::<Vec<Entity>>(
+                selection_id,
+            ))
+            .and_then(|value| value.downcast_ref::<Vec<Entity>>())
+            .is_none_or(|previous| previous != &selected.entities)
+        });
         let reveal_path =
             primary.and_then(|entity| ctx.get::<UsdPrimPath>(entity).map(|path| path.path.clone()));
 
@@ -429,7 +429,7 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                         ui,
                         root,
                         view,
-                        &selected,
+                        selected,
                         primary,
                         reveal_path.as_deref(),
                         selection_changed,
@@ -441,8 +441,10 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                     );
                 }
             });
-        ui.ctx()
-            .data_mut(|data| data.insert_temp(selection_id, selected.entities.clone()));
+        if selection_changed {
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(selection_id, selected.entities.clone()));
+        }
         preview
     };
 

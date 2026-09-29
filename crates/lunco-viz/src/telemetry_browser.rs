@@ -286,7 +286,7 @@ pub fn bind_dropped_channel(
 
 // ── Cached catalog ───────────────────────────────────────────────────
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct Row {
     sig: SignalRef,
     unit: Option<String>,
@@ -306,20 +306,20 @@ struct Row {
     search_fields: [String; 5],
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct TreeNode {
-    label: String,
+    label: Arc<str>,
     filter_label: String,
     id: String,
     children: std::collections::BTreeMap<String, TreeNode>,
-    rows: Vec<Row>,
+    rows: Vec<Arc<Row>>,
 }
 
 impl TreeNode {
     fn new(id: String, label: String) -> Self {
         let filter_label = label.to_lowercase();
         Self {
-            label,
+            label: Arc::from(label),
             filter_label,
             id,
             children: Default::default(),
@@ -600,7 +600,7 @@ fn build_tree_rows(
                 .entry(id.clone())
                 .or_insert_with(|| TreeNode::new(id, label));
         }
-        node.rows.push(row);
+        node.rows.push(Arc::new(row));
     }
     sort_tree(&mut root);
     root
@@ -955,13 +955,30 @@ fn presentation_group(presentation: &SignalPresentation) -> Option<&str> {
     }
 }
 
-fn telemetry_row_label_color(row: &Row, theme: &lunco_theme::Theme) -> egui::Color32 {
+#[derive(Clone, Copy)]
+struct TelemetryTheme {
+    text: egui::Color32,
+    text_subdued: egui::Color32,
+    warning: egui::Color32,
+}
+
+impl From<&lunco_theme::Theme> for TelemetryTheme {
+    fn from(theme: &lunco_theme::Theme) -> Self {
+        Self {
+            text: theme.tokens.text,
+            text_subdued: theme.tokens.text_subdued,
+            warning: theme.tokens.warning,
+        }
+    }
+}
+
+fn telemetry_row_label_color(row: &Row, theme: &TelemetryTheme) -> egui::Color32 {
     if !row.active {
-        theme.tokens.text_subdued
+        theme.text_subdued
     } else if row.exposure == SignalExposure::Internal {
-        theme.tokens.warning
+        theme.warning
     } else {
-        theme.tokens.text
+        theme.text
     }
 }
 
@@ -1048,23 +1065,62 @@ fn display_roots(root: &TreeNode) -> impl Iterator<Item = &TreeNode> {
     root.children.values()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn render_tree_node(
-    ui: &mut egui::Ui,
-    node: &TreeNode,
-    registry: &SignalRegistry,
-    theme: &lunco_theme::Theme,
+enum VisibleTelemetryRow {
+    Group {
+        display_label: Arc<str>,
+        branch_id: egui::Id,
+        depth: usize,
+    },
+    Channel {
+        row: Arc<Row>,
+        depth: usize,
+        stripe: usize,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct VisibleTelemetryRowsKey {
+    catalog_key: u64,
+    focus_key: u64,
+    filter: String,
     scoped: bool,
     show_model_variables: bool,
     show_archived: bool,
-    display_settings: &TelemetryDisplaySettings,
+}
+
+impl VisibleTelemetryRowsKey {
+    fn matches(
+        &self,
+        catalog_key: u64,
+        focus_key: u64,
+        filter: &str,
+        scoped: bool,
+        show_model_variables: bool,
+        show_archived: bool,
+    ) -> bool {
+        self.catalog_key == catalog_key
+            && self.focus_key == focus_key
+            && self.filter == filter
+            && self.scoped == scoped
+            && self.show_model_variables == show_model_variables
+            && self.show_archived == show_archived
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_visible_telemetry_rows(
+    ctx: &egui::Context,
+    node: &TreeNode,
+    parent_scope: egui::Id,
+    depth: usize,
+    scoped: bool,
+    show_model_variables: bool,
+    show_archived: bool,
     filter: &str,
     counts: &HashMap<usize, NodeVisibility>,
-    selected: Option<&SignalRef>,
-    depth: usize,
-    clicked: &mut Option<SignalRef>,
+    rows: &mut Vec<VisibleTelemetryRow>,
 ) {
-    let visible = counts
+    let visible_count = counts
         .get(&(node as *const TreeNode as usize))
         .map_or(0, |count| {
             if show_model_variables {
@@ -1073,131 +1129,177 @@ fn render_tree_node(
                 count.public
             }
         });
-    if visible == 0 {
+    if visible_count == 0 {
         return;
     }
-    let id = ui.make_persistent_id(("tb_entity", &node.id));
-    lunco_workbench_widgets::tree::branch(
-        ui,
-        id,
+
+    let branch_id = parent_scope.with(("tb_entity", &node.id));
+    let display_label: Arc<str> = format!("{} ({visible_count})", node.label).into();
+    rows.push(VisibleTelemetryRow::Group {
+        display_label,
+        branch_id,
+        depth,
+    });
+
+    let state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ctx,
+        branch_id,
         lunco_workbench_widgets::tree::default_open_at_depth(depth),
-        None,
-        |ui| {
-            let width = ui.available_width();
-            lunco_workbench_widgets::tree::label(
-                ui,
-                egui::RichText::new(format!("{} ({visible})", node.label)).strong(),
-                width,
-                egui::Sense::click(),
+    );
+    if !state.is_open() {
+        return;
+    }
+
+    let child_scope = parent_scope.with(branch_id);
+    for child in node.children.values() {
+        collect_visible_telemetry_rows(
+            ctx,
+            child,
+            child_scope,
+            depth + 1,
+            scoped,
+            show_model_variables,
+            show_archived,
+            filter,
+            counts,
+            rows,
+        );
+    }
+    for (stripe, row) in node
+        .rows
+        .iter()
+        .filter(|row| {
+            row_visible(
+                row,
+                scoped,
+                show_model_variables,
+                show_archived,
+                filter,
+                &node.filter_label,
             )
-            .clicked()
-        },
-        |ui| {
-            for child in node.children.values() {
-                render_tree_node(
-                    ui,
-                    child,
-                    registry,
-                    theme,
-                    scoped,
-                    show_model_variables,
-                    show_archived,
-                    display_settings,
-                    filter,
-                    counts,
-                    selected,
-                    depth + 1,
-                    clicked,
-                );
-            }
-            egui::Grid::new(("tb_grid", &node.id))
-                .num_columns(3)
-                .striped(true)
-                .spacing(egui::vec2(theme.spacing.item_spacing, 2.0))
-                .show(ui, |ui| {
-                    for row in node.rows.iter().filter(|r| {
-                        row_visible(
-                            r,
-                            scoped,
-                            show_model_variables,
-                            show_archived,
-                            filter,
-                            &node.filter_label,
-                        )
-                    }) {
-                        let latest = registry
-                            .scalar_history(&row.sig)
-                            .and_then(|h| h.samples.back())
-                            .map(|s| s.value);
-                        let channel_label =
-                            telemetry_row_label(row, display_settings.show_generated_names);
-                        let payload = ChannelDragPayload::from_signal(&row.sig);
-                        let inner = ui.dnd_drag_source(
-                            ui.id().with(("tb_row", &row.sig)),
-                            payload.clone(),
+        })
+        .enumerate()
+    {
+        rows.push(VisibleTelemetryRow::Channel {
+            row: Arc::clone(row),
+            depth: depth + 1,
+            stripe,
+        });
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_visible_telemetry_row(
+    ui: &mut egui::Ui,
+    entry: &VisibleTelemetryRow,
+    registry: &SignalRegistry,
+    theme: &TelemetryTheme,
+    display_settings: &TelemetryDisplaySettings,
+    row_text_cache: &mut TelemetryRowTextCache,
+    selected: Option<&SignalRef>,
+    clicked: &mut Option<SignalRef>,
+    tree_changed: &mut bool,
+) {
+    match entry {
+        VisibleTelemetryRow::Group {
+            display_label,
+            branch_id,
+            depth,
+        } => {
+            ui.push_id(("tb_entity_row", branch_id), |ui| {
+                let indent = ui.spacing().indent * *depth as f32;
+                ui.horizontal(|ui| {
+                    ui.add_space(indent);
+                    ui.vertical(|ui| {
+                        let branch_state = lunco_workbench_widgets::tree::branch(
+                            ui,
+                            *branch_id,
+                            lunco_workbench_widgets::tree::default_open_at_depth(*depth),
+                            None,
                             |ui| {
-                                ui.selectable_label(
-                                    selected == Some(&row.sig),
-                                    egui::RichText::new(if row.active {
-                                        channel_label.clone()
-                                    } else {
-                                        format!("{channel_label} (archived)")
-                                    })
-                                    .color(telemetry_row_label_color(row, theme)),
+                                let width = ui.available_width();
+                                lunco_workbench_widgets::tree::label(
+                                    ui,
+                                    egui::RichText::new(display_label.as_ref()).strong(),
+                                    width,
+                                    egui::Sense::click(),
                                 )
+                                .clicked()
                             },
+                            |_| {},
                         );
-                        let response = inner.inner;
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new(
-                                    latest
-                                        .map(|value| fmt_value(value, display_settings))
-                                        .unwrap_or_else(|| "—".into()),
+                        *tree_changed |= branch_state.changed;
+                    });
+                });
+            });
+        }
+        VisibleTelemetryRow::Channel { row, depth, stripe } => {
+            let latest = registry
+                .scalar_history(&row.sig)
+                .and_then(ScalarHistory::back)
+                .map(|sample| sample.value);
+            let label_text =
+                row_text_cache.label_text(row, theme, display_settings.show_generated_names);
+            let value_text = row_text_cache.value_text(row, latest, display_settings, theme);
+            let unit_text = row_text_cache.unit_text(row, theme);
+            ui.push_id(("tb_channel_row", &row.sig), |ui| {
+                let row_height = ui.spacing().interact_size.y;
+                let row_rect = ui.available_rect_before_wrap();
+                if stripe % 2 == 1 {
+                    ui.painter().rect_filled(
+                        egui::Rect::from_min_size(
+                            row_rect.min,
+                            egui::vec2(row_rect.width(), row_height),
+                        ),
+                        0.0,
+                        ui.visuals().faint_bg_color,
+                    );
+                }
+                let indent = ui.spacing().indent * *depth as f32;
+                ui.horizontal(|ui| {
+                    ui.add_space(indent);
+                    let width = ui.available_width();
+                    let label_width = (width * 0.55).max(72.0).min(width);
+                    let inner = ui.dnd_drag_source(
+                        ui.id().with(("tb_row", &row.sig)),
+                        ChannelDragPayload::from_signal(&row.sig),
+                        |ui| {
+                            ui.add_sized(
+                                [label_width, row_height],
+                                egui::Button::selectable(
+                                    selected == Some(&row.sig),
+                                    egui::WidgetText::RichText(label_text),
                                 )
-                                .monospace()
-                                .color(if latest.is_some() {
-                                    theme.tokens.text
-                                } else {
-                                    theme.tokens.text_subdued
-                                }),
+                                .truncate(),
                             )
-                        });
-                        let unit_response = ui.label(
-                            egui::RichText::new(pretty_unit(row.unit.as_deref()))
-                                .small()
-                                .color(theme.tokens.text_subdued),
-                        );
+                        },
+                    );
+                    let response = inner.inner;
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let unit_response = ui.label(egui::WidgetText::RichText(unit_text));
                         let tip = unit_tooltip(row.unit.as_deref());
-                        if !tip.is_empty() {
+                        if !tip.is_empty() && unit_response.hovered() {
                             unit_response.on_hover_text(tip);
                         }
-                        ui.end_row();
-                        if response.double_clicked() {
-                            queue_plot_drop(
-                                ui.ctx(),
-                                PlotDropRequest {
-                                    payload,
-                                    world_pos: None,
-                                },
-                            );
-                            *clicked = Some(row.sig.clone());
-                        } else if response.clicked() {
-                            *clicked = Some(row.sig.clone());
-                        }
-                        // One tooltip closure per row. `on_hover_ui` registers a
-                        // closure for every widget it is called on each frame (the
-                        // body only runs when the pointer is over the cell), so
-                        // attaching it to the drag label, value cell, AND unit cell
-                        // tripled the per-frame closure registrations and was a real
-                        // FPS cost on channel-dense scenes. The drag label is the
-                        // primary hover target; the unit cell keeps its own cheap
-                        // static-text tooltip for the dimensionless case.
-                        attach_row_tooltip(response, row);
+                        ui.label(egui::WidgetText::RichText(value_text));
+                    });
+                    if response.double_clicked() {
+                        queue_plot_drop(
+                            ui.ctx(),
+                            PlotDropRequest {
+                                payload: ChannelDragPayload::from_signal(&row.sig),
+                                world_pos: None,
+                            },
+                        );
+                        *clicked = Some(row.sig.clone());
+                    } else if response.clicked() {
+                        *clicked = Some(row.sig.clone());
                     }
+                    attach_row_tooltip(response, row);
                 });
-        },
-    );
+            });
+        }
+    }
 }
 
 /// Attach the source-authored explanation to a single telemetry-row cell.
@@ -1294,8 +1396,8 @@ struct HistFingerprint {
 fn hist_fingerprint(h: &ScalarHistory) -> HistFingerprint {
     HistFingerprint {
         len: h.len(),
-        first_t: h.samples.front().map_or(0, |s| s.time.to_bits()),
-        last_t: h.samples.back().map_or(0, |s| s.time.to_bits()),
+        first_t: h.front().map_or(0, |s| s.time.to_bits()),
+        last_t: h.back().map_or(0, |s| s.time.to_bits()),
     }
 }
 
@@ -1303,7 +1405,169 @@ struct PreviewCache {
     sig: SignalRef,
     fp: HistFingerprint,
     /// Decimated to the preview strip's pixel budget.
-    points: Vec<[f64; 2]>,
+    points: Vec<egui_plot::PlotPoint>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FormattedValueKey {
+    value_bits: u64,
+    significant_digits: u8,
+    zero_threshold_bits: u64,
+    color: egui::Color32,
+}
+
+struct CachedFormattedValue {
+    key: FormattedValueKey,
+    text: Arc<egui::RichText>,
+}
+
+struct CachedRowLabels {
+    label_color: egui::Color32,
+    unit_color: egui::Color32,
+    compact: Arc<egui::RichText>,
+    generated: Arc<egui::RichText>,
+    unit: Arc<egui::RichText>,
+}
+
+/// Reuse row text until its channel descriptor, latest numeric value, or
+/// display colors change. Builder repaints these rows more often than many
+/// telemetry channels produce a new sample.
+#[derive(Default)]
+struct TelemetryRowTextCache {
+    catalog_key: Option<u64>,
+    labels: HashMap<SignalRef, CachedRowLabels>,
+    values: HashMap<SignalRef, CachedFormattedValue>,
+    no_sample: Option<(egui::Color32, Arc<egui::RichText>)>,
+}
+
+impl TelemetryRowTextCache {
+    fn use_catalog(&mut self, catalog_key: u64) {
+        if self.catalog_key == Some(catalog_key) {
+            return;
+        }
+        self.catalog_key = Some(catalog_key);
+        self.labels.clear();
+        self.values.clear();
+        self.no_sample = None;
+    }
+
+    fn refresh_labels(&mut self, row: &Row, theme: &TelemetryTheme) {
+        let label_color = telemetry_row_label_color(row, theme);
+        let unit_color = theme.text_subdued;
+        let rebuild = self.labels.get(&row.sig).is_none_or(|cached| {
+            cached.label_color != label_color || cached.unit_color != unit_color
+        });
+        if rebuild {
+            let make_label = |show_generated_names| {
+                let mut label = telemetry_row_label(row, show_generated_names);
+                if !row.active {
+                    label.push_str(" (archived)");
+                }
+                Arc::new(egui::RichText::new(label).color(label_color))
+            };
+            let labels = CachedRowLabels {
+                label_color,
+                unit_color,
+                compact: make_label(false),
+                generated: make_label(true),
+                unit: Arc::new(
+                    egui::RichText::new(pretty_unit(row.unit.as_deref()))
+                        .small()
+                        .color(unit_color),
+                ),
+            };
+            self.labels.insert(row.sig.clone(), labels);
+        }
+    }
+
+    fn label_text(
+        &mut self,
+        row: &Row,
+        theme: &TelemetryTheme,
+        show_generated_names: bool,
+    ) -> Arc<egui::RichText> {
+        self.refresh_labels(row, theme);
+        let cached = self
+            .labels
+            .get(&row.sig)
+            .expect("the telemetry row label cache was populated");
+        Arc::clone(if show_generated_names {
+            &cached.generated
+        } else {
+            &cached.compact
+        })
+    }
+
+    fn unit_text(&mut self, row: &Row, theme: &TelemetryTheme) -> Arc<egui::RichText> {
+        self.refresh_labels(row, theme);
+        Arc::clone(
+            &self
+                .labels
+                .get(&row.sig)
+                .expect("the telemetry row label cache was populated")
+                .unit,
+        )
+    }
+
+    fn value_text(
+        &mut self,
+        row: &Row,
+        value: Option<f64>,
+        settings: &TelemetryDisplaySettings,
+        theme: &TelemetryTheme,
+    ) -> Arc<egui::RichText> {
+        let Some(value) = value else {
+            let color = theme.text_subdued;
+            if self
+                .no_sample
+                .as_ref()
+                .is_none_or(|(cached_color, _)| *cached_color != color)
+            {
+                self.no_sample = Some((
+                    color,
+                    Arc::new(egui::RichText::new("—").monospace().color(color)),
+                ));
+            }
+            return Arc::clone(
+                &self
+                    .no_sample
+                    .as_ref()
+                    .expect("the empty telemetry value was cached")
+                    .1,
+            );
+        };
+
+        let key = FormattedValueKey {
+            value_bits: value.to_bits(),
+            significant_digits: settings.significant_digits.clamp(1, 8),
+            zero_threshold_bits: settings.zero_threshold.to_bits(),
+            color: theme.text,
+        };
+        let rebuild = self
+            .values
+            .get(&row.sig)
+            .is_none_or(|cached| cached.key != key);
+        if rebuild {
+            self.values.insert(
+                row.sig.clone(),
+                CachedFormattedValue {
+                    key,
+                    text: Arc::new(
+                        egui::RichText::new(fmt_value(value, settings))
+                            .monospace()
+                            .color(theme.text),
+                    ),
+                },
+            );
+        }
+        Arc::clone(
+            &self
+                .values
+                .get(&row.sig)
+                .expect("the telemetry value cache was populated")
+                .text,
+        )
+    }
 }
 
 // ── Value formatting ─────────────────────────────────────────────────
@@ -1404,7 +1668,12 @@ fn unit_tooltip(unit: Option<&str>) -> &'static str {
 pub struct TelemetryBrowserPanel {
     filter: String,
     visibility_cache: Option<VisibilityCache>,
+    visible_rows: Vec<VisibleTelemetryRow>,
+    visible_rows_key: Option<VisibleTelemetryRowsKey>,
+    visible_rows_dirty: bool,
+    row_text_cache: TelemetryRowTextCache,
     selected: Option<SignalRef>,
+    requested_selection: Option<RequestedSignalSelection>,
     preview: Option<PreviewCache>,
     /// Narrow the list to [`TelemetryFocus`] — the selected vessel and everything
     /// under it. On by default: in an editor with a selection, "the thing I clicked"
@@ -1418,12 +1687,26 @@ pub struct TelemetryBrowserPanel {
     show_model_variables: bool,
 }
 
+/// Resolve a persistent view request only when either the request or the
+/// telemetry catalog changes. The panel still reapplies the resolved request
+/// if the user selects another row while an external view request is active.
+struct RequestedSignalSelection {
+    signal: String,
+    catalog_key: u64,
+    resolved: Option<SignalRef>,
+}
+
 impl Default for TelemetryBrowserPanel {
     fn default() -> Self {
         Self {
             filter: String::new(),
             visibility_cache: None,
+            visible_rows: Vec::new(),
+            visible_rows_key: None,
+            visible_rows_dirty: true,
+            row_text_cache: TelemetryRowTextCache::default(),
             selected: None,
+            requested_selection: None,
             preview: None,
             focus_only: true,
             // The operator view starts with the complete generated solver
@@ -1458,9 +1741,9 @@ impl Panel for TelemetryBrowserPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        if let Some(view) = ctx.resource::<TelemetryBrowserView>().cloned() {
+        if let Some(view) = ctx.resource::<TelemetryBrowserView>() {
             if self.filter != view.filter {
-                self.filter = view.filter;
+                self.filter.clone_from(&view.filter);
             }
             if !view.signal.is_empty()
                 && self
@@ -1471,11 +1754,14 @@ impl Panel for TelemetryBrowserPanel {
                 self.selected = None;
             }
         }
-        let Some(theme) = ctx.resource::<lunco_theme::Theme>().cloned() else {
+        let Some(theme) = ctx
+            .resource::<lunco_theme::Theme>()
+            .map(TelemetryTheme::from)
+        else {
             ui.label("Theme not installed.");
             return;
         };
-        let subdued = theme.tokens.text_subdued;
+        let subdued = theme.text_subdued;
         let telemetry_enabled = ctx
             .resource::<lunco_telemetry::TelemetrySettings>()
             .map(|settings| settings.enabled);
@@ -1485,7 +1771,7 @@ impl Panel for TelemetryBrowserPanel {
                     egui::RichText::new(
                         "Telemetry is off. Turn it on to collect and show channels.",
                     )
-                    .color(theme.tokens.warning),
+                    .color(theme.warning),
                 );
                 if ui.button("Turn telemetry on").clicked() {
                     ctx.trigger(lunco_telemetry::ControlTelemetry {
@@ -1505,8 +1791,7 @@ impl Panel for TelemetryBrowserPanel {
             });
             ui.separator();
         }
-        let stored_display_settings = ctx.resource_expect::<TelemetryDisplaySettings>().clone();
-        let mut display_settings = stored_display_settings.clone();
+        let mut display_settings = ctx.resource_expect::<TelemetryDisplaySettings>().clone();
 
         // ── Filter box ───────────────────────────────────────────
         ui.add(
@@ -1520,7 +1805,7 @@ impl Panel for TelemetryBrowserPanel {
                 ui.label(
                     egui::RichText::new("Internal state")
                         .small()
-                        .color(theme.tokens.warning),
+                        .color(theme.warning),
                 );
                 ui.label(
                     egui::RichText::new(
@@ -1536,17 +1821,16 @@ impl Panel for TelemetryBrowserPanel {
         // The focus resource is written by whichever app owns selection
         // (`lunco-scene-selection` mirrors `SelectedEntities` into it); absent ⇒ a host
         // with no selection concept at all, and the toggle simply has nothing to do.
-        let focus: Vec<Entity> = ctx
+        let has_focus = ctx
             .resource::<TelemetryFocus>()
-            .map(|f| f.roots.clone())
-            .unwrap_or_default();
+            .is_some_and(|focus| !focus.roots.is_empty());
         let focus_key = ctx
             .resource::<TelemetryFocus>()
             .map(|f| f.fingerprint())
             .unwrap_or(0);
         ui.horizontal(|ui| {
             ui.add_enabled(
-                !focus.is_empty(),
+                has_focus,
                 egui::Checkbox::new(&mut self.focus_only, "Selected only"),
             )
             .on_hover_text(
@@ -1554,7 +1838,7 @@ impl Panel for TelemetryBrowserPanel {
                  underneath it (motors, battery, wheels).",
             )
             .on_disabled_hover_text("Select something in the scene to scope the list.");
-            if focus.is_empty() {
+            if !has_focus {
                 ui.label(
                     egui::RichText::new("nothing selected")
                         .small()
@@ -1601,7 +1885,7 @@ impl Panel for TelemetryBrowserPanel {
                 );
             });
         });
-        if display_settings != stored_display_settings {
+        if ctx.resource_expect::<TelemetryDisplaySettings>() != &display_settings {
             display_settings.significant_digits = display_settings.significant_digits.clamp(1, 8);
             display_settings.zero_threshold = if display_settings.zero_threshold.is_finite() {
                 display_settings.zero_threshold.max(0.0)
@@ -1617,20 +1901,42 @@ impl Panel for TelemetryBrowserPanel {
             return;
         };
 
-        if let Some(view) = ctx.resource::<TelemetryBrowserView>().cloned() {
-            if !view.signal.is_empty() {
-                self.selected = registry
-                    .iter_scalar()
-                    .map(|(signal, _)| signal)
-                    .find(|signal| signal.path == view.signal)
-                    .cloned();
-            }
-        }
-
         // ── Change-driven catalog read ───────────────────────────
         // The catalog producer snapshots the registry revision and focus, then
         // derives the grouped tree off the UI pass. Never wait for that worker here.
         let key = catalog_key(registry);
+        if let Some(view) = ctx.resource::<TelemetryBrowserView>() {
+            if view.signal.is_empty() {
+                self.requested_selection = None;
+            } else {
+                let refresh = self
+                    .requested_selection
+                    .as_ref()
+                    .is_none_or(|cached| cached.signal != view.signal || cached.catalog_key != key);
+                if refresh {
+                    let resolved = registry
+                        .iter_scalar()
+                        .map(|(signal, _)| signal)
+                        .find(|signal| signal.path == view.signal)
+                        .cloned();
+                    self.requested_selection = Some(RequestedSignalSelection {
+                        signal: view.signal.clone(),
+                        catalog_key: key,
+                        resolved,
+                    });
+                }
+                let requested = self
+                    .requested_selection
+                    .as_ref()
+                    .expect("the active telemetry selection request is cached");
+                if self.selected.as_ref() != requested.resolved.as_ref() {
+                    self.selected.clone_from(&requested.resolved);
+                }
+            }
+        } else {
+            self.requested_selection = None;
+        }
+        self.row_text_cache.use_catalog(key);
         let Some(build) = ctx.resource::<TelemetryCatalogBuildState>() else {
             ui.label("Telemetry catalog is unavailable.");
             return;
@@ -1658,7 +1964,7 @@ impl Panel for TelemetryBrowserPanel {
         // checkbox must not invalidate the catalog, and the "selection has no
         // channels" case below needs to know the difference between "no channels"
         // and "none in scope".
-        let scoped = self.focus_only && !focus.is_empty();
+        let scoped = self.focus_only && has_focus;
         if self.visibility_cache.as_ref().is_none_or(|cache| {
             !cache.matches(
                 key,
@@ -1738,62 +2044,111 @@ impl Panel for TelemetryBrowserPanel {
         // iterating the catalog snapshot.
         let mut clicked: Option<SignalRef> = None;
 
+        // Build the open tree's lightweight row index, then let egui construct
+        // widgets only for entries inside the scroll viewport.
+        let visible_rows_stale = self.visible_rows_dirty
+            || !self.visible_rows_key.as_ref().is_some_and(|cache| {
+                cache.matches(
+                    key,
+                    focus_key,
+                    &visibility.normalized_filter,
+                    scoped,
+                    self.show_model_variables,
+                    display_settings.show_archived,
+                )
+            });
+        if visible_rows_stale {
+            self.visible_rows.clear();
+            let tree_scope = egui::Id::new("telemetry_browser_tree");
+            for node in display_roots(&catalog.root) {
+                collect_visible_telemetry_rows(
+                    ui.ctx(),
+                    node,
+                    tree_scope,
+                    0,
+                    scoped,
+                    self.show_model_variables,
+                    display_settings.show_archived,
+                    &visibility.normalized_filter,
+                    &visibility.counts,
+                    &mut self.visible_rows,
+                );
+            }
+            self.visible_rows_key = Some(VisibleTelemetryRowsKey {
+                catalog_key: key,
+                focus_key,
+                filter: visibility.normalized_filter.clone(),
+                scoped,
+                show_model_variables: self.show_model_variables,
+                show_archived: display_settings.show_archived,
+            });
+            self.visible_rows_dirty = false;
+        }
+
         // ── Channel list ─────────────────────────────────────────
         let detail_reserve = if self.selected.is_some() { 150.0 } else { 0.0 };
+        let row_height = ui.spacing().interact_size.y;
+        let mut tree_changed = false;
         egui::ScrollArea::vertical()
             .id_salt("telemetry_browser_list")
             .auto_shrink([false, false])
             .max_height((ui.available_height() - detail_reserve).max(60.0))
-            .show(ui, |ui| {
-                for node in display_roots(&catalog.root) {
-                    render_tree_node(
+            .show_rows(ui, row_height, self.visible_rows.len(), |ui, range| {
+                for row_index in range {
+                    render_visible_telemetry_row(
                         ui,
-                        node,
+                        &self.visible_rows[row_index],
                         registry,
                         &theme,
-                        scoped,
-                        self.show_model_variables,
-                        display_settings.show_archived,
                         &display_settings,
-                        &visibility.normalized_filter,
-                        &visibility.counts,
+                        &mut self.row_text_cache,
                         self.selected.as_ref(),
-                        0,
                         &mut clicked,
+                        &mut tree_changed,
                     );
                 }
             });
+        if tree_changed {
+            self.visible_rows_dirty = true;
+        }
 
         if let Some(sig) = clicked {
             self.selected = Some(sig);
         }
 
         // ── Detail strip: latest value + inline preview ──────────
-        let Some(sel) = self.selected.clone() else {
+        let selected_is_inactive = self.selected.as_ref().is_some_and(|selected| {
+            !display_settings.show_archived && !registry.is_active(selected)
+        });
+        if selected_is_inactive {
+            self.selected = None;
+            return;
+        }
+        let selected_is_hidden = self.selected.as_ref().is_some_and(|selected| {
+            !self.show_model_variables
+                && registry
+                    .meta(selected)
+                    .is_some_and(|meta| meta.exposure == SignalExposure::Internal)
+        });
+        if selected_is_hidden {
+            self.selected = None;
+            return;
+        }
+        let Some(sel) = self.selected.as_ref() else {
             return;
         };
-        if !display_settings.show_archived && !registry.is_active(&sel) {
-            self.selected = None;
-            return;
-        }
         ui.separator();
-        let metadata = registry.meta(&sel);
-        if !self.show_model_variables
-            && metadata.is_some_and(|meta| meta.exposure == SignalExposure::Internal)
-        {
-            self.selected = None;
-            return;
-        }
-        let unit = metadata.and_then(|m| m.unit.clone());
-        let description = metadata.and_then(|m| m.description.clone());
-        let hist = registry.scalar_history(&sel);
-        let latest = hist.and_then(|h| h.samples.back()).copied();
+        let metadata = registry.meta(sel);
+        let unit = metadata.and_then(|m| m.unit.as_deref());
+        let description = metadata.and_then(|m| m.description.as_deref());
+        let hist = registry.scalar_history(sel);
+        let latest = hist.and_then(ScalarHistory::back).copied();
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(&sel.path)
                     .strong()
                     .monospace()
-                    .color(theme.tokens.text),
+                    .color(theme.text),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Time is always SECONDS here — it is the channel's own clock
@@ -1833,11 +2188,14 @@ impl Panel for TelemetryBrowserPanel {
         // history fingerprint moved (idle sim = fingerprint compare).
         if let Some(h) = hist {
             let fp = hist_fingerprint(h);
-            let stale = !matches!(&self.preview, Some(p) if p.sig == sel && p.fp == fp);
+            let stale = !matches!(&self.preview, Some(p) if &p.sig == sel && p.fp == fp);
             if stale {
                 let raw: Vec<[f64; 2]> = h.iter().map(|s| [s.time, s.value]).collect();
-                let points =
-                    crate::plot_fmt::decimate_min_max(&raw, PREVIEW_PX_WIDTH).unwrap_or(raw);
+                let points = crate::plot_fmt::decimate_min_max(&raw, PREVIEW_PX_WIDTH)
+                    .unwrap_or(raw)
+                    .into_iter()
+                    .map(egui_plot::PlotPoint::from)
+                    .collect();
                 self.preview = Some(PreviewCache {
                     sig: sel.clone(),
                     fp,
@@ -1849,7 +2207,10 @@ impl Panel for TelemetryBrowserPanel {
         }
         if let Some(p) = &self.preview {
             if !p.points.is_empty() {
-                let color = crate::signal::color_for_signal(&theme, &sel.path);
+                let color = crate::signal::color_for_signal(
+                    ctx.resource_expect::<lunco_theme::Theme>(),
+                    &sel.path,
+                );
                 Plot::new(ui.id().with("tb_preview"))
                     .height(120.0)
                     .show_axes([true, true])
@@ -1861,7 +2222,7 @@ impl Panel for TelemetryBrowserPanel {
                     .sense(egui::Sense::hover())
                     .show(ui, |plot_ui| {
                         plot_ui.line(
-                            Line::new(sel.path.as_str(), PlotPoints::from(p.points.clone()))
+                            Line::new(sel.path.as_str(), PlotPoints::from(p.points.as_slice()))
                                 .color(color),
                         );
                     });

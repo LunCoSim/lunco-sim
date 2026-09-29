@@ -219,8 +219,8 @@ impl TerrainLayerStack {
             }
         }
         if let Some(radius) = curvature_radius {
-            content
-                .write_u64(crate::oracle::curvature_contribution(radius, base_datum).content_key);
+            let contribution = crate::oracle::curvature_contribution(radius, base_datum);
+            content.write_u64(contribution.content_key);
             has_contributions = true;
         }
         let content_key = if has_contributions {
@@ -729,16 +729,25 @@ mod tests {
                 42,
             ),
         );
-        let contributions: Vec<_> = stack
+        let mut contributions: Vec<_> = stack
             .0
             .iter()
             .filter_map(|entry| entry.layer.height_modifier(base.half_extent))
             .collect();
+        contributions.push(crate::oracle::curvature_contribution(
+            100_000.0,
+            base.border_datum(),
+        ));
         let oracle =
             crate::oracle::SurfaceOracle::new_with_base_key(base.clone(), contributions, base_key);
 
         assert_eq!(
-            stack.analytic_surface_key(base_key, base.half_extent, base.border_datum(), None,),
+            stack.analytic_surface_key(
+                base_key,
+                base.half_extent,
+                base.border_datum(),
+                Some(100_000.0),
+            ),
             Some(oracle.surface_key())
         );
     }

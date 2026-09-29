@@ -2,9 +2,9 @@
 //!
 //! Two separate maps, for orthogonal concerns:
 //!
-//! * [`VisualizationRegistry`] — live instances: `VizId → VisualizationConfig`.
+//! * [`VisualizationRegistry`] — live instances: `VizId → Arc<VisualizationConfig>`.
 //!   Adding a plot = inserting a config here. The [`VizPanel`](crate::panel::VizPanel)
-//!   looks up configs on each render.
+//!   takes a cheap immutable snapshot for each render; edits use copy-on-write.
 //!
 //! * [`VizKindCatalog`] — known viz-kind implementations:
 //!   `VizKindId → Arc<dyn Visualization>`. Populated at app startup via
@@ -22,7 +22,7 @@ use lunco_viz_core::VizId;
 /// Live instance map: one entry per open visualization.
 #[derive(Resource, Default)]
 pub struct VisualizationRegistry {
-    instances: HashMap<VizId, VisualizationConfig>,
+    instances: HashMap<VizId, Arc<VisualizationConfig>>,
 }
 
 impl VisualizationRegistry {
@@ -42,28 +42,37 @@ impl VisualizationRegistry {
 
     pub fn insert(&mut self, config: VisualizationConfig) -> VizId {
         let id = config.id;
-        self.instances.insert(id, config);
+        self.instances.insert(id, Arc::new(config));
         id
     }
 
     pub fn remove(&mut self, id: VizId) -> Option<VisualizationConfig> {
-        self.instances.remove(&id)
+        self.instances
+            .remove(&id)
+            .map(|config| Arc::try_unwrap(config).unwrap_or_else(|shared| shared.as_ref().clone()))
     }
 
     pub fn get(&self, id: VizId) -> Option<&VisualizationConfig> {
-        self.instances.get(&id)
+        self.instances.get(&id).map(Arc::as_ref)
+    }
+
+    /// Clone an immutable config snapshot without copying its bindings or style.
+    pub fn get_shared(&self, id: VizId) -> Option<Arc<VisualizationConfig>> {
+        self.instances.get(&id).cloned()
     }
 
     pub fn get_mut(&mut self, id: VizId) -> Option<&mut VisualizationConfig> {
-        self.instances.get_mut(&id)
+        self.instances.get_mut(&id).map(Arc::make_mut)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&VizId, &VisualizationConfig)> {
-        self.instances.iter()
+        self.instances
+            .iter()
+            .map(|(id, config)| (id, config.as_ref()))
     }
 
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut VisualizationConfig> {
-        self.instances.values_mut()
+        self.instances.values_mut().map(Arc::make_mut)
     }
 
     pub fn len(&self) -> usize {

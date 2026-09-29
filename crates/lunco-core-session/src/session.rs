@@ -833,13 +833,14 @@ pub enum SessionInputPayload {
         /// Correlation id from the admitted command.
         correlation_id: u64,
     },
-    /// Release every local input hold for an endpoint at a fixed simulation
+    /// Release every local setpoint hold for an endpoint at a fixed simulation
     /// tick in response to a command.
     ControlInputRelease {
         /// Correlation id from the admitted command.
         correlation_id: u64,
     },
-    /// Release every local input hold at a lifecycle boundary.
+    /// Release controller holds at a lifecycle boundary while preserving
+    /// authored program setpoints.
     ControlInputsReleased,
 }
 

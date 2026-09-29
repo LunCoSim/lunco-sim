@@ -498,14 +498,16 @@ behavior pass, and local-embodiment input stays on the interaction cadence.
 Live port-inspector writes and releases use the same queue with a `LocalUser`
 producer identity. `PanelCtx::trigger_command` scopes that session origin over
 deferred workbench dispatch so the cosim owner can admit and capture each
-action. The internal `ReleaseControlInputs` lifecycle event joins the shared
-input queue for the next fixed tick and only clears local input holds.
+action. `ControlAuthorityChanged` admits an internal `ReleaseControlInputs`
+lifecycle event for each live released endpoint. It joins the shared input
+queue for the next fixed tick and clears controller-owned input holds and
+simulated intents while preserving authored program setpoints and physics state.
 Previously admitted inputs retain their tick and sequence and commit before
 the release. The session owner captures the lifecycle record at that commit
 when recording is active. Missing target, generation, tick, or order state
-reports a runtime error and leaves existing holds intact. Session authority
-transitions do not issue this event or rewrite endpoint simulation inputs.
-Twin policy writes any stop setpoint explicitly through `SetPorts`.
+reports a runtime error and leaves existing holds intact. The release does not
+write replacement endpoint values or modify velocity. Twin policy writes any
+stop setpoint explicitly through `SetPorts`.
 Unclassified direct port events remain outside this stream.
 
 ## 4. Async preparation, priority, and result commit
@@ -1146,10 +1148,16 @@ The whole-simulation guarantee remains open because:
    runs on the browser main thread, so the web loader still needs a Modelica Web
    Worker handoff for a fully non-blocking parse and compile path.
 5. The simulation composition records the observed Compute pool width in
-   `PhysicsComputeProfile`; `clock_snapshot()` returns `physics_profile_known`
-   and the optional `physics_compute_threads` value, which the production
-   scripting task scene checks. The scene-test `--threads 0` profile uses
-   Bevy's default `TaskPoolOptions`, matching GUI `DefaultPlugins`; the normal
+   `PhysicsComputeProfile`; `clock_snapshot()` returns `physics_profile_known`,
+   the optional `physics_compute_threads` value, fixed and physics clock deltas
+   and elapsed time, pause state, and active `PhysicsHolds` reasons. During
+   `FixedUpdate`, `physics_elapsed_s` covers the previous completed Avian step
+   and equals `(sim_tick - 1) * fixed_dt_s`; a hold may clear `physics_dt_s`, so
+   elapsed time is the cycle-count check. The production Rhai replay gate checks
+   clock arithmetic within `1e-9` seconds and compares serialized physics and
+   Modelica state traces exactly (`numeric_tolerance=0`). The scene-test
+   `--threads 0` profile uses Bevy's default `TaskPoolOptions`, matching GUI
+   `DefaultPlugins`; the normal
    headless server entry point currently pins one Compute thread. Bevy's default
    assigns 25% of available threads to IO and AsyncCompute each, clamped to one
    through four, and gives Compute the remaining cores. Avian uses Compute for
@@ -1165,20 +1173,29 @@ The whole-simulation guarantee remains open because:
    suspension and tire forces, jointed tire forces, and raycast wheel
    mass-property folds use that key order. Missing, duplicate, or empty keys
    raise a runtime fault and hold physics. The production
-   `multi_rover_stress_20` Rhai replay gate compares rover physics and Modelica
-   snapshots. On the 2026-09-25 main-integrated build, a four-run matrix at
-   Compute widths 1 and 24 matched all six checkpoint snapshots, 32 per-tick
-   samples, 240 Modelica participant snapshots, and all 20 articulated-body
-   states in every run, with digest
-   `0a080decafbe69264944d141da6afa3e02a87514e2d1da4e92d2317713f82dd1`.
-   Every run produced the authored Rhai stress verdict. Scene-readiness holds
-   spanned 3,760–4,645 Update passes; physics-admission holds were 5 passes,
-   participant-readiness holds were 11–12, and each scene run took 26.8–27.1
-   seconds including startup. This is same-build evidence for that fixture and
-   those pool widths; it does not establish whole-simulation or cross-machine
-   determinism. The current profile records effective pool width but does not
-   select a deterministic Avian solver profile; that guarantee still needs a
-   measured production choice or deterministic reductions. In the same ordered
+   `multi_rover_stress.rhai` gate checks six full lifecycle/checkpoint states,
+   the first `on_tick` sample at tick 1, and an explicit final-stage record; it
+   emits no per-tick trace. Each selected state contains full rover physics and
+   Modelica variables. Articulated-body state is sampled at ticks 1, 11, 80,
+   and the final tick for the 4/8/20-rover fixtures. The comparator checks the
+   exact final physics, Modelica, and articulated states first, then compares
+   earlier checkpoints exactly. The production scene-test matrix leaves
+   `--tick-hz` unset, verifies its default fixed step is 60 Hz, and advances
+   through manual clock updates without wall-time pacing. By default the
+   comparator checks the committed portable fixture at
+   `scripts/tests/fixtures/deterministic-physics-reference.json`;
+   `--compare-reference PATH` selects a different baseline and
+   `--record-reference PATH` writes a new one. The source fingerprint covers
+   every tracked tree entry except the reference fixture itself, so committing
+   the fixture does not invalidate its source identity. The reference records
+   source and machine metadata for the 4/8/20-rover, serial/default Compute,
+   and seeded jitter profiles. Comparison requires exact final-stage and
+   checkpoint equality (`numeric_tolerance=0`);
+   no cross-machine run has been observed yet. This remains fixture-specific
+   evidence, not whole-simulation replay determinism. The current profile
+   records effective pool width but does not select a deterministic Avian
+   solver profile; that guarantee still needs a measured production choice or
+   deterministic reductions. In the same ordered
    `FixedUpdate` propagation path, a changed joint motor setpoint wakes its
    sleeping dynamic endpoint island with Avian's `WakeBody` command before the
    next solver step. The wake is edge-triggered by an enabled-state or target

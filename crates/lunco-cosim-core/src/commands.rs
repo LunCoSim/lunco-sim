@@ -8,10 +8,10 @@
 use bevy::prelude::*;
 use lunco_core::Command;
 
-/// Release an endpoint's local input holds at the next fixed tick.
+/// Release an endpoint's controller input holds at the next fixed tick.
 ///
-/// This lifecycle event changes input ownership only. The authored wiring and
-/// control law decide the resulting input values.
+/// This lifecycle event preserves authored program setpoints and physics state.
+/// The authored wiring and control law decide the resulting input values.
 #[derive(Event, Clone, Copy, Debug)]
 pub struct ReleaseControlInputs {
     /// Endpoint whose local input holds are released.
@@ -70,7 +70,7 @@ pub struct SetPortsBatch {
     pub producer_id: Option<u64>,
 }
 
-/// Release one manual input-port intent and hand that port back to its wiring.
+/// Release the named input-port holds and hand that port back to its wiring.
 #[Command]
 pub struct ReleasePort {
     /// The entity whose hold is released.

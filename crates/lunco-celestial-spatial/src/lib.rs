@@ -387,6 +387,22 @@ impl Plugin for CelestialPlugin {
         // binds its own Material still wins — content overrules the default.
         app.init_resource::<imagery::BoundBodyImagery>();
         app.init_resource::<imagery::PendingBodyImagery>();
+        app.configure_sets(
+            Update,
+            lunco_core::RuntimeCycleSet::Visualization
+                .after(lunco_core::RuntimeCycleSet::Ui)
+                .after(lunco_terrain_surface::TerrainSurfaceSet::Build),
+        );
+        // Curvature is consumed by DEM construction and stays on that
+        // authoritative boundary. Handoff selection, appearance, and globe LOD
+        // are presentation work after the DEM build.
+        app.add_systems(
+            Update,
+            placement::sync_terrain_body_curvature
+                .in_set(CelestialTerrainSet::Curvature)
+                .before(lunco_terrain_surface::TerrainSurfaceSet::Build)
+                .run_if(lunco_time::scene_time_ready),
+        );
         app.add_systems(
             Update,
             (
@@ -396,18 +412,11 @@ impl Plugin for CelestialPlugin {
                 imagery::bind_dataset_body_imagery,
                 imagery::adopt_authored_body_albedo,
                 big_space_setup::adopt_authored_body_look,
+                placement::sync_globe_handoffs.run_if(lunco_time::scene_time_ready),
                 globe_lod::update_globe_lod.run_if(globe_lod::globe_lod_update_due),
             )
-                .chain(),
-        );
-
-        // Site-anchored scenes: hand the DEM terrain the body radius so it
-        // curves onto the globe sphere (see `placement::sync_terrain_body_curvature`).
-        app.add_systems(
-            Update,
-            placement::sync_terrain_body_curvature
-                .in_set(CelestialTerrainSet::Curvature)
-                .run_if(lunco_time::scene_time_ready),
+                .chain()
+                .in_set(lunco_core::RuntimeCycleSet::Visualization),
         );
 
         // Terrain spawning is now handled by lunco-terrain plugin

@@ -948,7 +948,7 @@ mod tests {
         let registry = app.world().resource::<SignalRegistry>();
         let sample = registry
             .scalar_history(&signal)
-            .and_then(|history| history.samples.back())
+            .and_then(lunco_signal::ScalarHistory::back)
             .expect("the second physics state has a measurable acceleration");
         assert!((sample.value - 12.0).abs() < 1.0e-12);
         assert!((sample.time - 0.1).abs() < 1.0e-12);

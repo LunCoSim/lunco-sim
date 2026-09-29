@@ -79,6 +79,7 @@ enum ArchivePayload {
     ControlInputRelease {
         correlation_id: u64,
     },
+    /// Lifecycle release of controller input holds only.
     ControlInputsReleased,
     PortInputTransaction {
         batches: Vec<crate::PortInputTargetWrites>,

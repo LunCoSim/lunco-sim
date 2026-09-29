@@ -19,7 +19,6 @@ use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchSnapsho
 pub const PORT_PANEL_ID: PanelId = PanelId("port_inspector");
 
 /// A port row shown by [`PortPanel`].
-#[derive(Clone)]
 pub struct PortRow {
     /// The entity that owns the port surface.
     pub entity: Entity,
@@ -31,10 +30,13 @@ pub struct PortRow {
     pub wired: bool,
     /// The persisted manual setpoint, if the operator has taken this input.
     pub held: Option<f64>,
+    /// Formatted live/held value, refreshed with the sampled port data.
+    value_text: String,
+    /// Formatted authored range, stable while port topology is unchanged.
+    range_text: Option<String>,
 }
 
 /// One port-bearing entity in the universal browser.
-#[derive(Clone)]
 pub struct PortEntity {
     /// Entity used by the typed command surface.
     pub entity: Entity,
@@ -47,10 +49,12 @@ pub struct PortEntity {
 }
 
 /// Change-gated render state for the universal port panel.
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Default)]
 pub struct PortView {
     /// Port-bearing entities sorted by label.
     pub entities: Vec<PortEntity>,
+    /// Total number of projected ports, retained for the panel summary.
+    pub total_ports: usize,
     /// Last world time at which the live table was sampled.
     pub sampled_at: f64,
     /// Backend-owned identity keys for the current candidate set.
@@ -82,7 +86,70 @@ struct PortMatchCache {
     matching_port_indices: Vec<Vec<usize>>,
 }
 
-fn build_port_match_cache(view: &PortView, filter: String) -> PortMatchCache {
+#[derive(Default)]
+struct PortRowIndexCache {
+    built: bool,
+    topology_revision: Option<u64>,
+    filter: String,
+    expanded_entities: HashSet<Entity>,
+    expanded_indices: Vec<usize>,
+    collapsed_indices: Vec<usize>,
+    row_titles: Vec<Option<String>>,
+}
+
+struct PortDraft {
+    value: String,
+    validation: Result<f64, String>,
+}
+
+impl PortRowIndexCache {
+    fn matches(
+        &self,
+        topology_revision: Option<u64>,
+        filter: &str,
+        expanded_entities: &HashSet<Entity>,
+    ) -> bool {
+        self.built
+            && self.topology_revision == topology_revision
+            && self.filter == filter
+            && self.expanded_entities == *expanded_entities
+    }
+
+    fn rebuild(
+        &mut self,
+        view: &PortView,
+        topology_revision: Option<u64>,
+        filter: &str,
+        expanded_entities: &HashSet<Entity>,
+        matching_indices: &[usize],
+        matching_counts: &[usize],
+    ) {
+        let auto_expand_single = expanded_entities.is_empty() && matching_indices.len() == 1;
+        self.expanded_indices.clear();
+        self.collapsed_indices.clear();
+        self.row_titles.clear();
+        self.row_titles.resize_with(view.entities.len(), || None);
+        for &index in matching_indices {
+            let entity = view.entities[index].entity;
+            self.row_titles[index] = Some(format!(
+                "{}  ({})",
+                view.entities[index].label, matching_counts[index]
+            ));
+            if expanded_entities.contains(&entity) || auto_expand_single {
+                self.expanded_indices.push(index);
+            } else {
+                self.collapsed_indices.push(index);
+            }
+        }
+        self.topology_revision = topology_revision;
+        self.filter.clear();
+        self.filter.push_str(filter);
+        self.expanded_entities.clone_from(expanded_entities);
+        self.built = true;
+    }
+}
+
+fn build_port_match_cache(view: &PortView, filter: &str) -> PortMatchCache {
     let mut matching_counts = Vec::with_capacity(view.entities.len());
     let mut matching_indices = Vec::new();
     let mut matching_port_indices = Vec::with_capacity(view.entities.len());
@@ -110,7 +177,7 @@ fn build_port_match_cache(view: &PortView, filter: String) -> PortMatchCache {
 
     PortMatchCache {
         topology_revision: view.candidate_topology_revision,
-        filter,
+        filter: filter.to_owned(),
         matching_counts,
         matching_indices,
         matching_port_indices,
@@ -145,16 +212,23 @@ fn build_port_rows(
     let mut ports: Vec<_> = registry
         .entity_port_infos_with_handles(world, entity)
         .into_iter()
-        .map(|(owner, info)| PortRow {
-            entity,
-            owner,
-            wired: wired
+        .map(|(owner, info)| {
+            let held = holds
                 .get(&entity)
-                .is_some_and(|ports| ports.contains(&info.name)),
-            held: holds
-                .get(&entity)
-                .and_then(|ports| ports.get(&info.name).copied()),
-            info,
+                .and_then(|ports| ports.get(&info.name).copied());
+            let value_text = display_value(held, info.value);
+            let range_text = range_label(&info.metadata);
+            PortRow {
+                entity,
+                owner,
+                wired: wired
+                    .get(&entity)
+                    .is_some_and(|ports| ports.contains(&info.name)),
+                held,
+                info,
+                value_text,
+                range_text,
+            }
         })
         .collect();
     ports.sort_by(|a, b| a.info.name.cmp(&b.info.name));
@@ -204,11 +278,23 @@ fn refresh_decorations(
     }
 }
 
+fn refresh_display_values(entities: &mut [PortEntity], requested_entities: &HashSet<Entity>) {
+    for entity in entities {
+        if !requested_entities.contains(&entity.entity) {
+            continue;
+        }
+        for row in &mut entity.ports {
+            row.value_text = display_value(row.held, row.info.value);
+        }
+    }
+}
+
 /// Project all registered port backends into the panel's render model.
 pub fn populate_port_view(world: &mut World) {
     let Some(registry) = world.get_resource::<PortRegistry>().cloned() else {
         let mut view = world.resource_mut::<PortView>();
         view.entities.clear();
+        view.total_ports = 0;
         view.candidate_topology_keys.clear();
         view.candidate_topology_revision = None;
         return;
@@ -257,6 +343,7 @@ pub fn populate_port_view(world: &mut World) {
         };
         refresh_live_values(&registry, world, &mut entities, &requested_entities);
         refresh_decorations(&wired, &holds, &mut entities, &requested_entities);
+        refresh_display_values(&mut entities, &requested_entities);
         let mut view = world.resource_mut::<PortView>();
         view.entities = entities;
         view.sampled_at = sampled_at;
@@ -324,8 +411,11 @@ pub fn populate_port_view(world: &mut World) {
     rows.sort_by(|a, b| a.label.cmp(&b.label));
     refresh_live_values(&registry, world, &mut rows, &requested_entities);
     refresh_decorations(&wired, &holds, &mut rows, &requested_entities);
+    refresh_display_values(&mut rows, &requested_entities);
+    let total_ports = rows.iter().map(|entity| entity.ports.len()).sum();
     let mut view = world.resource_mut::<PortView>();
     view.entities = rows;
+    view.total_ports = total_ports;
     view.candidate_topology_keys = candidate_topology_keys;
     view.candidate_topology_revision = Some(topology_revision);
     view.sampled_at = sampled_at;
@@ -334,9 +424,12 @@ pub fn populate_port_view(world: &mut World) {
 #[derive(Default)]
 pub struct PortPanel {
     filter: String,
-    drafts: HashMap<(Entity, String), String>,
+    normalized_filter: String,
+    drafts: HashMap<Entity, HashMap<String, PortDraft>>,
     expanded_entities: HashSet<Entity>,
+    next_expanded_entities: HashSet<Entity>,
     matching_cache: Option<PortMatchCache>,
+    row_index: PortRowIndexCache,
 }
 
 impl Panel for PortPanel {
@@ -391,33 +484,32 @@ impl PortPanel {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label("Filter");
-            ui.add(
+            let response = ui.add(
                 lunco_workbench_widgets::text_editor::singleline(&mut self.filter)
                     .hint_text("entity, port, source, or authority")
                     .desired_width(ui.available_width()),
             );
+            if response.changed() {
+                self.normalized_filter = self.filter.trim().to_lowercase();
+            }
         });
         ui.label(
             egui::RichText::new(format!(
                 "{} entities · {} ports · sampled at {:.1} Hz",
                 view.entities.len(),
-                view.entities
-                    .iter()
-                    .map(|entity| entity.ports.len())
-                    .sum::<usize>(),
+                view.total_ports,
                 10.0,
             ))
             .small()
             .weak(),
         );
 
-        let normalized_filter = self.filter.trim().to_lowercase();
         let topology_revision = view.candidate_topology_revision;
         let cache_stale = self.matching_cache.as_ref().is_none_or(|cache| {
-            cache.topology_revision != topology_revision || cache.filter != normalized_filter
+            cache.topology_revision != topology_revision || cache.filter != self.normalized_filter
         });
         if cache_stale {
-            self.matching_cache = Some(build_port_match_cache(view, normalized_filter));
+            self.matching_cache = Some(build_port_match_cache(view, &self.normalized_filter));
         }
         // Temporarily own the cache while painting so the expanded row controls
         // can still mutate the panel's draft state without cloning the cached
@@ -429,28 +521,39 @@ impl PortPanel {
         let matching_counts = &cache.matching_counts;
         let matching_indices = &cache.matching_indices;
 
-        // Expanded bodies are painted outside the virtualized header list. The
-        // list therefore remains fixed-height even when a body contains a full
-        // port grid; opening a header moves its body into this small explicit set
-        // on the next paint.
-        let mut next_expanded = HashSet::new();
         let auto_expand_single = self.expanded_entities.is_empty() && matching_indices.len() == 1;
-        let expanded_indices: Vec<_> = matching_indices
-            .iter()
-            .copied()
-            .filter(|index| {
-                self.expanded_entities
-                    .contains(&view.entities[*index].entity)
-                    || auto_expand_single
-            })
-            .collect();
-        for index in expanded_indices {
+        if !self.row_index.matches(
+            topology_revision,
+            &self.normalized_filter,
+            &self.expanded_entities,
+        ) {
+            self.row_index.rebuild(
+                view,
+                topology_revision,
+                &self.normalized_filter,
+                &self.expanded_entities,
+                matching_indices,
+                matching_counts,
+            );
+        }
+
+        // Expanded bodies are painted outside the virtualized header list. The
+        // stable row index is rebuilt only for topology, filter, or expansion
+        // changes; widgets are still painted for the current frame.
+        let expanded_indices = std::mem::take(&mut self.row_index.expanded_indices);
+        let collapsed_indices = std::mem::take(&mut self.row_index.collapsed_indices);
+        let row_titles = std::mem::take(&mut self.row_index.row_titles);
+        let mut next_expanded = std::mem::take(&mut self.next_expanded_entities);
+        next_expanded.clear();
+        for index in expanded_indices.iter().copied() {
             let entity = &view.entities[index];
             if self.render_entity(
                 ui,
                 ctx,
                 entity,
-                matching_counts[index],
+                row_titles[index]
+                    .as_deref()
+                    .expect("matching port entity has a cached row title"),
                 &cache.matching_port_indices[index],
                 self.expanded_entities.contains(&entity.entity) || auto_expand_single,
             ) {
@@ -458,11 +561,6 @@ impl PortPanel {
             }
         }
 
-        let collapsed_indices: Vec<_> = matching_indices
-            .iter()
-            .copied()
-            .filter(|index| !next_expanded.contains(&view.entities[*index].entity))
-            .collect();
         let row_height = ui.text_style_height(&egui::TextStyle::Body);
         egui::ScrollArea::vertical()
             .id_salt("port_entity_browser")
@@ -471,7 +569,9 @@ impl PortPanel {
                 for row_index in range {
                     let index = collapsed_indices[row_index];
                     let entity = &view.entities[index];
-                    let title = format!("{}  ({})", entity.label, matching_counts[index]);
+                    let title = row_titles[index]
+                        .as_deref()
+                        .expect("matching port entity has a cached row title");
                     if lunco_workbench_widgets::tree::branch(
                         ui,
                         ui.make_persistent_id(("port_entity", entity.entity)),
@@ -488,15 +588,28 @@ impl PortPanel {
                             .clicked()
                         },
                         |_| {},
-                    ) {
+                    )
+                    .is_open
+                    {
                         next_expanded.insert(entity.entity);
                     }
                 }
             });
-        self.expanded_entities = next_expanded;
+        if next_expanded != self.expanded_entities {
+            std::mem::swap(&mut next_expanded, &mut self.expanded_entities);
+        }
+        next_expanded.clear();
         let _ = ctx.resource_scope::<PortInspectionRequest, _>(|_, request| {
-            request.expanded_entities = self.expanded_entities.clone();
+            if request.expanded_entities != self.expanded_entities {
+                request
+                    .expanded_entities
+                    .clone_from(&self.expanded_entities);
+            }
         });
+        self.next_expanded_entities = next_expanded;
+        self.row_index.expanded_indices = expanded_indices;
+        self.row_index.collapsed_indices = collapsed_indices;
+        self.row_index.row_titles = row_titles;
         self.matching_cache = Some(cache);
     }
 
@@ -505,11 +618,10 @@ impl PortPanel {
         ui: &mut egui::Ui,
         ctx: &mut PanelCtx,
         entity: &PortEntity,
-        matching_count: usize,
+        title: &str,
         matching_port_indices: &[usize],
         default_open: bool,
     ) -> bool {
-        let title = format!("{}  ({matching_count})", entity.label);
         lunco_workbench_widgets::tree::branch(
             ui,
             ui.make_persistent_id(("port_entity", entity.entity)),
@@ -546,6 +658,7 @@ impl PortPanel {
                     });
             },
         )
+        .is_open
     }
 }
 
@@ -565,11 +678,7 @@ impl PortPanel {
             }
         });
 
-        if let Some(held) = row.held {
-            ui.label(format!("{:.6}  (held)", held));
-        } else {
-            ui.label(format_value(info.value));
-        }
+        ui.label(&row.value_text);
 
         ui.vertical(|ui| {
             ui.label(info.metadata.value_type.as_str());
@@ -583,7 +692,7 @@ impl PortPanel {
             if let Some(frame) = &info.metadata.frame {
                 ui.small(format!("frame: {frame}"));
             }
-            if let Some(range) = range_label(&info.metadata) {
+            if let Some(range) = row.range_text.as_deref() {
                 ui.small(range);
             }
         });
@@ -598,27 +707,35 @@ impl PortPanel {
             return;
         }
 
-        let key = (row.entity, info.name.clone());
-        let draft = self.drafts.entry(key).or_insert_with(|| {
-            row.held
+        let entity_drafts = self.drafts.entry(row.entity).or_default();
+        if !entity_drafts.contains_key(info.name.as_str()) {
+            let value = row
+                .held
                 .or(info.value)
                 .map(|value| format!("{value:.9}"))
-                .unwrap_or_default()
-        });
-        let validation = draft
-            .parse::<f64>()
-            .map_err(|_| "enter a number".to_owned())
-            .and_then(|value| info.metadata.validate(value).map(|()| value));
+                .unwrap_or_default();
+            let validation = validate_port_value(info, &value);
+            entity_drafts.insert(info.name.clone(), PortDraft { value, validation });
+        }
+        let draft = entity_drafts
+            .get_mut(info.name.as_str())
+            .expect("port draft was inserted above");
         ui.horizontal(|ui| {
-            ui.add(lunco_workbench_widgets::text_editor::singleline(draft).desired_width(82.0));
+            let response = ui.add(
+                lunco_workbench_widgets::text_editor::singleline(&mut draft.value)
+                    .desired_width(82.0),
+            );
+            if response.changed() {
+                draft.validation = validate_port_value(info, &draft.value);
+            }
             if ui
                 .add_enabled(
-                    validation.is_ok() && local_origin.is_some(),
+                    draft.validation.is_ok() && local_origin.is_some(),
                     egui::Button::new("Apply"),
                 )
                 .clicked()
             {
-                if let (Ok(value), Some(origin)) = (validation.as_ref(), local_origin) {
+                if let (Ok(value), Some(origin)) = (&draft.validation, local_origin) {
                     ctx.trigger_command(
                         lunco_cosim_core::commands::SetPorts {
                             target: row.entity,
@@ -654,7 +771,7 @@ impl PortPanel {
                 egui::RichText::new("local control session unavailable").color(egui::Color32::RED),
             );
         }
-        if let Err(error) = validation {
+        if let Err(error) = &draft.validation {
             ui.small(egui::RichText::new(error).color(egui::Color32::RED));
         }
     }
@@ -696,6 +813,20 @@ fn format_value(value: Option<f64>) -> String {
     }
 }
 
+fn display_value(held: Option<f64>, value: f64) -> String {
+    match held {
+        Some(held) => format!("{held:.6}  (held)"),
+        None => format_value(value),
+    }
+}
+
+fn validate_port_value(info: &PortInfo, value: &str) -> Result<f64, String> {
+    value
+        .parse::<f64>()
+        .map_err(|_| "enter a number".to_owned())
+        .and_then(|value| info.metadata.validate(value).map(|()| value))
+}
+
 fn range_label(metadata: &PortMetadata) -> Option<String> {
     match (metadata.min, metadata.max) {
         (Some(min), Some(max)) => Some(format!("range {min}..{max}")),
@@ -731,6 +862,8 @@ mod tests {
             },
             wired: false,
             held: None,
+            value_text: "0.000000".into(),
+            range_text: Some("range -1..1".into()),
         };
         assert!(port_matches(&row, "Rover", "controller"));
         assert!(port_matches(&row, "Rover", "throttle"));
@@ -759,6 +892,8 @@ mod tests {
             },
             wired: false,
             held: None,
+            value_text: "0.000000".into(),
+            range_text: Some("range -1..1".into()),
         };
         let view = PortView {
             entities: vec![PortEntity {

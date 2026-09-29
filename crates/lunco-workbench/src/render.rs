@@ -279,6 +279,19 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             TabId::Singleton(id) => id,
             TabId::Instance { kind, .. } => kind,
         };
+        // Keep one named child zone per visible panel so a slow workbench
+        // frame can be attributed to its UI owner in Tracy.
+        let panel_span = match *tab {
+            TabId::Singleton(id) => {
+                bevy::log::info_span!("workbench_panel_render", panel = %id.as_str())
+            }
+            TabId::Instance { kind, instance } => bevy::log::info_span!(
+                "workbench_panel_render",
+                panel = %kind.as_str(),
+                instance
+            ),
+        };
+        let _panel_span = panel_span.enter();
         publish_panel_anchor(self.world, panel_id, panel_rect);
 
         // Publish the active tab's authoritative screen rect before rendering
@@ -295,17 +308,17 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
 
         match *tab {
             TabId::Singleton(id) => {
-                // Take-and-return pattern so the panel can itself borrow
-                // other panels' metadata via the layout (future-proof).
-                match self.panels.remove(&id) {
-                    Some(mut panel) => {
+                let panels = &mut *self.panels;
+                let world = &mut *self.world;
+                match panels.get_mut(&id) {
+                    Some(panel) => {
                         // Capability-narrowed context (no raw &mut World).
                         // Mutations the panel emits are queued and applied
                         // after paint (WP-8 structural prevention).
                         let is_main_scene =
                             panel.scene_target() == Some(PanelRenderTarget::MainViewport);
                         let transparent = panel_body_is_transparent(
-                            self.world,
+                            world,
                             panel.transparent_background(),
                             is_main_scene,
                         );
@@ -315,26 +328,26 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                         // area below a short card.
                         let body = ui.clip_rect();
                         let scroll_policy = panel.scroll_policy();
-                        let mut ctx = PanelCtx::with_surface(self.world, self.surface);
-                        match scroll_policy {
-                            PanelScrollPolicy::Vertical => {
-                                egui::ScrollArea::vertical()
-                                    .id_salt(("workbench_panel_body", id.as_str()))
-                                    .auto_shrink([false; 2])
-                                    .show(ui, |ui| panel.render(ui, &mut ctx));
+                        let intents = {
+                            let mut ctx = PanelCtx::with_surface(world, self.surface);
+                            match scroll_policy {
+                                PanelScrollPolicy::Vertical => {
+                                    egui::ScrollArea::vertical()
+                                        .id_salt(("workbench_panel_body", id.as_str()))
+                                        .auto_shrink([false; 2])
+                                        .show(ui, |ui| panel.render(ui, &mut ctx));
+                                }
+                                PanelScrollPolicy::SelfManaged => panel.render(ui, &mut ctx),
                             }
-                            PanelScrollPolicy::SelfManaged => panel.render(ui, &mut ctx),
-                        }
-                        let intents = ctx.take_intents();
-                        self.panels.insert(id, panel);
-                        intents.apply(self.world);
+                            ctx.take_intents()
+                        };
+                        intents.apply(world);
                         if !is_main_scene {
-                            record_chrome(self.world, ui, body, transparent);
+                            record_chrome(world, ui, body, transparent);
                         }
                     }
                     _ => {
-                        let error_color = self
-                            .world
+                        let error_color = world
                             .get_resource::<lunco_theme::Theme>()
                             .map(|t| t.tokens.error)
                             .unwrap_or(egui::Color32::LIGHT_RED);
@@ -346,40 +359,41 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                 }
             }
             TabId::Instance { kind, instance } => {
-                match self.instance_panels.remove(&kind) {
-                    Some(mut panel) => {
+                let instance_panels = &mut *self.instance_panels;
+                let world = &mut *self.world;
+                match instance_panels.get_mut(&kind) {
+                    Some(panel) => {
                         // Instance tabs are always chrome — no `InstancePanel` hosts a
                         // live scene (the scene viewport and the USD preview are both
                         // singleton `Panel`s).
-                        let transparent = panel_body_is_transparent(
-                            self.world,
-                            panel.transparent_background(),
-                            false,
-                        );
+                        let transparent =
+                            panel_body_is_transparent(world, panel.transparent_background(), false);
                         let body = ui.clip_rect();
                         let scroll_policy = panel.scroll_policy();
-                        let mut ctx = PanelCtx::with_surface(self.world, self.surface);
-                        match scroll_policy {
-                            PanelScrollPolicy::Vertical => {
-                                egui::ScrollArea::vertical()
-                                    .id_salt((
-                                        "workbench_instance_panel_body",
-                                        kind.as_str(),
-                                        instance,
-                                    ))
-                                    .auto_shrink([false; 2])
-                                    .show(ui, |ui| panel.render(ui, &mut ctx, instance));
+                        let intents = {
+                            let mut ctx = PanelCtx::with_surface(world, self.surface);
+                            match scroll_policy {
+                                PanelScrollPolicy::Vertical => {
+                                    egui::ScrollArea::vertical()
+                                        .id_salt((
+                                            "workbench_instance_panel_body",
+                                            kind.as_str(),
+                                            instance,
+                                        ))
+                                        .auto_shrink([false; 2])
+                                        .show(ui, |ui| panel.render(ui, &mut ctx, instance));
+                                }
+                                PanelScrollPolicy::SelfManaged => {
+                                    panel.render(ui, &mut ctx, instance)
+                                }
                             }
-                            PanelScrollPolicy::SelfManaged => panel.render(ui, &mut ctx, instance),
-                        }
-                        let intents = ctx.take_intents();
-                        self.instance_panels.insert(kind, panel);
-                        intents.apply(self.world);
-                        record_chrome(self.world, ui, body, transparent);
+                            ctx.take_intents()
+                        };
+                        intents.apply(world);
+                        record_chrome(world, ui, body, transparent);
                     }
                     _ => {
-                        let error_color = self
-                            .world
+                        let error_color = world
                             .get_resource::<lunco_theme::Theme>()
                             .map(|t| t.tokens.error)
                             .unwrap_or(egui::Color32::LIGHT_RED);
@@ -3432,7 +3446,7 @@ mod tests {
         plan.center = PerspectiveSlotPlan::new().single(Some(PanelId("viewport")));
         plan.right_inspector =
             PerspectiveSlotPlan::new().stacked([PanelId("inspector")], [PanelId("spawn")]);
-        layout.apply_perspective_plan(plan);
+        layout.apply_perspective_plan(PerspectiveId("test"), plan);
 
         let leaves: Vec<Vec<TabId>> = layout
             .dock
@@ -3463,7 +3477,7 @@ mod tests {
         plan.center = PerspectiveSlotPlan::new().single(Some(PanelId("viewport")));
         plan.right_inspector =
             PerspectiveSlotPlan::new().stacked([PanelId("inspector")], [PanelId("spawn")]);
-        layout.apply_perspective_plan(plan);
+        layout.apply_perspective_plan(PerspectiveId("test"), plan);
 
         layout.register(DockPanel(PanelId("entities")));
         layout.register(DockPanel(PanelId("telemetry")));
@@ -3844,7 +3858,7 @@ mod tests {
         let mut layout = WorkbenchLayout::default();
         let mut plan = PerspectiveLayoutPlan::new();
         plan.center = PerspectiveSlotPlan::new().tabs([PanelId("a"), PanelId("b")]);
-        layout.apply_perspective_plan(plan);
+        layout.apply_perspective_plan(PerspectiveId("test"), plan);
         assert_eq!(layout.center, vec![PanelId("a"), PanelId("b")]);
     }
 
@@ -3854,7 +3868,7 @@ mod tests {
         let mut plan = PerspectiveLayoutPlan::new();
         plan.center = PerspectiveSlotPlan::new().tabs([PanelId("code"), PanelId("diagram")]);
         plan.active_center_tab = Some(1);
-        layout.apply_perspective_plan(plan);
+        layout.apply_perspective_plan(PerspectiveId("test"), plan);
         assert_eq!(layout.active_center_tab, 1);
     }
 
@@ -3864,7 +3878,7 @@ mod tests {
         let mut plan = PerspectiveLayoutPlan::new();
         plan.center = PerspectiveSlotPlan::new().tabs([PanelId("x")]);
         plan.active_center_tab = Some(2);
-        layout.apply_perspective_plan(plan);
+        layout.apply_perspective_plan(PerspectiveId("test"), plan);
         assert_eq!(layout.active_center_tab, 0);
     }
 }

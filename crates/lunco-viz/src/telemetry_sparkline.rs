@@ -102,18 +102,9 @@ struct HistoryFingerprint {
 fn history_fingerprint(history: &ScalarHistory) -> HistoryFingerprint {
     HistoryFingerprint {
         len: history.len(),
-        first_time: history
-            .samples
-            .front()
-            .map_or(0, |sample| sample.time.to_bits()),
-        last_time: history
-            .samples
-            .back()
-            .map_or(0, |sample| sample.time.to_bits()),
-        last_value: history
-            .samples
-            .back()
-            .map_or(0, |sample| sample.value.to_bits()),
+        first_time: history.front().map_or(0, |sample| sample.time.to_bits()),
+        last_time: history.back().map_or(0, |sample| sample.time.to_bits()),
+        last_value: history.back().map_or(0, |sample| sample.value.to_bits()),
     }
 }
 

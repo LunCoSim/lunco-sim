@@ -11,6 +11,15 @@ use egui;
 /// Number of hierarchy levels that depth-based trees reveal by default.
 pub const DEFAULT_OPEN_LEVELS: usize = 2;
 
+/// Persistent disclosure state after painting one tree branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BranchState {
+    /// Whether the branch body is visible after this frame's interaction.
+    pub is_open: bool,
+    /// Whether the disclosure state changed while this branch was painted.
+    pub changed: bool,
+}
+
 /// Whether a branch at `depth` belongs to the initially visible hierarchy.
 pub fn default_open_at_depth(depth: usize) -> bool {
     depth < DEFAULT_OPEN_LEVELS
@@ -20,7 +29,7 @@ fn row_size(ui: &egui::Ui, width: f32) -> [f32; 2] {
     [width.max(0.0), ui.spacing().interact_size.y]
 }
 
-/// Render one standard workbench tree branch and return whether it is open.
+/// Render one standard workbench tree branch and return its disclosure state.
 ///
 /// `add_header` paints the branch contents after the shared disclosure
 /// control and returns whether its label was clicked. A label click toggles
@@ -34,7 +43,8 @@ fn row_size(ui: &egui::Ui, width: f32) -> [f32; 2] {
 ///
 /// The returned state lets a virtualized panel render a branch header in one
 /// pass and its body in another without introducing a second disclosure
-/// implementation.
+/// implementation. `changed` lets a panel invalidate a cached visible-row
+/// index after the user expands or collapses a branch.
 pub fn branch(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -42,12 +52,13 @@ pub fn branch(
     open: Option<bool>,
     add_header: impl FnOnce(&mut egui::Ui) -> bool,
     add_body: impl FnOnce(&mut egui::Ui),
-) -> bool {
+) -> BranchState {
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
         id,
         default_open,
     );
+    let was_open = state.is_open();
     let mut label_clicked = false;
     let header = ui.horizontal(|ui| {
         let item_spacing = ui.spacing().item_spacing;
@@ -68,14 +79,18 @@ pub fn branch(
     if let Some(open) = open {
         state.set_open(open);
     }
-    if state.is_open() {
+    let is_open = state.is_open();
+    if is_open {
         ui.indent(id, |ui| {
             ui.expand_to_include_x(header.response.rect.right());
             add_body(ui);
         });
     }
     state.store(ui.ctx());
-    state.is_open()
+    BranchState {
+        is_open,
+        changed: was_open != is_open,
+    }
 }
 
 /// Render one full-width leaf row using the same horizontal allocation as a

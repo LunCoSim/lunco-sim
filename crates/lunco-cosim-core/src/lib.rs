@@ -17,9 +17,7 @@ pub mod schedule;
 pub use actuation::{ForceActuator, TorqueActuator};
 pub use binding::{BindingRevision, BoundConnection, ConnectionBinding};
 pub use component::*;
-pub use connection::{
-    PortHolds, RealtimeSafe, SimConnection,
-};
+pub use connection::{PortHolds, RealtimeSafe, SimConnection};
 pub use contract::*;
 pub use diagnostics::{AlgebraicLoopDiagnostic, BrokenConnection, CosimDiagnostics};
 pub use lunco_port_core::ports::ScalarPortMap;

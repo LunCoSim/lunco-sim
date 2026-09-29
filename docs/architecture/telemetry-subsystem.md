@@ -90,6 +90,13 @@ pool. A catalog result is published only for the matching registry and focus key
 does not build the tree or wait for a worker during `Panel::render`; live sample values remain
 read from `SignalRegistry` when visible rows are painted.
 
+`ScalarHistory` stores completed retention blocks as immutable shared chunks and keeps only a
+bounded tail mutable. `snapshot()` shares completed chunks and copies that tail; plot workers
+flatten the snapshot and derive their point buffers off the UI frame, including decimation
+where the plot needs it. Ring eviction, resize, clear, and ordered iteration remain owned by
+`SignalRegistry`. This keeps a history refresh from copying the full retention window
+synchronously when Builder plots update.
+
 ### Archived history is not automatically stale
 
 An archived row means that its publisher was removed during this process (for example, a
@@ -197,7 +204,7 @@ ring buffers, a clock tree, and a timeseries type already exist.
 | Need | **Already exists** | Verdict |
 |---|---|---|
 | **Different clocks / cycles** | `lunco-time::domain` — `TimeDomain { parent, offset, scale, regime }` (affine child clock, USD `LayerOffset` semantics), `Playback { head, mode, rate, looping }` (independent playhead), **`TimeBinding { domain: Entity }` — a per-entity component**, `ResolvedDomains` resolved once per frame | **Use as-is.** "Sample this channel on another clock" = give the channel a `TimeBinding`. A missing bound domain is an owner-visible error, never an implicit switch to world time. |
-| **Retention / ring buffer** | `lunco_signal::SignalRegistry` — `ScalarHistory { VecDeque<ScalarSample>, capacity }` **per signal**, `push_scalar()` drops non-finite, and `SignalMeta { unit, provenance }` | **Use as-is.** Routing `SampledParameter → push_scalar` keeps retention and plotting on one path. |
+| **Retention / ring buffer** | `lunco_signal::SignalRegistry` — chunked `ScalarHistory` with a bounded mutable tail **per signal**, `push_scalar()` drops non-finite, and `SignalMeta { unit, provenance }` | **Use as-is.** Routing `SampledParameter → push_scalar` keeps retention and plotting on one path; use `snapshot()` when bulk history processing belongs on a worker. |
 | **FPS / frame stats** | Bevy diagnostics provide the engine-owned measurements and short diagnostic ring. The core health publisher exposes the latest facts and a bounded frame-time history in `EngineHealthSnapshot`; `lunco-telemetry` also retains selected samples in the global `SignalRegistry` | **Use typed engine-health facts for app presentation and the retained `SignalRegistry` for telemetry plots, APIs, and recording.** Do not read `DiagnosticsStore` from a UI surface. |
 | **Timeseries / experiments** | `RunResult { times: Vec<f64>, series: BTreeMap<String, Vec<f64>> }` (columnar), `RunUpdate::Progress { delta }` (incremental stream), `RunBounds { dt, n_intervals }` (**the codebase's existing vocabulary for output sample spacing**), `REGISTRY_CAP_PER_TWIN = 20` | A telemetry **recording** should *be* a `RunResult` — it then plots and retains through machinery that already works. Rate vocabulary should rhyme with `RunBounds::dt`. |
 | **Physics observations and conversions** | Native Avian ports plus LunCoRaycastAPI raw-query outputs; Modelica IMU/altimeter/attitude conversions are ordinary SimComponent ports | **Use the same telemetry path.** No semantic Rust sensor registry is needed. |

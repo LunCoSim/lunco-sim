@@ -2,9 +2,10 @@
 
 use bevy::math::DVec3;
 
-/// A square-site perimeter band that needs a minimum globe-tile detail.
+/// A square-site relief shoulder and cutout perimeter that need minimum
+/// globe-tile detail.
 ///
-/// `radius_m` is a conservative spherical bound around the perimeter band.
+/// `radius_m` is a conservative spherical bound around the refined region.
 /// Intersecting tiles are refined until their nominal arc size is no larger than
 /// `max_tile_size_m`. Fixed-detail regions are independent of camera distance
 /// and support static transitions outside the camera-driven detail band.
@@ -21,7 +22,7 @@ pub struct LodRefinementRegion {
     pub site_radius_m: f64,
     /// Half side of the square site's projected footprint.
     pub half_extent_m: f64,
-    /// Width of the boundary band that needs fixed detail.
+    /// Outward expansion beyond the clipped site edge that needs fixed detail.
     pub width_m: f64,
     /// Largest allowed tile arc size where this region intersects a tile.
     pub max_tile_size_m: f64,
@@ -332,7 +333,9 @@ fn tile_intersects_square_boundary_band(
     }
 
     let outer_extent_m = half_extent_m + width_m;
-    let inner_extent_m = (half_extent_m - width_m).max(0.0);
+    // The finite site owns and renders its full interior. Globe fixed detail is
+    // needed only in the outward strip where globe triangles meet that edge.
+    let inner_extent_m = half_extent_m;
     let overlaps_outer_square = max_east >= -outer_extent_m
         && min_east <= outer_extent_m
         && max_north >= -outer_extent_m

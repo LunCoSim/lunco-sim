@@ -11,9 +11,12 @@
 //! This bridge turns ALL of avian's f32 transform sync off
 //! (`propagate_before_physics`, `transform_to_position`,
 //! `position_to_transform`) and owns the sync itself in the f64 cell-chain
-//! domain (`grid_relative_pose` / `pose_in_grid`): render `GlobalTransform`s are big_space's
-//! alone; physics `Position`/`Rotation` are fed from (and written back to)
-//! `CellCoord` + `Transform` truth. The `Position` frame is the explicit
+//! domain (`grid_relative_pose` / `pose_in_grid`): render `GlobalTransform`s
+//! are big_space's alone. Avian `Position` and `Rotation` are authoritative
+//! solved poses after admission; authored or external `(CellCoord, Transform)`
+//! changes are consumed only at admission or the fixed physics boundary, then
+//! solved poses are written back for presentation. Interpolated render
+//! transforms never become physics input. The `Position` frame is the explicit
 //! [`lunco_spatial::ActivePhysicsFrame`] selected for the loaded physical site.
 //! Every Avian body and collider uses that one frame; sibling BigSpace branches
 //! are converted through their nearest shared grid. A body-fixed surface frame
@@ -22,22 +25,22 @@
 //!
 //! ## Sync rules
 //!
-//! READ (`pose_to_position`, Prepare): a body's `Position`/`Rotation` are
-//! recomputed from the cell chain ONLY when its own `(CellCoord, Transform)`
-//! differs from the [`BridgeShadow`] copy taken at the bridge's last write —
-//! i.e. when an EXTERNAL writer (spawn, teleport command, gizmo, USD
-//! animation, anchor system) touched it. BigSpace recentring is identified by
-//! reproducing its exact cell re-split from the previous representation, not by
-//! guessing from Bevy change flags; a real cross-cell teleport therefore cannot
-//! be mistaken for internal maintenance. A fired body
-//! also re-reads every descendant body, so teleporting a chassis carries its
-//! jointed wheels. Plain chain nodes (no body, no collider) carry no shadow;
-//! their motion is probed via `Changed<Transform>`/`Changed<CellCoord>`
-//! instead, so moving a group Xform re-reads the bodies beneath it too. A
-//! `Grid` can be either a paired BigSpace representation re-split or a real
-//! moving physical frame; only the paired re-split is excluded below. Static
-//! bodies at rest are never touched, so steady-state bridge reads do not dirty
-//! the contact graph.
+//! READ (pose-to-position bridge): scene admission seeds unseen bodies while
+//! the shared fixed clock is held. Once the active frame is established,
+//! external `(CellCoord, Transform)` changes are consumed at the fixed physics
+//! boundary, after render interpolation restores the solved endpoint. Existing
+//! body poses are never read during `PreUpdate`, where `Transform` may still be
+//! a presentation sample. BigSpace recentring is identified by reproducing its
+//! exact cell re-split from the previous representation, not by guessing from
+//! Bevy change flags; a real cross-cell teleport therefore cannot be mistaken
+//! for internal maintenance. A moved body also re-reads every descendant body,
+//! so teleporting a chassis carries its jointed wheels. Plain chain nodes (no
+//! body, no collider) carry no shadow; their motion is probed via
+//! `Changed<Transform>`/`Changed<CellCoord>` instead, so moving a group Xform
+//! re-reads the bodies beneath it too. A `Grid` can be either a paired BigSpace
+//! representation re-split or a real moving physical frame; only the paired
+//! re-split is excluded below. Static bodies at rest are never touched, so
+//! steady-state bridge reads do not dirty the contact graph.
 //!
 //! Standalone colliders (a `Collider` with no rigid-body ancestor, e.g. a
 //! world-fixed sensor zone) are covered by the same READ pass.
@@ -341,12 +344,12 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
                 .run_if(physics_frame_contract_inputs_changed)
                 .before(lunco_physics::apply_physics_holds),
         );
-        // Seed the authored f64 pose during scene preparation. This is a
-        // lifecycle read/write, not a physics step, so body admission can finish
-        // while the shared fixed clock remains held at its initial tick.
+        // Seed uninitialized poses during scene preparation while the shared
+        // fixed clock remains held. Already-seeded bodies commit external pose
+        // changes at the fixed physics boundary, after presentation easing.
         app.add_systems(
             PreUpdate,
-            pose_to_position
+            pose_to_position_admission
                 .run_if(physics_frame_contract_ready)
                 .in_set(PhysicsBridgeSystems::Read)
                 .after(validate_physics_frame_contract)
@@ -394,9 +397,9 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         // lived inside the disabled `transform_to_position`).
         app.register_required_components::<RigidBody, BridgeShadow>();
         // Avian's interpolation plugin owns the render-time Transform between
-        // fixed steps. Its FixedFirst completion restores the last solved
-        // endpoint before this bridge reads the pose, so interpolation remains
-        // presentation-only and cannot feed a render sample back into physics.
+        // fixed steps. `PreUpdate` precedes its FixedFirst endpoint restore, so
+        // admission reads only unseen bodies; established poses are read by the
+        // fixed-step bridge after interpolation restores the solved endpoint.
         // Keep the default interpolation markers active; disabling them leaves
         // every bridge-owned rigid body visibly stepped at the solver cadence.
         app.register_required_components::<Collider, BridgeShadow>();
@@ -406,12 +409,12 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         app.register_required_components::<CellCoord, SpatialBridgeShadow>();
         // The active Avian frame may change after bodies have been seeded (for
         // example when a live scene adopts its authored body-fixed site grid).
-        // Keep that handoff transactionally visible to each scheduled bridge
-        // read pass; a Local would process it twice.
+        // Admission leaves that transition pending; the fixed-step readers
+        // consume it once before solver state is used.
         app.init_resource::<PhysicsFrameTransportState>();
         app.add_systems(
             PhysicsSchedule,
-            pose_to_position
+            pose_to_position_fixed_step
                 .run_if(physics_frame_contract_ready)
                 .in_set(PhysicsBridgeSystems::Read)
                 .in_set(PhysicsSystems::Prepare)
@@ -425,9 +428,8 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
                 .before(PhysicsTransformSystems::TransformToPosition),
         );
         // Joint construction is also allowed to run while Avian's nested
-        // schedule is held for world readiness. Seed only never-seen poses in
-        // the enclosing schedule; all change detection remains owned by the
-        // same read system used during lifecycle preparation above.
+        // schedule is held for world readiness. This read consumes the shared
+        // frame transition and orders pose changes before solver preparation.
         app.add_systems(
             PhysicsSchedule,
             reset_frame_dependent_solver_state
@@ -442,7 +444,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         // ordered before integration without writing solver state itself.
         app.add_systems(
             FixedPostUpdate,
-            pose_to_position
+            pose_to_position_fixed_step
                 .run_if(physics_frame_contract_ready)
                 .in_set(PhysicsBridgeSystems::Read)
                 .in_set(PhysicsSystems::Prepare)
@@ -594,7 +596,7 @@ impl BridgeShadow {
         exact_big_space_resplit(grid, previous_cell, self.translation, cell, tf.translation)
     }
 
-    /// Has [`pose_to_position`] written a real world pose for this entity yet?
+    /// Has the pose bridge written a real world pose for this entity yet?
     ///
     /// The bridge owns `Position` initialisation in this app (avian's own
     /// `transform_to_position` is switched OFF above), and the default shadow is
@@ -692,6 +694,12 @@ fn exact_big_space_resplit(
 /// body (`ColliderOf` present, no own `RigidBody`) are excluded — avian's
 /// `update_child_collider_position` derives their pose from the body.
 type BridgeSynced = Or<(With<RigidBody>, Without<ColliderOf>)>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PoseToPositionPolicy {
+    Admission,
+    FixedStep,
+}
 
 fn is_below_active_frame(
     entity: Entity,
@@ -934,35 +942,31 @@ fn validate_physics_backend_state(
     }
 }
 
-/// READ: externally-moved `(cell, Transform)` → f64 `Position`/`Rotation`,
-/// carrying the change to descendant bodies (chassis teleport moves wheels).
-///
-/// Order against this via [`PhysicsBridgeSystems::Read`], not by name — it is the
-/// system that makes `Position` real, and anything seating against `Position`
-/// before it has run reads zeros for every body.
-#[allow(clippy::type_complexity)]
-fn pose_to_position(
-    mut commands: Commands,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&Grid>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-    q_frame_boundary_changes: Query<(), Or<(Changed<ChildOf>, Changed<CellCoord>)>>,
-    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
-    mut frame_state: ResMut<PhysicsFrameTransportState>,
-    q_sleeping: Query<(), (With<Sleeping>, With<RigidBody>)>,
-    q_pose_seeded: Query<(), With<lunco_physics::PhysicsPoseSeeded>>,
-    mut moved: Local<EntityHashSet>,
-    mut body_entities: Local<Vec<Entity>>,
+#[derive(bevy::ecs::system::SystemParam)]
+struct PoseToPositionParams<'w, 's> {
+    commands: Commands<'w, 's>,
+    q_parents: Query<'w, 's, &'static ChildOf>,
+    q_grids: Query<'w, 's, &'static Grid>,
+    q_spatial: Query<'w, 's, (Option<&'static CellCoord>, &'static Transform)>,
+    q_frame_boundary_changes: Query<'w, 's, (), Or<(Changed<ChildOf>, Changed<CellCoord>)>>,
+    active_frame: Res<'w, lunco_spatial::ActivePhysicsFrame>,
+    frame_state: ResMut<'w, PhysicsFrameTransportState>,
+    q_sleeping: Query<'w, 's, (), (With<Sleeping>, With<RigidBody>)>,
+    q_pose_seeded: Query<'w, 's, (), With<lunco_physics::PhysicsPoseSeeded>>,
+    moved: Local<'s, EntityHashSet>,
+    body_entities: Local<'s, Vec<Entity>>,
     // Plain chain nodes have a representation shadow when they carry a
     // CellCoord. Transform-only nodes cannot be recentered and every change is
     // semantic. Either kind can carry physical descendants.
-    mut q_moved_plain: Query<
+    q_moved_plain: Query<
+        'w,
+        's,
         (
             Entity,
-            Option<&CellCoord>,
-            &Transform,
-            Option<&mut SpatialBridgeShadow>,
-            Option<&ChildOf>,
+            Option<&'static CellCoord>,
+            &'static Transform,
+            Option<&'static mut SpatialBridgeShadow>,
+            Option<&'static ChildOf>,
         ),
         (
             Or<(Changed<Transform>, Changed<CellCoord>, Changed<ChildOf>)>,
@@ -970,40 +974,88 @@ fn pose_to_position(
             Without<Collider>,
         ),
     >,
-    mut body_queries: ParamSet<(
-        Query<
-            (Entity, Option<&CellCoord>, &Transform, &BridgeShadow),
-            (
+    body_queries: ParamSet<
+        'w,
+        's,
+        (
+            Query<
+                'w,
+                's,
+                (
+                    Entity,
+                    Option<&'static CellCoord>,
+                    &'static Transform,
+                    &'static BridgeShadow,
+                ),
+                (
+                    BridgeSynced,
+                    Without<lunco_core::PhysicsPoseAuthoritative>,
+                    Or<(
+                        Without<lunco_physics::PhysicsPoseSeeded>,
+                        Added<BridgeShadow>,
+                        Changed<Transform>,
+                        Changed<CellCoord>,
+                        Changed<ChildOf>,
+                    )>,
+                ),
+            >,
+            Query<
+                'w,
+                's,
+                (
+                    Entity,
+                    Option<&'static CellCoord>,
+                    &'static Transform,
+                    &'static mut Position,
+                    &'static mut Rotation,
+                    &'static mut LinearVelocity,
+                    &'static mut AngularVelocity,
+                    &'static mut BridgeShadow,
+                    Option<&'static lunco_core::PhysicsPoseAuthoritative>,
+                ),
                 BridgeSynced,
-                Without<lunco_core::PhysicsPoseAuthoritative>,
-                Or<(
-                    Without<lunco_physics::PhysicsPoseSeeded>,
-                    Added<BridgeShadow>,
-                    Changed<Transform>,
-                    Changed<CellCoord>,
-                    Changed<ChildOf>,
-                )>,
-            ),
-        >,
-        Query<
-            (
-                Entity,
-                Option<&CellCoord>,
-                &Transform,
-                &mut Position,
-                &mut Rotation,
-                &mut LinearVelocity,
-                &mut AngularVelocity,
-                &mut BridgeShadow,
-                Option<&lunco_core::PhysicsPoseAuthoritative>,
-            ),
-            BridgeSynced,
-        >,
-    )>,
-    q_metadata: Query<(Option<&Name>, Option<&UsdPrimPath>)>,
-    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
-    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
-) {
+            >,
+        ),
+    >,
+    q_metadata: Query<'w, 's, (Option<&'static Name>, Option<&'static UsdPrimPath>)>,
+    faults: Option<ResMut<'w, lunco_core::RuntimeFaults>>,
+    holds: Option<ResMut<'w, lunco_physics::PhysicsHolds>>,
+}
+
+fn pose_to_position_admission(params: PoseToPositionParams) {
+    sync_pose_to_position(params, PoseToPositionPolicy::Admission);
+}
+
+fn pose_to_position_fixed_step(params: PoseToPositionParams) {
+    sync_pose_to_position(params, PoseToPositionPolicy::FixedStep);
+}
+
+/// READ: externally-moved `(cell, Transform)` → f64 `Position`/`Rotation`,
+/// carrying the change to descendant bodies (chassis teleport moves wheels).
+///
+/// Admission seeds unseen bodies during preparation. Established-body pose
+/// changes and frame handoffs are consumed at a fixed physics boundary, after
+/// render interpolation has restored the solved endpoint.
+#[allow(clippy::type_complexity)]
+fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPolicy) {
+    let PoseToPositionParams {
+        mut commands,
+        q_parents,
+        q_grids,
+        q_spatial,
+        q_frame_boundary_changes,
+        active_frame,
+        mut frame_state,
+        q_sleeping,
+        q_pose_seeded,
+        mut moved,
+        mut body_entities,
+        mut q_moved_plain,
+        mut body_queries,
+        q_metadata,
+        mut faults,
+        mut holds,
+    } = params;
     let active_frame = active_frame.0;
     if q_grids.get(active_frame).is_err() {
         panic!("ActivePhysicsFrame {active_frame:?} is not a live BigSpace Grid");
@@ -1013,6 +1065,15 @@ fn pose_to_position(
     // observed the frame, which violates the scene lifecycle ordering. Fail at
     // this owner instead of trying to infer and repair an old coordinate frame.
     let first_read = frame_state.frame.is_none();
+    if policy == PoseToPositionPolicy::Admission
+        && !first_read
+        && frame_state.frame.is_some_and(|frame| frame != active_frame)
+    {
+        // Established bodies and frame handoffs are consumed at the fixed
+        // physics boundary. PreUpdate may seed newly admitted bodies only
+        // while the already-observed physics frame remains active.
+        return;
+    }
     let previous_frame = frame_state.take_transition(active_frame);
     // A frame handoff normally transports Avian's existing state into a new
     // set of axes. A site mount is different: the selected frame itself has
@@ -1057,20 +1118,22 @@ fn pose_to_position(
     }
     // Pass 1 (read-only): which entities did an external writer touch?
     moved.clear();
-    for (entity, cell, tf, shadow, child_of) in &mut q_moved_plain {
-        let representation_only = match (cell, shadow, child_of) {
-            (Some(cell), Some(mut shadow), Some(child_of)) => {
-                let parent = child_of.parent();
-                let representation_only = q_grids
-                    .get(parent)
-                    .is_ok_and(|grid| shadow.is_representation_only(cell, tf, parent, grid));
-                shadow.capture(cell, tf, parent);
-                representation_only
+    if policy == PoseToPositionPolicy::FixedStep {
+        for (entity, cell, tf, shadow, child_of) in &mut q_moved_plain {
+            let representation_only = match (cell, shadow, child_of) {
+                (Some(cell), Some(mut shadow), Some(child_of)) => {
+                    let parent = child_of.parent();
+                    let representation_only = q_grids
+                        .get(parent)
+                        .is_ok_and(|grid| shadow.is_representation_only(cell, tf, parent, grid));
+                    shadow.capture(cell, tf, parent);
+                    representation_only
+                }
+                _ => false,
+            };
+            if !representation_only {
+                moved.insert(entity);
             }
-            _ => false,
-        };
-        if !representation_only {
-            moved.insert(entity);
         }
     }
     // A direct body change is only a candidate. `position_to_pose` is the
@@ -1080,6 +1143,13 @@ fn pose_to_position(
     // re-split the same pose into a new `(CellCoord, Transform)` pair; the
     // exact resplit check below handles that representation-only case.
     for (entity, cell, tf, shadow) in body_queries.p0().iter() {
+        if policy == PoseToPositionPolicy::Admission
+            && !first_read
+            && shadow.is_seeded()
+            && shadow.physics_frame == active_frame
+        {
+            continue;
+        }
         let parent_grid = q_parents
             .get(entity)
             .ok()
@@ -1115,6 +1185,13 @@ fn pose_to_position(
         else {
             continue;
         };
+        if policy == PoseToPositionPolicy::Admission
+            && !first_read
+            && shadow.is_seeded()
+            && shadow.physics_frame == active_frame
+        {
+            continue;
+        }
         if pose_override.is_some() {
             continue;
         }

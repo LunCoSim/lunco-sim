@@ -13,6 +13,8 @@ Inspector and authored USD panels live in
 
 - **Spawn System** — click-to-place rovers, props, and terrain with ghost preview
 - **Entity Selection** — Left-click replaces, Shift+Left-click extends, and Ctrl+Left-click removes from the selection; each uses the transform gizmo selection owner
+- **Entity List** — the active-scene hierarchy reuses a panel-local row buffer and paints only visible rows while keeping expansion keyed to entity identity
+- **Live panel view models** — Command Deck and Joint State readouts update only while their panels are visible, using the workbench snapshot as the visibility boundary
 - **USD Preview Picking** — clicks in the isolated Editor image map through its focused offscreen camera and select the nearest authored prim-backed part
 - **Script-authored click tools** — Rhai tool libraries exposing `on_click(context)` appear in the Tools palette and receive the canonical scene click context
 - **Scene pointer previews** — high-frequency pointer samples keep only the newest position per pointer and picking frame; authored tools move view-only previews through a generic typed active-frame transform command without editing USD during hover

@@ -18,43 +18,66 @@ tangent-plane DEM onto the body sphere. Its authoritative height is:
 h_in + sag
 ```
 
-This preserves every DEM sample and applies only the physical body-curvature
-transform. The DEM square is a hard data boundary: the terrain renderer emits no
-fabricated outer wall, and the globe renderer owns the surface outside it. The
-boundary continuation preserves the measured one-sided edge slope, then returns
-edge relief to the curved border datum over one site half-extent outside the
-square. The wider shoulder avoids a steep drop where individual edge samples
-differ from the perimeter datum. The body-scale collar then blends that datum
-to the mean-radius globe.
+The DEM asset and retained cropped base grid stay unchanged. The shared local
+oracle applies body curvature and the authored terrain layers, but keeps every
+sample inside the crop faithful to that composed DEM surface. A site handoff
+uses only its installed cropped DEM.
+For rendering, the active crop's border datum sets the visible globe shell
+radius; the celestial body's canonical radius and all physical state remain
+unchanged. The visual globe handoff starts at the exact crop boundary and uses a
+generated exterior collar to meet that datum-aligned sphere. DEM meshes,
+terrain queries, and colliders inside the crop retain the same composed
+surface; the raw DEM grid is never rewritten.
 
-This applies to absolute and relative DEMs. An absolute sample near −1917 m
-remains at its authored datum; it is not blended toward zero or another guessed
-elevation.
+The render shell closes the finite crop; it does not describe measured terrain
+outside it. The square collar extends outside the crop by a bounded width
+derived from its half-width and posting size. It continues the measured edge
+profile and one-sided edge slope, then smoothly reaches the sphere; the crop
+interior is not feathered. Each Twin derives its shell datum, posting spacing,
+and collar geometry from its own crop. No body-wide raster, download, or
+Apollo-specific identity is part of this contract.
 
-The authored data and body radius are the only inputs to the composed surface.
-The tangent-plane footprint and the globe are separate ownership regions, joined
-by the measured boundary source.
+The handoff is parameterized by the active crop's georeference, grid spacing,
+border datum, and measured boundary profile; it has no site or Twin identity
+special case. The current globe owner accepts one built crop per body. If
+multiple crops target that same body, it reports the ambiguous input and omits
+the handoff rather than choosing one by size or load order.
 
-The globe cutout projects the authored square from the site's radial datum
-(`body radius + site datum`). Its collar transitions the gnomonic coordinates to
-the body's mean radius and ends on the exact radial globe. The surface and globe
-boundaries therefore share the same angular footprint at nonzero site elevation.
-The cutout edge is split at the local surface's authored grid samples. Globe
-and terrain tiles evaluate one shared piecewise-linear height curve along that
-edge. Each terrain tile touching the square adds a perimeter strip through the
-same postings and joins it to the tile's band-limited interior; the strip stays
-fixed during geomorph and is built in the asynchronous, cached tile bake. This
-shares the native posting-scale perimeter normals between both meshes, avoiding
-the dark seam produced by coarse tile normals. It closes coarse-tile corner gaps
-without adding per-frame sampling or a shell.
-Globe tiles throughout the collar use that same handoff, even when they do not
-intersect the cutout.
+The update order keeps the simulation input separate from visual handoff work:
+USD terrain projection publishes georeferencing, celestial curvature is
+published before `TerrainSurfaceSet::Build`, and deferred commands are applied
+before the build captures its oracle inputs. The DEM-to-globe handoff,
+appearance adoption, and globe LOD run in
+`RuntimeCycleSet::Visualization`, after terrain builds and UI commands.
+Raster loading and tile mesh generation run asynchronously. Visualization keeps
+at most one keyed collar preparation per globe, polls without waiting, rejects
+stale results, and installs a current handoff. Completed globe meshes retain their stable coarse-to-fine
+commit order under per-frame count and byte budgets. Worker completion timing
+can change when a visual handoff or tile appears, but it cannot change the
+derived surface or simulation state.
+
+The globe cutout and local terrain use the same orthographic tangent chart.
+One square collar mesh is prepared asynchronously: its inner ring matches the
+measured crop boundary and its outer ring lies on the analytic sphere. Globe
+triangles are clipped against the collar's outer square with bounded edge
+sampling, independent of DEM posting density. Camera-driven globe LOD remains
+unchanged, and no tile duplicates the collar geometry. The collar is a visual
+closure only; physics and terrain queries stay bounded to the DEM crop.
+
+The visible shell radius changes with the active crop datum, while celestial
+placement, gravity, terrain queries, and physics retain the canonical body
+radius. The shell is a visualization approximation where no surrounding DEM is
+available. DEM registration, reference radius, and height units remain part of
+the geometry contract, not shader settings.
 
 ### Authoring guidance
 
-The authored DEM square is preserved through its boundary. Do not place
-scene-owned terrain content outside the measured raster unless a separate,
-authored globe/site composition provides the surface there. A non-DEM site
+The DEM asset and retained crop are preserved; a Twin needs only the cropped
+DEM used by its terrain. The exterior render collar connects its exact square
+perimeter to the global sphere without changing terrain heights in the crop.
+Do not place scene-owned terrain content
+outside the measured local raster unless a separate authored source provides
+it. A non-DEM site
 must explicitly mark its standard, ENU-aligned finite Plane with
 `lunco:terrain:surfaceRole = "flat-site"`; the same handoff then derives the
 finite footprint from `UsdGeomPlane` width/length and its authored xform. Ramps and

@@ -16,18 +16,15 @@ whole celestial bodies seen from orbit.
 >   avian heightfield colliders + big_space per-tile anchoring for local ground,
 >   plus surface/regolith detail.
 >
-> The orbit→surface bridge is `CompositeHeightSource` (in `lunco-terrain-core`):
-> the site DEM inside its exact georeferenced square, a one-posting C1 collar that
-> fades measured edge relief onto the body-curved datum, and the globe height
-> outside it. `lunco-celestial` wires the retained surface oracle into the globe
-> tile builder; no globe shell is left underneath the DEM footprint. Globe
-> collar geometry is divided into one-posting edge and corner cells, so the
-> measured boundary relief stays local instead of stretching across a coarse
-> globe cell. Handoff refinement is limited to tiles whose projected bounds
-> cross a one-posting band around the DEM square; the rest uses camera-driven
-> globe LOD. Globe detail approaches three DEM postings apart at the seam,
-> independent of camera distance. Tile selection is cached and mesh baking is
-> asynchronous, so detail is not rebuilt every frame. See
+> The local DEM owns its georeferenced square. For rendering, its border datum
+> sets the globe shell radius; celestial and physics state keep the canonical
+> body radius. The local surface oracle preserves composed DEM relief across
+> the complete crop. One asynchronously prepared visual collar starts at the
+> exact crop boundary, continues its measured edge profile, and reaches the
+> datum-aligned sphere outside the crop. Physics and terrain queries remain
+> bounded to the crop. Globe tiles cut out the collar footprint and resume on
+> that sphere with bounded edge sampling, independent of DEM posting density
+> and camera-driven globe LOD. See
 > the design narrative in
 > [`docs/architecture/terrain-substrate.md`](../../docs/architecture/terrain-substrate.md).
 

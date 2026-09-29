@@ -34,7 +34,7 @@
 //   dt() -> f64                   time:  fixed-step delta in seconds (1/60)
 //   elapsed_seconds() -> f64      time:  admitted sim seconds derived from SimTick
 //   clock_snapshot() -> map       time:  simulation and interaction clocks,
-//                                        render samples, and physics admission status
+//                                        render samples, physics clocks and holds
 //   emit(name, value)             event: fire a TelemetryEvent
 //   input_key/input_click/...     UI automation: enqueue native Bevy window
 //                                        input; compose gestures in Rhai

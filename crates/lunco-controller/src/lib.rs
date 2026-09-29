@@ -977,6 +977,10 @@ fn commit_controller_session_input(
                 sim_tick: record.effective_tick,
             });
         }
+        lunco_core_session::SessionInputPayload::ControlInputRelease { .. }
+        | lunco_core_session::SessionInputPayload::ControlInputsReleased => {
+            clear_simulated_intents(&mut simulated, commit.target());
+        }
         lunco_core_session::SessionInputPayload::PhysicalIntentFrame { .. } => {
             commands.trigger(lunco_core::RuntimeError {
                 name: "session-input-admission".to_owned(),
@@ -1403,6 +1407,10 @@ fn reset_scene_control_state(
     paths.clear();
 }
 
+fn clear_simulated_intents(intents: &mut SimulatedIntents, target: Entity) {
+    intents.0.remove(&target);
+}
+
 impl Plugin for LunCoControllerPlugin {
     fn build(&self, app: &mut App) {
         ensure_control_plugin(app);
@@ -1489,6 +1497,68 @@ impl Plugin for LunCoControllerPlugin {
         // prediction log and the host reconcile-ack no longer depend on how the
         // command was produced.
         app.add_observer(record_control_input);
+    }
+}
+
+#[cfg(test)]
+mod control_release_tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_release_clears_only_the_target_simulated_intents() {
+        let mut app = App::new();
+        app.init_resource::<SimulatedIntents>()
+            .init_resource::<lunco_core_session::PendingSessionInputs>()
+            .init_resource::<lunco_control_core::SimulationInputOrderAllocator>()
+            .insert_resource(lunco_core_runtime::SimTick(1))
+            .add_observer(commit_controller_session_input);
+        let mut scene = lunco_core::SceneTransitionCoordinator::default();
+        let path = "control-release.usda".to_owned();
+        let root_prim = "/World".to_owned();
+        scene.admit(lunco_core::SceneTransitionRequest::load(
+            path.clone(),
+            root_prim.clone(),
+        ));
+        scene.take_admitted().expect("scene request admitted");
+        let generation = scene.start(lunco_core::SceneTransition::Load { path, root_prim });
+        assert!(scene.complete(generation));
+        let scene_generation = generation.get();
+        app.insert_resource(scene);
+        let target = app.world_mut().spawn_empty().id();
+        let other = app.world_mut().spawn_empty().id();
+        let target_gid = lunco_core::GlobalEntityId::from_raw(100);
+        app.world_mut().entity_mut(target).insert(target_gid);
+        app.world_mut()
+            .entity_mut(other)
+            .insert(lunco_core::GlobalEntityId::from_raw(200));
+        let source = lunco_core_session::SessionInputProducer::DirectCommand { producer_id: 17 };
+        {
+            let mut intents = app.world_mut().resource_mut::<SimulatedIntents>();
+            intents.set(target, UserIntent::MoveForward, source, true);
+            intents.set(other, UserIntent::MoveForward, source, true);
+        }
+
+        app.world_mut().resource_scope(
+            |world, mut pending: Mut<lunco_core_session::PendingSessionInputs>| {
+                pending
+                    .admit(
+                        &mut world
+                            .resource_mut::<lunco_control_core::SimulationInputOrderAllocator>(),
+                        lunco_core_session::SessionInputProducer::RuntimeLifecycle,
+                        target_gid,
+                        scene_generation,
+                        1,
+                        lunco_core_session::SessionInputPayload::ControlInputsReleased,
+                        None,
+                    )
+                    .expect("controller release admitted");
+            },
+        );
+        lunco_core_session::commit_due_session_inputs(app.world_mut());
+
+        let intents = app.world().resource::<SimulatedIntents>();
+        assert!(!intents.is_held(target, UserIntent::MoveForward));
+        assert!(intents.is_held(other, UserIntent::MoveForward));
     }
 }
 

@@ -182,7 +182,7 @@ pub fn drain_sim_samples_to_viz(
             }
             let changed = sigs
                 .scalar_history(&signal)
-                .and_then(|history| history.samples.back())
+                .and_then(lunco_signal::ScalarHistory::back)
                 .is_none_or(|sample| deadband.changed(sample.value, *val));
             if changed {
                 sigs.push_scalar(signal, batch.time, *val);

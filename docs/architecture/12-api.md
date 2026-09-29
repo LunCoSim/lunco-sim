@@ -556,7 +556,9 @@ curl -X POST http://127.0.0.1:4101/api/commands \
 Headless controllers can use `ClaimControl` before writing ports and
 `ReleaseControlClaim` when the session relinquishes the endpoint. `AcquireControl`
 combines the same authority transition with the local avatar's `ControlLink`
-and camera binding.
+and camera binding. Each accepted release clears that controller's held inputs
+at the next fixed tick while preserving authored program setpoints and physics
+state; it does not write a stop value.
 
 ### Example: Live cosim status
 
