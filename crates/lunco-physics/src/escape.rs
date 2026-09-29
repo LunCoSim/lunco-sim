@@ -145,7 +145,7 @@ pub struct PhysicsObjectPaused;
 pub fn pause_physics_members<F: bevy::ecs::query::QueryFilter>(
     members: &[Entity],
     joint_links: &Query<(Entity, &crate::PhysicsJointLink), F>,
-    colliders: &Query<(Entity, &ColliderOf)>,
+    colliders: &Query<(Entity, Option<&ColliderOf>), With<Collider>>,
     commands: &mut Commands,
 ) {
     let member_set: EntityHashSet = members.iter().copied().collect();
@@ -158,7 +158,11 @@ pub fn pause_physics_members<F: bevy::ecs::query::QueryFilter>(
     joints.sort_unstable_by_key(|entity| entity.to_bits());
     let mut owned_colliders = colliders
         .iter()
-        .filter_map(|(collider, owner)| member_set.contains(&owner.body).then_some(collider))
+        .filter_map(|(collider, owner)| {
+            (member_set.contains(&collider)
+                || owner.is_some_and(|owner| member_set.contains(&owner.body)))
+            .then_some(collider)
+        })
         .collect::<Vec<_>>();
     owned_colliders.sort_unstable_by_key(|entity| entity.to_bits());
     let mut bodies = members.to_vec();
@@ -338,7 +342,7 @@ fn pause_dynamic_object(
     seed: Entity,
     body_modes: &Query<&RigidBody>,
     joint_links: &Query<(Entity, &crate::PhysicsJointLink), Without<JointDisabled>>,
-    colliders: &Query<(Entity, &ColliderOf)>,
+    colliders: &Query<(Entity, Option<&ColliderOf>), With<Collider>>,
     reported: &mut ReportedEscapes,
     commands: &mut Commands,
 ) -> usize {
@@ -485,7 +489,7 @@ fn report_escaped_bodies(
     mut commands: Commands,
     body_modes: Query<&RigidBody>,
     joint_links: Query<(Entity, &crate::PhysicsJointLink), Without<JointDisabled>>,
-    colliders: Query<(Entity, &ColliderOf)>,
+    colliders: Query<(Entity, Option<&ColliderOf>), With<Collider>>,
     // Changed position or velocity is the query-level activity filter: avian
     // has no per-variant marker component (`RigidBody` is one enum component),
     // so "dynamic only" cannot be a `With<>` filter. The solver writes every

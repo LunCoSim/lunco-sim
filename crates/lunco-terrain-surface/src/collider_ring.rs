@@ -1776,7 +1776,7 @@ pub(crate) struct InitialPhysicsLifecycle<'w, 's> {
         ),
     >,
     joint_links: Query<'w, 's, (Entity, &'static lunco_physics::PhysicsJointLink)>,
-    colliders: Query<'w, 's, (Entity, &'static ColliderOf)>,
+    colliders: Query<'w, 's, (Entity, Option<&'static ColliderOf>), With<Collider>>,
 }
 
 /// Retire readiness markers and disable a complete articulated body set after
@@ -1786,7 +1786,7 @@ fn pause_initialization_assembly(
     members: &[Entity],
     penetration_m: f64,
     joint_links: &Query<(Entity, &lunco_physics::PhysicsJointLink)>,
-    colliders: &Query<(Entity, &ColliderOf)>,
+    colliders: &Query<(Entity, Option<&ColliderOf>), With<Collider>>,
     commands: &mut Commands,
 ) {
     lunco_physics::pause_physics_members(members, joint_links, colliders, commands);
@@ -1814,7 +1814,7 @@ fn resolve_initialization_penetration(
     penetration_m: f64,
     coordinator: Option<&lunco_core::SceneTransitionCoordinator>,
     joint_links: &Query<(Entity, &lunco_physics::PhysicsJointLink)>,
-    colliders: &Query<(Entity, &ColliderOf)>,
+    colliders: &Query<(Entity, Option<&ColliderOf>), With<Collider>>,
     commands: &mut Commands,
     findings: &mut Vec<lunco_core::RuntimeDiagnostic>,
 ) {

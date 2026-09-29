@@ -364,7 +364,8 @@ When a Twin needs to explain a handoff or admission failure, the generic
 `QueryPhysicsState { id }` provider exposes body mode, linear/angular velocity,
 computed mass/centre-of-mass/principal inertia, sleeping/readiness/admission
 markers, initialization pending/invalid state, pose-seeded and pose-authoritative
-markers, collider and disabled state, plus any published support footprint. It is
+markers, collider presence and explicit collider/body disable state, plus any
+published support footprint. It is
 a read-only diagnostic companion to `QueryEntity` and `QueryUsdPrim`; it does
 not encode rover or lander policy and can be consumed by Rhai, HTTP, or MCP.
 Authored mass/inertia/centre values and their Avian override markers are reported

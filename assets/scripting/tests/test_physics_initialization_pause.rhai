@@ -10,6 +10,7 @@ const JOINT_TEST_BODY_PATH = "/SandboxScene/JointTestB";
 let fails = [];
 let red_balloon_id = find(RED_BALLOON_PATH);
 let red_balloon = query("QueryPhysicsState", #{ id: red_balloon_id });
+let red_balloon_prim = query("QueryUsdPrim", #{ path: RED_BALLOON_PATH, attrs: [] });
 let skid_battery_id = find_path(SKID_BATTERY_PATH);
 let skid_battery = query("QueryPhysicsState", #{ id: skid_battery_id });
 let skid_battery_prim = query("QueryUsdPrim", #{ path: SKID_BATTERY_PATH, attrs: [] });
@@ -21,6 +22,7 @@ let diagnostics = query("RuntimeDiagnostics", #{});
 let physics = query("PhysicsPerformance", #{});
 let readiness = query("GetReadiness", #{});
 
+let red_balloon_pause_diagnostic = false;
 let skid_battery_pause_diagnostic = false;
 let paused_subjects = [];
 let physics_initialization_errors = 0;
@@ -33,6 +35,9 @@ if diagnostics != () && diagnostics.ok != false {
         if finding.code == "physics-initialization-paused"
             && finding.severity == "warning" {
             paused_subjects.push(finding.subject);
+            if finding.subject == RED_BALLOON_PATH {
+                red_balloon_pause_diagnostic = true;
+            }
             if finding.subject == SKID_BATTERY_PATH {
                 skid_battery_pause_diagnostic = true;
             }
@@ -43,11 +48,32 @@ if diagnostics != () && diagnostics.ok != false {
 fails.push(t_true(to_int(red_balloon_id) >= 0 && red_balloon != () && red_balloon.ok != false,
     "the authored RedBalloon body is queryable"));
 fails.push(t_eq(red_balloon.physics_initialization_pending, false,
-    "the supported RedBalloon no longer blocks physics admission"));
-fails.push(t_eq(red_balloon.physics_initialization_paused, false,
-    "a supported RedBalloon is not paused by the penetration policy"));
-fails.push(t_eq(red_balloon.physics_state_ready, true,
-    "the supported RedBalloon remains admitted while invalid bodies are paused"));
+    "RedBalloon no longer blocks physics admission"));
+fails.push(t_eq(red_balloon.physics_initialization_paused, true,
+    "the penetrating RedBalloon is paused by the initialization policy"));
+fails.push(t_eq(red_balloon.physics_initialization_invalid, true,
+    "RedBalloon remains marked as an invalid authored initial state"));
+fails.push(t_eq(red_balloon.physics_object_paused, true,
+    "the reusable physics object pause covers RedBalloon"));
+fails.push(t_true(red_balloon.physics_initialization_penetration_m > 0.0,
+    "RedBalloon retains its measured terrain penetration"));
+fails.push(t_eq(red_balloon.physics_state_pending, false,
+    "RedBalloon has left the world readiness gate"));
+fails.push(t_eq(red_balloon.rigid_body_disabled, true,
+    "RedBalloon remains disabled while paused"));
+fails.push(t_eq(red_balloon.collider_disabled, true,
+    "the RedBalloon body collider is disabled while paused"));
+fails.push(t_true(red_balloon_prim != () && red_balloon_prim.ok != false
+        && red_balloon_prim.position_frame == "active_physics",
+    "the paused RedBalloon keeps a queryable active-frame pose"));
+fails.push(t_near(red_balloon_prim.world_position[0], 10.0, 0.001,
+    "pause preserves the authored RedBalloon X position"));
+fails.push(t_near(red_balloon_prim.world_position[1], 5.0, 0.001,
+    "pause preserves the authored RedBalloon height instead of moving it up"));
+fails.push(t_near(red_balloon_prim.world_position[2], 0.0, 0.001,
+    "pause preserves the authored RedBalloon Z position"));
+fails.push(t_true(red_balloon_pause_diagnostic,
+    "the paused RedBalloon remains visible in runtime diagnostics"));
 fails.push(t_true(skid_battery != () && skid_battery.ok != false,
     "the authored Skid battery body is queryable"));
 fails.push(t_eq(skid_battery.physics_initialization_pending, false,
@@ -62,6 +88,8 @@ fails.push(t_eq(skid_battery.physics_state_pending, false,
     "the Skid battery has left the world readiness gate"));
 fails.push(t_eq(skid_battery.rigid_body_disabled, true,
     "the Skid battery remains disabled while paused"));
+fails.push(t_eq(skid_battery.collider_disabled, true,
+    "the Skid battery body collider is disabled while paused"));
 fails.push(t_true(skid_battery_pause_diagnostic,
     "the paused Skid battery remains visible in runtime diagnostics"));
 fails.push(t_true(skid_battery_prim != () && skid_battery_prim.ok != false
@@ -84,7 +112,8 @@ for subject in paused_subjects {
             && body.physics_initialization_pending == false
             && body.physics_admission_requested == false
             && body.physics_state_pending == false
-            && body.rigid_body_disabled == true,
+            && body.rigid_body_disabled == true
+            && body.collider_disabled == true,
         "each policy-paused subject is disabled and retired from readiness: " + subject));
 }
 fails.push(t_true(skid_physical != () && skid_physical.ok != false

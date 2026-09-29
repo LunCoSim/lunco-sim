@@ -7,9 +7,9 @@
 //! public query path without reaching into private ECS components.
 
 use avian3d::prelude::{
-    AngularInertia, AngularVelocity, CenterOfMass, ComputedAngularInertia, ComputedCenterOfMass,
-    ComputedMass, LinearVelocity, Mass, NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass,
-    RigidBody, Sleeping,
+    AngularInertia, AngularVelocity, CenterOfMass, ColliderDisabled, ComputedAngularInertia,
+    ComputedCenterOfMass, ComputedMass, LinearVelocity, Mass, NoAutoAngularInertia,
+    NoAutoCenterOfMass, NoAutoMass, RigidBody, Sleeping,
 };
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry, SimulationQueryReadScope};
@@ -227,6 +227,7 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             .get::<avian3d::prelude::RigidBodyDisabled>(entity)
             .is_some();
         let collider = world.get::<avian3d::prelude::Collider>(entity).is_some();
+        let collider_disabled = world.get::<ColliderDisabled>(entity).is_some();
         let authored_mass = world.get::<Mass>(entity);
         let authored_inertia = world.get::<AngularInertia>(entity);
         let authored_center_of_mass = world.get::<CenterOfMass>(entity);
@@ -393,6 +394,7 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             "physics_pose_authoritative": pose_authoritative,
             "rigid_body_disabled": disabled,
             "collider_present": collider,
+            "collider_disabled": collider_disabled,
             "authored_mass_kg": authored_mass.map(|mass| mass.0 as f64),
             "mass_override_active": world.get::<NoAutoMass>(entity).is_some(),
             "authored_inertia_principal_kgm2": authored_inertia.map(|inertia| {
