@@ -9,6 +9,7 @@ pub(super) fn render_layout(
     world: &mut World,
     theme: &lunco_theme::Theme,
     menus: &WorkbenchMenuRegistry,
+    direct_menu_labels: &[String],
 ) {
     // ── Clean capture ───────────────────────────────────────────────
     // A frame the offline recorder is capturing is a FILM frame: the whole
@@ -252,26 +253,13 @@ pub(super) fn render_layout(
             // float over our content because of `fullsize_content_view`.
             #[cfg(target_os = "macos")]
             ui.add_space(78.0);
-            let mut direct_menu_labels = vec![
-                "File".to_owned(),
-                "Edit".to_owned(),
-                "View".to_owned(),
-            ];
-            direct_menu_labels.extend(menus.custom_menus.iter().map(|(name, _)| name.clone()));
-            direct_menu_labels.extend(menus.scripted_menu_labels().map(str::to_owned));
-            direct_menu_labels.extend([
-                "Settings".to_owned(),
-                "Help".to_owned(),
-                "Time".to_owned(),
-            ]);
-            let mut measured_labels = std::collections::HashSet::new();
-            direct_menu_labels.retain(|label| measured_labels.insert(label.clone()));
+            let perspective_tabs = perspective_switcher_tabs(layout);
             let direct_menu_width =
                 measured_menu_row_width(ui, direct_menu_labels.iter().map(String::as_str));
             let menu_mode = top_menu_mode(
                 ui.available_width(),
                 direct_menu_width,
-                measured_titlebar_right_width(ui, layout, titlebar_control_size),
+                measured_titlebar_right_width(ui, &perspective_tabs, titlebar_control_size),
             );
             let r_file = ui.menu_button("File", |ui| {
                 // Active doc gates Save / Save As / Close — there's
@@ -794,27 +782,26 @@ pub(super) fn render_layout(
                     }
                     ui.separator();
                 }
-                let tabs = perspective_switcher_tabs(layout);
-                if tabs.len() > 1 {
-                    for (id, title, is_active) in tabs {
-                        let mut label = egui::RichText::new(title.as_str()).color(if is_active {
+                if perspective_tabs.len() > 1 {
+                    for (id, title, is_active) in &perspective_tabs {
+                        let mut label = egui::RichText::new(title.as_str()).color(if *is_active {
                             theme.colors.text
                         } else {
                             theme.colors.subtext1
                         });
-                        if is_active {
+                        if *is_active {
                             label = label.strong();
                         }
                         let mut button = egui::Button::new(label)
                             .corner_radius(theme.rounding.button)
-                            .selected(is_active)
+                            .selected(*is_active)
                             .stroke(egui::Stroke::NONE);
-                        if is_active {
+                        if *is_active {
                             button = button.fill(theme.tokens.surface_raised);
                         }
                         let response = ui.add(button);
-                        anchor_rects.push((perspective_help_anchor(id), response.rect));
-                        if response.clicked() && !is_active {
+                        anchor_rects.push((perspective_help_anchor(*id), response.rect));
+                        if response.clicked() && !*is_active {
                             world
                                 .resource_mut::<PendingLayoutRequests>()
                                 .0

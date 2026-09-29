@@ -253,6 +253,18 @@ can use the same state without making the reusable package depend on document
 resolution or Modelica setup. The host resolves its current document to a
 `TwinId` and calls the cache producer; the package never guesses that scope.
 
+The experiment view model also retains the sorted variable groups and each
+series' positivity summary. The plot widget converts immutable experiment or
+overlay samples to shared `PlotPoint` buffers on the async-compute pool and
+reuses them while the source identity, log-Y mode, and display width stay
+unchanged. Long time-series are min-max decimated to about one sample per
+logical display point before drawing, preserving narrow peaks. Cached
+full-data bounds keep egui's auto-fit pass from rescanning every sample on
+every repaint. While a replacement buffer builds for the same stable series
+and log-Y mode, the plot keeps drawing its last completed buffer. Plot items
+borrow those buffers; they do not clone the full sample vectors per frame.
+Screen-space line geometry is still rebuilt for display.
+
 ## Future enhancements
 
 - Disk persistence of experiments or definitions

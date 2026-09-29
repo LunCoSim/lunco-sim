@@ -293,6 +293,7 @@ fn collect_live_extras(
                 )
             });
             Some(lunco_viz::multi_series_plot::MultiSeriesOverlay {
+                cache_key: egui::Id::new(("live_overlay", &b.source)),
                 label,
                 color,
                 points,

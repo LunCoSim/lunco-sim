@@ -31,6 +31,7 @@ pub(crate) fn render_workbench(
     world: &mut World,
     state: &mut bevy::ecs::system::SystemState<(EguiContexts, Res<WorkbenchMenuRegistry>)>,
     mut menu_snapshot: Local<Option<WorkbenchMenuRegistry>>,
+    mut direct_menu_labels: Local<Vec<String>>,
 ) {
     let (ctx, menu_registry_changed) = {
         let Ok((mut contexts, menus)) = state.get_mut(world) else {
@@ -43,7 +44,9 @@ pub(crate) fn render_workbench(
         (ctx, menus.is_changed())
     };
     if menu_registry_changed || menu_snapshot.is_none() {
-        *menu_snapshot = Some(world.resource::<WorkbenchMenuRegistry>().clone());
+        let snapshot = world.resource::<WorkbenchMenuRegistry>().clone();
+        *direct_menu_labels = direct_menu_width_labels(&snapshot);
+        *menu_snapshot = Some(snapshot);
     }
 
     // egui's expansion diagnostics are developer overlays, not workbench UI.
@@ -156,7 +159,14 @@ pub(crate) fn render_workbench(
         .as_ref()
         .expect("the menu snapshot is initialized before the render pass");
     world.resource_scope(|world, mut layout: Mut<WorkbenchLayout>| {
-        layout_render::render_layout(&ctx, &mut layout, world, &theme, &menus);
+        layout_render::render_layout(
+            &ctx,
+            &mut layout,
+            world,
+            &theme,
+            &menus,
+            &direct_menu_labels,
+        );
     });
 
     let deferred = world
@@ -165,6 +175,26 @@ pub(crate) fn render_workbench(
     deferred.apply(world);
     // No scene-pointer gate is computed here: scene picking is bevy_picking-driven
     // and egui occlusion is handled by bevy_egui's picking backend.
+}
+
+/// Build the unique top-level labels used to measure the responsive menu row.
+/// The registry snapshot is stable until its owner changes, so this projection
+/// is prepared with that snapshot instead of allocating a vector and set on
+/// every egui pass.
+fn direct_menu_width_labels(menus: &WorkbenchMenuRegistry) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut labels = Vec::with_capacity(6 + menus.custom_menus.len() + menus.scripted_menus.len());
+    for label in ["File", "Edit", "View"]
+        .into_iter()
+        .chain(menus.custom_menus.iter().map(|(name, _)| name.as_str()))
+        .chain(menus.scripted_menu_labels())
+        .chain(["Settings", "Help", "Time"])
+    {
+        if seen.insert(label) {
+            labels.push(label.to_owned());
+        }
+    }
+    labels
 }
 
 /// Return the screen rect occupied by the dock leaves containing any panel in
@@ -931,40 +961,19 @@ pub(crate) fn render_custom_menus(
     menus: &WorkbenchMenuRegistry,
     mut anchors: Option<&mut Vec<(String, egui::Rect)>>,
 ) {
+    let _span = bevy::log::info_span!(
+        "workbench_custom_menus_render",
+        custom_menu_count = menus.custom_menus.len(),
+        scripted_menu_count = menus.scripted_menus.len(),
+    )
+    .entered();
     for (name, cb) in &menus.custom_menus {
-        let mut contributions = menus
-            .scripted_menus
-            .iter()
-            .filter(|contribution| contribution.label == *name)
-            .collect::<Vec<_>>();
-        contributions.sort_by(|left, right| left.provider.cmp(&right.provider));
         let response = ui.menu_button(name, |ui| {
             run_menu_callback(ui, world, cb.as_ref());
-            for contribution in &contributions {
-                run_menu_callback(ui, world, contribution.callback.as_ref());
-            }
-        });
-        if let Some(anchors) = anchors.as_deref_mut() {
-            anchors.push((name.clone(), response.response.rect));
-        }
-    }
-    let mut rendered_script_labels = Vec::new();
-    for menu in &menus.scripted_menus {
-        if rendered_script_labels.contains(&menu.label)
-            || menus
-                .custom_menus
-                .iter()
-                .any(|(name, _)| name == &menu.label)
-        {
-            continue;
-        }
-        rendered_script_labels.push(menu.label.clone());
-        let label = menu.label.clone();
-        let response = ui.menu_button(&label, |ui| {
             let mut contributions = menus
                 .scripted_menus
                 .iter()
-                .filter(|contribution| contribution.label == label)
+                .filter(|contribution| contribution.label == *name)
                 .collect::<Vec<_>>();
             contributions.sort_by(|left, right| left.provider.cmp(&right.provider));
             for contribution in contributions {
@@ -972,7 +981,33 @@ pub(crate) fn render_custom_menus(
             }
         });
         if let Some(anchors) = anchors.as_deref_mut() {
-            anchors.push((label, response.response.rect));
+            anchors.push((name.clone(), response.response.rect));
+        }
+    }
+    for (index, menu) in menus.scripted_menus.iter().enumerate() {
+        if menus
+            .custom_menus
+            .iter()
+            .any(|(name, _)| name == &menu.label)
+            || menus.scripted_menus[..index]
+                .iter()
+                .any(|earlier| earlier.label == menu.label)
+        {
+            continue;
+        }
+        let response = ui.menu_button(&menu.label, |ui| {
+            let mut contributions = menus
+                .scripted_menus
+                .iter()
+                .filter(|contribution| contribution.label == menu.label)
+                .collect::<Vec<_>>();
+            contributions.sort_by(|left, right| left.provider.cmp(&right.provider));
+            for contribution in contributions {
+                run_menu_callback(ui, world, contribution.callback.as_ref());
+            }
+        });
+        if let Some(anchors) = anchors.as_deref_mut() {
+            anchors.push((menu.label.clone(), response.response.rect));
         }
     }
 }
@@ -1000,12 +1035,12 @@ pub(crate) fn measured_menu_row_width<'a>(
     ui: &egui::Ui,
     labels: impl IntoIterator<Item = &'a str>,
 ) -> f32 {
-    let labels: Vec<&str> = labels.into_iter().collect();
-    let buttons = labels
-        .iter()
-        .map(|label| measured_menu_button_width(ui, label))
-        .sum::<f32>();
-    buttons + ui.spacing().item_spacing.x * labels.len().saturating_sub(1) as f32
+    let (buttons, count) = labels
+        .into_iter()
+        .fold((0.0, 0usize), |(buttons, count), label| {
+            (buttons + measured_menu_button_width(ui, label), count + 1)
+        });
+    buttons + ui.spacing().item_spacing.x * count.saturating_sub(1) as f32
 }
 
 pub(crate) fn top_menu_mode(
@@ -1022,10 +1057,9 @@ pub(crate) fn top_menu_mode(
 
 pub(crate) fn measured_titlebar_right_width(
     ui: &egui::Ui,
-    layout: &WorkbenchLayout,
+    tabs: &[(PerspectiveId, String, bool)],
     titlebar_control_size: egui::Vec2,
 ) -> f32 {
-    let tabs = perspective_switcher_tabs(layout);
     let tab_width = measured_menu_row_width(ui, tabs.iter().map(|(_, title, _)| title.as_str()));
     let transport_width = titlebar_control_size.x;
     #[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]

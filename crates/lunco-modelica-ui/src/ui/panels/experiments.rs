@@ -1653,7 +1653,9 @@ fn render_experiments_plot_inner(
                     // Shared samples are precomputed in `ExperimentsViewModel`
                     // (CQ-207) — a pointer-bump clone, not a per-frame re-zip.
                     // Absence means this run has no data for `var`.
-                    let Some(pts) = exp_vm.and_then(|vm| vm.points_for(exp.id, var)) else {
+                    let Some((pts, all_positive)) =
+                        exp_vm.and_then(|vm| vm.series_for(exp.id, var))
+                    else {
                         continue;
                     };
                     let unit = units.get(var).cloned();
@@ -1692,9 +1694,11 @@ fn render_experiments_plot_inner(
                         (palette_color(v_idx), exp.color_hint % 4)
                     };
                     series.push(MultiSeriesLine {
+                        cache_key: egui::Id::new(("experiment_series", exp.id, var)),
                         label,
                         color: egui::Color32::from_rgb(color.0, color.1, color.2),
                         points: pts,
+                        all_positive,
                         style: match style_idx {
                             0 => MultiSeriesStyle::Solid,
                             1 => MultiSeriesStyle::Dashed,
@@ -1715,13 +1719,11 @@ fn render_experiments_plot_inner(
         // need to hunt the Telemetry panel just to swap out a series.
         // Renders even when nothing is plotted yet so a fresh run lands
         // with an obvious "tick a chip" affordance.
-        // The variable catalog is precomputed in `ExperimentsViewModel`
-        // (CQ-207) — read it instead of re-walking every run's series keys
-        // each frame. Cloned (a small set of names) so the world is free for
-        // the picker's mutations below.
-        let all_vars: std::collections::BTreeSet<String> = ctx
+        // The variable groups are immutable shared view-model data; painting
+        // does not clone the full catalog or regroup names every frame.
+        let variable_catalog = ctx
             .resource::<ExperimentsViewModel>()
-            .map(ExperimentsViewModel::variables)
+            .map(ExperimentsViewModel::variable_catalog)
             .unwrap_or_default();
         // Variable picker — a compact Dymola / OMEdit-style component tree
         // in a persistent popup. Variables group by their first dotted
@@ -1760,15 +1762,6 @@ fn render_experiments_plot_inner(
         // header rendered above this body, so they stay reachable in
         // every state including the pure-live LinePlot mode.
         let var_count = picked_vars.len();
-        let mut groups: std::collections::BTreeMap<String, Vec<String>> =
-            std::collections::BTreeMap::new();
-        for v in &all_vars {
-            let (head, tail) = match v.split_once('.') {
-                Some((h, t)) => (h.to_string(), t.to_string()),
-                None => (String::new(), v.clone()),
-            };
-            groups.entry(head).or_default().push(tail);
-        }
         // Current log-Y state for the inline toggle button on this row.
         // Reflects the stored value; the auto-default (mixed units) is
         // persisted further down, so it shows pressed from the next frame.
@@ -1789,8 +1782,8 @@ fn render_experiments_plot_inner(
             );
             // The component tree stays open while groups unfold and leaves
             // are selected; only a click outside or Escape closes it.
-            if !groups.is_empty() {
-                let total_vars = all_vars.len();
+            if !variable_catalog.is_empty() {
+                let total_vars = variable_catalog.len();
                 let variable_button =
                     ui.button(format!("▾ Variables {}/{}", picked_vars.len(), total_vars));
                 egui::Popup::menu(&variable_button)
@@ -1826,7 +1819,7 @@ fn render_experiments_plot_inner(
                             // right edge with no dead space beside it.
                             .auto_shrink([false, true])
                             .show(ui, |ui| {
-                                for (head, tails) in &groups {
+                                for (head, tails) in variable_catalog.groups() {
                                     // Filter leaves; hide a group entirely
                                     // when nothing under it matches.
                                     let matching: Vec<&String> = tails
@@ -2080,8 +2073,7 @@ fn render_experiments_plot_inner(
         // when it's SAFE — every visible value strictly positive, so log-Y
         // drops nothing — and only until the user toggles it themselves.
         let mixed_units = shared_unit.is_none() && !series.is_empty() && picked_vars.len() > 1;
-        let all_positive =
-            !series.is_empty() && series.iter().all(|s| s.points.iter().all(|p| p[1] > 0.0));
+        let all_positive = !series.is_empty() && series.iter().all(|s| s.all_positive);
         let (stored_log_y, log_y_user_set) = states
             .by_viz
             .get(&viz_id)

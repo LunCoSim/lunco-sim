@@ -4,8 +4,192 @@
 //! module owns only egui plot policy: legends, line styles, log-Y rendering,
 //! hover text, fit requests, overlays, and the optional scrub cursor.
 
+use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use egui;
-use egui_plot::{Legend, Line, LineStyle, Plot, PlotPoints, VLine};
+use egui_plot::{
+    Legend, Line, LineStyle, Plot, PlotBounds, PlotItem, PlotPoint, PlotPoints, PlotUi, VLine,
+};
+use std::sync::{Arc, Mutex};
+
+struct CachedPlotSeries {
+    points: Arc<Vec<PlotPoint>>,
+    bounds: PlotBounds,
+}
+
+#[derive(Default)]
+struct MultiSeriesPointsCache {
+    requested: Option<(egui::Id, Arc<Vec<[f64; 2]>>, bool, u32)>,
+    displayed: Option<(
+        egui::Id,
+        Arc<Vec<[f64; 2]>>,
+        bool,
+        u32,
+        Arc<CachedPlotSeries>,
+    )>,
+    build: Option<
+        Task<(
+            egui::Id,
+            Arc<Vec<[f64; 2]>>,
+            bool,
+            u32,
+            Arc<CachedPlotSeries>,
+        )>,
+    >,
+}
+
+#[derive(Default)]
+struct MultiSeriesPlotCache {
+    items: Vec<MultiSeriesPointsCache>,
+}
+
+/// Retain the line's data bounds with its immutable plot points. egui_plot
+/// otherwise walks every point again on every frame while auto-fitting axes.
+struct CachedBoundsLine<'a> {
+    line: Line<'a>,
+    bounds: PlotBounds,
+}
+
+impl egui_plot::PlotItem for CachedBoundsLine<'_> {
+    fn shapes(
+        &self,
+        ui: &egui::Ui,
+        transform: &egui_plot::PlotTransform,
+        shapes: &mut Vec<egui::Shape>,
+    ) {
+        self.line.shapes(ui, transform, shapes);
+    }
+
+    fn initialize(&mut self, x_range: std::ops::RangeInclusive<f64>) {
+        self.line.initialize(x_range);
+    }
+
+    fn color(&self) -> egui::Color32 {
+        PlotItem::color(&self.line)
+    }
+
+    fn geometry(&self) -> egui_plot::PlotGeometry<'_> {
+        self.line.geometry()
+    }
+
+    fn bounds(&self) -> PlotBounds {
+        self.bounds
+    }
+
+    fn base(&self) -> &egui_plot::PlotItemBase {
+        self.line.base()
+    }
+
+    fn base_mut(&mut self) -> &mut egui_plot::PlotItemBase {
+        self.line.base_mut()
+    }
+}
+
+pub(crate) fn add_cached_line<'a>(plot_ui: &mut PlotUi<'a>, line: Line<'a>, bounds: PlotBounds) {
+    plot_ui.add(CachedBoundsLine { line, bounds });
+}
+
+fn cached_plot_points(
+    ctx: &egui::Context,
+    cache: &mut MultiSeriesPointsCache,
+    identity: egui::Id,
+    source: &Arc<Vec<[f64; 2]>>,
+    log_y: bool,
+    pixel_width: u32,
+) -> Option<Arc<CachedPlotSeries>> {
+    let completed = cache
+        .build
+        .as_mut()
+        .and_then(|task| future::block_on(future::poll_once(task)));
+    if let Some((built_identity, built_source, built_log_y, built_pixel_width, points)) = completed
+    {
+        cache.build = None;
+        if cache.requested.as_ref().is_some_and(
+            |(requested_identity, requested, requested_log_y, requested_pixel_width)| {
+                *requested_identity == built_identity
+                    && Arc::ptr_eq(requested, &built_source)
+                    && *requested_log_y == built_log_y
+                    && *requested_pixel_width == built_pixel_width
+            },
+        ) {
+            cache.displayed = Some((
+                built_identity,
+                built_source,
+                built_log_y,
+                built_pixel_width,
+                points,
+            ));
+        }
+    }
+
+    if !cache.requested.as_ref().is_some_and(
+        |(requested_identity, requested, requested_log_y, requested_pixel_width)| {
+            *requested_identity == identity
+                && Arc::ptr_eq(requested, source)
+                && *requested_log_y == log_y
+                && *requested_pixel_width == pixel_width
+        },
+    ) {
+        cache.requested = Some((identity, Arc::clone(source), log_y, pixel_width));
+    }
+
+    let displayed_matches = cache.displayed.as_ref().is_some_and(
+        |(displayed_identity, displayed, displayed_log_y, displayed_pixel_width, _)| {
+            *displayed_identity == identity
+                && Arc::ptr_eq(displayed, source)
+                && *displayed_log_y == log_y
+                && *displayed_pixel_width == pixel_width
+        },
+    );
+    if !displayed_matches && cache.build.is_none() {
+        let build_identity = identity;
+        let source = Arc::clone(source);
+        let build_pixel_width = pixel_width;
+        cache.build = Some(AsyncComputeTaskPool::get().spawn(async move {
+            let mut samples: Vec<[f64; 2]> = source
+                .iter()
+                .filter_map(|[x, y]| {
+                    let y = if log_y {
+                        (*y > 0.0).then(|| y.log10())?
+                    } else {
+                        *y
+                    };
+                    Some([*x, y])
+                })
+                .collect();
+            let mut bounds = PlotBounds::NOTHING;
+            for sample in &samples {
+                bounds.extend_with(&PlotPoint::from(*sample));
+            }
+            if let Some(decimated) =
+                crate::plot_fmt::decimate_min_max(&samples, build_pixel_width as f32 * 0.5)
+            {
+                samples = decimated;
+            }
+            let points: Vec<PlotPoint> = samples.into_iter().map(PlotPoint::from).collect();
+            (
+                build_identity,
+                source,
+                log_y,
+                build_pixel_width,
+                Arc::new(CachedPlotSeries {
+                    points: Arc::new(points),
+                    bounds,
+                }),
+            )
+        }));
+    }
+    if cache.build.is_some() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
+
+    cache
+        .displayed
+        .as_ref()
+        .filter(|(displayed_identity, _, displayed_log_y, _, _)| {
+            *displayed_identity == identity && *displayed_log_y == log_y
+        })
+        .map(|(_, _, _, _, points)| Arc::clone(points))
+}
 
 /// Stroke style for a multi-series curve.
 #[derive(Debug, Clone, Copy, Default)]
@@ -23,18 +207,24 @@ pub enum MultiSeriesStyle {
 
 /// A labelled trajectory prepared by a domain adapter.
 pub struct MultiSeriesLine {
+    /// Stable identity across history updates and display-width rebuilds.
+    pub cache_key: egui::Id,
     /// Legend and hover label.
     pub label: String,
     /// Curve colour.
     pub color: egui::Color32,
     /// Shared time-value samples.
     pub points: std::sync::Arc<Vec<[f64; 2]>>,
+    /// Whether every plotted Y sample is strictly positive.
+    pub all_positive: bool,
     /// Stroke used to distinguish related curves.
     pub style: MultiSeriesStyle,
 }
 
 /// An additional trajectory overlaid on the completed-run curves.
 pub struct MultiSeriesOverlay {
+    /// Stable identity across history updates and display-width rebuilds.
+    pub cache_key: egui::Id,
     /// Legend and hover label.
     pub label: String,
     /// Curve colour.
@@ -83,6 +273,24 @@ pub fn render_multi_series_plot(
     overlays: &[MultiSeriesOverlay],
     options: &MultiSeriesPlotOptions,
 ) -> Option<f64> {
+    type SharedPlotCache = Arc<Mutex<MultiSeriesPlotCache>>;
+    let cache_id = options.id.with("multi_series_plot_points");
+    let cache: SharedPlotCache = ui.ctx().data_mut(|data| {
+        if let Some(existing) = data.get_temp::<SharedPlotCache>(cache_id) {
+            existing
+        } else {
+            let fresh = SharedPlotCache::default();
+            data.insert_temp(cache_id, Arc::clone(&fresh));
+            fresh
+        }
+    });
+    let mut plot_cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let item_count = series.len() + overlays.len();
+    plot_cache.items.resize_with(item_count, Default::default);
+    plot_cache.items.truncate(item_count);
+
     let mut plot = Plot::new(options.id)
         .legend(Legend::default())
         .allow_drag(false)
@@ -107,34 +315,61 @@ pub fn render_multi_series_plot(
         plot = plot.y_axis_label(label.to_owned());
     }
 
-    let mut clicked_x = None;
-    plot.show(ui, |plot_ui| {
-        for line in series {
-            let points = if options.log_y {
-                crate::plot_fmt::log_y_points(line.points.as_slice())
-            } else {
-                line.points.as_ref().clone()
-            };
+    let egui_ctx = ui.ctx().clone();
+    let pixel_width = ui.available_width().max(1.0) as u32;
+    let plotted_series: Vec<_> = series
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let points = cached_plot_points(
+                &egui_ctx,
+                &mut plot_cache.items[index],
+                line.cache_key,
+                &line.points,
+                options.log_y,
+                pixel_width,
+            )?;
             let style = match line.style {
                 MultiSeriesStyle::Solid => LineStyle::Solid,
                 MultiSeriesStyle::Dashed => LineStyle::dashed_dense(),
                 MultiSeriesStyle::Dotted => LineStyle::dotted_dense(),
                 MultiSeriesStyle::DashDot => LineStyle::dashed_loose(),
             };
-            plot_ui.line(
-                Line::new(line.label.clone(), PlotPoints::from(points))
-                    .color(line.color)
-                    .style(style),
+            Some((line.label.clone(), line.color, style, points))
+        })
+        .collect();
+    let plotted_overlays: Vec<_> = overlays
+        .iter()
+        .enumerate()
+        .filter_map(|(index, overlay)| {
+            let points = cached_plot_points(
+                &egui_ctx,
+                &mut plot_cache.items[series.len() + index],
+                overlay.cache_key,
+                &overlay.points,
+                options.log_y,
+                pixel_width,
+            )?;
+            Some((overlay.label.clone(), overlay.color, points))
+        })
+        .collect();
+    drop(plot_cache);
+    let mut clicked_x = None;
+    plot.show(ui, |plot_ui| {
+        for (label, color, style, points) in &plotted_series {
+            add_cached_line(
+                plot_ui,
+                Line::new(label.clone(), PlotPoints::from(points.points.as_slice()))
+                    .color(*color)
+                    .style(*style),
+                points.bounds,
             );
         }
-        for overlay in overlays {
-            let points = if options.log_y {
-                crate::plot_fmt::log_y_points(overlay.points.as_slice())
-            } else {
-                overlay.points.as_ref().clone()
-            };
-            plot_ui.line(
-                Line::new(overlay.label.clone(), PlotPoints::from(points)).color(overlay.color),
+        for (label, color, points) in &plotted_overlays {
+            add_cached_line(
+                plot_ui,
+                Line::new(label.clone(), PlotPoints::from(points.points.as_slice())).color(*color),
+                points.bounds,
             );
         }
         if let Some(time) = options.scrub_time {

@@ -294,7 +294,15 @@ perspective and the active tab is applied in authored order.
 The exclusive render system keeps its egui-context query and menu-registry
 reader in scheduler-owned `SystemState`. The query state is initialized with the
 scheduled system and reused across UI passes; the menu snapshot is cloned only
-when Bevy reports that the registry resource changed.
+when Bevy reports that the registry resource changed. Its unique top-level menu
+labels are projected with that snapshot and borrowed for responsive-width
+measurement. A pass builds its perspective-tab rows once and reuses them for
+both width measurement and painting; neither path recollects labels into a
+temporary vector.
+Scripted contributions sharing a custom menu are grouped and provider-sorted
+only when that popup opens, not while the closed top-level row is repainted.
+The shell exposes that row loop as the `workbench_custom_menus_render` Tracy
+zone for Builder attribution.
 
 Typed trigger intents from `PanelCtx` and `MenuCtx`, plus shell menu actions,
 are held in the `lunco_workbench_core::DeferredWorldTriggers` render queue and

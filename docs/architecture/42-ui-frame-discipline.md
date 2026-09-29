@@ -343,10 +343,11 @@ The same ownership rule applies to the measured presentation paths:
 - **Graphs** retain the history-to-plot point buffer in the visualization
   owner, keyed by the history fingerprint. A due rebuild captures shared
   `ScalarHistory` chunks and copies only its bounded open tail on the UI thread;
-  the async worker flattens and derives its point buffer, including decimation
-  where required. Plot hosts may clone points at the `egui_plot` owned-data
-  boundary, but must not copy the full SignalRegistry retention window on a
-  paint or history refresh.
+  the async worker flattens, transforms, and min-max decimates time-series to
+  about one sample per logical display point while preserving extrema and
+  endpoints. It computes full-data axis bounds with the same buffer. Plot items
+  borrow the cached `PlotPoint` slice; they do not clone samples or rescan the
+  history to auto-fit axes on each paint.
 - **Status sparklines** use the same retained `SignalRegistry` history as every
   other telemetry visualization. `lunco-viz` derives and caches decimated points
   and summary statistics from a `(SignalRef, history fingerprint, width)` key;

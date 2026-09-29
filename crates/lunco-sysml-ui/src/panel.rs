@@ -3597,7 +3597,7 @@ fn evidence_sort_rank(
     match evidence_state(requirement, view_model, runs) {
         EvidenceState::Fail => 0,
         EvidenceState::Error => 1,
-        EvidenceState::Inconclusive => 2,
+        EvidenceState::Inconclusive | EvidenceState::Unverified => 2,
         EvidenceState::Stale => 3,
         EvidenceState::NoEvidence => 4,
         EvidenceState::Pass => 5,
@@ -3620,7 +3620,7 @@ fn execution_sort_rank(
         ExecutionState::Stale => 7,
         ExecutionState::Cancelled => 8,
         ExecutionState::Partial => 9,
-        ExecutionState::Inconclusive => 10,
+        ExecutionState::Inconclusive | ExecutionState::Unverified => 10,
         ExecutionState::Running => 11,
         ExecutionState::Pass => 12,
     }

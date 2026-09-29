@@ -117,7 +117,9 @@ the live menu row and right-side control group; on compact widths it keeps File
 and View direct and places registered domain menus plus Edit, Settings, Help, and
 Time under one keyboard-reachable `More` entry. The direct and overflow surfaces
 call the same menu renderers, so command semantics and callback state have one
-owner. Keep this one shared layer contract; do not rely on system execution order
+owner. Build responsive menu measurements from the registry snapshot and group
+scripted contributions only when their popup opens. Keep this one shared layer
+contract; do not rely on system execution order
 or give a tutorial surface a `Foreground`/`Tooltip` order that can cover
 application controls. The tutorial
 draw systems are chained within their shared layer, so their relative paint order

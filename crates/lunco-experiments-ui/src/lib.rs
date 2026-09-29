@@ -6,7 +6,7 @@
 //! It deliberately does not know about Modelica documents, egui widgets, or
 //! a particular workbench.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -200,26 +200,56 @@ impl ActivePlot {
 /// The cache is keyed by a Twin and a content signature of its registry. A
 /// host supplies the current Twin because document-to-Twin resolution belongs
 /// to that host, not to this backend-neutral package.
+#[derive(Default)]
+pub struct ExperimentVariableCatalog {
+    groups: BTreeMap<String, Vec<String>>,
+    len: usize,
+}
+
+impl ExperimentVariableCatalog {
+    /// Sorted variable groups for the Graphs picker.
+    pub fn groups(&self) -> &BTreeMap<String, Vec<String>> {
+        &self.groups
+    }
+
+    /// Number of distinct variables in the catalog.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether the catalog contains any variables.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+struct CachedExperimentSeries {
+    points: Arc<Vec<[f64; 2]>>,
+    all_positive: bool,
+}
+
 #[derive(Resource, Default)]
 pub struct ExperimentsViewModel {
     built_for: Option<(TwinId, u64, u64)>,
-    points: HashMap<(ExperimentId, String), Arc<Vec<[f64; 2]>>>,
-    all_vars: BTreeSet<String>,
+    points: HashMap<ExperimentId, HashMap<String, CachedExperimentSeries>>,
+    variable_catalog: Arc<ExperimentVariableCatalog>,
 }
 
 impl ExperimentsViewModel {
-    /// Get pre-zipped points for one run and variable.
-    pub fn points_for(
+    /// Get pre-zipped points and their cached positivity summary for one run
+    /// and variable without allocating a lookup key.
+    pub fn series_for(
         &self,
         experiment: ExperimentId,
         variable: &str,
-    ) -> Option<Arc<Vec<[f64; 2]>>> {
-        self.points.get(&(experiment, variable.to_owned())).cloned()
+    ) -> Option<(Arc<Vec<[f64; 2]>>, bool)> {
+        let series = self.points.get(&experiment)?.get(variable)?;
+        Some((Arc::clone(&series.points), series.all_positive))
     }
 
-    /// Get the cached variable catalog.
-    pub fn variables(&self) -> BTreeSet<String> {
-        self.all_vars.clone()
+    /// Get the immutable variable catalog shared with the Graphs picker.
+    pub fn variable_catalog(&self) -> Arc<ExperimentVariableCatalog> {
+        Arc::clone(&self.variable_catalog)
     }
 }
 
@@ -232,7 +262,7 @@ pub fn populate_experiments_view_model(world: &mut World, twin: Option<&TwinId>)
         if view_model.built_for.is_some() {
             view_model.built_for = None;
             view_model.points.clear();
-            view_model.all_vars.clear();
+            view_model.variable_catalog = Arc::default();
         }
     };
 
@@ -297,23 +327,51 @@ pub fn populate_experiments_view_model(world: &mut World, twin: Option<&TwinId>)
             };
             for (variable, values) in &result.series {
                 all_vars.insert(variable.clone());
+                let mut all_positive = true;
                 let zipped = Arc::new(
                     result
                         .times
                         .iter()
                         .zip(values.iter())
-                        .map(|(time, value)| [*time, *value])
+                        .map(|(time, value)| {
+                            all_positive &= *value > 0.0;
+                            [*time, *value]
+                        })
                         .collect(),
                 );
-                points.insert((experiment.id, variable.clone()), zipped);
+                points
+                    .entry(experiment.id)
+                    .or_insert_with(HashMap::new)
+                    .insert(
+                        variable.clone(),
+                        CachedExperimentSeries {
+                            points: zipped,
+                            all_positive,
+                        },
+                    );
             }
         }
         (points, all_vars)
     };
 
+    let mut groups = BTreeMap::<String, Vec<String>>::new();
+    for variable in all_vars {
+        let (head, tail) = variable
+            .split_once('.')
+            .map_or(("", variable.as_str()), |(head, tail)| (head, tail));
+        groups
+            .entry(head.to_owned())
+            .or_default()
+            .push(tail.to_owned());
+    }
+    let variable_catalog = Arc::new(ExperimentVariableCatalog {
+        len: groups.values().map(Vec::len).sum(),
+        groups,
+    });
+
     let mut view_model = world.resource_mut::<ExperimentsViewModel>();
     view_model.points = points;
-    view_model.all_vars = all_vars;
+    view_model.variable_catalog = variable_catalog;
     view_model.built_for = Some(key);
 }
 

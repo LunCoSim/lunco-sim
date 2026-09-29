@@ -58,9 +58,9 @@ pub fn log_y_tick(mark_value: f64) -> String {
 /// trajectories revisit X and must not be decimated this way.
 pub fn decimate_min_max(points: &[[f64; 2]], px_width: f32) -> Option<Vec<[f64; 2]>> {
     let cols = (px_width.max(1.0) as usize).max(1);
-    // 2 points per column; only worth doing when it at least halves
-    // the point count.
-    if points.len() <= cols * 4 {
+    // 2 points per column; skip only when the input already fits the
+    // requested output budget.
+    if points.len() <= cols.saturating_mul(2) {
         return None;
     }
     let x0 = points[0][0];
@@ -68,7 +68,7 @@ pub fn decimate_min_max(points: &[[f64; 2]], px_width: f32) -> Option<Vec<[f64; 
     if span.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) || !span.is_finite() {
         return None;
     }
-    let mut out = Vec::with_capacity(cols * 2);
+    let mut out = Vec::with_capacity(cols * 2 + 2);
     let mut bucket = 0usize;
     // Index of the current bucket's min/max sample (by Y).
     let (mut lo, mut hi): (usize, usize) = (0, 0);
@@ -98,6 +98,22 @@ pub fn decimate_min_max(points: &[[f64; 2]], px_width: f32) -> Option<Vec<[f64; 
         }
     }
     flush(lo, hi, &mut out);
+    let same_sample = |left: &[f64; 2], right: &[f64; 2]| {
+        left[0].to_bits() == right[0].to_bits() && left[1].to_bits() == right[1].to_bits()
+    };
+    if out
+        .first()
+        .is_none_or(|first| !same_sample(first, &points[0]))
+    {
+        out.insert(0, points[0]);
+    }
+    let last = points[points.len() - 1];
+    if out
+        .last()
+        .is_none_or(|last_sample| !same_sample(last_sample, &last))
+    {
+        out.push(last);
+    }
     Some(out)
 }
 

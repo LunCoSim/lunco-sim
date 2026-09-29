@@ -39,6 +39,15 @@ before fixing only one.
 The shell's steady `WorkbenchSnapshot` check compares borrowed dock and
 perspective iterators before materializing owned vectors; preserve that
 allocation-free stable path when changing layout publication.
+The top-level menu's unique label projection is built only when the menu
+registry changes. Width measurement borrows that projection and streams labels
+without collecting another vector; compute perspective-tab rows once per UI
+pass and reuse them for both width measurement and painting. Do not rebuild the
+same responsive menu inputs during steady repaint.
+For contributed top-level menus, defer collecting and sorting scripted
+contributions until the popup callback runs; a closed menu should only paint its
+row and publish its anchor. Use `workbench_custom_menus_render` to inspect that
+row path separately from the workbench aggregate.
 
 When a measured UI snapshot builds several indexes from the same entity
 population, combine compatible marker reads into the existing query and avoid
@@ -84,8 +93,18 @@ pool, and keep painting the last completed point buffer while the next build
 runs. `ScalarHistory::snapshot()` shares completed chunks and copies only its
 bounded open tail on the caller; flatten and decimate that snapshot on the
 worker. Auxiliary Graphs overlays should use the same snapshot cache and keep
-painting their last completed buffer while a new one is built. Include source
-identity, style, and pixel width in the cache key.
+painting their last completed buffer while a new one is built. Key transformed
+point buffers by source identity, transform mode, and pixel width; apply line
+style while painting.
+For experiment and live-overlay plots, retain transformed `PlotPoint` buffers
+by immutable source identity, log-Y mode, and display width; build them on the
+async-compute pool and borrow them while drawing. Min-max decimate time-sorted
+series to about one sample per logical display point on that worker so line
+geometry does not traverse every retained history sample each repaint,
+preserving narrow peaks. Cache each buffer's full-data bounds so egui auto-fit
+does not scan all samples on every repaint. Keep experiment variable groups
+and positivity summaries in the change-gated view model instead of regrouping
+names or scanning all sample values during graph painting.
 For the entity tree, derive parent and grid facts through indexed lookups along
 named candidates' deduplicated ancestor closure instead of copying every scene
 entity's `ChildOf` and `Grid` membership into the snapshot.

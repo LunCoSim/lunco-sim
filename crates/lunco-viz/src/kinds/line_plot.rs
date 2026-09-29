@@ -371,7 +371,8 @@ struct SeriesKey {
     px_w: u32,
 }
 
-type PlotSeriesPoints = std::sync::Arc<(SeriesKey, Vec<egui_plot::PlotPoint>)>;
+type PlotSeriesPoints =
+    std::sync::Arc<(SeriesKey, Vec<egui_plot::PlotPoint>, egui_plot::PlotBounds)>;
 
 #[derive(Default)]
 struct PlotSeriesCache {
@@ -453,13 +454,21 @@ fn cached_plot_series_points(
             if build_key.log_y {
                 points = crate::plot_fmt::log_y_points(&points);
             }
+            let mut bounds = egui_plot::PlotBounds::NOTHING;
+            for point in &points {
+                bounds.extend_with(&egui_plot::PlotPoint::from(*point));
+            }
             if time_on_x {
-                if let Some(decimated) = crate::plot_fmt::decimate_min_max(&points, pixel_width) {
+                // Min-max pairs cover two horizontal points per bin, giving
+                // the rendered line about one sample per display point.
+                if let Some(decimated) =
+                    crate::plot_fmt::decimate_min_max(&points, pixel_width * 0.5)
+                {
                     points = decimated;
                 }
             }
-            let points = points.into_iter().map(egui_plot::PlotPoint::from).collect();
-            std::sync::Arc::new((build_key, points))
+            let points: Vec<_> = points.into_iter().map(egui_plot::PlotPoint::from).collect();
+            std::sync::Arc::new((build_key, points, bounds))
         }));
     }
 
@@ -610,11 +619,7 @@ impl LinePlot {
         //
         // History changes rebuild the point buffer; plot width, X source, and
         // style changes also invalidate the per-binding cache.
-        let series_to_plot: Vec<(
-            std::sync::Arc<(SeriesKey, Vec<egui_plot::PlotPoint>)>,
-            String,
-            egui::Color32,
-        )> = y_bindings
+        let series_to_plot: Vec<(PlotSeriesPoints, String, egui::Color32)> = y_bindings
             .iter()
             .filter_map(|b| {
                 let hist = registry.scalar_history(&b.source)?;
@@ -764,8 +769,10 @@ impl LinePlot {
 
         plot.show(ctx.ui, |plot_ui| {
             for (series, label, color) in &series_to_plot {
-                plot_ui.line(
+                crate::multi_series_plot::add_cached_line(
+                    plot_ui,
                     Line::new(label.clone(), PlotPoints::from(series.1.as_slice())).color(*color),
+                    series.2,
                 );
             }
         });
