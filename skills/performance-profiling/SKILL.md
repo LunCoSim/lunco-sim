@@ -51,6 +51,10 @@ Gate panel-owned view models with `WorkbenchSnapshot::is_panel_visible`, and
 order their systems after `WorkbenchSnapshotPublishSet`. Hidden dock tabs have
 no reader and should not rebuild view data each frame; keep separate cleanup
 work transition-driven when a panel closes.
+In the Builder Spawn palette, enumerate distinct category labels without
+cloning one label per catalog entry, then borrow spawn entries only while their
+category is expanded. Do not build cloned entry groups before egui determines
+which categories have a reader.
 For live line plots, do not copy and decimate a full history in every UI frame.
 Keep one bounded build per binding, snapshot changed histories at a limited
 presentation cadence, transform immutable sample snapshots on the async-compute

@@ -30,6 +30,8 @@
 //! Publication is batch-atomic: the palette never exposes a half-scanned USD
 //! catalog while the remaining files are still being fetched.
 
+use std::collections::HashSet;
+
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::{ApiQueryError, ApiQueryResult};
@@ -272,10 +274,15 @@ impl SpawnCatalog {
     /// Distinct category labels present, sorted — drives dynamic UI grouping
     /// so a new content folder yields a new group with no Rust change.
     pub fn categories(&self) -> Vec<String> {
-        let mut cats: Vec<String> = self.entries.iter().map(|e| e.category.clone()).collect();
-        cats.sort();
-        cats.dedup();
-        cats
+        let mut cats: Vec<&str> = self
+            .entries
+            .iter()
+            .map(|entry| entry.category.as_str())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        cats.sort_unstable();
+        cats.into_iter().map(str::to_owned).collect()
     }
 }
 

@@ -84,29 +84,15 @@ fn spawn_palette_content(
         }
     }
 
-    // Read catalog — group by whatever dynamic category labels exist
-    // (derived from content folders), so new content needs no UI change.
-    let categories: Vec<(String, Vec<_>)> = {
-        let Some(catalog) = ctx.resource::<SpawnCatalog>() else {
-            return;
-        };
-        catalog
-            .categories()
-            .into_iter()
-            .map(|cat| {
-                let entries: Vec<_> = catalog.by_category(&cat).cloned().collect();
-                (cat, entries)
-            })
-            .filter(|(_, entries)| !entries.is_empty())
-            .collect()
-    };
-
-    for (category, entries) in categories {
-        ui.collapsing(category.to_string(), |ui| {
-                for entry in &entries {
-                    let selected = ctx.resource::<SpawnState>()
-                        .map(|s| matches!(s, SpawnState::Selecting { entry_id } if *entry_id == entry.id))
-                        .unwrap_or(false);
+    // Keep authored categories dynamic while avoiding a cloned catalog
+    // snapshot on every Builder frame. Entry rows are borrowed only when their
+    // category is expanded.
+    let mut requested_states = Vec::new();
+    if let Some(catalog) = ctx.resource::<SpawnCatalog>() {
+        for category in catalog.categories() {
+            ui.collapsing(category.clone(), |ui| {
+                for entry in catalog.by_category(&category) {
+                    let selected = selecting_id.as_deref() == Some(entry.id.as_str());
 
                     let btn_text = format!("{} · {}", entry.display_name, entry.origin.label());
 
@@ -136,7 +122,7 @@ fn spawn_palette_content(
 
                     if response.clicked() {
                         let entry_id = entry.id.clone();
-                        ctx.trigger(SpawnStateRequested(if selected {
+                        requested_states.push(SpawnStateRequested(if selected {
                             SpawnState::Idle
                         } else {
                             SpawnState::Selecting { entry_id }
@@ -145,10 +131,15 @@ fn spawn_palette_content(
 
                     if response.drag_started() {
                         let entry_id = entry.id.clone();
-                        ctx.trigger(SpawnStateRequested(SpawnState::Selecting { entry_id }));
+                        requested_states
+                            .push(SpawnStateRequested(SpawnState::Selecting { entry_id }));
                     }
                 }
             });
+        }
+    }
+    for requested_state in requested_states {
+        ctx.trigger(requested_state);
     }
 
     ui.separator();
