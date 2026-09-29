@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -15,6 +17,53 @@ SPEC.loader.exec_module(deterministic_physics_profiles)
 
 
 class DeterministicPhysicsProfileTests(unittest.TestCase):
+    def test_default_run_compares_the_checked_in_portable_reference(self) -> None:
+        args = deterministic_physics_profiles.parse_arguments([])
+        self.assertEqual(
+            args.compare_reference,
+            deterministic_physics_profiles.DEFAULT_REFERENCE_PATH,
+        )
+
+    def test_reference_file_is_excluded_from_tracked_source_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            def git(*args: str) -> None:
+                subprocess.run(
+                    ["git", *args], cwd=root, check=True, capture_output=True
+                )
+
+            git("init", "--quiet")
+            git("config", "user.name", "Deterministic test")
+            git("config", "user.email", "deterministic-test@example.invalid")
+            git("config", "commit.gpgsign", "false")
+            source = root / "crates" / "physics.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text("pub const STEP_HZ: u32 = 60;\n", encoding="utf-8")
+            git("add", "crates/physics.rs")
+            git("commit", "--quiet", "-m", "source")
+            source_fingerprint = (
+                deterministic_physics_profiles.tracked_source_fingerprint(root)
+            )
+
+            reference = root / deterministic_physics_profiles.REFERENCE_FIXTURE_PATH
+            reference.parent.mkdir(parents=True)
+            reference.write_text('{"baseline":1}\n', encoding="utf-8")
+            git("add", deterministic_physics_profiles.REFERENCE_FIXTURE_PATH.as_posix())
+            git("commit", "--quiet", "-m", "add reference fixture")
+            self.assertEqual(
+                source_fingerprint,
+                deterministic_physics_profiles.tracked_source_fingerprint(root),
+            )
+
+            source.write_text("pub const STEP_HZ: u32 = 120;\n", encoding="utf-8")
+            git("add", "crates/physics.rs")
+            git("commit", "--quiet", "-m", "change simulation source")
+            self.assertNotEqual(
+                source_fingerprint,
+                deterministic_physics_profiles.tracked_source_fingerprint(root),
+            )
+
     def _selected_state_output(self) -> str:
         ticks = ("0", "180", "360", "540", "720", "780")
         states = [f"D4_STATE_TRACE_V1|{tick};" for tick in ticks]

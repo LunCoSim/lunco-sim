@@ -92,14 +92,16 @@ lifecycle/checkpoint states, the first behavior state at tick 1, an explicit
 final-stage state, and articulated-body samples at ticks 1, 11, 80, and final;
 it does not emit per-tick traces. The comparator requires exact final physics,
 Modelica, and articulated equality before checking earlier selected states.
-Use `--record-reference PATH` to save the selected states for the 4/8/20-rover,
-Compute and jitter/seed profiles at the default 60 Hz fixed step, then
-`--compare-reference PATH` on another machine. The matrix leaves `--tick-hz`
-unset and runs its manual clock without wall-time pacing, so it advances as
-quickly as scene updates and required asynchronous work allow. The reference
-records source, input, binary, and machine metadata and requires exact equality
-(`numeric_tolerance=0`). This remains fixture-specific evidence. Do not claim
-whole-simulation replay determinism while the remaining reviewed gaps are open.
+The matrix leaves `--tick-hz` unset and runs its manual clock without wall-time
+pacing at the default 60 Hz fixed step. By default it compares against
+`scripts/tests/fixtures/deterministic-physics-reference.json`; use
+`--compare-reference PATH` to select another baseline or
+`--record-reference PATH` to intentionally replace one. The reference records
+source, input, binary, and machine metadata and requires exact equality
+(`numeric_tolerance=0`). Its tracked-source fingerprint excludes only the
+reference file, so the committed fixture remains valid. This remains
+fixture-specific evidence. Do not claim whole-simulation replay determinism
+while the remaining reviewed gaps are open.
 
 Reflected commands sent through `ApiCommandEvent` retain whether they came from
 an API transport or a Rhai evaluation; generated `CommandOccurred` facts carry
