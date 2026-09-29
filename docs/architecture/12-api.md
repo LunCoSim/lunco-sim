@@ -825,7 +825,9 @@ composed `type_name`/`kind`, parent and assembly paths, and the existing typed
 command/Rhai operation families. `selection_mode` is `none`, `single`, or
 `multiple`; `requires_single_target`, `stale_selection_count`, and
 `ambiguous_paths` make invalid targeting visible. It never exposes a display
-name as identity and never mutates selection or authored USD.
+name as identity and never mutates selection or authored USD. If the Assembly
+Editor has no open preview, including when its viewport is not mounted, it
+returns the typed `no_preview` state.
 
 When the selected prim is an authored `Xform` with `kind = "component"`, its
 operation families additionally advertise the recipe-driven `UpdateComponent`

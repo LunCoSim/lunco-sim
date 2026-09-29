@@ -1222,24 +1222,21 @@ impl PendingSessionInput {
 #[derive(Resource, Debug, Default)]
 pub struct PendingSessionInputs {
     pending: VecDeque<PendingSessionInput>,
+    /// Runtime spawn identities retained only while their queued inputs wait
+    /// for the fixed-tick commit boundary.
+    runtime_spawn_roots: std::collections::HashSet<lunco_core::GlobalEntityId>,
 }
 
 impl PendingSessionInputs {
-    /// Reserve one authoritative runtime-spawn identity, rejecting collisions
-    /// with live entities or identities already waiting in this queue.
+    /// Allocate one authoritative runtime-spawn identity, rejecting collisions
+    /// reported by the live identity index or queued runtime roots.
     pub fn reserve_runtime_spawn_root_id(
         &self,
-        existing_ids: impl IntoIterator<Item = lunco_core::GlobalEntityId>,
+        mut is_live_id: impl FnMut(lunco_core::GlobalEntityId) -> bool,
     ) -> Result<lunco_core::GlobalEntityId, String> {
         let candidate = lunco_core::GlobalEntityId::allocate_authoritative();
-        let conflicts_with_live = existing_ids.into_iter().any(|gid| gid == candidate);
-        let conflicts_with_pending = self.pending.iter().any(|input| {
-            matches!(
-                &input.record.payload,
-                SessionInputPayload::RuntimeSpawn { spawned_root, .. }
-                    if *spawned_root == candidate
-            )
-        });
+        let conflicts_with_live = is_live_id(candidate);
+        let conflicts_with_pending = self.runtime_spawn_roots.contains(&candidate);
         if candidate.get() == 0 || conflicts_with_live || conflicts_with_pending {
             return Err(format!(
                 "runtime spawn identity reservation collided with an existing GlobalEntityId ({candidate})"
@@ -1268,7 +1265,22 @@ impl PendingSessionInputs {
         }
         validate_session_input(producer, target, scene_generation, &payload, false)?;
 
+        let runtime_spawn_root = match &payload {
+            SessionInputPayload::RuntimeSpawn { spawned_root, .. } => Some(*spawned_root),
+            _ => None,
+        };
+        if let Some(root) = runtime_spawn_root
+            && self.runtime_spawn_roots.contains(&root)
+        {
+            return Err(format!(
+                "runtime spawn identity reservation is already pending ({root})"
+            ));
+        }
+
         let admission = order.assign_order(scene_generation, effective_tick)?;
+        if let Some(root) = runtime_spawn_root {
+            self.runtime_spawn_roots.insert(root);
+        }
         self.pending.push_back(PendingSessionInput {
             record: SessionInputRecord {
                 producer,
@@ -1381,12 +1393,19 @@ impl PendingSessionInputs {
             .iter()
             .take_while(|input| input.record.effective_tick <= tick)
             .count();
-        self.pending.drain(..ready_count).collect()
+        let due = self.pending.drain(..ready_count).collect::<Vec<_>>();
+        for input in &due {
+            if let SessionInputPayload::RuntimeSpawn { spawned_root, .. } = &input.record.payload {
+                self.runtime_spawn_roots.remove(spawned_root);
+            }
+        }
+        due
     }
 
     /// Discard queued inputs when their scene generation is torn down.
     pub fn clear(&mut self) {
         self.pending.clear();
+        self.runtime_spawn_roots.clear();
     }
 }
 
@@ -3515,7 +3534,7 @@ mod session_input_stream_tests {
         let target = lunco_core::GlobalEntityId::from_raw(42);
         let active_frame = lunco_core::GlobalEntityId::from_raw(43);
         let spawned_root = pending
-            .reserve_runtime_spawn_root_id(std::iter::empty())
+            .reserve_runtime_spawn_root_id(|_| false)
             .expect("session owner reserves one root identity");
         let position = [1.234_567_890_123, 20.000_000_000_007, -4.5];
         let rotation = Some([0.0, 0.0, 0.125, 0.992_156_741_649_221_5]);
@@ -3540,7 +3559,27 @@ mod session_input_stream_tests {
             .expect("valid runtime spawn is admitted");
 
         assert_eq!(admission.sequence, 1);
+        let duplicate = pending
+            .admit(
+                &mut order,
+                SessionInputProducer::DirectCommand { producer_id: 7 },
+                target,
+                3,
+                10,
+                SessionInputPayload::RuntimeSpawn {
+                    entry_id: "catalog-entry".to_owned(),
+                    active_frame,
+                    requested_position: position,
+                    requested_rotation: rotation,
+                    correlation_id: 20,
+                    spawned_root,
+                },
+                None,
+            )
+            .expect_err("a root identity cannot be queued twice");
+        assert!(duplicate.contains("already pending"));
         let due = pending.take_due(10);
+        assert!(!pending.runtime_spawn_roots.contains(&spawned_root));
         let record = due[0].record();
         assert_eq!(record.target, target);
         assert_eq!(

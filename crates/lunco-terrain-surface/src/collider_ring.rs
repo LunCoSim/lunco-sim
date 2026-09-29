@@ -1681,14 +1681,12 @@ fn cast_initial_support_ray(
             match distance.total_cmp(&hit.distance) {
                 std::cmp::Ordering::Less => true,
                 std::cmp::Ordering::Greater => false,
-                std::cmp::Ordering::Equal => {
-                    normal
-                        .x
-                        .total_cmp(&hit.normal.x)
-                        .then_with(|| normal.y.total_cmp(&hit.normal.y))
-                        .then_with(|| normal.z.total_cmp(&hit.normal.z))
-                        .is_lt()
-                }
+                std::cmp::Ordering::Equal => normal
+                    .x
+                    .total_cmp(&hit.normal.x)
+                    .then_with(|| normal.y.total_cmp(&hit.normal.y))
+                    .then_with(|| normal.z.total_cmp(&hit.normal.z))
+                    .is_lt(),
             }
         });
         if !replace_closest {

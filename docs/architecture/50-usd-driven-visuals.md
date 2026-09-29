@@ -4,10 +4,10 @@
 
 A sensor beam or an exhaust plume may be authored USD geometry whose size tracks a live
 simulation value. A route ribbon is a different class: it is a derived scene annotation
-whose geometry is generated from USD mission topology. The reusable route tool writes its
-current `BasisCurves` view to the document's `@view@` layer on route changes; the live
-scene projects those transient operations without changing the authored Twin or writing a
-document opinion every frame.
+whose geometry is generated from USD mission topology and terrain. USD supplies its stable
+curve identity, material binding, and pointer schema. The reusable route tool submits the
+current point snapshot to `UpdateUsdCurveView`; bounded background work samples terrain and
+builds the live Bevy mesh without editing a USD layer or advancing document generation.
 
 Three rules, in order of how often they are broken:
 
@@ -36,15 +36,17 @@ annotation system. The two ownership models must not be mixed.
 
 The route-point prims and the Rhai task program are the authored facts. The
 `waypoint_editor` tool derives a route view from those facts and materializes a
-single oriented standard `BasisCurves` prim from
+standard `BasisCurves` identity from
 [`assets/markers/route_ribbon.usda`](../../assets/markers/route_ribbon.usda)
-in `@view@`. This keeps the visual contract in USD, lets the existing USD
-renderer draw a cached flat strip with real depth in the live scene and document
-preview, and keeps all route-specific policy in Rhai. The curve's standard
-`normals` make `widths` a ribbon width, so this path does not become a
-cylindrical tube.
-The disposable view is rebuilt only after a route edit or when the route program
-starts; it is not a per-frame USD edit, a second route, or a screen-space gizmo.
+in `@view@`. This retains the USD path, material, and hit policy while the mesh
+itself remains a live presentation resource. Route edits still pass through the
+normal authored document and incremental scene projection once. They do not
+write a second ribbon edit: `UpdateUsdCurveView` coalesces the newest route
+points, samples an immutable terrain snapshot, and replaces only the existing
+mesh handle in `Update`. Its worker admission is capped at two builds, stale
+results are discarded by operation revision, and the route simulation never
+waits for mesh preparation. The curve's standard `normals` make `widths` a
+ribbon width, so the seed is not a cylindrical tube.
 When a document is shared by the mounted scene and an Editor preview, live
 structural edits resolve entities only in the mounted scene. A same-path preview
 entity cannot stand in for a missing scene entity. Procedural backgrounds also

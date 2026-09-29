@@ -12,7 +12,7 @@ use openusd::sdf::Path as SdfPath;
 
 use lunco_usd_bevy_lathe as lathe;
 use lunco_usd_bevy_scene::{
-    ShapeDims, UsdPrimPath, UsdStageRevision, read_usd_mesh_points, read_usd_mesh_topology,
+    ShapeDims, UsdPrimPath, UsdSceneChangeBatch, read_usd_mesh_points, read_usd_mesh_topology,
 };
 use lunco_usd_bevy_stage::{
     UsdRead, UsdStageAsset, canonical::CanonicalStages, read, stage_convention,
@@ -169,6 +169,13 @@ pub struct UsdPrimitiveMesh(pub ShapeDims);
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UsdCurveMesh;
 
+/// Marks a curve mesh whose live presentation is supplied by an owner through
+/// a transient render update. Authored USD remains the source for document
+/// reads; broad stage changes must not replace this current live mesh with an
+/// older authored curve snapshot.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransientUsdCurveView;
+
 /// Build one USD primitive's visual mesh from its resolved dimensions and the
 /// current Graphics quality profile. USD has no attribute for these tessellation
 /// counts; they are viewer policy, unlike the shape dimensions.
@@ -265,20 +272,29 @@ pub fn retessellate_primitive_meshes_on_quality_change(
     }
 }
 
-/// Rebuild USD curve meshes when authored USD geometry or Graphics tessellation
-/// changes. The live-stage revision is the generic invalidation signal for
-/// authored curve points, topology, and widths; no route or waypoint knowledge
-/// belongs in this renderer-owned path. Invalid settings leave the existing mesh
-/// in place and are reported; no lower quality profile is selected implicitly.
+/// Rebuild only authored curve meshes touched by the coalesced scene-change
+/// paths, or all authored curves when Graphics tessellation changes. A stage
+/// generation is too broad: unrelated point edits must not rebuild every curve
+/// mesh in every mounted document.
 pub fn refresh_curve_meshes_on_stage_or_quality_change(
     mut meshes: ResMut<Assets<Mesh>>,
-    q: Query<(&UsdPrimPath, &Mesh3d, Option<&Name>), With<UsdCurveMesh>>,
+    q: Query<
+        (&UsdPrimPath, &Mesh3d, Option<&Name>),
+        (With<UsdCurveMesh>, Without<TransientUsdCurveView>),
+    >,
     quality: Res<lunco_render::RenderingQualitySettings>,
-    stage_revision: Res<UsdStageRevision>,
+    mut scene_changes: MessageReader<UsdSceneChangeBatch>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
 ) {
-    if !quality.is_changed() && !stage_revision.is_changed() {
+    let quality_changed = quality.is_changed();
+    let mut changed_paths = std::collections::HashMap::<_, (Vec<String>, Vec<String>)>::new();
+    for change in scene_changes.read() {
+        let (resynced, info) = changed_paths.entry(change.stage_id).or_default();
+        resynced.extend(change.resynced_prim_paths.iter().cloned());
+        info.extend(change.info_prim_paths.iter().cloned());
+    }
+    if !quality_changed && changed_paths.is_empty() {
         return;
     }
     let profile = match quality.validated_profile() {
@@ -291,10 +307,22 @@ pub fn refresh_curve_meshes_on_stage_or_quality_change(
         }
     };
     for (prim_path, handle, name) in &q {
+        let stage_id = prim_path.stage_handle.id();
+        if !quality_changed
+            && !changed_paths.get(&stage_id).is_some_and(|paths| {
+                paths
+                    .0
+                    .iter()
+                    .any(|changed| curve_mesh_path_resynced(changed, &prim_path.path))
+                    || paths.1.iter().any(|changed| changed == &prim_path.path)
+            })
+        {
+            continue;
+        }
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
-        let (reader, _generation) = canonical.reader_for(prim_path.stage_handle.id(), stage_asset);
+        let (reader, _generation) = canonical.reader_for(stage_id, stage_asset);
         let Ok(path) = SdfPath::new(&prim_path.path) else {
             continue;
         };
@@ -309,6 +337,41 @@ pub fn refresh_curve_meshes_on_stage_or_quality_change(
             continue;
         };
         *slot = mesh;
+    }
+}
+
+fn curve_mesh_path_resynced(changed: &str, curve: &str) -> bool {
+    if changed == curve || changed == "/" {
+        return true;
+    }
+    let changed = changed.trim_end_matches('/');
+    let curve = curve.trim_end_matches('/');
+    curve.starts_with(&format!("{changed}/")) || changed.starts_with(&format!("{curve}/"))
+}
+
+#[cfg(test)]
+mod curve_invalidation_tests {
+    use super::curve_mesh_path_affected;
+
+    #[test]
+    fn curve_refresh_is_limited_to_its_resynced_subtree() {
+        assert!(curve_mesh_path_resynced("/World", "/World/Route/Curve"));
+        assert!(curve_mesh_path_resynced(
+            "/World/Route/Curve",
+            "/World/Route/Curve"
+        ));
+        assert!(curve_mesh_path_resynced(
+            "/World/Route/Curve/Child",
+            "/World/Route/Curve"
+        ));
+        assert!(!curve_mesh_path_resynced(
+            "/World/Route/W2",
+            "/World/Route/Curve"
+        ));
+        assert!(!curve_mesh_path_resynced(
+            "/WorldOther",
+            "/World/Route/Curve"
+        ));
     }
 }
 

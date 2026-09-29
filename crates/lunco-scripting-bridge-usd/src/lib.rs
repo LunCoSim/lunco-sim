@@ -50,6 +50,33 @@ pub fn find_path(path: &str) -> i64 {
     .unwrap_or(-1)
 }
 
+/// `find_path_in_document(doc_id, path)` — first entity gid for `path` in the
+/// live stage owned by `doc_id`, or `-1` when that prim has no live projection.
+/// USD paths are only unique inside their composed stage, so editing a
+/// document-backed prim must include its document identity.
+pub fn find_path_in_document(doc_id: u64, path: &str) -> i64 {
+    with_world(|world| {
+        let doc = lunco_doc::DocumentId::new(doc_id);
+        let backed = world.get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()?;
+        let asset_server = world.get_resource::<AssetServer>()?;
+        let stage = lunco_usd_bevy_twin::stage_asset_for_document(backed, asset_server, doc)?;
+        let mut prims = world.query::<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>();
+        let entities = world.get_resource::<ApiEntityRegistry>()?;
+        prims
+            .iter(world)
+            .filter(|(entity, prim)| {
+                prim.stage_handle.id() == stage
+                    && prim.path == path
+                    && !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)
+            })
+            .filter_map(|(entity, _)| entities.api_id_for(entity))
+            .min_by_key(|id| id.get())
+            .map(|id| id.get() as i64)
+    })
+    .flatten()
+    .unwrap_or(-1)
+}
+
 /// `usd_path(id)` — the exact composed USD path carried by an entity, or `()`.
 /// This is the inverse of [`find_path`] and is the generic identity primitive
 /// authored programs use to inspect their own scene-level ownership.

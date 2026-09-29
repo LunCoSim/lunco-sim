@@ -28,8 +28,8 @@ fn finish(me, passed, message) {
 }
 
 fn route_document_ready(me) {
-    let route = query("QueryUsdPrim", #{ path: ROUTE });
-    route != () && route.ok != false && route.doc_id != ()
+    let route = query("QueryUsdPrim", #{ path: ROUTE, children: true });
+    route != () && route.ok != false && route.doc_id != () && route.children != ()
 }
 
 fn discover_runtime_state(me) {
@@ -51,16 +51,16 @@ fn route_point_is_new(me) { this.restored != true }
 
 fn create_runtime_point(me) {
     print("ROUTE_RUNTIME_GATE: ABSENT_AT_START");
-    let plan = waypoint_editor::marker_ops(this.doc, ROUTE, [0.0, 0.0, 0.0]);
-    if plan == () || plan.ok != true {
-        this.failure = "route editor could not build a runtime-layer point edit";
-        return;
-    }
-    let applied = waypoint_editor::apply_ops(
-        this.doc, "Create route waypoint", plan.ops,
-    );
-    if applied == () || applied.ok != true {
-        this.failure = "route editor could not author the runtime-layer point";
+    let result = waypoint_editor::on_click(#{
+        button: "primary",
+        doc_id: this.doc,
+        route_path: ROUTE,
+        scene_root_path: "/RouteRuntimePersistence",
+        world_position: point3([0.0, 0.0, 0.0], "active_physics"),
+        surface_world_position: point3([0.0, 0.0, 0.0], "active_physics"),
+    });
+    if result == () || result.ok != true || result.path != POINT {
+        this.failure = "route editor could not add the runtime-layer waypoint through its public hook";
         return;
     }
     this.waiting_for = "runtime waypoint authoring";
@@ -83,7 +83,7 @@ fn report_restored_waypoint_pass(me) {
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["QueryUsdPrim", "ResolveUsdTarget"], required_inputs: [] }
+       query_reads: ["QueryUsdPrim", "QueryUsdPrims", "ResolveUsdTarget"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {

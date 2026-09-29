@@ -38,6 +38,7 @@ use bevy::math::{DQuat, DVec3, Dir3};
 use bevy::prelude::*;
 use lunco_spatial::coords::{GridPos, RenderPos};
 use lunco_terrain_core::{HeightSource, normal_at_bounded};
+use std::sync::Arc;
 
 use crate::oracle::DemHeightField;
 
@@ -90,6 +91,70 @@ pub struct TerrainPoseInPhysicsFrame {
     pub frame: Entity,
     pub position: DVec3,
     pub rotation: DQuat,
+}
+
+/// Immutable terrain sampling view for presentation work that runs off-thread.
+/// It owns only shareable oracle snapshots and committed poses; it carries no
+/// Bevy `World`, query, or render state.
+#[derive(Clone)]
+pub struct TerrainSurfaceSnapshot {
+    frame: Entity,
+    terrains: Vec<TerrainSurfaceSnapshotEntry>,
+}
+
+#[derive(Clone)]
+struct TerrainSurfaceSnapshotEntry {
+    entity: Entity,
+    oracle: Arc<crate::oracle::SurfaceOracle>,
+    position: DVec3,
+    rotation: DQuat,
+}
+
+impl TerrainSurfaceSnapshot {
+    /// The active physics frame captured with the terrain poses.
+    pub fn frame(&self) -> Entity {
+        self.frame
+    }
+
+    /// Sample the immutable composed terrain data in the captured active frame.
+    pub fn sample_surface(&self, point: GridPos, eps: f64) -> Option<SurfaceSample> {
+        self.terrains.iter().find_map(|terrain| {
+            sample_terrain_surface(
+                terrain.entity,
+                terrain.oracle.as_ref(),
+                terrain.position,
+                terrain.rotation,
+                point,
+                eps,
+            )
+        })
+    }
+}
+
+fn sample_terrain_surface(
+    entity: Entity,
+    oracle: &crate::oracle::SurfaceOracle,
+    position: DVec3,
+    rotation: DQuat,
+    point: GridPos,
+    eps: f64,
+) -> Option<SurfaceSample> {
+    let local = rotation.inverse() * (point.0 - position);
+    let height = height_in_footprint(oracle, GridPos(local))?;
+    let normal = rotation
+        * DVec3::from_array(normal_at_bounded(
+            oracle,
+            local.x,
+            local.z,
+            eps.max(1.0e-6),
+            oracle.half_extent() as f64,
+        ));
+    let normal = normal.normalize_or_zero();
+    (normal.is_finite() && normal.length_squared() > 1.0e-12).then_some(SurfaceSample {
+        point: GridPos(position + rotation * DVec3::new(local.x, height, local.z)),
+        normal,
+        terrain: entity,
+    })
 }
 
 /// Project each terrain owner's full hierarchy into the one active physics
@@ -183,6 +248,24 @@ impl GridSurfaceQuery<'_, '_> {
             .map(|(entity, height_field, _)| (entity, height_field.0.surface_key()))
     }
 
+    /// Capture the current immutable terrain oracles and their active-frame
+    /// poses for bounded background presentation work.
+    pub fn snapshot(&self) -> Option<TerrainSurfaceSnapshot> {
+        let (frame, _) = self.frame()?;
+        let terrains = self
+            .terrains
+            .iter()
+            .filter(|(_, _, pose)| pose.frame == frame)
+            .map(|(entity, height_field, pose)| TerrainSurfaceSnapshotEntry {
+                entity,
+                oracle: height_field.0.clone(),
+                position: pose.position,
+                rotation: pose.rotation,
+            })
+            .collect();
+        Some(TerrainSurfaceSnapshot { frame, terrains })
+    }
+
     /// Convert a render-space point into the grid frame — the boundary crossing
     /// every screen-space tool makes exactly once, at the top.
     pub fn to_grid(&self, render_point: RenderPos) -> Option<GridPos> {
@@ -230,24 +313,14 @@ impl GridSurfaceQuery<'_, '_> {
             if pose.frame != frame {
                 return None;
             }
-            let (position, rotation) = (pose.position, pose.rotation);
-            let local = rotation.inverse() * (p.0 - position);
-            let height = height_in_footprint(&terrain.0, GridPos(local))?;
-            let half = terrain.0.half_extent() as f64;
-            let normal = rotation
-                * DVec3::from_array(normal_at_bounded(
-                    terrain.0.as_ref(),
-                    local.x,
-                    local.z,
-                    eps.max(1.0e-6),
-                    half,
-                ));
-            let normal = normal.normalize_or_zero();
-            (normal.is_finite() && normal.length_squared() > 1.0e-12).then_some(SurfaceSample {
-                point: GridPos(position + rotation * DVec3::new(local.x, height, local.z)),
-                normal,
-                terrain: entity,
-            })
+            sample_terrain_surface(
+                entity,
+                terrain.0.as_ref(),
+                pose.position,
+                pose.rotation,
+                p,
+                eps,
+            )
         })
     }
 

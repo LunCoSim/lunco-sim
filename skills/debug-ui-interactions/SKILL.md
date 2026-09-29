@@ -50,13 +50,19 @@ one same-frame script step when testing focus, modifier state, or picking.
 
 A route-point secondary click opens its authored context menu without changing
 scene selection. Selecting a point is separate from the `Move route point`
-action: select enables the generic gizmo, while Move arms click-to-place with a
-disposable ghost. Hover alone must not arm movement. The context gesture itself
-must not enable the transform gizmo. The hit prim's registered
-`LunCoPointerInteractionAPI` must authorize that button as `context`; the
-generic viewport adapter applies its per-button blocking behavior before the
-ordered-hit pass, and route policy uses canonical hit paths rather than screen
-proximity. The popup host registers the foreground menu rectangle with
+action: select enables the generic gizmo, while Move selects its explicit point
+and arms click-to-place with a disposable ghost. That selected point remains the
+move target until placement or cancellation. Hover alone must not arm movement.
+The context gesture itself must not enable the transform gizmo. The hover
+dispatcher scopes movement from the hit prim's document and carries the
+same-document selected/control paths as route context. The hit prim's registered
+`LunCoPointerInteractionAPI` must authorize that button as `context`; the generic
+viewport adapter applies its per-button blocking behavior before the ordered-hit
+pass, and route policy uses canonical hit paths rather than screen proximity.
+Picking can target a child collider or terrain LOD entity without `UsdPrimPath`;
+resolve the nearest ancestor prim before determining its document, as click
+routing does.
+The popup host registers the foreground menu rectangle with
 `ScenePickGate` as chrome, even when that rectangle lies inside the 3D viewport;
 menu clicks must not also start a gizmo drag. A semantic chord alone does not
 create a menu. Unarmed route-edit
@@ -92,10 +98,21 @@ and menu policy in those tool hooks rather than sending it through the general
 REPL queue or a fixed-tick scenario. Heavy synchronous work in an input hook
 would still occupy the application thread, so keep the hook bounded and move
 preparation or I/O to its owning asynchronous boundary.
+When a UI hook reads a collection of USD prims, request the member list once
+and use `QueryUsdPrims` for their needed attributes, schemas, or relationships;
+declare that provider in the caller's `query_reads`. Avoid per-member
+`QueryUsdPrim` loops in input policy because every read occupies the same
+application thread. Resolve a live USD entity with its owning document identity
+when several documents can mount the same authored path. Generic `MoveEntity`
+persistence resolves the write document from the moved entity's stage, not the
+active editor tab.
 
 Scene `Pointer<Move>` and `Pointer<Enter>` observers used for an armed
-route-point preview must coalesce to the newest position per pointer and
-picking frame before adding one typed hook to the bounded UI queue. Enter
+route-point preview must coalesce the newest raw hit per pointer and picking
+frame before resolving scene identity, coordinates, or terrain position. A
+fallback terrain raycast then runs at most once per pointer per picking frame;
+direct analytic surface hits do not need that fallback. Queue one typed hook
+after resolution. Enter
 provides the first sample after a scene hit replaces a popup's previous-frame
 capture hit. Bevy can emit move events for both the pass-through preview and
 lower hits. Before deduplication, skip the preview event and stop its ancestor
@@ -104,11 +121,18 @@ terrain beneath it. Keep the hook presentation-only: update the
 live transform of the projected `@view@` preview through the generic typed
 preview-transform command. It validates document and view-layer ownership and
 uses the canonical active-frame/parent-local conversion; hover must not edit the
-USD document, trigger projection, rebuild route geometry, or sample a full
-terrain path. The next primary click commits the armed route point through the
-canonical `@runtime@` USD edit path. The `route_interaction` production gate
-checks that the live ghost responds within half a second while document
-generation stays unchanged during hover.
+USD document, trigger projection, or sample a full terrain path. Route add and
+delete hooks send the accepted route-point snapshot to `UpdateUsdCurveView`;
+the mesh owner coalesces it and rebuilds from immutable terrain data off-thread.
+It updates the existing renderer mesh without changing USD generation. The
+next primary click commits a moved route point through the canonical
+`@runtime@` USD edit path, whose projected change updates the ribbon once. The
+`route_interaction` production gate verifies that Move selects and retains the
+target, the live ghost follows a coalesced native terrain cursor trace, and
+document generation stays unchanged during preview. The gate sequences native
+press/release on separate task ticks and waits for observable state with the
+Rhai behavior tree; do not use simulation-time sleeps or encode progression as
+numeric phase state.
 The repeatable production gate is `assets/scenes/tests/editor/route_interaction/route_interaction.usda`,
 run by `scripts/run_editor_scene_tests.sh`; it sends typed native-window input
 through picking and verifies the mounted fixture, waypoint hit, semantic
@@ -144,8 +168,8 @@ absence of a notification:
   delivery; `port(...)`, `owner_of(...)`, and `is_controlled(...)` prove the
   generic control boundary.
 - `CaptureScreenshot` or an X11 window capture proves the visual result.
-- For route workflows, assert the authored point count/revision, marker or
-  ribbon projection, `program_active`, and a nonzero guidance output after
+- For route workflows, assert the authored point count/revision, marker or live
+  ribbon mesh, `program_active`, and a nonzero guidance output after
   selecting the rover and pressing the action binding. Add, move, context-menu
   delete, and undo/redo are separate assertions over the same canonical USD
   document; do not treat a spawned ECS entity as persistence proof.

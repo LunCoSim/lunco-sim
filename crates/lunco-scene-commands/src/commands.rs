@@ -265,7 +265,8 @@ pub fn on_detach_joint(
 pub fn persist_detach_to_runtime_layer(
     trigger: On<DetachJoint>,
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    asset_server: Res<AssetServer>,
+    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
     q_prim: Query<&UsdPrimPath>,
     mut commands: Commands,
 ) {
@@ -273,12 +274,18 @@ pub fn persist_detach_to_runtime_layer(
     if !cmd.intent.is_persistent() {
         return;
     }
-    let Some((doc, path, target)) = lunco_scene_authoring::doc_resolve::delete_target(
-        cmd.target,
-        &q_prim,
-        &usd_registry,
-        workspace.as_deref(),
-    ) else {
+    let Ok(prim) = q_prim.get(cmd.target) else {
+        return;
+    };
+    let Some(doc) = document_for_prim(&prim, &usd_registry, &asset_server, backed.as_deref())
+    else {
+        warn!(target = ?cmd.target, path = %prim.path, "persistent joint detach has no owning USD document");
+        return;
+    };
+    let Some((doc, path, target)) =
+        lunco_scene_authoring::doc_resolve::delete_target(cmd.target, &q_prim, &usd_registry, doc)
+    else {
+        warn!(target = ?cmd.target, path = %prim.path, "persistent joint detach target is not authorable in its owning USD document");
         return;
     };
 
@@ -380,6 +387,7 @@ struct SpawnCommandAdmission<'w, 's> {
     q_grids: Query<'w, 's, &'static Grid>,
     q_spatial: Query<'w, 's, (Option<&'static CellCoord>, &'static Transform)>,
     q_ids: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
+    entity_registry: Res<'w, lunco_api::registry::ApiEntityRegistry>,
     role: Res<'w, lunco_core_session::NetworkRole>,
     backed: Res<'w, lunco_usd_bevy_twin::DocBackedTwinScenes>,
     active_command: Res<'w, lunco_core::ActiveCommandId>,
@@ -396,6 +404,8 @@ pub fn on_spawn_entity_command(
     mut admission: SpawnCommandAdmission,
 ) -> Result<Ack, Reject> {
     let cmd = trigger.event();
+    let _span =
+        bevy::log::info_span!("scene_spawn_entity_command", entry_id = %cmd.entry_id).entered();
 
     // On a pure client, spawning is the host's job: the command is captured and
     // sent to the host, which spawns the authoritative rover and replicates it
@@ -543,7 +553,9 @@ pub fn on_spawn_entity_command(
     }
     let spawned_root = admission
         .pending
-        .reserve_runtime_spawn_root_id(admission.q_ids.iter().copied())
+        .reserve_runtime_spawn_root_id(|candidate| {
+            admission.entity_registry.resolve(&candidate).is_some()
+        })
         .map_err(Reject::InvalidOp)?;
     let input_admission = admission
         .pending
@@ -610,6 +622,7 @@ fn commit_runtime_spawn(
     asset_server: Res<AssetServer>,
     active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     role: Res<lunco_core_session::NetworkRole>,
+    entity_registry: Res<lunco_api::registry::ApiEntityRegistry>,
     backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     q_scene_root: Query<(Entity, &UsdPrimPath), With<UsdSceneRoot>>,
     q_ids: Query<&lunco_core::GlobalEntityId>,
@@ -629,6 +642,12 @@ fn commit_runtime_spawn(
     else {
         return;
     };
+    let _span = bevy::log::info_span!(
+        "scene_runtime_spawn_commit",
+        entry_id = %entry_id,
+        spawned_root_gid = spawned_root.get(),
+    )
+    .entered();
 
     let reject = |commands: &mut Commands, message: String| {
         commands.trigger(lunco_core::RuntimeError {
@@ -644,7 +663,7 @@ fn commit_runtime_spawn(
         );
         return;
     }
-    if q_ids.iter().any(|gid| gid == spawned_root) {
+    if entity_registry.resolve(spawned_root).is_some() {
         reject(
             &mut commands,
             format!("reserved runtime spawn identity {spawned_root} is already live"),
@@ -1489,19 +1508,19 @@ pub fn persist_transform_to_runtime_layer(
 /// [`on_move_entity_command`] but is fully decoupled from it — it touches no
 /// physics state.
 ///
-/// Persistence is **guarded to authored-scene entities**: it fires only when the
-/// moved entity carries a [`UsdPrimPath`] whose prim is owned by the active USD
-/// document (present in its base or runtime layer). Palette/sim spawns that
-/// aren't part of the authored scene are skipped, so this never authors stray
-/// opinions for entities the document doesn't know about. The op targets the
-/// runtime layer, so the move round-trips through the Twin journal and renders
-/// via the composed view, while Save stays base-only.
+/// Persistence is **guarded to authored-scene entities**: it resolves the
+/// owning USD document from the moved prim's stage, then checks that document's
+/// base, runtime, and composed-arc ownership before authoring. Palette/sim
+/// spawns and entities without a document-backed stage are skipped. The op
+/// targets the runtime layer, so the move round-trips through the owning Twin
+/// journal and renders via the composed view, while Save stays base-only.
 pub fn persist_move_to_runtime_layer(
     trigger: On<MoveEntity>,
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
     active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
+    asset_server: Res<AssetServer>,
     q_prim: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -1513,11 +1532,19 @@ pub fn persist_move_to_runtime_layer(
     let Some(target) = api_registry.resolve(&global_id) else {
         return;
     };
-    let Some((doc, path)) = lunco_scene_authoring::doc_resolve::authorable_prim(
+    let Some(prim) = q_prim.get(target).ok() else {
+        return;
+    };
+    let Some(doc) =
+        lunco_usd_bevy_twin::scene_document_for(&backed, &asset_server, prim.stage_handle.id())
+    else {
+        return;
+    };
+    let Some((doc, path)) = lunco_scene_authoring::doc_resolve::authorable_prim_in_document(
         target,
         &q_prim,
         &usd_registry,
-        workspace.as_deref(),
+        doc,
     ) else {
         return;
     };
@@ -1703,6 +1730,23 @@ fn is_mount_component(
     })
 }
 
+/// Resolve an entity's scene-owned USD document from the stage it was
+/// projected from. The editor's active document is an editing focus and may
+/// belong to a different scene.
+fn document_for_prim(
+    prim: &UsdPrimPath,
+    registry: &DocumentRegistry<UsdDocument>,
+    asset_server: &AssetServer,
+    backed: Option<&lunco_usd_bevy_twin::DocBackedTwinScenes>,
+) -> Option<lunco_doc::DocumentId> {
+    lunco_scene_authoring::doc_resolve::resolve_doc_for_stage(
+        prim.stage_handle.id(),
+        asset_server,
+        backed,
+        registry,
+    )
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // DeleteEntity — removal, authored
 // ─────────────────────────────────────────────────────────────────────
@@ -1713,7 +1757,8 @@ pub fn on_delete_entity(
     trigger: On<DeleteEntity>,
     selected: Option<ResMut<SelectedEntities>>,
     usd_registry: Option<Res<DocumentRegistry<UsdDocument>>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    asset_server: Option<Res<AssetServer>>,
+    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
     q_prim: Query<&UsdPrimPath>,
     q_joint_state: Query<
         (),
@@ -1726,6 +1771,8 @@ pub fn on_delete_entity(
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let cmd = trigger.event();
+    let _span =
+        bevy::log::info_span!("scene_delete_entity_command", target = ?cmd.target).entered();
     if q_joint_state.contains(cmd.target) {
         warn!(
             "DELETE_ENTITY rejected for joint {:?}; use DetachJoint so the physics bridge retires the solver edge",
@@ -1743,23 +1790,49 @@ pub fn on_delete_entity(
         );
         return Err(format!("target {:?} does not exist", cmd.target));
     };
-    if let Some(registry) = usd_registry.as_deref() {
-        let attachment = lunco_scene_authoring::doc_resolve::authorable_prim(
-            cmd.target,
-            &q_prim,
-            registry,
-            workspace.as_deref(),
-        );
-        if let Some((doc, path)) = attachment {
-            if is_mount_component(registry, doc, &path) {
-                warn!(
-                    "DELETE_ENTITY rejected for attached component {}; use DetachComponent",
-                    path
+    if let Ok(prim) = q_prim.get(cmd.target) {
+        let owner = usd_registry
+            .as_deref()
+            .zip(asset_server.as_deref())
+            .and_then(|(registry, asset_server)| {
+                document_for_prim(prim, registry, asset_server, backed.as_deref())
+            });
+        if cmd.intent.is_persistent() {
+            let Some((registry, (doc, _, _))) =
+                usd_registry
+                    .as_deref()
+                    .zip(owner)
+                    .and_then(|(registry, doc)| {
+                        lunco_scene_authoring::doc_resolve::delete_target(
+                            cmd.target, &q_prim, registry, doc,
+                        )
+                        .map(|target| (registry, target))
+                    })
+            else {
+                let message = format!(
+                    "persistent delete cannot resolve an authorable USD document for {}",
+                    prim.path
                 );
-                return Err(format!(
-                    "target {path} is an attached component; use DetachComponent"
-                ));
+                warn!(target = ?cmd.target, path = %prim.path, "{message}");
+                return Err(message);
+            };
+            if is_mount_component(registry, doc, &prim.path) {
+                let message = format!(
+                    "target {} is an attached component; use DetachComponent",
+                    prim.path
+                );
+                warn!(target = ?cmd.target, path = %prim.path, "{message}");
+                return Err(message);
             }
+        } else if let (Some(registry), Some(doc)) = (usd_registry.as_deref(), owner)
+            && is_mount_component(registry, doc, &prim.path)
+        {
+            let message = format!(
+                "target {} is an attached component; use DetachComponent",
+                prim.path
+            );
+            warn!(target = ?cmd.target, path = %prim.path, "{message}");
+            return Err(message);
         }
     }
     let deleted_path = q_prim.get(cmd.target).ok().map(|prim| prim.path.clone());
@@ -1779,7 +1852,8 @@ pub fn on_delete_entity(
 pub fn persist_delete_to_runtime_layer(
     trigger: On<DeleteEntity>,
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    asset_server: Res<AssetServer>,
+    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
     q_prim: Query<&UsdPrimPath>,
     q_joint_state: Query<
         (),
@@ -1792,6 +1866,8 @@ pub fn persist_delete_to_runtime_layer(
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
+    let _span =
+        bevy::log::info_span!("scene_delete_entity_persist", target = ?cmd.target).entered();
     if q_joint_state.contains(cmd.target) {
         warn!(
             "DELETE_ENTITY persistence rejected for joint {:?}; use DetachJoint",
@@ -1802,12 +1878,18 @@ pub fn persist_delete_to_runtime_layer(
     if !cmd.intent.is_persistent() {
         return;
     }
-    let Some((doc, path, target)) = lunco_scene_authoring::doc_resolve::delete_target(
-        cmd.target,
-        &q_prim,
-        &usd_registry,
-        workspace.as_deref(),
-    ) else {
+    let Ok(prim) = q_prim.get(cmd.target) else {
+        return;
+    };
+    let Some(doc) = document_for_prim(&prim, &usd_registry, &asset_server, backed.as_deref())
+    else {
+        warn!(target = ?cmd.target, path = %prim.path, "persistent delete has no owning USD document");
+        return;
+    };
+    let Some((doc, path, target)) =
+        lunco_scene_authoring::doc_resolve::delete_target(cmd.target, &q_prim, &usd_registry, doc)
+    else {
+        warn!(target = ?cmd.target, path = %prim.path, "persistent delete target is not authorable in its owning USD document");
         return;
     };
     if is_mount_component(&usd_registry, doc, &path) {
@@ -2352,6 +2434,12 @@ register_commands!(
 
 impl Plugin for SpawnCommandPlugin {
     fn build(&self, app: &mut App) {
+        // Runtime spawn IDs must be checked through the same maintained index
+        // used by API entity lookup, not by walking every live identity.
+        lunco_api::add_plugin_once::<lunco_api::registry::ApiEntityRegistryPlugin>(
+            app,
+            lunco_api::registry::ApiEntityRegistryPlugin,
+        );
         // Catalog discovery is a separate production package. Its plugin is
         // added here because every scene command host needs SpawnEntity's
         // authoritative catalog, but its systems/resources remain owned there.

@@ -243,8 +243,8 @@ its wasm bridge is selected automatically by the target.
 
 The API addresses entities by **numeric** `GlobalEntityId` (a `u64`, defined in
 `lunco-core`). The `ApiEntityRegistry` resource maintains a
-bidirectional `GlobalEntityId ↔ Bevy Entity` map; `sync_api_registry` keeps it
-in step as entities carrying a `GlobalEntityId` component are added/removed.
+bidirectional `GlobalEntityId ↔ Bevy Entity` map. Component lifecycle observers
+update it immediately on identity insertion, replacement, and removal.
 Entity fields in command params use the global entity ID returned by the API:
 
 ```json

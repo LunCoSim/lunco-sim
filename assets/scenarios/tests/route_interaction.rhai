@@ -1,5 +1,5 @@
-// Windowed production gate for unpossessed route edits, route-point selection
-// and move preview, and the native context menu while a rover is possessed.
+// Windowed production gate for unpossessed route edits, possessed route-point
+// selection, cursor-tracking move preview, and the native context menu.
 
 const TEST_KIND = "editor";
 const ROOT = "/RouteInteraction";
@@ -7,14 +7,21 @@ const ROUTE = ROOT + "/Route";
 
 import "lunco://scripting/tools/waypoint_editor" as waypoint_editor;
 
-fn selected_only(entity) {
+fn selected_only(doc, path) {
+    let editor = query("InspectUsdSelection", #{});
+    if editor != () && editor.ok != false
+        && editor.focused == true && editor.doc_id == doc {
+        return editor.primary != () && editor.primary.path == path
+            && editor.selected != () && editor.selected.len() == 1
+            && editor.selected[0].path == path;
+    }
+    let entity = find_path_in_document(doc, path);
     if entity < 0 { return false; }
-    let expected = entity.to_string();
     let selection = query("InspectSelection", #{});
     selection != () && selection.ok != false
-        && selection.primary.to_string() == expected
+        && selection.primary.to_string() == entity.to_string()
         && selection.selected != () && selection.selected.len() == 1
-        && selection.selected[0].to_string() == expected
+        && selection.selected[0].to_string() == entity.to_string()
 }
 
 fn positions_differ(left, right) {
@@ -37,6 +44,18 @@ fn distance_between(left, right) {
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
+fn document_generation(doc) {
+    usd_document_generation(doc)
+}
+
+fn live_render_translation(entity) {
+    if entity < 0 { return (); }
+    try {
+        let translation = get(entity, "Transform.translation");
+        [translation.x, translation.y, translation.z]
+    } catch (error) { () }
+}
+
 fn report(me, passed, message) {
     me.done = true;
     me.checks.push(t_true(passed, message));
@@ -45,19 +64,935 @@ fn report(me, passed, message) {
 }
 
 fn simulation_dependencies(me, ctx) {
+    let subject = query("QueryUsdPrim", #{ path: ROOT + "/Subject" });
+    if subject == () || subject.ok == false || subject.doc_id == () {
+        throw "route interaction subject document is unavailable";
+    }
     #{
-       modelica_entities: [find_path(ROOT + "/Subject")],
+       modelica_entities: [find_path_in_document(subject.doc_id, ROOT + "/Subject")],
        entity_reads: [], entity_writes: [],
-       query_reads: ["InspectSelection", "QueryUsdPrim", "ResolveUsdTarget"],
+       query_reads: ["InspectSelection", "ListOpenDocuments", "QueryUsdPrim", "QueryUsdPrims", "ResolveUsdTarget"],
        required_inputs: [] }
 }
 
+fn test_state_is_valid(me) { this.failure == "" }
+
+fn begin_input_frame_boundary(me) { this.input_frame_samples = 0; }
+fn advance_input_frame_boundary(me) { this.input_frame_samples += 1; }
+fn input_frame_boundary_reached(me) { this.input_frame_samples > 1 }
+
+fn next_input_frame() {
+    seq([
+        once(Fn("begin_input_frame_boundary")),
+        step(Fn("advance_input_frame_boundary"), Fn("input_frame_boundary_reached")),
+    ])
+}
+
+fn route_fixture_ready(me) {
+    let route = query("QueryUsdPrim", #{ path: ROUTE, children: true });
+    route != () && route.ok != false && route.doc_id != ()
+        && route.children != () && route.children.contains(ROUTE + "/P2")
+}
+
+fn prepare_route_and_add_unpossessed(me) {
+    let initial = query("QueryUsdPrim", #{ path: ROUTE, children: true });
+    if initial == () || initial.ok == false || initial.doc_id == () {
+        this.failure = "the route document did not become available";
+        return;
+    }
+    this.doc = initial.doc_id;
+
+    let route = query("QueryUsdPrim", #{
+        doc_id: this.doc, path: ROUTE, children: true,
+    });
+    let unused = query("ResolveUsdTarget", #{
+        doc_id: this.doc, path: ROUTE + "/P3", edit_target: "@runtime@",
+    });
+    let pointer_api = query("QueryUsdPrim", #{
+        doc_id: this.doc,
+        path: ROUTE + "/P0/Dome",
+        attrs: ["lunco:interaction:right"], schemas: true,
+    });
+    let ribbon_api = query("QueryUsdPrim", #{
+        doc_id: this.doc,
+        path: ROUTE + "/RouteRibbon/Geometry",
+        attrs: ["lunco:interaction:right", "curveVertexCounts"], schemas: true,
+    });
+    this.subject = find_path_in_document(this.doc, ROOT + "/Subject");
+    this.point = find_path_in_document(this.doc, ROUTE + "/P0");
+    this.marker = find_path_in_document(this.doc, ROUTE + "/P0/Dome");
+    if unused == () || unused.ok == false
+        || route == () || route.ok == false
+        || pointer_api == () || pointer_api.ok == false
+        || ribbon_api == () || ribbon_api.ok == false
+        || pointer_api.api_schemas == ()
+        || !pointer_api.api_schemas.contains("LunCoPointerInteractionAPI")
+        || pointer_api.attrs == ()
+        || pointer_api.attrs["lunco:interaction:right"] != "context"
+        || ribbon_api.api_schemas == ()
+        || !ribbon_api.api_schemas.contains("LunCoPointerInteractionAPI")
+        || ribbon_api.attrs == ()
+        || ribbon_api.attrs["curveVertexCounts"] == ()
+        || ribbon_api.attrs["lunco:interaction:right"] != "context"
+        || this.subject < 0 || this.point < 0 || this.marker < 0
+        || route.children == () || !route.children.contains(ROUTE + "/P2")
+        || route.doc_id != this.doc {
+        this.failure = "route fixture identities or pointer schemas did not compose";
+        return;
+    }
+    if unused.status != "missing" || unused.under_arc != true
+        || unused.composed_exists != false {
+        this.failure = "ResolveUsdTarget did not report an absent referenced child as missing";
+        return;
+    }
+
+    this.route_children_before_edit = route.children;
+    this.generation_before_add = document_generation(this.doc);
+    this.ribbon_seed_count = ribbon_api.attrs["curveVertexCounts"][0];
+    let add = #{
+        button: "primary",
+        doc_id: this.doc,
+        scene_root_path: ROOT,
+        route_path: (),
+        selected_path: ROUTE + "/P0",
+        target_path: ROUTE + "/P0",
+        hit_path: ROUTE + "/P0",
+        prim_paths: [ROUTE + "/P0"],
+        pointer_intents: ["route.add_point"],
+        modifiers: #{ alt: true, shift: false, ctrl: false },
+        surface_world_position: point3([4.0, 0.0, -16.0], "active_physics"),
+    };
+    let added = waypoint_editor::route_pointer_action(add);
+    if added == () || added.ok != true || added.path == () {
+        this.failure = "route add failed when no rover was possessed";
+        return;
+    }
+    if this.route_children_before_edit.contains(added.path) {
+        this.failure = "route add reused a waypoint path that existed before the unpossessed edit";
+        return;
+    }
+    this.generation_after_add = document_generation(this.doc);
+    this.added_without_possession = added.path;
+    this.waiting_for = "the unpossessed waypoint trigger projection";
+}
+
+fn unpossessed_waypoint_ready(me) {
+    if this.added_without_possession == () { return false; }
+    let trigger = query("QueryUsdPrim", #{
+        doc_id: this.doc,
+        path: this.added_without_possession + "/Trigger",
+        attrs: ["lunco:triggerZone"],
+    });
+    let ready = trigger != () && trigger.ok != false && trigger.attrs != ()
+        && trigger.attrs["lunco:triggerZone"] != ();
+    if !ready { return false; }
+    let curve = query("QueryUsdPrim", #{
+        doc_id: this.doc,
+        path: ROUTE + "/RouteRibbon/Geometry",
+        attrs: ["curveVertexCounts"],
+    });
+    let generation = document_generation(this.doc);
+    this.checks.push(t_true(to_int(this.generation_after_add)
+        == to_int(this.generation_before_add) + 3
+        && generation == this.generation_after_add,
+        "adding one point applies its three USD ops once with no follow-up document projection"));
+    this.checks.push(t_true(curve != () && curve.ok != false && curve.attrs != ()
+        && curve.attrs["curveVertexCounts"] != ()
+        && curve.attrs["curveVertexCounts"][0] == this.ribbon_seed_count,
+        "route ribbon geometry stays outside the edited USD document"));
+    true
+}
+
+fn delete_unpossessed_waypoint(me) {
+    this.generation_before_delete = document_generation(this.doc);
+    let deleted = waypoint_editor::on_delete(#{
+        doc_id: this.doc,
+        selected_path: this.added_without_possession,
+    });
+    if deleted == () || deleted.ok != true
+        || deleted.path != this.added_without_possession {
+        this.failure = "route delete failed when no rover was possessed";
+        return;
+    }
+    this.generation_after_delete = document_generation(this.doc);
+    this.waiting_for = "the unpossessed waypoint deletion projection";
+}
+
+fn unpossessed_waypoint_deleted(me) {
+    let route = query("QueryUsdPrim", #{
+        doc_id: this.doc, path: ROUTE, children: true,
+    });
+    let deleted = route != () && route.ok != false && route.children != ()
+        && !route.children.contains(this.added_without_possession);
+    if !deleted { return false; }
+    let generation = document_generation(this.doc);
+    this.checks.push(t_true(to_int(this.generation_after_delete)
+        == to_int(this.generation_before_delete) + 1
+        && generation == this.generation_after_delete,
+        "deleting one point projects one authored change without a ribbon projection"));
+    true
+}
+
+fn select_rover(me) {
+    let editor = query("InspectUsdSelection", #{});
+    let selected = if editor != () && editor.ok != false
+        && editor.focused == true && editor.doc_id == this.doc {
+        cmd("SelectUsdPrim", #{
+            preview: editor.preview,
+            path: ROOT + "/Subject",
+            extend: false,
+            toggle: false,
+        })
+    } else {
+        cmd("SelectEntity", #{
+            entity_id: this.subject,
+            inspector_part_entity_id: 0,
+            extend: false,
+            toggle: false,
+            remove_only: false,
+        })
+    };
+    if selected == () || selected.ok == false {
+        this.failure = "could not establish the pre-existing rover selection";
+    }
+    this.waiting_for = "the rover selection";
+}
+
+fn rover_is_selected(me) { selected_only(this.doc, ROOT + "/Subject") }
+
+fn possess_rover(me) {
+    let possession = cmd("AcquireControl", #{ target: this.subject });
+    if possession == () || possession.ok == false {
+        this.failure = "could not request rover possession before native route context input";
+    }
+    this.waiting_for = "rover possession";
+}
+
+fn rover_is_possessed(me) { is_controlled(this.subject) }
+
+fn observe_stable_marker_projection(me) {
+    if !is_controlled(this.subject) {
+        this.failure = "rover possession was lost before native context input";
+        return;
+    }
+    let screen = viewport_position(this.marker);
+    if screen == () || screen.len() != 2 {
+        this.last_screen = ();
+        this.stable_screen_samples = 0;
+        return;
+    }
+    if this.last_screen != () {
+        let dx = screen[0] - this.last_screen[0];
+        let dy = screen[1] - this.last_screen[1];
+        if (dx * dx + dy * dy).sqrt() <= 1.0 {
+            this.stable_screen_samples += 1;
+        } else {
+            this.stable_screen_samples = 0;
+        }
+    }
+    this.last_screen = screen;
+    if this.stable_screen_samples >= 3 { this.screen = screen; }
+}
+
+fn marker_projection_stable_or_failed(me) {
+    this.failure != "" || this.stable_screen_samples >= 3
+}
+
+fn move_pointer_to_p0(me) {
+    input_pointer_move(this.screen[0], this.screen[1]);
+    this.waiting_for = "the first native waypoint context event";
+}
+
+fn press_secondary(me) {
+    input_pointer_press("secondary", this.screen[0], this.screen[1]);
+}
+
+fn release_secondary(me) {
+    input_pointer_release("secondary", this.screen[0], this.screen[1]);
+}
+
+fn first_secondary_context_arrived(me) { this.secondary_contexts.len() >= 1 }
+
+fn context_hits_point(context, point) {
+    if context == () { return false; }
+    let paths = context["prim_paths"];
+    context["hit_path"] == point + "/Dome"
+        || context["target_path"] == point
+        || (paths != () && paths.contains(point + "/Dome"))
+}
+
+fn route_context_is_valid(context, point) {
+    if context == () { return false; }
+    let intents = context["pointer_intents"];
+    let policy = context["pointer_policy"];
+    context["button"] == "secondary"
+        && intents != () && intents.contains("route.context")
+        && policy != () && policy["right"] == "context"
+        && context_hits_point(context, point)
+}
+
+fn first_context_is_valid(me) {
+    let context = this.secondary_contexts[this.secondary_contexts.len() - 1];
+    let valid = route_context_is_valid(context, this.context_delete_path);
+    if !valid {
+        this.failure = "possessed secondary click projected P0 to " + this.screen.to_string()
+            + " but hit `" + context["hit_path"].to_string() + "` at "
+            + context["screen_position"].to_string() + " (target `"
+            + context["target_path"].to_string() + "`, world "
+            + context["world_position"].to_string() + ")";
+    }
+    valid
+}
+
+fn check_possession_and_selection(me) {
+    if !is_controlled(this.subject) {
+        this.failure = "rover possession was lost during the native context click";
+    } else if !selected_only(this.doc, ROOT + "/Subject") {
+        this.failure = "the possessed right-click changed the existing rover selection";
+    }
+}
+
+fn prepare_select_menu_row(me) {
+    this.menu_x = this.screen[0] + 58.0;
+    this.menu_y = this.screen[1] + 16.0;
+    input_pointer_move(this.menu_x, this.menu_y);
+}
+
+fn press_menu_primary(me) {
+    input_pointer_press("primary", this.menu_x, this.menu_y);
+}
+
+fn release_menu_primary(me) {
+    input_pointer_release("primary", this.menu_x, this.menu_y);
+}
+
+fn p0_is_selected(me) { selected_only(this.doc, ROUTE + "/P0") }
+
+fn point_selection_preserved_possession(me) {
+    if !is_controlled(this.subject) {
+        this.failure = "selecting a route point released rover possession";
+    } else if !selected_only(this.doc, ROUTE + "/P0") {
+        this.failure = "the explicit Select route point menu action did not select P0";
+    }
+}
+
+fn move_pointer_to_p1(me) {
+    let second_marker = viewport_position(
+        find_path_in_document(this.doc, ROUTE + "/P1/Dome"),
+    );
+    if second_marker == () || second_marker.len() != 2 {
+        this.failure = "could not project a second route point for the native move-mode check";
+        return;
+    }
+    input_pointer_move(second_marker[0], second_marker[1]);
+}
+
+fn selection_did_not_arm_move(me) {
+    let ghost = query("ResolveUsdTarget", #{
+        doc_id: this.doc,
+        path: ROUTE + "/MovePreview",
+        edit_target: "@view@",
+    });
+    ghost != () && ghost.ok != false && ghost.authored_here != true
+}
+
+fn prepare_second_context(me) {
+    input_pointer_move(this.screen[0], this.screen[1]);
+    this.waiting_for = "the second native waypoint context event";
+}
+
+fn second_secondary_context_arrived(me) { this.secondary_contexts.len() >= 2 }
+
+fn second_context_is_valid(me) {
+    let valid = route_context_is_valid(
+        this.secondary_contexts[this.secondary_contexts.len() - 1],
+        this.context_delete_path,
+    );
+    if !valid { this.failure = "selected P0 did not retain its authored context target"; }
+    valid
+}
+
+fn prepare_move_menu_row(me) {
+    this.menu_x = this.screen[0] + 58.0;
+    this.menu_y = this.screen[1] + 37.0;
+    input_pointer_move(this.menu_x, this.menu_y);
+}
+
+fn move_preview_is_armed(me) {
+    let target = query("ResolveUsdTarget", #{
+        doc_id: this.doc,
+        path: ROUTE + "/MovePreview/Target_P0",
+        edit_target: "@view@",
+    });
+    let preview = query("ResolveUsdTarget", #{
+        doc_id: this.doc,
+        path: ROUTE + "/MovePreview",
+        edit_target: "@view@",
+        authored_children: true,
+    });
+    let ghost = query("QueryUsdPrim", #{
+        doc_id: this.doc,
+        path: ROUTE + "/MovePreview",
+        attrs: ["lunco:interaction:left", "lunco:interaction:right", "xformOp:translate"],
+        schemas: true,
+    });
+    let preview_entity = find_path_in_document(this.doc, ROUTE + "/MovePreview");
+    let target_is_direct_child = false;
+    if preview != () && preview.ok != false && preview.authored_children != () {
+        for child in preview.authored_children {
+            if child == ROUTE + "/MovePreview/Target_P0" {
+                target_is_direct_child = true;
+            }
+        }
+    }
+    target != () && target.ok != false && target.authored_here == true
+        && target_is_direct_child
+        && ghost != () && ghost.ok != false && ghost.attrs != () && ghost.api_schemas != ()
+        && ghost.api_schemas.contains("LunCoPointerInteractionAPI")
+        && ghost.attrs["lunco:interaction:left"] == "pass_through"
+        && ghost.attrs["lunco:interaction:right"] == "pass_through"
+        && ghost.attrs["xformOp:translate"] != ()
+        && preview_entity >= 0
+}
+
+fn prepare_cursor_trace(me) {
+    if !selected_only(this.doc, ROUTE + "/P0") {
+        this.failure = "the Move route point menu action did not select P0";
+        return;
+    }
+    if !is_controlled(this.subject) {
+        this.failure = "starting a route move released rover possession";
+        return;
+    }
+    let ghost = query("QueryUsdPrim", #{
+        doc_id: this.doc,
+        path: ROUTE + "/MovePreview",
+        attrs: ["lunco:interaction:left", "lunco:interaction:right", "xformOp:translate"],
+        schemas: true,
+    });
+    let target = query("ResolveUsdTarget", #{
+        doc_id: this.doc,
+        path: ROUTE + "/MovePreview/Target_P0",
+        edit_target: "@view@",
+    });
+    if ghost == () || ghost.ok == false || ghost.attrs == () || ghost.api_schemas == ()
+        || !ghost.api_schemas.contains("LunCoPointerInteractionAPI")
+        || ghost.attrs["lunco:interaction:left"] != "pass_through"
+        || ghost.attrs["lunco:interaction:right"] != "pass_through"
+        || ghost.attrs["xformOp:translate"] == ()
+        || target == () || target.ok == false || target.authored_here != true {
+        this.failure = "Move did not arm a pass-through preview for P0";
+        return;
+    }
+    let point = query("QueryUsdPrim", #{ doc_id: this.doc, path: this.context_delete_path });
+    if point == () || point.ok == false || point.world_position == () {
+        this.failure = "could not read P0 position before native placement";
+        return;
+    }
+    this.point_position_before_move = point.world_position;
+    this.move_preview_entity = find_path_in_document(this.doc, ROUTE + "/MovePreview");
+    if this.move_preview_entity < 0
+        || !track_entity_read(this.move_preview_entity) {
+        this.failure = "the projected move ghost has no declared live entity read";
+        return;
+    }
+    let ghost_position = live_render_translation(this.move_preview_entity);
+    if ghost_position == () {
+        this.failure = "the declared move ghost has no live render transform (entity "
+            + this.move_preview_entity.to_string() + ")";
+        return;
+    }
+    this.move_preview_generation = usd_document_generation(this.doc);
+    this.last_ghost_position = ghost_position;
+    this.cursor_sample_seen = false;
+    this.move_x = this.screen[0] + 460.0;
+    this.move_y = this.screen[1];
+    for offset in [20.0, 60.0, 100.0, 140.0, 180.0, 220.0,
+        260.0, 300.0, 340.0, 380.0, 420.0, 460.0] {
+        input_pointer_move(this.screen[0] + offset, this.move_y);
+    }
+    this.waiting_for = "the coalesced move-preview cursor sample";
+}
+
+fn observe_ghost_cursor_sample(me) {
+    let ghost_position = live_render_translation(this.move_preview_entity);
+    if ghost_position == () {
+        this.failure = "the live move ghost lost its render transform during pointer movement";
+        return;
+    }
+    if positions_differ(ghost_position, this.last_ghost_position) {
+        this.cursor_sample_seen = true;
+    }
+}
+
+fn ghost_followed_cursor_or_failed(me) {
+    this.failure != "" || this.cursor_sample_seen
+}
+
+fn preview_document_generation_is_stable(me) {
+    if usd_document_generation(this.doc) != this.move_preview_generation {
+        this.failure = "cursor preview movement changed the USD document generation";
+        return false;
+    }
+    true
+}
+
+fn press_placement(me) { input_pointer_press("primary", this.move_x, this.move_y); }
+fn release_placement(me) { input_pointer_release("primary", this.move_x, this.move_y); }
+
+fn observe_moved_waypoint(me) {
+    let moved = query("QueryUsdPrim", #{
+        doc_id: this.doc, path: this.context_delete_path,
+    });
+    if moved != () && moved.ok != false && moved.world_position != ()
+        && positions_differ(moved.world_position, this.point_position_before_move) {
+        this.moved_point = moved;
+    }
+}
+
+fn waypoint_was_moved(me) { this.moved_point != () }
+
+fn moved_waypoint_matches_placement_click(me) {
+    if this.primary_contexts.len() == 0 {
+        this.failure = "the native placement click produced no scene.pointer context";
+        return false;
+    }
+    let context = this.primary_contexts[this.primary_contexts.len() - 1];
+    if context["selected_path"] != ROUTE + "/P0" {
+        this.failure = "the terrain placement context lost the selected waypoint identity";
+        return false;
+    }
+    let clicked_position = point_values(context["world_position"]);
+    if clicked_position == () {
+        this.failure = "the native placement click had no active-physics hit point";
+        return false;
+    }
+    if positions_differ(this.moved_point.world_position, clicked_position) {
+        this.failure = "the committed waypoint position did not match the placement click";
+        return false;
+    }
+    true
+}
+
+fn placement_preserved_rover_and_selection(me) {
+    if !is_controlled(this.subject) {
+        this.failure = "moving P0 through the native scene click dropped rover possession";
+    } else if !selected_only(this.doc, ROUTE + "/P0") {
+        this.failure = "moving P0 changed the selected waypoint";
+    }
+}
+
+fn move_pointer_to_moved_p0(me) {
+    input_pointer_move(this.screen[0], this.screen[1]);
+    this.waiting_for = "the post-move native waypoint context event";
+}
+
+fn prepare_moved_marker_projection(me) {
+    this.marker = find_path_in_document(this.doc, ROUTE + "/P0/Dome");
+    this.screen = ();
+    this.last_screen = ();
+    this.stable_screen_samples = 0;
+    if this.marker < 0 {
+        this.failure = "moved P0 has no live marker for its context-menu check";
+    }
+}
+
+fn third_secondary_context_arrived(me) { this.secondary_contexts.len() >= 3 }
+
+fn third_context_is_valid(me) {
+    let context = this.secondary_contexts[this.secondary_contexts.len() - 1];
+    let valid = route_context_is_valid(context, this.context_delete_path);
+    if !valid {
+        this.failure = "moved P0 context hit `"
+            + context["hit_path"].to_string()
+            + "` at " + context["screen_position"].to_string()
+            + "; expected `" + this.context_delete_path + "` at "
+            + this.screen.to_string();
+    }
+    valid
+}
+
+fn prepare_delete_menu_row(me) {
+    // P0 is an endpoint in the three-point fixture, so its menu contains
+    // Select, Move, Add before, Add after, and Delete in that order.
+    // Near the viewport edge, egui shifts the menu left to keep it visible.
+    // Keep the click close to the anchor so the short Delete button receives it.
+    this.menu_x = this.screen[0] + 20.0;
+    this.menu_y = this.screen[1] + 16.0 + 4.0 * 21.0;
+    input_pointer_move(this.menu_x, this.menu_y);
+}
+
+fn moved_waypoint_is_inactive(me) {
+    let deleted = query("QueryUsdPrim", #{
+        doc_id: this.doc, path: this.context_delete_path,
+    });
+    deleted != () && deleted.ok != false && deleted.active == false
+}
+
+fn delete_preserved_rover(me) {
+    if !is_controlled(this.subject) {
+        this.failure = "deleting a moved route point through the context menu dropped rover possession";
+    }
+}
+
+fn insert_after_p1(me) {
+    let inserted = waypoint_editor::on_insert_after(#{
+        doc_id: this.doc,
+        route_path: ROUTE,
+        selected_path: ROUTE + "/P1",
+        target_path: ROUTE + "/P1",
+        hit_path: ROUTE + "/P1",
+        prim_paths: [ROUTE + "/P1"],
+    });
+    if inserted == () || inserted.ok != true || inserted.path != ROUTE + "/P3" {
+        this.failure = "Add point after failed: " + inserted.to_string();
+        return;
+    }
+    this.inserted_after = inserted.path;
+    this.waiting_for = "the Add point after route order projection";
+}
+
+fn after_insertion_is_projected(me) {
+    let read = waypoint_editor::route_positions(this.doc, ROUTE);
+    read != () && read.ok == true && read.paths != ()
+        && read.paths.contains(this.inserted_after)
+}
+
+fn after_insertion_order_is_valid(me) {
+    let read = waypoint_editor::route_positions(this.doc, ROUTE);
+    if read == () || read.ok != true || read.paths.len() != 3
+        || read.paths[0] != ROUTE + "/P1"
+        || read.paths[1] != this.inserted_after
+        || read.paths[2] != ROUTE + "/P2" {
+        this.failure = "Add point after produced unexpected route order: "
+            + if read == () { "<no route read>" } else { read.paths.to_string() };
+        return false;
+    }
+    this.checks.push(t_true(true,
+        "Add point after orders the new direct point after its target"));
+    true
+}
+
+fn delete_p2_for_inactive_order_check(me) {
+    let deleted = waypoint_editor::on_delete(#{
+        doc_id: this.doc, selected_path: ROUTE + "/P2",
+    });
+    if deleted == () || deleted.ok != true || deleted.path != ROUTE + "/P2" {
+        this.failure = "could not deactivate P2 before testing order against inactive points";
+        return;
+    }
+    this.waiting_for = "the inactive P2 route projection";
+}
+
+fn p2_is_absent_from_active_route(me) {
+    let read = waypoint_editor::route_positions(this.doc, ROUTE);
+    read != () && read.ok == true && !read.paths.contains(ROUTE + "/P2")
+        && read.paths.contains(this.inserted_after)
+}
+
+fn insert_before_p1(me) {
+    let inserted = waypoint_editor::on_insert_before(#{
+        doc_id: this.doc,
+        route_path: ROUTE,
+        selected_path: ROUTE + "/P1",
+        target_path: ROUTE + "/P1",
+        hit_path: ROUTE + "/P1",
+        prim_paths: [ROUTE + "/P1"],
+    });
+    if inserted == () || inserted.ok != true || inserted.path != ROUTE + "/P4" {
+        this.failure = "Add point before failed after P2 deactivation: " + inserted.to_string();
+        return;
+    }
+    this.inserted_before = inserted.path;
+    this.waiting_for = "the Add point before route order projection";
+}
+
+fn before_insertion_is_projected(me) {
+    let read = waypoint_editor::route_positions(this.doc, ROUTE);
+    read != () && read.ok == true && read.paths.contains(this.inserted_before)
+        && !read.paths.contains(ROUTE + "/P2")
+}
+
+fn before_insertion_order_is_valid(me) {
+    let read = waypoint_editor::route_positions(this.doc, ROUTE);
+    if read == () || read.ok != true || read.paths.len() != 3
+        || read.paths[0] != this.inserted_before
+        || read.paths[1] != ROUTE + "/P1"
+        || read.paths[2] != this.inserted_after {
+        this.failure = "Add point before included an inactive point or misordered children: "
+            + if read == () { "<no route read>" } else { read.paths.to_string() };
+        return false;
+    }
+    this.checks.push(t_true(true,
+        "Add point before orders only the remaining composed points after P2 is deactivated"));
+    true
+}
+
+fn insert_after_final_point(me) {
+    let inserted = waypoint_editor::on_insert_after(#{
+        doc_id: this.doc,
+        route_path: ROUTE,
+        selected_path: this.inserted_after,
+        target_path: this.inserted_after,
+        hit_path: this.inserted_after,
+        prim_paths: [this.inserted_after],
+    });
+    if inserted == () || inserted.ok != true {
+        this.failure = "Add point after the final route point failed: " + inserted.to_string();
+        return;
+    }
+    this.inserted_endpoint = inserted.path;
+    this.waiting_for = "the endpoint insertion projection";
+}
+
+fn endpoint_is_projected(me) {
+    let read = waypoint_editor::route_positions(this.doc, ROUTE);
+    read != () && read.ok == true && read.paths.contains(this.inserted_endpoint)
+}
+
+fn finish_route_interaction(me) {
+    let read = waypoint_editor::route_positions(this.doc, ROUTE);
+    if read == () || read.ok != true || read.paths.len() != 4
+        || read.paths[0] != this.inserted_before
+        || read.paths[1] != ROUTE + "/P1"
+        || read.paths[2] != this.inserted_after
+        || read.paths[3] != this.inserted_endpoint {
+        this.failure = "endpoint insertion produced unexpected route order: "
+            + if read == () { "<no route read>" } else { read.paths.to_string() };
+        return;
+    }
+    let extension = distance_between(
+        read.points[read.points.len() - 2],
+        read.points[read.points.len() - 1],
+    );
+    if extension == () || (extension - 5.0).abs() > 0.01 {
+        this.failure = "endpoint insertion did not extend exactly five meters: "
+            + extension.to_string();
+        return;
+    }
+    this.checks.push(t_true(true,
+        "endpoint insertion appends a route point exactly five meters outward"));
+    this.waiting_for = "rover release before generic waypoint deletion";
+}
+
+fn release_rover_before_generic_delete(me) {
+    let released = release_control_claim(this.subject);
+    if released == () || released.ok == false {
+        this.failure = "could not release rover control before generic waypoint deletion";
+    }
+}
+
+fn rover_is_released(me) { !is_controlled(this.subject) }
+
+fn open_different_active_document(me) {
+    let opened = cmd("NewDocument", #{ kind: "usd" });
+    if opened == () || opened.ok == false {
+        this.failure = "could not create another active USD document before generic waypoint deletion";
+        return;
+    }
+    this.waiting_for = "a different active USD document";
+}
+
+fn different_active_document_is_ready(me) {
+    let docs = query("ListOpenDocuments");
+    if docs == () || docs.active_doc_id == () || docs.active_doc_id == this.doc {
+        return false;
+    }
+    this.active_document_id = docs.active_doc_id;
+    true
+}
+
+fn delete_waypoint_with_generic_command(me) {
+    if this.active_document_id == () || this.active_document_id == this.doc {
+        this.failure = "generic deletion requires a different active USD document";
+        return;
+    }
+    let target = find_path_in_document(this.doc, this.inserted_after);
+    if target < 0 {
+        this.failure = "generic deletion target has no live waypoint entity";
+        return;
+    }
+    this.generic_delete_generation_before = document_generation(this.doc);
+    let deleted = cmd("DeleteEntity", #{ target: target });
+    if deleted == () || deleted.ok == false {
+        this.failure = "generic DeleteEntity rejected the unpossessed route point: "
+            + if deleted == () { "no command result" } else { deleted.error };
+        return;
+    }
+    this.waiting_for = "generic waypoint deletion in its owning Twin document";
+}
+
+fn generic_delete_is_projected(me) {
+    let route = waypoint_editor::route_positions(this.doc, ROUTE);
+    if route == () || route.ok != true || route.paths.contains(this.inserted_after)
+        || find_path_in_document(this.doc, this.inserted_after) >= 0 {
+        return false;
+    }
+    let docs = query("ListOpenDocuments");
+    if docs == () || docs.active_doc_id != this.active_document_id {
+        this.failure = "generic DeleteEntity changed the active editor document";
+        return true;
+    }
+    this.generic_delete_generation_after = document_generation(this.doc);
+    if to_int(this.generic_delete_generation_after)
+        != to_int(this.generic_delete_generation_before) + 1 {
+        this.failure = "generic DeleteEntity did not author exactly one change in the stage-owning document";
+        return true;
+    }
+    this.checks.push(t_true(true,
+        "generic DeleteEntity removes an unpossessed route point from its owning Twin while another USD document is active"));
+    true
+}
+
+fn undo_generic_waypoint_delete(me) {
+    let undone = cmd("UndoDocument", #{ doc_id: this.doc });
+    if undone == () || undone.ok == false {
+        this.failure = "the owning Twin document rejected undo after generic DeleteEntity";
+        return;
+    }
+    this.waiting_for = "the owning Twin document restoring its generically deleted point";
+}
+
+fn generic_delete_undo_is_projected(me) {
+    let route = waypoint_editor::route_positions(this.doc, ROUTE);
+    if route == () || route.ok != true || !route.paths.contains(this.inserted_after)
+        || find_path_in_document(this.doc, this.inserted_after) < 0 {
+        return false;
+    }
+    let docs = query("ListOpenDocuments");
+    if docs == () || docs.active_doc_id != this.active_document_id {
+        this.failure = "undo changed the active editor document";
+        return true;
+    }
+    this.checks.push(t_true(true,
+        "undo restores the route point through the same owning Twin document"));
+    report(this, true,
+        "unpossessed edit, possessed native selection, explicit Move, cursor-tracking ghost, placement, right-click, ordered insertion, and generic delete with a different active document passed");
+    true
+}
+
+fn task(me, ctx) {
+    seq([
+        wait_until(Fn("route_fixture_ready")),
+        once(Fn("prepare_route_and_add_unpossessed")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("unpossessed_waypoint_ready")),
+        once(Fn("delete_unpossessed_waypoint")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("unpossessed_waypoint_deleted")),
+        once(Fn("select_rover")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("rover_is_selected")),
+        once(Fn("possess_rover")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("rover_is_possessed")),
+        step(Fn("observe_stable_marker_projection"), Fn("marker_projection_stable_or_failed")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("move_pointer_to_p0")),
+        next_input_frame(),
+        once(Fn("press_secondary")),
+        next_input_frame(),
+        once(Fn("release_secondary")),
+        wait_until(Fn("first_secondary_context_arrived")),
+        check(Fn("first_context_is_valid")),
+        once(Fn("check_possession_and_selection")),
+        check(Fn("test_state_is_valid")),
+        next_input_frame(),
+        once(Fn("prepare_select_menu_row")),
+        next_input_frame(),
+        once(Fn("press_menu_primary")),
+        next_input_frame(),
+        once(Fn("release_menu_primary")),
+        wait_until(Fn("p0_is_selected")),
+        once(Fn("point_selection_preserved_possession")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("move_pointer_to_p1")),
+        next_input_frame(),
+        check(Fn("selection_did_not_arm_move")),
+        once(Fn("prepare_second_context")),
+        next_input_frame(),
+        once(Fn("press_secondary")),
+        next_input_frame(),
+        once(Fn("release_secondary")),
+        wait_until(Fn("second_secondary_context_arrived")),
+        check(Fn("second_context_is_valid")),
+        once(Fn("prepare_move_menu_row")),
+        next_input_frame(),
+        once(Fn("press_menu_primary")),
+        next_input_frame(),
+        once(Fn("release_menu_primary")),
+        wait_until(Fn("move_preview_is_armed")),
+        once(Fn("prepare_cursor_trace")),
+        check(Fn("test_state_is_valid")),
+        step(Fn("observe_ghost_cursor_sample"), Fn("ghost_followed_cursor_or_failed")),
+        check(Fn("test_state_is_valid")),
+        check(Fn("preview_document_generation_is_stable")),
+        once(Fn("press_placement")),
+        next_input_frame(),
+        once(Fn("release_placement")),
+        step(Fn("observe_moved_waypoint"), Fn("waypoint_was_moved")),
+        check(Fn("moved_waypoint_matches_placement_click")),
+        once(Fn("placement_preserved_rover_and_selection")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("prepare_moved_marker_projection")),
+        step(Fn("observe_stable_marker_projection"), Fn("marker_projection_stable_or_failed")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("move_pointer_to_moved_p0")),
+        check(Fn("test_state_is_valid")),
+        next_input_frame(),
+        once(Fn("press_secondary")),
+        next_input_frame(),
+        once(Fn("release_secondary")),
+        wait_until(Fn("third_secondary_context_arrived")),
+        check(Fn("third_context_is_valid")),
+        once(Fn("prepare_delete_menu_row")),
+        next_input_frame(),
+        once(Fn("press_menu_primary")),
+        next_input_frame(),
+        once(Fn("release_menu_primary")),
+        wait_until(Fn("moved_waypoint_is_inactive")),
+        once(Fn("delete_preserved_rover")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("insert_after_p1")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("after_insertion_is_projected")),
+        check(Fn("after_insertion_order_is_valid")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("delete_p2_for_inactive_order_check")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("p2_is_absent_from_active_route")),
+        once(Fn("insert_before_p1")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("before_insertion_is_projected")),
+        check(Fn("before_insertion_order_is_valid")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("insert_after_final_point")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("endpoint_is_projected")),
+        once(Fn("finish_route_interaction")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("release_rover_before_generic_delete")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("rover_is_released")),
+        once(Fn("open_different_active_document")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("different_active_document_is_ready")),
+        once(Fn("delete_waypoint_with_generic_command")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("generic_delete_is_projected")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("undo_generic_waypoint_delete")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("generic_delete_undo_is_projected")),
+        check(Fn("test_state_is_valid")),
+    ])
+}
+
 fn on_start(me, ctx) {
-    this.phase = 0;
-    this.elapsed = 0.0;
-    this.phase_elapsed = 0.0;
     this.done = false;
     this.checks = [];
+    this.failure = "";
+    this.waiting_for = "the route fixture";
     this.doc = -1;
     this.subject = -1;
     this.point = -1;
@@ -68,825 +1003,45 @@ fn on_start(me, ctx) {
     this.context_delete_path = ROUTE + "/P0";
     this.last_screen = ();
     this.stable_screen_samples = 0;
-    this.scene_pointer_seen = false;
-    this.scene_pointer_context = ();
-    this.primary_pointer_context = ();
+    this.secondary_contexts = [];
+    this.primary_contexts = [];
     this.move_preview_entity = -1;
     this.move_preview_generation = -1;
-    this.ghost_observed_move = false;
+    this.last_ghost_position = ();
+    this.cursor_sample_seen = false;
+    this.moved_point = ();
     this.inserted_after = ();
     this.inserted_before = ();
     this.inserted_endpoint = ();
+    this.active_document_id = ();
+    this.generic_delete_generation_before = ();
+    this.generic_delete_generation_after = ();
+    this.input_frame_samples = 0;
+    subscribe("scene.pointer");
+    subscribe("TASK_FAILED");
 }
 
 fn on_event(me, evt, ctx) {
-    if !this.done && evt.name == "scene.pointer" && evt.value != () {
-        if this.phase >= 13 && evt.value["button"] == "secondary" {
-            this.scene_pointer_seen = true;
-            this.scene_pointer_context = evt.value;
-        }
-        if this.phase >= 22 && evt.value["button"] == "primary" {
-            this.primary_pointer_context = evt.value;
-        }
-    }
-}
-
-fn on_tick(me, ctx) {
     if this.done { return; }
-    this.elapsed += dt();
-    this.phase_elapsed += dt();
-    if this.elapsed > 30.0 {
-        this.done = true;
-        report(this, false, "native route context interaction timed out in phase " + this.phase);
+    if evt.name == "scene.pointer" && evt.value != () {
+        if evt.value["button"] == "secondary" {
+            this.secondary_contexts.push(evt.value);
+        } else if evt.value["button"] == "primary" {
+            this.primary_contexts.push(evt.value);
+        }
         return;
     }
-
-    if this.phase == 0 {
-        if this.doc == -1 {
-            let initial = query("QueryUsdPrim", #{ path: ROUTE, children: true });
-            if initial == () || initial.ok == false || initial.doc_id == () { return; }
-            this.doc = initial.doc_id;
-            let float_readback = waypoint_editor::points_equal(
-                [[550.069, 0.0, 0.0]],
-                [[550.0689697265625, 0.0, 0.0]],
-            );
-            let millimeter_change_stays_visible = !waypoint_editor::points_equal(
-                [[550.069, 0.0, 0.0]],
-                [[550.068, 0.0, 0.0]],
-            );
-            if !float_readback || !millimeter_change_stays_visible {
-                report(this, false,
-                    "ribbon point comparison did not respect USD point3f precision");
-                return;
-            }
-            this.checks.push(t_true(true,
-                "ribbon comparison accepts point3f readback and detects a millimeter edit"));
-        }
-        let route = query("QueryUsdPrim", #{
-            doc_id: this.doc,
-            path: ROUTE,
-            children: true,
-        });
-        let unused = query("ResolveUsdTarget", #{
-            doc_id: this.doc,
-            path: ROUTE + "/P3",
-            edit_target: "@runtime@",
-        });
-        let pointer_api = query("QueryUsdPrim", #{
-            doc_id: this.doc,
-            path: ROUTE + "/P0/Dome",
-            attrs: ["lunco:interaction:right"],
-            schemas: true,
-        });
-        let ribbon_api = query("QueryUsdPrim", #{
-            doc_id: this.doc,
-            path: ROUTE + "/RouteRibbon/Geometry",
-            attrs: ["lunco:interaction:right"],
-            schemas: true,
-        });
-        this.subject = find_path(ROOT + "/Subject");
-        this.point = find_path(ROUTE + "/P0");
-        this.marker = find_path(ROUTE + "/P0/Dome");
-        if unused == () || unused.ok == false { return; }
-        if unused.status != "missing" || unused.under_arc != true
-            || unused.composed_exists != false {
-            this.done = true;
-            report(this, false,
-                "ResolveUsdTarget did not report an absent referenced child as missing");
-            return;
-        }
-        if route == () || route.ok == false
-            || pointer_api == () || pointer_api.ok == false
-            || ribbon_api == () || ribbon_api.ok == false
-            || pointer_api.api_schemas == ()
-            || !pointer_api.api_schemas.contains("LunCoPointerInteractionAPI")
-            || pointer_api.attrs == ()
-            || pointer_api.attrs["lunco:interaction:right"] != "context"
-            || ribbon_api.api_schemas == ()
-            || !ribbon_api.api_schemas.contains("LunCoPointerInteractionAPI")
-            || ribbon_api.attrs == ()
-            || ribbon_api.attrs["lunco:interaction:right"] != "context"
-            || this.subject < 0
-            || this.point < 0 || this.marker < 0
-            || route.children == () || !route.children.contains(ROUTE + "/P2") {
-            return;
-        }
-        if route.doc_id != this.doc { return; }
-        this.route_children_before_edit = route.children;
-        let add = #{
-            button: "primary",
-            doc_id: this.doc,
-            scene_root_path: ROOT,
-            route_path: (),
-            selected_path: ROUTE + "/P0",
-            target_path: ROUTE + "/P0",
-            hit_path: ROUTE + "/P0",
-            prim_paths: [ROUTE + "/P0"],
-            pointer_intents: ["route.add_point"],
-            modifiers: #{ alt: true, shift: false, ctrl: false },
-            surface_world_position: point3([4.0, 0.0, -16.0], "active_physics"),
-        };
-        let added = waypoint_editor::route_pointer_action(add);
-        if added == () || added.ok != true || added.path == () {
-            this.done = true;
-            report(this, false,
-                "route add failed when a waypoint was selected and the rover was not possessed");
-            return;
-        }
-        if this.route_children_before_edit.contains(added.path) {
-            this.done = true;
-            report(this, false,
-                "route add reused a waypoint path that existed before the unpossessed edit");
-            return;
-        }
-        this.added_without_possession = added.path;
-        this.phase = 0.5;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 0.5 {
-        let trigger = query("QueryUsdPrim", #{
-            doc_id: this.doc,
-            path: this.added_without_possession + "/Trigger",
-            attrs: ["lunco:triggerZone"],
-        });
-        if trigger == () || trigger.ok == false || trigger.attrs == ()
-            || trigger.attrs["lunco:triggerZone"] == () {
-            return;
-        }
-        let delete_context = #{
-            doc_id: this.doc,
-            selected_path: this.added_without_possession,
-        };
-        let deleted = waypoint_editor::on_delete(delete_context);
-        if deleted == () || deleted.ok != true
-            || deleted.path != this.added_without_possession {
-            this.done = true;
-            report(this, false,
-                "route delete failed when a waypoint was selected and the rover was not possessed");
-            return;
-        }
-        this.phase = 8;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 8 {
-        let route_after_delete = query("QueryUsdPrim", #{
-            doc_id: this.doc,
-            path: ROUTE,
-            children: true,
-        });
-        if route_after_delete == () || route_after_delete.ok == false
-            || route_after_delete.children == ()
-            || route_after_delete.children.contains(this.added_without_possession) {
-            return;
-        }
-        let selected = cmd("SelectEntity", #{
-            entity_id: this.subject,
-            inspector_part_entity_id: 0,
-            extend: false,
-            toggle: false,
-            remove_only: false,
-        });
-        if selected == () || selected.ok == false {
-            this.done = true;
-            report(this, false, "could not establish the pre-existing rover selection");
-            return;
-        }
-        this.phase = 8.5;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 8.5 {
-        if !selected_only(this.subject) {
-            if this.phase_elapsed > 3.0 {
-                this.done = true;
-                report(this, false, "the rover selection did not settle before possession");
-            }
-            return;
-        }
-        let possession = cmd("AcquireControl", #{ target: this.subject });
-        if possession == () || possession.ok == false {
-            this.done = true;
-            report(this, false, "could not request rover possession before native route context input");
-            return;
-        }
-        this.phase = 9;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 9 {
-        if !is_controlled(this.subject) {
-            if this.phase_elapsed > 3.0 {
-                this.done = true;
-                report(this, false,
-                    "AcquireControl returned success but the rover never became locally controlled");
-            }
-            return;
-        }
-        let screen = viewport_position(this.marker);
-        if screen == () || screen.len() != 2 {
-            if this.phase_elapsed > 5.0 {
-                this.done = true;
-                report(this, false,
-                    "rover is possessed, but viewport_position could not project the route marker");
-            }
-            return;
-        }
-        if this.last_screen != () {
-            let dx = screen[0] - this.last_screen[0];
-            let dy = screen[1] - this.last_screen[1];
-            if (dx * dx + dy * dy).sqrt() <= 1.0 {
-                this.stable_screen_samples += 1;
-            } else {
-                this.stable_screen_samples = 0;
-            }
-        }
-        this.last_screen = screen;
-        if this.stable_screen_samples < 3 {
-            if this.phase_elapsed > 20.0 {
-                this.done = true;
-                report(this, false,
-                    "rover is possessed and the marker projects, but its camera position never settles");
-            }
-            return;
-        }
-        this.screen = screen;
-        input_pointer_move(this.screen[0], this.screen[1]);
-        this.phase = 13;
-        return;
-    }
-
-    if this.phase == 13 {
-        input_pointer_press("secondary", this.screen[0], this.screen[1]);
-        this.phase = 14;
-        return;
-    }
-
-    if this.phase == 14 {
-        input_pointer_release("secondary", this.screen[0], this.screen[1]);
-        this.phase = 15;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 15 {
-        if !this.scene_pointer_seen {
-            if this.phase_elapsed < 2.0 { return; }
-            this.done = true;
-            report(this, false,
-                "possessed secondary click produced no scene.pointer event; the click is being lost before route policy");
-            return;
-        }
-        let context = this.scene_pointer_context;
-        let intents = context["pointer_intents"];
-        let policy = context["pointer_policy"];
-        let paths = context["prim_paths"];
-        let point_hit = context["hit_path"] == this.context_delete_path + "/Dome"
-            || context["target_path"] == this.context_delete_path
-            || (paths != () && paths.contains(this.context_delete_path + "/Dome"));
-        if context["button"] != "secondary"
-            || intents == () || !intents.contains("route.context")
-            || policy == () || policy["right"] != "context"
-            || !point_hit {
-            this.done = true;
-            report(this, false,
-                "possessed scene.pointer arrived with the wrong route intent, pointer policy, or waypoint hit");
-            return;
-        }
-        if !is_controlled(this.subject) {
-            this.done = true;
-            report(this, false, "rover possession was lost during the native context click");
-            return;
-        }
-        if !selected_only(this.subject) {
-            this.done = true;
-            report(this, false, "the possessed right-click changed the existing rover selection");
-            return;
-        }
-        this.phase = 16;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 16 {
-        if this.phase_elapsed < 0.25 { return; }
-        // The route menu is anchored at P0; its first row is the explicit
-        // selection action. Click that UI row so the popup closes through its
-        // real dispatch path before testing placement input.
-        this.menu_x = this.screen[0] + 58.0;
-        this.menu_y = this.screen[1] + 16.0;
-        input_pointer_move(this.menu_x, this.menu_y);
-        this.phase = 17;
-        return;
-    }
-
-    if this.phase == 17 {
-        input_pointer_press("primary", this.menu_x, this.menu_y);
-        this.phase = 18;
-        return;
-    }
-
-    if this.phase == 18 {
-        input_pointer_release("primary", this.menu_x, this.menu_y);
-        this.phase = 19;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 19 {
-        if !selected_only(this.point) {
-            if this.phase_elapsed < 3.0 { return; }
-            this.done = true;
-            report(this, false,
-                "the explicit Select route point menu action did not select P0");
-            return;
-        }
-        if !is_controlled(this.subject) {
-            this.done = true;
-            report(this, false, "selecting a route point released rover possession");
-            return;
-        }
-        let second_marker = viewport_position(find_path(ROUTE + "/P1/Dome"));
-        if second_marker == () || second_marker.len() != 2 {
-            this.done = true;
-            report(this, false,
-                "could not project a second route point for the native move-mode check");
-            return;
-        }
-        input_pointer_move(second_marker[0], second_marker[1]);
-        this.phase = 20;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 20 {
-        let ghost = query("ResolveUsdTarget", #{
-            doc_id: this.doc,
-            path: ROUTE + "/MovePreview",
-            edit_target: "@view@",
-        });
-        if ghost != () && ghost.ok != false && ghost.authored_here == true {
-            this.done = true;
-            report(this, false,
-                "selecting P0 armed movement without the explicit Move menu action");
-            return;
-        }
-        this.scene_pointer_seen = false;
-        input_pointer_move(this.screen[0], this.screen[1]);
-        this.phase = 21;
-        return;
-    }
-
-    if this.phase == 21 {
-        input_pointer_press("secondary", this.screen[0], this.screen[1]);
-        this.phase = 22;
-        return;
-    }
-
-    if this.phase == 22 {
-        input_pointer_release("secondary", this.screen[0], this.screen[1]);
-        this.phase = 23;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 23 {
-        if !this.scene_pointer_seen {
-            if this.phase_elapsed < 2.0 { return; }
-            this.done = true;
-            report(this, false, "right-clicking selected P0 produced no scene.pointer event");
-            return;
-        }
-        let context = this.scene_pointer_context;
-        let paths = context["prim_paths"];
-        let point_hit = context["hit_path"] == this.context_delete_path + "/Dome"
-            || context["target_path"] == this.context_delete_path
-            || (paths != () && paths.contains(this.context_delete_path + "/Dome"));
-        if !point_hit || context["pointer_policy"] == ()
-            || context.pointer_policy["right"] != "context" {
-            this.done = true;
-            report(this, false, "selected P0 did not retain its authored context target");
-            return;
-        }
-        this.menu_x = this.screen[0] + 58.0;
-        this.menu_y = this.screen[1] + 37.0;
-        input_pointer_move(this.menu_x, this.menu_y);
-        this.phase = 24;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 24 {
-        if this.phase_elapsed < 0.25 { return; }
-        input_pointer_press("primary", this.menu_x, this.menu_y);
-        this.phase = 25;
-        return;
-    }
-
-    if this.phase == 25 {
-        input_pointer_release("primary", this.menu_x, this.menu_y);
-        this.phase = 26;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 26 {
-        if !selected_only(this.point) {
-            if this.phase_elapsed < 3.0 { return; }
-            this.done = true;
-            report(this, false, "the Move route point menu action did not select P0");
-            return;
-        }
-        let ghost = query("QueryUsdPrim", #{
-            doc_id: this.doc,
-            path: ROUTE + "/MovePreview",
-            attrs: ["lunco:interaction:left", "lunco:interaction:right", "xformOp:translate"],
-            schemas: true,
-        });
-        let target = query("ResolveUsdTarget", #{
-            doc_id: this.doc,
-            path: ROUTE + "/MovePreview/Target_P0",
-            edit_target: "@view@",
-        });
-        if ghost == () || ghost.ok == false || ghost.attrs == () || ghost.api_schemas == ()
-            || !ghost.api_schemas.contains("LunCoPointerInteractionAPI")
-            || ghost.attrs["lunco:interaction:left"] != "pass_through"
-            || ghost.attrs["lunco:interaction:right"] != "pass_through"
-            || ghost.attrs["xformOp:translate"] == ()
-            || target == () || target.ok == false || target.authored_here != true {
-            if this.phase_elapsed < 3.0 { return; }
-            this.done = true;
-            report(this, false,
-                "the Move route point menu action did not arm a pass-through view ghost for P0");
-            return;
-        }
-        let point = query("QueryUsdPrim", #{
-            doc_id: this.doc,
-            path: this.context_delete_path,
-        });
-        if point == () || point.ok == false || point.world_position == () {
-            if this.phase_elapsed < 3.0 { return; }
-            this.done = true;
-            report(this, false, "could not read P0's authored position before native placement");
-            return;
-        }
-        this.point_position_before_move = point.world_position;
-        this.move_preview_entity = find_path(ROUTE + "/MovePreview");
-        let ghost_position = if this.move_preview_entity >= 0 {
-            world_pos(this.move_preview_entity)
-        } else { () };
-        if ghost_position == () {
-            if this.phase_elapsed < 3.0 { return; }
-            this.done = true;
-            report(this, false, "the projected move ghost has no live world position");
-            return;
-        }
-        this.first_ghost_position = ghost_position;
-        this.move_preview_generation = usd_document_generation(this.doc);
-        if !is_controlled(this.subject) {
-            this.done = true;
-            report(this, false, "starting a route move released rover possession");
-            return;
-        }
-        this.move_x = this.screen[0] + 460.0;
-        this.move_y = this.screen[1];
-        // Several cursor samples can arrive before the UI hook drain runs.
-        // The preview should follow the newest position, not replay a FIFO trail.
-        for offset in [20.0, 60.0, 100.0, 140.0, 180.0, 220.0,
-            260.0, 300.0, 340.0, 380.0, 420.0, 460.0] {
-            input_pointer_move(this.screen[0] + offset, this.move_y);
-        }
-        this.phase = 27;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 27 {
-        let generation = usd_document_generation(this.doc);
-        if generation != this.move_preview_generation {
-            this.done = true;
-            report(this, false,
-                "hover movement changed the USD document instead of the live preview transform");
-            return;
-        }
-        let ghost_position = world_pos(this.move_preview_entity);
-        if ghost_position == () {
-            if this.phase_elapsed < 0.5 { return; }
-            this.done = true;
-            report(this, false, "the live move ghost disappeared during pointer movement");
-            return;
-        }
-        if positions_differ(ghost_position, this.first_ghost_position) {
-            this.ghost_observed_move = true;
-        }
-        if this.phase_elapsed > 0.5 && !this.ghost_observed_move {
-            this.done = true;
-            report(this, false,
-                "the live move ghost did not follow the cursor within half a second");
-            return;
-        }
-        if !this.ghost_observed_move { return; }
-        this.phase = 28;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 28 {
-        input_pointer_press("primary", this.move_x, this.move_y);
-        this.phase = 29;
-        return;
-    }
-
-    if this.phase == 29 {
-        input_pointer_release("primary", this.move_x, this.move_y);
-        this.phase = 30;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 30 {
-        let moved_point = query("QueryUsdPrim", #{
-            doc_id: this.doc,
-            path: this.context_delete_path,
-        });
-        if moved_point == () || moved_point.ok == false || moved_point.world_position == ()
-            || !positions_differ(
-                moved_point.world_position,
-                this.point_position_before_move,
-            ) {
-            if this.phase_elapsed < 2.0 { return; }
-            this.done = true;
-            report(this, false, "a primary scene click did not move selected waypoint P0");
-            return;
-        }
-        let clicked_point = if this.primary_pointer_context == () { () }
-            else { point_values(this.primary_pointer_context["world_position"]) };
-        if clicked_point == () {
-            if this.phase_elapsed < 2.0 { return; }
-            this.done = true;
-            report(this, false, "the native placement click had no active-physics hit point");
-            return;
-        }
-        if positions_differ(moved_point.world_position, clicked_point) {
-            this.done = true;
-            report(this, false,
-                "the committed waypoint position did not match the primary-click hit point");
-            return;
-        }
-        if !is_controlled(this.subject) {
-            this.done = true;
-            report(this, false,
-                "moving a route point through the native scene click dropped rover possession");
-            return;
-        }
-        if !selected_only(this.point) {
-            this.done = true;
-            report(this, false, "moving P0 changed the existing waypoint selection");
-            return;
-        }
-        this.screen = viewport_position(find_path(ROUTE + "/P0/Dome"));
-        if this.screen == () || this.screen.len() != 2 {
-            if this.phase_elapsed < 2.0 { return; }
-            this.done = true;
-            report(this, false, "could not project moved P0 for its final context-menu check");
-            return;
-        }
-        this.scene_pointer_seen = false;
-        input_pointer_move(this.screen[0], this.screen[1]);
-        this.phase = 31;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 31 {
-        input_pointer_press("secondary", this.screen[0], this.screen[1]);
-        this.phase = 32;
-        return;
-    }
-
-    if this.phase == 32 {
-        input_pointer_release("secondary", this.screen[0], this.screen[1]);
-        this.phase = 33;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 33 {
-        if !this.scene_pointer_seen {
-            if this.phase_elapsed < 2.0 { return; }
-            this.done = true;
-            report(this, false, "right-clicking moved P0 produced no scene.pointer event");
-            return;
-        }
-        let context = this.scene_pointer_context;
-        let paths = context["prim_paths"];
-        let point_hit = context["hit_path"] == this.context_delete_path + "/Dome"
-            || context["target_path"] == this.context_delete_path
-            || (paths != () && paths.contains(this.context_delete_path + "/Dome"));
-        if !point_hit || context["pointer_policy"] == ()
-            || context.pointer_policy["right"] != "context" {
-            this.done = true;
-            report(this, false, "moved P0 did not retain its authored context target");
-            return;
-        }
-        let delete_row = 2; // Select, Move, then Delete.
-        if this.before.len() >= 2 {
-            // The fixed fixture's active P0 has both before and after actions.
-            delete_row += 2;
-        }
-        this.delete_x = this.screen[0] + 60.0;
-        this.delete_y = this.screen[1] + 16.0 + delete_row.to_float() * 21.0;
-        input_pointer_move(this.delete_x, this.delete_y);
-        this.phase = 34;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 34 {
-        // Let the foreground egui menu paint and register its bounds before
-        // delivering the row click through the native window input path.
-        if this.phase_elapsed < 0.25 { return; }
-        input_pointer_press("primary", this.delete_x, this.delete_y);
-        this.phase = 35;
-        return;
-    }
-
-    if this.phase == 35 {
-        input_pointer_release("primary", this.delete_x, this.delete_y);
-        this.phase = 36;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 36 {
-        let deleted = query("QueryUsdPrim", #{
-            doc_id: this.doc,
-            path: this.context_delete_path,
-        });
-        if deleted == () || deleted.ok == false { return; }
-        if deleted.active != false {
-            if this.phase_elapsed < 2.0 { return; }
-            this.done = true;
-            report(this, false,
-                "native possessed route context did not deactivate P0 after its move");
-            return;
-        }
-        if !is_controlled(this.subject) {
-            this.done = true;
-            report(this, false,
-                "deleting a moved route point through the native context menu dropped rover possession");
-            return;
-        }
-        let context = #{
-            doc_id: this.doc,
-            route_path: ROUTE,
-            selected_path: ROUTE + "/P1",
-            target_path: ROUTE + "/P1",
-            hit_path: ROUTE + "/P1",
-            prim_paths: [ROUTE + "/P1"],
-        };
-        let inserted = waypoint_editor::on_insert_after(context);
-        if inserted == () || inserted.ok != true || inserted.path != ROUTE + "/P3" {
-            this.done = true;
-            report(this, false, "Add point after failed: " + inserted.to_string());
-            return;
-        }
-        this.inserted_after = inserted.path;
-        this.phase = 37;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 37 {
-        let read = waypoint_editor::route_positions(this.doc, ROUTE);
-        if read == () || read.ok != true || !read.paths.contains(this.inserted_after) { return; }
-        if read.paths.len() != 3 || read.paths[0] != ROUTE + "/P1"
-            || read.paths[1] != this.inserted_after || read.paths[2] != ROUTE + "/P2" {
-            this.done = true;
-            report(this, false, "Add point after produced unexpected route order: "
-                + read.paths.to_string());
-            return;
-        }
-        this.checks.push(t_true(true,
-            "Add point after orders the new direct point after its target"));
-        let deleted = waypoint_editor::on_delete(#{
-            doc_id: this.doc,
-            selected_path: ROUTE + "/P2",
-        });
-        if deleted == () || deleted.ok != true || deleted.path != ROUTE + "/P2" {
-            this.done = true;
-            report(this, false, "could not deactivate P2 before testing order against inactive points");
-            return;
-        }
-        this.phase = 38;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 38 {
-        let read = waypoint_editor::route_positions(this.doc, ROUTE);
-        if read == () || read.ok != true || read.paths.contains(ROUTE + "/P2")
-            || !read.paths.contains(this.inserted_after) { return; }
-        let context = #{
-            doc_id: this.doc,
-            route_path: ROUTE,
-            selected_path: ROUTE + "/P1",
-            target_path: ROUTE + "/P1",
-            hit_path: ROUTE + "/P1",
-            prim_paths: [ROUTE + "/P1"],
-        };
-        let inserted = waypoint_editor::on_insert_before(context);
-        if inserted == () || inserted.ok != true || inserted.path != ROUTE + "/P4" {
-            this.done = true;
-            report(this, false, "Add point before failed while P2 was inactive: "
-                + inserted.to_string());
-            return;
-        }
-        this.inserted_before = inserted.path;
-        this.phase = 39;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 39 {
-        let read = waypoint_editor::route_positions(this.doc, ROUTE);
-        if read == () || read.ok != true || !read.paths.contains(this.inserted_before)
-            || read.paths.contains(ROUTE + "/P2") { return; }
-        if read.paths.len() != 3 || read.paths[0] != this.inserted_before
-            || read.paths[1] != ROUTE + "/P1" || read.paths[2] != this.inserted_after {
-            this.done = true;
-            report(this, false, "Add point before included an inactive route point or misordered children: "
-                + read.paths.to_string());
-            return;
-        }
-        this.checks.push(t_true(true,
-            "Add point before orders only the remaining composed points after P2 is deactivated"));
-        let context = #{
-            doc_id: this.doc,
-            route_path: ROUTE,
-            selected_path: this.inserted_after,
-            target_path: this.inserted_after,
-            hit_path: this.inserted_after,
-            prim_paths: [this.inserted_after],
-        };
-        let inserted = waypoint_editor::on_insert_after(context);
-        if inserted == () || inserted.ok != true {
-            this.done = true;
-            report(this, false, "Add point after the final route point failed: "
-                + inserted.to_string());
-            return;
-        }
-        this.inserted_endpoint = inserted.path;
-        this.phase = 40;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 40 {
-        let read = waypoint_editor::route_positions(this.doc, ROUTE);
-        if read == () || read.ok != true || !read.paths.contains(this.inserted_endpoint) {
-            return;
-        }
-        if read.paths.len() != 4 || read.paths[0] != this.inserted_before
-            || read.paths[1] != ROUTE + "/P1"
-            || read.paths[2] != this.inserted_after
-            || read.paths[3] != this.inserted_endpoint {
-            this.done = true;
-            report(this, false, "endpoint insertion produced unexpected route order: "
-                + read.paths.to_string());
-            return;
-        }
-        let extension = distance_between(
-            read.points[read.points.len() - 2],
-            read.points[read.points.len() - 1],
-        );
-        if extension == () {
-            this.done = true;
-            report(this, false, "endpoint insertion did not produce a measurable position");
-            return;
-        }
-        if (extension - 5.0).abs() > 0.01 {
-            this.done = true;
-            report(this, false, "endpoint insertion extended by " + extension.to_string()
-                + " m instead of 5 m");
-            return;
-        }
-        this.checks.push(t_true(true,
-            "endpoint insertion appends a route point exactly five meters outward"));
-        this.done = true;
-        report(this, true,
-            "unpossessed edit, possessed native selection, explicit Move, ghost placement, right-click, delete, midpoint before/after insertion, and five-meter endpoint insertion passed");
+    if evt.name == "TASK_FAILED" {
+        let message = if this.failure == "" {
+            "the route interaction behavior tree failed while waiting for " + this.waiting_for
+        } else { this.failure };
+        report(this, false, message);
     }
 }
 
 fn on_stop(me, ctx) {
     if !this.done {
-        this.done = true;
-        report(this, false, "native route interaction stopped before its verdict");
+        report(this, false,
+            "native route interaction stopped before its behavior tree produced a verdict");
     }
 }

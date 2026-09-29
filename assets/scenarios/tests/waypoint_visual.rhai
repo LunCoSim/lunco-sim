@@ -33,7 +33,7 @@ fn simulation_dependencies(me, ctx) {
            find_path(PREDICTED_LANDING),
        ],
        entity_writes: [],
-       query_reads: [], required_inputs: [] }
+       query_reads: ["QueryUsdPrim", "QueryUsdPrims"], required_inputs: [] }
 }
 
 fn sky_uses_shader_defaults() {

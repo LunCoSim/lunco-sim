@@ -398,6 +398,7 @@ impl Plugin for SceneEditUiPlugin {
             .init_resource::<scene_context_menu::SceneContextMenuState>()
             .init_resource::<lunco_interaction_core::ArmedScriptTool>()
             .init_resource::<crate::script_tools::ScenePointerDispatch>()
+            .init_resource::<crate::script_tools::PendingUsdCurveViews>()
             .add_plugins(crate::perf_bridge::PerfBridgePlugin);
         app.world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
@@ -407,6 +408,18 @@ impl Plugin for SceneEditUiPlugin {
         app.add_systems(
             lunco_core::SceneTeardown,
             crate::diagnostic_visuals::reset_diagnostic_visuals,
+        );
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            crate::script_tools::reset_pending_usd_curve_views,
+        );
+        app.add_systems(
+            Update,
+            (
+                crate::script_tools::poll_pending_usd_curve_views,
+                crate::script_tools::prepare_pending_usd_curve_views,
+            )
+                .chain(),
         );
         app.add_systems(
             PostUpdate,

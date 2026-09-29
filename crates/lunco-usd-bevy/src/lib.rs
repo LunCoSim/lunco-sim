@@ -1620,6 +1620,7 @@ fn ensure_point_instancer_prototypes(
                 ),
                 (),
                 None,
+                prototype.clone(),
             );
         }
     }
@@ -1746,9 +1747,12 @@ fn queue_usd_child_spawn<Base: Bundle, Extra: Bundle>(
     base: Base,
     extra: Extra,
     projection: Option<UsdInstanceProjection>,
+    prim_path: String,
 ) -> Entity {
     let child = commands.spawn_empty().id();
     commands.queue(move |world: &mut World| {
+        let _spawn_span =
+            bevy::log::info_span!("scene_runtime_spawn_commit", prim_path = %prim_path).entered();
         if world.get_entity(parent).is_err() || !scene_mount_entity_is_live(world, parent) {
             let _ = world.despawn(child);
             return;
@@ -1994,6 +1998,7 @@ fn process_queued_usd_visuals(
     settings: Res<UsdVisualProjectionSettings>,
     mut commands: Commands,
 ) {
+    let _span = bevy::log::info_span!("usd_visual_projection_batch").entered();
     let active_root = mount_state.active_root();
     if *visual_state.last_active_root != active_root {
         visual_state.queued.clear();
@@ -2326,7 +2331,7 @@ fn admit_pending_usd_children(
             Name::new(child_path_text.clone()),
             UsdPrimPath {
                 stage_handle: parent_prim_path.stage_handle.clone(),
-                path: child_path_text,
+                path: child_path_text.clone(),
             },
             child_tf,
             GlobalTransform::default(),
@@ -2336,6 +2341,7 @@ fn admit_pending_usd_children(
             UsdSceneAwaitingStage,
             UsdSceneProjectionQueued,
         );
+        let child_path_for_span = child_path_text;
         let is_high_precision_parent = context.high_precision.contains(parent)
             || context
                 .child_of
@@ -2351,6 +2357,7 @@ fn admit_pending_usd_children(
                 base_components,
                 (member, big_space::grid::propagation::LowPrecisionRoot),
                 instance_projection.cloned(),
+                child_path_for_span.clone(),
             ),
             Some(member) if is_grid_entity => queue_usd_child_spawn(
                 &mut commands,
@@ -2358,6 +2365,7 @@ fn admit_pending_usd_children(
                 base_components,
                 (member, CellCoord::default()),
                 instance_projection.cloned(),
+                child_path_for_span.clone(),
             ),
             Some(member) => queue_usd_child_spawn(
                 &mut commands,
@@ -2365,6 +2373,7 @@ fn admit_pending_usd_children(
                 base_components,
                 (member,),
                 instance_projection.cloned(),
+                child_path_for_span.clone(),
             ),
             None if is_low_precision_root_target => queue_usd_child_spawn(
                 &mut commands,
@@ -2372,6 +2381,7 @@ fn admit_pending_usd_children(
                 base_components,
                 (big_space::grid::propagation::LowPrecisionRoot,),
                 instance_projection.cloned(),
+                child_path_for_span.clone(),
             ),
             None if is_grid_entity => queue_usd_child_spawn(
                 &mut commands,
@@ -2379,6 +2389,7 @@ fn admit_pending_usd_children(
                 base_components,
                 (CellCoord::default(),),
                 instance_projection.cloned(),
+                child_path_for_span.clone(),
             ),
             None => queue_usd_child_spawn(
                 &mut commands,
@@ -2386,6 +2397,7 @@ fn admit_pending_usd_children(
                 base_components,
                 (),
                 instance_projection.cloned(),
+                child_path_for_span,
             ),
         };
         project_spawnable_selectable(&reader, &child_path, child_entity, &mut commands);

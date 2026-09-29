@@ -880,6 +880,10 @@ fn view_layer_composes_without_entering_persistent_runtime_source() {
     assert_eq!(document.runtime_revision(), 1);
     assert_eq!(document.view_revision(), 1);
 
+    let persistent_data = document.persistent_composed_data().unwrap();
+    assert!(persistent_data.spec(&points).is_some());
+    assert!(persistent_data.spec(&ribbon).is_none());
+
     let persistent = usda_to_data(&document.persistent_composed_source().unwrap()).unwrap();
     assert!(persistent.spec(&points).is_some());
     assert!(persistent.spec(&ribbon).is_none());

@@ -27,7 +27,7 @@ pub(crate) fn refresh_program_owner(
     stage_id: AssetId<UsdStageAsset>,
     owner: Entity,
 ) {
-    let Some(network_members) = modelica_network_members_for_stage(world, stage_id) else {
+    let Some(network_members) = modelica_network_members_for_owner(world, stage_id, owner) else {
         return;
     };
     refresh_program_owner_with_network_members(world, stage_id, owner, &network_members);
@@ -74,6 +74,53 @@ pub(crate) fn modelica_network_members_for_stage(
         world
             .resource_mut::<program::ModelicaNetworkMembershipCache>()
             .insert(stage_id, generation, None, members),
+    )
+}
+
+/// Return Modelica membership from the exact composed surface that owns one
+/// runtime entity. Referenced instances use their prepared remapped plan until
+/// promotion, then the live canonical stage; they never borrow membership from
+/// the scene's unrelated base plan.
+pub(crate) fn modelica_network_members_for_owner(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+    owner: Entity,
+) -> Option<Arc<HashSet<String>>> {
+    let Some(instance) = world.get::<UsdInstanceProjection>(owner).cloned() else {
+        return modelica_network_members_for_stage(world, stage_id);
+    };
+    let Some(root) = instance.root else {
+        warn!("[usd] referenced owner {owner:?} has no instance root for Modelica membership");
+        return None;
+    };
+    let Some(_) = world.get_resource::<program::ModelicaNetworkMembershipCache>() else {
+        warn!("[usd] Modelica network membership cache is unavailable");
+        return None;
+    };
+    let Some(stage_asset) = world
+        .get_resource::<Assets<UsdStageAsset>>()
+        .and_then(|assets| assets.get(stage_id))
+    else {
+        warn!("[usd] stage asset {stage_id:?} is unavailable while resolving instance membership");
+        return None;
+    };
+    let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+        warn!("[usd] canonical stage reader is unavailable while resolving instance membership");
+        return None;
+    };
+    let (reader, generation) = stages.reader_for_entity(stage_id, stage_asset, Some(&instance));
+    let instance_key = root.to_bits();
+    if let Some(members) = world
+        .get_resource::<program::ModelicaNetworkMembershipCache>()
+        .and_then(|cache| cache.get(stage_id, generation, Some(instance_key)))
+    {
+        return Some(members);
+    }
+    let members = program::modelica_network_member_paths(&reader);
+    Some(
+        world
+            .resource_mut::<program::ModelicaNetworkMembershipCache>()
+            .insert(stage_id, generation, Some(instance_key), members),
     )
 }
 

@@ -95,9 +95,9 @@ def wait_for_scene(session: ProductionSession, scene: str, timeout: float) -> No
 def wait_for_scene_time_selection(
     session: ProductionSession, log_path: Path, timeout: float
 ) -> None:
-    """Wait until the scene owner has committed its epoch and reset the clocks."""
+    """Wait until the scene owner has committed its epoch."""
     deadline = time.monotonic() + timeout
-    marker = "[time] scene reset to retained "
+    marker = "[time] scene epoch "
     while time.monotonic() < deadline:
         if marker in tail(log_path, lines=10000):
             return

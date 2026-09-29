@@ -18,7 +18,8 @@ use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneChangeBatch};
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset};
 use openusd::schemas::lux::tokens as ltok;
 use openusd::sdf::Path as SdfPath;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 /// The attribute a move edit (`UsdOp::SetTranslate`) records as `InfoOnly`.
 const TRANSLATE_ATTR: &str = "xformOp:translate";
@@ -41,13 +42,17 @@ pub(crate) struct TransformEditChannels {
 /// Some valid stage edits do not produce a structural/info-only sink notice:
 /// a rebuilt stage starts with an empty sink, and an idempotent authored value
 /// can be absorbed by the stage without a visible delta. The document sync
-/// owner records those stages here so the live projector can still close the
-/// document-to-ECS handoff after the stage is ready.
-#[derive(Clone, Copy)]
+/// owner records those stages here so the live projector can close the
+/// document-to-ECS handoff after the stage and the references added by that
+/// edit are ready. Sink paths accumulate until that complete boundary is
+/// reached.
+#[derive(Clone)]
 struct PendingStageProjection {
     doc: lunco_doc::DocumentId,
     stage_id: AssetId<UsdStageAsset>,
     generation: u64,
+    changed_prim_paths: BTreeSet<String>,
+    required_reference_paths: BTreeSet<String>,
 }
 
 #[derive(Resource, Default)]
@@ -55,23 +60,132 @@ pub(crate) struct PendingStageProjections {
     stages: HashMap<AssetId<UsdStageAsset>, PendingStageProjection>,
 }
 
+/// Lifecycle-maintained lookup for the one live ECS projection of a USD path.
+/// Preview copies can share a stage/path, so each key keeps ordered candidates
+/// and queries exclude preview ancestry at read time.
+#[derive(Resource, Default)]
+pub(crate) struct LiveUsdPrimEntities {
+    by_stage: HashMap<AssetId<UsdStageAsset>, HashMap<Arc<str>, Vec<Entity>>>,
+    by_entity: HashMap<Entity, (AssetId<UsdStageAsset>, Arc<str>)>,
+}
+
+impl LiveUsdPrimEntities {
+    fn insert(&mut self, entity: Entity, prim: &UsdPrimPath) {
+        let stage = prim.stage_handle.id();
+        let path: Arc<str> = Arc::from(prim.path.as_str());
+        let key = (stage, Arc::clone(&path));
+        if self.by_entity.get(&entity) == Some(&key) {
+            return;
+        }
+        self.remove(entity);
+        let candidates = self
+            .by_stage
+            .entry(stage)
+            .or_default()
+            .entry(path)
+            .or_default();
+        match candidates.binary_search_by_key(&entity.to_bits(), |candidate| candidate.to_bits()) {
+            Ok(_) => {}
+            Err(index) => candidates.insert(index, entity),
+        }
+        self.by_entity.insert(entity, key);
+    }
+
+    fn remove(&mut self, entity: Entity) {
+        let Some((stage, path)) = self.by_entity.remove(&entity) else {
+            return;
+        };
+        let Some(paths) = self.by_stage.get_mut(&stage) else {
+            return;
+        };
+        if let Some(candidates) = paths.get_mut(&path) {
+            candidates.retain(|candidate| *candidate != entity);
+            if candidates.is_empty() {
+                paths.remove(&path);
+            }
+        }
+        if paths.is_empty() {
+            self.by_stage.remove(&stage);
+        }
+    }
+}
+
+fn index_live_usd_prim(
+    trigger: On<Insert, UsdPrimPath>,
+    prims: Query<&UsdPrimPath>,
+    mut index: ResMut<LiveUsdPrimEntities>,
+) {
+    if let Ok(prim) = prims.get(trigger.entity) {
+        index.insert(trigger.entity, prim);
+    }
+}
+
+fn unindex_live_usd_prim(trigger: On<Remove, UsdPrimPath>, mut index: ResMut<LiveUsdPrimEntities>) {
+    index.remove(trigger.entity);
+}
+
+pub(crate) fn install_live_prim_entity_index(app: &mut App) {
+    app.init_resource::<LiveUsdPrimEntities>()
+        .add_observer(index_live_usd_prim)
+        .add_observer(unindex_live_usd_prim);
+}
+
+impl PendingStageProjections {
+    pub(crate) fn clear(&mut self) {
+        self.stages.clear();
+    }
+}
+
 pub(crate) fn queue_stage_projection(
     world: &mut World,
     doc: lunco_doc::DocumentId,
     stage_id: AssetId<UsdStageAsset>,
     generation: u64,
+    required_reference_paths: impl IntoIterator<Item = String>,
 ) {
-    world
-        .resource_mut::<PendingStageProjections>()
-        .stages
-        .insert(
+    let mut pending = world.resource_mut::<PendingStageProjections>();
+    let previous = pending.stages.remove(&stage_id);
+    let (generation, changed_prim_paths, mut required_paths) = match previous {
+        Some(previous) if previous.doc == doc => (
+            generation.max(previous.generation),
+            previous.changed_prim_paths,
+            previous.required_reference_paths,
+        ),
+        Some(previous) => {
+            warn!(
+                "[usd-projection] stage {:?} changed document owner from {} to {}; replacing its pending projection",
+                stage_id, previous.doc, doc
+            );
+            (generation, BTreeSet::new(), BTreeSet::new())
+        }
+        None => (generation, BTreeSet::new(), BTreeSet::new()),
+    };
+    required_paths.extend(required_reference_paths);
+    pending.stages.insert(
+        stage_id,
+        PendingStageProjection {
+            doc,
             stage_id,
-            PendingStageProjection {
-                doc,
-                stage_id,
-                generation,
-            },
-        );
+            generation,
+            changed_prim_paths,
+            required_reference_paths: required_paths,
+        },
+    );
+}
+
+pub(crate) fn accumulate_pending_stage_changes(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+    paths: impl IntoIterator<Item = String>,
+) -> bool {
+    let Some(mut pending) = world.get_resource_mut::<PendingStageProjections>() else {
+        return false;
+    };
+    let Some(projection) = pending.stages.get_mut(&stage_id) else {
+        return false;
+    };
+    projection.changed_prim_paths.extend(paths);
+    true
 }
 
 fn remove_pending_stage_projection(world: &mut World, stage_id: AssetId<UsdStageAsset>) {
@@ -165,8 +279,7 @@ fn transform_only_prim_paths(info_only: &[String]) -> Vec<String> {
         let (prim, attribute) = path
             .split_once('.')
             .map_or((path.as_str(), ""), |(prim, attribute)| (prim, attribute));
-        let transform_only = attribute.starts_with("xformOp:")
-            || matches!(attribute, "xformOpOrder" | "resetXformStack");
+        let transform_only = is_transform_attribute(attribute);
         paths
             .entry(prim.to_string())
             .and_modify(|only_transforms| *only_transforms &= transform_only)
@@ -176,6 +289,10 @@ fn transform_only_prim_paths(info_only: &[String]) -> Vec<String> {
         .into_iter()
         .filter_map(|(path, transform_only)| transform_only.then_some(path))
         .collect()
+}
+
+fn is_transform_attribute(attribute: &str) -> bool {
+    attribute.starts_with("xformOp:") || matches!(attribute, "xformOpOrder" | "resetXformStack")
 }
 
 /// Returns whether an authored standard USD `inputs:*` value changed.
@@ -273,21 +390,33 @@ pub(crate) fn mark_live_transform(
 
 /// The live entity projecting `path` in the scene scoped to `stage_handle_id`,
 /// if one exists.
-fn find_live_entity(
-    world: &mut World,
+pub(crate) fn find_stage_entity(
+    world: &World,
     stage_handle_id: AssetId<UsdStageAsset>,
     path: &str,
 ) -> Option<Entity> {
-    let candidates = {
-        let mut query = world.query::<(Entity, &UsdPrimPath)>();
-        query
-            .iter(world)
-            .filter(|(_, prim)| prim.stage_handle.id() == stage_handle_id && prim.path == path)
-            .map(|(entity, _)| entity)
-            .collect::<Vec<_>>()
-    };
-    candidates
-        .into_iter()
+    world
+        .resource::<LiveUsdPrimEntities>()
+        .by_stage
+        .get(&stage_handle_id)?
+        .get(path)?
+        .iter()
+        .copied()
+        .next()
+}
+
+pub(crate) fn find_live_entity(
+    world: &World,
+    stage_handle_id: AssetId<UsdStageAsset>,
+    path: &str,
+) -> Option<Entity> {
+    world
+        .resource::<LiveUsdPrimEntities>()
+        .by_stage
+        .get(&stage_handle_id)?
+        .get(path)?
+        .iter()
+        .copied()
         .find(|entity| !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity))
 }
 
@@ -325,7 +454,12 @@ fn mark_stage_projected(
 /// cursor has been advanced. Authored policies use this event to invalidate
 /// cached composed topology when an edit was committed in the same frame that
 /// its live entities were still being reconciled.
-fn publish_stage_projected(world: &mut World, doc: lunco_doc::DocumentId, generation: u64) {
+fn publish_stage_projected(
+    world: &mut World,
+    doc: lunco_doc::DocumentId,
+    generation: u64,
+    changed_prim_paths: &[String],
+) {
     crate::twin_projection::release_document_projection_progress(world, doc, generation);
     let mut data = BTreeMap::new();
     data.insert(
@@ -335,6 +469,16 @@ fn publish_stage_projected(world: &mut World, doc: lunco_doc::DocumentId, genera
     data.insert(
         "generation".to_string(),
         lunco_telemetry_core::TelemetryValue::U64(generation),
+    );
+    data.insert(
+        "changed_prim_paths".to_string(),
+        lunco_telemetry_core::TelemetryValue::Array(
+            changed_prim_paths
+                .iter()
+                .cloned()
+                .map(lunco_telemetry_core::TelemetryValue::String)
+                .collect(),
+        ),
     );
     world.trigger(lunco_telemetry_core::TelemetryEvent {
         name: "usd.document.projected".to_string(),
@@ -347,17 +491,46 @@ fn publish_stage_projected(world: &mut World, doc: lunco_doc::DocumentId, genera
     });
 }
 
-fn publish_pending_stage_projections(world: &mut World) {
-    let pending = world
-        .get_resource_mut::<PendingStageProjections>()
-        .map(|mut pending| std::mem::take(&mut pending.stages))
+pub(crate) fn publish_pending_stage_projections(world: &mut World) {
+    let ready = world
+        .get_resource::<PendingStageProjections>()
+        .map(|pending| {
+            pending
+                .stages
+                .iter()
+                .filter(|(stage_id, projection)| {
+                    !crate::twin_projection::has_pending_reference_projection(
+                        world,
+                        **stage_id,
+                        &projection.required_reference_paths,
+                    )
+                })
+                .map(|(stage_id, _)| *stage_id)
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
-    for projection in pending.into_values() {
+    for stage_id in ready {
+        let Some(projection) = world
+            .resource_mut::<PendingStageProjections>()
+            .stages
+            .remove(&stage_id)
+        else {
+            continue;
+        };
         let projected = world
             .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
             .mark_document_projected(projection.doc, projection.stage_id, projection.generation);
         if let Some((doc, generation)) = projected {
-            publish_stage_projected(world, doc, generation);
+            let changed_prim_paths = projection
+                .changed_prim_paths
+                .into_iter()
+                .collect::<Vec<_>>();
+            publish_stage_projected(world, doc, generation, &changed_prim_paths);
+        } else {
+            warn!(
+                "[usd-projection] document {} generation {} no longer owns stage {:?}; refusing to publish a stale projection event",
+                projection.doc, projection.generation, projection.stage_id
+            );
         }
     }
 }
@@ -447,7 +620,6 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     let mut projected_anything = false;
     let mut connection_paths_changed = false;
     let mut input_defaults_changed = false;
-    let mut projected_stages = HashSet::new();
     for (id, changes) in batches {
         let authored_transform_edits = world
             .get_resource_mut::<LiveTransformEditHints>()
@@ -476,6 +648,11 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         info_prim_paths.sort();
         info_prim_paths.dedup();
         let transform_only_prim_paths = transform_only_prim_paths(&info_only);
+        let mut changed_prim_paths = resynced.clone();
+        changed_prim_paths.extend(info_prim_paths.iter().cloned());
+        changed_prim_paths.extend(authored_transform_edits.keys().cloned());
+        changed_prim_paths.sort();
+        changed_prim_paths.dedup();
         input_defaults_changed |= authored_input_defaults_changed(&info_only);
         for path in &info_only {
             if let Some((prim_path, attribute)) = path.split_once('.') {
@@ -493,10 +670,11 @@ pub(crate) fn project_stage_changes(world: &mut World) {
                 info_prim_paths,
                 transform_only_prim_paths,
             );
-            if let Some((doc, generation)) = mark_stage_projected(world, id) {
-                publish_stage_projected(world, doc, generation);
-                remove_pending_stage_projection(world, id);
-                projected_stages.insert(id);
+            if !accumulate_pending_stage_changes(world, id, changed_prim_paths.clone()) {
+                if let Some((doc, generation)) = mark_stage_projected(world, id) {
+                    publish_stage_projected(world, doc, generation, &changed_prim_paths);
+                    remove_pending_stage_projection(world, id);
+                }
             }
             continue;
         }
@@ -524,32 +702,18 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         // sink batch has been reconciled into the live ECS projection. A query
         // that runs before this boundary receives an explicit "projection is
         // not current" result instead of stale composed data.
-        if let Some((doc, generation)) = mark_stage_projected(world, id) {
-            publish_stage_projected(world, doc, generation);
-            remove_pending_stage_projection(world, id);
-            projected_stages.insert(id);
+        if !accumulate_pending_stage_changes(world, id, changed_prim_paths.clone()) {
+            if let Some((doc, generation)) = mark_stage_projected(world, id) {
+                publish_stage_projected(world, doc, generation, &changed_prim_paths);
+                remove_pending_stage_projection(world, id);
+            }
         }
     }
 
     // A rebuild has already reconciled its full scene, while an idempotent
-    // author may have no sink delta at all. Close those pending handoffs after
-    // every sink-bearing stage has been handled, preserving one generic event
-    // boundary for both projection paths.
-    let pending = world
-        .get_resource_mut::<PendingStageProjections>()
-        .map(|mut pending| std::mem::take(&mut pending.stages))
-        .unwrap_or_default();
-    for projection in pending.into_values() {
-        if projected_stages.contains(&projection.stage_id) {
-            continue;
-        }
-        let projected = world
-            .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
-            .mark_document_projected(projection.doc, projection.stage_id, projection.generation);
-        if let Some((doc, generation)) = projected {
-            publish_stage_projected(world, doc, generation);
-        }
-    }
+    // author may have no sink delta at all. Close a document handoff only once
+    // referenced roots and their instance projections have also been admitted.
+    publish_pending_stage_projections(world);
 
     // Connections are derived from native `connectionPaths` by
     // The USD co-simulation wiring owner. Prim spawn/despawn triggers
@@ -908,7 +1072,7 @@ pub(crate) fn refresh_edited_prims_live(
             }
             continue;
         }
-        if attr.starts_with("xformOp:") {
+        if is_transform_attribute(attr) {
             continue;
         }
         if standard_preview_surface_input_edit(world, id, prim, attr) {
@@ -1074,6 +1238,11 @@ pub(crate) fn reconcile_structural_live(
     id: AssetId<UsdStageAsset>,
     resync_paths: &[String],
 ) {
+    let _span = bevy::log::info_span!(
+        "usd_live_structural_reconcile",
+        resynced_prim_count = resync_paths.len(),
+    )
+    .entered();
     use lunco_usd_bevy_stage::canonical::CanonicalStages;
     for path in resync_paths {
         let Ok(sp) = SdfPath::new(path) else {
@@ -1245,6 +1414,61 @@ mod tests {
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
 
     #[test]
+    fn live_prim_path_index_tracks_component_lifecycle_and_preview_duplicates() {
+        let mut app = App::new();
+        install_live_prim_entity_index(&mut app);
+        let stage_handle = Handle::<UsdStageAsset>::default();
+        let stage_id = stage_handle.id();
+        let live = app
+            .world_mut()
+            .spawn(UsdPrimPath {
+                stage_handle: stage_handle.clone(),
+                path: "/World/Marker".into(),
+            })
+            .id();
+        let preview = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle,
+                    path: "/World/Marker".into(),
+                },
+                lunco_usd_bevy_scene::UsdPreviewOnly,
+            ))
+            .id();
+
+        assert_eq!(
+            find_live_entity(app.world(), stage_id, "/World/Marker"),
+            Some(live),
+            "path lookup must select the mounted projection over a preview duplicate"
+        );
+
+        app.world_mut().entity_mut(live).insert(UsdPrimPath {
+            stage_handle: Handle::<UsdStageAsset>::default(),
+            path: "/World/Renamed".into(),
+        });
+        assert_eq!(
+            find_live_entity(app.world(), stage_id, "/World/Marker"),
+            None,
+            "replacing path identity must remove its prior index entry"
+        );
+
+        app.world_mut().entity_mut(preview).remove::<UsdPrimPath>();
+        assert!(
+            app.world()
+                .resource::<LiveUsdPrimEntities>()
+                .by_entity
+                .get(&preview)
+                .is_none()
+        );
+        assert_eq!(
+            find_live_entity(app.world(), stage_id, "/World/Marker"),
+            None,
+            "removed prim paths must leave no live lookup candidate"
+        );
+    }
+
+    #[test]
     fn transform_edits_extract_only_authored_channels() {
         let info_only = vec![
             "/World".to_string(),
@@ -1294,6 +1518,7 @@ mod tests {
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>()
             .init_non_send::<CanonicalStages>();
+        install_live_prim_entity_index(&mut app);
 
         let recipe = StageRecipe::from_source("scene.usda", TINY);
         let handle = app
@@ -1372,6 +1597,7 @@ mod tests {
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>()
             .init_non_send::<CanonicalStages>();
+        install_live_prim_entity_index(&mut app);
 
         let recipe = StageRecipe::from_source("scene.usda", TINY);
         let handle = app
@@ -1448,6 +1674,7 @@ mod tests {
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>()
             .init_non_send::<CanonicalStages>();
+        install_live_prim_entity_index(&mut app);
         let recipe = StageRecipe::from_source("scene.usda", SCENE);
         let handle = app
             .world_mut()
@@ -1511,6 +1738,7 @@ mod tests {
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>()
             .init_non_send::<CanonicalStages>();
+        install_live_prim_entity_index(&mut app);
         let recipe = StageRecipe::from_source("vehicle.usda", SCENE);
         let handle = app
             .world_mut()
@@ -1570,6 +1798,7 @@ mod tests {
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>()
             .init_non_send::<CanonicalStages>();
+        install_live_prim_entity_index(&mut app);
 
         // An asset carrying the ref-less in-memory scene + its build recipe.
         let recipe = StageRecipe::from_source("scene.usda", SCENE);
@@ -1652,6 +1881,7 @@ mod tests {
             .init_asset::<UsdStageAsset>()
             .init_non_send::<CanonicalStages>()
             .add_message::<UsdSceneChangeBatch>();
+        install_live_prim_entity_index(&mut app);
 
         let recipe = StageRecipe::from_source("scene.usda", TINY);
         let handle = app

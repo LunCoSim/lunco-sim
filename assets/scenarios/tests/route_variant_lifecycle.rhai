@@ -84,7 +84,7 @@ fn fail(me, message) { finish(me, [t_true(false, message)]); }
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["QueryUsdPrim", "ResolveUsdTarget"], required_inputs: [] }
+       query_reads: ["QueryUsdPrim", "QueryUsdPrims", "ResolveUsdTarget"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {

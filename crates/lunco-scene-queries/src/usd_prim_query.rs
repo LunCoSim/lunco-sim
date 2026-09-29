@@ -11,6 +11,9 @@
 //! composed plan. Without `doc_id`, exactly one mounted live scene root is
 //! required. Preview focus, duplicate prim paths, and detached cached stages
 //! never choose the query target.
+//! Unpromoted runtime reference instances use their remapped prepared plan for
+//! attribute/schema/relationship reads. Opt-in geometry and topology reads use
+//! the owning document's composed source until that reference is promoted.
 //!
 //! ## Why a query provider and not a rhai binding
 //!
@@ -98,7 +101,7 @@ use lunco_usd_bevy_scene::{UsdPrimPath, read_primitive_axis, usd_axis_to_quat};
 use lunco_usd_bevy_stage::read::{UsdRead, UsdReadSource};
 use lunco_usd_bevy_stage::view::StageView;
 use lunco_usd_bevy_stage::{
-    MaterialPurpose, UsdStageAsset,
+    MaterialPurpose, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
     canonical::{CanonicalStage, CanonicalStages},
     effective_purpose, is_descendant_or_self, resolve_bound_shader, stage_convention,
 };
@@ -827,7 +830,15 @@ fn is_mounted_document_stage(world: &World, stage: bevy::asset::AssetId<UsdStage
 
 #[cfg(test)]
 mod query_generation_tests {
-    use super::can_read_applied_stage_generation;
+    use super::{can_read_applied_stage_generation, prepared_instance_roots_for_paths};
+    use bevy::asset::Handle;
+    use bevy::prelude::World;
+    use lunco_usd_bevy_scene::UsdPrimPath;
+    use lunco_usd_bevy_stage::{
+        UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset, UsdStageProjectionPlan,
+    };
+    use std::collections::HashSet;
+    use std::sync::Arc;
 
     #[test]
     fn explicit_queries_accept_a_stage_applied_ahead_of_ecs_cursor() {
@@ -839,6 +850,47 @@ mod query_generation_tests {
         assert!(!can_read_applied_stage_generation(8, Some(7), true));
         assert!(!can_read_applied_stage_generation(8, Some(8), false));
         assert!(!can_read_applied_stage_generation(8, None, true));
+    }
+
+    #[test]
+    fn query_paths_bind_to_their_unpromoted_instance_root() {
+        let mut world = World::new();
+        let stage_handle = Handle::<UsdStageAsset>::default();
+        let mut projection = UsdInstanceProjection::new(
+            Handle::default(),
+            Arc::new(UsdStageProjectionPlan::default()),
+            "reference.usda",
+            None,
+            Some("Xform".to_owned()),
+        );
+        let root = world
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage_handle.clone(),
+                    path: "/World/Spawned".to_owned(),
+                },
+                UsdInstanceRoot,
+            ))
+            .id();
+        projection.root = Some(root);
+        world.entity_mut(root).insert(projection.clone());
+        let requested = HashSet::from([
+            "/World/Spawned" as &str,
+            "/World/Spawned/Box",
+            "/World/Elsewhere",
+        ]);
+
+        let roots = prepared_instance_roots_for_paths(&world, &requested, Some(stage_handle.id()));
+
+        assert_eq!(roots.get("/World/Spawned"), Some(&root));
+        assert_eq!(roots.get("/World/Spawned/Box"), Some(&root));
+        assert!(!roots.contains_key("/World/Elsewhere"));
+        projection.mark_promoted();
+        world.entity_mut(root).insert(projection);
+        assert!(
+            prepared_instance_roots_for_paths(&world, &requested, Some(stage_handle.id()),)
+                .is_empty()
+        );
     }
 }
 
@@ -881,6 +933,53 @@ fn spawned_entities_for_paths(
         }
     }
     Ok(spawned)
+}
+
+fn prepared_instance_roots_for_paths(
+    world: &World,
+    paths: &HashSet<&str>,
+    live_stage: Option<bevy::asset::AssetId<UsdStageAsset>>,
+) -> HashMap<String, Entity> {
+    let Some(live_stage) = live_stage else {
+        return HashMap::new();
+    };
+    let Some(mut roots) = QueryState::<
+        (Entity, &UsdPrimPath, &UsdInstanceProjection),
+        With<UsdInstanceRoot>,
+    >::try_new(world) else {
+        return HashMap::new();
+    };
+    let mut roots = roots
+        .iter(world)
+        .filter(|(entity, prim, projection)| {
+            prim.stage_handle.id() == live_stage
+                && !projection.is_promoted()
+                && !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)
+        })
+        .map(|(entity, prim, _)| (prim.path.clone(), entity))
+        .collect::<Vec<_>>();
+    roots.sort_by(|left, right| {
+        right
+            .0
+            .len()
+            .cmp(&left.0.len())
+            .then_with(|| left.0.cmp(&right.0))
+            .then_with(|| left.1.to_bits().cmp(&right.1.to_bits()))
+    });
+    paths
+        .iter()
+        .filter_map(|path| {
+            roots
+                .iter()
+                .find(|(root, _)| {
+                    *path == root
+                        || path
+                            .strip_prefix(root.as_str())
+                            .is_some_and(|suffix| suffix.starts_with('/'))
+                })
+                .map(|(_, entity)| ((*path).to_owned(), *entity))
+        })
+        .collect()
 }
 
 fn query_record_value(
@@ -1027,6 +1126,63 @@ fn query_record_value(
     Ok(ApiValue::Map(out))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn read_query_path(
+    world: &World,
+    options: &UsdPrimQueryOptions,
+    doc: Option<DocumentId>,
+    generation: Option<u64>,
+    live_document: Option<DocumentId>,
+    source_document_generation: Option<u64>,
+    stage_generation: Option<u64>,
+    poses: &mut Option<lunco_physics::SimulationPoseReadState>,
+    view: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    live_view: Option<&StageView<'_>>,
+    path: &str,
+    prim: &SdfPath,
+    spawned: Option<Entity>,
+) -> Result<ApiValue, ApiQueryError> {
+    let read = read_prim_from_reader(
+        view,
+        live_view,
+        prim,
+        path,
+        &options.requested,
+        &options.requested_relationships,
+        options.include_relationships,
+        options.include_connections,
+        options.include_schemas,
+        options.include_children,
+        options.include_collision_bounds,
+        options.include_collision_geometry,
+        options.include_geometry_bounds,
+        options.include_topology,
+        doc,
+    )
+    .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error))?
+    .ok_or_else(|| {
+        ApiQueryError::new(
+            ApiErrorCode::EntityNotFound,
+            format!(
+                "QueryUsdPrim: prim `{path}` not found in the requested document or live stage"
+            ),
+        )
+    })?;
+    query_record_value(
+        world,
+        path,
+        read,
+        doc,
+        generation,
+        live_document,
+        source_document_generation,
+        stage_generation,
+        spawned,
+        options,
+        poses,
+    )
+}
+
 /// Execute one or more prim reads against one validated stage/document
 /// context. The stage is borrowed once for the entire batch, so component
 /// verification can ask for hundreds of paths without reopening the composed
@@ -1134,6 +1290,16 @@ fn execute_query_paths(
         .map(|(path, _)| path.as_str())
         .collect::<HashSet<_>>();
     let spawned = spawned_entities_for_paths(world, &requested_paths, doc, live_stage)?;
+    let prepared_instance_roots =
+        prepared_instance_roots_for_paths(world, &requested_paths, live_stage);
+    let query_uses_unpromoted_instance = paths.iter().any(|(path, _)| {
+        spawned
+            .get(path)
+            .copied()
+            .or_else(|| prepared_instance_roots.get(path).copied())
+            .and_then(|entity| world.get::<UsdInstanceProjection>(entity))
+            .is_some_and(|projection| !projection.is_promoted())
+    });
     let mut poses = if spawned.is_empty() {
         None
     } else {
@@ -1146,6 +1312,84 @@ fn execute_query_paths(
             })?,
         )
     };
+
+    let needs_live_geometry_reader = options.include_collision_bounds
+        || options.include_collision_geometry
+        || options.include_geometry_bounds
+        || options.include_topology;
+    if query_uses_unpromoted_instance && !needs_live_geometry_reader {
+        return paths
+            .iter()
+            .map(|(path, prim)| {
+                let entity = spawned.get(path).copied();
+                let instance_entity = entity
+                    .or_else(|| prepared_instance_roots.get(path).copied())
+                    .filter(|entity| {
+                        world
+                            .get::<UsdInstanceProjection>(*entity)
+                            .is_some_and(|projection| !projection.is_promoted())
+                    });
+                if let Some(projection) = instance_entity
+                    .and_then(|entity| world.get::<UsdInstanceProjection>(entity))
+                    .filter(|projection| !projection.is_promoted())
+                {
+                    return read_query_path(
+                        world,
+                        &options,
+                        doc,
+                        generation,
+                        live_document,
+                        source_document_generation,
+                        stage_generation,
+                        &mut poses,
+                        projection.plan.as_ref(),
+                        None,
+                        path,
+                        prim,
+                        entity,
+                    );
+                }
+                let Some((reader, _)) = selected_reader.as_ref() else {
+                    return Err(ApiQueryError::new(
+                        ApiErrorCode::InternalError,
+                        "QueryUsdPrim: no composed USD reader is available for a mixed instance query",
+                    ));
+                };
+                match reader {
+                    UsdReadSource::Prepared(reader) => read_query_path(
+                        world,
+                        &options,
+                        doc,
+                        generation,
+                        live_document,
+                        source_document_generation,
+                        stage_generation,
+                        &mut poses,
+                        *reader,
+                        None,
+                        path,
+                        prim,
+                        entity,
+                    ),
+                    UsdReadSource::Live(view) => read_query_path(
+                        world,
+                        &options,
+                        doc,
+                        generation,
+                        live_document,
+                        source_document_generation,
+                        stage_generation,
+                        &mut poses,
+                        view,
+                        Some(view),
+                        path,
+                        prim,
+                        entity,
+                    ),
+                }
+            })
+            .collect();
+    }
 
     let mut read_paths = |view: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
                           live_view: Option<&StageView<'_>>|
@@ -1196,10 +1440,33 @@ fn execute_query_paths(
             .collect()
     };
 
+    if query_uses_unpromoted_instance {
+        let Some(document) = source_document.and_then(|document_id| {
+            world
+                .get_resource::<DocumentRegistry<UsdDocument>>()
+                .and_then(|registry| registry.host(document_id))
+                .map(|host| host.document())
+        }) else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "QueryUsdPrim: the owning document for a prepared reference instance is unavailable",
+            ));
+        };
+        let stage = document.open_composed_stage().map_err(|error| {
+            ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                format!("QueryUsdPrim: referenced document stage could not be opened: {error}"),
+            )
+        })?;
+        let view = StageView::new(&stage);
+        return read_paths(&view, Some(&view));
+    }
+
     let needs_native_view = options.include_collision_bounds
         || options.include_collision_geometry
         || options.include_geometry_bounds
         || options.include_topology;
+
     if let Some((reader, _)) = selected_reader.as_ref() {
         match reader {
             UsdReadSource::Live(view) => return read_paths(reader, Some(view)),
