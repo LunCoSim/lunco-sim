@@ -1167,20 +1167,21 @@ The whole-simulation guarantee remains open because:
    suspension and tire forces, jointed tire forces, and raycast wheel
    mass-property folds use that key order. Missing, duplicate, or empty keys
    raise a runtime fault and hold physics. The production
-   `multi_rover_stress_20` Rhai replay gate compares rover physics and Modelica
-   snapshots. On the 2026-09-25 main-integrated build, a four-run matrix at
-   Compute widths 1 and 24 matched all six checkpoint snapshots, 32 per-tick
-   samples, 240 Modelica participant snapshots, and all 20 articulated-body
-   states in every run, with digest
-   `0a080decafbe69264944d141da6afa3e02a87514e2d1da4e92d2317713f82dd1`.
-   Every run produced the authored Rhai stress verdict. Scene-readiness holds
-   spanned 3,760–4,645 Update passes; physics-admission holds were 5 passes,
-   participant-readiness holds were 11–12, and each scene run took 26.8–27.1
-   seconds including startup. This is same-build evidence for that fixture and
-   those pool widths; it does not establish whole-simulation or cross-machine
-   determinism. The current profile records effective pool width but does not
-   select a deterministic Avian solver profile; that guarantee still needs a
-   measured production choice or deterministic reductions. In the same ordered
+   `multi_rover_stress.rhai` gate checks six full lifecycle/checkpoint states,
+   the first `on_tick` sample at tick 1, and an explicit final-stage record; it
+   emits no per-tick trace. Each selected state contains full rover physics and
+   Modelica variables. Articulated-body state is sampled at ticks 1, 11, 80,
+   and the final tick for the 4/8/20-rover fixtures. The comparator checks the
+   exact final physics, Modelica, and articulated states first, then compares
+   earlier checkpoints exactly. `--record-reference PATH` saves those points
+   for 4/8/20 rovers, serial/default Compute settings, seeded jitter profiles,
+   and 30 Hz, with source and machine metadata. `--compare-reference PATH`
+   requires exact final-stage and checkpoint equality (`numeric_tolerance=0`);
+   no cross-machine run has been observed yet. This remains fixture-specific
+   evidence, not whole-simulation replay determinism. The current profile
+   records effective pool width but does not select a deterministic Avian
+   solver profile; that guarantee still needs a measured production choice or
+   deterministic reductions. In the same ordered
    `FixedUpdate` propagation path, a changed joint motor setpoint wakes its
    sleeping dynamic endpoint island with Avian's `WakeBody` command before the
    next solver step. The wake is edge-triggered by an enabled-state or target

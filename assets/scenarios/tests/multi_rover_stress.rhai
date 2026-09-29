@@ -352,6 +352,8 @@ fn on_start(me, ctx) {
     this.distance = [];
     this.targets = [];
     this.deterministic_trace_ticks = [];
+    this.last_deterministic_state_row = "";
+    this.final_stage_tick = ();
     this.early_determinism_trace_captured = false;
     this.last_observed_tick = 0;
     this.first_missing_tick = ();
@@ -478,6 +480,7 @@ fn on_start(me, ctx) {
     let initial = deterministic_state_sample(this.rover_paths, this.rovers, true);
     this.deterministic_trace_valid = this.deterministic_trace_valid && initial.valid;
     this.deterministic_trace_ticks.push(sim_tick());
+    this.last_deterministic_state_row = initial.row;
     print("D4_STATE_TRACE_V1|" + initial.row);
     print("[multi-rover-stress] discovered " + this.rovers.len() + " rover(s)");
 }
@@ -505,16 +508,7 @@ fn on_tick(me, ctx) {
         this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
         print("D4_EARLY_STATE_TRACE_V1|" + sample.row);
     }
-    if sim_tick() <= 30 || (sim_tick() <= 150 && sim_tick() % 10 == 0) {
-        let capture_modelica_values = (this.rovers.len() <= 8 && sim_tick() > 1)
-            || (sim_tick() >= 10 && sim_tick() <= 20);
-        let sample = deterministic_state_sample(this.rover_paths, this.rovers,
-            capture_modelica_values);
-        this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
-        print("D4_TICK_STATE_TRACE_V1|" + sample.row);
-    }
-    if this.rovers.len() == 20 && (sim_tick() == 1 || sim_tick() == 2
-        || sim_tick() == 11 || sim_tick() == 80) {
+    if sim_tick() == 1 || sim_tick() == 11 || sim_tick() == 80 {
         for i in 0..this.rovers.len() {
             trace_articulated_body_state(
                 sim_tick(), this.rover_paths[i], this.rovers[i]);
@@ -529,6 +523,7 @@ fn on_tick(me, ctx) {
         let sample = deterministic_state_sample(this.rover_paths, this.rovers, true);
         this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
         this.deterministic_trace_ticks.push(sim_tick());
+        this.last_deterministic_state_row = sample.row;
         print("D4_STATE_TRACE_V1|" + sample.row);
         for i in 0..this.rovers.len() {
             let at = world_pos(this.rovers[i]);
@@ -576,10 +571,10 @@ fn on_tick(me, ctx) {
     }
 
     if this.t >= this.next_determinism_sample_s {
-        let sample = deterministic_state_sample(this.rover_paths, this.rovers,
-            false);
+        let sample = deterministic_state_sample(this.rover_paths, this.rovers, true);
         this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
         this.deterministic_trace_ticks.push(sim_tick());
+        this.last_deterministic_state_row = sample.row;
         print("D4_STATE_TRACE_V1|" + sample.row);
         this.next_determinism_sample_s += 3.0;
     }
@@ -588,10 +583,17 @@ fn on_tick(me, ctx) {
     if this.deterministic_trace_ticks.len() == 0
         || this.deterministic_trace_ticks[this.deterministic_trace_ticks.len() - 1] != sim_tick() {
         let sample = deterministic_state_sample(this.rover_paths, this.rovers,
-            false);
+            true);
         this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
         this.deterministic_trace_ticks.push(sim_tick());
+        this.last_deterministic_state_row = sample.row;
         print("D4_STATE_TRACE_V1|" + sample.row);
+    }
+    this.final_stage_tick = sim_tick();
+    print("D4_FINAL_STAGE_V1|" + this.last_deterministic_state_row);
+    for i in 0..this.rovers.len() {
+        trace_articulated_body_state(
+            sim_tick(), this.rover_paths[i], this.rovers[i]);
     }
     let checks = [];
     let modelica_profile = modelica_worker_step_profile();
@@ -610,7 +612,11 @@ fn on_tick(me, ctx) {
         "physics compute profile is available for deterministic-state comparison"));
     checks.push(t_true(this.deterministic_trace_valid
             && this.deterministic_trace_ticks.len() == 6,
-        "initial, per-tick, and milestone physics traces remained valid"));
+        "startup, lifecycle, and final physics checkpoints remained valid"));
+    checks.push(t_true(this.final_stage_tick == sim_tick()
+            && this.deterministic_trace_ticks[this.deterministic_trace_ticks.len() - 1]
+                == this.final_stage_tick,
+        "the recorded final simulation stage is complete and is the final checkpoint"));
     checks.push(t_true(modelica_profile.participants.to_float()
                 == this.rovers.len().to_float()
             && modelica_profile.entity_count.to_float()

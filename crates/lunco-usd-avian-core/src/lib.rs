@@ -11,9 +11,12 @@
 //! This bridge turns ALL of avian's f32 transform sync off
 //! (`propagate_before_physics`, `transform_to_position`,
 //! `position_to_transform`) and owns the sync itself in the f64 cell-chain
-//! domain (`grid_relative_pose` / `pose_in_grid`): render `GlobalTransform`s are big_space's
-//! alone; physics `Position`/`Rotation` are fed from (and written back to)
-//! `CellCoord` + `Transform` truth. The `Position` frame is the explicit
+//! domain (`grid_relative_pose` / `pose_in_grid`): render `GlobalTransform`s
+//! are big_space's alone. Avian `Position` and `Rotation` are authoritative
+//! solved poses after admission; authored or external `(CellCoord, Transform)`
+//! changes are consumed only at admission or the fixed physics boundary, then
+//! solved poses are written back for presentation. Interpolated render
+//! transforms never become physics input. The `Position` frame is the explicit
 //! [`lunco_spatial::ActivePhysicsFrame`] selected for the loaded physical site.
 //! Every Avian body and collider uses that one frame; sibling BigSpace branches
 //! are converted through their nearest shared grid. A body-fixed surface frame

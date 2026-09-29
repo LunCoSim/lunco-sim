@@ -112,7 +112,6 @@ impl Plugin for LunCoMobilityPlugin {
             .register_type::<JointedWheelTire>()
             .register_type::<TireLateralStiffnessGraph>()
             .register_type::<DifferentialCoupling>()
-            .register_type::<WheelHeadingBaseRotation>()
             .register_type::<SuspensionPiston>()
             .register_type::<SuspensionSpring>()
             .register_type::<RaycastWheelMassFolded>()
@@ -1369,6 +1368,10 @@ pub struct WheelRaycast {
     /// raked steering head tilts this (e.g. `(0, cos θ, sin θ)`) so the front
     /// wheel steers about the fork axis, not vertical.
     pub heading_axis: DVec3,
+    /// Fixed-step steering rotation consumed by wheel physics. The entity's
+    /// `Transform` mirrors this value for presentation; physics never reads it
+    /// back, since Avian interpolation may change that transform between ticks.
+    pub heading_rotation: DQuat,
 }
 
 /// **USD is the sole source of a wheel's physical numbers.**
@@ -1407,6 +1410,7 @@ impl Default for WheelRaycast {
             tire_force: DVec3::ZERO,
             brake_torque_max: 0.0,
             heading_axis: DVec3::Y,
+            heading_rotation: DQuat::IDENTITY,
         }
     }
 }
@@ -1513,7 +1517,6 @@ fn apply_wheel_suspension(
         &mut WheelRaycast,
         &Suspension,
         &RayHits,
-        &Transform,
         &WheelBodyMount,
     )>,
     // Force must land only on a body the solver will integrate. A disabled body
@@ -1547,7 +1550,7 @@ fn apply_wheel_suspension(
     let fixed_dynamic_bodies = dynamically_fixed_bodies(&fixed_joints, &q_bodies);
 
     for entity in order {
-        let Ok((_, _, mut wheel, susp, hits, wheel_tf, mount)) = q_wheels.get_mut(entity) else {
+        let Ok((_, _, mut wheel, susp, hits, mount)) = q_wheels.get_mut(entity) else {
             continue;
         };
         let parent_entity = mount.body;
@@ -1565,7 +1568,7 @@ fn apply_wheel_suspension(
                 GridPos(forces.position().0),
                 GridRot(forces.rotation().0),
                 mount.local.translation.as_dvec3(),
-                (mount.local.rotation * wheel_tf.rotation).as_dquat(),
+                mount.local.rotation.as_dquat() * wheel.heading_rotation,
             );
 
             let mut current_distance = susp.rest_length;
@@ -1686,7 +1689,6 @@ fn sync_raycast_wheel_physics_pose(
             &mut Position,
             &mut Rotation,
             &mut RayCaster,
-            &Transform,
             &WheelBodyMount,
             &Suspension,
         ),
@@ -1696,7 +1698,7 @@ fn sync_raycast_wheel_physics_pose(
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
-    for (wheel_entity, wheel, mut wpos, mut wrot, mut raycaster, wtf, mount, suspension) in
+    for (wheel_entity, wheel, mut wpos, mut wrot, mut raycaster, mount, suspension) in
         q_wheels.iter_mut()
     {
         if let Ok((cpos, crot)) = q_chassis.get(mount.body) {
@@ -1704,7 +1706,7 @@ fn sync_raycast_wheel_physics_pose(
                 GridPos(cpos.0),
                 GridRot(crot.0),
                 mount.local.translation.as_dvec3(),
-                (mount.local.rotation * wtf.rotation).as_dquat(),
+                mount.local.rotation.as_dquat() * wheel.heading_rotation,
             );
             // The raycaster's local origin is the authored strut-top offset and
             // Avian computes `Position + Rotation * origin`. Keep that offset in
@@ -1854,7 +1856,6 @@ fn apply_wheel_drive(
         Option<&lunco_physics::PhysicsOrderKey>,
         &WheelRaycast,
         &Suspension,
-        &Transform,
         &RayHits,
         &WheelBodyMount,
     )>,
@@ -1899,7 +1900,7 @@ fn apply_wheel_drive(
     let dt = time.delta_secs_f64();
 
     for entity in order {
-        let Ok((_, _, wheel, susp, wheel_tf, hits, mount)) = q_wheels.get(entity) else {
+        let Ok((_, _, wheel, susp, hits, mount)) = q_wheels.get(entity) else {
             continue;
         };
         let parent_entity = mount.body;
@@ -1916,7 +1917,7 @@ fn apply_wheel_drive(
                     GridPos(forces.position().0),
                     GridRot(forces.rotation().0),
                     mount.local.translation.as_dvec3(),
-                    (mount.local.rotation * wheel_tf.rotation).as_dquat(),
+                    mount.local.rotation.as_dquat() * wheel.heading_rotation,
                 );
                 // Traction only exists when the ray is hitting the ground.
                 let Some(hit) = hits
@@ -1998,14 +1999,6 @@ fn apply_wheel_drive(
     }
 }
 
-/// A raycast wheel's base (authored mount) local rotation, captured before the
-/// first authored heading write. Heading is a final scalar produced by the
-/// controller; this component only preserves the authored camber/toe/rake while
-/// realizing that scalar on a wheel that has no rigid-body joint.
-#[derive(Component, Debug, Clone, Copy, Reflect)]
-#[reflect(Component)]
-pub struct WheelHeadingBaseRotation(pub Quat);
-
 /// Realize a controller-produced wheel heading for a raycast wheel.
 ///
 /// Physical wheels receive the same authored scalar through a standard
@@ -2014,18 +2007,11 @@ pub struct WheelHeadingBaseRotation(pub Quat);
 /// no command interpretation, rate limiting, or vehicle-type dispatch; those
 /// belong to the authored controller.
 fn apply_wheel_heading(
-    mut commands: Commands,
-    mut q_wheels: Query<(
-        Entity,
-        &mut Transform,
-        &WheelBodyMount,
-        &WheelRaycast,
-        Option<&WheelHeadingBaseRotation>,
-    )>,
+    mut q_wheels: Query<(&mut WheelRaycast, &mut Transform, &WheelBodyMount)>,
     q_ports: Query<&Port>,
     q_chassis: Query<&RigidBody, With<RigidBody>>,
 ) {
-    for (entity, mut transform, mount, wheel, base) in q_wheels.iter_mut() {
+    for (mut wheel, mut transform, mount) in q_wheels.iter_mut() {
         // Predict-own: this chain runs on a client too. Skip wheels of a
         // `Kinematic` chassis (replicated rovers this peer does NOT own), whose
         // local steer ports are stale and would point the wheels wrong.
@@ -2034,30 +2020,25 @@ fn apply_wheel_heading(
                 continue;
             }
         }
-        // The mount's authored rotation, captured on first run — before this
-        // system has ever written the transform, so it IS the authored value.
         let Ok(heading) = q_ports.get(wheel.heading_port) else {
             continue;
         };
         if !heading.value.is_finite() {
             continue;
         }
-        let base_rotation = match base {
-            Some(b) => b.0,
-            None => {
-                let b = transform.rotation;
-                commands
-                    .entity(entity)
-                    .try_insert(WheelHeadingBaseRotation(b));
-                b
-            }
-        };
         // Rotate about the authored wheel-local heading axis. The input is the
-        // final angle in radians, not a normalized vehicle command.
-        let axis = wheel.heading_axis.as_vec3().normalize();
-        let rotation = base_rotation * Quat::from_axis_angle(axis, heading.value as f32);
-        if transform.rotation != rotation {
-            transform.rotation = rotation;
+        // final angle in radians, not a normalized vehicle command. The
+        // authored wheel attitude is already part of `WheelBodyMount.local`;
+        // this quaternion carries only the changing steering rotation.
+        let axis = wheel.heading_axis.normalize_or_zero();
+        if axis == DVec3::ZERO || !axis.is_finite() {
+            continue;
+        }
+        let rotation = DQuat::from_axis_angle(axis, heading.value);
+        wheel.heading_rotation = rotation;
+        let presentation_rotation = rotation.as_quat();
+        if transform.rotation != presentation_rotation {
+            transform.rotation = presentation_rotation;
         }
     }
 }
@@ -2346,6 +2327,91 @@ mod wheel_raycast_parallel_tests {
     use super::*;
     use bevy::time::TimeUpdateStrategy;
     use std::time::Duration;
+
+    #[test]
+    fn raycast_wheel_physics_pose_ignores_interpolated_transform() {
+        let mut app = App::new();
+        app.add_systems(FixedPostUpdate, sync_raycast_wheel_physics_pose);
+
+        let chassis_position = DVec3::new(12.0, 4.0, -8.0);
+        let chassis_rotation = DQuat::from_rotation_z(0.35);
+        let chassis = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Position(chassis_position),
+                Rotation(chassis_rotation),
+            ))
+            .id();
+
+        let authored_mount = Transform {
+            translation: Vec3::new(1.0, -0.25, 0.75),
+            rotation: Quat::from_rotation_x(0.2),
+            scale: Vec3::ONE,
+        };
+        let fixed_heading = DQuat::from_rotation_y(0.4);
+        let render_sample = Quat::from_rotation_z(-0.9);
+        let wheel = app
+            .world_mut()
+            .spawn((
+                WheelRaycast {
+                    wheel_radius: 0.35,
+                    heading_rotation: fixed_heading,
+                    ..default()
+                },
+                Position(DVec3::ZERO),
+                Rotation(DQuat::IDENTITY),
+                RayCaster::new(DVec3::ZERO, Dir3::NEG_Y),
+                WheelBodyMount {
+                    body: chassis,
+                    local: authored_mount,
+                },
+                Suspension {
+                    rest_length: 0.8,
+                    spring_k: 0.0,
+                    damping_c: 0.0,
+                    local_axis: DVec3::Y,
+                },
+                Transform::from_rotation(render_sample),
+            ))
+            .id();
+
+        let (expected_position, expected_rotation) = wheel_hub_pose(
+            GridPos(chassis_position),
+            GridRot(chassis_rotation),
+            authored_mount.translation.as_dvec3(),
+            authored_mount.rotation.as_dquat() * fixed_heading,
+        );
+        let expected_ray_origin = expected_rotation.0 * DVec3::Y * strut_offset(0.8, 0.35);
+
+        app.world_mut().run_schedule(FixedPostUpdate);
+
+        assert_eq!(
+            app.world().get::<Position>(wheel).unwrap().0,
+            expected_position.0
+        );
+        assert_eq!(
+            app.world().get::<RayCaster>(wheel).unwrap().origin,
+            expected_ray_origin
+        );
+        assert_eq!(
+            app.world().get::<Rotation>(wheel).unwrap().0,
+            DQuat::IDENTITY
+        );
+        assert_eq!(
+            app.world().get::<Transform>(wheel).unwrap().rotation,
+            render_sample
+        );
+
+        let (_, render_rotation) = wheel_hub_pose(
+            GridPos(chassis_position),
+            GridRot(chassis_rotation),
+            authored_mount.translation.as_dvec3(),
+            authored_mount.rotation.as_dquat() * render_sample.as_dquat(),
+        );
+        let render_ray_origin = render_rotation.0 * DVec3::Y * strut_offset(0.8, 0.35);
+        assert_ne!(render_ray_origin, expected_ray_origin);
+    }
 
     #[test]
     fn parallel_wheel_cast_matches_native_query_and_preserves_disabled_state() {
