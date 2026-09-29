@@ -1,9 +1,9 @@
 // ── Sandbox ramp placement regression ───────────────────────────────────────
 //
 // The interactive sandbox owns the ramp geometry and the rover spawn.  This
-// focused test composes that real scene, drives one raycast rover from its flat
-// approach across the first ramp, and checks the authored grade is physically
-// present in the observed world pose.
+// focused test composes that real scene, verifies a rover authored inside the
+// ramp is paused in place, and drives a second rover from the flat approach
+// across the ramp to check its authored grade in the observed world pose.
 
 const SETTLE_S = 2.0;
 const DRIVE_S = 28.0;
@@ -15,7 +15,14 @@ const MIN_RISE_M = 1.0;
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [find_path("/SandboxRampPlacement/Skid_Raycast_1")],
-       entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }
+       entity_reads: [find_path("/SandboxRampPlacement/Skid_Raycast_2")],
+       entity_writes: [],
+       query_reads: ["QueryPhysicsState", "QueryUsdPrim", "RuntimeDiagnostics"],
+       required_inputs: [] }
+}
+
+fn query_ok(record) {
+    record != () && record.ok != false
 }
 
 fn verdict(pass, reason) {
@@ -37,6 +44,9 @@ fn on_start(me, ctx) {
     this.max_x = 0.0;
     this.possession = ();
     this.drive_command = ();
+    this.slope_rover = find_path("/SandboxRampPlacement/Skid_Raycast_2");
+    this.slope_rover_checked = false;
+    this.slope_rover_paused_in_place = false;
     if this.rover >= 0 && this.ramp >= 0 {
         this.start = world_pos(this.rover);
         if this.start != () {
@@ -49,6 +59,41 @@ fn on_start(me, ctx) {
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.t += dt();
+
+    if !this.slope_rover_checked && this.slope_rover >= 0 {
+        let state = query("QueryPhysicsState", #{ id: this.slope_rover });
+        if query_ok(state) && state.physics_initialization_pending == false {
+            let pose = query("QueryUsdPrim", #{
+                path: "/SandboxRampPlacement/Skid_Raycast_2", attrs: [],
+            });
+            let diagnostics = query("RuntimeDiagnostics", #{});
+            let has_warning = false;
+            if query_ok(diagnostics) {
+                for finding in diagnostics.findings {
+                    if finding.code == "physics-initialization-paused"
+                        && finding.severity == "warning"
+                        && finding.subject == "/SandboxRampPlacement/Skid_Raycast_2" {
+                        has_warning = true;
+                    }
+                }
+            }
+            this.slope_rover_paused_in_place =
+                state.physics_initialization_paused == true
+                && state.physics_object_paused == true
+                && state.physics_state_pending == false
+                && state.physics_initialization_penetration_m > 0.0
+                && state.rigid_body_disabled == true
+                && state.collider_disabled == true
+                && query_ok(pose) && pose.position_frame == "active_physics"
+                && (pose.world_position[0] - 15.0).abs() <= 0.001
+                && (pose.world_position[1] - 5.0).abs() <= 0.001
+                && (pose.world_position[2] - 10.0).abs() <= 0.001
+                && has_warning;
+            this.slope_rover_checked = true;
+            print("[sandbox-ramp] authored slope rover paused in place="
+                + this.slope_rover_paused_in_place);
+        }
+    }
 
     if this.rover < 0 || this.ramp < 0 || this.start == () {
         this.done = true;
@@ -91,6 +136,10 @@ fn on_tick(me, ctx) {
         print("[sandbox-ramp] start=" + this.start + " final=" + p +
               " progress_x=" + progress + " rise_y=" + rise +
               " min_y=" + this.min_y + " max_x=" + this.max_x);
+        if !this.slope_rover_checked || !this.slope_rover_paused_in_place {
+            verdict(false, "the rover authored inside the ramp was not paused in place with a diagnostic");
+            return;
+        }
         verdict(progress > MIN_PROGRESS_M && rise > MIN_RISE_M,
             "rover did not climb the authored ramp (progress_x=" + progress +
             ", rise_y=" + rise + ")");

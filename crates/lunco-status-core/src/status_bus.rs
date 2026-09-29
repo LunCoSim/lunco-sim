@@ -814,7 +814,7 @@ pub fn wind_down_on_twin_closed(
 /// `Telemetry — DEM_BUILD_FAILED: Terrain 'apollo15' …`.
 pub const TELEMETRY_SOURCE: &str = "Telemetry";
 
-/// Fan Error/Critical domain telemetry onto the status bus.
+/// Fan Warning, Error, and Critical domain telemetry onto the status bus.
 ///
 /// **This is the bridge every emitting crate assumes exists.** Domain
 /// crates (`lunco-terrain-surface`, `lunco-assets`, `lunco-celestial`,
@@ -827,12 +827,10 @@ pub const TELEMETRY_SOURCE: &str = "Telemetry";
 /// and keeps the dependency arrow pointing the right way — UI consumes
 /// domain events, domains never learn about the UI.
 ///
-/// Only `Error` and `Critical` are forwarded. `TelemetryEvent` is also the
-/// carrier for ordinary simulation events (zone entries, script `emit`,
-/// sensor faults) at `Debug`/`Info`, and those would swamp the history and
-/// the bar — they remain available to the Console and API subscribers via
-/// the telemetry stream itself. `Warning` is forwarded too, since
-/// Diagnostics is meant to show warnings tied to a document.
+/// `TelemetryEvent` is also the carrier for ordinary simulation events (zone
+/// entries, script `emit`, sensor faults) at `Debug`/`Info`; those would swamp
+/// the history and the bar, so they remain available to Console and API
+/// subscribers through the telemetry stream itself.
 pub fn surface_error_telemetry(
     trigger: On<lunco_telemetry_core::TelemetryEvent>,
     mut bus: ResMut<StatusBus>,
@@ -926,6 +924,38 @@ mod tests {
             event.message.contains("DEM_BUILD_FAILED [source=42]")
                 && event.message.contains("/twins/apollo15/terrain")
         );
+    }
+
+    #[test]
+    fn warning_telemetry_reaches_the_status_bus() {
+        use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
+
+        let mut app = App::new();
+        app.add_plugins(StatusBusPlugin);
+        app.world_mut().trigger(TelemetryEvent {
+            name: "PHYSICS_INITIALIZATION_PAUSED".to_string(),
+            source: 0,
+            severity: Severity::Warning,
+            data: TelemetryValue::String(
+                "vehicle-17: authored pose penetrates support geometry by 0.250000 m; assembly paused in place".to_string(),
+            ),
+            timestamp: 0.0,
+            sim_secs: 0.0,
+            sim_tick: 0,
+        });
+
+        let bus = app.world().resource::<StatusBus>();
+        let event = bus
+            .history()
+            .find(|event| event.level == StatusLevel::Warn)
+            .expect("Warning telemetry must reach the Recent status history");
+        assert!(
+            event
+                .message
+                .contains("PHYSICS_INITIALIZATION_PAUSED [source=0]")
+        );
+        assert!(event.message.contains("vehicle-17"));
+        assert!(event.message.contains("assembly paused in place"));
     }
 
     #[test]

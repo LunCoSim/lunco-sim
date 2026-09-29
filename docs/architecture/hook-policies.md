@@ -221,10 +221,14 @@ The application initialization policy is installed at startup and remains
 active across Twin reloads; a mounted Twin may replace it with its own policy.
 The initialization facts contain the selector, stable USD subject path, finite
 pose, assembly member count, and validation status. A measured
-`terrain_penetration` also supplies `penetration_m`. The policy returns
+`terrain_penetration` also supplies `penetration_m`, measured from rigid
+collider overlap or support-probe displacement against composed support
+geometry. The policy returns
 `accept` to admit the authored pose unchanged, `pause` to disable the complete
 validated articulated object and remove it from readiness, or `reject` to keep
-the object held. Paused joints leave the shared native admission batch so
+the object held. A pause publishes `PHYSICS_INITIALIZATION_PAUSED` warning
+telemetry for Recent status and a runtime diagnostic for the physics panel.
+Paused joints leave the shared native admission batch so
 independent valid assemblies can finish. The shipped Application policy pauses
 measured terrain penetrations; it never raises, reseats, or edits authored poses.
 Missing, faulting, rejected, or malformed decisions remain visible and fail

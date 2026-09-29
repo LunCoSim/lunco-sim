@@ -21,7 +21,16 @@ def Xform "SandboxRampPlacement" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
     }
 
-    over "Skid_Raycast_2" (active = false) { }
+    over "Skid_Raycast_2" (
+        active = true
+    )
+    {
+        over "System" (
+            active = false
+        )
+        {
+        }
+    }
     over "Skid_Physical_1" (active = false) { }
     over "Ackermann_Raycast_1" (active = false) { }
     over "Ackermann_Physical_1" (active = false) { }

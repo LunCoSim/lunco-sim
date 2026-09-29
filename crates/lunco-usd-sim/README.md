@@ -89,11 +89,14 @@ def LunCoPolicy "PhysicsInitialization"
 
 The hook receives the stable USD subject path, selector, finite pose,
 articulated assembly member count, and validation status. Terrain penetration
-facts also include `penetration_m`. It never receives process-local ECS entity
-ids. `"accept"` admits the authored pose unchanged, `"pause"` disables the
-validated penetrating assembly and removes only that assembly from readiness,
-and `"reject"` keeps it held. Pause is accepted only with measured terrain
-penetration facts. Missing schema or selector, missing policy,
+facts also include `penetration_m`, measured from rigid collider overlap or
+support-probe displacement against composed support geometry. A pause emits a
+`PHYSICS_INITIALIZATION_PAUSED` warning in Recent status. The hook never
+receives process-local ECS entity ids. `"accept"` admits the authored pose
+unchanged, `"pause"` disables the validated penetrating assembly and removes
+only that assembly from readiness, and `"reject"` keeps it held. Pause is
+accepted only with measured terrain penetration facts. Missing schema or
+selector, missing policy,
 a non-deterministic registration, malformed result, or rejection leaves the
 body held and publishes a runtime diagnostic; there is no pose repair or
 engine-side decision fallback.

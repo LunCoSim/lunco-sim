@@ -935,6 +935,14 @@ fixed simulation cycle after admission. This keeps authored-pose validation
 inside lifecycle preparation without inventing a gravity sample or advancing a
 physics clock to obtain one.
 
+The articulated rigid colliders are also checked against live static support
+colliders with Avian's exact narrow phase. This catches an authored rover whose
+axle probe starts inside a ramp and therefore produces no ray hit. A measured
+overlap follows the same initialization policy as other support penetration;
+the owner pauses the assembly in place and publishes its diagnostic before
+dynamic admission, and sends a `PHYSICS_INITIALIZATION_PAUSED` warning to
+Recent status.
+
 Scene readiness follows the same rule. Initial composition must establish one
 simulation start boundary: asynchronous load duration must not consume
 authoritative ticks. Runtime referenced assets and other new participants must
