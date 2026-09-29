@@ -570,7 +570,9 @@ navigation actions.
 `lunco-workbench-widgets::tree::{branch, leaf}` is the single presentation owner for
 hierarchy rows rendered by workbench panels. It provides the common disclosure
 control, full-width row allocation, persistent expansion identity, and
-indented child body. USD prim/stage browsers, entity trees, telemetry trees,
+indented child body. `branch` also reports whether expansion changed in the
+current frame so virtualized panels can invalidate a cached row index without
+re-reading every branch. USD prim/stage browsers, entity trees, telemetry trees,
 the Ports entity browser, Modelica package/class trees, Twin folders, and
 library paths all use this contract.
 
@@ -579,8 +581,13 @@ identities, selection, loading, and typed actions. A domain renderer supplies
 only the label/body callbacks and stable `egui::Id`; it does not instantiate a
 second `CollapsingHeader`/`CollapsingState` tree path. Search may force a branch
 open for the current frame, while ordinary expansion remains persistent UI
-state. Settings groups and non-hierarchical detail accordions are not tree
-rows and remain local to their owning panel.
+state. Large trees retain their flattened visible-row index until the source
+revision, active filter/scope, or expansion state changes. Their egui widgets
+are still painted each frame from borrowed or shared immutable row data; panels
+do not clone the complete domain tree to render it. Tree rows borrow selection
+state during paint and retain an owned selection snapshot only when the
+selection changes. Settings groups and other non-hierarchical detail accordions
+remain local to their owning panel.
 
 The Editor Prims panel uses the same full-width selectable row as Entities. Its
 right edge carries three transient preview controls per prim: Visible,

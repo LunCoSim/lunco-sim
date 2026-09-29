@@ -494,7 +494,7 @@ impl Plugin for SceneEditUiPlugin {
         // then an early return — an O(1) live readout, the sanctioned
         // `every_frame` shape.
         app.add_view_model_every_frame(refresh_view_help_controls);
-        app.register_panel(spawn_palette::SpawnPalette)
+        app.register_panel(spawn_palette::SpawnPalette::default())
             .register_panel(entity_list::EntityList::default())
             .register_panel(ports::PortPanel::default())
             .register_panel(terrain_tools::ToolsPanel)

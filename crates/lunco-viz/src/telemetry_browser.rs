@@ -286,7 +286,7 @@ pub fn bind_dropped_channel(
 
 // ── Cached catalog ───────────────────────────────────────────────────
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct Row {
     sig: SignalRef,
     unit: Option<String>,
@@ -306,20 +306,20 @@ struct Row {
     search_fields: [String; 5],
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct TreeNode {
-    label: String,
+    label: Arc<str>,
     filter_label: String,
     id: String,
     children: std::collections::BTreeMap<String, TreeNode>,
-    rows: Vec<Row>,
+    rows: Vec<Arc<Row>>,
 }
 
 impl TreeNode {
     fn new(id: String, label: String) -> Self {
         let filter_label = label.to_lowercase();
         Self {
-            label,
+            label: Arc::from(label),
             filter_label,
             id,
             children: Default::default(),
@@ -600,7 +600,7 @@ fn build_tree_rows(
                 .entry(id.clone())
                 .or_insert_with(|| TreeNode::new(id, label));
         }
-        node.rows.push(row);
+        node.rows.push(Arc::new(row));
     }
     sort_tree(&mut root);
     root
@@ -1065,24 +1065,52 @@ fn display_roots(root: &TreeNode) -> impl Iterator<Item = &TreeNode> {
     root.children.values()
 }
 
-enum VisibleTelemetryRow<'a> {
+enum VisibleTelemetryRow {
     Group {
-        node: &'a TreeNode,
+        display_label: Arc<str>,
         branch_id: egui::Id,
         depth: usize,
-        visible_count: usize,
     },
     Channel {
-        row: &'a Row,
+        row: Arc<Row>,
         depth: usize,
         stripe: usize,
     },
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct VisibleTelemetryRowsKey {
+    catalog_key: u64,
+    focus_key: u64,
+    filter: String,
+    scoped: bool,
+    show_model_variables: bool,
+    show_archived: bool,
+}
+
+impl VisibleTelemetryRowsKey {
+    fn matches(
+        &self,
+        catalog_key: u64,
+        focus_key: u64,
+        filter: &str,
+        scoped: bool,
+        show_model_variables: bool,
+        show_archived: bool,
+    ) -> bool {
+        self.catalog_key == catalog_key
+            && self.focus_key == focus_key
+            && self.filter == filter
+            && self.scoped == scoped
+            && self.show_model_variables == show_model_variables
+            && self.show_archived == show_archived
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn collect_visible_telemetry_rows<'a>(
+fn collect_visible_telemetry_rows(
     ctx: &egui::Context,
-    node: &'a TreeNode,
+    node: &TreeNode,
     parent_scope: egui::Id,
     depth: usize,
     scoped: bool,
@@ -1090,7 +1118,7 @@ fn collect_visible_telemetry_rows<'a>(
     show_archived: bool,
     filter: &str,
     counts: &HashMap<usize, NodeVisibility>,
-    rows: &mut Vec<VisibleTelemetryRow<'a>>,
+    rows: &mut Vec<VisibleTelemetryRow>,
 ) {
     let visible_count = counts
         .get(&(node as *const TreeNode as usize))
@@ -1106,11 +1134,11 @@ fn collect_visible_telemetry_rows<'a>(
     }
 
     let branch_id = parent_scope.with(("tb_entity", &node.id));
+    let display_label: Arc<str> = format!("{} ({visible_count})", node.label).into();
     rows.push(VisibleTelemetryRow::Group {
-        node,
+        display_label,
         branch_id,
         depth,
-        visible_count,
     });
 
     let state = egui::collapsing_header::CollapsingState::load_with_default_open(
@@ -1153,7 +1181,7 @@ fn collect_visible_telemetry_rows<'a>(
         .enumerate()
     {
         rows.push(VisibleTelemetryRow::Channel {
-            row,
+            row: Arc::clone(row),
             depth: depth + 1,
             stripe,
         });
@@ -1163,27 +1191,27 @@ fn collect_visible_telemetry_rows<'a>(
 #[allow(clippy::too_many_arguments)]
 fn render_visible_telemetry_row(
     ui: &mut egui::Ui,
-    entry: &VisibleTelemetryRow<'_>,
+    entry: &VisibleTelemetryRow,
     registry: &SignalRegistry,
     theme: &TelemetryTheme,
     display_settings: &TelemetryDisplaySettings,
     row_text_cache: &mut TelemetryRowTextCache,
     selected: Option<&SignalRef>,
     clicked: &mut Option<SignalRef>,
+    tree_changed: &mut bool,
 ) {
     match entry {
         VisibleTelemetryRow::Group {
-            node,
+            display_label,
             branch_id,
             depth,
-            visible_count,
         } => {
             ui.push_id(("tb_entity_row", branch_id), |ui| {
                 let indent = ui.spacing().indent * *depth as f32;
                 ui.horizontal(|ui| {
                     ui.add_space(indent);
                     ui.vertical(|ui| {
-                        lunco_workbench_widgets::tree::branch(
+                        let branch_state = lunco_workbench_widgets::tree::branch(
                             ui,
                             *branch_id,
                             lunco_workbench_widgets::tree::default_open_at_depth(*depth),
@@ -1192,11 +1220,7 @@ fn render_visible_telemetry_row(
                                 let width = ui.available_width();
                                 lunco_workbench_widgets::tree::label(
                                     ui,
-                                    egui::RichText::new(format!(
-                                        "{} ({visible_count})",
-                                        node.label
-                                    ))
-                                    .strong(),
+                                    egui::RichText::new(display_label.as_ref()).strong(),
                                     width,
                                     egui::Sense::click(),
                                 )
@@ -1204,6 +1228,7 @@ fn render_visible_telemetry_row(
                             },
                             |_| {},
                         );
+                        *tree_changed |= branch_state.changed;
                     });
                 });
             });
@@ -1643,6 +1668,9 @@ fn unit_tooltip(unit: Option<&str>) -> &'static str {
 pub struct TelemetryBrowserPanel {
     filter: String,
     visibility_cache: Option<VisibilityCache>,
+    visible_rows: Vec<VisibleTelemetryRow>,
+    visible_rows_key: Option<VisibleTelemetryRowsKey>,
+    visible_rows_dirty: bool,
     row_text_cache: TelemetryRowTextCache,
     selected: Option<SignalRef>,
     requested_selection: Option<RequestedSignalSelection>,
@@ -1673,6 +1701,9 @@ impl Default for TelemetryBrowserPanel {
         Self {
             filter: String::new(),
             visibility_cache: None,
+            visible_rows: Vec::new(),
+            visible_rows_key: None,
+            visible_rows_dirty: true,
             row_text_cache: TelemetryRowTextCache::default(),
             selected: None,
             requested_selection: None,
@@ -1760,8 +1791,7 @@ impl Panel for TelemetryBrowserPanel {
             });
             ui.separator();
         }
-        let stored_display_settings = ctx.resource_expect::<TelemetryDisplaySettings>().clone();
-        let mut display_settings = stored_display_settings.clone();
+        let mut display_settings = ctx.resource_expect::<TelemetryDisplaySettings>().clone();
 
         // ── Filter box ───────────────────────────────────────────
         ui.add(
@@ -1855,7 +1885,7 @@ impl Panel for TelemetryBrowserPanel {
                 );
             });
         });
-        if display_settings != stored_display_settings {
+        if ctx.resource_expect::<TelemetryDisplaySettings>() != &display_settings {
             display_settings.significant_digits = display_settings.significant_digits.clamp(1, 8);
             display_settings.zero_threshold = if display_settings.zero_threshold.is_finite() {
                 display_settings.zero_threshold.max(0.0)
@@ -2016,68 +2046,102 @@ impl Panel for TelemetryBrowserPanel {
 
         // Build the open tree's lightweight row index, then let egui construct
         // widgets only for entries inside the scroll viewport.
-        let mut visible_rows = Vec::with_capacity(visible.saturating_add(32));
-        let tree_scope = egui::Id::new("telemetry_browser_tree");
-        for node in display_roots(&catalog.root) {
-            collect_visible_telemetry_rows(
-                ui.ctx(),
-                node,
-                tree_scope,
-                0,
+        let visible_rows_stale = self.visible_rows_dirty
+            || !self.visible_rows_key.as_ref().is_some_and(|cache| {
+                cache.matches(
+                    key,
+                    focus_key,
+                    &visibility.normalized_filter,
+                    scoped,
+                    self.show_model_variables,
+                    display_settings.show_archived,
+                )
+            });
+        if visible_rows_stale {
+            self.visible_rows.clear();
+            let tree_scope = egui::Id::new("telemetry_browser_tree");
+            for node in display_roots(&catalog.root) {
+                collect_visible_telemetry_rows(
+                    ui.ctx(),
+                    node,
+                    tree_scope,
+                    0,
+                    scoped,
+                    self.show_model_variables,
+                    display_settings.show_archived,
+                    &visibility.normalized_filter,
+                    &visibility.counts,
+                    &mut self.visible_rows,
+                );
+            }
+            self.visible_rows_key = Some(VisibleTelemetryRowsKey {
+                catalog_key: key,
+                focus_key,
+                filter: visibility.normalized_filter.clone(),
                 scoped,
-                self.show_model_variables,
-                display_settings.show_archived,
-                &visibility.normalized_filter,
-                &visibility.counts,
-                &mut visible_rows,
-            );
+                show_model_variables: self.show_model_variables,
+                show_archived: display_settings.show_archived,
+            });
+            self.visible_rows_dirty = false;
         }
 
         // ── Channel list ─────────────────────────────────────────
         let detail_reserve = if self.selected.is_some() { 150.0 } else { 0.0 };
         let row_height = ui.spacing().interact_size.y;
+        let mut tree_changed = false;
         egui::ScrollArea::vertical()
             .id_salt("telemetry_browser_list")
             .auto_shrink([false, false])
             .max_height((ui.available_height() - detail_reserve).max(60.0))
-            .show_rows(ui, row_height, visible_rows.len(), |ui, range| {
+            .show_rows(ui, row_height, self.visible_rows.len(), |ui, range| {
                 for row_index in range {
                     render_visible_telemetry_row(
                         ui,
-                        &visible_rows[row_index],
+                        &self.visible_rows[row_index],
                         registry,
                         &theme,
                         &display_settings,
                         &mut self.row_text_cache,
                         self.selected.as_ref(),
                         &mut clicked,
+                        &mut tree_changed,
                     );
                 }
             });
+        if tree_changed {
+            self.visible_rows_dirty = true;
+        }
 
         if let Some(sig) = clicked {
             self.selected = Some(sig);
         }
 
         // ── Detail strip: latest value + inline preview ──────────
-        let Some(sel) = self.selected.clone() else {
+        let selected_is_inactive = self.selected.as_ref().is_some_and(|selected| {
+            !display_settings.show_archived && !registry.is_active(selected)
+        });
+        if selected_is_inactive {
+            self.selected = None;
+            return;
+        }
+        let selected_is_hidden = self.selected.as_ref().is_some_and(|selected| {
+            !self.show_model_variables
+                && registry
+                    .meta(selected)
+                    .is_some_and(|meta| meta.exposure == SignalExposure::Internal)
+        });
+        if selected_is_hidden {
+            self.selected = None;
+            return;
+        }
+        let Some(sel) = self.selected.as_ref() else {
             return;
         };
-        if !display_settings.show_archived && !registry.is_active(&sel) {
-            self.selected = None;
-            return;
-        }
         ui.separator();
-        let metadata = registry.meta(&sel);
-        if !self.show_model_variables
-            && metadata.is_some_and(|meta| meta.exposure == SignalExposure::Internal)
-        {
-            self.selected = None;
-            return;
-        }
-        let unit = metadata.and_then(|m| m.unit.clone());
-        let description = metadata.and_then(|m| m.description.clone());
-        let hist = registry.scalar_history(&sel);
+        let metadata = registry.meta(sel);
+        let unit = metadata.and_then(|m| m.unit.as_deref());
+        let description = metadata.and_then(|m| m.description.as_deref());
+        let hist = registry.scalar_history(sel);
         let latest = hist.and_then(|h| h.samples.back()).copied();
         ui.horizontal(|ui| {
             ui.label(
@@ -2124,7 +2188,7 @@ impl Panel for TelemetryBrowserPanel {
         // history fingerprint moved (idle sim = fingerprint compare).
         if let Some(h) = hist {
             let fp = hist_fingerprint(h);
-            let stale = !matches!(&self.preview, Some(p) if p.sig == sel && p.fp == fp);
+            let stale = !matches!(&self.preview, Some(p) if &p.sig == sel && p.fp == fp);
             if stale {
                 let raw: Vec<[f64; 2]> = h.iter().map(|s| [s.time, s.value]).collect();
                 let points = crate::plot_fmt::decimate_min_max(&raw, PREVIEW_PX_WIDTH)

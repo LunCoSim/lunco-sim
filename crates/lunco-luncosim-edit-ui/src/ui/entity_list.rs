@@ -123,6 +123,8 @@ pub(crate) fn register_settings_submenu(world: &mut World) {
 /// top-level entities.
 #[derive(Resource, Default)]
 pub struct EntityTreeView {
+    /// Monotonic source revision used to invalidate panel-owned row indexes.
+    pub revision: u64,
     /// Shown top-level entities, sorted by leaf label.
     pub roots: Vec<Entity>,
     /// Shown children per parent, sorted by leaf label. A parent with no shown
@@ -487,11 +489,12 @@ pub(crate) fn poll_entity_tree_view_build(
         .task
         .as_mut()
         .and_then(|task| future::block_on(future::poll_once(task)));
-    let Some((revision, result)) = completed else {
+    let Some((revision, mut result)) = completed else {
         return;
     };
     build.task = None;
     if revision == build.revision {
+        result.revision = revision;
         *view = result;
         build.dirty = false;
     } else {
@@ -864,9 +867,20 @@ pub(crate) fn on_twin_closed(
 }
 
 /// Entity list panel — hierarchy tree of scene entities.
-#[derive(Default)]
 pub struct EntityList {
     visible_rows: Vec<VisibleEntityRow>,
+    visible_rows_revision: Option<u64>,
+    visible_rows_dirty: bool,
+}
+
+impl Default for EntityList {
+    fn default() -> Self {
+        Self {
+            visible_rows: Vec::new(),
+            visible_rows_revision: None,
+            visible_rows_dirty: true,
+        }
+    }
 }
 
 struct VisibleEntityRow {
@@ -894,7 +908,13 @@ impl Panel for EntityList {
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         ctx.panel_content_frame().show(ui, |ui| {
-            entity_list_content(ui, ctx, &mut self.visible_rows)
+            entity_list_content(
+                ui,
+                ctx,
+                &mut self.visible_rows,
+                &mut self.visible_rows_revision,
+                &mut self.visible_rows_dirty,
+            )
         });
     }
 }
@@ -948,6 +968,7 @@ fn render_node_row(
     shift_held: bool,
     to_select: &mut Option<(Entity, bool)>,
     to_focus: &mut Option<Entity>,
+    tree_changed: &mut bool,
 ) {
     let entity = row.entity;
     let label = view
@@ -974,7 +995,7 @@ fn render_node_row(
 
     let mut header_select = None;
     let mut header_focus = None;
-    lunco_workbench_widgets::tree::branch(
+    let branch_state = lunco_workbench_widgets::tree::branch(
         ui,
         id,
         lunco_workbench_widgets::tree::default_open_at_depth(row.depth),
@@ -993,6 +1014,7 @@ fn render_node_row(
         },
         |_| {},
     );
+    *tree_changed |= branch_state.changed;
     if header_select.is_some() {
         *to_select = header_select;
     }
@@ -1048,25 +1070,33 @@ fn entity_list_content(
     ui: &mut egui::Ui,
     ctx: &mut PanelCtx,
     visible_rows: &mut Vec<VisibleEntityRow>,
+    visible_rows_revision: &mut Option<u64>,
+    visible_rows_dirty: &mut bool,
 ) {
     ui.label("Click to select. Expand > to reach sub-parts (wheels, body).");
-    if let Some((active_scene_root, error)) = ctx
-        .resource::<EntityTreeView>()
-        .map(|view| (view.active_scene_root, view.scene_error.clone()))
-    {
-        match error {
-            Some(error) => ui.label(format!("Scene ownership error: {error}")),
-            None if active_scene_root.is_some() => ui.label("Scene scope: Active scene"),
-            None => ui.label("No active scene mounted."),
+    if let Some(view) = ctx.resource::<EntityTreeView>() {
+        match view.scene_error.as_deref() {
+            Some(error) => {
+                ui.horizontal(|ui| {
+                    ui.label("Scene ownership error:");
+                    ui.label(error);
+                });
+            }
+            None if view.active_scene_root.is_some() => {
+                ui.label("Scene scope: Active scene");
+            }
+            None => {
+                ui.label("No active scene mounted.");
+            }
         };
     }
     ui.separator();
 
     // Authoritative selection — read directly (small, cheap); never shadowed.
+    let empty_selection = lunco_scene_selection::SelectedEntities::default();
     let selected = ctx
         .resource::<lunco_scene_selection::SelectedEntities>()
-        .cloned()
-        .unwrap_or_default();
+        .unwrap_or(&empty_selection);
     let shift_held = ui.input(|i| i.modifiers.shift);
 
     let mut to_select: Option<(Entity, bool)> = None;
@@ -1082,10 +1112,15 @@ fn entity_list_content(
         // One panel-level scroll area owns the open hierarchy. `show_rows`
         // reserves its full extent while constructing widgets only for rows
         // that intersect the viewport.
-        visible_rows.clear();
-        for &root in &view.roots {
-            collect_visible_rows(ui.ctx(), root, 0, view, visible_rows);
+        if *visible_rows_dirty || *visible_rows_revision != Some(view.revision) {
+            visible_rows.clear();
+            for &root in &view.roots {
+                collect_visible_rows(ui.ctx(), root, 0, view, visible_rows);
+            }
+            *visible_rows_revision = Some(view.revision);
+            *visible_rows_dirty = false;
         }
+        let mut tree_changed = false;
         let row_height = ui.spacing().interact_size.y;
         egui::ScrollArea::vertical()
             .id_salt("entity_list_scroll")
@@ -1102,10 +1137,11 @@ fn entity_list_content(
                                     ui,
                                     row,
                                     view,
-                                    &selected,
+                                    selected,
                                     shift_held,
                                     &mut to_select,
                                     &mut to_focus,
+                                    &mut tree_changed,
                                 );
                             });
                         });
@@ -1118,6 +1154,9 @@ fn entity_list_content(
             .any(|entity| !view.labels.contains_key(entity))
         {
             ui.label("A selected entity is outside the active scene tree.");
+        }
+        if tree_changed {
+            *visible_rows_dirty = true;
         }
     }
 

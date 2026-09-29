@@ -43,18 +43,28 @@ another full-population traversal for each marker set. Keep queries over
 different populations separate unless measurements show that a broader scan
 costs less.
 For large Builder hierarchies, derive a lightweight row index from the cached
-tree and current expansion state, then use `ScrollArea::show_rows` to create
-widgets only for rows in the viewport. Keep foldout state keyed by stable
-entity/group identity and preserve selection, drag, and tooltip behavior on
-painted rows.
+tree and current expansion state, retain that index across repaints, then use
+`ScrollArea::show_rows` to create widgets only for rows in the viewport. Rebuild
+the index only after a source revision, active filter/scope change, or a branch
+disclosure change reported by the shared tree helper. Keep foldout state keyed
+by stable entity/group identity and preserve selection, drag, and tooltip
+behavior on painted rows. Immediate-mode widgets are expected to be repainted;
+the domain tree and entry records should be borrowed or shared, not cloned into
+panel-owned snapshots. Borrow selected-entity state during paint and retain an
+owned selection snapshot only when it changes; compare egui temporary values
+through borrowed type-map access instead of cloning a cached vector every frame.
 Gate panel-owned view models with `WorkbenchSnapshot::is_panel_visible`, and
 order their systems after `WorkbenchSnapshotPublishSet`. Hidden dock tabs have
 no reader and should not rebuild view data each frame; keep separate cleanup
 work transition-driven when a panel closes.
-In the Builder Spawn palette, enumerate distinct category labels without
-cloning one label per catalog entry, then borrow spawn entries only while their
-category is expanded. Do not build cloned entry groups before egui determines
-which categories have a reader.
+In the Builder Spawn palette, use the catalog owner's revisioned
+category-to-entry index. Borrow category labels and spawn entries, and retain
+formatted display labels only until that revision changes. Do not rescan all
+entries for each open category or build cloned entry groups before egui
+determines which categories have a reader.
+For Builder Ports, retain matching and expanded/collapsed entity indexes by
+topology revision, filter, and expansion state; update the sampling request
+only when the expanded entity set changes.
 In the Inspector's material part selector, keep the entity index separate from
 its display text. Format the active label only for the selected part and format
 the other labels only while the dropdown is open.

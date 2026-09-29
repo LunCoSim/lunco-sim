@@ -30,7 +30,7 @@
 //! Publication is batch-atomic: the palette never exposes a half-scanned USD
 //! catalog while the remaining files are still being fetched.
 
-use std::collections::HashSet;
+use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
@@ -44,7 +44,9 @@ use lunco_usd_bevy_stage::UsdInstanceRoot;
 /// Registry of all spawnable object types.
 #[derive(Resource, Default)]
 pub struct SpawnCatalog {
-    pub entries: Vec<SpawnableEntry>,
+    entries: Vec<SpawnableEntry>,
+    category_indices: BTreeMap<String, Vec<usize>>,
+    revision: u64,
 }
 
 /// Structured read of the runtime spawn catalog.
@@ -228,12 +230,44 @@ pub fn register_query(app: &mut App) {
 }
 
 impl SpawnCatalog {
+    /// Monotonic catalog revision for presentation caches.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Read the entries without taking ownership or cloning catalog data.
+    pub fn entries(&self) -> &[SpawnableEntry] {
+        &self.entries
+    }
+
+    /// Clear the published catalog and its indexes after a completed rescan.
+    pub fn clear(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        self.entries.clear();
+        self.category_indices.clear();
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    fn push_entry(&mut self, entry: SpawnableEntry) {
+        let index = self.entries.len();
+        if let Some(indexes) = self.category_indices.get_mut(entry.category.as_str()) {
+            indexes.push(index);
+        } else {
+            self.category_indices
+                .insert(entry.category.clone(), vec![index]);
+        }
+        self.entries.push(entry);
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     /// Add `entry` while keeping catalog IDs unique. Re-scanning the same source
     /// is idempotent; two different sources with the same display stem receive a
     /// deterministic source-derived suffix instead of one silently disappearing.
     pub fn add_unique(&mut self, mut entry: SpawnableEntry) -> bool {
         let Some(existing) = self.entries.iter().find(|e| e.id == entry.id) else {
-            self.entries.push(entry);
+            self.push_entry(entry);
             return true;
         };
         if same_source(existing, &entry) {
@@ -257,7 +291,7 @@ impl SpawnCatalog {
             }
         }
         entry.id = candidate;
-        self.entries.push(entry);
+        self.push_entry(entry);
         true
     }
 
@@ -268,21 +302,24 @@ impl SpawnCatalog {
 
     /// Get all entries in a category (matched by its dynamic string label).
     pub fn by_category<'a>(&'a self, cat: &'a str) -> impl Iterator<Item = &'a SpawnableEntry> {
-        self.entries.iter().filter(move |e| e.category == cat)
+        self.category_indices
+            .get(cat)
+            .into_iter()
+            .flatten()
+            .filter_map(|&index| self.entries.get(index))
     }
 
-    /// Distinct category labels present, sorted — drives dynamic UI grouping
-    /// so a new content folder yields a new group with no Rust change.
-    pub fn categories(&self) -> Vec<String> {
-        let mut cats: Vec<&str> = self
-            .entries
+    /// Distinct sorted categories with the entry indexes already grouped for
+    /// the palette. Iteration borrows catalog-owned labels and index slices.
+    pub fn category_groups(&self) -> impl Iterator<Item = (&str, &[usize])> {
+        self.category_indices
             .iter()
-            .map(|entry| entry.category.as_str())
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-        cats.sort_unstable();
-        cats.into_iter().map(str::to_owned).collect()
+            .map(|(category, indexes)| (category.as_str(), indexes.as_slice()))
+    }
+
+    /// Look up a catalog entry by its stable palette index.
+    pub fn entry_at(&self, index: usize) -> Option<&SpawnableEntry> {
+        self.entries.get(index)
     }
 }
 
@@ -928,7 +965,7 @@ pub fn drain_usd_scan(
     if scan.staged.is_empty() {
         if scan.replace_on_publish {
             store.by_path.clear();
-            catalog.entries.clear();
+            catalog.clear();
             scan.replace_on_publish = false;
         }
         return;
@@ -936,7 +973,7 @@ pub fn drain_usd_scan(
 
     if scan.replace_on_publish {
         store.by_path.clear();
-        catalog.entries.clear();
+        catalog.clear();
         scan.replace_on_publish = false;
     }
     // Completion order is nondeterministic because each asset is read by its
@@ -1191,9 +1228,7 @@ mod tests {
 
     #[test]
     fn test_add_unique_dedups() {
-        let mut c = SpawnCatalog {
-            entries: Vec::new(),
-        };
+        let mut c = SpawnCatalog::default();
         let mk = |id: &str| SpawnableEntry {
             id: id.into(),
             display_name: id.into(),
@@ -1209,9 +1244,7 @@ mod tests {
 
     #[test]
     fn test_add_unique_disambiguates_different_sources() {
-        let mut c = SpawnCatalog {
-            entries: Vec::new(),
-        };
+        let mut c = SpawnCatalog::default();
         let entry = |source: &str| SpawnableEntry {
             id: "rover".into(),
             display_name: "Rover".into(),
@@ -1293,32 +1326,34 @@ mod tests {
     #[test]
     fn test_default_catalog_is_empty() {
         // Nothing hardcoded — every spawnable is discovered from project USD.
-        assert!(SpawnCatalog::default().entries.is_empty());
+        assert!(SpawnCatalog::default().entries().is_empty());
     }
 
     #[test]
     fn spawn_catalog_provider_exposes_the_command_authority() {
         let mut world = World::new();
-        world.insert_resource(SpawnCatalog {
-            entries: vec![
-                SpawnableEntry {
-                    id: "z-last".into(),
-                    display_name: "Last".into(),
-                    category: "Other".into(),
-                    source: SpawnSource::UsdFile("z.usda".into()),
-                    origin: SpawnOrigin::Twin("summer-space-school".into()),
-                    default_transform: Transform::from_xyz(1.0, 2.0, 3.0),
-                },
-                SpawnableEntry {
-                    id: "a-first".into(),
-                    display_name: "First".into(),
-                    category: "Other".into(),
-                    source: SpawnSource::UsdFile("a.usda".into()),
-                    origin: SpawnOrigin::BuiltIn,
-                    default_transform: Transform::default(),
-                },
-            ],
-        });
+        let mut catalog = SpawnCatalog::default();
+        for entry in [
+            SpawnableEntry {
+                id: "z-last".into(),
+                display_name: "Last".into(),
+                category: "Other".into(),
+                source: SpawnSource::UsdFile("z.usda".into()),
+                origin: SpawnOrigin::Twin("summer-space-school".into()),
+                default_transform: Transform::from_xyz(1.0, 2.0, 3.0),
+            },
+            SpawnableEntry {
+                id: "a-first".into(),
+                display_name: "First".into(),
+                category: "Other".into(),
+                source: SpawnSource::UsdFile("a.usda".into()),
+                origin: SpawnOrigin::BuiltIn,
+                default_transform: Transform::default(),
+            },
+        ] {
+            catalog.add_unique(entry);
+        }
+        world.insert_resource(catalog);
         world.insert_resource(AssetMetaStore {
             by_path: [(
                 "a.usda".into(),
@@ -1430,9 +1465,7 @@ mod tests {
 
     #[test]
     fn test_categories_distinct_sorted() {
-        let mut c = SpawnCatalog {
-            entries: Vec::new(),
-        };
+        let mut c = SpawnCatalog::default();
         let mk = |id: &str, cat: &str| SpawnableEntry {
             id: id.into(),
             display_name: id.into(),
@@ -1445,10 +1478,14 @@ mod tests {
         c.add_unique(mk("b", "Structures"));
         c.add_unique(mk("c", "Rovers"));
         assert_eq!(
-            c.categories(),
+            c.category_groups()
+                .map(|(category, _)| category.to_owned())
+                .collect::<Vec<_>>(),
             vec!["Rovers".to_string(), "Structures".to_string()]
         );
         assert_eq!(c.by_category("Rovers").count(), 2);
+        let (_, rover_indices) = c.category_groups().next().unwrap();
+        assert_eq!(rover_indices.len(), 2);
     }
 
     /// The store is keyed on `asset_path` (what the catalogue and the UI both
