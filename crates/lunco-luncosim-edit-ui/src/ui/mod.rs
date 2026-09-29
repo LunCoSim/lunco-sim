@@ -494,8 +494,8 @@ impl Plugin for SceneEditUiPlugin {
         // then an early return — an O(1) live readout, the sanctioned
         // `every_frame` shape.
         app.add_view_model_every_frame(refresh_view_help_controls);
-        app.register_panel(spawn_palette::SpawnPalette)
-            .register_panel(entity_list::EntityList)
+        app.register_panel(spawn_palette::SpawnPalette::default())
+            .register_panel(entity_list::EntityList::default())
             .register_panel(ports::PortPanel::default())
             .register_panel(terrain_tools::ToolsPanel)
             .register_panel(cinematic::CinematicPanel)
@@ -718,12 +718,17 @@ impl Plugin for SceneEditUiPlugin {
             connection_canvas::editor_canvas_changed,
         );
 
-        // Command Deck view-model: selection + possession + behaviour-spec
-        // readout for the currently-selected vessel. Cheap O(1) single-entity
-        // lookups each `Update` (the sanctioned live-readout exception to §7),
-        // so no change-gate — same shape as the avatar status producer.
+        // Command Deck view-model: selection + possession for its visible
+        // panel. A hidden panel has no reader, so do not allocate its label or
+        // query control state in the frame loop.
         app.init_resource::<command_deck::CommandDeckView>();
-        app.add_view_model_every_frame(command_deck::populate_command_deck_view);
+        app.add_systems(
+            Update,
+            command_deck::populate_command_deck_view
+                .in_set(ViewModelSet)
+                .after(lunco_workbench_core::WorkbenchSnapshotPublishSet)
+                .run_if(command_deck::command_deck_visible),
+        );
 
         // One generic human-facing evidence surface. It reads the existing
         // selection, possession, camera, runtime-diagnostic, and diagnostic
@@ -736,13 +741,17 @@ impl Plugin for SceneEditUiPlugin {
             authoring_review::authoring_review_view_due,
         );
 
-        // Joint State view-model: the selected vessel's joints and wheels are
-        // live physics (θ / ω / τ change every tick), so this is an explicit
-        // every-frame producer — bounded by the vessel's joint count, the same
-        // scale as the joint_viz gizmo pass. Its first branch returns before
-        // iterating any joint or wheel query when nothing is selected.
+        // Joint State view-model: live physics readouts are rebuilt only while
+        // their panel is visible. Hidden dock tabs have no consumer and must
+        // not scan the scene's joints and wheels every app frame.
         app.init_resource::<joint_state::JointStateView>();
-        app.add_view_model_every_frame(joint_state::populate_joint_state_view);
+        app.add_systems(
+            Update,
+            joint_state::populate_joint_state_view
+                .in_set(ViewModelSet)
+                .after(lunco_workbench_core::WorkbenchSnapshotPublishSet)
+                .run_if(joint_state::joint_state_visible),
+        );
 
         // Debug-viz settings menu rows (joint + wheel-force gizmos).
         app.add_systems(Startup, register_debug_viz_settings);
@@ -949,10 +958,9 @@ impl Perspective for EditorPerspective {
         lunco_interaction_core::SceneInteractionMode::Editor
     }
     fn layout_revision(&self) -> u32 {
-        // The editor now opens directly on the prim tree. Invalidate the
-        // previous Twin-first preset once so persisted editor layouts adopt
-        // the new authored default.
-        1
+        // The editor keeps requirement details in a dedicated lower-right
+        // dock pane alongside the inspector.
+        2
     }
     fn layout(&self) -> PerspectiveLayoutPlan {
         // Structure first: the USD prim tree is the assembly's authoring
@@ -972,7 +980,8 @@ impl Perspective for EditorPerspective {
                 lunco_usd_viewport_runtime::USD_VIEWPORT_PANEL_ID,
                 PanelId("rhai_editor"),
             ]),
-            // The Inspector alone on the right — parameter editing is the point here.
+            // The Inspector tools share the upper-right tab strip. Optional
+            // workflow panels contribute their own lower-right slots.
             right_inspector: PerspectiveSlotPlan::new().tabs([
                 PanelId("sandbox_inspector"),
                 PanelId("authoring_review"),
@@ -1073,6 +1082,6 @@ mod tests {
                 .contains(&PanelId("usd_prim_tree"))
         );
         assert!(plan.side_browser.secondary.contains(&TWIN_BROWSER_PANEL_ID));
-        assert_eq!(EditorPerspective.layout_revision(), 1);
+        assert_eq!(EditorPerspective.layout_revision(), 2);
     }
 }

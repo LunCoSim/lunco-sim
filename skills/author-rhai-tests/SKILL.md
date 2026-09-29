@@ -113,11 +113,25 @@ non-empty footprint.
 For cross-run determinism, each production scene test must emit its sampled
 state from Rhai through public queries and reach its own authored verdict. A
 narrow production harness may launch separate scene-test processes with the
-same explicit seed and controlled execution profiles, then compare the Rhai
-traces at matching fixed steps after each scenario's first `on_start` snapshot.
-That callback may run after the scene clock has advanced through readiness;
-retain its global tick and derive a scenario-relative step for cross-scene
-alignment. Match equivalent authored subjects by their USD-owned stable facts,
+same explicit seed and controlled execution profiles, then compare Rhai traces
+at identical global `SimTick` values. Keep saved evidence bounded to selected
+checkpoints; do not emit a per-tick state log. Include an explicit final-stage
+record and require exact final physics, Modelica, and articulated-state equality
+before comparing earlier checkpoints. The multi-rover harness can write a
+portable reference with `--record-reference PATH` and compare it with
+`--compare-reference PATH`; both use exact numeric equality. A fresh-scene startup test asserts that
+`on_start` observes tick 0 and the first `on_tick` observes tick 1; startup
+readiness must hold the shared clock until those callbacks can begin in order.
+For USD Modelica networks, the startup gate also covers member-source resolution,
+network synthesis, and generated port-surface publication; the binding epoch
+must not classify authored connections while that interface is pending. Keep
+the production scene-test's connection diagnostics in the pass condition.
+Do not normalize startup ticks or reset elapsed time to make a trace begin at
+zero. The production fixed runner completes a started causal cycle and retains
+its remaining fixed time while an owner hold is active; verify startup stays at
+tick 0 with no fixed elapsed time or overstep before readiness.
+Never subtract a scenario start tick or translate traces to a relative tick
+sequence. Match equivalent authored subjects by their USD-owned stable facts,
 and omit ECS allocation and wall-clock timing from the comparison.
 
 For observable multi-actor ordering, attach scenarios to distinct authored

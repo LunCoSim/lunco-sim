@@ -688,8 +688,8 @@ fn propagate_connections_with_cache(
     // capacity between ticks and are swapped with the published snapshots below.
     // Manual holds outrank the fabric — see `lunco_cosim_core::PortHolds`. They are
     // explicit control intents, so they remain live across fixed ticks and are
-    // cleared only by ReleasePort, the vehicle safe-stop command, or lifecycle
-    // teardown.
+    // cleared only by ReleasePort, ReleaseControl, lifecycle input release, or
+    // scene teardown.
     let holds = world.get_resource::<PortHolds>();
     let hold_revision = holds.map_or(0, PortHolds::revision);
     if rewired || scratch.held_revision != Some(hold_revision) {

@@ -359,7 +359,7 @@ impl Plugin for CelestialPlugin {
                 .chain()
                 .in_set(CelestialEpochSet)
                 .run_if(lunco_time::scene_time_ready)
-                .after(lunco_time::TimeSpineSet)
+                .after(lunco_time::SimulationAdmissionSet)
                 .after(lunco_time::CelestialTimeSet),
         );
 
@@ -441,10 +441,10 @@ impl Plugin for CelestialPlugin {
 /// * **Resource state reset.** Terrain-curvature coupling is a resource rather
 ///   than an entity, so it is reset here explicitly.
 ///
-/// The clock tree is reset separately and universally by `lunco_time::ResetTime`, fired
-/// from the scene-clear choke point. `ResetTime` restores the celestial
-/// `TimeDomain` as an identity child of `WorldTime`, then resets the mission
-/// epoch before celestial consumers resume.
+/// The time owner installs the selected scene epoch and restores the celestial
+/// `TimeDomain` as an identity child of `WorldTime`. It anchors that epoch at
+/// the current global `SimTick`, preserving the fixed-cycle history while
+/// celestial consumers wait for scene admission.
 fn teardown_celestial_scene(
     mut commands: Commands,
     mut active_physics_frame: ResMut<lunco_spatial::ActivePhysicsFrame>,

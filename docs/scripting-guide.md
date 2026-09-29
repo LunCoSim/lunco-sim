@@ -252,10 +252,14 @@ do not add a family of per-cycle scenario callbacks until a real stateful
 cross-cycle behavior requires isolated instances and typed messages.
 
 Connected co-simulation events are edge-detected on admitted simulation ticks,
-after `SimTickSet` and the full scripting pass. Startup warm-up may produce an
-event before the scenario gate opens; pre-start events are not replayed, so
-`on_start` reads current state from its owner. Later events retain their
-producer stamp and arrive on the next eligible scenario pass.
+after `SimTickSet` and the full scripting pass. Scene, solver, terrain, and
+physics admission hold the shared fixed clock. Rhai compilation, dependency
+planning, initialization, and `on_start` complete before the fixed runner
+admits its first tick, so `on_start` reads the committed initial state at tick 0 and
+the first `on_tick` observes tick 1. Events queued before startup remain
+available to existing scenarios but are not replayed to a newly started one;
+events emitted by `on_start` retain their producer stamp for the next eligible
+scenario pass.
 
 ## 2. Your first script
 
@@ -430,8 +434,9 @@ You'll use these constantly (the complete table is in
 > falls through to a scalar port it is a raw write and has no persistent hold;
 > use `cmd("SetPorts", #{target: id, writes: [[name, value]]})` when wiring must
 > be overridden until an explicit release; use `cmd("ReleasePort", ... )` for
-> one port or `cmd("ReleaseControl", #{target: id})` for the complete vehicle
-> command surface. Direct
+> one port or `cmd("ReleaseControl", #{target: id})` to return every local
+> input hold to authored wiring. Release commands do not write replacement
+> values; send named `SetPorts` values for an explicit setpoint. Direct
 > writes are host-authoritative and unavailable to client-targeted scripts. Use `cmd`
 > for an *operation* with side effects
 > beyond a field write (spawning, swapping a material, anything an observer reacts to).
@@ -526,8 +531,9 @@ in a prelude/tool. Native `Vec3`/`Quat` operations are registered by
 > reflected field surface or the canonical scalar co-simulation port surface.
 > This is a raw write, not a persistent hold; use
 > `cmd("SetPorts", #{target: id, writes: [[name, value]]})` for a persistent
-> command intent, and `cmd("ReleaseControl", #{target: id})` to apply the safe
-> state. External one-shot callers include their stable `producer_id` and wait
+> command intent, and `cmd("ReleaseControl", #{target: id})` to release all
+> local input holds without changing port values. Write any desired safe
+> setpoint explicitly with `SetPorts`. External one-shot callers include their stable `producer_id` and wait
 > for the next fixed tick; Simulation-clock Rhai keeps its authored pass. Direct
 > writes are host-authoritative and unavailable to client-targeted scripts. Use `cmd` for
 > an *operation* with side effects beyond a field write (spawning, swapping a
@@ -580,9 +586,9 @@ verbs — read the topic files for the full, authoritative list. Highlights:
   the id in editor sessions.
 - **Selection toolkit:** `all_of_type`, `min_by`/`max_by`, `count_where`, `nearest_where`/`farthest_where`, `has_component`, `kind`.
 - **View / cutscenes:** `set_camera(name)` — cut the scene viewport to a `def Camera` by name (leaf or full USD path); pairs with a timeline for cutscene camera changes. `possess(vessel)`, `notify(msg)`, `photo()` (capture from the active camera).
-- **Route programs** ([`route_follow.rhai`](../assets/scenarios/route_follow.rhai)): the scene owns an ordered USD route and a sibling `LunCoProgramAPI` program. The program resolves its `inputs:subject` relationship, reads route-point poses, records only the next unvisited point in USD order, and advances an enabled route on the matching generic sensor enter event. Out-of-order arrivals do not mark later points. Route points are not stored on or discovered through a vessel-owned list.
+- **Route programs** ([`route_follow.rhai`](../assets/scenarios/route_follow.rhai)): the scene owns an ordered USD route and a sibling `LunCoProgramAPI` program. The program resolves its `inputs:subject` relationship, reads route-point poses, records only the next unvisited point in USD order, and advances an enabled route on the matching named sensor enter event. Generic `SENSOR_ENTER` / `SENSOR_EXIT` events carry sensor and moving-body identity; `TriggerZone` labels additionally provide named geofence events. Out-of-order arrivals do not mark later points. Route points are not stored on or discovered through a vessel-owned list.
 - **Route presentation**: the reusable [`route_point.usda`](../assets/markers/route_point.usda) asset owns the standard translucent, unlit, shadowless visual/material and trigger geometry. Its unvisited point is green in standard `primvars:displayColor`/`primvars:displayOpacity`; the generic `route_follow` policy uses the `waypoint_editor` transient USD view tool to turn a visited point gray. A secondary `route.context` gesture opens the authored menu without selecting the waypoint or showing its gizmo; Select and Move are separate menu actions, and Move arms the disposable click-to-place ghost. A scenario consumes `route_point_reached` for mission policy without recreating distance checks or adding a second marker implementation.
-- **Route restart and possession**: `route_follow` keeps visited USD point paths when autopilot is disabled and re-enabled, and selects the first unvisited point. `SensorOccupants` reads Avian's current touching moving bodies by stable sensor id, so only the next unvisited point can be marked from the `on_start` occupancy snapshot; simultaneous contacts cannot establish route order. Later sensor enters mark only the next point while disabled, and an active route advances on the matching enter event. Releasing manual possession updates session authority and presentation without writing endpoint ports; the enabled route keeps its current target and continues running.
+- **Route restart and possession**: `route_follow` keeps visited USD point paths when autopilot is disabled and re-enabled, and selects the first unvisited point. `SensorOccupants` reads Avian's current touching moving bodies by stable sensor id, so only the next unvisited point can be marked from the `on_start` occupancy snapshot; simultaneous contacts cannot establish route order. Later named sensor enters mark only the next point while disabled, and an active route advances on the matching enter event. Releasing manual possession updates session authority and presentation without writing endpoint ports; the enabled route keeps its current target and continues running.
 - **Science instruments** ([`science.rhai`](../assets/scripting/prelude/science.rhai)): `photo_from(vessel)` captures from a vessel's mounted camera through the typed `CaptureFromCamera` command. Tool actions are generic task/program data; the engine dispatches only registered executable tools.
 - **Tutorial HUD** ([`hud.rhai`](../assets/scripting/prelude/hud.rhai)): `hint(msg)`/`clear_hint()` (sticky instruction), `objectives_hud(list)` (or just declare a `mission(me, ctx)` — it auto-publishes), `guided_hud_actions(tool, hook, actions)`/`clear_guided_hud_actions()` (persistent semantic buttons dispatched through a typed Rhai tool hook), `spotlight(anchor, caption)`/`clear_spotlight()` (dim + ring a workbench widget by `HelpAnchors` key), `focus_panel(id)` (open a singleton workbench panel on interactive hosts; unattended gates omit this presentation command), and `coach_step(steps, i)` (a guided coach-mark tour step; advance the cursor in `on_event`). This is how tutorials are authored — a tutorial is just a scenario. See [`tutorials/README.md`](../assets/tutorials/README.md).
 

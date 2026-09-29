@@ -466,6 +466,17 @@ the same three contributions a static layer makes.
   `HeightSource`. It stays bounded, composable, and content-addressable; a
   *layer over* the base, never a replacement of it.
 
+## Bounded rock scatter admission
+
+Procedural rock placement and shared mesh selection remain owned by the terrain
+layer. New and recycled rock bodies enter the ECS in stable batches of at most
+8 per `Update`; render-only components are admitted in batches of at most 64.
+Each body batch is committed in deterministic placement order while the current
+simulation continues; rock admission adds no physics hold. The terrain keeps
+`TerrainLayersPending` until both body and visual queues finish, then publishes
+`TerrainLayersApplied` and its scatter fingerprint. Refresh and scene teardown
+cancel queued work.
+
 ## Current state & roadmap
 
 **As-built (works today):** DEM ingest + crop/resample; **the live-analytic

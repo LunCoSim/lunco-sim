@@ -18,7 +18,7 @@ pub use actuation::{ForceActuator, TorqueActuator};
 pub use binding::{BindingRevision, BoundConnection, ConnectionBinding};
 pub use component::*;
 pub use connection::{
-    ControlWriteFence, PortHolds, RealtimeSafe, SimConnection, clear_control_write_fence,
+    PortHolds, RealtimeSafe, SimConnection,
 };
 pub use contract::*;
 pub use diagnostics::{AlgebraicLoopDiagnostic, BrokenConnection, CosimDiagnostics};

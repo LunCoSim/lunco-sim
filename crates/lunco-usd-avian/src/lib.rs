@@ -54,8 +54,8 @@ use lunco_usd_avian_core::report_physics_runtime_fault;
 use lunco_usd_avian_filters::collision_groups::{CollisionGroupTable, CollisionGroupTables};
 use lunco_usd_avian_filters::filtered_pairs as collision_filters;
 use lunco_usd_bevy_scene::{
-    UsdAnimated, UsdPreviewOnly, UsdPrimPath, UsdSceneProjected, UsdSceneRoot, instance_key,
-    is_preview_only,
+    UsdAnimated, UsdPreviewOnly, UsdPrimPath, UsdSceneProjected, UsdSceneRoot,
+    UsdVisualProjectionSet, instance_key, is_preview_only,
 };
 use lunco_usd_bevy_stage::{
     Purpose, TransformReadError, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot,
@@ -466,10 +466,9 @@ impl Plugin for UsdAvianPlugin {
         //   right after the USD structural projection translates each prim,
         //   so the stage and Transform exist. CPU visual meshes may still be
         //   streaming; mesh-backed terrain has its own pending-collider phase.
-        // `build_usd_physics_joints`: stays a per-frame system because
-        //   it's a deferred state-machine waiting for both referenced bodies
-        //   and their bridge-seeded poses.
-        //   `run_if(any pending)` makes it idle when no joints await.
+        // `build_usd_physics_joints`: runs after authored USD simulation
+        //   projection and pose seeding, before native joint admission. It is
+        //   lifecycle preparation and must not depend on a fixed physics step.
         // `PhysicsSceneGravity` records which prim set the world's gravity, which
         // is only meaningful while that scene is loaded — carried into the next
         // scene it would make a fresh `PhysicsScene` look like a conflicting
@@ -486,32 +485,36 @@ impl Plugin for UsdAvianPlugin {
             },
         );
 
+        app.configure_sets(
+            Update,
+            (
+                UsdVisualProjectionSet.before(lunco_usd_avian_joints::JointPreparation),
+            ),
+        );
         app.register_type::<ShouldBeDynamic>()
             .register_type::<collision_filters::SharedTireContact>()
             .register_type::<lunco_core::Mobility>()
             .add_observer(on_add_usd_prim)
             .add_observer(process_usd_avian_prims)
-            // The joint builder is preparation, not integration. It runs in the
-            // enclosing fixed schedule after the bridge's hold-safe read pass,
-            // so scene readiness can resolve authored joints even while
-            // `Time<Physics>` is paused. The outer Update admission pass runs
-            // after the deferred commands are flushed; the next fixed physics
-            // step then consumes the admitted constraint after solver bodies
-            // exist.
+            // Projection systems publish body components through deferred
+            // commands. Flush that projection before checking whether joint
+            // work exists, then commit the typed native plan before the single
+            // owner of solver-joint admission runs.
             .add_systems(
-                FixedPostUpdate,
+                Update,
+                bevy::ecs::schedule::ApplyDeferred
+                    .in_set(lunco_usd_avian_joints::JointPreparation)
+                    .before(build_usd_physics_joints),
+            )
+            .add_systems(
+                Update,
                 (
                     build_usd_physics_joints
-                        .in_set(avian3d::prelude::PhysicsSystems::Prepare)
-                        .after(lunco_usd_avian_core::PhysicsBridgeSystems::Read)
-                        .after(
-                            avian3d::dynamics::rigid_body::mass_properties::MassPropertySystems::UpdateComputedMassProperties,
-                        )
                         .run_if(any_with_component::<PendingUsdJoint>),
                     bevy::ecs::schedule::ApplyDeferred,
                 )
                     .chain()
-                    .before(avian3d::prelude::PhysicsSystems::StepSimulation),
+                    .in_set(lunco_usd_avian_joints::JointPreparation),
             )
             .add_systems(
                 avian3d::schedule::PhysicsSchedule,
@@ -1524,11 +1527,27 @@ fn extract_avian_prim(
         return;
     }
 
-    // ── TRIGGER ZONE ── `lunco:triggerZone` → overlap-only static Sensor.
-    if let Some(zone) = reader
-        .text(sdf_path, "lunco:triggerZone")
-        .filter(|z| !z.trim().is_empty())
-    {
+    // ── TRIGGER SENSOR ── applying the API opts into an overlap-only static
+    // Sensor; `lunco:triggerZone` is an optional label for named geofence events.
+    if reader.has_api_schema(sdf_path, "LunCoTriggerZoneAPI") {
+        let zone = match reader.text(sdf_path, "lunco:triggerZone") {
+            Some(zone) => zone,
+            None if !reader.has_authored_attribute(sdf_path, "lunco:triggerZone") => String::new(),
+            None => {
+                reject_collider_projection(
+                    commands,
+                    entity,
+                    sdf_path,
+                    faults.as_deref_mut(),
+                    holds.as_deref_mut(),
+                    ColliderProjectionError::Backend {
+                        prim: sdf_path.to_string(),
+                        detail: "malformed lunco:triggerZone; expected a token".to_owned(),
+                    },
+                );
+                return;
+            }
+        };
         commands
             .entity(entity)
             .try_insert((RigidBody::Static, lunco_core::Mobility::Static));
@@ -1807,32 +1826,21 @@ fn on_add_usd_prim(
     // and avoid duplicate processing.
 }
 
-/// Resolves pending USD joints once both body entities exist.
-///
-/// This system runs every frame. When a `PendingUsdJoint` entity finds that both its
-/// referenced bodies have been spawned as Bevy entities with matching `UsdPrimPath`
-/// components, it hands the normalized joint facts to the native joint-admission
-/// package and removes the pending marker.
-/// Physics ticks a pending joint may scan the body query at full rate before its
-/// unresolved body path is reported.
-const JOINT_RESOLVE_WARN_TICKS: u32 = 600;
+/// Resolves pending USD joints after their projected endpoints and poses are
+/// available. Authored relationship errors are reported by `read_joint_spec`;
+/// valid relationships stay pending while bounded scene projection publishes
+/// their body entities.
 
-/// Retry cadence for a pending joint after its warning budget.
-const JOINT_RESOLVE_RETRY_INTERVAL: u32 = 60;
-
-/// Hard deadline for a joint whose authored body relationship never resolves.
-const JOINT_RESOLVE_MAX_TICKS: u32 = 3_600;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PendingUsdJointWait {
     MissingBody { body0: bool, body1: bool },
+    MissingPoseOwner { body0: bool, body1: bool },
     UnseededPose { body0: bool, body1: bool },
     ComputedDriveInertia,
 }
 
 #[derive(Default)]
 struct PendingUsdJointResolutionState {
-    ticks: EntityHashMap<u32>,
     waits: EntityHashMap<PendingUsdJointWait>,
 }
 
@@ -1894,7 +1902,6 @@ fn build_usd_physics_joints(
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut resolution: Local<PendingUsdJointResolutionState>,
 ) {
-    resolution.ticks.retain(|e, _| q_pending.contains(*e));
     resolution.waits.retain(|e, _| q_pending.contains(*e));
     // Pending constraints are created from deferred USD projections.  ECS
     // iteration order is not authored order and can vary when async referenced
@@ -1909,13 +1916,6 @@ fn build_usd_physics_joints(
         // after Avian creates the solver body-island nodes. Holding
         // this builder would deadlock readiness because the binding epoch waits
         // for the pending joint marker to clear.
-        let ticks = resolution.ticks.get(&joint_entity).copied().unwrap_or(0);
-        if ticks >= JOINT_RESOLVE_WARN_TICKS && ticks % JOINT_RESOLVE_RETRY_INTERVAL != 0 {
-            resolution
-                .ticks
-                .insert(joint_entity, ticks.saturating_add(1));
-            continue;
-        }
         let joint_root = instance_key(
             joint_entity,
             &q_provenance,
@@ -1977,92 +1977,73 @@ fn build_usd_physics_joints(
                     )
                 },
             );
-            let ticks = ticks.saturating_add(1);
-            if ticks == JOINT_RESOLVE_WARN_TICKS {
-                let missing = match (missing0, missing1) {
-                    (true, true) => format!(
-                        "bodies '{}' and '{}'",
-                        pending.body0_path, pending.body1_path
-                    ),
-                    (true, _) => format!("body '{}'", pending.body0_path),
-                    _ => format!("body '{}'", pending.body1_path),
-                };
-                let candidates: Vec<String> = q_bodies
-                    .iter()
-                    .filter(|(_, path)| {
-                        path.path == pending.body0_path || path.path == pending.body1_path
-                    })
-                    .map(|(entity, path)| {
-                        format!(
-                            "entity={entity:?} path={} stage={:?} instance={:?}",
-                            path.path,
-                            path.stage_handle.id(),
-                            instance_key(
-                                entity,
-                                &q_provenance,
-                                &q_gid,
-                                &q_instance_root,
-                                &q_instance_projection,
-                            ),
-                        )
-                    })
-                    .collect();
-                warn!(
-                    "[usd-avian] joint {}: {missing} still unresolved after {} physics ticks \
-                     — check the joint's body rel paths and stage/instance identity; \
-                     candidates={candidates:?}; retrying every {} ticks.",
-                    joint_prim_path.path, JOINT_RESOLVE_WARN_TICKS, JOINT_RESOLVE_RETRY_INTERVAL,
-                );
-            }
-            if ticks >= JOINT_RESOLVE_MAX_TICKS {
+            continue;
+        }
+
+        // `Position` is pose storage, not proof that the bridge seeded an
+        // authored pose. The bridge publishes this fact in `PreUpdate`, before
+        // joint preparation in `Update`; an unseeded endpoint remains pending
+        // rather than being seated against a required-component default.
+        //
+        // `BridgeShadow::is_seeded` is the honest signal: the shadow starts as a NaN
+        // sentinel and becomes finite exactly when the bridge first writes a real
+        // world pose. A missing shadow is not a readiness signal: unless the
+        // ground-placement owner supplied an authoritative pose, the physics
+        // pose owner is absent and this joint must not be seated.
+        //
+        let seeded = |e: Entity| {
+            q_pose_authoritative.contains(e)
+                || q_shadow
+                    .get(e)
+                    .is_ok_and(lunco_usd_avian_core::BridgeShadow::is_seeded)
+        };
+        let missing_pose_owner = |e: Entity| {
+            !q_pose_authoritative.contains(e) && q_shadow.get(e).is_err()
+        };
+        let body0_missing_pose_owner = body0_ent.is_some_and(missing_pose_owner);
+        let body1_missing_pose_owner = body1_ent.is_some_and(missing_pose_owner);
+        if body0_missing_pose_owner || body1_missing_pose_owner {
+            let reason = PendingUsdJointWait::MissingPoseOwner {
+                body0: body0_missing_pose_owner,
+                body1: body1_missing_pose_owner,
+            };
+            if resolution.waits.get(&joint_entity) != Some(&reason) {
                 let detail = format!(
-                    "body relationship did not resolve after {} physics ticks: body0='{}', \
-                     body1='{}'",
-                    JOINT_RESOLVE_MAX_TICKS, pending.body0_path, pending.body1_path
+                    "physics pose owner is missing for body0='{}' ({}) or body1='{}' ({})",
+                    pending.body0_path,
+                    if body0_missing_pose_owner {
+                        "missing"
+                    } else {
+                        "available"
+                    },
+                    pending.body1_path,
+                    if body1_missing_pose_owner {
+                        "missing"
+                    } else {
+                        "available"
+                    },
                 );
                 if let Some(faults) = faults.as_deref_mut() {
                     faults.raise(
-                        "usd-joint-unresolved",
+                        "usd-joint-pose-owner-missing",
                         Some(joint_entity),
                         joint_prim_path.path.clone(),
                         detail.clone(),
                     );
                 }
-                error!(
-                    "[usd-avian] joint {} is terminally unresolved: {detail}",
-                    joint_prim_path.path
-                );
-                commands
-                    .entity(joint_entity)
-                    .remove::<PendingUsdJoint>()
-                    .remove::<lunco_physics::PhysicsJointPending>()
-                    .remove::<lunco_physics::PhysicsJointTopologyPending>();
-                resolution.ticks.remove(&joint_entity);
-                continue;
+                if let Some(holds) = holds.as_deref_mut() {
+                    holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                }
             }
-            resolution.ticks.insert(joint_entity, ticks);
+            report_pending_usd_joint_wait(
+                &mut resolution.waits,
+                joint_entity,
+                &joint_prim_path.path,
+                reason,
+                || format!("{reason:?}"),
+            );
             continue;
         }
-        resolution.ticks.remove(&joint_entity);
-
-        // Is `Position` the authored pose yet, or still `RigidBody`'s required-
-        // component default of zero? Scheduling (see `UsdAvianPlugin`) puts this
-        // system after the bridge's `pose_to_position`, so it normally is — but
-        // "normally" is exactly what failed silently before, so the precondition is
-        // CHECKED rather than assumed. A body the bridge has not reached stays
-        // `PendingUsdJoint` for another tick instead of being welded against zeros;
-        // this is the same deferral the admission gate above already relies on.
-        //
-        // `BridgeShadow::is_seeded` is the honest signal: the shadow starts as a NaN
-        // sentinel and becomes finite exactly when the bridge first writes a real
-        // world pose. An ABSENT shadow means `BigSpacePhysicsBridgePlugin` is not
-        // installed, so avian's own `transform_to_position` owns `Position` and has
-        // already run in `FixedPostUpdate` — ready by construction.
-        //
-        let seeded = |e: Entity| {
-            q_pose_authoritative.contains(e)
-                || q_shadow.get(e).map(|s| s.is_seeded()).unwrap_or(true)
-        };
         let body0_unseeded = body0_ent.is_some_and(|e| !seeded(e));
         let body1_unseeded = body1_ent.is_some_and(|e| !seeded(e));
         if body0_unseeded || body1_unseeded {
@@ -2106,9 +2087,8 @@ fn build_usd_physics_joints(
                 ResolvedJointDrive::Ready(model) => Some(model),
                 ResolvedJointDrive::Waiting => {
                     // USD permits mass/inertia to be computed from attached
-                    // colliders. Avian has not exposed that result yet; keep
-                    // the authored joint pending and retry after the next
-                    // mass-property update.
+                    // colliders. Keep the joint pending until Avian publishes
+                    // the composed properties for the projected body.
                     report_pending_usd_joint_wait(
                         &mut resolution.waits,
                         joint_entity,
@@ -2147,7 +2127,6 @@ fn build_usd_physics_joints(
                         .remove::<PendingUsdJoint>()
                         .remove::<lunco_physics::PhysicsJointPending>()
                         .remove::<lunco_physics::PhysicsJointTopologyPending>();
-                    resolution.ticks.remove(&joint_entity);
                     continue;
                 }
             },

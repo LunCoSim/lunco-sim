@@ -42,9 +42,53 @@ population, combine compatible marker reads into the existing query and avoid
 another full-population traversal for each marker set. Keep queries over
 different populations separate unless measurements show that a broader scan
 costs less.
+For large Builder hierarchies, derive a lightweight row index from the cached
+tree and current expansion state, retain that index across repaints, then use
+`ScrollArea::show_rows` to create widgets only for rows in the viewport. Rebuild
+the index only after a source revision, active filter/scope change, or a branch
+disclosure change reported by the shared tree helper. Keep foldout state keyed
+by stable entity/group identity and preserve selection, drag, and tooltip
+behavior on painted rows. Immediate-mode widgets are expected to be repainted;
+the domain tree and entry records should be borrowed or shared, not cloned into
+panel-owned snapshots. Borrow selected-entity state during paint and retain an
+owned selection snapshot only when it changes; compare egui temporary values
+through borrowed type-map access instead of cloning a cached vector every frame.
+Gate panel-owned view models with `WorkbenchSnapshot::is_panel_visible`, and
+order their systems after `WorkbenchSnapshotPublishSet`. Hidden dock tabs have
+no reader and should not rebuild view data each frame; keep separate cleanup
+work transition-driven when a panel closes.
+In the Builder Spawn palette, use the catalog owner's revisioned
+category-to-entry index. Borrow category labels and spawn entries, and retain
+formatted display labels only until that revision changes. Do not rescan all
+entries for each open category or build cloned entry groups before egui
+determines which categories have a reader.
+For Builder Ports, retain matching and expanded/collapsed entity indexes by
+topology revision, filter, and expansion state; update the sampling request
+only when the expanded entity set changes.
+In the Inspector's material part selector, keep the entity index separate from
+its display text. Format the active label only for the selected part and format
+the other labels only while the dropdown is open. Retain the material-bearing
+entity index for projected USD roots by selected root and `UsdStageRevision`;
+rebuild it only when either changes. Recompute for non-USD roots or when the
+revision resource is unavailable.
+When deriving a chosen part's material controls, filter the selected root's
+existing material-bearing entity list instead of walking that part's child tree
+again.
+For live line plots, do not copy and decimate a full history in every UI frame.
+Keep one bounded build per binding, snapshot changed histories at a limited
+presentation cadence, transform immutable sample snapshots on the async-compute
+pool, and keep painting the last completed point buffer while the next build
+runs. Include source identity, style, and pixel width in the cache key.
 For the entity tree, derive parent and grid facts through indexed lookups along
 named candidates' deduplicated ancestor closure instead of copying every scene
 entity's `ChildOf` and `Grid` membership into the snapshot.
+For Builder telemetry, inspect `telemetry_catalog_snapshot` separately from
+`telemetry_catalog_build_worker`. The first copies only signal metadata and
+owner ancestry; grouping and sorting belong on the worker. Compare the first
+Builder frame with settled `render_workbench` and `EguiPrimaryContextPass`
+samples so a one-time catalog build is not reported as a steady per-frame cost.
+Use the `workbench_panel_render` child zones to separate the active panel costs
+inside `render_workbench` before optimizing a specific Builder surface.
 
 For startup asset graphs, separate asynchronous source reads from discovery,
 composition, and UI/physics admission. Read all known dependencies in each
@@ -214,6 +258,11 @@ items per update as well as elapsed time. Direct-child admission has its own
 `child_spawn_budget` and `max_child_spawns_per_update`; the parent keeps its
 awaiting/projecting markers until its direct children enter the ECS queue, so
 scene readiness must remain held while batches drain.
+For large procedural terrain fields, profile both scatter execution and its
+deferred entity commands. Admit generated body bundles and visual components in
+stable bounded batches while physics continues. Keep the terrain's applied
+marker pending until bodies and required visuals are committed. Cancel queued
+entries on refresh and teardown.
 Gate sparse lifecycle work on an existing pending marker or owner queue; an
 idle Update should not scan lifecycle state for a request that did not arrive.
 For joint admission, use one combined query over the existing
@@ -446,6 +495,11 @@ and target-plan identity before opening the live stage and committing the plan.
 Measure serialization and plan preparation separately from the live-stage
 build, reset owners, and visual projection; do not move the thread-affine stage
 across the worker boundary or let completion order select a commit.
+For a first-mounted document with a non-empty view layer, profile
+`view_ops_since_source_baseline` separately from the global operation journal.
+The initial recipe already contains base and runtime layers; only the bounded
+view suffix needs replay, while an expired view suffix still requires a full
+composed-source rebuild.
 
 For `project_usd_policies`, a cold cache can use the worker-prepared plan as its
 baseline only when every `UsdSceneChangeBatch` from generation zero to the live

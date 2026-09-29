@@ -6,6 +6,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
+use std::collections::HashMap;
 
 use lunco_luncosim_edit_core::SpawnState;
 use lunco_scene_catalog::catalog::{AssetMetaStore, SpawnCatalog, SpawnSource};
@@ -22,7 +23,11 @@ pub(crate) fn on_spawn_state_requested(
 }
 
 /// Spawn palette panel — lists spawnable objects by category.
-pub struct SpawnPalette;
+#[derive(Default)]
+pub struct SpawnPalette {
+    catalog_revision: Option<u64>,
+    row_labels: HashMap<usize, String>,
+}
 
 impl Panel for SpawnPalette {
     fn id(&self) -> PanelId {
@@ -42,77 +47,73 @@ impl Panel for SpawnPalette {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        let Some(tokens) = ctx
+        let Some((success, success_subdued)) = ctx
             .resource::<lunco_theme::Theme>()
-            .map(|theme| theme.tokens.clone())
+            .map(|theme| (theme.tokens.success, theme.tokens.success_subdued))
         else {
             return;
         };
         ctx.panel_content_frame().show(ui, |ui| {
-            spawn_palette_content(self, ui, ctx, &tokens);
+            spawn_palette_content(self, ui, ctx, success, success_subdued);
         });
     }
 }
 
 fn spawn_palette_content(
-    _panel: &mut SpawnPalette,
+    panel: &mut SpawnPalette,
     ui: &mut egui::Ui,
     ctx: &mut PanelCtx,
-    tokens: &lunco_theme::DesignTokens,
+    success: egui::Color32,
+    success_subdued: egui::Color32,
 ) {
     ui.heading("Spawn");
 
-    // Read current state
-    let is_selecting = ctx
-        .resource::<SpawnState>()
-        .map(|s| matches!(*s, SpawnState::Selecting { .. }))
-        .unwrap_or(false);
-    let selecting_id = ctx.resource::<SpawnState>().and_then(|s| match s {
-        SpawnState::Selecting { entry_id } => Some(entry_id.clone()),
+    // Keep the selection borrowed during paint; own an id only when an action
+    // is dispatched.
+    let selecting_id = ctx.resource::<SpawnState>().and_then(|state| match state {
+        SpawnState::Selecting { entry_id } => Some(entry_id.as_str()),
         _ => None,
     });
+    let is_selecting = selecting_id.is_some();
+    let mut requested_states = Vec::new();
 
     if is_selecting {
-        if let Some(id) = &selecting_id {
+        if let Some(id) = selecting_id {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(format!("Placing: {id}")).color(tokens.success));
+                ui.label(egui::RichText::new("Placing:").color(success));
+                ui.label(id);
                 if ui.button("Cancel").clicked() {
-                    ctx.trigger(SpawnStateRequested(SpawnState::Idle));
+                    requested_states.push(SpawnStateRequested(SpawnState::Idle));
                 }
             });
             ui.separator();
         }
     }
 
-    // Read catalog — group by whatever dynamic category labels exist
-    // (derived from content folders), so new content needs no UI change.
-    let categories: Vec<(String, Vec<_>)> = {
-        let Some(catalog) = ctx.resource::<SpawnCatalog>() else {
-            return;
-        };
-        catalog
-            .categories()
-            .into_iter()
-            .map(|cat| {
-                let entries: Vec<_> = catalog.by_category(&cat).cloned().collect();
-                (cat, entries)
-            })
-            .filter(|(_, entries)| !entries.is_empty())
-            .collect()
-    };
+    // Keep authored categories dynamic while avoiding a cloned catalog
+    // snapshot on every Builder frame. Entry rows are borrowed only when their
+    // category is expanded.
+    let metadata = ctx.resource::<AssetMetaStore>();
+    if let Some(catalog) = ctx.resource::<SpawnCatalog>() {
+        if panel.catalog_revision != Some(catalog.revision()) {
+            panel.catalog_revision = Some(catalog.revision());
+            panel.row_labels.clear();
+        }
+        for (category, entry_indices) in catalog.category_groups() {
+            ui.collapsing(category, |ui| {
+                for &entry_index in entry_indices {
+                    let entry = catalog
+                        .entry_at(entry_index)
+                        .expect("spawn category index points to a catalog entry");
+                    let selected = selecting_id.as_deref() == Some(entry.id.as_str());
 
-    for (category, entries) in categories {
-        ui.collapsing(category.to_string(), |ui| {
-                for entry in &entries {
-                    let selected = ctx.resource::<SpawnState>()
-                        .map(|s| matches!(s, SpawnState::Selecting { entry_id } if *entry_id == entry.id))
-                        .unwrap_or(false);
+                    let btn_text = panel.row_labels.entry(entry_index).or_insert_with(|| {
+                        format!("{} · {}", entry.display_name, entry.origin.label())
+                    });
 
-                    let btn_text = format!("{} · {}", entry.display_name, entry.origin.label());
-
-                    let btn = egui::Button::new(&btn_text);
+                    let btn = egui::Button::new(btn_text.as_str());
                     let btn = if selected {
-                        btn.fill(tokens.success_subdued)
+                        btn.fill(success_subdued)
                     } else {
                         btn
                     };
@@ -122,8 +123,7 @@ fn spawn_palette_content(
                     // store. Show a hint only when the authored default prim has
                     // a non-empty standard USD `doc` field; absent metadata stays
                     // quiet instead of inventing a description or placeholder.
-                    let response = if let Some(description) = ctx
-                        .resource::<AssetMetaStore>()
+                    let response = if let Some(description) = metadata
                         .and_then(|store| match &entry.source {
                             SpawnSource::UsdFile(path) => store.description(path),
                         })
@@ -136,7 +136,7 @@ fn spawn_palette_content(
 
                     if response.clicked() {
                         let entry_id = entry.id.clone();
-                        ctx.trigger(SpawnStateRequested(if selected {
+                        requested_states.push(SpawnStateRequested(if selected {
                             SpawnState::Idle
                         } else {
                             SpawnState::Selecting { entry_id }
@@ -145,10 +145,15 @@ fn spawn_palette_content(
 
                     if response.drag_started() {
                         let entry_id = entry.id.clone();
-                        ctx.trigger(SpawnStateRequested(SpawnState::Selecting { entry_id }));
+                        requested_states
+                            .push(SpawnStateRequested(SpawnState::Selecting { entry_id }));
                     }
                 }
             });
+        }
+    }
+    for requested_state in requested_states {
+        ctx.trigger(requested_state);
     }
 
     ui.separator();

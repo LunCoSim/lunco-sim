@@ -26,7 +26,9 @@ hands to the rover → progressively harder player tasks that exercise **energy*
 | Task state machines | rhai `seq`/`par_all`/`par_race`/`repeat` sequencer + `fn task(me, ctx)` | ✅ |
 | Connector/`connect()` Modelica | rumoca flattens `RC_Circuit.mo`, `CascadedRCFilter.mo` | ✅ (verify MSL `LimPID` specifically) |
 | Live input retune (no recompile) | port write changes `input Real` next step | ✅ (must be a model **input**, not a `parameter`) |
-| Named trigger zones (geofence events) | `lunco:triggerZone="name"` → overlap-only Sensor → `enter:/exit:<name>` events | ✅ |
+| Trigger sensor opt-in | apply `LunCoTriggerZoneAPI` to the collider prim | ✅ |
+| Generic Avian sensor transitions | `SENSOR_ENTER` / `SENSOR_EXIT`; source is sensor GID, value is moving-body GID | ✅ |
+| Named trigger zones (geofence events) | non-empty `lunco:triggerZone="name"` adds `enter:<name>` / `exit:<name>` events | ✅ |
 | Model events | Modelica condition output → `LunCoEvent.inputs:trigger.connect` → named telemetry event on its rising edge | ✅ (condition and hysteresis remain solver-owned) |
 | Per-instance program config | one typed attribute per key on the program prim — `custom float lunco:param:wmax = 1.05` → rhai `param(me,k,default)` | ✅ (the right answer instead of `name(me)` matching) |
 | Emitter identity on events | `TelemetryEvent.source` (sensor/script gid); `wait_for_from(name, src)`, `evt.source` | ✅ |

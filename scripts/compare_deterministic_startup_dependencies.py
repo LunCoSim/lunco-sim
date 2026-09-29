@@ -16,10 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCENE = "assets/scenes/tests/sensor.usda"
 TRACE_PATTERN = re.compile(r"SENSOR_FIRST_TICK_TRACE_V2\|([^\r\n]*)")
 ACTOR_ORDER_PATTERN = re.compile(r"SCENARIO_ACTOR_ORDER_TRACE\|([^\r\n]+)")
-WARMUP_PATTERN = re.compile(r"\[test\] ([^\r\n]+?) held (\d+) updates")
-
-
-def run_profile(binary: str, requested_threads: int) -> tuple[int, str, str, float]:
+def run_profile(binary: str, requested_threads: int) -> tuple[int, str, float]:
     command = [
         binary,
         "test",
@@ -34,10 +31,21 @@ def run_profile(binary: str, requested_threads: int) -> tuple[int, str, str, flo
         "--seed",
         "6840157149251759617",
     ]
+    config = ROOT / "target" / "scene-tests" / (
+        f"startup-deterministic-{requested_threads}-{os.getpid()}-"
+        f"{time.monotonic_ns()}"
+    )
+    config.parent.mkdir(parents=True, exist_ok=True)
+    environment = os.environ.copy()
+    environment["LUNCOSIM_CONFIG"] = str(config)
+    environment["LUNCOSIM_EPHEMERAL_SETTINGS"] = "1"
+    environment["LUNCOSIM_ISOLATED_RUN"] = "1"
+    environment["LUNCO_ASSET_ROOT"] = str(ROOT / "assets")
     started = time.monotonic()
     result = subprocess.run(
         command,
         cwd=ROOT,
+        env=environment,
         check=False,
         capture_output=True,
         text=True,
@@ -59,7 +67,7 @@ def run_profile(binary: str, requested_threads: int) -> tuple[int, str, str, flo
             line
             for line in output.splitlines()
             if re.search(
-                r"(ERROR|NO-VERDICT|TESTS_|SENSORS|SCENARIO_ACTOR_ORDER|"
+                r"(ERROR|NO-VERDICT|TESTS_|FAIL:|SENSORS|SCENARIO_ACTOR_ORDER|"
                 r"SENSOR_FIRST_TICK|"
                 r"Failed to load asset|on_start\(\) failed|on_tick\(\) failed)",
                 line,
@@ -76,6 +84,12 @@ def run_profile(binary: str, requested_threads: int) -> tuple[int, str, str, flo
     if len(fields) != 11:
         raise RuntimeError(f"malformed first-tick trace: {traces[0]!r}")
     effective_threads = int(fields[2])
+    first_tick = int(fields[0])
+    if first_tick != 1:
+        raise RuntimeError(
+            f"--threads {requested_threads} first behavior sample used SimTick "
+            f"{first_tick}, expected 1"
+        )
     if effective_threads < 1:
         raise RuntimeError(
             f"--threads {requested_threads} did not publish an effective "
@@ -90,9 +104,7 @@ def run_profile(binary: str, requested_threads: int) -> tuple[int, str, str, flo
         raise RuntimeError(
             f"scenario actor did not expose a stable GlobalEntityId: {fields[3]!r}"
         )
-    warmups = WARMUP_PATTERN.findall(output)
-    held_updates = ";".join(f"{name}:{count}" for name, count in warmups)
-    return effective_threads, traces[0], held_updates or "none", elapsed
+    return effective_threads, traces[0], elapsed
 
 
 def authoritative_snapshot(trace: str) -> str:
@@ -110,8 +122,8 @@ def main() -> int:
 
     serial = [run_profile(binary, 1) for _ in range(2)]
     default = [run_profile(binary, 0) for _ in range(2)]
-    serial_widths = {width for width, _, _, _ in serial}
-    default_widths = {width for width, _, _, _ in default}
+    serial_widths = {width for width, _, _ in serial}
+    default_widths = {width for width, _, _ in default}
     if serial_widths != {1}:
         raise RuntimeError(f"serial runs reported physics widths {sorted(serial_widths)}")
     if len(default_widths) != 1 or next(iter(default_widths)) <= 1:
@@ -121,7 +133,7 @@ def main() -> int:
         )
 
     runs = serial + default
-    snapshots = [authoritative_snapshot(trace) for _, trace, _, _ in runs]
+    snapshots = [authoritative_snapshot(trace) for _, trace, _ in runs]
     if any(snapshot != snapshots[0] for snapshot in snapshots[1:]):
         for label, run in zip(
             ("serial 1", "serial 2", "default 1", "default 2"), runs
@@ -129,15 +141,14 @@ def main() -> int:
             print(f"{label}: {run[1]}", file=sys.stderr)
         raise RuntimeError("first behavior-tick Modelica/Avian snapshots diverged")
 
-    runtimes = ",".join(f"{elapsed:.1f}" for _, _, _, elapsed in runs)
-    update_counts = ",".join(counts for _, _, counts, _ in runs)
+    runtimes = ",".join(f"{elapsed:.1f}" for _, _, elapsed in runs)
     digest = hashlib.sha256(snapshots[0].encode()).hexdigest()
     print(
         "DETERMINISTIC_STARTUP_DEPENDENCIES_OK "
         "actor_order=PASS "
         f"compute_widths=1,{next(iter(default_widths))} "
         f"runs=4 first_tick={snapshots[0].split('|', 1)[0]} "
-        f"sha256={digest} admission_holds={update_counts} wall_seconds={runtimes}"
+        f"sha256={digest} wall_seconds={runtimes}"
     )
     return 0
 

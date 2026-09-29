@@ -141,7 +141,16 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
                 lunco_scripting_rhai_world::world_bridge::prepare_rhai_scenario_compiles
                     .after(commands::attach_embedded_scenarios)
                     .after(lunco_scripting::scenario::open_scenarios_when_scene_ready)
-                    .before(lunco_time::TimeSpineSet),
+                    .before(lunco_time::SimulationAdmissionSet),
+            )
+            .add_systems(
+                PreUpdate,
+                lunco_scripting_rhai_world::world_bridge::start_ready_rhai_scenarios
+                    .after(lunco_scripting_rhai_world::world_bridge::prepare_rhai_scenario_compiles)
+                    .after(lunco_core_runtime::SimulationProgressAdmissionSet)
+                    .before(lunco_time::SimulationAdmissionSet)
+                    .run_if(lunco_scripting::scenario::scenario_execution_enabled)
+                    .run_if(lunco_scripting_rhai_world::world_bridge::rhai_runtime_ready),
             )
             .add_systems(
                 FixedUpdate,
@@ -165,7 +174,7 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
                 lunco_scripting_rhai_world::world_bridge::tick_rhai_scenario_visualization
                     .in_set(lunco_core::RuntimeCycleSet::Visualization)
                     .after(lunco_scripting_rhai_world::world_bridge::prepare_rhai_scenario_compiles)
-                    .after(lunco_time::TimeSpineSet)
+                    .after(lunco_time::SimulationAdmissionSet)
                     .run_if(lunco_scripting::scenario::scenario_execution_enabled)
                     .run_if(lunco_scripting_rhai_world::world_bridge::rhai_runtime_ready),
             );

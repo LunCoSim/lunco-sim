@@ -81,8 +81,11 @@ remain authored Rhai over typed USD queries.
 `default_slot()` seeds layout intent only before the first perspective is
 active. After that, the active `Perspective` owns its slot declarations;
 late panel registration adds the renderer without changing the current
-presentation. Declare a panel id in the perspective that should show it, or
-use the existing explicit panel-opening command/path.
+presentation unless the panel declares `visible_in_perspective()` for the
+active perspective. Use that contribution when a plugin-owned panel belongs
+in another package's perspective, so the perspective does not need a dependency
+on the panel package or a copied panel id. Cached user layouts still restore as
+saved; contributions apply when a perspective builds its default layout.
 
 The workbench status history is one shared presentation surface: render Info,
 Progress, Warn, Error, and Attention through the same responsive

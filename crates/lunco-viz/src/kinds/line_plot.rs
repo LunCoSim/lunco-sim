@@ -9,7 +9,9 @@
 //! creates a fresh `VizId` and a matching `VisualizationConfig`. A
 //! small per-panel toolbar exposes an X-axis picker, the current
 //! Y-binding chips (each with ×), and an "+ Add signal" dropdown
-//! populated from the `SignalRegistry`. Without this toolbar, new
+//! populated from the `SignalRegistry` when opened. Picker entries are
+//! cached by catalog revision while labels continue to use live owner names.
+//! Without this toolbar, new
 //! plots appeared frozen to users because the only signal-picker
 //! (Telemetry's checkboxes) targeted the default plot exclusively.
 //!
@@ -17,6 +19,7 @@
 //! [`LinePlotStyle`] (serde JSON) so the choice survives save/reload.
 
 use bevy::prelude::*;
+use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use egui;
 use egui_plot::{Corner, Legend, Line, Plot, PlotPoints};
 use serde::{Deserialize, Serialize};
@@ -111,6 +114,17 @@ impl LinePlotStyle {
 /// The full path remains available in telemetry tooltips and persistence keeps
 /// the entity identity; this is solely the concise plot presentation.
 fn component_parameter_label(wb: &PanelCtx, signal: &SignalRef) -> String {
+    let meta = wb
+        .resource::<SignalRegistry>()
+        .and_then(|registry| registry.meta(signal));
+    component_parameter_label_with_meta(wb, signal, meta)
+}
+
+fn component_parameter_label_with_meta(
+    wb: &PanelCtx,
+    signal: &SignalRef,
+    meta: Option<&SignalMeta>,
+) -> String {
     let owner = wb
         .get::<Name>(signal.entity)
         .map(|name| {
@@ -121,9 +135,6 @@ fn component_parameter_label(wb: &PanelCtx, signal: &SignalRef) -> String {
             )
         })
         .unwrap_or_else(|| "Unnamed entity".to_string());
-    let meta = wb
-        .resource::<SignalRegistry>()
-        .and_then(|registry| registry.meta(signal));
     let channel = crate::signal::display_channel_label(
         &signal.path,
         meta.and_then(|metadata| metadata.group_path.as_deref()),
@@ -149,7 +160,7 @@ fn binding_label(wb: &PanelCtx, binding: &SignalBinding, meta: Option<&SignalMet
     let label = binding
         .label
         .clone()
-        .unwrap_or_else(|| component_parameter_label(wb, &binding.source));
+        .unwrap_or_else(|| component_parameter_label_with_meta(wb, &binding.source, meta));
     let unit = meta
         .and_then(|m| m.unit.as_deref())
         .filter(|unit| !unit.is_empty() && *unit != "1");
@@ -170,6 +181,57 @@ fn signal_hint(meta: Option<&SignalMeta>) -> Option<String> {
         parts.push(description.to_owned());
     }
     (!parts.is_empty()).then(|| parts.join("\n"))
+}
+
+#[derive(Debug)]
+struct ToolbarSignal {
+    source: SignalRef,
+    meta: Option<SignalMeta>,
+    hint: Option<String>,
+}
+
+#[derive(Debug)]
+struct ToolbarSignalCatalog {
+    registry_address: usize,
+    revision: u64,
+    signals: Vec<ToolbarSignal>,
+}
+
+/// Build the signal-picker entries only when a picker is open, then reuse them
+/// until the signal catalog changes.
+fn toolbar_signal_catalog(
+    ctx: &egui::Context,
+    registry: &SignalRegistry,
+) -> std::sync::Arc<ToolbarSignalCatalog> {
+    let registry_address = registry as *const SignalRegistry as usize;
+    let revision = registry.catalog_revision();
+    let cache_id = egui::Id::new("line_plot_toolbar_signal_catalog");
+    type CachedCatalog = std::sync::Arc<ToolbarSignalCatalog>;
+    if let Some(cached) = ctx.data(|data| data.get_temp::<CachedCatalog>(cache_id)) {
+        if cached.registry_address == registry_address && cached.revision == revision {
+            return cached;
+        }
+    }
+
+    let signals = registry
+        .iter_signals()
+        .filter(|&(_, kind)| kind == SignalType::Scalar)
+        .map(|(signal, _)| {
+            let meta = registry.meta(signal).cloned();
+            ToolbarSignal {
+                source: signal.clone(),
+                hint: signal_hint(meta.as_ref()),
+                meta,
+            }
+        })
+        .collect();
+    let catalog = std::sync::Arc::new(ToolbarSignalCatalog {
+        registry_address,
+        revision,
+        signals,
+    });
+    ctx.data_mut(|data| data.insert_temp(cache_id, catalog.clone()));
+    catalog
 }
 
 /// Keep the optional phase-space X axis on the same stable-identity lifecycle
@@ -255,14 +317,114 @@ pub fn cached_scalar_history_points(
 
 /// Everything a cached tessellation depends on. Stored next to the
 /// points; a mismatch on any component forces a rebuild.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct SeriesKey {
     y: HistFingerprint,
     /// Fingerprint of the X signal's history in phase-space mode.
     x: Option<HistFingerprint>,
+    /// X identity matters even when two histories currently share a fingerprint.
+    x_signal: Option<SignalRef>,
     log_y: bool,
     /// Plot pixel width bucket — decimation depth depends on it.
     px_w: u32,
+}
+
+type PlotSeriesPoints = std::sync::Arc<(SeriesKey, Vec<egui_plot::PlotPoint>)>;
+
+#[derive(Default)]
+struct PlotSeriesCache {
+    displayed: Option<PlotSeriesPoints>,
+    build: Option<Task<PlotSeriesPoints>>,
+    last_build_sec: Option<f64>,
+}
+
+const PLOT_SERIES_REFRESH_INTERVAL_SEC: f64 = 1.0 / 20.0;
+
+fn same_series_presentation(left: &SeriesKey, right: &SeriesKey) -> bool {
+    left.x_signal == right.x_signal && left.log_y == right.log_y && left.px_w == right.px_w
+}
+
+/// Reuse the last plot buffer while a worker builds a newer history snapshot.
+/// Snapshot copying is rate-limited and min-max decimation never runs in the
+/// UI frame; at most one build is active for each plot binding.
+fn cached_plot_series_points(
+    ctx: &egui::Context,
+    cache_id: egui::Id,
+    key: SeriesKey,
+    y_history: &crate::signal::ScalarHistory,
+    x_history: Option<&crate::signal::ScalarHistory>,
+    pixel_width: f32,
+) -> Option<PlotSeriesPoints> {
+    type SharedCache = std::sync::Arc<std::sync::Mutex<PlotSeriesCache>>;
+    let cache: SharedCache = ctx.data_mut(|data| {
+        if let Some(existing) = data.get_temp::<SharedCache>(cache_id) {
+            existing
+        } else {
+            let fresh = SharedCache::default();
+            data.insert_temp(cache_id, fresh.clone());
+            fresh
+        }
+    });
+
+    let now = ctx.input(|input| input.time);
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let completed = cache
+        .build
+        .as_mut()
+        .and_then(|task| future::block_on(future::poll_once(task)));
+    if let Some(points) = completed {
+        cache.build = None;
+        cache.displayed = Some(points);
+    }
+
+    let display_matches = cache
+        .displayed
+        .as_ref()
+        .is_some_and(|points| same_series_presentation(&points.0, &key));
+    let data_matches = cache
+        .displayed
+        .as_ref()
+        .is_some_and(|points| points.0 == key);
+    let refresh_due = cache
+        .last_build_sec
+        .is_none_or(|last| now - last >= PLOT_SERIES_REFRESH_INTERVAL_SEC);
+
+    if !data_matches && cache.build.is_none() && (!display_matches || refresh_due) {
+        let y_samples: Vec<ScalarSample> = y_history.iter().copied().collect();
+        let x_samples: Option<Vec<ScalarSample>> =
+            x_history.map(|history| history.iter().copied().collect());
+        let build_key = key.clone();
+        cache.last_build_sec = Some(now);
+        cache.build = Some(AsyncComputeTaskPool::get().spawn(async move {
+            let time_on_x = x_samples.is_none();
+            let mut points = match x_samples {
+                Some(xs) => pair_by_time(&xs, y_samples),
+                None => y_samples
+                    .iter()
+                    .map(|sample| [sample.time, sample.value])
+                    .collect(),
+            };
+            if build_key.log_y {
+                points = crate::plot_fmt::log_y_points(&points);
+            }
+            if time_on_x {
+                if let Some(decimated) = crate::plot_fmt::decimate_min_max(&points, pixel_width) {
+                    points = decimated;
+                }
+            }
+            let points = points.into_iter().map(egui_plot::PlotPoint::from).collect();
+            std::sync::Arc::new((build_key, points))
+        }));
+    }
+
+    cache
+        .displayed
+        .as_ref()
+        .filter(|points| same_series_presentation(&points.0, &key))
+        .cloned()
 }
 
 pub const LINE_PLOT_KIND: VizKindId = VizKindId::new_static("line_plot");
@@ -393,29 +555,23 @@ impl LinePlot {
         // we pull the X signal's history and pair by time below.
         // Fingerprint travels into each series' cache key so an X-side
         // change also dirties the pairing.
-        let x_fp: Option<HistFingerprint> = style
+        let x_history = style
             .x_signal
             .as_ref()
             .and_then(|xs| registry.scalar_history(xs))
-            .filter(|h| !h.is_empty())
-            .map(hist_fingerprint);
-        // Lazily materialised on the first cache miss — an idle frame
-        // (all series clean) never copies the X history at all. The
-        // outer `Option` is "not fetched yet", the inner one is the
-        // classic "no usable X signal → time on X" fallback.
-        let mut x_samples: Option<Option<Vec<ScalarSample>>> = None;
+            .filter(|history| !history.is_empty());
+        let x_fp = x_history.map(hist_fingerprint);
 
-        // Build the egui_plot `Line`s up-front so we can release the
-        // registry borrow before calling `plot.show()` (which wants a
-        // long-lived borrow on `ctx.ui`).
+        // Snapshot point buffers and their current labels/colors before the
+        // plot takes a long-lived borrow on `ctx.ui`.
         //
-        // Tessellation is dirty-checked: the (history fingerprint,
-        // x fingerprint, log_y, pixel width) key is compared against a
-        // per-binding cache in egui context data; only a moved key
-        // re-copies the history, re-logs, and re-decimates. Steady
-        // frames clone the cached (pixel-bounded) point vec only —
-        // that owned copy is the one egui_plot's `PlotPoints` demands.
-        let lines: Vec<Line> = y_bindings
+        // History changes rebuild the point buffer; plot width, X source, and
+        // style changes also invalidate the per-binding cache.
+        let series_to_plot: Vec<(
+            std::sync::Arc<(SeriesKey, Vec<egui_plot::PlotPoint>)>,
+            String,
+            egui::Color32,
+        )> = y_bindings
             .iter()
             .filter_map(|b| {
                 let hist = registry.scalar_history(&b.source)?;
@@ -425,52 +581,20 @@ impl LinePlot {
                 let key = SeriesKey {
                     y: hist_fingerprint(hist),
                     x: x_fp,
+                    x_signal: style.x_signal.clone(),
                     log_y: style.log_y,
                     px_w: remaining.x.max(1.0) as u32,
                 };
-                let cache_id = egui::Id::new(("line_plot_series", config.id.raw())).with(&b.source);
-                let cached: Option<std::sync::Arc<(SeriesKey, Vec<[f64; 2]>)>> =
-                    ctx.ui.ctx().data(|d| d.get_temp(cache_id));
-                let series = match cached {
-                    Some(c) if c.0 == key => c,
-                    _ => {
-                        let xs_resolved = x_samples.get_or_insert_with(|| {
-                            style.x_signal.as_ref().and_then(|xs| {
-                                registry
-                                    .scalar_history(xs)
-                                    .filter(|h| !h.is_empty())
-                                    .map(|h| h.iter().copied().collect())
-                            })
-                        });
-                        let time_on_x = xs_resolved.is_none();
-                        let mut pts: Vec<[f64; 2]> = match xs_resolved {
-                            None => {
-                                // Classic time on X. Each sample's own
-                                // `time` is its X coordinate.
-                                hist.iter().map(|s| [s.time, s.value]).collect()
-                            }
-                            Some(xs) => pair_by_time(xs, hist.iter().copied()),
-                        };
-                        if style.log_y {
-                            pts = crate::plot_fmt::log_y_points(&pts);
-                        }
-                        // Decimate to pixel width — min-max buckets so
-                        // spikes survive. Time-series only: a phase-
-                        // space trajectory revisits X, which breaks
-                        // the column bucketing.
-                        if time_on_x {
-                            if let Some(dec) = crate::plot_fmt::decimate_min_max(&pts, remaining.x)
-                            {
-                                pts = dec;
-                            }
-                        }
-                        let fresh = std::sync::Arc::new((key, pts));
-                        ctx.ui
-                            .ctx()
-                            .data_mut(|d| d.insert_temp(cache_id, fresh.clone()));
-                        fresh
-                    }
-                };
+                let cache_id =
+                    egui::Id::new(("line_plot_async_series", config.id.raw())).with(&b.source);
+                let series = cached_plot_series_points(
+                    ctx.ui.ctx(),
+                    cache_id,
+                    key,
+                    hist,
+                    x_history,
+                    remaining.x,
+                )?;
                 if series.1.is_empty() {
                     return None;
                 }
@@ -481,11 +605,11 @@ impl LinePlot {
                 let color = b
                     .color
                     .unwrap_or_else(|| crate::signal::color_for_signal(&theme, &b.source.path));
-                Some(Line::new(label, PlotPoints::new(series.1.clone())).color(color))
+                Some((series, label, color))
             })
             .collect();
 
-        if lines.is_empty() {
+        if series_to_plot.is_empty() {
             let muted = ctx
                 .wb
                 .resource::<lunco_theme::Theme>()
@@ -596,8 +720,10 @@ impl LinePlot {
         }
 
         plot.show(ctx.ui, |plot_ui| {
-            for line in lines {
-                plot_ui.line(line);
+            for (series, label, color) in &series_to_plot {
+                plot_ui.line(
+                    Line::new(label.clone(), PlotPoints::from(series.1.as_slice())).color(*color),
+                );
             }
         });
     }
@@ -620,48 +746,13 @@ fn render_toolbar(
     config: &VisualizationConfig,
     actions: impl FnOnce(&mut egui::Ui, &mut PanelCtx),
 ) -> Option<Edit> {
-    // Snapshot available signals + current style so we can render
-    // without holding a long-lived registry borrow.
-    let registry = ctx.wb.resource::<SignalRegistry>();
-    let (available, current_y_paths): (Vec<SignalRef>, std::collections::HashSet<SignalRef>) = {
-        let available: Vec<SignalRef> = registry
-            .map(|r| {
-                r.iter_signals()
-                    .filter(|&(_, t)| t == SignalType::Scalar)
-                    .map(|(s, _)| s.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let current: std::collections::HashSet<SignalRef> = config
-            .inputs
-            .iter()
-            .filter(|b| b.role == ROLE_Y.role)
-            .map(|b| b.source.clone())
-            .collect();
-        (available, current)
-    };
-    let style = LinePlotStyle::load_cached(ctx.ui.ctx(), config);
-    let muted = ctx
-        .wb
-        .resource::<lunco_theme::Theme>()
-        .map(|t| t.tokens.text_subdued)
-        .unwrap_or(egui::Color32::DARK_GRAY);
-
-    // Resolve registry metadata for a signal at most once per toolbar render.
-    // Keep owned metadata here so the row can also issue a mutable host action
-    // without holding an immutable borrow of the SignalRegistry through the
-    // egui closure. The previous version asked the registry for `meta(&source)`
-    // twice per Y chip and once more per addable.
-    let metadata: HashMap<SignalRef, SignalMeta> = available
+    let current_y_paths: std::collections::HashSet<SignalRef> = config
+        .inputs
         .iter()
-        .filter_map(|sig| {
-            registry
-                .and_then(|r| r.meta(sig))
-                .cloned()
-                .map(|meta| (sig.clone(), meta))
-        })
+        .filter(|b| b.role == ROLE_Y.role)
+        .map(|b| b.source.clone())
         .collect();
-    let meta_of = |sig: &SignalRef| metadata.get(sig);
+    let style = LinePlotStyle::load_cached(ctx.ui.ctx(), config);
 
     let mut edit: Option<Edit> = None;
     let mut removed: Option<SignalRef> = None;
@@ -690,14 +781,18 @@ fn render_toolbar(
                 {
                     edit = Some(Edit::SetX(None));
                 }
-                for sig in &available {
-                    let selected = style.x_signal.as_ref() == Some(sig);
-                    if ui
-                        .selectable_label(selected, component_parameter_label(ctx.wb, sig))
-                        .clicked()
-                        && !selected
-                    {
-                        edit = Some(Edit::SetX(Some(sig.clone())));
+                if let Some(registry) = ctx.wb.resource::<SignalRegistry>() {
+                    let catalog = toolbar_signal_catalog(ui.ctx(), registry);
+                    for signal in &catalog.signals {
+                        let selected = style.x_signal.as_ref() == Some(&signal.source);
+                        let label = component_parameter_label_with_meta(
+                            ctx.wb,
+                            &signal.source,
+                            signal.meta.as_ref(),
+                        );
+                        if ui.selectable_label(selected, label).clicked() && !selected {
+                            edit = Some(Edit::SetX(Some(signal.source.clone())));
+                        }
                     }
                 }
             });
@@ -716,7 +811,10 @@ fn render_toolbar(
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     for b in config.inputs.iter().filter(|b| b.role == ROLE_Y.role) {
-                        let meta = meta_of(&b.source);
+                        let meta = ctx
+                            .wb
+                            .resource::<SignalRegistry>()
+                            .and_then(|registry| registry.meta(&b.source));
                         let chip = ui
                             .small_button(format!("{} x", binding_label(ctx.wb, b, meta)))
                             .on_hover_text("Remove from this plot");
@@ -747,35 +845,44 @@ fn render_toolbar(
                 edit = Some(Edit::SetLogY(log_y));
             }
             ui.separator();
-            let addables: Vec<&SignalRef> = available
-                .iter()
-                .filter(|s| !current_y_paths.contains(s))
-                .collect();
-            if !addables.is_empty() {
-                egui::ComboBox::from_id_salt(("lp_add", config.id.raw()))
-                    .selected_text("Add")
-                    .width(120.0)
-                    .show_ui(ui, |ui| {
-                        for sig in addables {
-                            let meta = meta_of(sig);
-                            let button = ui.button(component_parameter_label(ctx.wb, sig));
-                            let button = if let Some(hint) = signal_hint(meta) {
-                                button.on_hover_text(hint)
-                            } else {
-                                button
-                            };
-                            if button.clicked() {
-                                edit = Some(Edit::AddY(sig.clone()));
-                            }
+            egui::ComboBox::from_id_salt(("lp_add", config.id.raw()))
+                .selected_text("Add")
+                .width(120.0)
+                .show_ui(ui, |ui| {
+                    let Some(registry) = ctx.wb.resource::<SignalRegistry>() else {
+                        ui.label("SignalRegistry not installed.");
+                        return;
+                    };
+                    let catalog = toolbar_signal_catalog(ui.ctx(), registry);
+                    let mut has_addable = false;
+                    for signal in &catalog.signals {
+                        if current_y_paths.contains(&signal.source) {
+                            continue;
                         }
-                    });
-            } else if current_y_paths.is_empty() {
-                ui.label(
-                    egui::RichText::new("no signals yet")
-                        .color(muted)
-                        .size(10.0),
-                );
-            }
+                        has_addable = true;
+                        let label = component_parameter_label_with_meta(
+                            ctx.wb,
+                            &signal.source,
+                            signal.meta.as_ref(),
+                        );
+                        let button = ui.button(label);
+                        let button = if let Some(hint) = &signal.hint {
+                            button.on_hover_text(hint)
+                        } else {
+                            button
+                        };
+                        if button.clicked() {
+                            edit = Some(Edit::AddY(signal.source.clone()));
+                        }
+                    }
+                    if !has_addable {
+                        ui.label(if catalog.signals.is_empty() {
+                            "No scalar signals are available yet."
+                        } else {
+                            "All scalar signals are already plotted."
+                        });
+                    }
+                });
         });
     });
     if let Some(r) = removed {

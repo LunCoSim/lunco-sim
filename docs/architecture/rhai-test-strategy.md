@@ -367,6 +367,10 @@ markers, initialization pending/invalid state, pose-seeded and pose-authoritativ
 markers, collider and disabled state, plus any published support footprint. It is
 a read-only diagnostic companion to `QueryEntity` and `QueryUsdPrim`; it does
 not encode rover or lander policy and can be consumed by Rhai, HTTP, or MCP.
+Authored mass/inertia/centre values and their Avian override markers are reported
+beside computed values. `computed_mass_finite` and
+`computed_inertia_finite` expose whether Avian has produced usable solver values,
+so production Rhai physics gates can fail at the first invalid fixed step.
 
 The production gate is the coverage index for claims that an asset author can
 observe through USD, commands, queries, or telemetry. A row may point at more

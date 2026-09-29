@@ -732,7 +732,48 @@ pub(crate) fn on_pbr_material_requested(trigger: On<PbrMaterialRequested>, mut c
 // ─────────────────────────────────────────────────────────────────────
 
 /// Inspector panel — editable entity parameters.
-pub struct Inspector;
+#[derive(Default)]
+pub struct Inspector {
+    editable_parts_cache: Option<EditablePartsCache>,
+}
+
+struct EditablePartsCache {
+    root: Entity,
+    stage_revision: Option<u64>,
+    parts: Vec<Entity>,
+}
+
+impl Inspector {
+    /// Reuse the selected USD root's material-bearing entity index until its
+    /// selection or projected stage changes.
+    fn cached_editable_parts<'a>(&'a mut self, ctx: &PanelCtx, root: Entity) -> &'a [Entity] {
+        let stage_revision = ctx
+            .get::<lunco_usd_bevy_scene::UsdPrimPath>(root)
+            .and_then(|_| {
+                ctx.resource::<lunco_usd_bevy_scene::UsdStageRevision>()
+                    .map(|revision| revision.0)
+            });
+        let current = stage_revision.is_some()
+            && self
+                .editable_parts_cache
+                .as_ref()
+                .is_some_and(|cache| cache.root == root && cache.stage_revision == stage_revision);
+
+        if !current {
+            self.editable_parts_cache = Some(EditablePartsCache {
+                root,
+                stage_revision,
+                parts: editable_parts(ctx, root),
+            });
+        }
+
+        &self
+            .editable_parts_cache
+            .as_ref()
+            .expect("the material part index was just populated")
+            .parts
+    }
+}
 
 impl Panel for Inspector {
     fn id(&self) -> PanelId {
@@ -1160,7 +1201,7 @@ fn usd_preview_transform_section(
     });
 }
 
-fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+fn inspector_content(panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     // Esc / Backspace deselection lives in the Bevy `handle_entity_selection`
     // system (the single mutation path), not here.
 
@@ -1375,12 +1416,12 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
     // resync would now overwrite them on the next document change.
 
     // ── Materials ────────────────────────────────────────────────
-    let parts = editable_parts(ctx, entity);
+    let parts = panel.cached_editable_parts(ctx, entity);
     if !parts.is_empty() {
         let stored = ctx
             .resource::<lunco_scene_selection::SelectionTarget>()
             .and_then(|t| t.part)
-            .filter(|p| parts.iter().any(|(e, _)| e == p));
+            .filter(|part| parts.contains(part));
         let mut target = stored.or_else(|| default_part(ctx, &parts));
         if stored.is_none() {
             if let Some(t) = target {
@@ -1398,11 +1439,9 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
             shader_picker_for_part(ui, ctx, part);
             shader_tools_ui(ui, ctx, part);
 
-            // One subtree pass yields both the shader holder and the
-            // distinct PBR material handles (CQ-204: was two independent
-            // `subtree` walks of the same part — `first_shader_holder` +
-            // `collect_std_handles`).
-            let (pbr_parts, shader_holder) = part_materials(ctx, part);
+            // Reuse the selected root's material-bearing entities to find the
+            // chosen part's surfaces without another child-tree traversal.
+            let (pbr_parts, shader_holder) = part_materials(ctx, part, &parts);
             if let Some(holder) = shader_holder {
                 egui::CollapsingHeader::new("Shader Parameters")
                     .default_open(true)
@@ -2820,20 +2859,25 @@ fn joint_control_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, j: JointReadout)
     }
 }
 
-/// Walk `root`'s subtree once, returning its PBR-surface **entities** and the
-/// first [`ShaderLook`]-bearing entity. Replaces the former
-/// `collect_std_handles` + `first_shader_holder`, which each ran an
-/// independent `subtree` walk of the same root (CQ-204).
+/// Select the PBR surfaces and first [`ShaderLook`]-bearing entity below
+/// `root` from the selected scene root's material-bearing entities.
 ///
 /// Surfaces are addressed by ENTITY and classified by their appearance **intent**
 /// ([`PbrLook`] / [`ShaderLook`]), never by a bound material: the material is
 /// derived from the intent (`lunco-render-bevy` re-binds on `Changed<…Look>`), it is
 /// *shared* across every entity with the same look — so an in-place asset write would
 /// bleed onto all of them — and naming it would drag `bevy_pbr` into this crate.
-fn part_materials(ctx: &PanelCtx, root: Entity) -> (Vec<Entity>, Option<Entity>) {
+fn part_materials(
+    ctx: &PanelCtx,
+    root: Entity,
+    scene_parts: &[Entity],
+) -> (Vec<Entity>, Option<Entity>) {
     let mut parts: Vec<Entity> = Vec::new();
     let mut shader_holder: Option<Entity> = None;
-    for e in subtree(ctx, root) {
+    for &e in scene_parts {
+        if !is_same_or_descendant(ctx, root, e) {
+            continue;
+        }
         if ctx.get::<PbrLook>(e).is_some() {
             parts.push(e);
         }
@@ -2844,38 +2888,55 @@ fn part_materials(ctx: &PanelCtx, root: Entity) -> (Vec<Entity>, Option<Entity>)
     (parts, shader_holder)
 }
 
-/// Material-bearing parts of `root`'s subtree, each labelled by the shared
-/// entity presentation policy.
-fn editable_parts(ctx: &PanelCtx, root: Entity) -> Vec<(Entity, String)> {
+/// Whether `entity` is `root` or has `root` in its parent chain.
+fn is_same_or_descendant(ctx: &PanelCtx, root: Entity, mut entity: Entity) -> bool {
+    loop {
+        if entity == root {
+            return true;
+        }
+        let Some(parent) = ctx.get::<ChildOf>(entity).map(ChildOf::parent) else {
+            return false;
+        };
+        entity = parent;
+    }
+}
+
+/// Material-bearing entities in `root`'s subtree.
+fn editable_parts(ctx: &PanelCtx, root: Entity) -> Vec<Entity> {
     let ents = subtree(ctx, root);
     let mut out = Vec::new();
     for e in ents {
         let has_shader = ctx.get::<ShaderLook>(e).is_some();
         let has_std = ctx.get::<PbrLook>(e).is_some();
         if has_shader || has_std {
-            let label = lunco_core::entity_display_name(
-                ctx.get::<Name>(e),
-                ctx.get::<lunco_core::markers::Callsign>(e),
-                ctx.get::<lunco_core::CatalogEntryId>(e),
-            );
-            let label = if label.is_empty() {
-                "Unnamed entity".to_string()
-            } else {
-                label
-            };
-            out.push((e, label));
+            out.push(e);
         }
     }
     out
 }
 
+/// Resolve the label for one material-bearing entity when the Part control
+/// needs to display it.
+fn editable_part_label(ctx: &PanelCtx, entity: Entity) -> String {
+    let label = lunco_core::entity_display_name(
+        ctx.get::<Name>(entity),
+        ctx.get::<lunco_core::markers::Callsign>(entity),
+        ctx.get::<lunco_core::CatalogEntryId>(entity),
+    );
+    if label.is_empty() {
+        "Unnamed entity".to_string()
+    } else {
+        label
+    }
+}
+
 /// Default part to edit: the first part WITHOUT a shader (the PBR body).
-fn default_part(ctx: &PanelCtx, parts: &[(Entity, String)]) -> Option<Entity> {
+fn default_part(ctx: &PanelCtx, parts: &[Entity]) -> Option<Entity> {
     parts
         .iter()
-        .map(|(e, _)| *e)
-        .find(|e| ctx.get::<ShaderLook>(*e).is_none())
-        .or_else(|| parts.first().map(|(e, _)| *e))
+        .copied()
+        .find(|entity| ctx.get::<ShaderLook>(*entity).is_none())
+        .or_else(|| parts.first().copied())
 }
 
 /// *Part* dropdown for a multi-part component. Writes the choice into
@@ -2884,20 +2945,25 @@ fn default_part(ctx: &PanelCtx, parts: &[(Entity, String)]) -> Option<Entity> {
 fn parts_selector(
     ui: &mut egui::Ui,
     ctx: &mut PanelCtx,
-    parts: &[(Entity, String)],
+    parts: &[Entity],
     current: Option<Entity>,
 ) -> Option<Entity> {
     let cur_label = current
-        .and_then(|c| parts.iter().find(|(e, _)| *e == c).map(|(_, l)| l.clone()))
+        .filter(|entity| parts.contains(entity))
+        .map(|entity| editable_part_label(ctx, entity))
         .unwrap_or_else(|| "—".to_string());
 
     let mut chosen: Option<Entity> = None;
     egui::ComboBox::from_label("Part")
         .selected_text(cur_label)
         .show_ui(ui, |ui| {
-            for (e, label) in parts {
-                if ui.selectable_label(current == Some(*e), label).clicked() {
-                    chosen = Some(*e);
+            for &entity in parts {
+                let label = editable_part_label(ctx, entity);
+                if ui
+                    .selectable_label(current == Some(entity), label)
+                    .clicked()
+                {
+                    chosen = Some(entity);
                 }
             }
         });

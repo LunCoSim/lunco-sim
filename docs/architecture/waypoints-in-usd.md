@@ -17,7 +17,8 @@ vehicles or autopilot programs.
 |---|---|
 | Route identity, point placement, trigger radius, look, and subject relationship | Composed USD |
 | Route sequencing, enable/disable policy, mission reactions | Rhai program |
-| Sensor overlap and `enter:<zone>` event production | Generic physics/sensor runtime |
+| Avian sensor transitions (`SENSOR_ENTER` / `SENSOR_EXIT`) | Generic physics/sensor runtime |
+| Optional named geofence events (`enter:<zone>` / `exit:<zone>`) | Generic physics/sensor runtime from `TriggerZone` metadata |
 | Steering math and named-port writes | Generic navigation/port mechanisms |
 | Equations, actuator dynamics, and contact response | Modelica / Avian |
 | Route ribbon presentation | Reusable `waypoint_editor` Rhai tool + standard USD BasisCurves asset in the disposable `@view@` layer |
@@ -26,8 +27,10 @@ The standard reusable marker is
 [`assets/markers/route_point.usda`](../../assets/markers/route_point.usda).
 It contains a visual-only dome and a separate invisible overlap sensor. The
 asset uses standard USD geometry/material properties plus the registered
-project schemas needed for a trigger zone and billboard presentation. It is a
-route annotation, not a vessel component.
+project schemas needed for a trigger zone and billboard presentation. Its
+sensor emits generic transitions whether or not it has a zone label. A
+non-empty `lunco:triggerZone` adds named geofence events for route policy. It is
+a route annotation, not a vessel component.
 
 ## Scene shape
 
@@ -147,18 +150,22 @@ used for selection and menu dispatch.
 
 ## Progression
 
-The generic sensor emits `enter:<zone>` and `exit:<zone>` events. The route
-program accepts an enter event when its payload is the current subject or a
-registered descendant collider in that subject's generic parent chain, and the
-zone is the next unvisited point in authored route order. An out-of-order enter
-does not change visit state or advance the route; the point must be entered
-again after its predecessors. At startup, only the first unvisited point can be
-marked from `SensorOccupants`, because a simultaneous occupancy snapshot does
-not establish arrival order. An accepted visit changes that point's reusable
-marker to its visited colour through the generic transient USD view tool,
-emits the authored route-level `route_point_reached` event for mission policy,
-and advances the local cursor. Physics reports sensor events; it does not
-publish a route-specific “target reached” fact or decide mission progression.
+Every Avian sensor transition emits `SENSOR_ENTER` or `SENSOR_EXIT`, with the
+sensor GID in `TelemetryEvent.source` and the moving body's GID in the event
+value. This identity-based event does not require a `TriggerZone` label. A
+non-empty label additionally emits `enter:<zone>` or `exit:<zone>` for authored
+geofence policies that use names. The route program consumes the named form,
+accepting an enter event when its payload is the current subject or a registered
+descendant collider in that subject's generic parent chain, and the zone is the
+next unvisited point in authored route order. An out-of-order enter does not
+change visit state or advance the route; the point must be entered again after
+its predecessors. At startup, only the first unvisited point can be marked from
+`SensorOccupants`, because a simultaneous occupancy snapshot does not establish
+arrival order. An accepted visit changes that point's reusable marker to its
+visited colour through the generic transient USD view tool, emits the authored
+route-level `route_point_reached` event for mission policy, and advances the
+local cursor. Physics reports sensor events; Rhai maps those facts to route
+progression.
 
 Route progress is keyed by canonical USD point path and survives disabling and
 re-enabling the program. Initial scenario admission waits for all scene

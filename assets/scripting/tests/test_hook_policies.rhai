@@ -190,6 +190,32 @@ checks.push(t_true(authored_time_selection.ok == true
         && authored_time_selection.value.epoch_jd == authored_time_epoch
         && authored_time_selection.value.warning == (),
     "scene time policy selects an authored root epoch when it is valid"));
+
+let scene_composition_hook = ();
+for hook in hooks {
+    if hook.id == "usd.scene_composition" { scene_composition_hook = hook; }
+}
+checks.push(t_true(scene_composition_hook != ()
+        && scene_composition_hook.declared == true
+        && scene_composition_hook.deterministic == true
+        && scene_composition_hook.required == true
+        && scene_composition_hook.installable == true
+        && scene_composition_hook.parameters.len() == 1
+        && scene_composition_hook.parameters[0].name == "facts"
+        && scene_composition_hook.parameters[0].type == "map"
+        && scene_composition_hook.output == "map",
+    "USD incomplete composition admission exposes one required deterministic policy"));
+let partial_scene_admission = invoke_hook("usd.scene_composition", [#{
+    scene_path: "twin://policy-test/scenes/partial.usda",
+    missing_dependencies: [#{
+        referring_layer: "twin://policy-test/scenes/partial.usda",
+        dependency: "twin://policy-test/assets/optional.usda",
+    }],
+}]);
+checks.push(t_true(partial_scene_admission.ok == true
+        && partial_scene_admission.value.action == "allow_partial",
+    "the shipped USD composition policy preserves partial loading with unresolved-arc diagnostics"));
+
 let camera_call = invoke_hook("camera.default_presentation", [#{
     local_avatar_camera_count: 1,
     camera_track_count: 0,

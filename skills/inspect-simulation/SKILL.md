@@ -95,7 +95,9 @@ To perturb-then-observe: `set_input` / `SetPorts {target, writes:[[name,val]],
 producer_id}` to poke a live input through the next fixed tick; reuse one stable
 nonzero producer id for the same external caller, then re-read. Use
 `ReleasePort` / `ReleaseControl` with the same producer id when releasing a
-live hold or applying a safe state externally. Use `possess_vessel` when the
+live hold to return an input to authored wiring. Apply a safe state with
+explicit named `SetPorts` values and keep that hold active while it is wanted.
+Use `possess_vessel` when the
 target also requires an explicit control claim.
 
 ## Recipe

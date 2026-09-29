@@ -9,7 +9,7 @@
 //! |---|---|---|
 //! | [`kinds::SCENE_LOAD`] | the stage or its projected participants are still settling | world |
 //! | [`kinds::PROGRAM_COMPILE`] | an entity's Modelica model has not compiled | its owning physical subtree |
-//! | [`kinds::PARTICIPANT_INIT`] | an active Modelica model has not completed its first communication point (entity), or an authored rigid body has not been admitted to Avian (world) | entity subtree or world |
+//! | [`kinds::PARTICIPANT_INIT`] | an active Modelica model lacks a valid initialized t=0 snapshot (entity), or an authored rigid body has not been admitted to Avian (world) | entity subtree or world |
 //!
 //! # Why reconcile systems rather than events
 //!
@@ -53,7 +53,7 @@ struct PhysicsAdmissionWait {
     ticket: ReadinessTicket,
 }
 
-/// The open compile or first-exchange wait for this entity's Modelica model.
+/// The open compile or initial-snapshot wait for this entity's Modelica model.
 ///
 /// On the entity rather than in a side table so it dies with the entity; the
 /// registry drops waits whose subject was despawned, so a scene reload
@@ -253,14 +253,14 @@ fn owning_physics_entity(
     entity
 }
 
-/// Whether this Modelica participant has reached the state its owner needs.
+/// Whether this Modelica participant has a valid initialized solver snapshot.
 ///
-/// Source compilation and the first live communication point are different
-/// lifecycle events. A paused model is intentionally ready after compilation;
-/// an active model keeps its owning physical subtree held until a successful
-/// step publishes its first live outputs. A component error remains a named
-/// readiness fact, even when the model field has not received the same
-/// diagnostic yet.
+/// Source compilation constructs and samples the live solver at t=0. The
+/// active participant is ready when that initial output snapshot is committed;
+/// requiring a positive model time would advance the simulation during scene
+/// admission. A paused model remains intentionally ready after compilation.
+/// A component error remains a named readiness fact, even when the model field
+/// has not received the same diagnostic yet.
 fn modelica_wait_kind(
     model: &ModelicaModel,
     component: Option<&SimComponent>,
@@ -273,7 +273,12 @@ fn modelica_wait_kind(
         Some(kinds::PROGRAM_FAILED)
     } else if model.is_compiling || !model.is_compiled {
         Some(kinds::PROGRAM_COMPILE)
-    } else if !model.paused && (!model.current_time.is_finite() || model.current_time <= 0.0) {
+    } else if !model.paused
+        && (!model.current_time.is_finite()
+            || model.current_time < 0.0
+            || model.variables.is_empty()
+            || model.variables.values().any(|value| !value.is_finite()))
+    {
         Some(kinds::PARTICIPANT_INIT)
     } else {
         None
@@ -377,31 +382,57 @@ mod tests {
         assert_eq!(
             modelica_wait_kind(&active, Some(&compiling)),
             Some(kinds::PARTICIPANT_INIT),
-            "an active participant remains pending until its first live communication point"
+            "an active participant remains pending until its initialized t=0 snapshot"
         );
 
         let initialized = ModelicaModel {
+            is_compiled: true,
+            paused: false,
+            variables: [("initial_output".to_owned(), 1.0)].into(),
+            ..default()
+        };
+        assert_eq!(
+            modelica_wait_kind(&initialized, None),
+            None,
+            "the committed t=0 solver snapshot closes participant initialization"
+        );
+
+        let positive_time_without_snapshot = ModelicaModel {
             is_compiled: true,
             paused: false,
             current_time: active.communication_period_secs,
             ..default()
         };
         assert_eq!(
-            modelica_wait_kind(&initialized, None),
-            None,
-            "a completed first communication point closes participant initialization"
+            modelica_wait_kind(&positive_time_without_snapshot, None),
+            Some(kinds::PARTICIPANT_INIT),
+            "a clock value without an output snapshot is not initialized state"
         );
 
         let invalid_time = ModelicaModel {
             is_compiled: true,
             paused: false,
             current_time: f64::NAN,
+            variables: [("initial_output".to_owned(), 1.0)].into(),
             ..default()
         };
         assert_eq!(
             modelica_wait_kind(&invalid_time, None),
             Some(kinds::PARTICIPANT_INIT),
             "a non-finite solver clock is not evidence of an initial exchange"
+        );
+
+        let invalid_snapshot = ModelicaModel {
+            is_compiled: true,
+            paused: false,
+            current_time: 0.0,
+            variables: [("initial_output".to_owned(), f64::NAN)].into(),
+            ..default()
+        };
+        assert_eq!(
+            modelica_wait_kind(&invalid_snapshot, None),
+            Some(kinds::PARTICIPANT_INIT),
+            "non-finite initial observables cannot release participant readiness"
         );
     }
 

@@ -2038,6 +2038,9 @@ fn swap_terrain_grid(
     commands
         .entity(entity)
         .remove::<crate::terrain_layers::TerrainLayersApplied>();
+    commands
+        .entity(entity)
+        .remove::<crate::terrain_layers::TerrainLayersPending>();
 }
 
 /// In-flight off-thread **visual** re-stamp for a terrain: clones the pristine base
@@ -2408,9 +2411,10 @@ pub(crate) fn finish_dem_restamp(
         // spec edit as a whole terrain edit, making a rocks checkbox look like
         // a slow DEM reload.
         if same_heights && (!same_scatter || rescatter) {
-            commands
-                .entity(entity)
-                .try_remove::<crate::terrain_layers::TerrainLayersApplied>();
+            commands.entity(entity).try_remove::<(
+                crate::terrain_layers::TerrainLayersApplied,
+                crate::terrain_layers::TerrainLayersPending,
+            )>();
             commands.entity(entity).try_remove::<TerrainRescatter>();
             for (scatter_entity, owner, procedural, _) in &mut scattered {
                 if owner.0 == entity {
@@ -2499,9 +2503,10 @@ pub(crate) fn finish_dem_restamp(
         // The scatter-only tier (`TerrainRescatter` — e.g. a placed rock) re-scatters
         // too, while keeping the tile re-bake scoped to the marked bounds.
         if !scoped || rescatter {
-            commands
-                .entity(entity)
-                .try_remove::<crate::terrain_layers::TerrainLayersApplied>();
+            commands.entity(entity).try_remove::<(
+                crate::terrain_layers::TerrainLayersApplied,
+                crate::terrain_layers::TerrainLayersPending,
+            )>();
             commands.entity(entity).try_remove::<TerrainRescatter>();
             for (scatter_entity, owner, procedural, _) in &mut scattered {
                 if owner.0 == entity {

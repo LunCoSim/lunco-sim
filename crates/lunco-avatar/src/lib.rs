@@ -717,26 +717,14 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::system::SystemState;
 
-    #[derive(Resource, Default)]
-    struct SafeStopCount(usize);
-
-    fn count_safe_stop(
-        _trigger: On<lunco_cosim_core::commands::ControlSafeStop>,
-        mut count: ResMut<SafeStopCount>,
-    ) {
-        count.0 += 1;
-    }
-
     #[test]
-    fn possession_release_does_not_stop_the_endpoint() {
+    fn possession_release_changes_authority_only() {
         let mut app = App::new();
         app.init_resource::<lunco_core_session::SyncApplyGuard>()
             .init_resource::<NetworkRole>()
             .init_resource::<LocalSession>()
             .init_resource::<lunco_core_session::SessionRegistry>()
-            .init_resource::<SafeStopCount>()
-            .add_observer(on_release_command)
-            .add_observer(count_safe_stop);
+            .add_observer(on_release_command);
 
         let target_gid = 0xA1;
         let target = app
@@ -764,11 +752,6 @@ mod tests {
                 .resource::<lunco_core_session::SessionRegistry>()
                 .owner_of(target_gid),
             None
-        );
-        assert_eq!(
-            app.world().resource::<SafeStopCount>().0,
-            0,
-            "ending avatar possession must not dispatch the endpoint lifecycle safe-stop"
         );
     }
 

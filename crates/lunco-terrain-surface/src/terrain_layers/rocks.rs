@@ -2,7 +2,10 @@
 //! drivable obstacles, LOD-culled), ground height resolved from the composed
 //! surface oracle (so rocks sit correctly in/around analytic craters and edits).
 
-use std::sync::Arc;
+use std::{
+    collections::{BTreeSet, HashMap, VecDeque},
+    sync::Arc,
+};
 
 use avian3d::prelude::{Collider, RigidBody};
 #[cfg(not(target_arch = "wasm32"))]
@@ -43,12 +46,300 @@ struct ProceduralRockBundle {
 }
 
 #[derive(Bundle)]
-struct ProceduralRockVisualBundle {
-    rock: ProceduralRockBundle,
+struct ProceduralRockVisuals {
     mesh: Mesh3d,
     look: lunco_render::PbrLook,
+    visibility: Visibility,
     #[cfg(not(target_arch = "wasm32"))]
     visibility_range: VisibilityRange,
+}
+
+struct PendingRockBody {
+    terrain: Entity,
+    existing: Option<Entity>,
+    body: ProceduralRockBundle,
+    visuals: Option<ProceduralRockVisuals>,
+}
+
+struct PendingRockVisual {
+    terrain: Entity,
+    entity: Entity,
+    visuals: ProceduralRockVisuals,
+}
+
+#[derive(Default)]
+struct TerrainAdmissionCounts {
+    bodies: usize,
+    visuals: usize,
+}
+
+const MAX_ROCK_BODIES_PER_UPDATE: usize = 8;
+const MAX_ROCK_VISUAL_INSERTIONS_PER_UPDATE: usize = 64;
+
+/// Ordered, bounded admission for generated rock bodies and their visuals.
+#[derive(Resource, Default)]
+pub(crate) struct PendingTerrainRockAdmission {
+    bodies: VecDeque<PendingRockBody>,
+    visuals: VecDeque<PendingRockVisual>,
+    counts: HashMap<Entity, TerrainAdmissionCounts>,
+    fingerprints: HashMap<Entity, u64>,
+}
+
+impl PendingTerrainRockAdmission {
+    fn enqueue_bodies(&mut self, bodies: Vec<PendingRockBody>) {
+        self.bodies.reserve(bodies.len());
+        for body in bodies {
+            let counts = self.counts.entry(body.terrain).or_default();
+            counts.bodies += 1;
+            if body.visuals.is_some() {
+                counts.visuals += 1;
+            }
+            self.bodies.push_back(body);
+        }
+    }
+
+    pub(super) fn register_terrain(&mut self, terrain: Entity, fingerprint: u64) {
+        self.fingerprints.insert(terrain, fingerprint);
+    }
+
+    pub(super) fn has_terrain_work(&self, terrain: Entity) -> bool {
+        self.counts
+            .get(&terrain)
+            .is_some_and(|counts| counts.bodies > 0 || counts.visuals > 0)
+    }
+
+    pub(super) fn cancel_terrain(&mut self, terrain: Entity) {
+        self.bodies.retain(|body| body.terrain != terrain);
+        self.visuals.retain(|visual| visual.terrain != terrain);
+        self.counts.remove(&terrain);
+        self.fingerprints.remove(&terrain);
+    }
+
+    fn take_body_batch(&mut self) -> Vec<PendingRockBody> {
+        let count = self.bodies.len().min(MAX_ROCK_BODIES_PER_UPDATE);
+        let mut batch = Vec::with_capacity(count);
+        for _ in 0..count {
+            let Some(body) = self.bodies.pop_front() else {
+                break;
+            };
+            batch.push(body);
+        }
+        batch
+    }
+
+    fn take_visual_batch(&mut self) -> Vec<PendingRockVisual> {
+        let count = self
+            .visuals
+            .len()
+            .min(MAX_ROCK_VISUAL_INSERTIONS_PER_UPDATE);
+        self.visuals.drain(..count).collect()
+    }
+
+    fn complete_body(&mut self, terrain: Entity) {
+        if let Some(counts) = self.counts.get_mut(&terrain) {
+            if counts.bodies == 0 {
+                warn!("terrain rock body admission completed with no pending body for {terrain}");
+            } else {
+                counts.bodies -= 1;
+            }
+        } else {
+            warn!("terrain rock body admission completed for untracked terrain {terrain}");
+        }
+    }
+
+    fn complete_visual(&mut self, terrain: Entity) {
+        if let Some(counts) = self.counts.get_mut(&terrain) {
+            if counts.visuals == 0 {
+                warn!(
+                    "terrain rock visual admission completed with no pending visual for {terrain}"
+                );
+            } else {
+                counts.visuals -= 1;
+            }
+        } else {
+            warn!("terrain rock visual admission completed for untracked terrain {terrain}");
+        }
+    }
+
+    fn take_completed(&mut self, terrains: impl IntoIterator<Item = Entity>) -> Vec<(Entity, u64)> {
+        let mut seen = BTreeSet::new();
+        let mut completed = Vec::new();
+        for terrain in terrains {
+            if !seen.insert(terrain) || self.has_terrain_work(terrain) {
+                continue;
+            }
+            self.counts.remove(&terrain);
+            if let Some(fingerprint) = self.fingerprints.remove(&terrain) {
+                completed.push((terrain, fingerprint));
+            }
+        }
+        completed
+    }
+}
+
+/// Admit bounded body and render batches in stable queue order while the current
+/// simulation continues.
+pub(crate) fn admit_pending_terrain_rocks(
+    mut commands: Commands,
+    mut pending: ResMut<PendingTerrainRockAdmission>,
+) {
+    let bodies = pending.take_body_batch();
+    if !bodies.is_empty() {
+        commands.queue(ApplyRockBodyBatch { bodies });
+    }
+    let visuals = pending.take_visual_batch();
+    if !visuals.is_empty() {
+        commands.queue(ApplyRockVisualBatch { visuals });
+    }
+}
+
+pub(crate) fn clear_pending_terrain_rocks(mut pending: ResMut<PendingTerrainRockAdmission>) {
+    *pending = PendingTerrainRockAdmission::default();
+}
+
+struct ApplyRockBodyBatch {
+    bodies: Vec<PendingRockBody>,
+}
+
+impl bevy::ecs::system::Command for ApplyRockBodyBatch {
+    type Out = ();
+
+    fn apply(self, world: &mut World) {
+        let capacity = self.bodies.len();
+        let mut spawn_bodies = Vec::with_capacity(capacity);
+        let mut spawn_visuals = Vec::with_capacity(capacity);
+        let mut update_bodies = Vec::with_capacity(capacity);
+        let mut queued_visuals = Vec::with_capacity(capacity);
+        let mut completed_bodies = Vec::with_capacity(capacity);
+        let mut skipped_visuals = Vec::with_capacity(capacity);
+        let mut touched_terrains = Vec::with_capacity(capacity);
+        let mut canceled_terrains = BTreeSet::new();
+
+        for pending in self.bodies {
+            touched_terrains.push(pending.terrain);
+            if world.get_entity(pending.terrain).is_err() {
+                canceled_terrains.insert(pending.terrain);
+                continue;
+            }
+            if let Some(entity) = pending.existing {
+                if world.get_entity(entity).is_ok() {
+                    update_bodies.push((entity, pending.body));
+                    completed_bodies.push(pending.terrain);
+                    if let Some(visuals) = pending.visuals {
+                        queued_visuals.push(PendingRockVisual {
+                            terrain: pending.terrain,
+                            entity,
+                            visuals,
+                        });
+                    }
+                } else {
+                    completed_bodies.push(pending.terrain);
+                    if pending.visuals.is_some() {
+                        skipped_visuals.push(pending.terrain);
+                    }
+                }
+            } else {
+                spawn_bodies.push(pending.body);
+                spawn_visuals.push((pending.terrain, pending.visuals));
+                completed_bodies.push(pending.terrain);
+            }
+        }
+
+        let spawned = bevy::log::info_span!("terrain_rock_spawn_batch", count = spawn_bodies.len())
+            .in_scope(|| world.spawn_batch(spawn_bodies).collect::<Vec<_>>());
+        for ((terrain, visuals), entity) in spawn_visuals.into_iter().zip(spawned) {
+            if let Some(visuals) = visuals {
+                queued_visuals.push(PendingRockVisual {
+                    terrain,
+                    entity,
+                    visuals,
+                });
+            }
+        }
+        if !update_bodies.is_empty() {
+            if let Err(error) =
+                bevy::log::info_span!("terrain_rock_update_batch", count = update_bodies.len())
+                    .in_scope(|| world.try_insert_batch(update_bodies))
+            {
+                warn!(
+                    count = error.entities.len(),
+                    "terrain rock body batch referenced entities that were already removed"
+                );
+            }
+        }
+
+        let completed =
+            if let Some(mut pending) = world.get_resource_mut::<PendingTerrainRockAdmission>() {
+                for terrain in canceled_terrains {
+                    pending.cancel_terrain(terrain);
+                }
+                pending.visuals.extend(queued_visuals);
+                for terrain in completed_bodies {
+                    pending.complete_body(terrain);
+                }
+                for terrain in skipped_visuals {
+                    pending.complete_visual(terrain);
+                }
+                pending.take_completed(touched_terrains)
+            } else {
+                Vec::new()
+            };
+        for (terrain, fingerprint) in completed {
+            if let Ok(mut entity) = world.get_entity_mut(terrain) {
+                entity.insert((
+                    super::TerrainLayersApplied,
+                    super::ScatteredContent(fingerprint),
+                ));
+                entity.remove::<super::TerrainLayersPending>();
+            }
+        }
+    }
+}
+
+struct ApplyRockVisualBatch {
+    visuals: Vec<PendingRockVisual>,
+}
+
+impl bevy::ecs::system::Command for ApplyRockVisualBatch {
+    type Out = ();
+
+    fn apply(self, world: &mut World) {
+        let mut insertions = Vec::with_capacity(self.visuals.len());
+        let mut terrains = Vec::with_capacity(self.visuals.len());
+        for pending in self.visuals {
+            terrains.push(pending.terrain);
+            if world.get_entity(pending.terrain).is_ok() && world.get_entity(pending.entity).is_ok()
+            {
+                insertions.push((pending.entity, pending.visuals));
+            }
+        }
+        if !insertions.is_empty() {
+            if let Err(error) =
+                bevy::log::info_span!("terrain_rock_visual_insert_batch", count = insertions.len())
+                    .in_scope(|| world.try_insert_batch(insertions))
+            {
+                warn!(
+                    count = error.entities.len(),
+                    "terrain rock visual batch referenced entities that were already removed"
+                );
+            }
+        }
+        if let Some(mut pending) = world.get_resource_mut::<PendingTerrainRockAdmission>() {
+            for terrain in &terrains {
+                pending.complete_visual(*terrain);
+            }
+            let completed = pending.take_completed(terrains);
+            for (terrain, fingerprint) in completed {
+                if let Ok(mut entity) = world.get_entity_mut(terrain) {
+                    entity.insert((
+                        super::TerrainLayersApplied,
+                        super::ScatteredContent(fingerprint),
+                    ));
+                    entity.remove::<super::TerrainLayersPending>();
+                }
+            }
+        }
+    }
 }
 
 /// Bound the in-memory placement cache while still covering normal inspector
@@ -302,16 +593,8 @@ impl TerrainLayer for RockScatterLayer {
 
         let mut reused = 0usize;
         let mut spawned = 0usize;
-        #[cfg(not(target_arch = "wasm32"))]
-        let reused_capacity = placements.len().min(cx.rock_pool.len());
-        #[cfg(target_arch = "wasm32")]
-        let reused_capacity = 0;
-        let spawn_capacity = placements.len() - reused_capacity;
         let has_visuals = bucket_handles.is_some();
-        let mut rock_updates = Vec::with_capacity(if has_visuals { 0 } else { reused_capacity });
-        let mut visual_updates = Vec::with_capacity(if has_visuals { reused_capacity } else { 0 });
-        let mut rock_spawns = Vec::with_capacity(if has_visuals { 0 } else { spawn_capacity });
-        let mut visual_spawns = Vec::with_capacity(if has_visuals { spawn_capacity } else { 0 });
+        let mut body_admissions = Vec::with_capacity(placements.len());
         for p in placements.iter() {
             let y =
                 lunco_terrain_core::HeightSource::height_at(oracle, p.pos.x as f64, p.pos.y as f64)
@@ -344,13 +627,16 @@ impl TerrainLayer for RockScatterLayer {
                 system_managed: lunco_core::SystemManaged,
                 transform: Transform::from_xyz(p.pos.x, y - r_vis * 0.25, p.pos.y)
                     .with_rotation(Quat::from_rotation_y(p.yaw)),
-                visibility: Visibility::Inherited,
+                visibility: if has_visuals {
+                    Visibility::Hidden
+                } else {
+                    Visibility::Inherited
+                },
                 rigid_body: RigidBody::Static,
                 collider: Collider::sphere((r_vis * 0.6) as f64),
             };
-            if let Some(handles) = &bucket_handles {
-                let bundle = ProceduralRockVisualBundle {
-                    rock,
+            let visuals = bucket_handles.as_ref().map(|handles| {
+                ProceduralRockVisuals {
                     mesh: Mesh3d(handles[bucket].clone()),
                     // `no_shadow_cast` rides on the look — `lunco-render-bevy`
                     // inserts `NotShadowCaster` for it. Cloning the look does NOT
@@ -363,37 +649,17 @@ impl TerrainLayer for RockScatterLayer {
                         cx.quality.terrain_rock_lod_start_distance,
                         cx.quality.terrain_rock_lod_fade_distance,
                     ),
-                };
-                if let Some(entity) = recycled {
-                    visual_updates.push((entity, bundle));
-                } else {
-                    visual_spawns.push(bundle);
+                    visibility: Visibility::Inherited,
                 }
-            } else if let Some(entity) = recycled {
-                rock_updates.push((entity, rock));
-            } else {
-                rock_spawns.push(rock);
-            }
+            });
+            body_admissions.push(PendingRockBody {
+                terrain: cx.terrain,
+                existing: recycled,
+                body: rock,
+                visuals,
+            });
         }
-        if !rock_updates.is_empty() {
-            // A doc-backed terrain can disappear before deferred commands apply;
-            // the fallible batch reports any stale target without panicking.
-            cx.commands.try_insert_batch(rock_updates);
-        }
-        if !visual_updates.is_empty() {
-            // Parent, collider, transform, and visual components enter through one
-            // ordered bundle batch, so each rock makes one archetype transition.
-            // ChildOf relationship hooks still run in placement order.
-            cx.commands.try_insert_batch(visual_updates);
-        }
-        if !rock_spawns.is_empty() {
-            cx.commands.spawn_batch(rock_spawns);
-        }
-        if !visual_spawns.is_empty() {
-            // New rocks enter their final archetype directly instead of being
-            // spawned empty and migrated by a later deferred insert batch.
-            cx.commands.spawn_batch(visual_spawns);
-        }
+        cx.pending_rock_admission.enqueue_bodies(body_admissions);
 
         debug!(
             "[terrain-layer/rocks] scattered {} rock(s), reused {reused}, spawned {spawned} \

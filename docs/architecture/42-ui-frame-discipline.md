@@ -262,6 +262,37 @@ package — none of these belong on the UI thread every frame. Patterns:
   with indexed entity lookups, and collect grid membership along those same
   paths; do not materialize `ChildOf` and `Grid` facts for unrelated scene
   entities. Validate the selected active grid with a direct entity lookup.
+- **Builder tree rows**: retain each panel's flattened visible-row index and
+  rebuild it only when its source revision, filter/scope options, or expansion
+  state changes. The shared `tree::branch` reports disclosure changes so the
+  panel can invalidate its index without querying every branch on every paint.
+  Reuse the row vector's capacity. `ScrollArea::show_rows` still creates the
+  interactive egui widgets for the viewport each frame; those widgets consume
+  borrowed/`Arc`-shared source rows, and live selection and sample values remain
+  paint inputs. Do not clone a complete domain tree or entry list into a panel.
+  Borrow selected-entity state during paint and retain an owned selection
+  snapshot only when it changes; compare egui temporary values through borrowed
+  type-map access instead of cloning a cached vector every frame.
+- **Spawn palette**: `SpawnCatalog` owns a sorted category-to-entry-index map
+  and advances its revision when catalog contents change. The palette borrows
+  category labels and entry rows through that index, then keeps formatted row
+  labels only until the catalog revision changes. Opening a category does not
+  scan all catalog entries or copy entry records.
+- **Builder Ports tree**: retain expanded and collapsed entity row indexes by
+  port topology revision, filter text, and expansion set. Reuse the vectors and
+  expansion scratch set between repaints. Publish the expanded-entity sample
+  request only when that set changes; live port values keep their bounded
+  sample cadence.
+- **Telemetry catalog**: snapshot channel metadata and the label/path/parent
+  facts for signal owners and their ancestor closure when the registry catalog
+  revision or focus fingerprint changes. Deduplication, grouping, and sorting
+  run on one async-compute task; a result publishes only while both keys still
+  match. The panel displays a pending state instead of building or joining the
+  catalog in `Panel::render`, and sample updates do not invalidate its tree.
+  Its flattened open-row index is also retained across repaints and invalidated
+  by catalog/focus/filter/display changes or a branch disclosure change. Cached
+  rows share immutable descriptors; latest sample values are still read for
+  painted channels.
 - **Generation-gated recompute**: the canvas diagram only
   reprojects when the document generation moves; the panel advances
   its `last_seen_gen` to skip echo rebuilds of its own ops.
@@ -346,6 +377,12 @@ The same ownership rule applies to the measured presentation paths:
   camera reconciler legitimately mutably borrows that resource every frame;
   that borrow tick is not a presentation change. Joint readouts remain bounded
   to their declared 10 Hz refresh cadence.
+- **Inspector material parts** retains the selected USD root's
+  material-bearing entity index by root identity and `UsdStageRevision`. Stage
+  projection changes rebuild that subtree-derived index. Non-USD roots or a
+  missing revision resource disable reuse. Material values remain live paint
+  inputs, while display labels are formatted only for the active part or an
+  open selector.
 
 The same rule applies below the UI boundary. The Modelica engine-sync pass is
 woken by the document registry revision and still compares document generations

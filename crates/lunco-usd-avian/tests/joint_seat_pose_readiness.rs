@@ -13,7 +13,7 @@ use bevy::time::TimeUpdateStrategy;
 use big_space::prelude::{BigSpace, CellCoord, FloatingOrigin, Grid};
 use core::time::Duration;
 use lunco_spatial::ActivePhysicsFrame;
-use lunco_usd_avian_core::{BigSpacePhysicsBridgePlugin, PhysicsBridgeSystems};
+use lunco_usd_avian_core::BigSpacePhysicsBridgePlugin;
 
 const EDGE: f32 = 2000.0;
 
@@ -21,7 +21,7 @@ const EDGE: f32 = 2000.0;
 /// motivated this (`episode_01_recording.usda` puts its lander at y = 70).
 const AUTHORED_Y: f32 = 70.0;
 
-/// First `Position` observed at the hold-safe joint-preparation slot.
+/// First `Position` observed at the pre-tick joint-preparation slot.
 #[derive(Resource, Default)]
 struct SeenInJointPreparation(Option<DVec3>);
 
@@ -49,17 +49,14 @@ fn make_app() -> App {
     ));
     app.init_resource::<SeenInJointPreparation>();
 
-    app.add_systems(
-        FixedPostUpdate,
-        record_joint_slot
-            .in_set(PhysicsSystems::Prepare)
-            .after(PhysicsBridgeSystems::Read)
-            .before(PhysicsSystems::StepSimulation),
-    );
+    app.add_systems(Update, record_joint_slot);
 
     app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_micros(
         15625,
     )));
+    app.world_mut()
+        .resource_mut::<Time<Virtual>>()
+        .pause();
     app.finish();
     app.cleanup();
     app
@@ -104,45 +101,25 @@ fn spawn_scene(app: &mut App) {
 }
 
 #[test]
-fn joint_preparation_reads_the_authored_pose() {
+fn lifecycle_joint_preparation_reads_pose_without_a_physics_tick() {
     let mut app = make_app();
     spawn_scene(&mut app);
-    // A few frames allow `Time<Fixed>` to accumulate before the preparation slot
-    // runs.
-    for _ in 0..4 {
-        app.update();
-    }
+    app.update();
 
     let observed = app
         .world()
         .resource::<SeenInJointPreparation>()
         .0
-        .expect("the PhysicsSchedule probe must observe the body on the first tick");
+        .expect("Update joint preparation must observe the bridge-seeded body pose");
     assert!(
         (observed.y - AUTHORED_Y as f64).abs() < 1e-6,
         "joint-seating slot must read the authored pose, got {observed:?} \
          (expected y = {AUTHORED_Y})"
     );
-}
-
-#[test]
-fn joint_preparation_reads_authored_pose_while_physics_is_paused() {
-    let mut app = make_app();
-    spawn_scene(&mut app);
-    app.world_mut().resource_mut::<Time<Physics>>().pause();
-
-    for _ in 0..4 {
-        app.update();
-    }
-
-    let observed = app
-        .world()
-        .resource::<SeenInJointPreparation>()
-        .0
-        .expect("joint preparation must run while the nested physics schedule is paused");
-    assert!(
-        (observed.y - AUTHORED_Y as f64).abs() < 1e-6,
-        "hold-safe bridge read must publish the authored pose, got {observed:?}"
+    assert_eq!(
+        app.world().resource::<Time<Fixed>>().elapsed(),
+        Duration::ZERO,
+        "lifecycle pose preparation does not need a fixed physics cycle"
     );
 }
 

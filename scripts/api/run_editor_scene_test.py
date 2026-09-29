@@ -120,8 +120,7 @@ def run(port: int, timeout: float, scene: str, log_path: Path) -> int:
             windowed=True,
         ) as session:
             wait_for_scene(session, scene, min(timeout, 45.0))
-            # Opening a document precedes its scene-time policy and ResetTime.
-            # Wait for that lifecycle boundary so it cannot overwrite this
+            # Wait for the scene-time selection boundary before issuing this
             # test's transport command while asynchronous scene preparation is
             # still settling.
             wait_for_scene_time_selection(session, log_path, timeout)

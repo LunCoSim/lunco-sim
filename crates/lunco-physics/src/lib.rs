@@ -730,10 +730,6 @@ impl PhysicsHolds {
     /// this reason; integration resumes only after the complete pending
     /// admission set is ready.
     pub const BODY_ADMISSION: &'static str = "body-admission";
-    /// The scene-test runner is assembling its initial physics/Modelica state.
-    /// It releases this after all startup participants reach their first
-    /// successful exchange, before the authored scenario is opened.
-    pub const SCENE_TEST_STARTUP: &'static str = "scene-test-startup";
     /// A scripted cutscene / offline recording is choosing when the world moves.
     ///
     /// Held, physics is frozen but `Time<Virtual>` keeps running, so `FixedUpdate` —

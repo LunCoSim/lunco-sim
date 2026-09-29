@@ -1,17 +1,68 @@
 //! First Drive tutorial — orchestrator attached to /FirstDrive/Scenario.
 //!
 //! A declarative `mission(me)`: each objective advances when the student does
-//! the real thing, not on a timer. Possession and arrival are checked against
-//! the rover's live controller and distance to this lesson's named flag. The
-//! engine auto-publishes the
-//! objectives checklist to the tutorial HUD, so this whole lesson is ~30 lines
-//! and no Rust.
+//! the real thing, not on a timer. Possession is checked against the rover's
+//! live controller; arrival comes from the flag's generic Avian sensor event.
+//! The engine auto-publishes the objectives checklist to the tutorial HUD.
 
 fn on_start(me, ctx) {
     // The catalog-selected scene is mounted before this script starts. This script
     // only teaches and verifies the rover actions in that world.
     hint("Select the rover. Click Possess in Inspector or Command Deck.");
     notify_kind("Tutorial: First Drive", "info");
+
+    this.rover = find_path("/FirstDrive/Rover");
+    this.flag_sensor = find_path("/FirstDrive/Flag/Trigger");
+    if this.rover < 0 || this.flag_sensor < 0 {
+        notify_kind("First Drive cannot resolve its rover or waypoint sensor.", "error");
+        return;
+    }
+
+    // Startup does not replay sensor events from before on_start. Read current
+    // Avian occupancy once, then consume generic enter events for later arrival.
+    let occupants = query("SensorOccupants", #{ sensor: this.flag_sensor });
+    if occupants == () {
+        notify_kind("First Drive cannot read waypoint sensor occupancy: no query result.", "error");
+        return;
+    }
+    if occupants.ok == false {
+        notify_kind("First Drive cannot read waypoint sensor occupancy: " + occupants.error, "error");
+        return;
+    }
+    if occupants.entrants == () {
+        notify_kind("First Drive waypoint occupancy has no entrant list.", "error");
+        return;
+    }
+    for entrant in occupants.entrants {
+        if first_drive_entity_within(entrant, this.rover) {
+            emit("first_drive_waypoint_reached", entrant);
+            break;
+        }
+    }
+}
+
+fn simulation_dependencies(me, ctx) {
+    let rover = find_path("/FirstDrive/Rover");
+    let flag = find_path("/FirstDrive/Flag");
+    let sensor = find_path("/FirstDrive/Flag/Trigger");
+    if rover < 0 || flag < 0 || sensor < 0 {
+        throw "First Drive requires its authored rover, flag, and waypoint sensor before simulation starts";
+    }
+    #{ modelica_entities: [rover], entity_reads: [flag, sensor], entity_writes: [],
+       query_reads: ["SensorOccupants"], required_inputs: [] }
+}
+
+fn first_drive_entity_within(entity, ancestor) {
+    if entity == () || ancestor < 0 { return false; }
+    let current = entity.to_int();
+    if current < 0 { return false; }
+    for depth in 0..32 {
+        if current == ancestor { return true; }
+        let next = parent(current);
+        if next == () || next < 0 { return false; }
+        current = next;
+    }
+    false
 }
 
 fn first_drive_possessed(me) {
@@ -23,21 +74,16 @@ fn first_drive_finished(me) {
 }
 
 fn first_drive_controlled(me) {
-    let rover = find("/FirstDrive/Rover");
+    // Headless acceptance runs have no local input controller. Their authored
+    // task takes the rover through the same target and arrival objectives.
+    if is_unattended() { return true; }
+    let rover = find_path("/FirstDrive/Rover");
     rover >= 0 && controller(rover) != ()
 }
 
-fn first_drive_at_flag(me) {
-    let rover = find("/FirstDrive/Rover");
-    let flag = find("/FirstDrive/Flag");
-    if rover < 0 || flag < 0 { return false; }
-    arrived(rover, world_pos(flag), 2.5)
-}
-
 fn mission(me, ctx) {
-    // Scene entity paths as LOCALS (not top-level `const`): rhai closures capture
-    // enclosing locals by value, but named fns can't see module consts — so the
-    // `done` closure below captures these, resolving each via find() every tick.
+    // Named functions are used for the live possession check. Arrival is an
+    // event objective so no callback needs to read scenario state indirectly.
     [
         // Step 1 — take control. A request is not success; live controller state
         // must show that this rover is actually owned.
@@ -46,87 +92,73 @@ fn mission(me, ctx) {
             done: Fn("first_drive_controlled"),
             on_complete: Fn("first_drive_possessed"),
         }),
-        // Step 2 — drive to this lesson's named flag. A generic marker event is
-        // not enough to prove the correct rover reached the correct target.
+        // Step 2 — the exact flag sensor must report entry by this rover (or
+        // one of its colliders). The event is the arrival fact.
         objective("reach_flag", #{
             text: "Drive to the glowing flag and stop there",
             requires: ["possess"],
-            done: Fn("first_drive_at_flag"),
+            requires_event: "first_drive_waypoint_reached",
             on_complete: Fn("first_drive_finished"),
         }),
     ]
 }
 
 fn on_event(me, evt, ctx) {
+    if sensor_entered(evt, this.flag_sensor)
+        && first_drive_entity_within(evt.value, this.rover) {
+        emit("first_drive_waypoint_reached", evt.value);
+    }
+
     // The engine emits MISSION_COMPLETE once every objective is done.
     if evt.name == "MISSION_COMPLETE" {
         hint("You took control and reached the flag.\n\nClick Continue to start Moon Driving Basics, or choose another lesson from Tutorials.");
         notify_kind("First Drive complete", "success");
+    } else if evt.name == "cmd:ReleaseControlSource" {
+        // Releasing the avatar only relinquishes authority. Stop this lesson's
+        // rover endpoint explicitly so it cannot coast away from the waypoint.
+        let rover = find_path("/FirstDrive/Rover");
+        if rover >= 0 {
+            let stopped = cmd("ReleaseControl", #{ target: rover });
+            if stopped == () || stopped.ok != true {
+                notify_kind("First Drive could not safely stop the rover after control was released.", "error");
+            }
+        }
     }
 }
 
-// UNATTENDED autopilot — runs ALONGSIDE the mission (a scenario may have both a
-// `task` behaviour and a `mission` tracker). Gated on the AUDIENCE: with no
-// window (CI, `scene_test`, a headless smoke) it possesses the rover and drives
-// to the flag hands-free, auto-passing the lesson; with a window open it returns
-// () so the student plays. This is the "if unattended, autopilot" pattern — the
-// conditional lives in the scenario, keyed off is_unattended().
-// A world point `standoff` metres SHORT of the flag along the rover→flag line.
-// We aim the final creep here, not at the flag itself: the rover's reported pose is
-// its chassis CENTRE and the body is a couple of metres long, so driving the centre
-// onto the flag pole just rams it and rocks back. Parking the centre a body-length
-// short lands the nose right at the flag. Recomputed live is stable — we never get
-// nearer the flag than `standoff`, so the rover→flag direction never degenerates.
-fn aim_short_of(rover, flag, standoff) {
-    let rp = world_pos(rover);
-    let fp = world_pos(flag);
-    if rp == () || fp == () { return fp; }
-    let d = vnorm(vsub(fp, rp));                        // unit rover → flag
-    vsub(fp, [d[0]*standoff, d[1]*standoff, d[2]*standoff])
-}
+// UNATTENDED guidance runs alongside the mission for headless acceptance.
+// Windowed sessions leave control to the student. Modelica owns continuous
+// driving; entry into the Avian sensor, not a script distance threshold, ends
+// the approach and tells this task when to brake.
 
-fn first_drive_autopilot_possess(me) {
-    let rover = find("/FirstDrive/Rover");
-    cmd("AcquireControl", #{ target: rover });
-    notify_kind("[debug] autopilot engaged", "info");
-}
-
-fn first_drive_cruise(me) {
-    nav_to(find("/FirstDrive/Rover"), world_pos(find("/FirstDrive/Flag")), 1.0, 8.0)
-}
-
-fn first_drive_cruise_done(me) {
-    arrived(find("/FirstDrive/Rover"), world_pos(find("/FirstDrive/Flag")), 8.0)
-}
-
-fn first_drive_creep(me) {
-    nav_to(find("/FirstDrive/Rover"), aim_short_of(find("/FirstDrive/Rover"), find("/FirstDrive/Flag"), 1.5), 0.15, 0.6)
-}
-
-fn first_drive_creep_done(me) {
-    arrived(find("/FirstDrive/Rover"), aim_short_of(find("/FirstDrive/Rover"), find("/FirstDrive/Flag"), 1.5), 0.6)
+fn first_drive_publish_waypoint(me) {
+    let rover = find_path("/FirstDrive/Rover");
+    let flag = find_path("/FirstDrive/Flag");
+    let target = world_pos(flag);
+    if rover < 0 || flag < 0 || target == () {
+        notify_kind("First Drive could not resolve the rover or waypoint target.", "error");
+        return;
+    }
+    // Modelica's radius shapes deceleration only. Arrival is the semantic
+    // event produced from the generic Avian sensor transition.
+    let result = modelica_waypoint(rover, target, 1.0, 1.0, 0.0);
+    if result == () || result.ok != true {
+        let detail = if result == () { "no command result" } else { result.error };
+        notify_kind("First Drive could not publish rover guidance: " + detail, "error");
+    }
 }
 
 fn first_drive_brake(me) {
-    brake(find("/FirstDrive/Rover"))
+    modelica_waypoint_stop(find_path("/FirstDrive/Rover"))
 }
 
 fn task(me, ctx) {
     if !is_unattended() { return; }   // a human is watching: they drive
     seq([
-        wait(1.0),                     // let the scene settle / rover spawn
-        once(|m| first_drive_autopilot_possess(m)),
-        wait(0.5),
-        // Phase 1: cruise toward the flag at a moderate speed until within 8 m.
-        step(|m| first_drive_cruise(m), |m| first_drive_cruise_done(m)),
-        // Phase 2: creep SLOWLY to a point 1.5 m short of the flag (an offset in
-        // front of it) and stop there — so the rover's centre parks a body-length
-        // out with its nose AT the flag, instead of ramming through and settling
-        // ~2.3 m back. Aiming short, not just braking, is what puts it on the flag.
-        step(|m| first_drive_creep(m), |m| first_drive_creep_done(m)),
-        // Brake and HOLD for a couple of sim-seconds so it parks instead of coasting.
-        // `act_for` re-brakes every tick while the dwell holds the step, so the
-        // brake persists (a single pulse would let it roll onward).
-        act_for(|m| first_drive_brake(m), 2.0),
+        wait(1.0),
+        once(|m| first_drive_publish_waypoint(m)),
+        wait_for("first_drive_waypoint_reached"),
+        once(|m| first_drive_brake(m)),
+        wait(2.0),
     ])
 }

@@ -82,6 +82,11 @@ impl Plugin for TerrainSurfacePlugin {
         // (procedural scatter AND `PlaceRock`) so rocks batch instead of each one
         // adding a draw call + a bind group.
         app.init_resource::<crate::terrain_layers::SharedRockAssets>();
+        app.init_resource::<crate::terrain_layers::PendingTerrainRockAdmission>()
+            .add_systems(
+                lunco_core::SceneTeardown,
+                crate::terrain_layers::clear_pending_terrain_rocks,
+            );
         app.init_resource::<crate::terrain_layers::TerrainScatterQualitySignature>();
         app.add_systems(
             Update,
@@ -94,6 +99,11 @@ impl Plugin for TerrainSurfacePlugin {
             crate::terrain_layers::scatter_terrain_layers
                 .after(crate::terrain::start_dem_restamp)
                 .after(crate::terrain::finish_dem_restamp),
+        );
+        app.add_systems(
+            Update,
+            crate::terrain_layers::admit_pending_terrain_rocks
+                .after(crate::terrain_layers::scatter_terrain_layers),
         );
         // The frame contract the whole analytic surface rests on: a DEM terrain
         // is grid-direct at the origin cell, so oracle coordinates ARE world-grid

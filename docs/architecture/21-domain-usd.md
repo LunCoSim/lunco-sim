@@ -395,6 +395,13 @@ including local subtree remove/restore, replay incrementally
 source string is identical is an idempotent no-op and does not advance the
 projection generation.
 
+On a Twin's first projection, the loaded stage recipe already contains the
+current base and runtime layers. The document projector replays the disposable
+view layer from its own bounded operation suffix since the current source
+baseline, so runtime restores and persistent edits cannot evict presentation
+ops. If that view suffix itself expired, projection uses the complete composed
+document rebuild path.
+
 An authored standard `inputs:*` edit on a live model instance also advances the
 backend-neutral `lunco_core::ModelStateRevision`. This is only an invalidation
 signal: USD does not know whether the attached tool is Modelica, Rhai, physics,
@@ -530,6 +537,17 @@ transport is available. A missing sublayer, reference, or payload does not
 discard already available siblings. The loader publishes the available stage, leaves
 the missing authored arc unresolved as required by OpenUSD, and records a
 scene-scoped `RuntimeDiagnostics` warning with both logical layer identifiers.
+After structural projection settles and before the scene transition releases its
+simulation hold, `usd.scene_composition` receives the root address and the
+ordered list of missing `{referring_layer, dependency}` pairs. The shipped
+required Rhai policy chooses `allow_partial`, preserving this behavior by
+default. An active Twin policy may replace that decision with `reject_scene`;
+the runtime then tears down the partial primary stage and fails the transition
+before an authoritative physics cycle can consume it. A missing, faulting, or
+malformed policy result fails admission visibly. Complete closures do not call
+the policy. The loader remains responsible for fetching the available closure
+and reporting missing arcs; the scene lifecycle owner consumes the policy
+decision.
 
 Other failures remain visible and terminal at their owner: unsafe traversal,
 permission or storage errors, malformed required input, and exceeded closure

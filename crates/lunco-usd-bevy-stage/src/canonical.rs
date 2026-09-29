@@ -1662,8 +1662,8 @@ mod authoring_tests {
         assert!(
             cs.drain_changes()
                 .iter()
-                .any(|change| change.resynced.iter().any(|path| path == &route)),
-            "child order authors a parent resync"
+                .any(|change| change.info_only.iter().any(|path| path == &route)),
+            "child order authors a parent info change"
         );
 
         cs.projector()

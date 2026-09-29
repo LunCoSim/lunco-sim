@@ -291,14 +291,14 @@ fn contact_pair(
 }
 
 /// The named trigger-zone events a contact produces: for each side that is a
-/// *named* sensor (a trigger volume carrying a `Name`), an
+/// sensor carrying a non-empty `TriggerZone` label, an
 /// `("<verb>:<zone>", entrant_gid)` pair, where the entrant is the OTHER side
 /// and has a registered stable id. The entrant must be a moving rigid body;
 /// static terrain, scenery, and unidentified contacts are not arrivals. Empty
-/// when neither side is a named zone — those contacts still surface as the
-/// generic `COLLISION_START`/`COLLISION_END`.
+/// when neither side has a label. Generic collision events remain available,
+/// and sensor pairs additionally produce identity-based sensor transitions.
 ///
-/// `zone_name` maps a collider entity to its zone name (the sensor's `Name`);
+/// `zone_name` maps a collider entity to its explicitly authored zone label;
 /// abstracted as a closure so this stays a pure, unit-testable function.
 fn zone_events(
     verb: &str,
@@ -329,18 +329,50 @@ fn zone_events(
     out
 }
 
+/// Generic Avian sensor transitions, independent of any authored zone name.
+/// Each tuple is `(entrant_gid, sensor_gid)`: the sensor is the event source
+/// and the moving body's collider identity (or rigid-body identity when its
+/// collider is unregistered) is the payload.
+fn sensor_events(
+    c1: Entity,
+    b1: Option<Entity>,
+    c2: Entity,
+    b2: Option<Entity>,
+    is_sensor: impl Fn(Entity) -> bool,
+    reg: &ApiEntityRegistry,
+    is_moving_body: impl Fn(Option<Entity>) -> bool,
+) -> Vec<(i64, u64)> {
+    let mut out = Vec::new();
+    let mut add = |sensor_collider, sensor_body, entrant_collider, entrant_body| {
+        if !is_sensor(sensor_collider) || !is_moving_body(entrant_body) {
+            return;
+        }
+        let (Some(sensor), Some(entrant)) = (
+            contact_gid(reg, sensor_collider, sensor_body),
+            contact_gid(reg, entrant_collider, entrant_body),
+        ) else {
+            return;
+        };
+        out.push((entrant as i64, sensor));
+    };
+    add(c1, b1, c2, b2);
+    add(c2, b2, c1, b1);
+    out
+}
+
 /// Bridge `CollisionStart`/`CollisionEnd` → `TelemetryEvent`. Every contact fires
 /// the generic `COLLISION_START`/`COLLISION_END` (payload `"gidA:gidB"`). A
-/// contact involving a *named* sensor additionally fires `enter:<zone>` /
-/// `exit:<zone>` whose payload is the entrant's gid — so a scenario reacts to a
-/// trigger volume by name (`if evt.name == "enter:pad_2"`) without reverse-mapping
-/// gids. Triggered events reach the script inbox observer and are delivered to
-/// `on_event` next tick (the frame-delayed actor model `emit` uses).
+/// sensor contact with a moving body also fires `SENSOR_ENTER`/`SENSOR_EXIT`
+/// with the sensor GID as source and entrant GID as value. A sensor with an
+/// explicit non-empty `TriggerZone` label additionally fires `enter:<zone>` /
+/// `exit:<zone>`.
+/// Triggered events reach script `on_event` on the next scenario pass.
 fn bridge_collision_events(
     mut starts: MessageReader<CollisionStart>,
     mut ends: MessageReader<CollisionEnd>,
     registry: Res<ApiEntityRegistry>,
-    zones: Query<(Option<&TriggerZone>, &Name), With<Sensor>>,
+    zones: Query<Option<&TriggerZone>, With<Sensor>>,
+    sensors: Query<Entity, With<Sensor>>,
     bodies: Query<&RigidBody>,
     world: Option<Res<lunco_time::WorldTime>>,
     mut commands: Commands,
@@ -357,14 +389,9 @@ fn bridge_collision_events(
             sim_tick: 0,
         });
     };
-    // Prefer the explicit `TriggerZone` name (short, stable), falling back to the
-    // entity's `Name` (its USD path) for an unnamed sensor.
-    let zone_name = |e: Entity| {
-        zones.get(e).ok().map(|(tz, name)| {
-            tz.map(|z| z.0.clone())
-                .unwrap_or_else(|| name.as_str().to_string())
-        })
-    };
+    // Named geofence events are an optional authored view of sensor contact.
+    // Generic sensor events below do not depend on TriggerZone or entity names.
+    let zone_name = |e: Entity| zones.get(e).ok().flatten().map(|zone| zone.0.clone());
     let is_moving_body = |body: Option<Entity>| {
         body.is_some_and(|entity| {
             matches!(
@@ -383,13 +410,29 @@ fn bridge_collision_events(
                 &mut commands,
             );
         }
+        for (entrant, sensor) in sensor_events(
+            ev.collider1,
+            ev.body1,
+            ev.collider2,
+            ev.body2,
+            |entity| sensors.get(entity).is_ok(),
+            &registry,
+            is_moving_body,
+        ) {
+            fire(
+                "SENSOR_ENTER".to_string(),
+                TelemetryValue::I64(entrant),
+                sensor,
+                &mut commands,
+            );
+        }
         for (name, entrant, zone) in zone_events(
             "enter",
             ev.collider1,
             ev.body1,
             ev.collider2,
             ev.body2,
-            zone_name,
+            |entity| zone_name(entity).filter(|name| !name.is_empty()),
             &registry,
             is_moving_body,
         ) {
@@ -405,13 +448,29 @@ fn bridge_collision_events(
                 &mut commands,
             );
         }
+        for (entrant, sensor) in sensor_events(
+            ev.collider1,
+            ev.body1,
+            ev.collider2,
+            ev.body2,
+            |entity| sensors.get(entity).is_ok(),
+            &registry,
+            is_moving_body,
+        ) {
+            fire(
+                "SENSOR_EXIT".to_string(),
+                TelemetryValue::I64(entrant),
+                sensor,
+                &mut commands,
+            );
+        }
         for (name, entrant, zone) in zone_events(
             "exit",
             ev.collider1,
             ev.body1,
             ev.collider2,
             ev.body2,
-            zone_name,
+            |entity| zone_name(entity).filter(|name| !name.is_empty()),
             &registry,
             is_moving_body,
         ) {
@@ -584,6 +643,38 @@ mod tests {
                 |body| body == Some(rover),
             )
             .is_empty()
+        );
+    }
+
+    #[test]
+    fn sensor_events_use_sensor_identity_without_a_zone_name() {
+        let mut world = World::new();
+        let rover = world.spawn_empty().id();
+        let sensor = world.spawn_empty().id();
+        let plain = world.spawn_empty().id();
+        let mut reg = ApiEntityRegistry::default();
+        reg.assign(rover, GlobalEntityId::from_raw(42));
+        reg.assign(sensor, GlobalEntityId::from_raw(7));
+
+        let is_sensor = |entity| entity == sensor;
+        assert_eq!(
+            sensor_events(rover, None, sensor, None, is_sensor, &reg, |_| true),
+            vec![(42, 7)]
+        );
+        // The contact order does not affect which GID is the sensor source.
+        assert_eq!(
+            sensor_events(sensor, None, rover, Some(rover), is_sensor, &reg, |_| true),
+            vec![(42, 7)]
+        );
+        // An arbitrary non-sensor collider produces no sensor transition.
+        assert!(
+            sensor_events(plain, None, rover, Some(rover), is_sensor, &reg, |_| true).is_empty()
+        );
+        // Static contacts are not sensor arrivals.
+        assert!(sensor_events(sensor, None, plain, None, is_sensor, &reg, |_| false).is_empty());
+        // A sensor without a stable public identity cannot emit an addressable event.
+        assert!(
+            sensor_events(plain, None, rover, Some(rover), |_| true, &reg, |_| true).is_empty()
         );
     }
 }

@@ -104,6 +104,14 @@ and its lifecycle/structural invalidation hook, including checks for in-place
 values that change membership. Live samples are excluded from the key. The
 available ports:
 
+The registry resolves each named write from the owners' declared port lists.
+`write_port`, direction-constrained writes, and `resolve_input` share that
+winner; once selected, an owner refusal is terminal and cannot fall through to
+a shadowed port. Output-only owners do not shadow input writes. `ReleasePort`,
+`ReleaseControl`, and the lifecycle release clear input holds without writing
+values; authored control policy uses named `SetPorts` writes for explicit
+setpoints.
+
 | Kind | Ports |
 |---|---|
 | **Rigid body** | out: `position_{x,y,z}`, `velocity_{x,y,z}`, `quat_{w,x,y,z}`, `yaw`/`pitch`/`roll`, `angvel_{x,y,z}`; in: `force_{x,y,z}`, `force_local_{x,y,z}`, `torque_{x,y,z}`, `mass`, `inertia_{xx,yy,zz}`, `com_{x,y,z}` |
@@ -261,12 +269,13 @@ with non-blocking implementation for independent paths:
   declared zero-order hold. A result is consumed in `Update`; the next fixed
   tick then reads the fresh output, propagates it, applies forces/motors once,
   and schedules the next point.
-* For a coupled request, the current fixed tick is the only tick admitted after
-  the request is sent; any remaining same-frame fixed overstep is discarded. A
-  slow solver costs wall time, but cannot create stale-force bursts, unbounded
-  simulated-time debt, or a Rhai/controller tick that runs ahead of the state
-  it observes. An independent request does not raise this barrier and its last
-  validated output remains held until its next completed communication point.
+* For a coupled request, the current fixed tick is the last tick admitted until
+  the worker result returns. The time owner retains remaining same-frame fixed
+  time and resumes it after the barrier clears, so a slow solver costs wall
+  time without dropping simulation time or letting a Rhai/controller tick run
+  ahead of the state it observes. An independent request does not raise this
+  barrier and its last validated output remains held until its next completed
+  communication point.
 * Membership is computed from the composed wiring projection by walking
   backwards from backend-owned `CausalStateSink` capabilities. Avian, joint,
   hardware, and wheel backends mark the actual endpoint that writes state;
@@ -383,7 +392,7 @@ The **control plane** is typed commands (see AGENTS.md § 4.2 and
 |---|---|---|
 | **Control** — discrete, occasional | `LoadScene`, `CompileModel`, `RunExperiment`, Pause/Resume/Reset, time-warp | typed `#[Command]` / `TwinCommand`. May return an `Ack` ("launched"); a long-running run then reports **completion/progress via domain state** (`Run.status`, `CompileStatus`, `RunStatus`), not a per-tick result endpoint. |
 | **Data** — continuous, per-tick | the FMI master loop, the solver step, `run_scripted_models` | plain `FixedUpdate` systems. No command, no id, no result store. |
-| **Live inputs** — high-frequency, latest-wins | joystick/throttle (`SetPorts`) | Named writes use the shared `PortRegistry`. External API, identified direct typed, local port-inspector, and non-Simulation Rhai `SetPorts`, `ReleasePort`, and `ReleaseControl` commands enter the bounded session queue and commit at the next fixed tick. Simulation-clock Rhai and fixed-step controller writes stay in their owning pass; network ControlStream frames keep their per-vessel input path. The receiver latches each named vehicle command until replacement or explicit `ReleasePort`/`ReleaseControl`. |
+| **Live inputs** — high-frequency, latest-wins | joystick/throttle (`SetPorts`) | Named writes use the shared `PortRegistry`. External API, identified direct typed, local port-inspector, and non-Simulation Rhai `SetPorts`, `ReleasePort`, and `ReleaseControl` commands enter the bounded session queue and commit at the next fixed tick. Simulation-clock Rhai and fixed-step controller writes stay in their owning pass; network ControlStream frames keep their per-vessel input path. The receiver latches each named vehicle command until replacement or explicit `ReleasePort`/`ReleaseControl`; release returns it to authored wiring without synthesizing values. |
 | **Modelica input injection** — discrete | `SetModelInput` | live API clients select a Modelica participant by `target_gid` from `ListEntities`; workbench clients select an editor document by `doc_id`. Live `SetModelInput` commands and local Modelica canvas writes are admitted to the shared next-fixed-tick queue, captured as typed Modelica changes, and applied by the Modelica owner through the shared port-first helper. Editor-only models keep immediate writes; Simulation-clock Rhai writes remain derived behavior. |
 
 For a batch `RunExperiment`, the deferred command acknowledgement contains the
@@ -701,28 +710,20 @@ discovery and connection derivation remain separate owners in the parent
 package. Scene admission and mounting are owned by
 `lunco-usd-bevy-runtime-core`.
 
-It used to wait for `variables`. For the few hundred milliseconds until the
-worker answered, the prim existed with **no ports at all** — so every wire into
-it hit `write_port → false` and the propagation master reported a *dangling
-wire*: a diagnostic that means "your wiring is wrong", raised for wiring that was
-correct. On older solar-rover scenes that included `sun_azimuth`, `panel_yaw`
-and `vehicle_throttle` on every load. The solar-rover scene has no
-Modelica-to-light wire: celestial systems own body position and irradiance,
-while the rover's `SunTracker` consumes a generic target vector selected by
-its `EnvironmentProbe` wires.
+An initially discovered USD domain network owns a `UsdDomainProjection`
+progress key through member-source resolution, synthesis, and generated
+`SimComponent` publication. The shared fixed clock cannot advance while a
+network's endpoint surface is unknown, and the binding epoch remains open until
+that surface is published. The Modelica participant's compile key overlaps the
+domain admission boundary before simulation resumes. For live edits, the
+installed network remains authoritative while its replacement is prepared and
+the new interface is admitted at the ordinary simulation boundary.
 
-Two lessons generalise beyond Modelica:
-
-- **A not-yet-ready participant must not look like a misconfigured one.** The
-  composer defers an edge until its target contract exists; the propagation
-  master classifies a compiling endpoint as `pending`, not failed. Once the
-  contract is running or errored, an unknown input becomes one terminal fault.
-  This keeps load ordering out of both logs and test verdicts without swallowing
-  a real typo.
-- **A deduplicated diagnostic must be scoped to what it describes.** That report
-  is deduped per port NAME in a `Local`, so one load-time false positive
-  silenced the genuine report for that name for the rest of the process. It now
-  clears whenever the fabric rewires.
+`SimComponent` publishes the declared input interface as soon as the parsed
+Modelica declaration is available, with `SimStatus::Compiling` until the solver
+has produced its initial state. A connection to an endpoint whose interface is
+still pending remains pending; once that interface is terminal, an unknown
+input is reported against the authored connection.
 
 A **Python** program has the same explicit USD interface contract as a Modelica
 program. `lunco-usd-sim` derives the declared scalar ports from the program prim

@@ -9660,6 +9660,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
+ "egui_extras",
  "lunco-assets-core",
  "lunco-doc",
  "lunco-doc-bevy",

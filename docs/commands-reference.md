@@ -1244,24 +1244,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | `rate` | `Option < f64 >` |  Playback rate (1.0 = realtime); `None` leaves it. |
 | `looping` | `Option < bool >` |  Wrap at the range end instead of clamping (`None` leaves it). Honoured by  [`step_playhead`], and only meaningful once the range is bounded — an  unbounded `Playback` ignores it, so a looping camera path needs an authored  clip span from its camera-track binding. |
 
-#### `ResetTime`
-
- Reset the **entire clock tree** to defaults from the retained scene epoch.
-
- This command restores the standing clock shape across scene reloads (doc 19
- §11b):
-
- * **celestial** → WorldTime child at identity rate and zero offset;
- * **interaction** → wall-rooted identity (its default);
- * **animation preview** → playhead 0, playing, 1×;
- * **transport** → Playing at 1×, except for an explicit pause requested while
-   the scene transition was pending, which is applied once to the replacement;
- * **mission calendar** → the selected scene epoch retained from the last
-   completed `scene.time.select` decision.
-
-- *defined in:* `crates/lunco-time/src/domain.rs`
-- *fields:* none — call with `ResetTime` (no params)
-
 #### `SetCelestialClock`
 
  Rate-scale or seek the celestial child of [`WorldTime`]. The command cannot
@@ -1906,14 +1888,14 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `ReleaseControl`
 
- Release the complete control intent for an endpoint and apply its safe state.
+ Release all local input holds for an endpoint. This does not write replacement values; use `SetPorts` for explicit setpoints.
 
 - *defined in:* `crates/lunco-cosim-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `target` | `Entity` |  The endpoint whose complete control intent is released. |
-| `producer_id` | `Option < u64 >` |  Stable producer identity for API, actorless Rhai, and direct typed  releases admitted to the session's next fixed tick. Twin Rhai uses its  stable actor identity and omits this field. Internal lifecycle releases  omit it because their cause is owned by another boundary. |
+| `target` | `Entity` |  The endpoint whose local input holds are released. |
+| `producer_id` | `Option < u64 >` |  Stable producer identity for external API, actorless Rhai, and direct  typed releases admitted to the session's next fixed tick. Twin Rhai uses its  stable actor identity and omits this field. |
 
 #### `ReleasePort`
 

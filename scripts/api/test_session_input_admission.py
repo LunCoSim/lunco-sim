@@ -25,12 +25,14 @@ TIMEOUT_S = float(os.environ.get("SESSION_INPUT_TIMEOUT", "240"))
 PORT = int(os.environ.get("SESSION_INPUT_API_PORT", "4732"))
 PRODUCER_ID = 8182
 PORT_PRODUCER_ID = 8282
+RELEASE_WRITE_PRODUCER_ID = 8382
 RELEASE_PORT_PRODUCER_ID = 8383
 RELEASE_CONTROL_PRODUCER_ID = 8484
 AUTHORITY_PORT_PRODUCER_ID = 8585
 INPUT_NAME = "throttle"
 INPUT_VALUE = 0.375
 PORT_VALUE = 0.625
+RELEASE_WRITE_VALUE = 0.875
 AUTHORITY_PORT_WRITES = {
     "forward": 0.7,
     "side": -0.25,
@@ -508,8 +510,18 @@ def main() -> int:
                 raise RuntimeError("RunScenario returned an empty acknowledgement")
 
             verdict = wait_for_verdict(log_path, offset)
+            execute(session, "SetTimeTransport", {"playing": False})
             execute(session, "ClearSessionInputCapture")
             execute(session, "StartSessionInputCapture")
+            release_write_ack = execute(
+                session,
+                "SetPorts",
+                {
+                    "target": target_gid,
+                    "writes": [[INPUT_NAME, RELEASE_WRITE_VALUE]],
+                    "producer_id": RELEASE_WRITE_PRODUCER_ID,
+                },
+            )
             port_release_ack = execute(
                 session,
                 "ReleasePort",
@@ -525,6 +537,7 @@ def main() -> int:
                 {"target": target_gid, "producer_id": RELEASE_CONTROL_PRODUCER_ID},
             )
             for command, ack, producer_id in (
+                ("SetPorts before release", release_write_ack, RELEASE_WRITE_PRODUCER_ID),
                 ("ReleasePort", port_release_ack, RELEASE_PORT_PRODUCER_ID),
                 ("ReleaseControl", control_release_ack, RELEASE_CONTROL_PRODUCER_ID),
             ):
@@ -536,6 +549,22 @@ def main() -> int:
                     or not ack.get("correlation_id")
                 ):
                     raise RuntimeError(f"{command} returned an incomplete live admission: {ack}")
+            release_stamps = [
+                ack["admission"]
+                for ack in (release_write_ack, port_release_ack, control_release_ack)
+            ]
+            if (
+                len({stamp.get("effective_tick") for stamp in release_stamps}) != 1
+                or not (
+                    release_stamps[0].get("sequence")
+                    < release_stamps[1].get("sequence")
+                    < release_stamps[2].get("sequence")
+                )
+            ):
+                raise RuntimeError(
+                    "same-tick release inputs did not retain their shared sequence order: "
+                    f"{release_stamps}"
+                )
 
             with RELEASE_SCENARIO_SOURCE.open("r", encoding="utf-8") as source:
                 release_scenario = source.read()
@@ -548,6 +577,10 @@ def main() -> int:
                     "source": release_scenario,
                     "params": {
                         "target_gid": target_gid,
+                        "write_producer_id": RELEASE_WRITE_PRODUCER_ID,
+                        "write_correlation_id": release_write_ack["correlation_id"],
+                        "write_admission": release_write_ack["admission"],
+                        "write_value": RELEASE_WRITE_VALUE,
                         "port_producer_id": RELEASE_PORT_PRODUCER_ID,
                         "port_correlation_id": port_release_ack["correlation_id"],
                         "port_admission": port_release_ack["admission"],
@@ -559,6 +592,7 @@ def main() -> int:
             )
             if not release_script:
                 raise RuntimeError("RunScenario returned an empty release-verifier acknowledgement")
+            execute(session, "SetTimeTransport", {"playing": True})
             release_verdict = wait_for_verdict(log_path, release_offset)
 
             execute(session, "ClearSessionInputCapture")

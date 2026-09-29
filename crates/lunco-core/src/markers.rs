@@ -177,13 +177,13 @@ pub struct ScenarioProgramPrim(pub String);
 /// A named overlap **trigger zone** (geofence) — the discrete-event twin of a
 /// continuous port signal.
 ///
-/// Stamped by the USD loader (`lunco-usd-avian`) on a prim carrying
-/// `custom string lunco:triggerZone = "<name>"` (alongside an avian `Sensor` +
-/// collider shape). `lunco-mobility`'s collision bridge fires
-/// `enter:<name>` / `exit:<name>` [`TelemetryEvent`]s (payload = the entrant's
-/// gid) when a body crosses the volume; scenarios react in rhai via
-/// `wait_for("enter:<name>")` / `entered_zone(evt, "<name>")` — no per-tick
-/// distance polling, detection happens in avian.
+/// Stamped by the USD loader (`lunco-usd-avian`) on a prim applying
+/// `LunCoTriggerZoneAPI`, alongside an avian `Sensor` and collider shape. Every
+/// Avian sensor transition emits generic `SENSOR_ENTER` / `SENSOR_EXIT` events
+/// keyed by sensor GID and carrying the moving body's GID. A non-empty
+/// `lunco:triggerZone` token additionally emits `enter:<name>` / `exit:<name>`
+/// [`TelemetryEvent`]s, so authored route policy can use named geofences when
+/// that label is part of its contract.
 ///
 /// Decouples the event/signal NAME from the entity's `Name` (its USD path) so
 /// zone names stay short and stable. Lives in `lunco-core` so the loader and the

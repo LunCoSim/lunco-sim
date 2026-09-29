@@ -112,8 +112,9 @@ fn on_tick(me, ctx) {
         this.rcs_activity = max(rcs_pos_activity, rcs_neg_activity);
         this.rcs_full_length = max(rcs_pos_length, rcs_neg_length);
         this.rcs_length_fraction = max(rcs_pos_fraction, rcs_neg_fraction);
-        let zero = cmd("ReleaseControl", #{
+        let zero = cmd("SetPorts", #{
             target: this.lander,
+            writes: [["external_throttle", 0.0], ["yaw", 0.0]],
         });
         this.zero_command_ok = zero.ok;
         this.phase = 1;

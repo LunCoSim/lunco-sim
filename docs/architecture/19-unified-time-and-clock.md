@@ -19,10 +19,19 @@ The live transport exposes one bounded ladder: `0.1x, 0.25x, 0.5x, 1x, 2x,
 world. The fixed timestep does not change, so a higher rate performs more
 completed physics ticks per rendered frame.
 
-`TimeTransport` is projected onto Bevy's virtual clock before the fixed loop.
-After that loop drains its admitted ticks, `WorldTime` is published from the
-latest completed `SimTick`. Its mission seconds, elapsed seconds, and epoch are
-derived from `MissionClock`; no consumer accumulates its own calendar time.
+`ClockProjectionSet` projects `TimeTransport` and causal holds onto Bevy's
+virtual clock in `First`, before `TimeSystems` samples the next delta.
+`SimulationAdmissionSet` is the `PreUpdate` boundary after lifecycle and
+readiness owners publish their current holds. The fixed runner checks admission
+before each complete `FixedMain` cycle; if a hold appears during a cycle, that
+cycle finishes and the remaining fixed time stays in `Time<Fixed>::overstep`
+until admission resumes. Completed fixed elapsed time plus pending overstep
+equals the duration admitted to the fixed clock: each completed cycle moves one
+fixed timestep from overstep into elapsed time. A hold retains the pending
+balance without changing either clock value.
+After the runner, `WorldTime` is published from the latest completed
+`SimTick`. Its mission seconds, elapsed seconds, and epoch are derived from
+`MissionClock`; no consumer accumulates its own calendar time.
 `SetMissionEpoch` re-anchors the calendar at the current tick without creating
 another running clock.
 
@@ -59,16 +68,21 @@ transition. One-shot policy inspection uses its separate
 
 Until the selection is installed, `SceneTimeState` holds the physical fixed
 loop and gates USD time-sample animation, celestial placement/presentation, and
-USD DEM terrain construction. Applying the selection resets `SimTick`, the
-mission calendar, and clock-domain samples. In the following `PreUpdate`, the
-terrain bridge resolves authored DEM prims and the simulation assembly records
-their exact progress holds before `TimeSpineSet` can admit a fixed tick. This
-includes Twin manifest scans and downloads that have not produced a terrain
-request yet. Pending DEM data, collider construction, and the browser worker's
-full result keep `SimTick`, Rhai simulation hooks, Modelica, and Avian held
-while render and UI schedules continue. Physics readiness then covers
-fixed-step body and joint admission.
-`ResetTime` uses the retained selection and never invokes the policy. This
+USD DEM terrain construction. Applying the selection reanchors the mission
+calendar at the current global `SimTick` and installs the selected scene epoch;
+it does not reset `SimTick` or `Time<Fixed>`. A replacement scene therefore
+starts its local mission time at zero while every fixed-cycle consumer retains
+the same monotonic tick history. The clock-domain sample history is cleared at
+this boundary. In the following `PreUpdate`, the terrain bridge resolves
+authored DEM prims and the simulation assembly records their exact progress
+holds before `SimulationAdmissionSet`. This includes Twin manifest
+scans and downloads that have not produced a terrain request yet. Pending DEM
+data, collider construction, and the browser worker's full result keep `SimTick`,
+Rhai simulation hooks, Modelica, and Avian held while render and UI schedules
+continue. Physics readiness then covers fixed-step body and joint admission.
+
+The retained scene-time selection is applied directly at the typed
+`ApplySceneTimeSelection` boundary and never invokes the policy again. This
 keeps a replacement scene from consuming the outgoing scene's epoch while its
 assets and projections are still arriving. A missing epoch warns when celestial
 sources are present; an invalid `LunCoEpochAPI` value always warns. Both select
@@ -257,7 +271,17 @@ the observed Bevy Compute pool width. `clock_snapshot()` exposes
 absent profile or unavailable pool raises a runtime fault. A one-thread Compute
 profile controls one source of scheduling variation. It is not a verdict that
 physics or the whole simulation is deterministic, and it does not constrain IO
-or AsyncCompute.
+or AsyncCompute. The snapshot also reports fixed and physics clock deltas and
+elapsed time, pause state, and the active `PhysicsHolds` reasons so an authored
+test can check whether physics advanced at the expected fixed boundary. A
+scenario's `FixedUpdate` callback runs before that tick's Avian
+`FixedPostUpdate` step, so `physics_elapsed_s` must equal
+`(sim_tick - 1) * fixed_dt_s` there. A hold or coupling barrier can clear
+`physics_dt_s` when it pauses the clock; that sampled delta is not a
+physics-cycle counter. Use elapsed-time conservation to validate completed
+physics cycles. The production replay gate accepts clock arithmetic within
+`1e-9` seconds and requires exact equality (`numeric_tolerance=0`) for serialized
+state traces across runs.
 
 `RuntimeCycleSet` supplies ordering vocabulary, not an active clock sample or
 an independent cadence driver. Every system and callback must use the clock

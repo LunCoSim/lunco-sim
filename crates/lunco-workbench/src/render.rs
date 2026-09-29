@@ -279,6 +279,19 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             TabId::Singleton(id) => id,
             TabId::Instance { kind, .. } => kind,
         };
+        // Keep one named child zone per visible panel so a slow workbench
+        // frame can be attributed to its UI owner in Tracy.
+        let panel_span = match *tab {
+            TabId::Singleton(id) => {
+                bevy::log::info_span!("workbench_panel_render", panel = %id.as_str())
+            }
+            TabId::Instance { kind, instance } => bevy::log::info_span!(
+                "workbench_panel_render",
+                panel = %kind.as_str(),
+                instance
+            ),
+        };
+        let _panel_span = panel_span.enter();
         publish_panel_anchor(self.world, panel_id, panel_rect);
 
         // Publish the active tab's authoritative screen rect before rendering
@@ -3432,7 +3445,7 @@ mod tests {
         plan.center = PerspectiveSlotPlan::new().single(Some(PanelId("viewport")));
         plan.right_inspector =
             PerspectiveSlotPlan::new().stacked([PanelId("inspector")], [PanelId("spawn")]);
-        layout.apply_perspective_plan(plan);
+        layout.apply_perspective_plan(PerspectiveId("test"), plan);
 
         let leaves: Vec<Vec<TabId>> = layout
             .dock
@@ -3463,7 +3476,7 @@ mod tests {
         plan.center = PerspectiveSlotPlan::new().single(Some(PanelId("viewport")));
         plan.right_inspector =
             PerspectiveSlotPlan::new().stacked([PanelId("inspector")], [PanelId("spawn")]);
-        layout.apply_perspective_plan(plan);
+        layout.apply_perspective_plan(PerspectiveId("test"), plan);
 
         layout.register(DockPanel(PanelId("entities")));
         layout.register(DockPanel(PanelId("telemetry")));
@@ -3844,7 +3857,7 @@ mod tests {
         let mut layout = WorkbenchLayout::default();
         let mut plan = PerspectiveLayoutPlan::new();
         plan.center = PerspectiveSlotPlan::new().tabs([PanelId("a"), PanelId("b")]);
-        layout.apply_perspective_plan(plan);
+        layout.apply_perspective_plan(PerspectiveId("test"), plan);
         assert_eq!(layout.center, vec![PanelId("a"), PanelId("b")]);
     }
 
@@ -3854,7 +3867,7 @@ mod tests {
         let mut plan = PerspectiveLayoutPlan::new();
         plan.center = PerspectiveSlotPlan::new().tabs([PanelId("code"), PanelId("diagram")]);
         plan.active_center_tab = Some(1);
-        layout.apply_perspective_plan(plan);
+        layout.apply_perspective_plan(PerspectiveId("test"), plan);
         assert_eq!(layout.active_center_tab, 1);
     }
 
@@ -3864,7 +3877,7 @@ mod tests {
         let mut plan = PerspectiveLayoutPlan::new();
         plan.center = PerspectiveSlotPlan::new().tabs([PanelId("x")]);
         plan.active_center_tab = Some(2);
-        layout.apply_perspective_plan(plan);
+        layout.apply_perspective_plan(PerspectiveId("test"), plan);
         assert_eq!(layout.active_center_tab, 0);
     }
 }

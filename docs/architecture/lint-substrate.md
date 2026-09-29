@@ -185,16 +185,16 @@ planes are explicit—lint is not run on load or every physics tick.
 
 ### Projected port-owner diagnostics
 
-The live `RunLint` path also performs a read-only pass over the already projected
-entities. It asks the shared `PortRegistry` for each entity's distinct runtime
-owners, groups duplicate public names by access direction, and appends a
-structured `warn` finding with rule `port-owner-collision` to `LintReport` (or
-the document-scoped report). The finding includes the composed entity path,
-each owner source/domain/backend, its `inputs:`/`outputs:` property path, and
-the actual registry precedence used by `write_port` and the read operations.
-Repeated inspection views from one owner are deduplicated; different backends
-remain visible. Input, output, and bidirectional collisions are reported on the
-access side that is ambiguous, and do not change routing or make lint fail.
+The live `RunLint` path also projects the already resolved owners from the
+shared `PortRegistry` into `runtime_port_collisions` facts. The authored
+`lint.usd` rule emits a structured `error` finding with rule
+`port-owner-collision` to `LintReport` (or the document-scoped report). It names
+the composed entity, each owner's `inputs:`/`outputs:` property path and source,
+and the actual registry precedence. Repeated inspection views from one owner
+are deduplicated; different backends remain visible. Input, output, and
+bidirectional collisions are reported on the ambiguous access side and make
+the lint report fail. Resolve each collision at the authoring boundary before
+relying on the ambiguous port.
 
 The repair is made at the authoring boundary: one semantic public port name has
 one authoritative owner. Rename or remove the duplicate (for example, use
@@ -319,7 +319,7 @@ merely **wrong** — `error` severities join `errors`, everything else joins
 | `joint-drive-negative-damping` | error | a drive has negative damping (or an implicit drive would receive a negative damping ratio) and injects energy |
 | `invalid-gear-drive` | error | a `PhysxPhysicsGearJoint` angular drive has values the canonical USD-sim reader refuses to install |
 | `invalid-network-synthesizer` | error | the composed `CollectionAPI:components` members have incompatible domain roles and runtime cannot select an owner |
-| `port-owner-collision` | warn, live `RunLint` | one composed entity exposes the same public port name through multiple runtime owners; routing still follows registry precedence, so the owners need distinct names |
+| `port-owner-collision` | error, live `RunLint` | one composed entity exposes the same public port name through multiple runtime owners; routing follows registry precedence, so the owners need distinct names |
 | `connection-source-path-invalid` | error | a connection source is not a valid USD property path |
 | `connection-source-prim-missing` | error | the source prim is absent from the composed stage |
 | `connection-source-property-missing` | error | the source property is absent and no runtime provider owns the source prim |

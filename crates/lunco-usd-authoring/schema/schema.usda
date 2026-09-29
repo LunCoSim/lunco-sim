@@ -1063,18 +1063,22 @@ class "LunCoTriggerZoneAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = """Marks a prim's geometry an overlap-only static sensor volume — the
-    physics loader (lunco-usd-avian) gives it a static collider and a `Sensor`,
-    so it detects overlaps and blocks nothing."""
+    doc = """Applying this API marks a prim's geometry as an overlap-only static
+    sensor volume. The physics loader (lunco-usd-avian) gives it a static
+    collider and a `Sensor`, so it detects overlaps and blocks nothing. The
+    optional trigger-zone token labels named geofence events; it does not opt
+    the prim into sensor behavior."""
 )
 {
     token lunco:triggerZone = "" (
-        doc = """The zone's name, reported with its overlap events. Non-empty IS
-        the opt-in; empty means no trigger zone.
+        doc = """Optional name for this sensor's geofence events. When non-empty,
+        the physics runtime also emits `enter:<zone>` / `exit:<zone>` events.
+        Empty means generic sensor events only; applying LunCoTriggerZoneAPI is
+        what enables overlap sensing.
 
-        `token`: the name is an IDENTIFIER — it is compared (`enter:<zone>` /
-        `exit:<zone>` event matching in rhai), never presented as prose. Open
-        vocabulary — a scene names its own zones — so no `allowedTokens`."""
+        `token`: the name is an IDENTIFIER — it is compared in Rhai, never
+        presented as prose. Open vocabulary — a scene names its own zones — so
+        no `allowedTokens`."""
     )
 }
 

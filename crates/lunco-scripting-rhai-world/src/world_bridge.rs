@@ -4556,8 +4556,17 @@ pub fn tick_rhai_scenarios(world: &mut World) {
     );
 }
 
-/// Exclusive system (Update while simulation time is paused): deliver scenario
-/// startup and queued discrete events without running fixed-step behavior.
+/// Exclusive system (PreUpdate): admit scenario startup before the time spine
+/// releases the first fixed tick.
+pub fn start_ready_rhai_scenarios(world: &mut World) {
+    lunco_scripting::scenario::ScenarioDriver::<RhaiScenarioRuntime>::run_startup(
+        world,
+        ScriptLanguage::Rhai,
+    );
+}
+
+/// Exclusive system (Update while simulation time is paused): deliver queued
+/// discrete events without running fixed-step behavior.
 pub fn tick_rhai_scenarios_while_paused(world: &mut World) {
     lunco_scripting::scenario::ScenarioDriver::<RhaiScenarioRuntime>::run_without_simulation_tick(
         world,

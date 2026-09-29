@@ -1,6 +1,6 @@
 # Handover: deterministic runtime work
 
-**Prepared:** 2026-09-27
+**Prepared:** 2026-09-28
 **Workspace:** `/home/rod/Documents/luncosim-workspace/lunar-soil`
 **Branch:** `codex/lunar-soil`
 **D3/D9 physical-input acceptance commit:** `b1747728e`
@@ -8,7 +8,7 @@
 **D9 session-record validation commit:** `d4937baff`
 **D9 archive feature commit:** `935a527322bc9ab8c753920aa1e31ee7cf1059ca`
 **D9 archive merge commit:** `61737e56e645ab58f3b033c5e2968c0bc119dc75`
-**Latest observed `origin/main` before this handover refresh:** `6b8258edf`
+**Latest observed `origin/main` before this handover refresh:** `79b3546c1`
 
 The D9 session-input boundary at `4acf09915` and its 2026-09-27 acceptance,
 direct-command, record-validation, and archive-codec commits are integrated on
@@ -23,10 +23,91 @@ fast-forwarded across `main`, `codex/lunar-soil`, `tutorials`, `usd`, and
 documentation edits remain in their worktrees; the tutorials backup stash
 `d22f8f25d` and earlier recovery stashes remain intact. The USD worktree is
 clean. A Tracy build was active in optimization at the last check and was not
-interrupted. The last observed `origin/main` was `6b8258edf`; its reflog shows
+interrupted. At that earlier handover, the last observed `origin/main` was
+`6b8258edf`; its reflog shows
 an `update by push` during this continuation, but this agent did not run a
 push. The evidence below stays tied to the individual builds and source
 revisions named in each section.
+
+**Latest local integration (2026-09-28):** merge commit `544c2991e` integrates
+`7170e77f7` into local `main` at `80f28c140`; the merged GUI runtime advertised
+a settled schema of 242 commands and the command reference was regenerated in
+`8931cd0ab`. Local `main` then advanced with the optimization telemetry
+projection commit `bb4eab1b5`. The task branch added local port-inspector input
+admission in `382db427a` and fast-forwarded onto `main`. Main then merged
+optimization commit `b68da02ba` as `52a5922c3`, reusing one canonical owner
+reader and child snapshot for control and program projection. The task branch
+fast-forwarded to that merge, then `e648adef6` fixed the shader-contract Rhai
+gate's unsigned `uniform_size` comparison and was fast-forwarded onto `main`.
+At that checkpoint both branches pointed to `e648adef6`. The
+post-`382db427a` production build
+`cargo build -p lunco-luncosim --bin luncosim --features tracy -j 4` passed.
+The owned API session used PID 307181 on port 4733 and exited through API
+`Exit`; the port is closed. At that checkpoint local `main` was clean and 13
+commits ahead of the observed `origin/main` at `79b3546c1`; no push was made.
+
+**Continuation integration (2026-09-28):** `main` advanced by 20 commits after
+`e648adef6`; `codex/lunar-soil` was fast-forwarded to `54ad69a32`
+(`perf(ui): reduce entity tree snapshot scans`). The task handover draft and
+untracked `scripts/perf/` capture were preserved. The integrated delta includes
+off-thread engine/Twin dataset discovery with Twin results committed in scan
+order, bounded Twin-policy preparation held through lifecycle activation, and
+stable path-ordered USD child admission under count/time budgets. The relevant
+async owners and updated architecture docs were reviewed; `git diff --check`
+passed and `python3 scripts/validate_skills.py` passed all 43 skills. No source
+tests or runtime acceptance were run in this continuation. Local `main` is
+clean and both local branches point to `54ad69a32`. At the start of this
+continuation local `main` was 33 commits ahead of `origin/main`; during review,
+the shared reflog recorded `origin/main` advancing to `54ad69a32` by an
+`update by push` at 07:07 +02:00. This agent did not run a push. The task checkout has no
+`target/` directory and only 2.0 GiB free, while the sibling `main/target/` is
+25 GiB. Do not clean that sibling target. At the last process check, a separate
+`main` session (PID 1070084, port 49733) and a `terrain` session (PID 1071139,
+port 49732) were active and left untouched; recheck session ownership before
+runtime work.
+
+**Follow-up integration (2026-09-28):** local `main` advanced four commits
+from `54ad69a32` to `5ac91bf93` and `codex/lunar-soil` was fast-forwarded to
+that head. The commits coalesce celestial projection work, keep USD telemetry
+progress in its owner index, derive entity-tree ancestry only for named nodes,
+and read initial DEM bridge facts from the prepared projection plan. The task
+branch is now four commits ahead of `origin/main`; no push was run. The incoming
+range and integrated worktree pass `git diff --check`. These changes have not
+been cargo-tested or runtime-validated in this continuation. The task target is
+still absent and free space fell to 1.1 GiB; `main/target/` remains 25 GiB and
+must not be cleaned. The latest process scan found no Cargo, luncosim, or Tracy
+capture process. Optimization, USD, tutorials, and terrain worktrees have
+unrelated dirty files and were left untouched.
+
+**Continuation integration (2026-09-28):** local `main` advanced one commit to
+`9b86bf8ff` (`perf(camera): queue camera path discovery`), and the task branch
+was fast-forwarded. The change queues inserted USD prim identities and stage
+generation/asset invalidations, then retries candidates with pending runtime
+prerequisites. The camera-path math tests are present, but this merge has not
+been runtime-validated in this checkout. `cargo test -p lunco-usd-bevy-camera
+-j 4` passed all 46 tests. The `camera_path` tests cover interpolation and aim
+blending only; the repository has no authored scene fixture with
+`lunco:path:camera`, so the new discovery and retry lifecycle remains without
+runtime acceptance. Local `main` and the task branch are now five commits ahead
+of `origin/main`; no push was made.
+There are 31 GiB free and this checkout has no `target/`, so no cleanup was
+needed. A Cargo build is active in the separate USD worktree (PID `1530551`),
+and the terrain app remains active on port `49732` (PID `1440998`); neither was
+controlled or stopped. Existing unrelated changes in optimization, tutorials,
+and terrain worktrees remain untouched.
+
+**Continuation integration (2026-09-28):** local `main` advanced one commit to
+`90fa387fe` (`perf(usd-sim): select bounded prim work prefix`), and the task
+branch was fast-forwarded. The owner now selects 32 prims before sorting the
+selected prefix. Review lead: equal authored prim paths are ordered by Bevy
+`Entity` bits; the same path can occur in distinct loaded stages, so check
+whether a stable stage/scene identity should qualify this ordering before
+claiming cross-run determinism. No behavior regression has been demonstrated.
+A production Cargo build is active in the separate terrain worktree (PID
+`1647373`), and the terrain app remains on port `49732` (PID `1440998`); neither
+was controlled. This checkout has a 2.6 GiB target and 23 GiB free, so no
+cleanup is needed. The task branch and local `main` are six commits ahead of
+`origin/main`; no push was made.
 
 ## Active user objective
 
@@ -491,6 +572,213 @@ typed queues before that is safe.
   does not assemble active model source with its full compile dependency
   closure. Baseline collection, durable storage, and playback remain open.
 
+The 2026-09-28 continuation confirmed that no session-wide baseline collector
+or initial authoritative-state snapshot has been added. The next replay step is
+to map the application/runtime readers for the existing USD, Rhai, SysML,
+Modelica, build, physics, and identity owner facts into one fail-closed typed
+baseline boundary, then connect that baseline to capture/export before adding
+playback. Do not infer active script roots from the global registry or treat a
+solver configuration snapshot as its initial live state.
+
+The owner audit identifies these inputs: `UsdStageAsset.recipe` supplies the
+base `StageRecipe` closure, while `CanonicalStage::generation()` distinguishes
+later live authored edits; a recipe-only hash cannot stand in for the current
+authored document after that generation advances. `SysmlAnalysis::content_closure()`
+and `RhaiScenarioRuntime::active_content_closure(entity)` already provide
+source-owned exact closures. `ModelicaModel` retains the compiled source
+generation, solver configuration, current variables, inputs, and model time,
+but not a complete initial Rumoca stepper state or the exact assembled compile
+closure. `PhysicsComputeProfile` records pool width as an execution profile,
+not physics state or a determinism guarantee. `BuildIdentity` supplies the
+host's product/source stamp. The collector must join these through the active
+scene and stable entity identities, and fail if any current owner snapshot is
+missing or stale.
+
+**Replay baseline boundary audit (2026-09-28):** `StartSessionInputCapture`
+currently begins `SessionInputStream` using only its record limit, and archive
+version 3 contains validated input records without a baseline. Keep
+`lunco-core-session` domain-agnostic: it should own the typed baseline value,
+capture lifecycle, validation, and archive framing, while the application/domain
+composition gathers facts from each authoritative owner. Capture must bind the
+snapshot to the same committed scene generation and simulation tick as its
+first record; a cached closure or solver profile is insufficient if its source
+owner has changed. The current Modelica snapshot is still missing initial
+stepper state, so a fail-closed collector cannot yet claim complete replay
+readiness. Do not start playback until the archive round-trips the baseline and
+the production path verifies restore before applying the first ordered input.
+
+At the prior process check, PID `1440998` was running the production binary
+from the separate `/home/rod/Documents/luncosim-workspace/terrain` checkout on
+API port `49732`; it was left untouched. This task checkout then remained at
+`9b86bf8ff`, five commits ahead of `origin/main`, with no push by this agent.
+Its `target/` was absent; `/home` had 31 GiB free.
+
+The Modelica runtime-state audit traced the live solver to the worker-owned
+`LiveStepper`. Its current adapter exposes observable `SessionState`, time,
+inputs, and reset, but no snapshot/restore contract. Rumoca's adaptive
+`SimulationSession` keeps its backend private; LunCoSim's fixed-step session
+also keeps its state vector, parameters, step index, and time origin private.
+The worker owns these steppers on its dedicated thread. A complete replay
+baseline therefore needs either a genesis-only capture contract that rebuilds
+each stepper before the first simulation tick, or solver-owner snapshot/restore
+support for every enabled backend. A list of visible variable values is not
+enough to promise same-state continuation from an arbitrary capture tick.
+
+### D27 Modelica and generic port admission continuation (2026-09-28)
+
+- Live API `SetPorts`, `ReleasePort`, and `ReleaseControl` use the shared
+  pending-input queue. Their acknowledgements return stable target, producer,
+  correlation, and next-tick admission identity. A release commits at its own
+  sequence after earlier admitted writes; every admitted write remains in the
+  queue and capture stream. Simulation-clock Rhai remains on its owning pass.
+- `ReleaseControl` and the internal `ReleaseControlInputs` lifecycle event
+  clear local `PortHolds` at their ordered commit. Neither writes endpoint
+  values. Twin policy owns stop setpoints and expresses them as named
+  `SetPorts` writes. `ReleasePort` removes only its selected hold at the
+  ordered commit and does not change the underlying value.
+- Possession authority changes do not emit lifecycle input releases or rewrite
+  endpoint simulation inputs. The production gate
+  `session_authority_release_preserves_ports.rhai` checks that claim/release
+  keeps nonzero endpoint inputs and creates no lifecycle-release record.
+  Connection loss queues `ControlInputsReleased` for the next fixed tick; the
+  session stream captures it there when recording is active.
+- The current production acceptance is
+  `scripts/api/test_session_input_admission.py`, including the Rhai release
+  verifier and the authority-release preservation scenario. Its last recorded
+  result is from an earlier production binary; rerun it after the current
+  co-simulation source integration. The current physics scenario also checks
+  positive finite mass/inertia across startup ticks so unintended endpoint
+  writes surface through a production verdict.
+- Unclassified direct `SetPorts`, `ReleasePort`, and `ReleaseControl` events
+  without stable producer identity still use the immediate owner path and are
+  not captured. This remains an open replay boundary.
+- After integration, `cargo build -p lunco-luncosim --bin luncosim --features
+  tracy -j 4` passed on local `main`. The merged GUI runtime published the
+  settled 242-command schema; `docs/commands-reference.md` was regenerated from
+  that response and committed as `8931cd0ab`.
+- Live port-inspector `SetPorts` and `ReleasePort` events now use
+  `PanelCtx::trigger_command` with `CommandOrigin::LocalUser` and the active
+  `LocalSession`. The origin survives the workbench's deferred render queue;
+  the cosim owner admits stable live scene targets through `PendingSessionInputs`.
+  Editor-only targets without `GlobalEntityId` keep their immediate path. If the
+  local session resource is absent, the two controls are disabled with a visible
+  status message.
+- `cargo test -p lunco-workbench-core
+  deferred_panel_command_retains_and_restores_its_user_origin -j 4` passed
+  (1 test); `cargo test -p lunco-core-session
+  local_user_input_uses_the_local_session_as_its_producer_identity -j 4` passed
+  (1 test). Focused `cargo check` passed for workbench core, core session,
+  cosim, controller, the USD/cosim API adapter, and edit UI. Skill validation
+  passed with 43 skills.
+- After `382db427a` integration, the production API gate
+  `scripts/api/test_session_input_admission.py` passed against that main binary
+  on owned port 4734: `TESTS_OK 13` for Modelica and
+  port admission, then `TESTS_OK 7` for port/control release. The observed
+  admission ticks were 28 and 32, with release ticks 46 and 47. Process 459422
+  exited through API `Exit`, and the port closed.
+- The latest main delta `b68da02ba` reports a passing focused
+  `cargo +nightly-2026-02-27 check -j 4 -p lunco-usd-bevy-authored-runtime`.
+- The authored `shader_asset_contracts` scene exercises its initial
+  `LunCoProgramAPI` owner on the merged runtime. Its Rhai assertion now converts
+  `ValidateAsset.uniform_size`'s `UInt` explicitly for the bounded 256-byte
+  comparison. The production gate passed with `TESTS_OK 57` in 62 ticks using
+  the task asset root and the `52a5922c3` binary. The fixture still logs its
+  missing-`DirectionalLight` diagnostic. No post-change performance profile
+  was obtained.
+- The task checkout `target/` was cleaned again after reaching 4.3 GiB with
+  1.9 GiB free; Cargo removed 4.6 GiB. The existing `main/target/` and shared
+  Cargo caches were preserved for the post-integration production build.
+- This increment does not add archive playback or a baseline manifest. Capture
+  for unclassified direct port events, whole-session cross-domain replay, and
+  performance evidence remain open. No production GUI session was launched for
+  this local-panel path.
+
+### Main fast-forward and deterministic continuation (2026-09-28)
+
+- This checkout was fast-forwarded from `cb10b4472` to `85e5d433d`, the fetched
+  `origin/main` head. In-progress deterministic changes were preserved in a
+  local stash and reapplied; the stash remains until the merged work is fully
+  reviewed and validated.
+- `main`'s current possession contract keeps session-authority release
+  independent from endpoint input values. Keep that contract and its authored
+  production regression while continuing fixed-tick ordering and replay work.
+- Control release clears only endpoint-local manual holds and leaves endpoint
+  values unchanged. Authored policy writes an explicit `SetPorts` stop setpoint
+  when required. The physics Rhai gate checks that mass and inertia remain
+  finite. The production API release gate and deterministic physics-profile
+  comparison still need to run on the integrated source tree.
+
+### D28 USD simulation preview admission continuation (2026-09-28)
+
+- Local `main` advanced from `90fa387fe` to `456d2e736`; the task checkout was
+  fast-forwarded to that head before this change. Commit `106031a97` excludes
+  preview-only prims from the 32-row simulation-work prefix. The selector
+  expands only as needed to find 32 non-preview candidates, caches ancestry
+  checks across expansion, and marks preview rows processed before topology
+  preparation.
+- `cargo test -p lunco-usd-sim pending_sim_work_tests -j 4` passed all four
+  owner tests. This covers preview-heavy selection, bounded ancestry checks,
+  work lifecycle edges, and teardown. No production editor stress fixture with
+  more than 32 preview prims was run; D28 records that acceptance gap.
+- After review, commit `106031a97` was fast-forwarded into local `main`. The
+  task and main worktrees now share that head and are eight commits ahead of
+  `origin/main` at `54ad69a32`; no push was made. Only the simulation owner and
+  open-contract row were committed. The handover update and `scripts/perf/`
+  capture remain uncommitted.
+- This checkout has a 4.2 GiB `target/` and 8.6 GiB free; no cleanup was needed.
+  Cargo is idle. A separate Tutorials app (PID `1593496`, API port `4158`)
+  remains active and untouched. No task-owned API session was launched.
+
+
+## Current production acceptance update (2026-09-28)
+
+- `codex/lunar-soil` fast-forwarded from `85e5d433d` to local `main` at
+  `651487c8d`, integrating the bounded terrain and telemetry UI work. No push
+  was made. The separate `main` worktree remains dirty in 30 files, with 12
+  paths overlapping this task; preserve it and do not fast-forward its checked
+  out branch until those edits are handled by their owner.
+- This checkout alone was cleaned after measuring 8.8 GiB in `target/` and
+  651 MiB free; Cargo removed 10.2 GiB. The current integrated production build
+  passed: `cargo build --locked -j 4 -p lunco-luncosim --bin luncosim`.
+- `scripts/compare_deterministic_startup_dependencies.py` passed four
+  production runs at Compute widths 1 and 24. Every sensor scenario's
+  `on_start`/first `on_tick` boundary was 0/1 and the first-tick actor, scene,
+  IMU, altimeter, and contact snapshot matched with digest
+  `92753352336a37dd97ed30837833bba97c64db68ef0649b8f1e29727583999da`.
+- `scripts/compare_deterministic_physics_profiles.py` passed all 12 production
+  runs and both gates, `DETERMINISTIC_SCENARIO_MATRIX_OK` and
+  `DETERMINISTIC_PHYSICS_PROFILES_OK`. The 4/8/20 rover fixtures matched at
+  42 physics samples across the four shared authored lanes. Repeated and
+  cross-profile 20-rover traces matched at Compute widths 1 and 24: six
+  full-roster checkpoints, 42 physics snapshots, 280 full Modelica system
+  snapshots across authored ticks 0, 1, 10–20, and 180, plus 80 articulated
+  body records at ticks 1, 2, 11, and 80. Digest:
+  `c0b6cfc74ed7a8b33c7fa4b00dfd3ba1e1637d585cf6a16f0c117acdc9473dc6`.
+  The comparator derives full Modelica samples from the Rhai-authored trace
+  schedule; physics-only ticks do not imply a full Modelica snapshot.
+- The production `port_owner_collision` Rhai scene passed 11 assertions in two
+  ticks and emitted one `PORT_OWNER_COLLISION` error naming both input owners
+  and registry precedence. The rule is Rhai policy over typed runtime registry
+  facts.
+- `scripts/api/test_session_input_admission.py` passed on the integrated
+  production binary on owned port 46372: `TESTS_OK 13` for Modelica and
+  SetPorts admission, `TESTS_OK 10` for ordered ReleaseControl, and `TESTS_OK 6`
+  for authority release. Process 996863 exited through API `Exit`; the port
+  closed. ReleaseControl clears endpoint-local input holds and leaves values
+  unchanged; authored policy writes explicit stop setpoints through SetPorts.
+- `cargo test --locked -j 4 -p lunco-time` passed all 53 tests, including
+  startup hold, late progress admission, retained fixed-time, and scene epoch
+  installation without resetting the global fixed cycle. `python3
+  scripts/validate_skills.py` passed all 43 skills; Python syntax compilation
+  and `git diff --check` passed. The whole-session baseline, durable replay,
+  controlled opposite async completion order, cross-machine floating-point
+  behavior, and production performance acceptance remain open.
+- A follow-up app relink exceeded the remaining disk space after the test-profile
+  outputs had been built. The linker reported disk full. This checkout's target
+  was cleaned again, removing 9.7 GiB; the shared Cargo cache and sibling targets
+  were preserved. There is currently no `target/debug/luncosim`; rebuild in this
+  checkout before another production run.
+
 ## Runtime and repository constraints
 
 - Do not edit authored USD through shell or patch tools. Use the live USD
@@ -498,8 +786,119 @@ typed queues before that is safe.
 - Runtime checks must use this checkout's production binary on an explicit free
   port. Verify PID, executable, working directory, and listener before control;
   stop only the owned app through API `Exit`.
-- Preserve unrelated edits in the optimization worktree and the backup stash.
-  Do not reset, repeat Cargo cleanup, or push. The earlier package-scoped Cargo
-  cleanup removed only this checkout's selected build outputs; shared Cargo
-  caches and source were preserved.
+- Preserve unrelated edits in the optimization worktree and existing stashes.
+  Do not reset or push. The task checkout's `target/` was cleaned after checking
+  its 13 GiB size and 2.1 GiB free space; Cargo removed 14.1 GiB of local build
+  outputs. A later task-local cleanup removed 4.6 GiB after that target grew to
+  4.3 GiB. Source, shared Cargo caches, and sibling targets were preserved.
 - Report source, scene-test, live API, and visual evidence as distinct claims.
+- Performance profiling remains open. On 2026-09-28, independent Apollo
+  sessions (PIDs 464419 and 466277, API ports 43453 and 4158) were active in
+  the integrated `main` checkout; both were left untouched. Tracy capture PID
+  464318 on port 8086 was active during an accidental `--version` probe that
+  briefly launched another Tracy-enabled app. Treat that capture as potentially
+  contaminated. The probe process was stopped by its exact PID. Both Apollo
+  sessions had exited by the final check; a separate terrain session (PID
+  297685, API port 47127) remained active at about 187% CPU and was left
+  untouched. No clean FPS window or new Tracy analysis was obtained; recheck
+  ownership and build state before the next profiling run.
+
+## Current continuation after main fast-forward (2026-09-28)
+
+- `codex/lunar-soil` was fast-forwarded from `8cc677173` to local `main` at
+  `63af9676c`. Local `main` is ten commits ahead of `origin/main` at
+  `2581dd81b`; no push was made. The existing handover edit and untracked
+  `scripts/perf/` capture were preserved.
+- The integrated USD simulation admission owner passed
+  `cargo test -p lunco-usd-sim pending_sim_work_tests -j 4` (10 passed). The
+  same compiled test binary's `dynamic_activation_tests` filter passed all five
+  tests. `git diff --check` passed after the integration review.
+- `cargo clean` in this checkout removed 2.5 GiB of its `target/` outputs after
+  the focused tests. The final check showed 8.8 GiB free and no `target/` here;
+  sibling worktree targets and shared Cargo caches were left intact. No
+  production binary build or task-owned API session was run after the merge.
+- The general workflow has deterministic fixed-tick admission and ordering for
+  admitted scene state and captured input, with same-build cross-Compute
+  production stress evidence documented under D4. It is not yet a complete
+  replay workflow: the session archive lacks a composite owner baseline and a
+  playback consumer, and several authoritative commands remain uncaptured.
+- Baseline continuation remains the next replay gap. The active Modelica worker
+  exposes values/time/reset but not a portable solver checkpoint; both Rumoca's
+  adaptive stepper state and LunCoSim's fixed-step state vector/index are
+  private. Do not represent visible variables or solver settings as a complete
+  restorable state. Decide and implement either an explicit genesis-only
+  capture boundary or solver-owner snapshot/restore before claiming replay.
+- Current source still uses `@peer host|client|both` for process-role routing;
+  `2ec8aaa3f` is the later contract after the earlier `@run-on` rename. Keep
+  process role distinct from Rust runtime scope, cycle, and clock.
+
+## Domain-network startup admission continuation (2026-09-29)
+
+- Commit `d2f7de95c` adds a root-scoped `UsdDomainProjection` progress hold for
+  initial USD Modelica network discovery. The hold covers member-source
+  resolution, synthesis, and generated `SimComponent` publication; the binding
+  epoch stays open while its port surface is unknown. At the
+  `SimulationProgressAdmissionSet` boundary the domain hold releases only once
+  the component is present, while the existing Modelica compile hold overlaps
+  it. This fixes the 4-rover startup case that previously emitted unresolved
+  connection-binding warnings before its generated interfaces existed.
+- `cargo check --locked -j 4 -p lunco-usd-sim-domain -p lunco-usd-sim-cosim`
+  passed. `cargo build --locked -j 4 -p lunco-luncosim --bin luncosim
+  --no-default-features --features api-transport` passed; it reported the
+  pre-existing unused `ApiResponse` import in `lunco-api-transport`.
+- `python3 scripts/compare_deterministic_physics_profiles.py` passed both
+  production gates across the 4-, 8-, and 20-rover fixtures: 12 runs,
+  Compute widths 1 and 24, matching physics and Modelica traces, digest
+  `c0b6cfc74ed7a8b33c7fa4b00dfd3ba1e1637d585cf6a16f0c117acdc9473dc6`.
+  The 4-rover startup no longer logged connection-binding failures.
+- `python3 scripts/compare_deterministic_startup_dependencies.py` passed twice
+  after the change: four production runs, first behavior tick 1, matching
+  actor and sensor/physics snapshot across Compute widths 1 and 24, digest
+  `92753352336a37dd97ed30837833bba97c64db68ef0649b8f1e29727583999da`.
+- The task commit was fast-forwarded to local `main` at `d2f7de95c`; nothing was
+  pushed. Main's 20 non-overlapping staged user edits are restored. Ten
+  overlapping edits targeted the superseded `ControlSafeStop` value-writing
+  contract; they remain recoverable in `stash@{0}` (`2da31eca2c86f3a6861245516888e072cb590c63`)
+  rather than reintroducing that API. The separate untracked `scripts/perf/`
+  work remains untouched.
+- The task checkout's `cargo clean` removed 7.3 GiB; rebuild its production
+  binary before another runtime check. The next broad replay gap remains a
+  truthful genesis-only capture boundary or owner-supported solver snapshots;
+  the current Modelica worker does not expose portable solver checkpoints.
+
+## Incomplete USD composition policy and async ordering (2026-09-29)
+
+- `codex/lunar-soil` was fast-forwarded from `2540d231b` to local `main` at
+  `c7d991eac` (three commits); no push was made. Changes in those commits did
+  not overlap the USD policy or composition-order work. Preserve the separate
+  untracked `scripts/perf/` directory.
+- The scene lifecycle now owns required deterministic
+  `usd.scene_composition(facts: Map) -> Map`. It runs only for unresolved
+  fetched arcs after structural projection and before releasing the scene
+  simulation hold. The shipped application Rhai policy returns
+  `allow_partial`, matching the existing warning plus partial-stage default;
+  a Twin policy may return `reject_scene`. Rejection, missing policy, policy
+  fault, or malformed result tears down the partial primary stage and fails the
+  scene transition. Architecture and `author-hook-policy` guidance describe
+  the contract.
+- `cargo test -j 4 -p lunco-usd-bevy-stage
+  reverse_async_completion_keeps_authored_recipe_order_and_identity` passed.
+  It forced closure reads to finish in reverse order, verified authored-order
+  application, and compared equal `StageContentClosure` identities.
+  `cargo check -j 4 -p lunco-usd-bevy-runtime-core --lib` and
+  `cargo check -j 4 -p lunco-usd-bevy-runtime-core --tests` passed; the latter
+  reported the existing unused `mut` in `twin_projection.rs:4277`.
+- `python3 scripts/validate_skills.py`, the application policy TOML/wiring
+  check, and `git diff --check` passed. No `LUNCOSIM_BIN` or checkout
+  production binary was available. A runtime-core test build was stopped as
+  this checkout's new `target/` reached 1.8 GiB with only 2.9 GiB remaining;
+  `cargo clean` restored disk space before the successful focused checks. The
+  authored Rhai hook-policy test was not run through the production test
+  binary. A final `cargo clean` after the checks removed another 1.9 GiB and
+  left 4.0 GiB free.
+- Still open: production `LoadScene` tests exercising both Rhai allow and Twin
+  reject policies against a missing USD arc, and full AssetServer composition
+  closure acceptance. The async test covers the production ordered join helper
+  and recipe identity, not a live AssetServer source transaction. The broader
+  replay, cross-machine numeric, browser-worker, and performance gaps remain
+  open as recorded above.

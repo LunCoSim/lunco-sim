@@ -1038,6 +1038,116 @@ fn ops_since_returns_typed_op_suffix() {
     );
 }
 
+#[test]
+fn view_ops_since_source_baseline_tracks_only_the_live_view_suffix() {
+    let mut doc = UsdDocument::new(DocumentId::new(306), TINY_USDA);
+    assert!(
+        doc.view_ops_since_source_baseline()
+            .is_some_and(|ops| ops.is_empty())
+    );
+
+    let view_op = UsdOp::AddPrim {
+        edit_target: LayerId::view(),
+        parent_path: "/World".into(),
+        name: "RouteRibbon".into(),
+        type_name: Some("Xform".into()),
+        reference: None,
+        reference_prim_path: None,
+    };
+    doc.apply(view_op.clone()).unwrap();
+
+    doc.apply(UsdOp::AddPrim {
+        edit_target: LayerId::runtime(),
+        parent_path: "/World".into(),
+        name: "RuntimeOnly".into(),
+        type_name: Some("Xform".into()),
+        reference: None,
+        reference_prim_path: None,
+    })
+    .unwrap();
+    doc.restore_runtime(usda_to_data(EMPTY_USDA).unwrap());
+    doc.apply(UsdOp::SetTranslate {
+        edit_target: LayerId::root(),
+        path: "/World".into(),
+        value: [1.0, 2.0, 3.0],
+    })
+    .unwrap();
+
+    for (label, suffix) in [
+        (
+            "runtime restores and persistent edits do not consume the view suffix",
+            doc.view_ops_since_source_baseline(),
+        ),
+        (
+            "cloning a document preserves its source-relative view history",
+            doc.clone().view_ops_since_source_baseline(),
+        ),
+    ] {
+        let suffix = suffix.expect(label);
+        assert_eq!(suffix.len(), 1, "{label}");
+        assert!(
+            matches!(
+                &suffix[0],
+                UsdOp::AddPrim {
+                    edit_target,
+                    parent_path,
+                    name,
+                    type_name,
+                    reference: None,
+                    reference_prim_path: None,
+                } if edit_target == &LayerId::view()
+                    && parent_path == "/World"
+                    && name == "RouteRibbon"
+                    && type_name.as_deref() == Some("Xform")
+            ),
+            "{label}"
+        );
+    }
+
+    assert!(doc.reset_to_source(TINY_USDA));
+    assert!(
+        doc.view_ops_since_source_baseline()
+            .is_some_and(|ops| ops.is_empty()),
+        "a new source establishes a fresh empty view baseline"
+    );
+}
+
+#[test]
+fn view_ops_since_source_baseline_requires_a_snapshot_after_expiration() {
+    let mut doc = UsdDocument::new(DocumentId::new(307), TINY_USDA);
+
+    for index in 0..CHANGE_HISTORY_CAPACITY {
+        doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::view(),
+            parent_path: "/World".into(),
+            name: format!("View{index}"),
+            type_name: Some("Xform".into()),
+            reference: None,
+            reference_prim_path: None,
+        })
+        .unwrap();
+    }
+    assert_eq!(
+        doc.view_ops_since_source_baseline().unwrap().len(),
+        CHANGE_HISTORY_CAPACITY
+    );
+
+    doc.apply(UsdOp::AddPrim {
+        edit_target: LayerId::view(),
+        parent_path: "/World".into(),
+        name: "ViewAfterExpiration".into(),
+        type_name: Some("Xform".into()),
+        reference: None,
+        reference_prim_path: None,
+    })
+    .unwrap();
+
+    assert!(
+        doc.view_ops_since_source_baseline().is_none(),
+        "an incomplete source-relative view suffix requires a composed snapshot"
+    );
+}
+
 /// A rejected op neither bumps the generation nor records into the op log, so
 /// the projector never replays a no-op.
 #[test]

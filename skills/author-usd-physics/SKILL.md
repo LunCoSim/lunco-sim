@@ -26,6 +26,18 @@ schedule. Do not duplicate standard fields under `lunco:*`. Missing or invalid
 fields fail projection; they are never replaced by a target, force cap, or
 solver-resolution workaround.
 
+Startup joint topology is prepared while the shared fixed clock is held. The
+BigSpace physics bridge seeds authored body poses in `PreUpdate`; USD joints
+are projected in `JointPreparation` during `Update`, after USD simulation
+projection and before the generic `JointAdmission` owner. This phase must not
+wait for a first physics step to resolve bodies or seat a joint.
+
+Initial body admission validates raycast-wheel support footprints against the
+composed Avian collider geometry and its hit normal. It does not require a
+`LocalGravity` sample from a fixed cycle that has not been admitted yet. Keep
+authored-pose validation in lifecycle preparation; the first synchronized
+physics cycle begins only after the complete admission set is ready.
+
 For asset-level checks, the authored `assembly_audit` tool can inspect explicit
 composed joint body relationships, cardinal axes, optional local frames,
 rigid-body/joint coverage, and mass/inertia/collider manifests. Use those
@@ -467,11 +479,13 @@ Which disposition is right depends on who owns the value:
 scene-derived state and do not register it, you have added a leak.
 
 The shared physics owner clears `PhysicsHolds` and `PhysicsStepRequest` and
-restores a zero-delta `Time<Physics>` at this boundary. The time owner clears
-fixed overstep during reset, and the controller/core owners clear scene-keyed
-input and control-path state. Do not add an asset-local pause flag or carry
-step debt into the replacement scene; readiness and deliberate stepping must be
-re-authored by the incoming scene.
+restores a zero-delta `Time<Physics>` at this boundary. The time owner keeps
+`SimTick` and `Time<Fixed>` continuous across scene changes; it reanchors the
+new mission epoch at the current tick and holds fixed cycles until the new scene
+is ready. Any admitted fixed-time balance remains with that shared clock and
+advances only after its causal holds clear. The controller/core owners clear
+scene-keyed input and control-path state. Do not add an asset-local pause flag;
+readiness and deliberate physics stepping must be owned by the incoming scene.
 
 ## 5. Reading the failure modes
 

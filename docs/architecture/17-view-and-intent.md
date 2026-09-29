@@ -381,8 +381,9 @@ remote-control adapter, or another specialized controller. `ClaimControl` and
 headless/authored producers; each accepted transition emits
 `ControlAuthorityChanged`. Authority updates change who may provide manual
 input, while the co-simulation endpoint keeps its current simulation inputs.
-An explicit `ControlSafeStop` remains available for endpoint lifecycle events
-such as a disconnected controller.
+An endpoint lifecycle event such as disconnection releases local input holds
+at the next fixed tick without writing a replacement value. Twin control
+policy owns any stop setpoint and writes it explicitly through `SetPorts`.
 
 `AcquireControl` is the avatar-level composition of those primitives: its command
 validates the target's writable input surface, asks the session authority to

@@ -129,6 +129,10 @@ pub struct PendingJoint<J: Component + Clone> {
 #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct JointAdmission;
 
+/// Schedule boundary for producing typed pending-joint plans before admission.
+#[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct JointPreparation;
+
 #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
 struct JointAdmissionCommit;
 
@@ -158,6 +162,7 @@ impl Plugin for JointAttachPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(lunco_physics::DeterministicJointSolverPlugin)
             .init_resource::<JointAdmissionBatch>()
+            .configure_sets(Update, JointPreparation.before(JointAdmission))
             .add_observer(collision_filters::on_remove_joint_collision_pair);
         app.add_systems(
             Update,
