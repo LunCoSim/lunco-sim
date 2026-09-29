@@ -257,7 +257,16 @@ fn cached_plot_points(
         let build_identity = identity;
         let source = Arc::clone(source);
         let build_pixel_width = pixel_width;
+        let build_span = bevy::log::info_span!(
+            "multi_series_plot_points_build_worker",
+            identity = ?identity,
+            input_points = source.len(),
+            pixel_width = build_pixel_width,
+            log_y,
+            output_points = bevy::log::tracing::field::Empty
+        );
         cache.build = Some(AsyncComputeTaskPool::get().spawn(async move {
+            let _build_span = build_span.enter();
             let mut samples: Vec<[f64; 2]> = source
                 .iter()
                 .filter_map(|[x, y]| {
@@ -279,6 +288,7 @@ fn cached_plot_points(
                 samples = decimated;
             }
             let points: Vec<PlotPoint> = samples.into_iter().map(PlotPoint::from).collect();
+            build_span.record("output_points", points.len());
             (
                 build_identity,
                 source,

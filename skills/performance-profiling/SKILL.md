@@ -92,10 +92,16 @@ presentation cadence, transform immutable sample snapshots on the async-compute
 pool, and keep painting the last completed point buffer while the next build
 runs. `ScalarHistory::snapshot()` shares completed chunks and copies only its
 bounded open tail on the caller; flatten and decimate that snapshot on the
-worker. Auxiliary Graphs overlays should use the same snapshot cache and keep
-painting their last completed buffer while a new one is built. Key transformed
-point buffers by source identity, transform mode, and pixel width; apply line
-style while painting.
+worker. In Tracy, compare `line_plot_history_snapshot` (app-thread copy time)
+with `line_plot_series_build_worker` (worker time and input/output point
+counts); several plots can rebuild concurrently even when each panel's paint
+span is short. When live curves share an experiment plot, also inspect
+`line_plot_scalar_history_snapshot`, `line_plot_scalar_history_build_worker`,
+and `multi_series_plot_points_build_worker` to account for both history
+flattening and plot-point preparation. Auxiliary Graphs overlays should use
+the same snapshot cache and keep painting their last completed buffer while a
+new one is built. Key transformed point buffers by source identity, transform
+mode, and pixel width; apply line style while painting.
 For experiment and live-overlay plots, retain transformed `PlotPoint` buffers
 by immutable source identity, log-Y mode, and display width; build them on the
 async-compute pool and borrow them while drawing. Min-max decimate time-sorted

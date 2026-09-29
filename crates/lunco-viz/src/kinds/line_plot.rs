@@ -340,14 +340,28 @@ pub fn cached_scalar_history_points(
         .last_build_sec
         .is_none_or(|last| now - last >= PLOT_SERIES_REFRESH_INTERVAL_SEC);
     if !data_matches && cache.build.is_none() && (cache.displayed.is_none() || refresh_due) {
-        let snapshot = history.snapshot();
+        let sample_count = history.len();
+        let snapshot_span = bevy::log::info_span!(
+            "line_plot_scalar_history_snapshot",
+            signal = ?source,
+            samples = sample_count
+        );
+        let snapshot = snapshot_span.in_scope(|| history.snapshot());
+        let build_span = bevy::log::info_span!(
+            "line_plot_scalar_history_build_worker",
+            signal = ?source,
+            samples = sample_count,
+            output_points = bevy::log::tracing::field::Empty
+        );
         cache.last_build_sec = Some(now);
         cache.build = Some(AsyncComputeTaskPool::get().spawn(async move {
-            let points = snapshot
+            let _build_span = build_span.enter();
+            let points: Vec<[f64; 2]> = snapshot
                 .into_samples()
                 .into_iter()
                 .map(|sample| [sample.time, sample.value])
                 .collect();
+            build_span.record("output_points", points.len());
             (key, std::sync::Arc::new(points))
         }));
     }
@@ -436,11 +450,28 @@ fn cached_plot_series_points(
         .is_none_or(|last| now - last >= PLOT_SERIES_REFRESH_INTERVAL_SEC);
 
     if !data_matches && cache.build.is_none() && (!display_matches || refresh_due) {
-        let y_samples = y_history.snapshot();
-        let x_samples = x_history.map(ScalarHistory::snapshot);
+        let y_sample_count = y_history.len();
+        let x_sample_count = x_history.map_or(0, ScalarHistory::len);
+        let snapshot_span = bevy::log::info_span!(
+            "line_plot_history_snapshot",
+            plot_cache = ?cache_id,
+            y_samples = y_sample_count,
+            x_samples = x_sample_count
+        );
+        let (y_samples, x_samples) = snapshot_span
+            .in_scope(|| (y_history.snapshot(), x_history.map(ScalarHistory::snapshot)));
         let build_key = key.clone();
+        let build_span = bevy::log::info_span!(
+            "line_plot_series_build_worker",
+            plot_cache = ?cache_id,
+            y_samples = y_sample_count,
+            x_samples = x_sample_count,
+            pixel_width = pixel_width as u32,
+            output_points = bevy::log::tracing::field::Empty
+        );
         cache.last_build_sec = Some(now);
         cache.build = Some(AsyncComputeTaskPool::get().spawn(async move {
+            let _build_span = build_span.enter();
             let y_samples = y_samples.into_samples();
             let x_samples = x_samples.map(ScalarHistorySnapshot::into_samples);
             let time_on_x = x_samples.is_none();
@@ -467,7 +498,9 @@ fn cached_plot_series_points(
                     points = decimated;
                 }
             }
+            let output_point_count = points.len();
             let points: Vec<_> = points.into_iter().map(egui_plot::PlotPoint::from).collect();
+            build_span.record("output_points", output_point_count);
             std::sync::Arc::new((build_key, points, bounds))
         }));
     }
