@@ -53,7 +53,7 @@ class DeterministicPhysicsProfileTests(unittest.TestCase):
     def test_portable_reference_requires_exact_final_stage_equality(self) -> None:
         reference = {
             "scene-4-serial": {
-                "parameters": {"tick_hz": None},
+                "parameters": {"tick_hz": 60.0},
                 "checkpoints": [{"tick": "0", "physics": ["p=0"]}],
                 "articulated_checkpoints": [
                     {"tick": "11", "rovers": [{"bodies": "wheel=p0"}]}
@@ -63,7 +63,7 @@ class DeterministicPhysicsProfileTests(unittest.TestCase):
         }
         candidate = {
             "scene-4-serial": {
-                "parameters": {"tick_hz": None},
+                "parameters": {"tick_hz": 60.0},
                 "checkpoints": [{"tick": "0", "physics": ["p=0"]}],
                 "articulated_checkpoints": [
                     {"tick": "11", "rovers": [{"bodies": "wheel=p0"}]}
@@ -72,6 +72,11 @@ class DeterministicPhysicsProfileTests(unittest.TestCase):
             }
         }
         deterministic_physics_profiles.compare_profile_cases(reference, candidate)
+
+        candidate["scene-4-serial"]["parameters"]["tick_hz"] = 30.0
+        with self.assertRaisesRegex(RuntimeError, "parameters do not match"):
+            deterministic_physics_profiles.compare_profile_cases(reference, candidate)
+        candidate["scene-4-serial"]["parameters"]["tick_hz"] = 60.0
 
         candidate["scene-4-serial"]["articulated_checkpoints"] = [
             {"tick": "11", "rovers": [{"bodies": "wheel=p1"}]}
