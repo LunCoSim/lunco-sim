@@ -19,6 +19,7 @@
 //! [`LinePlotStyle`] (serde JSON) so the choice survives save/reload.
 
 use bevy::prelude::*;
+use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use egui;
 use egui_plot::{Corner, Legend, Line, Plot, PlotPoints};
 use serde::{Deserialize, Serialize};
@@ -328,6 +329,104 @@ struct SeriesKey {
     px_w: u32,
 }
 
+type PlotSeriesPoints = std::sync::Arc<(SeriesKey, Vec<egui_plot::PlotPoint>)>;
+
+#[derive(Default)]
+struct PlotSeriesCache {
+    displayed: Option<PlotSeriesPoints>,
+    build: Option<Task<PlotSeriesPoints>>,
+    last_build_sec: Option<f64>,
+}
+
+const PLOT_SERIES_REFRESH_INTERVAL_SEC: f64 = 1.0 / 20.0;
+
+fn same_series_presentation(left: &SeriesKey, right: &SeriesKey) -> bool {
+    left.x_signal == right.x_signal && left.log_y == right.log_y && left.px_w == right.px_w
+}
+
+/// Reuse the last plot buffer while a worker builds a newer history snapshot.
+/// Snapshot copying is rate-limited and min-max decimation never runs in the
+/// UI frame; at most one build is active for each plot binding.
+fn cached_plot_series_points(
+    ctx: &egui::Context,
+    cache_id: egui::Id,
+    key: SeriesKey,
+    y_history: &crate::signal::ScalarHistory,
+    x_history: Option<&crate::signal::ScalarHistory>,
+    pixel_width: f32,
+) -> Option<PlotSeriesPoints> {
+    type SharedCache = std::sync::Arc<std::sync::Mutex<PlotSeriesCache>>;
+    let cache: SharedCache = ctx.data_mut(|data| {
+        if let Some(existing) = data.get_temp::<SharedCache>(cache_id) {
+            existing
+        } else {
+            let fresh = SharedCache::default();
+            data.insert_temp(cache_id, fresh.clone());
+            fresh
+        }
+    });
+
+    let now = ctx.input(|input| input.time);
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let completed = cache
+        .build
+        .as_mut()
+        .and_then(|task| future::block_on(future::poll_once(task)));
+    if let Some(points) = completed {
+        cache.build = None;
+        cache.displayed = Some(points);
+    }
+
+    let display_matches = cache
+        .displayed
+        .as_ref()
+        .is_some_and(|points| same_series_presentation(&points.0, &key));
+    let data_matches = cache
+        .displayed
+        .as_ref()
+        .is_some_and(|points| points.0 == key);
+    let refresh_due = cache
+        .last_build_sec
+        .is_none_or(|last| now - last >= PLOT_SERIES_REFRESH_INTERVAL_SEC);
+
+    if !data_matches && cache.build.is_none() && (!display_matches || refresh_due) {
+        let y_samples: Vec<ScalarSample> = y_history.iter().copied().collect();
+        let x_samples: Option<Vec<ScalarSample>> =
+            x_history.map(|history| history.iter().copied().collect());
+        let build_key = key.clone();
+        cache.last_build_sec = Some(now);
+        cache.build = Some(AsyncComputeTaskPool::get().spawn(async move {
+            let time_on_x = x_samples.is_none();
+            let mut points = match x_samples {
+                Some(xs) => pair_by_time(&xs, y_samples),
+                None => y_samples
+                    .iter()
+                    .map(|sample| [sample.time, sample.value])
+                    .collect(),
+            };
+            if build_key.log_y {
+                points = crate::plot_fmt::log_y_points(&points);
+            }
+            if time_on_x {
+                if let Some(decimated) = crate::plot_fmt::decimate_min_max(&points, pixel_width) {
+                    points = decimated;
+                }
+            }
+            let points = points.into_iter().map(egui_plot::PlotPoint::from).collect();
+            std::sync::Arc::new((build_key, points))
+        }));
+    }
+
+    cache
+        .displayed
+        .as_ref()
+        .filter(|points| same_series_presentation(&points.0, &key))
+        .cloned()
+}
+
 pub const LINE_PLOT_KIND: VizKindId = VizKindId::new_static("line_plot");
 
 const ROLE_Y: RoleSpec = RoleSpec {
@@ -456,17 +555,12 @@ impl LinePlot {
         // we pull the X signal's history and pair by time below.
         // Fingerprint travels into each series' cache key so an X-side
         // change also dirties the pairing.
-        let x_fp: Option<HistFingerprint> = style
+        let x_history = style
             .x_signal
             .as_ref()
             .and_then(|xs| registry.scalar_history(xs))
-            .filter(|h| !h.is_empty())
-            .map(hist_fingerprint);
-        // Lazily materialised on the first cache miss — an idle frame
-        // (all series clean) never copies the X history at all. The
-        // outer `Option` is "not fetched yet", the inner one is the
-        // classic "no usable X signal → time on X" fallback.
-        let mut x_samples: Option<Option<Vec<ScalarSample>>> = None;
+            .filter(|history| !history.is_empty());
+        let x_fp = x_history.map(hist_fingerprint);
 
         // Snapshot point buffers and their current labels/colors before the
         // plot takes a long-lived borrow on `ctx.ui`.
@@ -491,50 +585,16 @@ impl LinePlot {
                     log_y: style.log_y,
                     px_w: remaining.x.max(1.0) as u32,
                 };
-                let cache_id = egui::Id::new(("line_plot_series", config.id.raw())).with(&b.source);
-                let cached: Option<std::sync::Arc<(SeriesKey, Vec<egui_plot::PlotPoint>)>> =
-                    ctx.ui.ctx().data(|d| d.get_temp(cache_id));
-                let series = match cached {
-                    Some(c) if c.0 == key => c,
-                    _ => {
-                        let xs_resolved = x_samples.get_or_insert_with(|| {
-                            style.x_signal.as_ref().and_then(|xs| {
-                                registry
-                                    .scalar_history(xs)
-                                    .filter(|h| !h.is_empty())
-                                    .map(|h| h.iter().copied().collect())
-                            })
-                        });
-                        let time_on_x = xs_resolved.is_none();
-                        let mut pts: Vec<[f64; 2]> = match xs_resolved {
-                            None => {
-                                // Classic time on X. Each sample's own
-                                // `time` is its X coordinate.
-                                hist.iter().map(|s| [s.time, s.value]).collect()
-                            }
-                            Some(xs) => pair_by_time(xs, hist.iter().copied()),
-                        };
-                        if style.log_y {
-                            pts = crate::plot_fmt::log_y_points(&pts);
-                        }
-                        // Decimate to pixel width — min-max buckets so
-                        // spikes survive. Time-series only: a phase-
-                        // space trajectory revisits X, which breaks
-                        // the column bucketing.
-                        if time_on_x {
-                            if let Some(dec) = crate::plot_fmt::decimate_min_max(&pts, remaining.x)
-                            {
-                                pts = dec;
-                            }
-                        }
-                        let pts = pts.into_iter().map(egui_plot::PlotPoint::from).collect();
-                        let fresh = std::sync::Arc::new((key, pts));
-                        ctx.ui
-                            .ctx()
-                            .data_mut(|d| d.insert_temp(cache_id, fresh.clone()));
-                        fresh
-                    }
-                };
+                let cache_id =
+                    egui::Id::new(("line_plot_async_series", config.id.raw())).with(&b.source);
+                let series = cached_plot_series_points(
+                    ctx.ui.ctx(),
+                    cache_id,
+                    key,
+                    hist,
+                    x_history,
+                    remaining.x,
+                )?;
                 if series.1.is_empty() {
                     return None;
                 }

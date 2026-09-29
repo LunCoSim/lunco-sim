@@ -60,8 +60,11 @@ the selection list.
 The line-plot signal pickers enumerate scalar channels only while a picker is
 open and reuse signal references and metadata until the signal catalog changes;
 owner labels are resolved live while the menu is visible. Decimated plot points
-are borrowed from the retained cache on steady frames, so painting does not
-copy each series into a new point vector.
+are borrowed from the retained cache on steady frames. A changing history is
+snapshotted at most 20 times per second, and pairing, log conversion, and
+decimation run on the async-compute pool; the plot keeps drawing its latest
+completed buffer while that work runs. This bounds presentation lag to roughly
+50 ms without making the UI wait for history conversion.
 
 Persisted bindings are reconciled from stable `GlobalEntityId` identity only
 when the visualization registry or an identity publication changes. Unchanged

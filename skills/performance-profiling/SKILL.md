@@ -47,6 +47,11 @@ tree and current expansion state, then use `ScrollArea::show_rows` to create
 widgets only for rows in the viewport. Keep foldout state keyed by stable
 entity/group identity and preserve selection, drag, and tooltip behavior on
 painted rows.
+For live line plots, do not copy and decimate a full history in every UI frame.
+Keep one bounded build per binding, snapshot changed histories at a limited
+presentation cadence, transform immutable sample snapshots on the async-compute
+pool, and keep painting the last completed point buffer while the next build
+runs. Include source identity, style, and pixel width in the cache key.
 For the entity tree, derive parent and grid facts through indexed lookups along
 named candidates' deduplicated ancestor closure instead of copying every scene
 entity's `ChildOf` and `Grid` membership into the snapshot.
