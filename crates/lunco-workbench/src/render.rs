@@ -1179,7 +1179,7 @@ pub(crate) fn perspective_help_anchor(id: PerspectiveId) -> String {
 
 /// Render the bottom status strip and its shared progress/history popup.
 /// Active progress opens a compact notice; expanding it replaces that notice
-/// with recent history and pins the current operation at the top.
+/// with discrete recent history. Live progress stays out of the history list.
 pub(crate) fn render_status_bar_inner(
     ui: &mut egui::Ui,
     world: &mut World,
@@ -1213,32 +1213,28 @@ pub(crate) fn render_status_bar_inner(
         data.insert_temp(fault_key_id, current_fault_key);
         should_open
     });
+    let popup_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
+    let history_surface_open =
+        (popup_open && popup_view == StatusPopupView::History) || should_auto_open_fault;
+    let scene_transition_active = world
+        .get_resource::<lunco_core::SceneTransitionCoordinator>()
+        .is_some_and(|coordinator| coordinator.active().is_some() || coordinator.has_admitted());
 
     // Snapshot what we need from the bus into local owned values so
     // we don't hold a borrow across the popup callback (it also wants
     // to read the bus).
-    struct LatestSnapshot {
-        source: &'static str,
-        message: String,
-        level: StatusLevel,
-        progress_pct: Option<f64>,
-    }
-    let (latest, history, primary_progress): (
-        Option<LatestSnapshot>,
+    let (notification, history, primary_progress): (
+        StatusBarNotificationSnapshot,
         Vec<(StatusEventKey, lunco_status_core::status_bus::StatusEvent)>,
         Option<lunco_status_core::status_bus::StatusEvent>,
     ) = {
         let bus = world.resource::<StatusBus>();
-        let latest = bus.display_latest().map(|e| LatestSnapshot {
-            source: e.source,
-            message: e.message.clone(),
-            level: e.level,
-            progress_pct: e.progress_pct(),
-        });
+        let notification =
+            status_bar_notification_snapshot(bus, history_surface_open, scene_transition_active);
         let discrete: Vec<_> = bus.history().cloned().collect();
         let discrete_len = discrete.len();
         let history_total = bus.history_total();
-        let mut history: Vec<_> = discrete
+        let history: Vec<_> = discrete
             .into_iter()
             .enumerate()
             .map(|(offset, event)| {
@@ -1248,18 +1244,19 @@ pub(crate) fn render_status_bar_inner(
                 )
             })
             .collect();
-        history.extend(
-            bus.active_progress()
-                .cloned()
-                .map(|event| (StatusEventKey::Progress(event.scope, event.source), event)),
-        );
-        history.sort_by_key(|(_, event)| event.at);
-        let primary_progress = bus.active_progress().min_by_key(|event| event.at).cloned();
-        (latest, history, primary_progress)
+        let primary_progress = bus
+            .active_progress()
+            .filter(|event| {
+                status_progress_visible_for_scene_lifecycle(*event, scene_transition_active)
+            })
+            .min_by_key(|event| event.at)
+            .cloned();
+        (notification, history, primary_progress)
     };
-    let primary_progress_key = primary_progress
-        .as_ref()
-        .map(|event| StatusEventKey::Progress(event.scope, event.source));
+    let latest = match &notification {
+        StatusBarNotificationSnapshot::Event(event) => Some(event),
+        StatusBarNotificationSnapshot::Hidden | StatusBarNotificationSnapshot::Ready => None,
+    };
     let perf_stats = world.resource::<PerfStats>().clone();
     // Engine frame health advances with rendered frames, including before a
     // Twin is active. Its shared snapshot owns this history; simulation
@@ -1303,7 +1300,6 @@ pub(crate) fn render_status_bar_inner(
     // The compact progress notice and the history view share one popup id and
     // anchor. A completion closes only the automatically-opened notice; the
     // history view remains open if the user expanded it.
-    let popup_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
     if should_auto_open_fault {
         popup_view = StatusPopupView::History;
     } else if primary_progress.is_some() && !popup_open {
@@ -1336,7 +1332,7 @@ pub(crate) fn render_status_bar_inner(
                 egui::vec2(status_width, 18.0),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    if let Some(l) = latest.as_ref() {
+                    if let StatusBarNotificationSnapshot::Event(l) = &notification {
                         let dot_color = match l.level {
                             StatusLevel::Error => theme.tokens.error,
                             StatusLevel::Attention => theme.tokens.error,
@@ -1400,7 +1396,7 @@ pub(crate) fn render_status_bar_inner(
                                 }
                             }
                         }
-                    } else {
+                    } else if matches!(&notification, StatusBarNotificationSnapshot::Ready) {
                         ui.label(egui::RichText::new("ready").small().weak());
                     }
                 },
@@ -1430,7 +1426,11 @@ pub(crate) fn render_status_bar_inner(
         } else if !latest_attention
             && response
                 .interact(egui::Sense::click())
-                .on_hover_text("Click to view recent status events")
+                .on_hover_text(if history_surface_open {
+                    "Click to close recent status events"
+                } else {
+                    "Click to view recent status events"
+                })
                 .clicked()
         {
             if egui::Popup::is_id_open(ui.ctx(), popup_id) && popup_view == StatusPopupView::History
@@ -1601,28 +1601,12 @@ pub(crate) fn render_status_bar_inner(
                         .id_salt("recent_status_history")
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
-                            if let Some(progress) = primary_progress.as_ref() {
-                                ui.label(egui::RichText::new("Current progress").weak().small());
-                                render_status_event_row(
-                                    ui,
-                                    progress,
-                                    theme,
-                                    ui.make_persistent_id((
-                                        "workbench_status_event",
-                                        StatusEventKey::Progress(progress.scope, progress.source),
-                                    )),
-                                );
-                                ui.separator();
-                            }
                             if history.is_empty() {
                                 ui.label(egui::RichText::new("(no events yet)").weak());
                                 return;
                             }
-                            // Newest first, after the pinned active operation.
+                            // History contains discrete snapshots only.
                             for (key, ev) in history.iter().rev() {
-                                if Some(*key) == primary_progress_key {
-                                    continue;
-                                }
                                 if render_status_event_row(
                                     ui,
                                     ev,
@@ -1675,10 +1659,9 @@ fn render_status_progress_notice(
 
 const STATUS_EVENT_LEVEL_WIDTH: f32 = 56.0;
 const STATUS_EVENT_SOURCE_WIDTH: f32 = 84.0;
-const STATUS_EVENT_PROGRESS_WIDTH: f32 = 120.0;
 const STATUS_EVENT_ATTENTION_WIDTH: f32 = 80.0;
 
-/// Render every history item through the same level/source/message/progress
+/// Render each discrete history item through shared level/source/message
 /// columns. Warn/Error rows expand their complete diagnostic when clicked,
 /// while Attention adds the owning status action.
 fn render_status_event_row(
@@ -1709,31 +1692,16 @@ fn render_status_event_row(
     } else {
         STATUS_EVENT_SOURCE_WIDTH
     };
-    let has_progress = status_event_has_progress(event.level, event.progress);
-    let progress_width = if has_progress {
-        if compact {
-            72.0
-        } else {
-            STATUS_EVENT_PROGRESS_WIDTH
-        }
-    } else {
-        0.0
-    };
     let action_width = status_event_action_width(event.level, compact);
     let column_gap = if compact {
         4.0
     } else {
         ui.spacing().item_spacing.x
     };
-    let column_count = 3 + usize::from(has_progress) + usize::from(action_width > 0.0);
+    let column_count = 3 + usize::from(action_width > 0.0);
     let column_gaps = column_count.saturating_sub(1) as f32;
-    let message_width = (row_width
-        - level_width
-        - source_width
-        - progress_width
-        - action_width
-        - column_gap * column_gaps)
-        .max(1.0);
+    let message_width =
+        (row_width - level_width - source_width - action_width - column_gap * column_gaps).max(1.0);
     let display_message = if has_details {
         status_message_summary(&event.message)
     } else {
@@ -1770,23 +1738,6 @@ fn render_status_event_row(
                 .halign(egui::Align::LEFT),
         )
         .on_hover_text(&event.message);
-
-        if let Some(pct) = event.progress_pct() {
-            ui.add_sized(
-                [progress_width, 0.0],
-                egui::ProgressBar::new((pct as f32) / 100.0)
-                    .desired_width(progress_width)
-                    .desired_height(6.0),
-            );
-        } else if has_progress {
-            ui.allocate_ui_with_layout(
-                egui::vec2(progress_width, ui.spacing().interact_size.y),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    ui.spinner();
-                },
-            );
-        }
 
         if event.level == lunco_status_core::status_bus::StatusLevel::Attention {
             attention_clicked = ui
@@ -1874,13 +1825,6 @@ fn status_event_action_width(
     } else {
         0.0
     }
-}
-
-fn status_event_has_progress(
-    level: lunco_status_core::status_bus::StatusLevel,
-    progress: Option<(u64, u64)>,
-) -> bool {
-    progress.is_some() || level == lunco_status_core::status_bus::StatusLevel::Progress
 }
 
 const STATUS_BAR_PROGRESS_WIDTH: f32 = 120.0;
@@ -2003,7 +1947,63 @@ fn should_auto_open_status_popup(
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 enum StatusEventKey {
     Discrete(u64),
-    Progress(lunco_status_core::status_bus::BusyScope, &'static str),
+}
+
+/// Owned status event fields needed after releasing the
+/// [`StatusBus`](lunco_status_core::status_bus::StatusBus) borrow.
+struct StatusBarEventSnapshot {
+    source: &'static str,
+    message: String,
+    level: lunco_status_core::status_bus::StatusLevel,
+    progress_pct: Option<f64>,
+}
+
+/// The status strip's left segment while its shared history popup is open.
+enum StatusBarNotificationSnapshot {
+    Hidden,
+    Ready,
+    Event(StatusBarEventSnapshot),
+}
+
+/// Select the strip content, suppressing its event summary while history is open.
+fn status_bar_notification_snapshot(
+    bus: &lunco_status_core::status_bus::StatusBus,
+    history_surface_open: bool,
+    scene_transition_active: bool,
+) -> StatusBarNotificationSnapshot {
+    if history_surface_open {
+        return StatusBarNotificationSnapshot::Hidden;
+    }
+
+    bus.display_latest_with_progress_filter(|event| {
+        status_progress_visible_for_scene_lifecycle(event, scene_transition_active)
+    })
+    .map(|event| {
+        StatusBarNotificationSnapshot::Event(StatusBarEventSnapshot {
+            source: event.source,
+            message: event.message.clone(),
+            level: event.level,
+            progress_pct: event.progress_pct(),
+        })
+    })
+    .unwrap_or(StatusBarNotificationSnapshot::Ready)
+}
+
+/// Scene streaming is useful as a load indicator only while the authoritative
+/// scene transaction is pending. Keep its live status in StatusBus for visual
+/// readiness consumers without presenting camera-driven terrain streaming as
+/// a new scene load after admission completes.
+fn status_progress_visible_for_scene_lifecycle(
+    event: &lunco_status_core::status_bus::StatusEvent,
+    scene_transition_active: bool,
+) -> bool {
+    scene_transition_active
+        || ![
+            lunco_status_core::status_bus::TERRAIN_SOURCE,
+            lunco_status_core::status_bus::TERRAIN_DERIVED_SOURCE,
+            lunco_status_core::status_bus::SCENE_VISUAL_SOURCE,
+        ]
+        .contains(&event.source)
 }
 
 fn discrete_status_event_key(
@@ -3258,6 +3258,34 @@ mod tests {
     }
 
     #[test]
+    fn recent_history_hides_the_entire_status_strip_notification() {
+        let mut bus = lunco_status_core::status_bus::StatusBus::default();
+        bus.set_progress("terrain", "Preparing terrain visuals", 1, 2);
+        bus.push(
+            "terrain",
+            lunco_status_core::status_bus::StatusLevel::Info,
+            "Terrain streaming ready (2/2)",
+        );
+
+        assert!(matches!(
+            status_bar_notification_snapshot(&bus, true, false),
+            StatusBarNotificationSnapshot::Hidden
+        ));
+        assert!(matches!(
+            status_bar_notification_snapshot(&bus, false, false),
+            StatusBarNotificationSnapshot::Event(_)
+        ));
+        assert!(matches!(
+            status_bar_notification_snapshot(
+                &lunco_status_core::status_bus::StatusBus::default(),
+                false,
+                false,
+            ),
+            StatusBarNotificationSnapshot::Ready
+        ));
+    }
+
+    #[test]
     fn status_message_summary_keeps_diagnostic_lines_for_expanded_detail() {
         let message = "\nmissing prim /World/Terrain\ncaused by: /twins/apollo15/terrain";
         assert_eq!(
@@ -3269,18 +3297,6 @@ mod tests {
 
     #[test]
     fn status_event_rows_reserve_width_only_for_attention_action() {
-        assert!(!status_event_has_progress(
-            lunco_status_core::status_bus::StatusLevel::Info,
-            None
-        ));
-        assert!(status_event_has_progress(
-            lunco_status_core::status_bus::StatusLevel::Progress,
-            None
-        ));
-        assert!(status_event_has_progress(
-            lunco_status_core::status_bus::StatusLevel::Info,
-            Some((1, 2))
-        ));
         assert_eq!(
             status_event_action_width(lunco_status_core::status_bus::StatusLevel::Info, false),
             0.0
