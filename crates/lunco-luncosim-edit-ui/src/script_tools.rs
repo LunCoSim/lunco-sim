@@ -30,6 +30,9 @@ use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use big_space::prelude::{CellCoord, Grid};
+use lunco_api::queries::{ApiQueryProvider, SimulationQueryReadScope, api_param_u64};
+use lunco_api::{ApiQueryError, ApiQueryResult};
+use lunco_api_core::{ApiErrorCode, ApiQueryParameterSchema, ApiQuerySchema, ApiValue, api_value};
 use lunco_command_contracts::{Ack, OpId};
 use lunco_control_core::ControlLink;
 use lunco_core::{Command, on_command, register_commands};
@@ -74,6 +77,16 @@ pub(crate) struct PendingUsdCurveViews {
     requests: HashMap<Entity, UsdCurveViewRequest>,
     tasks: HashMap<Entity, Task<UsdCurveViewBuild>>,
     latest_revision: HashMap<Entity, u64>,
+    status: HashMap<Entity, UsdCurveViewStatus>,
+}
+
+#[derive(Clone, Debug)]
+struct UsdCurveViewStatus {
+    requested_revision: u64,
+    completed_revision: u64,
+    applied_revision: u64,
+    vertex_count: usize,
+    error: Option<String>,
 }
 
 struct UsdCurveViewRequest {
@@ -245,7 +258,7 @@ pub struct UpdateUsdCurveView {
     pub root_entity_id: u64,
     /// Stable API identity of the projected UsdGeomBasisCurves entity.
     pub curve_entity_id: u64,
-    /// Ordered centerline points in the active physics frame.
+    /// Ordered centerline points in the route parent's local USD coordinates.
     pub points: Vec<[f64; 3]>,
     /// Full ribbon width in metres.
     pub width_m: f64,
@@ -257,6 +270,156 @@ pub struct UpdateUsdCurveView {
     pub max_samples: u64,
 }
 
+/// Read the latest requested USD curve-view result.
+///
+/// The result is presentation state: it does not read or mutate a USD layer.
+/// Callers use the revision fields to distinguish a committed mesh or hidden
+/// no-geometry state from an older mesh still displayed during preparation.
+pub struct InspectUsdCurveViewProvider;
+
+impl ApiQueryProvider for InspectUsdCurveViewProvider {
+    fn name(&self) -> &'static str {
+        "InspectUsdCurveView"
+    }
+
+    fn schema(&self) -> ApiQuerySchema {
+        ApiQuerySchema {
+            name: self.name().to_owned(),
+            description: Some(
+                "Inspect the latest Bevy presentation result for one document-backed USD curve view."
+                    .to_owned(),
+            ),
+            parameters: Some(vec![
+                ApiQueryParameterSchema {
+                    name: "doc_id".to_owned(),
+                    type_name: "u64".to_owned(),
+                    required: true,
+                    description: "Owning USD document identity.".to_owned(),
+                    allowed_values: None,
+                },
+                ApiQueryParameterSchema {
+                    name: "entity_id".to_owned(),
+                    type_name: "u64".to_owned(),
+                    required: true,
+                    description: "Stable API identity of the projected curve prim.".to_owned(),
+                    allowed_values: None,
+                },
+            ]),
+            exactly_one_of: Vec::new(),
+            response: Some(
+                "{ doc_id, entity_id, path, state, requested_revision, completed_revision, applied_revision, local_visibility, result_vertex_count, error }"
+                    .to_owned(),
+            ),
+        }
+    }
+
+    fn simulation_read_scope(&self, _params: &ApiValue) -> SimulationQueryReadScope {
+        SimulationQueryReadScope::ScenarioDeclared
+    }
+
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(raw_doc) = api_param_u64(params, "doc_id") else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "InspectUsdCurveView requires a numeric `doc_id`",
+            ));
+        };
+        let Some(raw_entity) = api_param_u64(params, "entity_id") else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "InspectUsdCurveView requires a numeric `entity_id`",
+            ));
+        };
+        let entity_id = lunco_core::GlobalEntityId::from_raw(raw_entity);
+        let Some(entity) = world
+            .get_resource::<lunco_api::registry::ApiEntityRegistry>()
+            .and_then(|registry| registry.resolve(&entity_id))
+        else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::EntityNotFound,
+                format!("InspectUsdCurveView entity {raw_entity} is not live"),
+            ));
+        };
+        let Some(prim) = world.get::<lunco_usd_bevy_scene::UsdPrimPath>(entity) else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "InspectUsdCurveView target is not a USD prim",
+            ));
+        };
+        if world.get::<UsdCurveMesh>(entity).is_none() {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "InspectUsdCurveView target is not a projected USD curve mesh",
+            ));
+        }
+        let Some(backed) = world.get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "InspectUsdCurveView document ownership is unavailable",
+            ));
+        };
+        let Some(asset_server) = world.get_resource::<AssetServer>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "InspectUsdCurveView asset server is unavailable",
+            ));
+        };
+        let target_doc =
+            lunco_usd_bevy_twin::scene_document_for(backed, asset_server, prim.stage_handle.id())
+                .ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::EntityNotFound,
+                    "InspectUsdCurveView target has no document-backed scene",
+                )
+            })?;
+        if target_doc.raw() != raw_doc {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "InspectUsdCurveView target belongs to another USD document",
+            ));
+        }
+        let status = world
+            .get_resource::<PendingUsdCurveViews>()
+            .and_then(|views| views.status.get(&entity))
+            .ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::EntityNotFound,
+                    "InspectUsdCurveView has no build result for this curve",
+                )
+            })?;
+        let state = if status.completed_revision != status.requested_revision {
+            "pending"
+        } else if status.error.is_some() {
+            "failed"
+        } else {
+            "ready"
+        };
+        let visibility = match world.get::<Visibility>(entity) {
+            Some(Visibility::Hidden) => "hidden",
+            Some(Visibility::Visible) => "visible",
+            Some(Visibility::Inherited) => "inherited",
+            None => {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::InternalError,
+                    "InspectUsdCurveView target has no visibility state",
+                ));
+            }
+        };
+        Ok(Some(api_value!({
+            "doc_id": raw_doc,
+            "entity_id": raw_entity,
+            "path": prim.path.clone(),
+            "state": state,
+            "requested_revision": status.requested_revision,
+            "completed_revision": status.completed_revision,
+            "applied_revision": status.applied_revision,
+            "local_visibility": visibility,
+            "result_vertex_count": status.vertex_count as u64,
+            "error": status.error.clone().unwrap_or_default(),
+        })))
+    }
+}
+
 #[on_command(UpdateUsdCurveView)]
 fn on_update_usd_curve_view(
     trigger: On<UpdateUsdCurveView>,
@@ -265,7 +428,10 @@ fn on_update_usd_curve_view(
     entities: Res<lunco_api::registry::ApiEntityRegistry>,
     q_root: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
     q_parents: Query<&ChildOf>,
-    q_curve: Query<(&lunco_usd_bevy_scene::UsdPrimPath, &Mesh3d), With<UsdCurveMesh>>,
+    mut q_curve: Query<
+        (&lunco_usd_bevy_scene::UsdPrimPath, &Mesh3d, &mut Visibility),
+        With<UsdCurveMesh>,
+    >,
     mut pending: ResMut<PendingUsdCurveViews>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
@@ -311,8 +477,8 @@ fn on_update_usd_curve_view(
     let root_prim = q_root
         .get(root)
         .map_err(|_| "curve view anchor is not a USD prim".to_string())?;
-    let (curve_prim, _) = q_curve
-        .get(curve)
+    let (curve_prim, _, mut visibility) = q_curve
+        .get_mut(curve)
         .map_err(|_| "curve view geometry is not a projected USD curve".to_string())?;
     if root_prim.stage_handle.id() != curve_prim.stage_handle.id()
         || !curve_prim.path.starts_with(&(root_prim.path.clone() + "/"))
@@ -346,7 +512,8 @@ fn on_update_usd_curve_view(
         return Err("curve view anchor is not directly parented to its route prim".to_string());
     }
 
-    if pending.requests.len() + pending.tasks.len() >= MAX_PENDING_CURVE_VIEW_REQUESTS
+    if command.points.len() >= 2
+        && pending.requests.len() + pending.tasks.len() >= MAX_PENDING_CURVE_VIEW_REQUESTS
         && !pending.requests.contains_key(&curve)
         && !pending.tasks.contains_key(&curve)
     {
@@ -358,6 +525,45 @@ fn on_update_usd_curve_view(
         .ok_or_else(|| "curve view operation revision is exhausted".to_string())?;
     pending.next_revision = revision;
     pending.latest_revision.insert(curve, revision);
+    let applied_revision = pending
+        .status
+        .get(&curve)
+        .map_or(0, |status| status.applied_revision);
+    let completed_revision = pending
+        .status
+        .get(&curve)
+        .map_or(0, |status| status.completed_revision);
+    let vertex_count = pending
+        .status
+        .get(&curve)
+        .map_or(0, |status| status.vertex_count);
+    pending.status.insert(
+        curve,
+        UsdCurveViewStatus {
+            requested_revision: revision,
+            completed_revision,
+            applied_revision,
+            vertex_count,
+            error: None,
+        },
+    );
+    if command.points.len() < 2 {
+        *visibility = Visibility::Hidden;
+        pending.requests.remove(&curve);
+        pending.latest_revision.remove(&curve);
+        pending.status.insert(
+            curve,
+            UsdCurveViewStatus {
+                requested_revision: revision,
+                completed_revision: revision,
+                applied_revision: revision,
+                vertex_count: 0,
+                error: None,
+            },
+        );
+        commands.entity(curve).try_insert(TransientUsdCurveView);
+        return Ok(Ack::new(OpId::new()));
+    }
     pending.requests.insert(
         curve,
         UsdCurveViewRequest {
@@ -390,7 +596,10 @@ pub(crate) fn prepare_pending_usd_curve_views(
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_root: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
-    q_curve: Query<(&lunco_usd_bevy_scene::UsdPrimPath, &Mesh3d), With<UsdCurveMesh>>,
+    mut q_curve: Query<
+        (&lunco_usd_bevy_scene::UsdPrimPath, &Mesh3d, &mut Visibility),
+        With<UsdCurveMesh>,
+    >,
 ) {
     if pending.tasks.len() >= MAX_ACTIVE_CURVE_VIEW_BUILDS || pending.requests.is_empty() {
         return;
@@ -430,12 +639,22 @@ pub(crate) fn prepare_pending_usd_curve_views(
         let Some(request) = pending.requests.remove(&entity) else {
             continue;
         };
-        let Some((curve, _)) = q_curve.get(entity).ok() else {
+        let Ok((curve, _, mut visibility)) = q_curve.get_mut(entity) else {
             pending.latest_revision.remove(&entity);
+            pending.status.remove(&entity);
             continue;
         };
         let Ok(root) = q_root.get(request.root) else {
             pending.latest_revision.remove(&entity);
+            *visibility = Visibility::Hidden;
+            complete_curve_view_status(
+                &mut pending,
+                entity,
+                request.revision,
+                0,
+                Some("curve view anchor is no longer live".to_owned()),
+            );
+            warn!("[usd-curve-view] queued anchor is no longer live");
             continue;
         };
         if curve.stage_handle.id() != request.stage_id
@@ -443,31 +662,32 @@ pub(crate) fn prepare_pending_usd_curve_views(
             || request.curve != entity
         {
             pending.latest_revision.remove(&entity);
+            *visibility = Visibility::Hidden;
+            complete_curve_view_status(
+                &mut pending,
+                entity,
+                request.revision,
+                0,
+                Some("queued curve view target changed before preparation".to_owned()),
+            );
             warn!("[usd-curve-view] queued target changed before mesh preparation");
             continue;
         }
-        let (parent_position, parent_rotation) = if request.points.len() < 2 {
-            (DVec3::ZERO, bevy::math::DQuat::IDENTITY)
-        } else {
-            let Some(frame) = frame else {
-                pending.requests.insert(entity, request);
-                warn!("[usd-curve-view] no active physics frame is available for route geometry");
-                continue;
-            };
-            let Some(pose) = lunco_spatial::coords::pose_in_grid(
-                request.parent,
-                frame,
-                &q_parents,
-                &q_grids,
-                &q_spatial,
-            ) else {
-                pending.requests.insert(entity, request);
-                warn!(
-                    "[usd-curve-view] route parent is disconnected from the active physics frame"
-                );
-                continue;
-            };
-            pose
+        let Some(frame) = frame else {
+            pending.requests.insert(entity, request);
+            warn!("[usd-curve-view] no active physics frame is available for route geometry");
+            continue;
+        };
+        let Some((parent_position, parent_rotation)) = lunco_spatial::coords::pose_in_grid(
+            request.parent,
+            frame,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
+            pending.requests.insert(entity, request);
+            warn!("[usd-curve-view] route parent is disconnected from the active physics frame");
+            continue;
         };
         let terrain = terrain.clone();
         let task_request = request;
@@ -519,32 +739,69 @@ pub(crate) fn poll_pending_usd_curve_views(
         };
         let Ok((root_prim, mut root_transform)) = q_root.get_mut(result.root) else {
             pending.latest_revision.remove(&entity);
+            *visibility = Visibility::Hidden;
+            complete_curve_view_status(
+                &mut pending,
+                entity,
+                result.revision,
+                0,
+                Some("curve view anchor is no longer live".to_owned()),
+            );
+            warn!("[usd-curve-view] completed anchor is no longer live");
             continue;
         };
         if curve_prim.stage_handle.id() != result.stage_id
             || root_prim.stage_handle.id() != result.stage_id
         {
             pending.latest_revision.remove(&entity);
+            *visibility = Visibility::Hidden;
+            complete_curve_view_status(
+                &mut pending,
+                entity,
+                result.revision,
+                0,
+                Some("completed target belongs to a replaced stage".to_owned()),
+            );
             warn!("[usd-curve-view] completed target belongs to a replaced stage");
             continue;
         }
-        let result = match result.result {
+        let revision = result.revision;
+        let build_result = match result.result {
             Ok(result) => result,
             Err(error) => {
                 pending.latest_revision.remove(&entity);
+                *visibility = Visibility::Hidden;
+                complete_curve_view_status(&mut pending, entity, revision, 0, Some(error.clone()));
                 warn!("[usd-curve-view] mesh preparation failed: {error}");
                 continue;
             }
         };
-        if let Some((mesh, anchor)) = result {
+        if let Some((mesh, anchor)) = build_result {
             let anchor = anchor.as_vec3();
             if !anchor.is_finite() {
                 pending.latest_revision.remove(&entity);
+                *visibility = Visibility::Hidden;
+                complete_curve_view_status(
+                    &mut pending,
+                    entity,
+                    revision,
+                    0,
+                    Some("computed anchor exceeds render-space range".to_owned()),
+                );
                 warn!("[usd-curve-view] computed anchor exceeds render-space range");
                 continue;
             }
+            let vertex_count = mesh.count_vertices();
             let Some(mut current_mesh) = meshes.get_mut(&mesh_handle.0) else {
                 pending.latest_revision.remove(&entity);
+                *visibility = Visibility::Hidden;
+                complete_curve_view_status(
+                    &mut pending,
+                    entity,
+                    revision,
+                    0,
+                    Some("projected curve mesh asset is unavailable".to_owned()),
+                );
                 warn!("[usd-curve-view] projected curve mesh asset is unavailable");
                 continue;
             };
@@ -553,12 +810,35 @@ pub(crate) fn poll_pending_usd_curve_views(
                 root_transform.translation = anchor;
             }
             *visibility = Visibility::Inherited;
+            complete_curve_view_status(&mut pending, entity, revision, vertex_count, None);
         } else {
             *visibility = Visibility::Hidden;
+            complete_curve_view_status(&mut pending, entity, revision, 0, None);
         }
         if !pending.requests.contains_key(&entity) {
             pending.latest_revision.remove(&entity);
         }
+    }
+}
+
+fn complete_curve_view_status(
+    pending: &mut PendingUsdCurveViews,
+    entity: Entity,
+    revision: u64,
+    vertex_count: usize,
+    error: Option<String>,
+) {
+    let Some(status) = pending.status.get_mut(&entity) else {
+        return;
+    };
+    if status.requested_revision != revision {
+        return;
+    }
+    status.completed_revision = revision;
+    status.vertex_count = vertex_count;
+    status.error = error;
+    if status.error.is_none() {
+        status.applied_revision = revision;
     }
 }
 
@@ -1689,5 +1969,60 @@ mod usd_curve_view_tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn failed_current_curve_view_completes_without_advancing_applied_revision() {
+        let entity = Entity::PLACEHOLDER;
+        let mut pending = PendingUsdCurveViews::default();
+        pending.status.insert(
+            entity,
+            UsdCurveViewStatus {
+                requested_revision: 8,
+                completed_revision: 7,
+                applied_revision: 6,
+                vertex_count: 12,
+                error: None,
+            },
+        );
+
+        complete_curve_view_status(
+            &mut pending,
+            entity,
+            8,
+            0,
+            Some("test mesh failure".to_owned()),
+        );
+
+        let status = pending.status.get(&entity).unwrap();
+        assert_eq!(status.completed_revision, 8);
+        assert_eq!(status.applied_revision, 6);
+        assert_eq!(status.vertex_count, 0);
+        assert_eq!(status.error.as_deref(), Some("test mesh failure"));
+    }
+
+    #[test]
+    fn stale_curve_view_completion_cannot_replace_newer_status() {
+        let entity = Entity::PLACEHOLDER;
+        let mut pending = PendingUsdCurveViews::default();
+        pending.status.insert(
+            entity,
+            UsdCurveViewStatus {
+                requested_revision: 9,
+                completed_revision: 7,
+                applied_revision: 7,
+                vertex_count: 12,
+                error: None,
+            },
+        );
+
+        complete_curve_view_status(&mut pending, entity, 8, 4, None);
+
+        let status = pending.status.get(&entity).unwrap();
+        assert_eq!(status.requested_revision, 9);
+        assert_eq!(status.completed_revision, 7);
+        assert_eq!(status.applied_revision, 7);
+        assert_eq!(status.vertex_count, 12);
+        assert_eq!(status.error, None);
     }
 }

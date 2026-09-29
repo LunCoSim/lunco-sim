@@ -1046,7 +1046,7 @@ fn on_tick(me, ctx) {
         if point_count(this.doc) != 1 || has_path(this.doc, ROUTE + "/P1")
             || find_path(RIBBON_GEOMETRY) != this.ribbon_entity { return; }
         this.checks.push(t_true(true,
-            "a one-point route keeps the stable ribbon entity while its mesh is empty"));
+            "a one-point route keeps the stable ribbon identity"));
         waypoint_editor::on_delete(context(this.doc, ROUTE + "/P0", ()));
         this.phase = 7;
         return;
@@ -1056,7 +1056,7 @@ fn on_tick(me, ctx) {
         if point_count(this.doc) != 0
             || find_path(RIBBON_GEOMETRY) != this.ribbon_entity { return; }
         this.checks.push(t_true(true,
-            "an empty route retains its reusable ribbon entity without a mesh"));
+            "an empty route retains its reusable ribbon identity"));
         waypoint_editor::on_click(context(this.doc, (), [0.0, 1.0, -8.0]));
         this.phase = 8;
         return;

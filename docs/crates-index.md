@@ -205,7 +205,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-canvas`** | Stateful 2D scene editor substrate for diagrams and annotation overlays. |
 | **`lunco-luncosim-edit-core`** | Headless-safe scene-editing mechanisms: spawn and terrain tools, scene picking, typed command registration, and ECS state. |
 | **`lunco-luncosim-edit-gizmo-ui`** | Focused rendered transform-gizmo capability: render-space proxies, live/preview pose transactions, camera binding, and kinematic-drive lifecycle. It owns the external `transform-gizmo-bevy` dependency independently of the editor panels. |
-| **`lunco-luncosim-edit-ui`** | Rendered scene-editing presentation: egui/workbench panels, selection and preview adapters, physics diagnostics, and bounded background construction of transient USD curve views. It composes the focused transform-gizmo package. |
+| **`lunco-luncosim-edit-ui`** | Rendered scene-editing presentation: egui/workbench panels, selection and preview adapters, physics diagnostics, bounded background construction of transient USD curve views, and `InspectUsdCurveView` status for current curve-view results. It composes the focused transform-gizmo package. |
 | **`lunco-luncosim-edit-inspector-core`** | Renderer-independent Inspector readout snapshot and change gate. It owns the bounded ECS queries for sun, camera, ambient, and joint facts; the rendered Inspector consumes this package without moving those scans into egui paint. |
 | **`lunco-luncosim-edit-inspector-ui`** | Domain-heavy Inspector and authored USD panels: standard USD joint/animation/mount/variant/parameter view models plus environment/entity authoring surfaces. It is installed explicitly by windowed composition roots. |
 | **`lunco-usd-prim-tree-ui`** | Reusable composed-USD prim hierarchy panel and reactive view model. It is independent of the domain Inspector and its physics/environment authoring dependencies. |
@@ -1166,8 +1166,11 @@ the UI tool library.
 **`lunco-luncosim-edit-ui`**
 Rendered scene-editing presentation. Implements the egui/workbench panels,
 selection and USD preview interaction, physics diagnostic visualization, and
-the bounded async preparation/commit path for transient curve-view meshes. It
-depends on `lunco-luncosim-edit-core` and composes the focused
+the bounded async preparation/commit path for transient curve-view meshes.
+`InspectUsdCurveView` reports request/completion/application revisions,
+generated vertex count, local visibility, and terminal errors to API and Rhai
+consumers. It depends on
+`lunco-luncosim-edit-core` and composes the focused
 `lunco-luncosim-edit-gizmo-ui` package; the core package does not depend back on
 either UI package.
 

@@ -61,7 +61,14 @@ captures the route parent's active-frame pose and an immutable
 `TerrainSurfaceSnapshot`, then admits at most two curve builds at a time.
 Requests for one curve coalesce behind its active build. A result updates the
 existing mesh only if its operation revision and stage identity still match;
-it cannot edit USD, choose route state, or delay a simulation tick. The
+it cannot edit USD, choose route state, or delay a simulation tick. A route with
+fewer than two points has no drawable geometry, so its owner hides the curve
+and completes that presentation revision immediately without terrain sampling
+or a worker task.
+`InspectUsdCurveView` exposes requested, completed, and applied view revisions plus
+the terminal presentation result and local visibility. Authored tests can wait
+for a terminal revision, require a successful mesh application, and observe
+hidden or failed results without reading stale USD seed attributes. The
 `usd.document.projected` telemetry event carries `changed_prim_paths` for the
 reconciled stage batches and fires after the affected referenced roots have
 reached their live instance projection. The pending roots come from the edit's

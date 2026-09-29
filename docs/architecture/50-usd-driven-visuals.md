@@ -42,11 +42,19 @@ in `@view@`. This retains the USD path, material, and hit policy while the mesh
 itself remains a live presentation resource. Route edits still pass through the
 normal authored document and incremental scene projection once. They do not
 write a second ribbon edit: `UpdateUsdCurveView` coalesces the newest route
-points, samples an immutable terrain snapshot, and replaces only the existing
-mesh handle in `Update`. Its worker admission is capped at two builds, stale
-results are discarded by operation revision, and the route simulation never
-waits for mesh preparation. The curve's standard `normals` make `widths` a
-ribbon width, so the seed is not a cylindrical tube.
+points in route-parent local USD coordinates, samples an immutable terrain
+snapshot, and replaces only the existing mesh handle in `Update`. The owner
+combines those local points with the route parent's active-frame pose before
+terrain sampling. Views with fewer than two points are hidden and completed
+immediately without terrain sampling or a worker task. Worker admission is
+capped at two builds; stale results are discarded by operation revision, and
+the route simulation never waits for mesh preparation. `InspectUsdCurveView`
+reports requested,
+completed, and applied build revisions, result vertex count, local visibility,
+and terminal build errors without projecting presentation facts back into USD.
+A failed current build hides the ribbon and reports the failure instead of
+leaving old geometry visible as if it were current. The curve's standard
+`normals` make `widths` a ribbon width, so the seed is not a cylindrical tube.
 When a document is shared by the mounted scene and an Editor preview, live
 structural edits resolve entities only in the mounted scene. A same-path preview
 entity cannot stand in for a missing scene entity. Procedural backgrounds also

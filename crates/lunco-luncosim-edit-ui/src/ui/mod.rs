@@ -403,6 +403,9 @@ impl Plugin for SceneEditUiPlugin {
         app.world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
             .register(crate::diagnostic_visuals::DiagnosticVisualsQueryProvider);
+        app.world_mut()
+            .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
+            .register(crate::script_tools::InspectUsdCurveViewProvider);
         app.add_systems(Startup, crate::physics_viz::configure_gizmo_overlay);
         app.register_type::<crate::physics_viz::PhysicsArrows>();
         app.add_systems(

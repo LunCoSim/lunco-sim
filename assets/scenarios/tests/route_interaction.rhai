@@ -48,6 +48,137 @@ fn document_generation(doc) {
     usd_document_generation(doc)
 }
 
+fn inspect_route_curve_view(doc) {
+    let entity = find_path_in_document(doc, ROUTE + "/RouteRibbon/Geometry");
+    if entity < 0 { return (); }
+    query("InspectUsdCurveView", #{ doc_id: doc, entity_id: entity })
+}
+
+fn begin_curve_view_expectation(me, point_count, visibility, needs_mesh, label) {
+    let view = inspect_route_curve_view(this.doc);
+    if view == () || view.ok == false || view.state != "ready"
+        || view.completed_revision != view.requested_revision
+        || view.applied_revision != view.requested_revision {
+        this.failure = "cannot start " + label
+            + " before the previous route ribbon result is applied";
+        return false;
+    }
+    this.curve_edit_baseline = view.requested_revision;
+    this.curve_expected_point_count = point_count;
+    this.curve_expected_visibility = visibility;
+    this.curve_expected_mesh = needs_mesh;
+    this.curve_edit_label = label;
+    true
+}
+
+fn route_curve_view_is_ready_after_edit(me) {
+    if this.failure != "" { return true; }
+    let view = inspect_route_curve_view(this.doc);
+    if view == () || view.ok == false { return false; }
+    if view.state == "failed" {
+        this.failure = "route ribbon build failed after " + this.curve_edit_label
+            + ": " + view.error;
+        return true;
+    }
+    if view.state != "ready"
+        || view.completed_revision != view.requested_revision
+        || view.applied_revision != view.requested_revision
+        || view.requested_revision <= this.curve_edit_baseline {
+        return false;
+    }
+    let route = waypoint_editor::route_positions(this.doc, ROUTE);
+    if route == () || route.ok != true
+        || route.paths.len() != this.curve_expected_point_count {
+        return false;
+    }
+    if view.local_visibility != this.curve_expected_visibility
+        || (this.curve_expected_mesh && view.result_vertex_count < 4)
+        || (!this.curve_expected_mesh && view.result_vertex_count != 0) {
+        this.failure = "route ribbon result after " + this.curve_edit_label
+            + " disagrees with the route: local visibility=" + view.local_visibility
+            + ", vertices=" + view.result_vertex_count.to_string();
+        return true;
+    }
+    true
+}
+
+fn record_route_curve_view_edit(me) {
+    this.checks.push(t_true(this.failure == "",
+        this.curve_edit_label + " applies the current route mesh revision and visibility"));
+}
+
+fn delete_last_route_point_for_view_test(me, next_count, visibility, needs_mesh, label) {
+    if !begin_curve_view_expectation(me, next_count, visibility, needs_mesh, label) {
+        return;
+    }
+    let route = waypoint_editor::route_positions(this.doc, ROUTE);
+    if route == () || route.ok != true
+        || route.paths.len() != next_count + 1 || route.paths.len() == 0 {
+        this.failure = "route topology is not ready for " + label;
+        return;
+    }
+    let target = route.paths[route.paths.len() - 1];
+    let deleted = waypoint_editor::on_delete(#{
+        doc_id: this.doc, route_path: ROUTE, selected_path: target,
+    });
+    if deleted == () || deleted.ok != true || deleted.path != target {
+        this.failure = label + " was rejected: "
+            + if deleted == () { "no command result" } else { deleted.error };
+        return;
+    }
+    this.waiting_for = label + " route and ribbon projection";
+}
+
+fn add_route_point_for_view_test(me, position, next_count, visibility, needs_mesh, label) {
+    if !begin_curve_view_expectation(me, next_count, visibility, needs_mesh, label) {
+        return;
+    }
+    let point = point3(position, "active_physics");
+    let added = waypoint_editor::on_click(#{
+        button: "primary",
+        doc_id: this.doc,
+        scene_root_path: ROOT,
+        route_path: ROUTE,
+        surface_world_position: point,
+    });
+    if added == () || added.ok != true || added.path == () {
+        this.failure = label + " was rejected: "
+            + if added == () { "no command result" } else { added.error };
+        return;
+    }
+    this.waiting_for = label + " route and ribbon projection";
+}
+
+fn delete_to_three_route_points(me) {
+    delete_last_route_point_for_view_test(me, 3, "inherited", true,
+        "reducing the route to three points");
+}
+
+fn delete_to_two_route_points(me) {
+    delete_last_route_point_for_view_test(me, 2, "inherited", true,
+        "reducing the route to two points");
+}
+
+fn delete_to_one_route_point(me) {
+    delete_last_route_point_for_view_test(me, 1, "hidden", false,
+        "reducing the route to one point");
+}
+
+fn delete_to_empty_route(me) {
+    delete_last_route_point_for_view_test(me, 0, "hidden", false,
+        "emptying the route");
+}
+
+fn add_one_route_point(me) {
+    add_route_point_for_view_test(me, [12.0, 1.0, -16.0], 1, "hidden", false,
+        "restoring one route point");
+}
+
+fn add_second_route_point(me) {
+    add_route_point_for_view_test(me, [18.0, 1.0, -16.0], 2, "inherited", true,
+        "restoring two route points");
+}
+
 fn live_render_translation(entity) {
     if entity < 0 { return (); }
     try {
@@ -71,7 +202,7 @@ fn simulation_dependencies(me, ctx) {
     #{
        modelica_entities: [find_path_in_document(subject.doc_id, ROOT + "/Subject")],
        entity_reads: [], entity_writes: [],
-       query_reads: ["InspectSelection", "ListOpenDocuments", "QueryUsdPrim", "QueryUsdPrims", "ResolveUsdTarget"],
+       query_reads: ["InspectSelection", "InspectUsdCurveView", "ListOpenDocuments", "QueryUsdPrim", "QueryUsdPrims", "ResolveUsdTarget"],
        required_inputs: [] }
 }
 
@@ -90,8 +221,25 @@ fn next_input_frame() {
 
 fn route_fixture_ready(me) {
     let route = query("QueryUsdPrim", #{ path: ROUTE, children: true });
-    route != () && route.ok != false && route.doc_id != ()
-        && route.children != () && route.children.contains(ROUTE + "/P2")
+    let ready = route != () && route.ok != false && route.doc_id != ()
+        && route.children != () && route.children.contains(ROUTE + "/P2");
+    if ready { this.doc = route.doc_id; }
+    ready
+}
+
+fn route_curve_view_is_ready_at_fixture(me) {
+    if this.failure != "" { return true; }
+    let view = inspect_route_curve_view(this.doc);
+    if view == () || view.ok == false { return false; }
+    if view.state == "failed" {
+        this.failure = "initial route ribbon build failed: " + view.error;
+        return true;
+    }
+    view.state == "ready"
+        && view.completed_revision == view.requested_revision
+        && view.applied_revision == view.requested_revision
+        && view.local_visibility == "inherited"
+        && view.result_vertex_count >= 4
 }
 
 fn prepare_route_and_add_unpossessed(me) {
@@ -121,6 +269,9 @@ fn prepare_route_and_add_unpossessed(me) {
     this.subject = find_path_in_document(this.doc, ROOT + "/Subject");
     this.point = find_path_in_document(this.doc, ROUTE + "/P0");
     this.marker = find_path_in_document(this.doc, ROUTE + "/P0/Dome");
+    let ribbon_entity = find_path_in_document(
+        this.doc, ROUTE + "/RouteRibbon/Geometry",
+    );
     if unused == () || unused.ok == false
         || route == () || route.ok == false
         || pointer_api == () || pointer_api.ok == false
@@ -140,6 +291,16 @@ fn prepare_route_and_add_unpossessed(me) {
         this.failure = "route fixture identities or pointer schemas did not compose";
         return;
     }
+    if ribbon_entity < 0 {
+        this.failure = "route ribbon geometry has no live view identity";
+        return;
+    }
+    let wrong_view_owner = query("InspectUsdCurveView", #{
+        doc_id: this.doc + 1,
+        entity_id: ribbon_entity,
+    });
+    this.checks.push(t_true(wrong_view_owner != () && wrong_view_owner.ok == false,
+        "curve-view inspection rejects a mismatched document identity"));
     if unused.status != "missing" || unused.under_arc != true
         || unused.composed_exists != false {
         this.failure = "ResolveUsdTarget did not report an absent referenced child as missing";
@@ -162,6 +323,8 @@ fn prepare_route_and_add_unpossessed(me) {
         modifiers: #{ alt: true, shift: false, ctrl: false },
         surface_world_position: point3([4.0, 0.0, -16.0], "active_physics"),
     };
+    if !begin_curve_view_expectation(me, 4, "inherited", true,
+        "the unpossessed route add") { return; }
     let added = waypoint_editor::route_pointer_action(add);
     if added == () || added.ok != true || added.path == () {
         this.failure = "route add failed when no rover was possessed";
@@ -185,7 +348,7 @@ fn unpossessed_waypoint_ready(me) {
     });
     let ready = trigger != () && trigger.ok != false && trigger.attrs != ()
         && trigger.attrs["lunco:triggerZone"] != ();
-    if !ready { return false; }
+    if !ready || !route_curve_view_is_ready_after_edit(me) { return false; }
     let curve = query("QueryUsdPrim", #{
         doc_id: this.doc,
         path: ROUTE + "/RouteRibbon/Geometry",
@@ -205,6 +368,8 @@ fn unpossessed_waypoint_ready(me) {
 
 fn delete_unpossessed_waypoint(me) {
     this.generation_before_delete = document_generation(this.doc);
+    if !begin_curve_view_expectation(me, 3, "inherited", true,
+        "the unpossessed route delete") { return; }
     let deleted = waypoint_editor::on_delete(#{
         doc_id: this.doc,
         selected_path: this.added_without_possession,
@@ -224,7 +389,7 @@ fn unpossessed_waypoint_deleted(me) {
     });
     let deleted = route != () && route.ok != false && route.children != ()
         && !route.children.contains(this.added_without_possession);
-    if !deleted { return false; }
+    if !deleted || !route_curve_view_is_ready_after_edit(me) { return false; }
     let generation = document_generation(this.doc);
     this.checks.push(t_true(to_int(this.generation_after_delete)
         == to_int(this.generation_before_delete) + 1
@@ -537,7 +702,11 @@ fn preview_document_generation_is_stable(me) {
     true
 }
 
-fn press_placement(me) { input_pointer_press("primary", this.move_x, this.move_y); }
+fn press_placement(me) {
+    if !begin_curve_view_expectation(me, 3, "inherited", true,
+        "the route-point move") { return; }
+    input_pointer_press("primary", this.move_x, this.move_y);
+}
 fn release_placement(me) { input_pointer_release("primary", this.move_x, this.move_y); }
 
 fn observe_moved_waypoint(me) {
@@ -619,6 +788,8 @@ fn prepare_delete_menu_row(me) {
     // Keep the click close to the anchor so the short Delete button receives it.
     this.menu_x = this.screen[0] + 20.0;
     this.menu_y = this.screen[1] + 16.0 + 4.0 * 21.0;
+    if !begin_curve_view_expectation(me, 2, "inherited", true,
+        "deleting the moved route point") { return; }
     input_pointer_move(this.menu_x, this.menu_y);
 }
 
@@ -627,6 +798,7 @@ fn moved_waypoint_is_inactive(me) {
         doc_id: this.doc, path: this.context_delete_path,
     });
     deleted != () && deleted.ok != false && deleted.active == false
+        && route_curve_view_is_ready_after_edit(me)
 }
 
 fn delete_preserved_rover(me) {
@@ -636,6 +808,8 @@ fn delete_preserved_rover(me) {
 }
 
 fn insert_after_p1(me) {
+    if !begin_curve_view_expectation(me, 3, "inherited", true,
+        "Add point after") { return; }
     let inserted = waypoint_editor::on_insert_after(#{
         doc_id: this.doc,
         route_path: ROUTE,
@@ -656,6 +830,7 @@ fn after_insertion_is_projected(me) {
     let read = waypoint_editor::route_positions(this.doc, ROUTE);
     read != () && read.ok == true && read.paths != ()
         && read.paths.contains(this.inserted_after)
+        && route_curve_view_is_ready_after_edit(me)
 }
 
 fn after_insertion_order_is_valid(me) {
@@ -674,6 +849,8 @@ fn after_insertion_order_is_valid(me) {
 }
 
 fn delete_p2_for_inactive_order_check(me) {
+    if !begin_curve_view_expectation(me, 2, "inherited", true,
+        "deleting inactive-order fixture point P2") { return; }
     let deleted = waypoint_editor::on_delete(#{
         doc_id: this.doc, selected_path: ROUTE + "/P2",
     });
@@ -688,9 +865,12 @@ fn p2_is_absent_from_active_route(me) {
     let read = waypoint_editor::route_positions(this.doc, ROUTE);
     read != () && read.ok == true && !read.paths.contains(ROUTE + "/P2")
         && read.paths.contains(this.inserted_after)
+        && route_curve_view_is_ready_after_edit(me)
 }
 
 fn insert_before_p1(me) {
+    if !begin_curve_view_expectation(me, 3, "inherited", true,
+        "Add point before") { return; }
     let inserted = waypoint_editor::on_insert_before(#{
         doc_id: this.doc,
         route_path: ROUTE,
@@ -711,6 +891,7 @@ fn before_insertion_is_projected(me) {
     let read = waypoint_editor::route_positions(this.doc, ROUTE);
     read != () && read.ok == true && read.paths.contains(this.inserted_before)
         && !read.paths.contains(ROUTE + "/P2")
+        && route_curve_view_is_ready_after_edit(me)
 }
 
 fn before_insertion_order_is_valid(me) {
@@ -729,6 +910,8 @@ fn before_insertion_order_is_valid(me) {
 }
 
 fn insert_after_final_point(me) {
+    if !begin_curve_view_expectation(me, 4, "inherited", true,
+        "endpoint insertion") { return; }
     let inserted = waypoint_editor::on_insert_after(#{
         doc_id: this.doc,
         route_path: ROUTE,
@@ -748,6 +931,7 @@ fn insert_after_final_point(me) {
 fn endpoint_is_projected(me) {
     let read = waypoint_editor::route_positions(this.doc, ROUTE);
     read != () && read.ok == true && read.paths.contains(this.inserted_endpoint)
+        && route_curve_view_is_ready_after_edit(me)
 }
 
 fn finish_route_interaction(me) {
@@ -813,6 +997,8 @@ fn delete_waypoint_with_generic_command(me) {
         return;
     }
     this.generic_delete_generation_before = document_generation(this.doc);
+    if !begin_curve_view_expectation(me, 3, "inherited", true,
+        "generic waypoint deletion") { return; }
     let deleted = cmd("DeleteEntity", #{ target: target });
     if deleted == () || deleted.ok == false {
         this.failure = "generic DeleteEntity rejected the unpossessed route point: "
@@ -825,7 +1011,8 @@ fn delete_waypoint_with_generic_command(me) {
 fn generic_delete_is_projected(me) {
     let route = waypoint_editor::route_positions(this.doc, ROUTE);
     if route == () || route.ok != true || route.paths.contains(this.inserted_after)
-        || find_path_in_document(this.doc, this.inserted_after) >= 0 {
+        || find_path_in_document(this.doc, this.inserted_after) >= 0
+        || !route_curve_view_is_ready_after_edit(me) {
         return false;
     }
     let docs = query("ListOpenDocuments");
@@ -845,6 +1032,8 @@ fn generic_delete_is_projected(me) {
 }
 
 fn undo_generic_waypoint_delete(me) {
+    if !begin_curve_view_expectation(me, 4, "inherited", true,
+        "undoing generic waypoint deletion") { return; }
     let undone = cmd("UndoDocument", #{ doc_id: this.doc });
     if undone == () || undone.ok == false {
         this.failure = "the owning Twin document rejected undo after generic DeleteEntity";
@@ -856,7 +1045,8 @@ fn undo_generic_waypoint_delete(me) {
 fn generic_delete_undo_is_projected(me) {
     let route = waypoint_editor::route_positions(this.doc, ROUTE);
     if route == () || route.ok != true || !route.paths.contains(this.inserted_after)
-        || find_path_in_document(this.doc, this.inserted_after) < 0 {
+        || find_path_in_document(this.doc, this.inserted_after) < 0
+        || !route_curve_view_is_ready_after_edit(me) {
         return false;
     }
     let docs = query("ListOpenDocuments");
@@ -866,20 +1056,27 @@ fn generic_delete_undo_is_projected(me) {
     }
     this.checks.push(t_true(true,
         "undo restores the route point through the same owning Twin document"));
-    report(this, true,
-        "unpossessed edit, possessed native selection, explicit Move, cursor-tracking ghost, placement, right-click, ordered insertion, and generic delete with a different active document passed");
     true
+}
+
+fn complete_route_curve_view_checks(me) {
+    report(this, true,
+        "unpossessed edit, possessed native context selection, explicit Move, cursor-following preview, placement, ordered insertion, generic delete/undo, and applied ribbon states for zero, one, and multiple points passed");
 }
 
 fn task(me, ctx) {
     seq([
         wait_until(Fn("route_fixture_ready")),
+        wait_until(Fn("route_curve_view_is_ready_at_fixture")),
+        check(Fn("test_state_is_valid")),
         once(Fn("prepare_route_and_add_unpossessed")),
         check(Fn("test_state_is_valid")),
         wait_until(Fn("unpossessed_waypoint_ready")),
+        once(Fn("record_route_curve_view_edit")),
         once(Fn("delete_unpossessed_waypoint")),
         check(Fn("test_state_is_valid")),
         wait_until(Fn("unpossessed_waypoint_deleted")),
+        once(Fn("record_route_curve_view_edit")),
         once(Fn("select_rover")),
         check(Fn("test_state_is_valid")),
         wait_until(Fn("rover_is_selected")),
@@ -932,6 +1129,9 @@ fn task(me, ctx) {
         once(Fn("release_placement")),
         step(Fn("observe_moved_waypoint"), Fn("waypoint_was_moved")),
         check(Fn("moved_waypoint_matches_placement_click")),
+        wait_until(Fn("route_curve_view_is_ready_after_edit")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("record_route_curve_view_edit")),
         once(Fn("placement_preserved_rover_and_selection")),
         check(Fn("test_state_is_valid")),
         once(Fn("prepare_moved_marker_projection")),
@@ -951,24 +1151,34 @@ fn task(me, ctx) {
         next_input_frame(),
         once(Fn("release_menu_primary")),
         wait_until(Fn("moved_waypoint_is_inactive")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("record_route_curve_view_edit")),
         once(Fn("delete_preserved_rover")),
         check(Fn("test_state_is_valid")),
         once(Fn("insert_after_p1")),
         check(Fn("test_state_is_valid")),
         wait_until(Fn("after_insertion_is_projected")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("record_route_curve_view_edit")),
         check(Fn("after_insertion_order_is_valid")),
         check(Fn("test_state_is_valid")),
         once(Fn("delete_p2_for_inactive_order_check")),
         check(Fn("test_state_is_valid")),
         wait_until(Fn("p2_is_absent_from_active_route")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("record_route_curve_view_edit")),
         once(Fn("insert_before_p1")),
         check(Fn("test_state_is_valid")),
         wait_until(Fn("before_insertion_is_projected")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("record_route_curve_view_edit")),
         check(Fn("before_insertion_order_is_valid")),
         check(Fn("test_state_is_valid")),
         once(Fn("insert_after_final_point")),
         check(Fn("test_state_is_valid")),
         wait_until(Fn("endpoint_is_projected")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("record_route_curve_view_edit")),
         once(Fn("finish_route_interaction")),
         check(Fn("test_state_is_valid")),
         once(Fn("release_rover_before_generic_delete")),
@@ -981,9 +1191,44 @@ fn task(me, ctx) {
         check(Fn("test_state_is_valid")),
         wait_until(Fn("generic_delete_is_projected")),
         check(Fn("test_state_is_valid")),
+        once(Fn("record_route_curve_view_edit")),
+        check(Fn("test_state_is_valid")),
         once(Fn("undo_generic_waypoint_delete")),
         check(Fn("test_state_is_valid")),
         wait_until(Fn("generic_delete_undo_is_projected")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("record_route_curve_view_edit")),
+        once(Fn("delete_to_three_route_points")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("route_curve_view_is_ready_after_edit")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("record_route_curve_view_edit")),
+        once(Fn("delete_to_two_route_points")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("route_curve_view_is_ready_after_edit")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("record_route_curve_view_edit")),
+        once(Fn("delete_to_one_route_point")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("route_curve_view_is_ready_after_edit")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("record_route_curve_view_edit")),
+        once(Fn("delete_to_empty_route")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("route_curve_view_is_ready_after_edit")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("record_route_curve_view_edit")),
+        once(Fn("add_one_route_point")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("route_curve_view_is_ready_after_edit")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("record_route_curve_view_edit")),
+        once(Fn("add_second_route_point")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("route_curve_view_is_ready_after_edit")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("record_route_curve_view_edit")),
+        once(Fn("complete_route_curve_view_checks")),
         check(Fn("test_state_is_valid")),
     ])
 }
@@ -1016,6 +1261,11 @@ fn on_start(me, ctx) {
     this.active_document_id = ();
     this.generic_delete_generation_before = ();
     this.generic_delete_generation_after = ();
+    this.curve_edit_baseline = 0;
+    this.curve_expected_point_count = 0;
+    this.curve_expected_visibility = "";
+    this.curve_expected_mesh = false;
+    this.curve_edit_label = "";
     this.input_frame_samples = 0;
     subscribe("scene.pointer");
     subscribe("TASK_FAILED");
