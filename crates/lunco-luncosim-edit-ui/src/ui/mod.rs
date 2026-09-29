@@ -958,10 +958,9 @@ impl Perspective for EditorPerspective {
         lunco_interaction_core::SceneInteractionMode::Editor
     }
     fn layout_revision(&self) -> u32 {
-        // The editor now opens directly on the prim tree. Invalidate the
-        // previous Twin-first preset once so persisted editor layouts adopt
-        // the new authored default.
-        1
+        // The editor keeps requirement details in a dedicated lower-right
+        // dock pane alongside the inspector.
+        2
     }
     fn layout(&self) -> PerspectiveLayoutPlan {
         // Structure first: the USD prim tree is the assembly's authoring
@@ -981,7 +980,8 @@ impl Perspective for EditorPerspective {
                 lunco_usd_viewport_runtime::USD_VIEWPORT_PANEL_ID,
                 PanelId("rhai_editor"),
             ]),
-            // The Inspector alone on the right — parameter editing is the point here.
+            // The Inspector tools share the upper-right tab strip. Optional
+            // workflow panels contribute their own lower-right slots.
             right_inspector: PerspectiveSlotPlan::new().tabs([
                 PanelId("sandbox_inspector"),
                 PanelId("authoring_review"),
@@ -1082,6 +1082,6 @@ mod tests {
                 .contains(&PanelId("usd_prim_tree"))
         );
         assert!(plan.side_browser.secondary.contains(&TWIN_BROWSER_PANEL_ID));
-        assert_eq!(EditorPerspective.layout_revision(), 1);
+        assert_eq!(EditorPerspective.layout_revision(), 2);
     }
 }

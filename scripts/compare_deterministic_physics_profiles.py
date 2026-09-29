@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare authored multi-rover snapshots across pacing, scene sizes, and Compute widths."""
+"""Compare authored multi-rover snapshots at the default step and full update throughput."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ SCENES_BY_ROVER_COUNT = {
     20: SCENE,
 }
 PROFILE_RUNS = 2
+DEFAULT_TICK_HZ = 60.0
 EXPECTED_SHARED_ROVERS = 4
 EXPECTED_STATE_SNAPSHOT_COUNT = 6
 DETERMINISTIC_SEED = 6840157149251759617
@@ -43,7 +44,8 @@ ARTICULATED_BODY_TRACE_PATTERN = re.compile(
     r"D4_ARTICULATED_BODY_TRACE_V2\|(\d+)\|([^|\r\n]+)\|([^\r\n]*)"
 )
 PROFILE_PATTERN = re.compile(r"D4_PROFILE_V1\|(\d+)")
-REFERENCE_SCHEMA = "luncosim-deterministic-physics-reference-v1"
+TICK_HZ_PATTERN = re.compile(r"\btick_hz=([0-9]+(?:\.[0-9]+)?)\b")
+REFERENCE_SCHEMA = "luncosim-deterministic-physics-reference-v2"
 ARTICULATED_CHECKPOINT_TICKS = ("1", "11", "80")
 PORTABLE_ARTICULATED_CHECKPOINT_TICKS = ("11", "80")
 
@@ -153,12 +155,11 @@ def run_profile(
     scene: str = SCENE,
     jitter: float = 0.0,
     seed: int = DETERMINISTIC_SEED,
-    tick_hz: float | None = None,
 ) -> tuple[int, list[str], str, float]:
     print(
         f"Running production scene {Path(scene).stem} with Compute width "
         f"{threads or 'default'}, jitter {jitter}, seed {seed}, "
-        f"tick rate {tick_hz or 'default'} Hz",
+        f"default fixed step {DEFAULT_TICK_HZ:g} Hz, unpaced",
         flush=True,
     )
     command = [
@@ -175,11 +176,9 @@ def run_profile(
         "--seed",
         str(seed),
     ]
-    if tick_hz is not None:
-        command.extend(("--tick-hz", str(tick_hz)))
     config = ROOT / "target" / "scene-tests" / (
         f"deterministic-{Path(scene).stem}-{threads}-{jitter}-{seed}-"
-        f"{tick_hz or 'default'}hz-{os.getpid()}-"
+        f"{DEFAULT_TICK_HZ:g}hz-{os.getpid()}-"
         f"{time.monotonic_ns()}"
     )
     config.parent.mkdir(parents=True, exist_ok=True)
@@ -246,6 +245,12 @@ def run_profile(
         raise RuntimeError(
             f"--threads {threads}: expected six authored Rhai snapshots, "
             f"found {len(traces)}"
+        )
+    tick_rates = TICK_HZ_PATTERN.findall(output)
+    if len(tick_rates) != 1 or float(tick_rates[0]) != DEFAULT_TICK_HZ:
+        raise RuntimeError(
+            f"--threads {threads}: expected the default fixed step to be "
+            f"{DEFAULT_TICK_HZ:g} Hz, found {tick_rates or 'no reported rate'}"
         )
     return int(profiles[0]), traces, output, elapsed
 
@@ -1285,7 +1290,6 @@ def make_reference_case(
     thread_setting: str,
     jitter: float,
     seed: int,
-    tick_hz: float | None,
 ) -> dict[str, object]:
     label, width, _, output, _ = run
     validate_startup_trace(output, label)
@@ -1313,7 +1317,7 @@ def make_reference_case(
             "thread_setting": thread_setting,
             "jitter": jitter,
             "seed": seed,
-            "tick_hz": tick_hz,
+            "tick_hz": DEFAULT_TICK_HZ,
         },
         "effective_compute_width": width,
         "first_behavior_tick": raw_sim_tick(EARLY_TRACE_PATTERN.findall(output)[0]),
@@ -1326,7 +1330,6 @@ def make_reference_case(
 def collect_reference_cases(
     scene_runs: dict[int, list[tuple[str, int, list[str], str, float]]],
     jitter_runs: list[tuple[str, int, list[str], str, float]],
-    tick_rate_runs: list[tuple[str, int, list[str], str, float]],
 ) -> dict[str, dict[str, object]]:
     cases: dict[str, dict[str, object]] = {}
     for rover_count in (4, 8, 20):
@@ -1339,7 +1342,6 @@ def collect_reference_cases(
             thread_setting="single",
             jitter=0.0,
             seed=DETERMINISTIC_SEED,
-            tick_hz=None,
         )
         cases[f"scene-{rover_count}-default"] = make_reference_case(
             f"{rover_count} default reference",
@@ -1349,7 +1351,6 @@ def collect_reference_cases(
             thread_setting="default",
             jitter=0.0,
             seed=DETERMINISTIC_SEED,
-            tick_hz=None,
         )
 
     for profile_index, (jitter, seed) in enumerate(JITTER_REPLAY_PROFILES):
@@ -1362,19 +1363,7 @@ def collect_reference_cases(
             thread_setting="single",
             jitter=jitter,
             seed=seed,
-            tick_hz=None,
         )
-
-    cases["tick-rate-30hz"] = make_reference_case(
-        tick_rate_runs[0][0],
-        tick_rate_runs[0],
-        scene=SCENES_BY_ROVER_COUNT[4],
-        rover_count=4,
-        thread_setting="single",
-        jitter=0.0,
-        seed=DETERMINISTIC_SEED,
-        tick_hz=30.0,
-    )
     return cases
 
 
@@ -1593,26 +1582,6 @@ def main() -> int:
         except RuntimeError as error:
             replay_errors.append(str(error))
 
-    tick_rate_runs = []
-    for repeat in range(1, PROFILE_RUNS + 1):
-        width, traces, output, elapsed = run_profile(
-            binary,
-            1,
-            SCENES_BY_ROVER_COUNT[4],
-            tick_hz=30.0,
-        )
-        if width != 1:
-            raise RuntimeError(
-                f"4-rover 30 Hz profile reported Compute width {width}, expected 1"
-            )
-        tick_rate_runs.append(
-            (f"4 30 Hz repeat {repeat}", width, traces, output, elapsed)
-        )
-    try:
-        compare_full_roster_replays(tick_rate_runs[0], tick_rate_runs[1:])
-    except RuntimeError as error:
-        replay_errors.append(str(error))
-
     try:
         shared_rovers, compared_runs = compare_scenario_matrix(scene_runs)
     except RuntimeError as error:
@@ -1642,13 +1611,6 @@ def main() -> int:
         "against=fixed_step comparison=exact numeric_tolerance=0",
         flush=True,
     )
-    print(
-        "DETERMINISTIC_TICK_RATE_PROFILE_OK "
-        "scene_size=4 compute_width=1 tick_hz=30 repeats=2 "
-        "compared=full_roster_physics,Modelica comparison=exact",
-        flush=True,
-    )
-
     early_traces = [
         EARLY_TRACE_PATTERN.findall(output)
         for output in (
@@ -1759,9 +1721,10 @@ def main() -> int:
         "wall_seconds="
         f"{serial_elapsed:.1f},{repeat_elapsed:.1f},"
         f"{default_elapsed:.1f},{default_repeat_elapsed:.1f}"
+        f" fixed_step_hz={DEFAULT_TICK_HZ:g} execution=unpaced"
     )
     if args.record_reference is not None or args.compare_reference is not None:
-        profiles = collect_reference_cases(scene_runs, jitter_runs, tick_rate_runs)
+        profiles = collect_reference_cases(scene_runs, jitter_runs)
         if args.record_reference is not None:
             output = write_reference(args.record_reference, binary, profiles)
             print(f"DETERMINISTIC_REFERENCE_RECORDED path={output}", flush=True)

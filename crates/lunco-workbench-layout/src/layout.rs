@@ -112,10 +112,9 @@ impl WorkbenchLayout {
     ///
     /// Before the first perspective is active, [`Panel::default_slot`] seeds
     /// the initial slot intent. Once a perspective is active, that
-    /// perspective owns the slot intent; late registration must not add a
-    /// panel to the active layout. A perspective that wants a late-registered
-    /// panel declares its id through its `PerspectiveLayoutPlan`, and the
-    /// rebuild below then realizes that declaration.
+    /// perspective owns the slot intent; late registration only adds a panel
+    /// when its `visible_in_perspective()` contribution opts into the active
+    /// perspective. An explicit slot declaration in the perspective plan wins.
     pub fn register<P: Panel + 'static>(&mut self, panel: P) {
         self.register_boxed(Box::new(panel));
     }
@@ -127,39 +126,41 @@ impl WorkbenchLayout {
         // its renderer. In that case the declared slot is authoritative: do
         // not append the panel to its authored default as well, or a stacked
         // Build preset silently turns back into one tab strip.
-        let declared = self.side_browser.contains(&id)
-            || self.side_browser_bottom.contains(&id)
-            || self.center.contains(&id)
-            || self.right_inspector.contains(&id)
-            || self.right_inspector_bottom.contains(&id)
-            || self.bottom.contains(&id);
-        if self.active_perspective.is_none() && !declared {
-            match slot {
-                PanelSlot::SideBrowser => {
-                    if !self.side_browser.contains(&id) {
-                        self.side_browser.push(id);
-                    }
+        let declared = self.has_slot_intent(id);
+        if !declared {
+            if let Some(perspective) = self.active_perspective {
+                if let Some(slot) = panel.visible_in_perspective(perspective) {
+                    self.add_panel_to_slot(id, slot);
                 }
-                PanelSlot::Center => {
-                    if !self.center.contains(&id) {
-                        self.center.push(id);
-                    }
-                }
-                PanelSlot::RightInspector => {
-                    if !self.right_inspector.contains(&id) {
-                        self.right_inspector.push(id);
-                    }
-                }
-                PanelSlot::Bottom => {
-                    if !self.bottom.contains(&id) {
-                        self.bottom.push(id);
-                    }
-                }
-                PanelSlot::Hidden => { /* registered, intentionally not docked */ }
+            } else {
+                self.add_panel_to_slot(id, slot);
             }
         }
         self.panels.insert(id, panel);
         self.rebuild_dock();
+    }
+
+    fn add_panel_to_slot(&mut self, id: PanelId, slot: PanelSlot) {
+        let entries = match slot {
+            PanelSlot::SideBrowser => &mut self.side_browser,
+            PanelSlot::Center => &mut self.center,
+            PanelSlot::RightInspector => &mut self.right_inspector,
+            PanelSlot::RightInspectorBottom => &mut self.right_inspector_bottom,
+            PanelSlot::Bottom => &mut self.bottom,
+            PanelSlot::Hidden => return,
+        };
+        if !entries.contains(&id) {
+            entries.push(id);
+        }
+    }
+
+    fn has_slot_intent(&self, id: PanelId) -> bool {
+        self.side_browser.contains(&id)
+            || self.side_browser_bottom.contains(&id)
+            || self.center.contains(&id)
+            || self.right_inspector.contains(&id)
+            || self.right_inspector_bottom.contains(&id)
+            || self.bottom.contains(&id)
     }
 
     /// Register a multi-instance panel *kind*. Tabs of this kind are
@@ -237,6 +238,9 @@ impl WorkbenchLayout {
             Some(PanelSlot::Bottom) => self.bottom.iter().copied().collect(),
             Some(PanelSlot::SideBrowser) => self.side_browser.iter().copied().collect(),
             Some(PanelSlot::RightInspector) => self.right_inspector.iter().copied().collect(),
+            Some(PanelSlot::RightInspectorBottom) => {
+                self.right_inspector_bottom.iter().copied().collect()
+            }
             _ => std::collections::HashSet::new(),
         };
         let center_ids: std::collections::HashSet<PanelId> = self.center.iter().copied().collect();
@@ -264,14 +268,17 @@ impl WorkbenchLayout {
                     _ => false,
                 })
             })
-            // Priority 3: leaf hosting any Center singleton (the
-            // historical fallback, kept so kinds with no
-            // preferred slot still land somewhere visible).
+            // Priority 3: use a Center singleton as the fallback for ordinary
+            // slots. A lower-right tab needs its own split below the Inspector.
             .or_else(|| {
-                find_leaf_matching(main, |t| match *t {
-                    TabId::Singleton(id) => center_ids.contains(&id),
-                    _ => false,
-                })
+                if preferred_slot == Some(PanelSlot::RightInspectorBottom) {
+                    None
+                } else {
+                    find_leaf_matching(main, |t| match *t {
+                        TabId::Singleton(id) => center_ids.contains(&id),
+                        _ => false,
+                    })
+                }
             })
             // Priority 4: any leaf at all, except that a kind whose
             // authoritative default is the Bottom dock must create a bottom
@@ -279,7 +286,10 @@ impl WorkbenchLayout {
             // first leaf can be the left browser, making a default graph tab
             // appear in the wrong surface.
             .or_else(|| {
-                if preferred_slot != Some(PanelSlot::Bottom) {
+                if !matches!(
+                    preferred_slot,
+                    Some(PanelSlot::Bottom | PanelSlot::RightInspectorBottom)
+                ) {
                     first_leaf(main)
                 } else {
                     None
@@ -306,6 +316,35 @@ impl WorkbenchLayout {
                 surface: egui_dock::SurfaceIndex::main(),
                 node: leaf,
             });
+        } else if preferred_slot == Some(PanelSlot::RightInspectorBottom) {
+            let inspector_node = self.right_inspector.first().copied().and_then(|id| {
+                let inspector_tab = TabId::Singleton(id);
+                find_leaf_matching(self.dock.main_surface_mut(), |candidate| {
+                    *candidate == inspector_tab
+                })
+            });
+            if let Some(node) = inspector_node {
+                self.dock
+                    .main_surface_mut()
+                    .split_below(node, 0.5, vec![tab]);
+            } else if let Some(vp) = vp_leaf {
+                // Keep an exclusive scene viewport leaf intact when no
+                // Inspector pane is available to anchor the lower-right slot.
+                self.dock.main_surface_mut().split_below(vp, 0.7, vec![tab]);
+            } else if let Some(leaf) = first_leaf(self.dock.main_surface_mut()) {
+                self.dock.main_surface_mut()[leaf].append_tab(tab);
+            } else {
+                self.dock = DockState::new(vec![tab]);
+            }
+            if let Some(path) = self.dock.find_tab(&tab) {
+                self.dock.set_focused_node_and_surface(path.node_path());
+                if let Err(error) = self.dock.set_active_tab(path) {
+                    bevy::log::warn!(
+                        "open_instance: could not foreground tab {kind:?}#{instance} \
+                         at {path:?}: {error:?}"
+                    );
+                }
+            }
         } else if let Some(vp) = vp_leaf {
             // Only the scene-viewport leaf is available (e.g. Build, whose Bottom
             // slot is empty). Split a fresh leaf BELOW the viewport (~30% tall) and
@@ -407,7 +446,7 @@ impl WorkbenchLayout {
     /// Materialize a renderer-independent perspective plan into the concrete
     /// dock tree. Only this shell method knows how semantic slots map to
     /// `egui_dock` nodes.
-    pub fn apply_perspective_plan(&mut self, plan: PerspectiveLayoutPlan) {
+    pub fn apply_perspective_plan(&mut self, id: PerspectiveId, plan: PerspectiveLayoutPlan) {
         self.activity_bar = plan.activity_bar;
         self.side_browser = plan.side_browser.primary;
         self.side_browser_bottom = plan.side_browser.secondary;
@@ -419,6 +458,21 @@ impl WorkbenchLayout {
         self.right_inspector = plan.right_inspector.primary;
         self.right_inspector_bottom = plan.right_inspector.secondary;
         self.bottom = plan.bottom.primary;
+        let contributions: Vec<_> = self
+            .panels
+            .iter()
+            .filter_map(|(panel_id, panel)| {
+                if self.has_slot_intent(*panel_id) {
+                    return None;
+                }
+                panel
+                    .visible_in_perspective(id)
+                    .map(|slot| (*panel_id, slot))
+            })
+            .collect();
+        for (panel_id, slot) in contributions {
+            self.add_panel_to_slot(panel_id, slot);
+        }
         self.rebuild_dock();
         for tab in plan.instance_tabs {
             self.open_instance_with_slot(tab.kind, tab.instance, Some(tab.slot));
@@ -503,7 +557,7 @@ impl WorkbenchLayout {
         let perspectives = std::mem::take(&mut self.perspectives);
         if let Some(ws) = perspectives.iter().find(|w| w.id() == id) {
             let plan = ws.layout();
-            self.apply_perspective_plan(plan);
+            self.apply_perspective_plan(id, plan);
             self.active_perspective = Some(id);
         }
         self.perspectives = perspectives;
@@ -1098,33 +1152,44 @@ impl WorkbenchLayout {
             PanelSlot::SideBrowser => self.side_browser.first().copied(),
             PanelSlot::Center => self.center.first().copied(),
             PanelSlot::RightInspector => self.right_inspector.first().copied(),
+            PanelSlot::RightInspectorBottom => self.right_inspector_bottom.first().copied(),
             PanelSlot::Bottom => self.bottom.first().copied(),
             PanelSlot::Hidden => None,
         };
         let target_node: Option<NodeIndex> = neighbour.and_then(|nid| {
             let target_tab = TabId::Singleton(nid);
             // Walk all nodes; egui_dock's NodeIndex is opaque so we
-            // probe by index until we find the leaf containing the
-            // sibling tab.
-            let mut found = None;
-            for i in 0..256 {
-                let node = NodeIndex(i);
-                if let Some(node_ref) = main.iter().nth(i) {
-                    if let egui_dock::Node::Leaf(leaf) = node_ref {
-                        if leaf.tabs.contains(&target_tab) {
-                            found = Some(node);
-                            break;
-                        }
+            // find the leaf containing the sibling tab.
+            main.iter()
+                .enumerate()
+                .find_map(|(index, node)| match node {
+                    egui_dock::Node::Leaf(leaf) if leaf.tabs.contains(&target_tab) => {
+                        Some(NodeIndex(index))
                     }
-                } else {
-                    break;
-                }
-            }
-            found
+                    _ => None,
+                })
         });
         if let Some(node) = target_node {
             main.set_focused_node(node);
             main.push_to_focused_leaf(tab);
+        } else if slot == PanelSlot::RightInspectorBottom
+            && let Some(top_panel) = self.right_inspector.first().copied()
+        {
+            let target_tab = TabId::Singleton(top_panel);
+            let right_node = main
+                .iter()
+                .enumerate()
+                .find_map(|(index, node)| match node {
+                    egui_dock::Node::Leaf(leaf) if leaf.tabs.contains(&target_tab) => {
+                        Some(NodeIndex(index))
+                    }
+                    _ => None,
+                });
+            if let Some(node) = right_node {
+                main.split_below(node, 0.5, vec![tab]);
+            } else {
+                main.push_to_focused_leaf(tab);
+            }
         } else {
             // Last resort: append to focused leaf (whatever the user
             // had focus on). Better than wiping the dock.
@@ -1166,18 +1231,17 @@ impl WorkbenchLayout {
         let main = self.dock.main_surface_mut();
         // Collect node indices to mutate.
         let mut hits: Vec<(NodeIndex, usize)> = Vec::new();
-        for i in 0..256 {
-            let node = NodeIndex(i);
-            match main.iter().nth(i) {
-                Some(egui_dock::Node::Leaf(leaf)) => {
+        for (index, node_ref) in main.iter().enumerate() {
+            let node = NodeIndex(index);
+            match node_ref {
+                egui_dock::Node::Leaf(leaf) => {
                     for (idx, t) in leaf.tabs.iter().enumerate() {
                         if *t == tab {
                             hits.push((node, idx));
                         }
                     }
                 }
-                Some(_) => {}
-                None => break,
+                _ => {}
             }
         }
         for (node, idx) in hits.into_iter().rev() {
@@ -1510,6 +1574,53 @@ mod tests {
     use egui_dock::egui;
     use lunco_workbench_core::PanelCtx;
 
+    struct TestPanel {
+        id: PanelId,
+        slot: PanelSlot,
+        contribution: Option<(PerspectiveId, PanelSlot)>,
+    }
+
+    impl Panel for TestPanel {
+        fn id(&self) -> PanelId {
+            self.id
+        }
+
+        fn title(&self) -> String {
+            self.id.as_str().to_owned()
+        }
+
+        fn default_slot(&self) -> PanelSlot {
+            self.slot
+        }
+
+        fn visible_in_perspective(&self, perspective: PerspectiveId) -> Option<PanelSlot> {
+            self.contribution
+                .filter(|(owner, _)| *owner == perspective)
+                .map(|(_, slot)| slot)
+        }
+
+        fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx) {}
+    }
+
+    struct TestPerspective {
+        id: PerspectiveId,
+        plan: PerspectiveLayoutPlan,
+    }
+
+    impl Perspective for TestPerspective {
+        fn id(&self) -> PerspectiveId {
+            self.id
+        }
+
+        fn title(&self) -> String {
+            self.id.as_str().to_owned()
+        }
+
+        fn layout(&self) -> PerspectiveLayoutPlan {
+            self.plan.clone()
+        }
+    }
+
     struct TestInstancePanel(PanelId);
 
     impl InstancePanel for TestInstancePanel {
@@ -1519,6 +1630,24 @@ mod tests {
 
         fn default_slot(&self) -> PanelSlot {
             PanelSlot::Center
+        }
+
+        fn title(&self, _world: &World, instance: u64) -> String {
+            format!("{} #{instance}", self.0.as_str())
+        }
+
+        fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx, _instance: u64) {}
+    }
+
+    struct RightInspectorBottomInstancePanel(PanelId);
+
+    impl InstancePanel for RightInspectorBottomInstancePanel {
+        fn kind(&self) -> PanelId {
+            self.0
+        }
+
+        fn default_slot(&self) -> PanelSlot {
+            PanelSlot::RightInspectorBottom
         }
 
         fn title(&self, _world: &World, instance: u64) -> String {
@@ -1560,5 +1689,130 @@ mod tests {
                 .reconcile_dock(stale_only, &HashMap::new(), &discarded)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn late_perspective_contribution_builds_the_lower_right_dock_leaf() {
+        let editor = PerspectiveId("editor");
+        let viewport = PanelId("viewport");
+        let inspector = PanelId("inspector");
+        let details = PanelId("requirement_details");
+        let mut plan = PerspectiveLayoutPlan::new();
+        plan.center = plan.center.single(Some(viewport));
+        plan.right_inspector = plan.right_inspector.single(Some(inspector));
+
+        let mut layout = WorkbenchLayout::default();
+        layout.register_perspective(TestPerspective { id: editor, plan });
+        layout.register(TestPanel {
+            id: viewport,
+            slot: PanelSlot::Center,
+            contribution: None,
+        });
+        layout.register(TestPanel {
+            id: inspector,
+            slot: PanelSlot::RightInspector,
+            contribution: None,
+        });
+        layout.register(TestPanel {
+            id: details,
+            slot: PanelSlot::Hidden,
+            contribution: Some((editor, PanelSlot::RightInspectorBottom)),
+        });
+
+        assert_eq!(layout.right_inspector_bottom, [details]);
+        let inspector_node = layout
+            .dock
+            .find_tab(&TabId::Singleton(inspector))
+            .expect("inspector is docked")
+            .node;
+        let details_node = layout
+            .dock
+            .find_tab(&TabId::Singleton(details))
+            .expect("contributed details panel is docked")
+            .node;
+        assert_ne!(inspector_node, details_node);
+    }
+
+    #[test]
+    fn explicit_perspective_slot_wins_over_panel_contribution() {
+        let editor = PerspectiveId("editor");
+        let viewport = PanelId("viewport");
+        let inspector = PanelId("inspector");
+        let details = PanelId("requirement_details");
+        let mut layout = WorkbenchLayout::default();
+        for (id, slot, contribution) in [
+            (viewport, PanelSlot::Center, None),
+            (inspector, PanelSlot::RightInspector, None),
+            (
+                details,
+                PanelSlot::Hidden,
+                Some((editor, PanelSlot::RightInspectorBottom)),
+            ),
+        ] {
+            layout.register(TestPanel {
+                id,
+                slot,
+                contribution,
+            });
+        }
+
+        let mut plan = PerspectiveLayoutPlan::new();
+        plan.center = plan.center.tabs([viewport, details]);
+        plan.right_inspector = plan.right_inspector.single(Some(inspector));
+        layout.apply_perspective_plan(editor, plan);
+
+        assert_eq!(layout.center, [viewport, details]);
+        assert!(layout.right_inspector_bottom.is_empty());
+        assert_eq!(
+            layout
+                .dock
+                .iter_all_tabs()
+                .filter(|(_, tab)| **tab == TabId::Singleton(details))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn lower_right_instance_tab_splits_below_the_inspector_when_empty() {
+        let viewport = PanelId("viewport");
+        let inspector = PanelId("inspector");
+        let instance_kind = PanelId("requirement_detail_instance");
+        let mut layout = WorkbenchLayout::default();
+        layout.register(TestPanel {
+            id: viewport,
+            slot: PanelSlot::Center,
+            contribution: None,
+        });
+        layout.register(TestPanel {
+            id: inspector,
+            slot: PanelSlot::RightInspector,
+            contribution: None,
+        });
+        layout.register_instance_panel(RightInspectorBottomInstancePanel(instance_kind));
+
+        let mut plan = PerspectiveLayoutPlan::new();
+        plan.center = plan.center.single(Some(viewport));
+        plan.right_inspector = plan.right_inspector.single(Some(inspector));
+        layout.apply_perspective_plan(PerspectiveId("editor"), plan);
+        layout.open_instance(instance_kind, 7);
+
+        let inspector_node = layout
+            .dock
+            .find_tab(&TabId::Singleton(inspector))
+            .expect("inspector is docked")
+            .node;
+        let instance_node = layout
+            .dock
+            .find_tab(&TabId::instance(instance_kind, 7))
+            .expect("instance tab is docked")
+            .node;
+        let center_node = layout
+            .dock
+            .find_tab(&TabId::Singleton(viewport))
+            .expect("center panel is docked")
+            .node;
+        assert_ne!(instance_node, inspector_node);
+        assert_ne!(instance_node, center_node);
     }
 }

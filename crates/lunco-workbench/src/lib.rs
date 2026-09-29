@@ -432,6 +432,9 @@ fn focus_panel_now(layout: &mut WorkbenchLayout, want: &str) {
             PanelSlot::RightInspector if !layout.right_inspector.contains(&pid) => {
                 layout.right_inspector.push(pid)
             }
+            PanelSlot::RightInspectorBottom if !layout.right_inspector_bottom.contains(&pid) => {
+                layout.right_inspector_bottom.push(pid)
+            }
             PanelSlot::Bottom if !layout.bottom.contains(&pid) => layout.bottom.push(pid),
             PanelSlot::Hidden => unreachable!("hidden panels are normalized above"),
             _ => {}

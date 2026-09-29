@@ -443,8 +443,9 @@ small trait:
 pub trait Panel: Send + Sync + 'static {
     fn id(&self) -> PanelId;                 // newtype over &'static str
     fn title(&self) -> String;
-    fn default_slot(&self) -> PanelSlot;     // Left / RightInspector / Bottom / Center / …
+    fn default_slot(&self) -> PanelSlot;     // Left / RightInspector / RightInspectorBottom / Bottom / Center / …
     fn preferred_perspective(&self) -> Option<PerspectiveId> { None } // optional owner workflow
+    fn visible_in_perspective(&self, id: PerspectiveId) -> Option<PanelSlot> { None }
     // Render reads through the capability-narrowed `PanelCtx` (no raw `&mut World`);
     // mutations emit typed events/resources and are applied after paint.
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx);
@@ -464,6 +465,7 @@ A panel's default slot derives from its `default_slot()` (and `id` substring con
 |----------|--------------|----------|
 | Navigation | Left side | Twin panel, Files panel |
 | Inspector | Right side | Properties, Modelica Inspector, Component Palette |
+| Detail | Lower-right pane | Requirement details |
 | Tool | Bottom | Diagram Editor |
 | Output | Bottom | Console, Plots, Telemetry, Diagnostics |
 
@@ -471,25 +473,26 @@ Users can drag panels between slots, tab them together, collapse them,
 or detach them (see § 8).
 
 Panel registration and perspective ownership are separate. Before the first
-perspective is active, `default_slot()` seeds the initial slot intent. After a
-perspective is active, registering another panel only adds its renderer to the
-registry; it does not mutate the active perspective or place the panel in its
-dock. A perspective returns a `PerspectiveLayoutPlan` from `layout()` and may
-seed a canonical multi-instance tab with `open_instance`. The concrete shell
-materializes that plan and uses the instance panel's authoritative
-`default_slot()`. Because the plan is evaluated for a first visit, layout
-revision rebuild, or explicit reset, switching back to a visited perspective
-restores its cached user layout and does not reopen a closed tab. Opening a
-panel from the View menu or a typed `FocusPanel` command is an explicit focus
-request. If the registered panel declares a registered
-`preferred_perspective()`, the shell activates that perspective before opening
-and focusing the panel; panels without an owner perspective keep the active
-perspective. The menu keeps Reset Layout and Toggle Activity Bar directly
-available, then groups panel checkboxes into Builder, Editor, and Lunica
-submenus according to `PanelMenuGroup`; unclassified integrations use Other.
-The SysML Requirements panel is grouped under Editor, belongs to the Editor
-perspective, and opens in Center. It remains available inside the existing
-workbench and does not add another editor session or perspective.
+perspective is active, `default_slot()` seeds the initial slot intent. A panel
+can also return a slot from `visible_in_perspective()` when another package's
+perspective should include it without depending on the panel's package. The
+shell applies those contributions when it builds the perspective and when a
+matching panel registers late. A perspective returns a
+`PerspectiveLayoutPlan` from `layout()` and may seed a canonical multi-instance
+tab with `open_instance`. The concrete shell materializes that plan and uses
+the instance panel's authoritative `default_slot()`. Because the plan is
+evaluated for a first visit, layout revision rebuild, or explicit reset,
+switching back to a visited perspective restores its cached user layout and
+does not reopen a closed tab. Opening a panel from the View menu or a typed
+`FocusPanel` command is an explicit focus request. If the registered panel
+declares a registered `preferred_perspective()`, the shell activates that
+perspective before opening and focusing the panel; panels without an owner
+perspective keep the active perspective. The menu keeps Reset Layout and
+Toggle Activity Bar directly available, then groups panel checkboxes into
+Builder, Editor, and Lunica submenus according to `PanelMenuGroup`;
+unclassified integrations use Other. The SysML Requirements browser is
+grouped under Editor and opens in Center. Its Requirement details panel
+contributes the lower-right Editor pane and follows the selected requirement.
 
 ### 5a. Side-browser architecture — Twin panel + Files panel
 

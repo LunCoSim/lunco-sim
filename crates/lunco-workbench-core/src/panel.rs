@@ -53,6 +53,8 @@ pub enum PanelSlot {
     Center,
     /// Right-side inspector region.
     RightInspector,
+    /// Lower pane in the right-side inspector region.
+    RightInspectorBottom,
     /// Bottom dock region.
     Bottom,
     /// Registered but not automatically docked.
@@ -285,6 +287,12 @@ pub trait Panel: Send + Sync + 'static {
     /// panel, so a panel cannot report success while remaining in a hidden
     /// perspective dock.
     fn preferred_perspective(&self) -> Option<PerspectiveId> {
+        None
+    }
+    /// Default slot contributed when a perspective is active, without requiring
+    /// that perspective's crate to depend on this panel's crate. An explicit
+    /// placement in the perspective plan takes precedence.
+    fn visible_in_perspective(&self, _perspective: PerspectiveId) -> Option<PanelSlot> {
         None
     }
     /// Whether the panel may be closed.

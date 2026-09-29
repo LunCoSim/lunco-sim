@@ -93,9 +93,11 @@ final-stage state, and articulated-body samples at ticks 1, 11, 80, and final;
 it does not emit per-tick traces. The comparator requires exact final physics,
 Modelica, and articulated equality before checking earlier selected states.
 Use `--record-reference PATH` to save the selected states for the 4/8/20-rover,
-Compute, jitter/seed, and 30 Hz profiles, then
-`--compare-reference PATH` on another machine. The reference records source,
-input, binary, and machine metadata and requires exact equality
+Compute and jitter/seed profiles at the default 60 Hz fixed step, then
+`--compare-reference PATH` on another machine. The matrix leaves `--tick-hz`
+unset and runs its manual clock without wall-time pacing, so it advances as
+quickly as scene updates and required asynchronous work allow. The reference
+records source, input, binary, and machine metadata and requires exact equality
 (`numeric_tolerance=0`). This remains fixture-specific evidence. Do not claim
 whole-simulation replay determinism while the remaining reviewed gaps are open.
 

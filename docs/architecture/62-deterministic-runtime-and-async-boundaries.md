@@ -1173,9 +1173,12 @@ The whole-simulation guarantee remains open because:
    Modelica variables. Articulated-body state is sampled at ticks 1, 11, 80,
    and the final tick for the 4/8/20-rover fixtures. The comparator checks the
    exact final physics, Modelica, and articulated states first, then compares
-   earlier checkpoints exactly. `--record-reference PATH` saves those points
-   for 4/8/20 rovers, serial/default Compute settings, seeded jitter profiles,
-   and 30 Hz, with source and machine metadata. `--compare-reference PATH`
+   earlier checkpoints exactly. The production scene-test matrix leaves
+   `--tick-hz` unset, verifies its default fixed step is 60 Hz, and advances
+   through manual clock updates without wall-time pacing. `--record-reference PATH`
+   saves those points for 4/8/20 rovers, serial/default Compute settings,
+   and seeded jitter profiles, with source and machine metadata.
+   `--compare-reference PATH`
    requires exact final-stage and checkpoint equality (`numeric_tolerance=0`);
    no cross-machine run has been observed yet. This remains fixture-specific
    evidence, not whole-simulation replay determinism. The current profile
