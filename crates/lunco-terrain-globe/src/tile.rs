@@ -6,7 +6,8 @@ use bevy::prelude::*;
 use bevy_mesh::{Indices, PrimitiveTopology};
 use lunco_materials::ATTRIBUTE_GLOBE_DIRECTION;
 use lunco_terrain_core::{
-    HeightSource, square_boundary_height_at, square_boundary_sample_coordinate,
+    HeightSource, square_boundary_height_at, square_boundary_posting_spacing,
+    square_boundary_sample_coordinate,
 };
 
 /// The exact local DEM footprint in the body's tangent-plane coordinates.
@@ -82,6 +83,10 @@ pub fn create_square_handoff_collar_mesh(
     if !outer_extent.is_finite() {
         return Err("collar outer extent is not finite");
     }
+    let normal_step_m =
+        square_boundary_posting_spacing(handoff.half_extent, boundary_grid_resolution)
+            .ok_or("collar boundary posting spacing is invalid")?
+            * 0.25;
     let outer_resolution = GLOBE_CUTOUT_EDGE_SEGMENTS + 1;
     let ring_count = radial_segments + 1;
     let resolutions = (0..ring_count)
@@ -132,13 +137,32 @@ pub fn create_square_handoff_collar_mesh(
         let perimeter = square_perimeter_coordinates(extent, resolution);
         ring_starts.push(positions.len());
         for (x, z_south) in perimeter {
+            let z_north = -z_south;
             let position = position_at(x, z_south);
-            let normal = position.normalize_or_zero();
-            if !position.is_finite() || !normal.is_finite() || normal.length_squared() < 0.9 {
+            let direction = position.normalize_or_zero();
+            // The boundary-position helper snaps vertices to the DEM's exact
+            // posting line. Use the continuous source for derivatives so a
+            // corner does not collapse one gradient axis onto that line.
+            let gradient_x = (source.height_at(x + normal_step_m, -z_north)
+                - source.height_at(x - normal_step_m, -z_north))
+                / (2.0 * normal_step_m);
+            let gradient_z = (source.height_at(x, -(z_north + normal_step_m))
+                - source.height_at(x, -(z_north - normal_step_m)))
+                / (2.0 * normal_step_m);
+            let normal = (handoff.east + handoff.dir * gradient_x)
+                .cross(handoff.north + handoff.dir * gradient_z)
+                .normalize_or_zero();
+            if !position.is_finite()
+                || !direction.is_finite()
+                || direction.length_squared() < 0.9
+                || !gradient_x.is_finite()
+                || !gradient_z.is_finite()
+                || !normal.is_finite()
+                || normal.length_squared() < 0.9
+            {
                 return Err("collar mesh contains non-finite geometry");
             }
             let offset = position - center;
-            let direction = normal;
             let offset = offset.as_vec3().to_array();
             let normal = normal.as_vec3().to_array();
             let direction = direction.as_vec3().to_array();
@@ -424,7 +448,18 @@ fn collar_position(
     z_north: f64,
     boundary_grid_resolution: usize,
 ) -> DVec3 {
-    let height = if boundary_grid_resolution >= 2 {
+    let height = collar_height(handoff, source, x, z_north, boundary_grid_resolution);
+    handoff.dir * (handoff.radius_m + height) + handoff.east * x + handoff.north * z_north
+}
+
+fn collar_height(
+    handoff: &GlobeHandoff,
+    source: &dyn HeightSource,
+    x: f64,
+    z_north: f64,
+    boundary_grid_resolution: usize,
+) -> f64 {
+    if boundary_grid_resolution >= 2 {
         square_boundary_height_at(
             source,
             x,
@@ -435,8 +470,7 @@ fn collar_position(
         .unwrap_or_else(|| source.height_at(x, -z_north))
     } else {
         source.height_at(x, -z_north)
-    };
-    handoff.dir * (handoff.radius_m + height) + handoff.east * x + handoff.north * z_north
+    }
 }
 
 fn interpolate_dir(dirs: &[DVec3; 3], bary: [f64; 3]) -> DVec3 {
@@ -735,6 +769,17 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    struct SlopedEdgeToSphere;
+
+    impl HeightSource for SlopedEdgeToSphere {
+        fn height_at(&self, x: f64, z_south: f64) -> f64 {
+            (RADIUS * RADIUS - x * x - z_south * z_south).sqrt() - RADIUS
+                + 0.15 * x
+                + 0.08 * z_south
+        }
+    }
+
     fn handoff() -> GlobeHandoff {
         GlobeHandoff {
             dir: DVec3::X,
@@ -888,6 +933,33 @@ mod tests {
             let c = point(triangle[2]);
             assert!((b - a).cross(c - a).dot(handoff.dir) > 0.0);
         }
+    }
+
+    #[test]
+    fn collar_inner_corner_normal_preserves_both_measured_edge_slopes() {
+        let handoff = handoff();
+        let resolution = 5;
+        let mesh = create_square_handoff_collar_mesh(handoff, &SlopedEdgeToSphere, resolution, 4)
+            .expect("valid finite crop collar");
+        let VertexAttributeValues::Float32x3(normals) = mesh
+            .attribute(Mesh::ATTRIBUTE_NORMAL)
+            .expect("collar normals")
+        else {
+            panic!("collar normals have an unexpected format");
+        };
+
+        let x = -HALF_EXTENT;
+        let z_north = HALF_EXTENT;
+        let radial = (RADIUS * RADIUS - x * x - z_north * z_north).sqrt();
+        let gradient_x = -x / radial + 0.15;
+        let gradient_z_north = -z_north / radial - 0.08;
+        let expected = (handoff.dir - handoff.east * gradient_x - handoff.north * gradient_z_north)
+            .normalize();
+        let actual = DVec3::from_array(normals[0].map(f64::from));
+        assert!(
+            actual.dot(expected) > 0.999,
+            "inner corner normal lost a measured edge slope: actual={actual:?}, expected={expected:?}"
+        );
     }
 
     #[test]

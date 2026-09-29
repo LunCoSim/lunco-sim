@@ -90,7 +90,7 @@ impl InstancePanel for VizPanel {
                     return;
                 }
             };
-            let Some(cfg) = registry.get(id).cloned() else {
+            let Some(cfg) = registry.get_shared(id) else {
                 // The dock layout may persist longer than a runtime-created
                 // visualization. The registry is authoritative, so remove
                 // the stale tab after this paint rather than showing a dead

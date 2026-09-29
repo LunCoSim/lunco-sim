@@ -214,6 +214,9 @@ the physics solver empties. Never block that queue:
 - **No per-frame allocations in the common path.** `String` clones
   and `Vec` rebuilds that happen on a no-op path are the most
   common offenders — pre-allocate, reuse, or skip entirely.
+- Workbench visualization configs are immutable `Arc` snapshots while a panel
+  paints. Registry edits use copy-on-write, so plot panels do not deep-clone
+  signal bindings and style data on every frame.
 - The Workbench keeps its immutable theme snapshot and derived egui visuals
   behind the theme revision. A stable frame reuses that snapshot and does not
   reapply context-wide visuals. The runtime-UI render acknowledgement follows
