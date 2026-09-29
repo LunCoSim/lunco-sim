@@ -147,6 +147,8 @@ producer must not rebuild a projection in the background.
 `WorkbenchSnapshot::is_panel_visible` is the shared visibility boundary for
 that decision; selecting the panel makes its normal producer cadence eligible
 again. `is_panel_docked` remains the layout-presence query for shell operations.
+The dock adapter borrows registered panel objects in place during a paint pass;
+it does not remove and reinsert each visible tab through the panel registry.
 The snapshot also publishes exact visible `TabId`s for instance panels, and
 `WorkbenchSnapshotPublishSet` orders consumers after that publication. USD
 preview cameras remain active only while their Visual singleton/instance tab is
