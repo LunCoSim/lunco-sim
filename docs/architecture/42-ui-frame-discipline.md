@@ -377,6 +377,12 @@ The same ownership rule applies to the measured presentation paths:
   camera reconciler legitimately mutably borrows that resource every frame;
   that borrow tick is not a presentation change. Joint readouts remain bounded
   to their declared 10 Hz refresh cadence.
+- **Inspector material parts** retains the selected USD root's
+  material-bearing entity index by root identity and `UsdStageRevision`. Stage
+  projection changes rebuild that subtree-derived index. Non-USD roots or a
+  missing revision resource disable reuse. Material values remain live paint
+  inputs, while display labels are formatted only for the active part or an
+  open selector.
 
 The same rule applies below the UI boundary. The Modelica engine-sync pass is
 woken by the document registry revision and still compares document generations
