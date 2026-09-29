@@ -2593,12 +2593,20 @@ fn build_world_engine_base(
     engine.register_fn("find", |name: ImmutableString| -> i64 {
         bridge_core::find(name.as_str())
     });
-    // find_path(path) -> id (i64), or -1. USD paths are the stable authored
-    // identity used by Twin route/program relations; no name convention is
-    // involved.
+    // find_path(path) -> id (i64), or -1. This path-only form is for lookups
+    // whose mounted stage is unambiguous; document-backed scene policy uses
+    // find_path_in_document because paths are stage-local identities.
     engine.register_fn("find_path", |path: ImmutableString| -> i64 {
         usd_bridge::find_path(path.as_str())
     });
+    // Resolve a USD path within its owning document's live stage. USD paths
+    // are not globally unique across concurrently mounted documents.
+    engine.register_fn(
+        "find_path_in_document",
+        |doc_id: u64, path: ImmutableString| -> i64 {
+            usd_bridge::find_path_in_document(doc_id, path.as_str())
+        },
+    );
     // usd_path(id) -> exact composed USD path, or (). This is the generic
     // identity inverse used by scene-level programs; no domain name is encoded
     // in the lookup.
@@ -5358,19 +5366,28 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
                 id,
                 correlation_id,
                 match &engine {
-                    Ok(engine) => eval_tool_with_engine(
-                        world,
-                        engine,
-                        &tool,
-                        &hook,
-                        &args,
-                        authority,
-                        if ui {
-                            lunco_core::RuntimeCycle::Ui
-                        } else {
-                            lunco_core::RuntimeCycle::Repl
-                        },
-                    ),
+                    Ok(engine) => {
+                        let _span = bevy::log::info_span!(
+                            "world_script_tool_eval",
+                            ui,
+                            tool = %tool,
+                            hook = %hook,
+                        )
+                        .entered();
+                        eval_tool_with_engine(
+                            world,
+                            engine,
+                            &tool,
+                            &hook,
+                            &args,
+                            authority,
+                            if ui {
+                                lunco_core::RuntimeCycle::Ui
+                            } else {
+                                lunco_core::RuntimeCycle::Repl
+                            },
+                        )
+                    }
                     Err(error) => Err(error.clone()),
                 },
             ),

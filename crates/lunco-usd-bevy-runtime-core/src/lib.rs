@@ -89,6 +89,7 @@ impl Plugin for UsdSceneRuntimePlugin {
         app.init_resource::<twin_projection::PendingInstanceProjections>();
         app.init_resource::<lunco_core_runtime::SimulationProgress>();
         app.init_resource::<live_consume::PendingStageProjections>();
+        live_consume::install_live_prim_entity_index(app);
         app.add_systems(
             bevy::prelude::PreUpdate,
             (

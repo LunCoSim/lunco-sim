@@ -1315,6 +1315,11 @@ fn on_apply_usd_ops(
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
+        let _span = bevy::log::info_span!(
+            "usd_apply_ops_document",
+            operation_count = command.ops.len(),
+        )
+        .entered();
         let outcome = match apply_ops_as_change_set_result(
             world,
             command.doc_id,
@@ -1412,6 +1417,11 @@ fn on_apply_usd_op(
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
+        let _span = bevy::log::info_span!(
+            "usd_apply_one_op_document",
+            affected_path_count = paths.len(),
+        )
+        .entered();
         let paths_for_error = paths.clone();
         refresh_authoring_recipe(world, doc);
         let result = match expand_usd_geometry_ops(vec![op]) {
@@ -1891,6 +1901,9 @@ fn apply_ops_as_change_set_result(
     parent_gen: Option<u64>,
 ) -> Result<(Ack, usize), String> {
     let ops = expand_usd_geometry_ops(ops)?;
+    let _span =
+        bevy::log::info_span!("usd_document_apply_change_set", operation_count = ops.len(),)
+            .entered();
     if ops.iter().any(|op| op.edit_target().is_view()) {
         return Err("the disposable view layer only accepts ApplyUsdTransientOps".to_string());
     }

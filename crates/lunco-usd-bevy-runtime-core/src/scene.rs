@@ -790,9 +790,10 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
 /// freeing any worker-side state (such as Modelica steppers or Python script documents)
 /// via the reactive observers registered in `lunco-modelica-core` and `lunco-scripting`.
 pub fn despawn_usd_subtree(world: &mut World, root: Entity) {
+    let _span = bevy::log::info_span!("usd_live_subtree_despawn", root = ?root).entered();
     if let Ok(em) = world.get_entity_mut(root) {
         em.despawn();
-        info!("[scene] incremental despawn: entity {:?}", root);
+        debug!("[scene] incremental despawn: entity {:?}", root);
     }
 }
 
@@ -822,6 +823,8 @@ pub fn spawn_usd_child_under_parent(
     path: &str,
     tf: Transform,
 ) -> Option<Entity> {
+    let _spawn_span =
+        bevy::log::info_span!("scene_runtime_spawn_commit", prim_path = %path).entered();
     let stage_handle = world
         .get::<UsdPrimPath>(parent_entity)?
         .stage_handle
@@ -894,7 +897,7 @@ pub fn spawn_usd_child_under_parent(
     if let Some(projection) = parent_projection {
         world.entity_mut(entity).insert(projection);
     }
-    info!("[scene] incremental spawn: `{}` (entity {})", path, entity);
+    debug!("[scene] incremental spawn: `{}` (entity {})", path, entity);
     Some(entity)
 }
 

@@ -8,7 +8,7 @@
 //! visual-only consumers do not compile or install control behavior.
 
 use crate::program_runtime::{
-    apply_program_owner_projection, modelica_network_members_for_stage, resolve_program_owner,
+    apply_program_owner_projection, modelica_network_members_for_owner, resolve_program_owner,
 };
 use bevy::asset::Assets;
 use bevy::prelude::{Add, ChildOf, Commands, Component, Entity, On, Query, With, Without, World};
@@ -20,8 +20,6 @@ use lunco_usd_bevy_stage::{
     UsdInstanceProjection, UsdRead, UsdStageAsset, canonical::CanonicalStages,
 };
 use openusd::sdf::Path as SdfPath;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 /// A control surface prepared from one composed USD owner.
 struct AuthoredControlSurface {
@@ -107,16 +105,6 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
         .iter(world)
         .map(|(entity, path)| (entity, path.stage_handle.id(), path.path.clone()))
         .collect();
-    let mut network_members_by_stage: HashMap<_, Arc<HashSet<String>>> = HashMap::new();
-    for (_, stage_id, _) in &owners {
-        if network_members_by_stage.contains_key(stage_id) {
-            continue;
-        }
-        if let Some(members) = modelica_network_members_for_stage(world, *stage_id) {
-            network_members_by_stage.insert(*stage_id, members);
-        }
-    }
-
     for (entity, stage_id, owner_path) in owners {
         if let Ok(mut owner) = world.get_entity_mut(entity) {
             owner.remove::<AuthoredRuntimeProjectionPending>();
@@ -124,6 +112,7 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
         if lunco_usd_bevy_scene::is_preview_only_entity(world, entity) {
             continue;
         }
+        let network_members = modelica_network_members_for_owner(world, stage_id, entity);
         let (surface, prepared_program) = {
             let Some(stage_asset) = world
                 .get_resource::<Assets<UsdStageAsset>>()
@@ -147,7 +136,7 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
             let (reader, _) = stages.reader_for_entity(stage_id, stage_asset, instance);
             let owner_children = reader.children(&owner);
             let surface = read_control_surface(&reader, &owner, &owner_children);
-            let prepared_program = network_members_by_stage.get(&stage_id).map(|members| {
+            let prepared_program = network_members.as_ref().map(|members| {
                 resolve_program_owner(&reader, &owner, &owner_children, members.as_ref())
             });
             (surface, prepared_program)

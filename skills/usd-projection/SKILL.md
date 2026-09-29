@@ -61,6 +61,42 @@ uses the render-free `lunco-usd-geometry` package, while its existing async
 compute path and only Bevy asset insertion remain on the main thread. After the initial asset generation, explicit live edits use the
 canonical `StageView` and the same extractor contract.
 
+Incremental structural reconciliation resolves a live path through the
+`UsdPrimPath` lifecycle index keyed by stage asset and prim path. Insert and
+removal observers maintain it, including component replacement and preview
+duplicates; do not add a per-frame `Added` query or scan the full scene for each
+changed path. The canonical stage records a weak identity for each merged
+`Arc<StageRecipe>` so subsequent instances of that loaded revision skip cloning
+and comparing its full layer closure. A reloaded recipe has a new identity and
+must merge its current bytes before authoring the reference. Live instance
+handles own asset lifetime; the index and weak recipe cache are derived state.
+For a document-backed runtime reference spawn, the authored document keeps the
+reference arc. The live canonical stage receives only the instance root while
+an instance-scoped view over the shared immutable prepared snapshot projects
+the source asset's `defaultPrim` subtree. The view maps paths into the instance
+namespace and stores root pose and `lunco:catalogId` overrides; creating the
+view is constant time with respect to the source prim count. The first other
+authored edit composes the reference once, then shared promotion state switches
+every entity clone to the canonical reader. Root deletion can remove an
+unpromoted instance without composing its source. Keep simple `QueryUsdPrim`
+reads on the same plan; explicit geometry/topology queries use the owning
+document's composed stage. A failed promotion faults the mounted scene and
+rejects that live edit.
+
+Changes to a document's root scene are projected by its canonical stage. Only
+different recipe roots that compose the changed layer are dependent refresh
+targets; the root scene never refreshes itself as a dependent stage.
+
+For a bounded typed edit, the dependent owner composes the current persistent
+document layers directly to `Sdf Data` on a worker, then patches only the
+affected prim specs and fields in the existing canonical stage with one
+`Stage::batch_edit`. The normal sink projects those paths into ECS before an
+active-stage progress hold is released. Afterward, a background worker
+serializes the changed source and composes the immutable asset plan for a later
+mount. That plan refresh does not hold simulation progress or reset the live
+scene. Coarse composition edits and updates that span multiple changed source
+layers use the full-stage reset owner.
+
 Doc-backed Twin admission is also asset-event driven. `UsdSourceText` is loaded
 through the registered source scheme; `AssetEvent` and
 `AssetLoadFailedEvent` advance or fail the pending document transaction. The
@@ -73,12 +109,12 @@ read/parse and editor-preview initial serialization remain synchronous; wasm
 worker transport for this path is not installed, so the owner reports that
 boundary visibly. The live USD stage stays with its thread-affine owner.
 Referenced stage closures follow the same event boundary before a reference is
-authored onto the live stage. The instance carries a path-remapped copy of the
-prepared source plan and its root identity; descendants reuse both through the
-same queue. The entity reader invalidates that prepared source when the
-canonical stage generation changes, so authored overrides are always read from
-the live composed stage. Do not add frame-count timeouts, per-frame load polls,
-or direct filesystem reads to this path. After admission,
+authored onto the live stage. Each instance shares the prepared source snapshot
+and carries only its namespace, root identity, and root overrides; descendants
+reuse that view through the same queue. The entity reader invalidates that
+prepared source when the canonical stage generation changes, so authored
+overrides are always read from the live composed stage. Do not add frame-count
+timeouts, per-frame load polls, or direct filesystem reads to this path. After admission,
 `DocumentChanged` and stage-asset lifecycle events wake the single
 `sync_twin_overlays` owner; do not add a per-frame generation scan or a
 viewport-specific edit/reload path.
@@ -206,6 +242,11 @@ to move or remove a referenced/variant prim. Do not inspect flat layer data as
 a replacement for OpenUSD PCP resolution or use it to invent a composed-only
 target.
 
+For a transient edit target that a tool has just authored, pass
+`authored_children: true` to `ResolveUsdTarget` when it needs that layer's direct
+child paths before scene projection settles. This returns the selected layer's
+`primChildren` paths only; it does not resolve or enumerate composed children.
+
 Agents and editor automation should use the built-in `assembly_edit` Rhai
 library. It is a thin wrapper over `OpenFile`, `InspectUsdDocument`,
 `InspectUsdViewport`, `ResolveUsdTarget`, `SyncUsdDocument`,
@@ -290,10 +331,31 @@ one and leaves the object half-edited.
 
 This law is for authored edits. A derived presentation may use the typed
 `ApplyUsdTransientOps` command after resolving its source from the composed
-stage. That path is generation-checked and projected through OpenUSD, but is
-explicitly outside save, undo/redo, and the Twin journal. Do not use it for a
-user edit, and do not make a derived view durable by quietly authoring a second
-`UsdOp`.
+stage when it needs a USD prim identity, schema, or picking contract. That path
+is generation-checked and projected through OpenUSD, but is explicitly outside
+save, undo/redo, and the Twin journal. Do not use it for a user edit or to
+refresh dense per-edit geometry. Keep high-frequency or terrain-sampled view
+geometry in its transient render owner; snapshot inputs, coalesce per target,
+bound worker admission, and commit only current results to the existing render
+entity. For example, route edits update their normal authored projection once,
+then `UpdateUsdCurveView` rebuilds the ribbon mesh without a second USD
+generation.
+
+`usd.document.projected` includes the reconciled `changed_prim_paths` in its
+typed event data. A policy that caches composed facts should check this path set
+before issuing document queries; unrelated document edits are not a request to
+rescan the whole owned subtree. The event closes the live handoff only after
+referenced roots changed by that edit and their prepared instance projections
+have reached the ECS scene. Typed reference-add intents seed this required-root
+set before the asynchronous asset admission emits a stage notice; pending
+references elsewhere in the mounted stage do not delay this edit or retain its
+document-projection hold. An authoritative pending reference still owns its
+independent `SceneReferences` key until its instance projection is in ECS.
+Partial ancestor sink notices are accumulated into that one completion event.
+Each live `UsdInstanceProjection`
+retains its source asset handle with its remapped immutable plan. Sibling
+instances of the same asset reuse that prepared composition while any live
+instance still uses it.
 
 Writing an ECS component directly is legitimate **only** for state that is
 genuinely not part of the document (a camera's current yaw, a hover highlight).

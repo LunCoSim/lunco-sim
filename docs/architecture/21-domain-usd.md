@@ -120,15 +120,21 @@ by another stage rejects the reset until its topology can be rebuilt together.
 
 When a component document changes, the dependent-stage owner snapshots its
 base/runtime revisions and coalesces layer updates against the immutable recipe.
-Bounded `UsdPreparation` workers serialize the persistent document snapshot once
-per revision, share those bytes across dependent stages, apply the changed-layer
-overlay, and build each immutable projection plan. Identical layer bytes skip
-the rebuild. The owner accepts only current document revisions, operation/revision,
-and target-plan identity, then opens the thread-affine `CanonicalStage`, prepares
-registered reset owners, and swaps the stage and plan together. An active stage
-holds its exact simulation-progress key through that commit. `UsdStageAsset`
-shares its immutable `StageRecipe` through `Arc`, so ordinary asset and
-pending-job snapshots do not copy the layer closure on the app thread.
+Bounded `UsdPreparation` workers compose the persistent document layers directly
+to `Sdf Data`, shared across dependent stages for the same revision. A bounded
+typed edit publishes its affected prim specs and fields to the existing
+thread-affine `CanonicalStage` as soon as that data is ready. One
+`Stage::batch_edit` transaction patches the owning layer, and the ordinary stage
+sink reconciles only the changed paths. An active stage holds its exact
+simulation-progress key through that ECS handoff. Only after the live patch is
+committed does a background worker serialize the changed source and compose the
+immutable projection plan needed by a future mount. This plan refresh does not
+hold simulation progress or replace the live scene. Coarse composition changes
+and edits spanning multiple source layers retain the registered full-stage reset
+boundary. The owner accepts only current document revisions, operation/revision,
+and target-plan identity. Identical layer bytes skip plan replacement.
+`UsdStageAsset` shares its immutable `StageRecipe` through `Arc`, so ordinary
+asset and pending-job snapshots do not copy the layer closure on the app thread.
 When the live stage and prepared plan were built from that same recipe, the
 canonical owner records the exact plan identity at the stage generation. The
 asset `Modified` notification then reuses the already-open stage instead of
@@ -648,11 +654,12 @@ root-relative transforms. The body's ECS transform owns the root prim's scale,
 rotation, and placement exactly once. Nested rigid bodies remain separate
 ownership boundaries, and their shapes are not folded into the ancestor.
 
-This rule applies equally to the live composed reader and the prepared,
-path-remapped plan used for runtime reference instances. Consequently, a
-reference does not lose a body-root shape merely because the referenced asset
-also contains child colliders, and all composed prim paths remain available to
-the existing joint, Modelica, and collision-filter resolution paths.
+This rule applies equally to the live composed reader and the instance-scoped
+view over the shared prepared plan used for runtime references. Consequently,
+a reference does not lose a body-root shape merely because the referenced asset
+also contains child colliders, and all prim paths in the referenced
+`defaultPrim` subtree remain available to the existing joint, Modelica, and
+collision-filter resolution paths.
 
 `QueryUsdPrim.collision_geometry` reports the effective scaled Avian collider
 for authored Mesh, Cube, Sphere, Cylinder, Cone, Capsule, and finite Plane
@@ -976,6 +983,22 @@ and `lunco-usd-prim-tree-ui` owns the reusable prim tree.
   (`UsdPrimPath { path: "" }`) — the loader resolves and writes back the concrete
   prim path. USD stays the source of truth for the root prim; the loader resolves
   the authored `defaultPrim` rather than making a filename-based path guess.
+- Live structural reconciliation resolves `(stage, prim path)` through the
+  `UsdPrimPath` lifecycle index. Insert and removal observers keep the index
+  current, including duplicate preview paths; scene edits no longer scan every
+  live prim once for each changed path. A referenced spawn merges an immutable
+  `StageRecipe` closure once per asset revision. Warm instances reuse its weak
+  recipe identity, while a newly loaded revision still refreshes changed layer
+  bytes. The asset handle on each live instance owns the recipe lifetime; the
+  canonical stage's identity cache does not retain unloaded assets. Cold source
+  preparation remains asynchronous, and only the affected instance is admitted
+  at the ordered live-stage boundary. Its prepared read view shares the
+  immutable source snapshot and stores only the instance namespace and root
+  overrides, so creating the view does not copy the asset's prim tree.
+  Raw-file runtime spawns check candidate identities through the same
+  lifecycle-maintained `ApiEntityRegistry` used by public entity lookup; queued
+  spawn identities use a hash set. Neither path scans all live IDs or queued
+  inputs per command.
 - **Selection root**: a prim that declares `lunco:spawnable = true` — authored or
   *composed from a referenced wrapper* — is tagged `SelectableRoot`, so a click on
   a deep glTF sub-mesh resolves *up* (via `find_selectable`, depth cap 32) to the

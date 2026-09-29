@@ -13,6 +13,12 @@ pub struct ApiEntityRegistry {
 
 impl ApiEntityRegistry {
     pub fn assign(&mut self, entity: Entity, id: GlobalEntityId) {
+        if let Some(previous_id) = self.bevy_to_api.remove(&entity)
+            && previous_id != id
+            && self.api_to_bevy.get(&previous_id) == Some(&entity)
+        {
+            self.api_to_bevy.remove(&previous_id);
+        }
         // An id is DETERMINISTIC (prim path / provenance), so a scene reload
         // moves it from the despawned entity to its replacement. Drop the old
         // reverse entry or it dangles and later poisons a `remove`.
@@ -65,33 +71,41 @@ impl ApiEntityRegistry {
     }
 }
 
-/// System that synchronizes [GlobalEntityId] components into the [ApiEntityRegistry].
-pub fn sync_api_registry(
+fn index_global_entity_id(
+    trigger: On<Insert, GlobalEntityId>,
+    ids: Query<&GlobalEntityId>,
     mut registry: ResMut<ApiEntityRegistry>,
-    q_added: Query<(Entity, &GlobalEntityId), Added<GlobalEntityId>>,
-    mut q_removed: RemovedComponents<GlobalEntityId>,
 ) {
-    // Removes FIRST: a scene reload despawns a prim's entity and spawns its
-    // replacement with the SAME deterministic id in the same frame. Processing
-    // the add first and the remove second handed `remove` a stale reverse
-    // entry for the reused id (guarded in `remove` too, belt and braces).
-    for entity in q_removed.read() {
-        registry.remove(entity);
+    if let Ok(id) = ids.get(trigger.entity) {
+        registry.assign(trigger.entity, *id);
     }
-    for (entity, id) in q_added.iter() {
+}
+
+fn index_existing_global_entity_ids(
+    ids: Query<(Entity, &GlobalEntityId)>,
+    mut registry: ResMut<ApiEntityRegistry>,
+) {
+    for (entity, id) in &ids {
         registry.assign(entity, *id);
     }
 }
 
-/// Plugin that registers the entity registry and synchronization system.
+fn unindex_global_entity_id(
+    trigger: On<Remove, GlobalEntityId>,
+    mut registry: ResMut<ApiEntityRegistry>,
+) {
+    registry.remove(trigger.entity);
+}
+
+/// Plugin that registers the entity registry and its component lifecycle observers.
 pub struct ApiEntityRegistryPlugin;
 
 impl Plugin for ApiEntityRegistryPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ApiEntityRegistry>().add_systems(
-            PreUpdate,
-            sync_api_registry.in_set(lunco_core::RuntimeCycleSet::EntityIndex),
-        );
+        app.init_resource::<ApiEntityRegistry>()
+            .add_systems(PreStartup, index_existing_global_entity_ids)
+            .add_observer(index_global_entity_id)
+            .add_observer(unindex_global_entity_id);
     }
 }
 
@@ -135,6 +149,34 @@ mod tests {
         assert_eq!(registry.api_id_for(b), Some(id));
         assert_eq!(registry.api_id_for(a), None);
         assert_eq!(registry.entities_by_identity(), vec![(id, b)]);
+    }
+
+    #[test]
+    fn component_insert_replace_and_remove_update_registry_immediately() {
+        let mut app = App::new();
+        app.add_plugins(ApiEntityRegistryPlugin);
+
+        let entity = app.world_mut().spawn(GlobalEntityId::from_raw(51)).id();
+        assert_eq!(
+            app.world()
+                .resource::<ApiEntityRegistry>()
+                .resolve(&GlobalEntityId::from_raw(51)),
+            Some(entity),
+        );
+
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(GlobalEntityId::from_raw(52));
+        let registry = app.world().resource::<ApiEntityRegistry>();
+        assert_eq!(registry.resolve(&GlobalEntityId::from_raw(51)), None);
+        assert_eq!(
+            registry.resolve(&GlobalEntityId::from_raw(52)),
+            Some(entity)
+        );
+
+        app.world_mut().despawn(entity);
+        let registry = app.world().resource::<ApiEntityRegistry>();
+        assert_eq!(registry.resolve(&GlobalEntityId::from_raw(52)), None);
     }
 
     #[test]

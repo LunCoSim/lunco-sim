@@ -58,6 +58,23 @@ fn parent_path(path: &str) -> String {
     }
 }
 
+fn no_preview_selection_context() -> ApiQueryResult {
+    Ok(Some(api_value!({
+        "preview": null,
+        "doc_id": null,
+        "edit_target": null,
+        "focused": false,
+        "selection_state": "no_preview",
+        "selection_mode": "none",
+        "requires_single_target": true,
+        "selected": [],
+        "primary": null,
+        "inspector_target": null,
+        "stale_selection_count": 0,
+        "ambiguous_paths": [],
+    })))
+}
+
 fn entity_in_preview(
     world: &World,
     entity: Entity,
@@ -187,10 +204,7 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
 
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         let Some(viewport) = world.get_resource::<UsdViewportState>() else {
-            return Err(ApiQueryError::new(
-                ApiErrorCode::InternalError,
-                "InspectUsdSelection requires the Assembly Editor viewport",
-            ));
+            return no_preview_selection_context();
         };
         let requested_preview = match preview_id(params) {
             Ok(preview) => preview,
@@ -199,20 +213,7 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
         let preview = requested_preview.or_else(|| viewport.focused_preview_id());
 
         let Some(preview) = preview else {
-            return Ok(Some(api_value!({
-                "preview": null,
-                "doc_id": null,
-                "edit_target": null,
-                "focused": false,
-                "selection_state": "no_preview",
-                "selection_mode": "none",
-                "requires_single_target": true,
-                "selected": [],
-                "primary": null,
-                "inspector_target": null,
-                "stale_selection_count": 0,
-                "ambiguous_paths": [],
-            })));
+            return no_preview_selection_context();
         };
         let Some(session) = viewport.session(preview) else {
             return Err(ApiQueryError::new(
@@ -520,9 +521,8 @@ mod tests {
     }
 
     #[test]
-    fn no_focused_preview_is_explicit_empty_context() {
-        let mut world = World::new();
-        world.insert_resource(UsdViewportState::default());
+    fn no_editor_viewport_is_explicit_empty_context() {
+        let world = World::new();
         let response = InspectUsdSelectionProvider.execute(&world, &ApiValue::Map(Vec::new()));
         let Ok(Some(data)) = response else {
             panic!("expected an empty selection context");

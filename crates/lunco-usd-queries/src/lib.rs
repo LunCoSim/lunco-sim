@@ -8,10 +8,13 @@
 use bevy::asset::{AssetServer, Assets};
 use bevy::prelude::{App, Plugin, Vec3, World};
 use lunco_api::queries::{
-    ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, api_param_f64,
-    api_param_str, api_param_u64,
+    ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, api_param_bool,
+    api_param_f64, api_param_str, api_param_u64,
 };
-use lunco_api_core::{ApiErrorCode, ApiValue, api_value, api_value_from_serializable};
+use lunco_api_core::{
+    ApiErrorCode, ApiQueryParameterSchema, ApiQuerySchema, ApiValue, api_value,
+    api_value_from_serializable,
+};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::{DocumentRegistry, JournalResource};
 use lunco_usd_avian_contracts::AvianMeshApproximation;
@@ -33,6 +36,62 @@ fn query_ok(value: ApiValue) -> ApiQueryResult {
 
 fn query_error(code: ApiErrorCode, message: impl Into<String>) -> ApiQueryResult {
     Err(ApiQueryError::new(code, message))
+}
+
+fn authored_child_paths(
+    document: &UsdDocument,
+    edit_target: &lunco_usd_document::document::LayerId,
+    path: &SdfPath,
+) -> Result<Vec<String>, String> {
+    let data = if edit_target.is_root() {
+        document.data()
+    } else if edit_target.is_runtime() {
+        document.runtime_data()
+    } else {
+        document.view_data()
+    };
+    let Some(spec) = data.spec(path) else {
+        return Ok(Vec::new());
+    };
+    let children = match spec.get("primChildren") {
+        None => Vec::new(),
+        Some(SdfValue::TokenVec(names)) => names.iter().map(ToString::to_string).collect(),
+        Some(SdfValue::TokenListOp(names)) => names
+            .flatten()
+            .into_iter()
+            .map(|name| name.to_string())
+            .collect(),
+        Some(_) => {
+            return Err(format!(
+                "invalid primChildren field at `{path}` in `{}`: expected token list",
+                edit_target.as_str(),
+            ));
+        }
+    };
+    let parent = path.to_string();
+    Ok(children
+        .into_iter()
+        .map(|name| format!("{parent}/{name}"))
+        .collect())
+}
+
+fn include_authored_children(
+    result: ApiQueryResult,
+    children: Option<&[String]>,
+) -> ApiQueryResult {
+    let Some(children) = children else {
+        return result;
+    };
+    match result {
+        Ok(Some(ApiValue::Map(mut entries))) => {
+            entries.push((
+                "authored_children".to_owned(),
+                api_value!(children.to_vec()),
+            ));
+            Ok(Some(ApiValue::Map(entries)))
+        }
+        other => other,
+    }
 }
 
 fn document_stage_recipe<'a>(
@@ -1102,6 +1161,8 @@ impl ApiQueryProvider for SyncUsdDocumentProvider {
 /// allocate a new child path without treating an ordinary absence as a query
 /// failure. A path authored in this document remains resolvable from the
 /// document layer while the canonical stage catches up with that local edit.
+/// Set `authored_children: true` to include direct prim child paths from the
+/// explicitly selected document layer without waiting for scene projection.
 pub struct ResolveUsdTargetProvider;
 
 impl ApiQueryProvider for ResolveUsdTargetProvider {
@@ -1109,7 +1170,68 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
         "ResolveUsdTarget"
     }
 
+    fn schema(&self) -> ApiQuerySchema {
+        ApiQuerySchema {
+            name: self.name().to_owned(),
+            description: Some(
+                "Resolve an explicit USD edit target and optionally read direct authored child paths from its layer."
+                    .to_owned(),
+            ),
+            parameters: Some(vec![
+                ApiQueryParameterSchema {
+                    name: "doc_id".to_owned(),
+                    type_name: "u64".to_owned(),
+                    required: true,
+                    description: "Open USD document identity.".to_owned(),
+                    allowed_values: None,
+                },
+                ApiQueryParameterSchema {
+                    name: "path".to_owned(),
+                    type_name: "usd_prim_path".to_owned(),
+                    required: true,
+                    description: "Absolute prim path to resolve.".to_owned(),
+                    allowed_values: None,
+                },
+                ApiQueryParameterSchema {
+                    name: "edit_target".to_owned(),
+                    type_name: "usd_edit_target".to_owned(),
+                    required: true,
+                    description: "Document layer used to resolve the authoring target.".to_owned(),
+                    allowed_values: Some(vec![
+                        "@root@".to_owned(),
+                        "@runtime@".to_owned(),
+                        "@view@".to_owned(),
+                    ]),
+                },
+                ApiQueryParameterSchema {
+                    name: "authored_children".to_owned(),
+                    type_name: "bool".to_owned(),
+                    required: false,
+                    description: "Include direct prim child paths from the selected layer's primChildren field.".to_owned(),
+                    allowed_values: None,
+                },
+            ]),
+            exactly_one_of: Vec::new(),
+            response: Some(
+                "{ doc_id, path, status, source, authored_here, edit_scope, prim_stack, authored_children?: string[] }"
+                    .to_owned(),
+            ),
+        }
+    }
+
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let include_children = match params.get("authored_children") {
+            None => false,
+            Some(_) => match api_param_bool(params, "authored_children") {
+                Some(include) => include,
+                None => {
+                    return query_error(
+                        ApiErrorCode::DeserializationError,
+                        "ResolveUsdTarget parameter `authored_children` must be a boolean",
+                    );
+                }
+            },
+        };
         let Some(raw_doc) = api_param_u64(params, "doc_id") else {
             return query_error(
                 ApiErrorCode::DeserializationError,
@@ -1152,6 +1274,14 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                 format!("USD document {doc} is not open"),
             );
         };
+        let authored_children = if include_children {
+            match authored_child_paths(document, &edit_target, &path) {
+                Ok(children) => Some(children),
+                Err(error) => return query_error(ApiErrorCode::DeserializationError, error),
+            }
+        } else {
+            None
+        };
         let authored_here = match document.authored_prim_exists(&edit_target, raw_path) {
             Ok(exists) => exists,
             Err(error) => {
@@ -1182,25 +1312,28 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
             || authored_in_document
             || authored_here;
         let document_layer_response = || {
-            query_ok(api_value!({
-                "doc_id": doc.raw(),
-                "path": raw_path,
-                "edit_target": edit_target.as_str(),
-                "status": if document_composed_exists { "resolved" } else { "missing" },
-                "source": "document_layers",
-                "composed_exists": document_composed_exists,
-                "authored_here": authored_here,
-                "authored_in_document": authored_in_document,
-                "under_arc": under_arc,
-                "edit_scope": if authored_here {
-                    "authored_layer"
-                } else if document_composed_exists && authored_in_document {
-                    "local_override"
-                } else {
-                    "missing"
-                },
-                "prim_stack": [],
-            }))
+            include_authored_children(
+                query_ok(api_value!({
+                    "doc_id": doc.raw(),
+                    "path": raw_path,
+                    "edit_target": edit_target.as_str(),
+                    "status": if document_composed_exists { "resolved" } else { "missing" },
+                    "source": "document_layers",
+                    "composed_exists": document_composed_exists,
+                    "authored_here": authored_here,
+                    "authored_in_document": authored_in_document,
+                    "under_arc": under_arc,
+                    "edit_scope": if authored_here {
+                        "authored_layer"
+                    } else if document_composed_exists && authored_in_document {
+                        "local_override"
+                    } else {
+                        "missing"
+                    },
+                    "prim_stack": [],
+                })),
+                authored_children.as_deref(),
+            )
         };
 
         if let Some(stage) = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc) {
@@ -1221,48 +1354,54 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                         format!("OpenUSD could not return the prim stack for `{raw_path}`"),
                     );
                 };
-                return query_ok(api_value!({
-                    "doc_id": doc.raw(),
-                    "path": raw_path,
-                    "edit_target": edit_target.as_str(),
-                    "status": "resolved",
-                    "source": "canonical_stage",
-                    "composed_exists": true,
-                    "authored_here": authored_here,
-                    "authored_in_document": authored_in_document,
-                    "under_arc": under_arc,
-                    "edit_scope": if authored_here {
-                        "authored_layer"
-                    } else if authored_in_document || under_arc {
-                        "local_override"
-                    } else {
-                        "composed_read_only"
-                    },
-                    "prim_stack": stack.into_iter().map(|(layer, authored_path)| {
-                        api_value!({
-                            "layer": layer,
-                            "path": authored_path.to_string(),
-                        })
-                    }).collect::<Vec<_>>(),
-                }));
+                return include_authored_children(
+                    query_ok(api_value!({
+                        "doc_id": doc.raw(),
+                        "path": raw_path,
+                        "edit_target": edit_target.as_str(),
+                        "status": "resolved",
+                        "source": "canonical_stage",
+                        "composed_exists": true,
+                        "authored_here": authored_here,
+                        "authored_in_document": authored_in_document,
+                        "under_arc": under_arc,
+                        "edit_scope": if authored_here {
+                            "authored_layer"
+                        } else if authored_in_document || under_arc {
+                            "local_override"
+                        } else {
+                            "composed_read_only"
+                        },
+                        "prim_stack": stack.into_iter().map(|(layer, authored_path)| {
+                            api_value!({
+                                "layer": layer,
+                                "path": authored_path.to_string(),
+                            })
+                        }).collect::<Vec<_>>(),
+                    })),
+                    authored_children.as_deref(),
+                );
             }
             if authored_here || authored_in_document {
                 return document_layer_response();
             }
             if under_arc {
-                return query_ok(api_value!({
-                    "doc_id": doc.raw(),
-                    "path": raw_path,
-                    "edit_target": edit_target.as_str(),
-                    "status": "missing",
-                    "source": "canonical_stage",
-                    "composed_exists": false,
-                    "authored_here": false,
-                    "authored_in_document": false,
-                    "under_arc": true,
-                    "edit_scope": "missing",
-                    "prim_stack": [],
-                }));
+                return include_authored_children(
+                    query_ok(api_value!({
+                        "doc_id": doc.raw(),
+                        "path": raw_path,
+                        "edit_target": edit_target.as_str(),
+                        "status": "missing",
+                        "source": "canonical_stage",
+                        "composed_exists": false,
+                        "authored_here": false,
+                        "authored_in_document": false,
+                        "under_arc": true,
+                        "edit_scope": "missing",
+                        "prim_stack": [],
+                    })),
+                    authored_children.as_deref(),
+                );
             }
         } else if under_arc {
             if authored_here || authored_in_document {
@@ -1300,19 +1439,22 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                 }
             };
             if !composed_exists {
-                return query_ok(api_value!({
-                    "doc_id": doc.raw(),
-                    "path": raw_path,
-                    "edit_target": edit_target.as_str(),
-                    "status": "missing",
-                    "source": "document_composition",
-                    "composed_exists": false,
-                    "authored_here": false,
-                    "authored_in_document": false,
-                    "under_arc": true,
-                    "edit_scope": "missing",
-                    "prim_stack": [],
-                }));
+                return include_authored_children(
+                    query_ok(api_value!({
+                        "doc_id": doc.raw(),
+                        "path": raw_path,
+                        "edit_target": edit_target.as_str(),
+                        "status": "missing",
+                        "source": "document_composition",
+                        "composed_exists": false,
+                        "authored_here": false,
+                        "authored_in_document": false,
+                        "under_arc": true,
+                        "edit_scope": "missing",
+                        "prim_stack": [],
+                    })),
+                    authored_children.as_deref(),
+                );
             }
             let Ok(stack) = prim.prim_stack() else {
                 return query_error(
@@ -1320,24 +1462,27 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                     format!("OpenUSD could not return the prim stack for `{raw_path}`"),
                 );
             };
-            return query_ok(api_value!({
-                "doc_id": doc.raw(),
-                "path": raw_path,
-                "edit_target": edit_target.as_str(),
-                "status": "resolved",
-                "source": "document_composition",
-                "composed_exists": true,
-                "authored_here": false,
-                "authored_in_document": false,
-                "under_arc": true,
-                "edit_scope": "local_override",
-                "prim_stack": stack.into_iter().map(|(layer, authored_path)| {
-                    api_value!({
-                        "layer": layer,
-                        "path": authored_path.to_string(),
-                    })
-                }).collect::<Vec<_>>(),
-            }));
+            return include_authored_children(
+                query_ok(api_value!({
+                    "doc_id": doc.raw(),
+                    "path": raw_path,
+                    "edit_target": edit_target.as_str(),
+                    "status": "resolved",
+                    "source": "document_composition",
+                    "composed_exists": true,
+                    "authored_here": false,
+                    "authored_in_document": false,
+                    "under_arc": true,
+                    "edit_scope": "local_override",
+                    "prim_stack": stack.into_iter().map(|(layer, authored_path)| {
+                        api_value!({
+                            "layer": layer,
+                            "path": authored_path.to_string(),
+                        })
+                    }).collect::<Vec<_>>(),
+                })),
+                authored_children.as_deref(),
+            );
         }
         document_layer_response()
     }

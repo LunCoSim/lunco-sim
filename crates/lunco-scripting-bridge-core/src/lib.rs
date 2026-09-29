@@ -688,10 +688,13 @@ pub fn ensure_script_mutation_allowed() -> Result<(), String> {
     }
 }
 
-/// Gate typed commands to the disposable USD view edit during visualization.
+/// Gate typed commands to presentation-only updates during visualization.
 pub fn ensure_script_command_allowed(name: &str) -> Result<(), String> {
+    // These are presentation owners: one journals transient @view@ opinions;
+    // the other queues a revision-fenced render mesh update without touching
+    // USD or authoritative simulation state.
     if execution_context().phase == lunco_core::RuntimePhase::Visualization
-        && name == "ApplyUsdTransientOps"
+        && matches!(name, "ApplyUsdTransientOps" | "UpdateUsdCurveView")
     {
         Ok(())
     } else {
@@ -1873,7 +1876,7 @@ mod tests {
     use lunco_core_session::{AuthorityRole, CommandPolicy, UserSession};
 
     #[test]
-    fn visualization_mutations_are_limited_to_disposable_usd_view_edits() {
+    fn visualization_commands_are_limited_to_disposable_presentation_updates() {
         let mut world = World::new();
         let mut context = lunco_core::RuntimeExecutionContext::unclassified();
         context.phase = lunco_core::RuntimePhase::Visualization;
@@ -1882,7 +1885,9 @@ mod tests {
         assert!(ensure_script_mutation_allowed().is_err());
         assert!(ensure_script_command_allowed("SetPorts").is_err());
         assert!(ensure_script_command_allowed("ApplyUsdOp").is_err());
+        assert!(ensure_script_command_allowed("SpawnEntity").is_err());
         assert!(ensure_script_command_allowed("ApplyUsdTransientOps").is_ok());
+        assert!(ensure_script_command_allowed("UpdateUsdCurveView").is_ok());
     }
 
     #[test]

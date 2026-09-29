@@ -10,6 +10,7 @@
 //! walks `material:binding` on the composed stage. They belong here, where the
 //! command layer and the Inspector can share them.
 
+use bevy::asset::AssetId;
 use bevy::prelude::*;
 use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::DocumentRegistry;
@@ -211,30 +212,42 @@ pub fn geom_api_schemas(world: &mut World, prim: &UsdPrimPath) -> Vec<String> {
 pub fn resolve_doc_for_entity(world: &World, entity: Entity) -> Option<lunco_doc::DocumentId> {
     let prim = world.get::<UsdPrimPath>(entity)?;
     let asset_server = world.get_resource::<AssetServer>()?;
-    let asset_path = asset_server.get_path(prim.stage_handle.id())?;
+    let registry = world.get_resource::<DocumentRegistry<UsdDocument>>()?;
+    resolve_doc_for_stage(
+        prim.stage_handle.id(),
+        asset_server,
+        world.get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>(),
+        registry,
+    )
+}
+
+/// Resolve the document that owns a projected USD stage. Twin identity is
+/// matched through its existing stage/document map; ordinary file-backed
+/// documents use the canonical asset path. The active editor document is not
+/// part of scene ownership.
+pub fn resolve_doc_for_stage(
+    stage_id: AssetId<UsdStageAsset>,
+    asset_server: &AssetServer,
+    backed: Option<&lunco_usd_bevy_twin::DocBackedTwinScenes>,
+    registry: &DocumentRegistry<UsdDocument>,
+) -> Option<lunco_doc::DocumentId> {
+    let asset_path = asset_server.get_path(stage_id)?;
     let path_str = asset_path.path().to_string_lossy().to_string();
 
     if let Some((name, rel)) = lunco_assets_core::split_twin_rel(&path_str) {
-        if let Some(doc) = world
-            .get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
-            .and_then(|backed| backed.doc_for(name, rel))
-        {
+        if let Some(doc) = backed.and_then(|backed| backed.doc_for(name, rel)) {
             return Some(doc);
         }
     }
 
-    world
-        .get_resource::<DocumentRegistry<UsdDocument>>()
-        .and_then(|reg| {
-            reg.ids().find(|id| {
-                reg.host(*id).is_some_and(|h| match h.document().origin() {
-                    DocumentOrigin::File { path, .. } => {
-                        path.to_string_lossy().ends_with(&path_str)
-                    }
-                    _ => false,
-                })
+    registry.ids().find(|id| {
+        registry
+            .host(*id)
+            .is_some_and(|h| match h.document().origin() {
+                DocumentOrigin::File { path, .. } => path.to_string_lossy().ends_with(&path_str),
+                _ => false,
             })
-        })
+    })
 }
 
 /// Resolve the active USD document and the entity's authorable prim path for a
@@ -252,6 +265,19 @@ pub fn authorable_prim(
     workspace: Option<&lunco_workspace::WorkspaceResource>,
 ) -> Option<(lunco_doc::DocumentId, String)> {
     let doc = workspace?.0.active_document?;
+    authorable_prim_in_document(entity, q_prim, usd_registry, doc)
+}
+
+/// Resolve an entity's authorable prim in an explicitly resolved owning
+/// document. Scene mutation observers use this after resolving the document
+/// from the entity's composed USD stage, so an unrelated active document with
+/// the same prim path cannot receive the edit.
+pub fn authorable_prim_in_document(
+    entity: Entity,
+    q_prim: &Query<&UsdPrimPath>,
+    usd_registry: &DocumentRegistry<UsdDocument>,
+    doc: lunco_doc::DocumentId,
+) -> Option<(lunco_doc::DocumentId, String)> {
     let host = usd_registry.host(doc)?;
     let prim = q_prim.get(entity).ok()?;
     let prim_sdf = SdfPath::new(&prim.path).ok()?;
@@ -283,9 +309,8 @@ pub fn delete_target(
     entity: Entity,
     q_prim: &Query<&UsdPrimPath>,
     usd_registry: &DocumentRegistry<UsdDocument>,
-    workspace: Option<&lunco_workspace::WorkspaceResource>,
+    doc: lunco_doc::DocumentId,
 ) -> Option<(lunco_doc::DocumentId, String, DeleteTarget)> {
-    let doc = workspace?.0.active_document?;
     let host = usd_registry.host(doc)?;
     let prim = q_prim.get(entity).ok()?;
     let prim_sdf = SdfPath::new(&prim.path).ok()?;

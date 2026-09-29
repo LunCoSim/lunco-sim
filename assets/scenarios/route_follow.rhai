@@ -68,8 +68,8 @@ fn simulation_dependencies(me, ctx) {
     if targets == () || targets.len() != 1 {
         throw "route program must have exactly one subject while resolving its Modelica dependency";
     }
-    #{ modelica_entities: [find_path(targets[0])], entity_reads: [], entity_writes: [],
-       query_reads: ["QueryUsdPrim", "ResolveUsdTarget", "SensorOccupants", "InspectSelection",
+    #{ modelica_entities: [find_path_in_document(result.doc_id, targets[0])], entity_reads: [], entity_writes: [],
+       query_reads: ["QueryUsdPrim", "QueryUsdPrims", "ResolveUsdTarget", "SensorOccupants", "InspectSelection",
                      "InspectUsdDocument", "TerrainHeights"],
        required_inputs: [] }
 }
@@ -139,7 +139,7 @@ fn route_subject_state_for(me, state) {
             error: "the route document is not synchronized" };
     }
     if state.subject_path != () {
-        let cached = find_path(state.subject_path);
+        let cached = find_path_in_document(doc, state.subject_path);
         if cached >= 0 {
             return #{ subject: cached, path: state.subject_path,
                 retryable: false, error: "" };
@@ -158,7 +158,7 @@ fn route_subject_state_for(me, state) {
         return #{ subject: -1, retryable: false,
             error: "the authored inputs:subject relationship is unavailable" };
     }
-    let subject = find_path(targets[0]);
+    let subject = find_path_in_document(doc, targets[0]);
     if subject < 0 {
         return #{ subject: -1, retryable: true,
             error: "the route subject has no live projection" };
@@ -486,7 +486,7 @@ fn mark_initial_route_occupancy(me, state) {
     }
     if next.path == () { return #{ ok: true, state: state }; }
     let point = next.path;
-    let sensor = find_path(point + "/Trigger");
+    let sensor = find_path_in_document(state.route_document, point + "/Trigger");
     if sensor < 0 {
         return route_failure("the route sensor has no live projection: " + point);
     }
@@ -530,7 +530,7 @@ fn drive_current_point(me, state) {
     if state.commanded_path == point && state.commanded_view_key == state.route_view_key {
         return #{ result: #{ ok: true }, state: state };
     }
-    let target = find_path(point);
+    let target = find_path_in_document(state.route_document, point);
     let position = if target >= 0 { world_pos(target) } else { () };
     if position == () {
         return #{
@@ -569,9 +569,8 @@ fn refresh_route_view(me, state, snapshot) {
             state: state,
         };
     }
-    // The document generation also advances for disposable view overlays. Read
-    // the authored route geometry first and invalidate only when its typed
-    // identity/placement key changes (or marker state is explicitly dirty).
+    // Route topology is read only at the projected document boundary or when
+    // visited-marker presentation is explicitly dirty.
     let read = if snapshot == () {
         waypoint_editor::route_positions(doc, state.route_path)
     } else { snapshot };
@@ -590,7 +589,8 @@ fn refresh_route_view(me, state, snapshot) {
             state: state,
         };
     }
-    if state.route_view_key == view_key && !state.marker_sync_pending {
+    if state.route_view_key == view_key && !state.marker_sync_pending
+        && !state.ribbon_sync_pending {
         return #{ result: #{ ok: true, revision: revision, view_key: view_key }, state: state };
     }
     // A document generation may replace children, the subject relationship, or
@@ -599,36 +599,33 @@ fn refresh_route_view(me, state, snapshot) {
     state.subject_path = ();
     state.route_points = read.paths;
     state.safe_stopped = false;
-    let result = waypoint_editor::ensure_ribbon(#{
-        doc_id: doc,
-        route_path: state.route_path,
-    });
+    let result = waypoint_editor::update_ribbon_view(doc, state.route_path, read.points);
     // The ribbon is a disposable presentation view. It must never prevent a
     // valid authored program from starting or advancing when terrain sampling
     // or transient rendering is still settling.
-    if result == () || result.ok != true {
+    let presentation_ready = result != () && result.ok == true;
+    if !presentation_ready {
         let presentation_error = if result == () || result.error == () {
             "route presentation is not ready"
         } else { result.error };
-        if result.retryable != true {
+        if result == () || result.retryable != true {
             emit("route_presentation_unavailable", presentation_error);
         }
     }
-    let marker = waypoint_editor::sync_marker_states(
-        doc, state.route_path, state.visited_points,
-    );
-    if marker == () || marker.ok != true {
-        state.marker_sync_pending = true;
-        if marker == () || marker.retryable != true {
-            emit("route_presentation_unavailable", "route-point state is not ready");
+    state.ribbon_sync_pending = !presentation_ready || result.pending == true;
+    if state.marker_sync_pending {
+        let marker = waypoint_editor::sync_marker_states(
+            doc, state.route_path, state.visited_points,
+        );
+        if marker == () || marker.ok != true {
+            state.marker_sync_pending = true;
+            if marker == () || marker.retryable != true {
+                emit("route_presentation_unavailable", "route-point state is not ready");
+            }
+        } else {
+            state.marker_sync_pending = false;
         }
-    } else {
-        state.marker_sync_pending = false;
     }
-    // The ribbon itself is a runtime edit and may advance the document
-    // generation. Capture the post-edit revision for observers, while the
-    // view key remains the idempotence boundary for this presentation.
-    let post_revision = route_revision_for(state);
     state.route_view_key = view_key;
     let subject_state = route_subject_state_for(me, state);
     state.subject_id = subject_state.subject;
@@ -636,8 +633,9 @@ fn refresh_route_view(me, state, snapshot) {
     #{
         result: #{
             ok: true,
-            revision: if post_revision == () { revision } else { post_revision },
+            revision: revision,
             view_key: view_key,
+            pending: state.ribbon_sync_pending,
         },
         state: state,
     }
@@ -811,6 +809,7 @@ fn on_start(me, ctx) {
     this.selected = route_is_selected(me);
     this.route_revision = ();
     this.route_view_key = ();
+    this.ribbon_sync_pending = false;
     this.route_error = "";
     this.start_requested = false;
     // The mounted USD stage can be projected before it is associated with a
@@ -850,24 +849,6 @@ fn on_start(me, ctx) {
     }
 }
 
-// The ribbon is disposable presentation geometry. Prepare it after the scene,
-// document, and terrain inputs settle, without waiting for Modelica startup.
-fn on_visualization(me, ctx) {
-    let route = route_path(me);
-    let doc = route_document(me);
-    if (route == () || doc == ()) {
-        throw "route ribbon inputs are unavailable after visualization preparation";
-    }
-    let result = waypoint_editor::ensure_ribbon(#{ doc_id: doc, route_path: route });
-    if result == () || result.ok != true {
-        let message = if result == () || result.error == () {
-            "route ribbon could not be prepared after visualization inputs settled"
-        } else { result.error };
-        throw message;
-    }
-    this
-}
-
 fn bind_projected_route(me, state, expected_doc) {
     let route = route_path(me);
     let program = program_path(me);
@@ -892,10 +873,26 @@ fn bind_projected_route(me, state, expected_doc) {
     #{ ok: true, state: state }
 }
 
+fn projected_paths_touch_route(paths, route) {
+    if paths == () || route == () { return false; }
+    let prefix = route + "/";
+    for path in paths {
+        if path == route || route.starts_with(path + "/") { return true; }
+        if !path.starts_with(prefix) { continue; }
+        let parts = path.sub_string(prefix.len()).split("/");
+        if parts.len() == 1 && parts[0] == "RouteRibbon" { continue; }
+        if parts.len() == 1 || (parts.len() == 2 && parts[1] == "Trigger") {
+            return true;
+        }
+    }
+    false
+}
+
 fn on_event(me, evt, ctx) {
     if evt.name == "usd.document.projected" && evt.value != () {
         let projected_doc = evt.value["doc_id"];
-        if this.route_document == () {
+        let first_projected_binding = this.route_document == ();
+        if first_projected_binding {
             // A scenario can start before its live stage is associated with
             // the document. Bind at the projection event that makes that
             // identity authoritative, then publish readiness for observers.
@@ -908,11 +905,16 @@ fn on_event(me, evt, ctx) {
             });
         }
         if !same_document_id(projected_doc, this.route_document) { return; }
+        if !first_projected_binding && !projected_paths_touch_route(
+            evt.value["changed_prim_paths"], this.route_path,
+        ) {
+            this.route_revision = evt.value["generation"];
+            return;
+        }
         // Projection is the authoritative invalidation boundary for route
-        // presentation. Compare its composed point key here, after the stage
-        // is current, rather than polling topology from the control task. The
-        // key makes a view edit's follow-up event idempotent even when several
-        // layer changes share a document generation.
+        // topology. Only route-owned transform/order changes or Trigger
+        // admission reach this read; marker decoration and unrelated document
+        // edits do not rescan the route from the fixed simulation cycle.
         let generation = evt.value["generation"];
         let read = waypoint_editor::route_positions(
             this.route_document, this.route_path,
@@ -926,7 +928,8 @@ fn on_event(me, evt, ctx) {
             this.route_revision = ();
             return;
         }
-        if view_key == this.route_view_key && !this.marker_sync_pending {
+        if view_key == this.route_view_key && !this.marker_sync_pending
+            && !this.ribbon_sync_pending {
             this.route_revision = generation;
             return;
         }

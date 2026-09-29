@@ -53,6 +53,45 @@ full `ScriptingSet`, and stamps each event from `MissionClock` at that exact
 may precede `on_start`; scenario inboxes do not replay pre-start edges, so
 `on_start` reads the current state from its owning subsystem.
 
+Derived route geometry is presentation work. Rhai selects route points and
+submits them through `UpdateUsdCurveView`; the route-follow program is the
+single live ribbon-refresh owner, and the waypoint editor submits no duplicate
+mesh request after committing an edit. The UI-owned presentation system
+captures the route parent's active-frame pose and an immutable
+`TerrainSurfaceSnapshot`, then admits at most two curve builds at a time.
+Requests for one curve coalesce behind its active build. A result updates the
+existing mesh only if its operation revision and stage identity still match;
+it cannot edit USD, choose route state, or delay a simulation tick. The
+`usd.document.projected` telemetry event carries `changed_prim_paths` for the
+reconciled stage batches and fires after the affected referenced roots have
+reached their live instance projection. The pending roots come from the edit's
+typed reference-add operations, so a root is tracked even before its async asset
+admission reaches the stage sink. Pending references elsewhere in the same
+stage do not delay this edit's completion or release of its document-projection
+hold. Each authoritative pending reference retains its own `SceneReferences`
+hold until its instance projection reaches ECS.
+Authored policy filters that typed path set
+before it re-reads route topology, so unrelated edits in the same document do
+not cause a route scan in the fixed simulation cycle.
+
+Document-backed runtime reference spawns keep the document's authored
+reference as authority. Once the source asset is prepared, the live stage
+authors only the instance root while the per-instance `UsdStageProjectionPlan`
+projects its subtree. Every render, physics, and authored-runtime reader uses
+that remapped plan until an edit changes facts outside its typed root pose and
+catalog identity. The first such edit composes the reference into the canonical
+stage once, then a shared promotion state moves every entity reader to that
+stage. Deleting an unpromoted root removes the lightweight root and its ECS
+subtree without composing the reference. Simple `QueryUsdPrim` reads use the
+same prepared plan; explicit geometry and topology queries read the owning
+document's composed stage. Promotion errors fault the mounted scene and reject
+the live projection of the edit.
+
+An edit to a document's root scene is already owned by that scene's canonical
+stage. Dependent-stage refresh applies only when the changed layer is composed
+under a different recipe root; the source scene is not rebuilt as its own
+dependent asset.
+
 Scenario lifecycle has one readiness boundary: the optional, read-only
 `simulation_dependencies` plan declares prerequisites; after those inputs are
 committed, per-instance module initialization runs once and `on_start` runs
@@ -492,6 +531,10 @@ Their records retain producer provenance, correlation, stable scene-root and
 active-frame identities, original f64 pose, and a reserved root identity. The
 scene-command owner revalidates those facts and commits the spawn at its
 assigned tick before identity admission; `NetSpawn` uses the reserved identity.
+Spawn identity collision checks query the lifecycle-maintained
+`ApiEntityRegistry` and a hash index of queued runtime roots, so admission does
+not walk all live entities or scan the pending input queue. The API registry
+updates on `GlobalEntityId` component insertion, replacement, and removal.
 Document-backed spawns remain `ApplyUsdOps` entries in the Twin journal and do
 not also enter the session stream. Physical-frame snapshots are sampled and
 captured at their consuming fixed tick with the same per-tick allocator after
@@ -516,7 +559,7 @@ Unclassified direct port events remain outside this stream.
 
 | Domain/work | May run async | Must run at the owner boundary |
 |---|---|---|
-| USD | Asset I/O, dependency discovery, immutable layer parsing/composition, and send-safe projection-plan preparation; dependent-stage source snapshots are serialized once per revision and recipe overlays are coalesced through bounded admission; simulation topology classification runs from an exact canonical recipe snapshot through shared bounded admission | Check source revisions, operation/revision, and target-plan identity; mutate the live, thread-affine stage and publish ECS projection in stable scene order. USD simulation topology holds its mounted root's exact progress key until a current-generation index is committed; an active dependent-stage refresh retains its exact key through commit |
+| USD | Asset I/O, dependency discovery, immutable layer parsing/composition, and send-safe projection-plan preparation; dependent-stage document layers compose directly to shared `Sdf Data` for the live patch, then changed bytes and the future-mount plan are prepared at background priority; simulation topology classification runs from an exact canonical recipe snapshot through shared bounded admission | Check source revisions, operation/revision, and target-plan identity; mutate the live, thread-affine stage and publish ECS projection in stable scene order. USD simulation topology holds its mounted root's exact progress key until a current-generation index is committed; an active dependent-stage refresh holds only through the live patch and ECS handoff |
 | Modelica | Source I/O, declaration/interface extraction, parsing/lowering, solver construction, and requested numerical step | Check model generation/session/step; publish outputs and propagate ports at the fixed co-simulation boundary |
 | SysML | Source-set I/O, parse, resolve, typed analysis, and requirement report preparation | Publish only the current source revision; verification that reads live simulation values consumes the committed tick snapshot |
 | Rhai | Parse file-backed `.rhai` assets in Bevy's async asset-loading tasks; prepare inline roots and immutable compile artifacts through shared admission | Publish canonical source/AST revisions; validate and commit the dependency closure; evaluate imported module bodies, top-level initialization, and lifecycle hooks against the live world in stable actor order; apply commands at their declared boundary |

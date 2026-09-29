@@ -582,6 +582,12 @@ ordered delta, while an expired cursor returns the complete base/runtime layer
 snapshot needed to resync. A future cursor is rejected. Neither query creates a
 second composition cache, resolver, or history log.
 
+Pass `authored_children: true` when a tool needs direct child paths already
+authored in the selected layer while the live stage is catching up. The
+`authored_children` response comes from that layer's `primChildren` field. It
+reports layer-local authoring facts and does not replace composed child reads
+through `QueryUsdPrim` or `QueryUsdPrims`.
+
 The target response reports `edit_scope` (`authored_layer`, `local_override`,
 `composed_read_only`, or `missing`) instead of claiming that every composed
 prim supports every operation. Namespace edits still follow the operation's

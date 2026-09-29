@@ -1683,6 +1683,19 @@ impl UsdDocument {
         &self.runtime
     }
 
+    /// The persistent authored layers composed as Sdf data, excluding the
+    /// disposable view layer. Consumers that patch or inspect authored specs
+    /// should use this value directly instead of serializing USDA and parsing
+    /// it back into an equivalent layer.
+    pub fn persistent_composed_data(&self) -> Result<sdf::Data, DocumentError> {
+        if let Some(raw) = &self.parse_error {
+            return Err(DocumentError::ValidationFailed(format!(
+                "document source is un-parseable: {raw}"
+            )));
+        }
+        Ok(author::compose_layers(&self.base, &self.runtime))
+    }
+
     /// The disposable **view** layer. It composes into live reads and is
     /// excluded from source Save and runtime persistence.
     pub fn view_data(&self) -> &sdf::Data {

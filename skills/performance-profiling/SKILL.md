@@ -201,6 +201,57 @@ including a host without worker transport, must be visible through the scene
 fault owner. Do not run a whole-stage topology traversal synchronously in
 `Update`.
 
+For route-edit latency, record four separate spans: the bounded Rhai input
+hook, the durable route `ApplyUsdOps` and its one incremental projection,
+reference-marker admission, and `UpdateUsdCurveView`'s mesh worker/commit.
+Ribbon mesh preparation is presentation-only and must not issue another
+`ApplyUsdTransientOps`, change document generation, or run inside the fixed
+scenario event that observes a projected route. Compare the UI hook and fixed
+tick against frame/physics budgets; a fast worker result does not excuse a
+slow synchronous query or document edit in the input path.
+
+For general `SpawnEntity`/`DeleteEntity`, measure the command, USD add/remove,
+live structural reconciliation, and referenced asset admission separately.
+Keep edit-to-projection wall time separate from frame time. A new referenced
+entity may still be preparing its source plan across frames; each live instance
+retains that prepared asset so later matching spawns are warm. Measure the
+first spawn, a warm spawn, and deletion separately, while checking render-frame
+and fixed-step cadence during each. Use the production spans
+`scene_spawn_entity_command`, `usd_apply_ops_document`,
+`usd_document_apply_change_set`, `usd_reference_layer_closure_merge`,
+`usd_reference_instance_plan_remap`, `usd_reference_root_author`,
+`usd_reference_instance_promotion`,
+`usd_live_structural_reconcile`, `usd_visual_projection_batch`,
+`scene_runtime_spawn_commit`, `usd_live_subtree_despawn`,
+`scene_delete_entity_command`,
+`scene_delete_entity_persist`, and `usd_apply_one_op_document` to separate
+command, document, reference, projection, and removal costs. Warm instances of
+one immutable asset recipe should bypass layer-byte cloning and comparison;
+asset reloads use a new recipe identity and still merge changed bytes. Path
+reconciliation uses the lifecycle-maintained stage/path index, not a full
+population scan per changed prim. Raw-file spawn identity collision checks use
+the lifecycle-maintained API identity registry and a hash set of queued roots,
+not a world scan or a walk of all pending inputs. Document projection waits only for
+references named by that edit's typed AddPrim operations; an unrelated
+reference must not extend its completion time or document-projection hold. An
+authoritative pending reference can retain its separate `SceneReferences`
+simulation hold until its own instance is committed. A long completion wait is
+not itself a frame stall, but an unready authoritative reference can hold
+simulation progress. A normal document-backed spawn projects from the prepared
+instance plan and authors only a lightweight live root; `usd_reference_root_author`
+must not include reference composition. Measure `usd_reference_instance_promotion`
+separately because the first later edit that needs full composed instance facts
+performs that one-time promotion. Deleting an unpromoted root must not promote it.
+`scene_runtime_spawn_commit` measures each changed prim's live ECS structure
+insertion, including deferred reference descendants. `usd_visual_projection_batch`
+measures the bounded per-update component and visual projection pass; keep its
+frame cost separate from total time until the last descendant is admitted. The
+`usd_reference_instance_plan_remap` span must remain independent of asset prim
+count: an instance shares the immutable prepared snapshot and carries only its
+namespace and root overrides. The stage test verifies snapshot sharing with
+`Arc::ptr_eq` and verifies that an instance view exposes only the source asset's
+`defaultPrim` subtree.
+
 For Twin-open stalls, profile the active Twin policy loader separately from
 policy activation. Native manifest and Rhai source reads should run through
 bounded `AsyncWorkAdmission`; `twin_policy_source_prepare_offthread` measures

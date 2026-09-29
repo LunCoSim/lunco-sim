@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 static NEXT_CANONICAL_STAGE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -82,6 +82,9 @@ pub struct CanonicalStage {
     /// recipe without cloning every layer's bytes on each authored edit.
     resolver_identity: u64,
     resolver_revision: std::cell::Cell<u64>,
+    /// Immutable source recipes already merged into this resolver. Weak
+    /// references keep revision identity without retaining unloaded assets.
+    reference_recipes: HashMap<String, Weak<StageRecipe>>,
     /// Bumped by the drain step on each observed change (debug / asserts).
     pub generation: u64,
     /// Prepared snapshot known to describe this live stage at the recorded
@@ -141,6 +144,7 @@ impl CanonicalStage {
             resolver_bytes: None,
             resolver_identity: NEXT_CANONICAL_STAGE_ID.fetch_add(1, Ordering::Relaxed),
             resolver_revision: std::cell::Cell::new(0),
+            reference_recipes: HashMap::new(),
             generation: 0,
             prepared_plan: None,
         }
@@ -489,14 +493,88 @@ impl CanonicalStage {
     /// those ids composes on this stage. Returns `false` if this stage has no
     /// injectable resolver (built via [`from_stage`](Self::from_stage) over a
     /// foreign resolver). Merges — existing ids keep their bytes.
-    pub fn add_layer_bytes(&self, extra: HashMap<String, Vec<u8>>) -> bool {
+    pub fn add_layer_bytes(&mut self, extra: HashMap<String, Vec<u8>>) -> bool {
+        match self.add_layer_bytes_from(&extra) {
+            Some(changed) => {
+                if changed {
+                    self.reference_recipes.clear();
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Merge a referenced asset's immutable closure once for each admitted
+    /// recipe revision. Warm instances of the same loaded asset skip both the
+    /// byte-map clone and the per-layer equality scan. A reloaded recipe has a
+    /// different identity and replaces changed layer bytes before composition.
+    pub fn add_layer_recipe(&mut self, recipe: &Arc<StageRecipe>) -> bool {
+        if self
+            .reference_recipes
+            .get(&recipe.root_id)
+            .and_then(Weak::upgrade)
+            .is_some_and(|known| Arc::ptr_eq(&known, recipe))
+        {
+            return self.resolver_bytes.is_some();
+        }
+        if self.add_layer_bytes_from(&recipe.bytes).is_none() {
+            return false;
+        }
+        self.reference_recipes
+            .insert(recipe.root_id.clone(), Arc::downgrade(recipe));
+        true
+    }
+
+    /// Copy selected authored specs and fields from `source` into one existing
+    /// resolver layer in one USD transaction. The stage recomposes only the
+    /// affected composition paths and the normal sink reconciles those paths
+    /// into ECS; unrelated live prims keep their entity identities.
+    ///
+    /// This is the live propagation door for a changed dependency layer. The
+    /// source document remains authoritative for durable edits; this method
+    /// updates only the composed stage's cached authored layer.
+    pub fn patch_layer(
+        &self,
+        layer_identifier: &str,
+        source: &openusd::sdf::Data,
+        spec_paths: &[SdfPath],
+        fields: &[(SdfPath, String)],
+    ) -> anyhow::Result<bool> {
+        use openusd::sdf::AbstractData;
+
+        self.stage
+            .batch_edit(&[layer_identifier], |edits| {
+                for path in spec_paths {
+                    if source.spec_type(path).is_some() {
+                        openusd::sdf::copy_spec(source, path, edits[0].data_mut(), path)?;
+                    } else {
+                        edits[0].remove_spec(path)?;
+                    }
+                }
+
+                for (path, field) in fields {
+                    if source.spec_type(path).is_none() {
+                        continue;
+                    }
+                    match source.spec(path).and_then(|spec| spec.get(field)) {
+                        Some(value) => edits[0].data_mut().set_field(path, field, value.clone()),
+                        None => edits[0].data_mut().erase_field(path, field),
+                    }
+                }
+                Ok(())
+            })
+            .map_err(Into::into)
+    }
+
+    fn add_layer_bytes_from(&self, extra: &HashMap<String, Vec<u8>>) -> Option<bool> {
         match &self.resolver_bytes {
             Some(shared) => {
                 let mut bytes = shared.borrow_mut();
                 let mut changed = false;
                 for (id, layer) in extra {
-                    if bytes.get(&id) != Some(&layer) {
-                        bytes.insert(id, layer);
+                    if bytes.get(id) != Some(layer) {
+                        bytes.insert(id.clone(), layer.clone());
                         changed = true;
                     }
                 }
@@ -508,9 +586,9 @@ impl CanonicalStage {
                             .expect("canonical stage resolver revision exhausted"),
                     );
                 }
-                true
+                Some(changed)
             }
-            None => false,
+            None => None,
         }
     }
 
@@ -944,6 +1022,19 @@ impl CanonicalStage {
 pub struct StageProjector<'a>(&'a CanonicalStage);
 
 impl StageProjector<'_> {
+    /// Propagate selected source-layer specs and fields into the canonical
+    /// stage without replacing the stage or its ECS projection.
+    pub fn patch_layer(
+        &self,
+        layer_identifier: &str,
+        source: &openusd::sdf::Data,
+        spec_paths: &[SdfPath],
+        fields: &[(SdfPath, String)],
+    ) -> anyhow::Result<bool> {
+        self.0
+            .patch_layer(layer_identifier, source, spec_paths, fields)
+    }
+
     /// Replay a `SetTranslate` op — see [`CanonicalStage::author_translate`].
     pub fn author_translate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
         self.0.author_translate(path, value)
@@ -1215,20 +1306,19 @@ impl CanonicalStages {
 
     /// Select the composed reader for one projected entity.
     ///
-    /// Referenced runtime instances carry an immutable plan remapped to their
-    /// authored scene path. That plan is the read source for the instance
-    /// subtree; the scene's live stage remains the source for edits and for
-    /// ordinary authored prims. Runtime-layer edits do not replace this read
-    /// surface: they change the instance root's authored pose and metadata,
-    /// while the prepared plan remains the source of the referenced asset's
-    /// local topology and transforms.
+    /// Referenced runtime instances start with an immutable plan remapped to
+    /// their authored scene path. The plan serves the instance subtree until
+    /// the first edit that changes composed instance facts; that edit composes
+    /// the reference into this live stage and switches every cloned instance
+    /// reader to the canonical view. Root pose and catalog identity are the
+    /// authored facts represented directly by the initial plan.
     pub fn reader_for_entity<'a>(
         &'a self,
         asset: bevy::asset::AssetId<UsdStageAsset>,
         stage_asset: &'a UsdStageAsset,
         instance: Option<&'a crate::UsdInstanceProjection>,
     ) -> (UsdReadSource<'a>, u64) {
-        if let Some(instance) = instance {
+        if let Some(instance) = instance.filter(|instance| !instance.is_promoted()) {
             return (UsdReadSource::Prepared(instance.plan.as_ref()), 0);
         }
         self.reader_for(asset, stage_asset)
@@ -1438,7 +1528,7 @@ mod recipe_tests {
     #[test]
     fn layer_byte_revision_changes_only_when_the_resolver_closure_changes() {
         let recipe = StageRecipe::from_source("scene.usda", FIXTURE);
-        let canonical = CanonicalStage::from_recipe(&recipe).expect("create canonical stage");
+        let mut canonical = CanonicalStage::from_recipe(&recipe).expect("create canonical stage");
         let initial = canonical.layer_bytes_revision();
         let dependency = HashMap::from([("part.usda".to_string(), FIXTURE.as_bytes().to_vec())]);
 
@@ -1449,6 +1539,99 @@ mod recipe_tests {
 
         assert!(canonical.add_layer_bytes(dependency));
         assert_eq!(canonical.layer_bytes_revision(), updated);
+    }
+
+    #[test]
+    fn referenced_recipe_reuse_skips_warm_merge_and_accepts_reloaded_source() {
+        let scene = StageRecipe::from_source("scene.usda", FIXTURE);
+        let mut canonical = CanonicalStage::from_recipe(&scene).expect("create canonical stage");
+        let source = Arc::new(StageRecipe::from_source("part.usda", FIXTURE));
+
+        assert!(canonical.add_layer_recipe(&source));
+        let first_merge = canonical.layer_bytes_revision();
+        assert!(canonical.add_layer_recipe(&source));
+        assert_eq!(
+            canonical.layer_bytes_revision(),
+            first_merge,
+            "warm spawns reusing one immutable asset recipe must skip closure merging"
+        );
+
+        assert!(canonical.add_layer_bytes(HashMap::from([(
+            source.root_id.clone(),
+            b"#usda 1.0\ndef Xform \"Replacement\" {}\n".to_vec(),
+        )])));
+        let explicit_merge = canonical.layer_bytes_revision();
+        assert_ne!(explicit_merge, first_merge);
+        assert!(canonical.add_layer_recipe(&source));
+        let restored_merge = canonical.layer_bytes_revision();
+        assert_ne!(
+            restored_merge, explicit_merge,
+            "a direct resolver update must invalidate cached recipe identity"
+        );
+        assert!(canonical.add_layer_recipe(&source));
+        assert_eq!(
+            canonical.layer_bytes_revision(),
+            restored_merge,
+            "the restored recipe remains warm after its resolver bytes are current"
+        );
+
+        let changed_source = Arc::new(StageRecipe::from_source(
+            "part.usda",
+            "#usda 1.0\ndef Xform \"UpdatedPart\" {}\n",
+        ));
+        assert!(canonical.add_layer_recipe(&changed_source));
+        assert_ne!(
+            canonical.layer_bytes_revision(),
+            restored_merge,
+            "a new asset recipe revision must still update the live resolver"
+        );
+    }
+
+    #[test]
+    fn instance_readers_switch_to_the_live_stage_when_promoted() {
+        let scene = StageRecipe::from_source(
+            "scene.usda",
+            "#usda 1.0\ndef Xform \"Root\" { def Cube \"Box\" { double size = 3 } }\n",
+        );
+        let referenced = StageRecipe::from_source(
+            "reference.usda",
+            "#usda 1.0\ndef Xform \"Root\" { def Cube \"Box\" { double size = 4 } }\n",
+        );
+        let handle = bevy::asset::Handle::<UsdStageAsset>::default();
+        let stage_asset = UsdStageAsset::from_recipe(scene.clone()).expect("prepare scene");
+        let mut canonical = CanonicalStage::from_recipe(&scene).expect("open live stage");
+        canonical
+            .author_translate(&SdfPath::new("/Root/Box").unwrap(), [1.0, 0.0, 0.0])
+            .expect("advance the live stage generation");
+        canonical.drain_changes();
+
+        let mut stages = CanonicalStages::default();
+        stages.insert(handle.id(), canonical);
+        let projection = crate::UsdInstanceProjection::new(
+            bevy::asset::Handle::default(),
+            Arc::new(UsdStageProjectionPlan::from_recipe(&referenced).expect("prepare reference")),
+            "lunco://test/reference.usda",
+            None,
+            Some("Xform".into()),
+        );
+        let instance_clone = projection.clone();
+
+        let (reader, generation) =
+            stages.reader_for_entity(handle.id(), &stage_asset, Some(&projection));
+        assert_eq!(generation, 0);
+        assert_eq!(
+            reader.real(&SdfPath::new("/Root/Box").unwrap(), "size"),
+            Some(4.0)
+        );
+
+        instance_clone.mark_promoted();
+        let (reader, generation) =
+            stages.reader_for_entity(handle.id(), &stage_asset, Some(&projection));
+        assert_eq!(generation, 1);
+        assert_eq!(
+            reader.real(&SdfPath::new("/Root/Box").unwrap(), "size"),
+            Some(3.0)
+        );
     }
 
     #[test]
@@ -1675,6 +1858,105 @@ mod authoring_tests {
                 .map(|path| path.name().unwrap_or_default().to_owned())
                 .collect::<Vec<_>>(),
             ["P0", "P1", "P2"].map(str::to_owned)
+        );
+    }
+
+    #[test]
+    fn dependent_layer_patch_updates_only_named_subtree_and_fields() {
+        use lunco_usd_data::usd_data::UsdDataExt;
+
+        let initial =
+            "#usda 1.0\ndef Xform \"Route\" { def Xform \"W0\" {} }\ndef Cube \"Unrelated\" {}\n";
+        let updated = "#usda 1.0\ndef Xform \"Route\" { reorder nameChildren = [\"W1\", \"W0\"] def Xform \"W0\" {} def Xform \"W1\" {} }\ndef Cube \"Unrelated\" {}\n";
+        let recipe = StageRecipe::from_source("scene.usda", initial);
+        let mut canonical = CanonicalStage::from_recipe(&recipe).expect("build live stage");
+        let source = lunco_usd_compose::parse_usda(updated).expect("parse updated layer");
+        let route = SdfPath::new("/Route").expect("route path");
+        let waypoint = SdfPath::new("/Route/W1").expect("waypoint path");
+
+        canonical
+            .projector()
+            .patch_layer(
+                "scene.usda",
+                &source,
+                std::slice::from_ref(&waypoint),
+                &[
+                    (route.clone(), "primChildren".to_owned()),
+                    (route.clone(), "primOrder".to_owned()),
+                ],
+            )
+            .expect("patch the authored layer");
+
+        let expected_order = source.field(&route, openusd::sdf::FieldKey::PrimOrder.as_str());
+        let actual_order = canonical
+            .stage
+            .root_layer()
+            .data()
+            .get_field(&route, openusd::sdf::FieldKey::PrimOrder.as_str())
+            .ok()
+            .map(|value| value.into_owned());
+        assert_eq!(
+            actual_order.as_ref(),
+            expected_order,
+            "copy authored primOrder"
+        );
+
+        assert!(canonical.view().has_prim(&waypoint));
+        assert!(
+            canonical
+                .view()
+                .has_prim(&SdfPath::new("/Unrelated").unwrap())
+        );
+        assert_eq!(
+            UsdRead::children(&canonical.view(), &route)
+                .iter()
+                .map(|path| path.name().unwrap_or_default().to_owned())
+                .collect::<Vec<_>>(),
+            ["W1", "W0"].map(str::to_owned)
+        );
+        let changes = canonical.drain_changes();
+        assert!(
+            changes
+                .iter()
+                .any(|change| { change.resynced.iter().any(|path| path == &waypoint) }),
+            "the stage sink must report the newly composed waypoint"
+        );
+        assert!(
+            changes.iter().all(|change| !change
+                .resynced
+                .iter()
+                .any(|path| path.to_string() == "/Unrelated")),
+            "unrelated prims must not enter the stage change set"
+        );
+
+        let deleted = lunco_usd_compose::parse_usda(
+            "#usda 1.0\ndef Xform \"Route\" { reorder nameChildren = [\"W0\"] def Xform \"W0\" {} }\ndef Cube \"Unrelated\" {}\n",
+        )
+        .expect("parse deleted layer");
+        canonical
+            .projector()
+            .patch_layer(
+                "scene.usda",
+                &deleted,
+                std::slice::from_ref(&waypoint),
+                &[
+                    (route.clone(), "primChildren".to_owned()),
+                    (route, "primOrder".to_owned()),
+                ],
+            )
+            .expect("remove the authored waypoint");
+        assert!(!canonical.view().has_prim(&waypoint));
+        assert!(
+            canonical
+                .view()
+                .has_prim(&SdfPath::new("/Unrelated").unwrap())
+        );
+        assert!(
+            canonical
+                .drain_changes()
+                .iter()
+                .any(|change| change.resynced.iter().any(|path| path == &waypoint)),
+            "the stage sink must report the removed waypoint"
         );
     }
 

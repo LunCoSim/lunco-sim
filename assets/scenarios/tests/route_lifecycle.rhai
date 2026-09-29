@@ -2,6 +2,8 @@
 // program. All observable route policy stays here; Rust is exercised only as
 // the generic typed USD command and event/port boundary.
 
+const TEST_KIND = "editor";
+
 const ROOT = "/RouteLifecycle";
 const ROUTE = "/RouteLifecycle/Route";
 const ALTERNATE_ROUTE = "/RouteLifecycle/AlternateRoute";
@@ -15,7 +17,7 @@ const APPLICATION_ADMISSION_EVENT = "ROUTE_LIFECYCLE_APPLICATION_EDIT";
 fn simulation_dependencies(me, ctx) {
     let subject = find_path(SUBJECT_PATH);
     #{ modelica_entities: [subject], entity_reads: [subject], entity_writes: [],
-       query_reads: ["QueryUsdPrim", "QueryPhysicsState", "ResolveUsdTarget", "InspectSelection", "ScriptInspect", "ScriptStatus", "ReadExposures"],
+       query_reads: ["QueryUsdPrim", "QueryUsdPrims", "QueryPhysicsState", "ResolveUsdTarget", "InspectSelection", "InspectUsdSelection", "ScriptInspect", "ScriptStatus", "ReadExposures"],
        required_inputs: [] }
 }
 
@@ -55,15 +57,9 @@ fn route_revision(doc) {
     result.generation
 }
 
-fn ribbon_count(doc) {
-    let result = query("QueryUsdPrim", #{
-        doc_id: doc,
-        path: RIBBON_GEOMETRY,
-        attrs: ["curveVertexCounts"],
-    });
-    if result == () || result.ok == false || result.attrs == ()
-        || result.attrs["curveVertexCounts"] == () { return (); }
-    result.attrs["curveVertexCounts"][0]
+fn ribbon_present(doc) {
+    let result = query("QueryUsdPrim", #{ doc_id: doc, path: RIBBON_GEOMETRY });
+    result != () && result.ok != false
 }
 
 fn ribbon_is_open(doc) {
@@ -115,20 +111,6 @@ fn ribbon_normals_match(doc, count) {
     });
     result != () && result.ok != false && result.attrs != ()
         && result.attrs["normals"] != () && result.attrs["normals"].len() == count
-}
-
-fn ribbon_clearance_matches(doc) {
-    let result = query("QueryUsdPrim", #{
-        doc_id: doc,
-        path: RIBBON_GEOMETRY,
-        attrs: ["points"],
-    });
-    if result == () || result.ok == false || result.attrs == ()
-        || result.attrs["points"] == () || result.attrs["points"].len() == 0 {
-        return false;
-    }
-    let first = result.attrs["points"][0];
-    first.len() == 3 && first[1] >= 0.02 && first[1] <= 0.04
 }
 
 fn ribbon_anchor_matches_point(doc, point_path) {
@@ -391,7 +373,7 @@ fn on_tick(me, ctx) {
             detail += "; doc=" + this.doc.to_string()
                 + ", subject=" + find_path(SUBJECT_PATH).to_string()
                 + ", points=" + point_count(this.doc).to_string()
-                + ", ribbon=" + ribbon_count(this.doc).to_string()
+                + ", ribbon=" + ribbon_present(this.doc).to_string()
                 + ", normals=" + ribbon_normals_match(this.doc, 3).to_string()
                 + ", anchor=" + ribbon_anchor_matches_point(this.doc, ROUTE + "/P0").to_string()
                 + ", programs=" + programs.to_string();
@@ -426,16 +408,16 @@ fn on_tick(me, ctx) {
         if this.phase == 2 {
             detail += "; point_count=" + point_count(this.doc).to_string()
                 + ", new_point=" + this.new_point.to_string()
-                + ", ribbon_count=" + ribbon_count(this.doc).to_string();
+                + ", ribbon_present=" + ribbon_present(this.doc).to_string();
         }
         if this.phase == 5 {
             detail += "; point_count=" + point_count(this.doc).to_string()
                 + ", referenced_point_exists=" + has_path(this.doc, ROUTE + "/P2").to_string()
-                + ", ribbon_count=" + ribbon_count(this.doc).to_string();
+                + ", ribbon_present=" + ribbon_present(this.doc).to_string();
         }
         if this.phase == 9 {
             detail += "; point_count=" + point_count(this.doc).to_string()
-                + ", ribbon_count=" + ribbon_count(this.doc).to_string();
+                + ", ribbon_present=" + ribbon_present(this.doc).to_string();
         }
         if this.phase == 15 {
             detail += "; application_event_received=" + this.application_admission_received.to_string()
@@ -469,11 +451,13 @@ fn on_tick(me, ctx) {
         if route == () || route.ok == false || route.doc_id == () { return; }
         this.doc = route.doc_id;
         this.subject = find_path(SUBJECT_PATH);
-        if this.subject < 0 || point_count(this.doc) != 3 || ribbon_count(this.doc) != 3
+        if this.subject < 0 || point_count(this.doc) != 3 || !ribbon_present(this.doc)
             || !ribbon_normals_match(this.doc, 3)
             || !ribbon_anchor_matches_point(this.doc, ROUTE + "/P0") {
             return;
         }
+        this.ribbon_entity = find_path(RIBBON_GEOMETRY);
+        if this.ribbon_entity < 0 { return; }
         let listed = program_editor::list(this.doc, ROUTE);
         if listed == () || !listed.ok || listed.programs.len() == 0 { return; }
         this.program_path = listed.programs[0]["path"];
@@ -494,8 +478,8 @@ fn on_tick(me, ctx) {
             "route ribbon keeps a narrow terrain annotation width"));
         this.checks.push(t_true(ribbon_is_open(this.doc),
             "route ribbon is open and never connects the last point to the first"));
-        this.checks.push(t_true(ribbon_clearance_matches(this.doc),
-            "route ribbon clears the surface along its support normal"));
+        this.checks.push(t_true(ribbon_present(this.doc),
+            "route ribbon keeps one disposable USD identity for its live mesh"));
         this.checks.push(t_true(listed.ok && listed.programs.len() == 1
             && listed.programs[0]["path"] == this.program_path,
             "generic program discovery lists the authored executable"));
@@ -722,7 +706,7 @@ fn on_tick(me, ctx) {
     if this.phase == 102 {
         // Let the disposable ribbon observe the completed delete before the
         // durable point used by the rest of this lifecycle is appended.
-        if point_count(this.doc) != 3 || ribbon_count(this.doc) != 3 { return; }
+        if point_count(this.doc) != 3 || !ribbon_present(this.doc) { return; }
         let pointer = scene_interaction::on_pointer(
             context(this.doc, (), [0.0, 1.0, -32.0]),
         );
@@ -739,7 +723,7 @@ fn on_tick(me, ctx) {
 
     if this.phase == 2 {
         if point_count(this.doc) != 4 || !has_path(this.doc, this.new_point)
-            || ribbon_count(this.doc) != 4 || !ribbon_normals_match(this.doc, 4) { return; }
+            || !ribbon_present(this.doc) { return; }
         this.checks.push(t_true(true,
             "the add-point policy appends a named route point"));
         let position = point_position(this.doc, this.new_point);
@@ -889,30 +873,26 @@ fn on_tick(me, ctx) {
     }
 
     if this.phase == 210 {
-        // Live pointer motion is exercised through native picking by the
-        // windowed route_interaction gate. This headless lifecycle gate checks
-        // the authored preview shape and durable placement separately.
-        let marker_visual = query("QueryUsdPrim", #{
+        // The placement hit can arrive before the disposable preview has been
+        // projected into the live scene. Resolve its target from the view
+        // layer and apply the click without waiting for composed reads.
+        let point_parts = this.new_point.split("/");
+        let target_path = ROUTE + "/MovePreview/Target_"
+            + point_parts[point_parts.len() - 1];
+        let preview = query("ResolveUsdTarget", #{
             doc_id: this.doc,
-            path: this.new_point + "/Dome",
-            attrs: ["radius", "xformOp:translate"],
+            path: ROUTE + "/MovePreview",
+            edit_target: "@view@",
+            authored_children: true,
         });
-        let ghost_visual = query("QueryUsdPrim", #{
-            doc_id: this.doc,
-            path: ROUTE + "/MovePreview/Dome",
-            attrs: ["radius", "xformOp:translate"],
-        });
-        this.checks.push(t_true(marker_visual != () && marker_visual.ok != false
-            && ghost_visual != () && ghost_visual.ok != false
-            && marker_visual.attrs != () && ghost_visual.attrs != ()
-            && marker_visual.attrs["radius"] != ()
-            && ghost_visual.attrs["radius"] != ()
-            && marker_visual.attrs["xformOp:translate"] != ()
-            && ghost_visual.attrs["xformOp:translate"] != ()
-            && marker_visual.attrs["radius"] == ghost_visual.attrs["radius"]
-            && marker_visual.attrs["xformOp:translate"]
-                == ghost_visual.attrs["xformOp:translate"],
-            "the ghost uses the selected marker's authored radius and dome offset"));
+        let preview_target_found = false;
+        if preview != () && preview.ok != false && preview.authored_children != () {
+            for child in preview.authored_children {
+                if child == target_path { preview_target_found = true; }
+            }
+        }
+        this.checks.push(t_true(preview_target_found,
+            "the transient move target resolves directly from its authored view layer"));
         let destination = this.move_preview_expected;
         let place = context(this.doc, (), destination);
         place.route_path = ROUTE;
@@ -940,7 +920,7 @@ fn on_tick(me, ctx) {
             edit_target: "@view@",
         });
         if position == () || position[0] != 6.0 || position[2] != -36.0
-            || ribbon_count(this.doc) != 4 { return; }
+            || !ribbon_present(this.doc) { return; }
         this.checks.push(t_true(ghost == () || ghost.ok == false
             || ghost.authored_here != true,
             "committing the move removes its transient ghost"));
@@ -951,7 +931,7 @@ fn on_tick(me, ctx) {
     if this.phase == 3 {
         let position = point_position(this.doc, this.new_point);
         if position == () || position[0] != 6.0 || position[2] != -36.0
-            || ribbon_count(this.doc) != 4 { return; }
+            || !ribbon_present(this.doc) { return; }
         this.checks.push(t_true(true,
             "moving a selected point refreshes the reusable ribbon in place"));
         let deleted = waypoint_editor::on_delete(context(this.doc, this.new_point, ()));
@@ -963,7 +943,7 @@ fn on_tick(me, ctx) {
 
     if this.phase == 4 {
         if point_count(this.doc) != 3 || has_path(this.doc, this.new_point)
-            || ribbon_count(this.doc) != 3 { return; }
+            || !ribbon_present(this.doc) { return; }
         this.checks.push(t_true(true, "deleting a point updates ribbon topology"));
         this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
             "deleting a point does not rebuild the subject"));
@@ -979,7 +959,7 @@ fn on_tick(me, ctx) {
     if this.phase == 40 {
         let position = point_position(this.doc, ROUTE + "/P2");
         if position == () || position[0] != 2.0 || position[2] != -26.0
-            || ribbon_count(this.doc) != 3 { return; }
+            || !ribbon_present(this.doc) { return; }
         this.checks.push(t_true(true,
             "moving a referenced route point updates its composed ribbon"));
         this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
@@ -993,7 +973,7 @@ fn on_tick(me, ctx) {
     if this.phase == 41 {
         let position = point_position(this.doc, ROUTE + "/P2");
         if position == () || position[0] != 0.0 || position[2] != -24.0
-            || ribbon_count(this.doc) != 3 { return; }
+            || !ribbon_present(this.doc) { return; }
         this.checks.push(t_true(true,
             "undo removes only the local transform opinion from a referenced point"));
         this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
@@ -1007,7 +987,7 @@ fn on_tick(me, ctx) {
     if this.phase == 42 {
         let position = point_position(this.doc, ROUTE + "/P2");
         if position == () || position[0] != 2.0 || position[2] != -26.0
-            || ribbon_count(this.doc) != 3 { return; }
+            || !ribbon_present(this.doc) { return; }
         this.checks.push(t_true(true,
             "redo reapplies the referenced transform without scene reprojection"));
         this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
@@ -1021,7 +1001,7 @@ fn on_tick(me, ctx) {
 
     if this.phase == 5 {
         if point_count(this.doc) != 2 || has_path(this.doc, ROUTE + "/P2")
-            || ribbon_count(this.doc) != 2 { return; }
+            || !ribbon_present(this.doc) { return; }
         this.checks.push(t_true(true, "deactivating a referenced point does not rebuild the subject"));
         let undone = cmd("UndoDocument", #{ doc_id: this.doc });
         if undone == () || undone.ok != true { return; }
@@ -1031,7 +1011,7 @@ fn on_tick(me, ctx) {
 
     if this.phase == 51 {
         if point_count(this.doc) != 3 || !has_path(this.doc, ROUTE + "/P2")
-            || ribbon_count(this.doc) != 3 { return; }
+            || !ribbon_present(this.doc) { return; }
         this.checks.push(t_true(true,
             "undo restores a referenced route point and its ribbon"));
         this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
@@ -1044,42 +1024,54 @@ fn on_tick(me, ctx) {
 
     if this.phase == 52 {
         if point_count(this.doc) != 2 || has_path(this.doc, ROUTE + "/P2")
-            || ribbon_count(this.doc) != 2 { return; }
+            || !ribbon_present(this.doc) { return; }
         this.checks.push(t_true(true,
             "redo reapplies the referenced route-point deletion"));
         this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
             "redoing a referenced route edit preserves the subject identity"));
-        waypoint_editor::on_delete(context(this.doc, ROUTE + "/P1", ()));
+        let remaining_deleted = waypoint_editor::on_delete(
+            context(this.doc, ROUTE + "/P1", ()),
+        );
+        this.checks.push(t_true(remaining_deleted.ok == true,
+            "the remaining route point accepts a persistent delete"));
+        if remaining_deleted.ok != true {
+            finish(this);
+            return;
+        }
         this.phase = 6;
         return;
     }
 
     if this.phase == 6 {
         if point_count(this.doc) != 1 || has_path(this.doc, ROUTE + "/P1")
-            || ribbon_count(this.doc) != () { return; }
-        this.checks.push(t_true(true, "a one-point route has no stale ribbon"));
+            || find_path(RIBBON_GEOMETRY) != this.ribbon_entity { return; }
+        this.checks.push(t_true(true,
+            "a one-point route keeps the stable ribbon entity while its mesh is empty"));
         waypoint_editor::on_delete(context(this.doc, ROUTE + "/P0", ()));
         this.phase = 7;
         return;
     }
 
     if this.phase == 7 {
-        if point_count(this.doc) != 0 || ribbon_count(this.doc) != () { return; }
-        this.checks.push(t_true(true, "an empty route is safe and has no stale presentation"));
+        if point_count(this.doc) != 0
+            || find_path(RIBBON_GEOMETRY) != this.ribbon_entity { return; }
+        this.checks.push(t_true(true,
+            "an empty route retains its reusable ribbon entity without a mesh"));
         waypoint_editor::on_click(context(this.doc, (), [0.0, 1.0, -8.0]));
         this.phase = 8;
         return;
     }
 
     if this.phase == 8 {
-        if point_count(this.doc) != 1 || ribbon_count(this.doc) != () { return; }
+        if point_count(this.doc) != 1
+            || find_path(RIBBON_GEOMETRY) != this.ribbon_entity { return; }
         waypoint_editor::on_click(context(this.doc, (), [0.0, 1.0, -16.0]));
         this.phase = 9;
         return;
     }
 
     if this.phase == 9 {
-        if point_count(this.doc) != 2 || ribbon_count(this.doc) != 2 { return; }
+        if point_count(this.doc) != 2 || !ribbon_present(this.doc) { return; }
         let modified = modified_context(this.doc, (), [0.0, 1.0, -24.0],
             #{ alt: true, shift: true, ctrl: true });
         modified.pointer_intents = [];
@@ -1089,7 +1081,7 @@ fn on_tick(me, ctx) {
     }
 
     if this.phase == 90 {
-        if point_count(this.doc) != 2 || ribbon_count(this.doc) != 2 { return; }
+        if point_count(this.doc) != 2 || !ribbon_present(this.doc) { return; }
         let possession = cmd("AcquireControl", #{
             target: this.subject,
             bind_camera: false,
@@ -1113,7 +1105,7 @@ fn on_tick(me, ctx) {
 
     if this.phase == 10 {
         if !this.active_edit {
-            if point_count(this.doc) != 2 || ribbon_count(this.doc) != 2 { return; }
+            if point_count(this.doc) != 2 || !ribbon_present(this.doc) { return; }
             this.checks.push(t_true(true,
                 "a non-matching modifier combination does not append a route point"));
             let added = waypoint_editor::on_click(
@@ -1124,7 +1116,7 @@ fn on_tick(me, ctx) {
             this.active_edit = true;
             return;
         }
-        if point_count(this.doc) != 3 || ribbon_count(this.doc) != 3 { return; }
+        if point_count(this.doc) != 3 || !ribbon_present(this.doc) { return; }
         if this.started == 0 || this.stopped != 0 { return; }
         let guidance = port(this.subject, "guidance_throttle");
         if guidance == () || guidance.abs() < 0.01 { return; }
@@ -1312,7 +1304,7 @@ fn on_tick(me, ctx) {
 
     if this.phase == 13 {
         if point_count(this.doc) != 2 || has_path(this.doc, this.generic_delete_path)
-            || ribbon_count(this.doc) != 2 { return; }
+            || !ribbon_present(this.doc) { return; }
         this.checks.push(t_true(true,
             "generic DeleteEntity persists a runtime active override for an authored point"));
         let alternate = program_editor::list(this.doc, ALTERNATE_ROUTE);

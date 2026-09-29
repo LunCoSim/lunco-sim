@@ -51,12 +51,14 @@ layer under the selected route scope from the committed USD route. An edit can
 use the selected route point to resolve its enclosing route and does not require
 rover possession; multiple routes still require an explicit route or subject
 selection. A selection-only delete resolves the selected point when no pointer
-target is present. A route program can use `on_visualization(me, ctx)` to prepare
-that view after terrain and document preparation while Modelica compilation is
-pending. This one-shot callback runs in `PreUpdate`, after the time spine and
-before the first fixed tick, top-level initialization, or `on_start`; use the
-host id, parameters, and read-only queries. Rhai blocks world writes and
-events there;
+target is present. Bind a route program to its composed USD document and build
+its ribbon from the matching `usd.document.projected` event; that event is the
+authoritative boundary for the route identity and does not wait for Modelica
+admission. Keep `on_visualization(me, ctx)` for presentation preparation that
+does not depend on a document attachment that may still be settling. This
+one-shot callback runs in `PreUpdate`, after the time spine and before the first
+fixed tick, top-level initialization, or `on_start`; use the host id, parameters,
+and read-only queries. Rhai blocks world writes and events there;
 `ApplyUsdTransientOps` is the only available command and always edits the
 disposable view layer. Keeping the ribbon under that scope
 preserves the route points' USD parent frame. The subject and route owner remain live:

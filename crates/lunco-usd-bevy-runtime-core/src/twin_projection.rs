@@ -34,7 +34,11 @@
 //!    persistence plugin saves coalesced runtime-layer snapshots off-thread;
 //!    dependent stages are refreshed only when their composition uses the
 //!    changed document. A referenced spawn whose asset isn't loaded yet is
-//!    fetched once through [`drain_ref_spawns`], then authored the same way.
+//!    fetched once through [`drain_ref_spawns`]; its prepared per-instance plan
+//!    drives the initial subtree while the live stage receives only its root.
+//!    The first later edit that needs composed instance facts promotes that
+//!    reference into the canonical stage, and root deletion never needs that
+//!    composition.
 //!
 //! Ownership: a default Twin scene gets a scene lease in
 //! [`DocBackedTwinScenes`]. An explicit file open, new document, or authored edit
@@ -50,7 +54,7 @@
 //! scheme-qualified scene sources enter the typed `LoadScene` path directly.
 
 use lunco_usd_document::document::UsdDocument;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
@@ -68,7 +72,8 @@ use lunco_usd_bevy_scene::{
     UsdSceneProjectionReset, UsdSceneRoot,
 };
 use lunco_usd_bevy_stage::{
-    UsdInstanceProjection, UsdStageAsset, UsdStageProjectionPlan, source::UsdSourceText,
+    UsdInstanceProjection, UsdRead, UsdStageAsset, UsdStageProjectionPlan, euler_xyz_deg_to_quat,
+    source::UsdSourceText,
 };
 use lunco_usd_bevy_twin::{
     DocBackedTwinScenes, LiveRebuildExempt, TwinProjectionWake, scene_document_for,
@@ -133,7 +138,7 @@ enum TwinDocCompletionResult {
     PersistentSource(Result<String, String>),
 }
 
-/// Worker-prepared replacement plans for dependent stage recipes.
+/// Coalesced dependent-layer patches and worker-prepared plans for later mounts.
 #[derive(Resource, Default)]
 pub(crate) struct PendingDependentStageRefreshes {
     by_stage: HashMap<AssetId<UsdStageAsset>, PendingDependentStageRefresh>,
@@ -146,8 +151,13 @@ struct PendingDependentStageRefresh {
     target_plan: Arc<UsdStageProjectionPlan>,
     base_recipe: Arc<lunco_usd_compose::recipe::StageRecipe>,
     changed_layers: BTreeMap<String, Arc<DependentStageLayerSource>>,
+    layer_patches: BTreeMap<String, DependentStageLayerPatch>,
+    reference_assets: HashMap<AssetId<UsdStageAsset>, Handle<UsdStageAsset>>,
     desired_revision: u64,
     submitted_revision: Option<u64>,
+    phase: DependentStageRefreshPhase,
+    live_patch_applied: bool,
+    plan_failure: Option<String>,
     work_key: Option<AsyncWorkKey>,
     capacity_revision: Option<u64>,
     work_identity: u128,
@@ -156,14 +166,102 @@ struct PendingDependentStageRefresh {
     priority: AsyncWorkPriority,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct DependentStageLayerPatch {
+    rebuild_stage: bool,
+    prim_subtrees: BTreeSet<String>,
+    property_subtrees: BTreeSet<String>,
+    fields: BTreeSet<(String, String)>,
+}
+
+impl DependentStageLayerPatch {
+    fn merge(&mut self, other: Self) {
+        if self.rebuild_stage || other.rebuild_stage {
+            *self = Self {
+                rebuild_stage: true,
+                ..Self::default()
+            };
+            return;
+        }
+        self.prim_subtrees.extend(other.prim_subtrees);
+        self.property_subtrees.extend(other.property_subtrees);
+        self.fields.extend(other.fields);
+    }
+}
+
+#[derive(Clone)]
+enum DependentStageRefreshMode {
+    Incremental(DependentStageLayerPatch),
+    Rebuild,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DependentStageRefreshPhase {
+    Patch,
+    Plan,
+    Rebuild,
+}
+
+fn dependent_stage_work_priority(
+    phase: DependentStageRefreshPhase,
+    active: bool,
+    inactive_priority: AsyncWorkPriority,
+) -> AsyncWorkPriority {
+    match phase {
+        DependentStageRefreshPhase::Plan => AsyncWorkPriority::Background,
+        DependentStageRefreshPhase::Patch | DependentStageRefreshPhase::Rebuild if active => {
+            AsyncWorkPriority::SimulationRequired
+        }
+        DependentStageRefreshPhase::Patch | DependentStageRefreshPhase::Rebuild => {
+            inactive_priority
+        }
+    }
+}
+
+struct PreparedDependentLayer {
+    layer_id: String,
+    source: Option<Arc<openusd::sdf::Data>>,
+    patch: DependentStageLayerPatch,
+}
+
+struct PreparedDependentStagePlan {
+    recipe: lunco_usd_compose::recipe::StageRecipe,
+    projection_plan: UsdStageProjectionPlan,
+}
+
+struct PreparedDependentStagePatch {
+    layers: Vec<PreparedDependentLayer>,
+    reference_recipes: Vec<Arc<lunco_usd_compose::recipe::StageRecipe>>,
+}
+
 struct DependentStageLayerSource {
     doc: DocumentId,
     persistent_revision: (u64, u64),
     snapshot: Arc<UsdDocument>,
+    data: OnceLock<Result<Arc<openusd::sdf::Data>, Arc<str>>>,
     serialized: OnceLock<Result<Arc<[u8]>, Arc<str>>>,
 }
 
 impl DependentStageLayerSource {
+    fn persistent_data(&self) -> Result<Arc<openusd::sdf::Data>, String> {
+        self.data
+            .get_or_init(|| {
+                let _span = bevy::log::info_span!(
+                    "usd_twin_projection_dependent_source_compose",
+                    doc = %self.doc,
+                    base_revision = self.persistent_revision.0,
+                    runtime_revision = self.persistent_revision.1
+                )
+                .entered();
+                self.snapshot
+                    .persistent_composed_data()
+                    .map(Arc::new)
+                    .map_err(|error| Arc::<str>::from(error.to_string()))
+            })
+            .clone()
+            .map_err(|error| error.to_string())
+    }
+
     fn persistent_bytes(&self) -> Result<Arc<[u8]>, String> {
         self.serialized
             .get_or_init(|| {
@@ -174,8 +272,11 @@ impl DependentStageLayerSource {
                     runtime_revision = self.persistent_revision.1
                 )
                 .entered();
-                self.snapshot
-                    .persistent_composed_source()
+                self.persistent_data()
+                    .and_then(|data| {
+                        lunco_usd_authoring::author::data_to_usda(&data)
+                            .map_err(|error| error.to_string())
+                    })
                     .map(|source| Arc::from(source.into_bytes()))
                     .map_err(|error| Arc::<str>::from(error.to_string()))
             })
@@ -184,17 +285,22 @@ impl DependentStageLayerSource {
     }
 }
 
+enum DependentReferenceRecipes {
+    Ready(Vec<Arc<lunco_usd_compose::recipe::StageRecipe>>),
+    Waiting,
+    Failed(String),
+}
+
 struct DependentStageRefreshCompletion {
     stage: AssetId<UsdStageAsset>,
     operation: u64,
     revision: u64,
-    result: Result<
-        Option<(
-            lunco_usd_compose::recipe::StageRecipe,
-            UsdStageProjectionPlan,
-        )>,
-        String,
-    >,
+    kind: DependentStageRefreshCompletionKind,
+}
+
+enum DependentStageRefreshCompletionKind {
+    Patch(Result<PreparedDependentStagePatch, String>),
+    Plan(Result<Option<PreparedDependentStagePlan>, String>),
 }
 
 impl PendingDependentStageRefreshes {
@@ -206,7 +312,8 @@ impl PendingDependentStageRefreshes {
 
     fn has_admission_retry(&self, capacity_revision: u64) -> bool {
         self.by_stage.values().any(|pending| {
-            pending.work_key.is_none()
+            pending.plan_failure.is_none()
+                && pending.work_key.is_none()
                 && pending
                     .capacity_revision
                     .is_none_or(|revision| revision != capacity_revision)
@@ -511,6 +618,34 @@ impl PrimaryReferenceCommitOrder {
 #[derive(Resource, Default)]
 pub(crate) struct PendingInstanceProjections {
     plans: HashMap<(AssetId<UsdStageAsset>, String), PendingInstanceProjection>,
+}
+
+/// Whether an affected referenced subtree has reached its live ECS owner.
+/// Unrelated pending references in the mounted stage do not delay this
+/// document edit's completion boundary.
+pub(crate) fn has_pending_reference_projection(
+    world: &World,
+    scene_id: AssetId<UsdStageAsset>,
+    required_reference_paths: &std::collections::BTreeSet<String>,
+) -> bool {
+    let waiting_for_reference = world
+        .get_resource::<PendingRefSpawns>()
+        .is_some_and(|pending| {
+            pending.items.iter().any(|item| {
+                item.scene_id == scene_id
+                    && item.active
+                    && !item.removed
+                    && required_reference_paths.contains(&item.prim_path)
+            })
+        });
+    let waiting_for_instance = world
+        .get_resource::<PendingInstanceProjections>()
+        .is_some_and(|pending| {
+            pending.plans.keys().any(|(stage_id, path)| {
+                *stage_id == scene_id && required_reference_paths.contains(path)
+            })
+        });
+    waiting_for_reference || waiting_for_instance
 }
 
 pub(crate) struct PendingInstanceProjection {
@@ -873,6 +1008,19 @@ fn fail_reference_spawn(world: &mut World, item: &mut RefSpawn, detail: String) 
     }
 }
 
+fn deferred_op_is_represented_by_instance_plan(op: &UsdOp, root_path: &str) -> bool {
+    match op {
+        UsdOp::SetRotate { path, .. } | UsdOp::SetScale { path, .. } => path == root_path,
+        UsdOp::SetAttribute {
+            path,
+            name,
+            type_name,
+            ..
+        } => path == root_path && name == "lunco:catalogId" && type_name == "string",
+        _ => false,
+    }
+}
+
 /// Keep every failed document projection diagnosable, while only a failure on
 /// the mounted primary scene faults and holds authoritative simulation time.
 pub(crate) fn report_reference_failure(
@@ -946,6 +1094,7 @@ pub(crate) fn reset_scene_projection_state(
     mut pending_document_projections: Option<ResMut<PendingDocumentProjectionAdmissions>>,
     mut pending_dependent_refreshes: Option<ResMut<PendingDependentStageRefreshes>>,
     mut pending_instances: Option<ResMut<PendingInstanceProjections>>,
+    mut pending_stage_projections: Option<ResMut<crate::live_consume::PendingStageProjections>>,
     mut admission: Option<ResMut<AsyncWorkAdmission>>,
     mut progress: Option<ResMut<SimulationProgress>>,
 ) {
@@ -980,6 +1129,9 @@ pub(crate) fn reset_scene_projection_state(
     pending_refs.held_keys.clear();
     if let Some(pending_instances) = pending_instances.as_deref_mut() {
         pending_instances.plans.clear();
+    }
+    if let Some(pending_stage_projections) = pending_stage_projections.as_deref_mut() {
+        pending_stage_projections.clear();
     }
 }
 
@@ -1590,10 +1742,9 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         })
     };
     // A preview may edit a referenced component document while another preview
-    // is already showing an assembly that contains it.  Keep those two views
-    // live as one graph: the component's `twin://` bytes are patched into every
-    // loaded dependent recipe and its canonical stage is rebuilt in place.  The
-    // viewport state (including orbit camera) is deliberately not touched.
+    // is already showing an assembly that contains it. Keep those views live as
+    // one graph by patching the component's `twin://` layer into each loaded
+    // dependent canonical stage. The viewport state is deliberately untouched.
     for (doc, name, rel, applied, view_applied, overlay_synced) in entries {
         let _document_span = bevy::log::info_span!("usd_twin_projection_document_sync").entered();
         if preparing_docs.contains(&doc) {
@@ -1677,6 +1828,15 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         // edit volume.
         // `None` means the relevant journal suffix expired or spans a full
         // source reset; the composed document remains the authoritative rebuild.
+        let required_reference_paths = pending_ops
+            .as_ref()
+            .map(|ops| referenced_add_prim_paths(ops))
+            .unwrap_or_default();
+        let dependent_reference_paths = required_reference_paths.clone();
+        let dependent_refresh = match pending_ops.as_deref() {
+            None => Some(DependentStageRefreshMode::Rebuild),
+            Some(ops) => dependent_stage_refresh_mode(ops),
+        };
         let has_work = pending_ops
             .as_ref()
             .map(|ops| !ops.is_empty())
@@ -1813,15 +1973,32 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         } else {
             let _span =
                 bevy::log::info_span!("usd_twin_projection_queue_live_stage_projection").entered();
-            crate::live_consume::queue_stage_projection(world, doc, scene_id, cur_gen);
+            crate::live_consume::queue_stage_projection(
+                world,
+                doc,
+                scene_id,
+                cur_gen,
+                required_reference_paths,
+            );
         }
         // The live stage now owns this generation. Do not serialize the whole
         // composed scene into the asset overlay for ordinary edits. A later
         // mount publishes the current document once; loaded dependent stages
-        // receive the affected layer through the targeted refresh below.
-        let _span =
-            bevy::log::info_span!("usd_twin_projection_refresh_dependent_stage_assets").entered();
-        refresh_dependent_stage_assets(world, doc, scene_id, &twin_path, active_twin_document);
+        // receive the affected layer through a subtree patch when the typed
+        // operation has a bounded authored footprint.
+        if let Some(mode) = dependent_refresh {
+            let _span = bevy::log::info_span!("usd_twin_projection_refresh_dependent_stage_assets")
+                .entered();
+            refresh_dependent_stage_assets(
+                world,
+                doc,
+                scene_id,
+                &twin_path,
+                active_twin_document,
+                mode,
+                &dependent_reference_paths,
+            );
+        }
     }
     submit_pending_dependent_stage_refreshes(world);
 }
@@ -1831,18 +2008,21 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
 /// `UsdStageAsset` recipes are intentionally immutable snapshots at the async
 /// loader boundary.  That is the right property for deterministic loading, but
 /// it means a separately opened component document cannot otherwise be observed
-/// by an assembly whose resolver already captured the old bytes.  This bridge is
-/// the single live-edit seam: patch the changed layer in each dependent recipe,
-/// rebuild its existing canonical stage, and reinstantiate its stage-owned
-/// entities.  Preview cameras and document sessions remain untouched.
+/// by an assembly whose resolver already captured the old bytes. Bounded typed
+/// edits patch the changed authored layer in the existing canonical stage and
+/// reconcile its affected paths immediately. Worker plan composition updates the
+/// immutable asset snapshot for a future mount; it does not gate the live patch.
+/// Coarse composition edits retain the full-stage reset path.
 fn refresh_dependent_stage_assets(
     world: &mut World,
     changed_doc: DocumentId,
     changed_scene: AssetId<UsdStageAsset>,
     layer_id: &str,
     active_twin_document: bool,
+    mode: DependentStageRefreshMode,
+    required_reference_paths: &[String],
 ) {
-    let candidates: Vec<AssetId<UsdStageAsset>> = {
+    let candidates: Vec<(AssetId<UsdStageAsset>, String)> = {
         let _span = bevy::log::info_span!("usd_twin_projection_dependent_candidate_scan").entered();
         let assets = world.resource::<Assets<UsdStageAsset>>();
         assets
@@ -1852,14 +2032,19 @@ fn refresh_dependent_stage_assets(
                     return None;
                 }
                 let recipe = asset.recipe.as_ref()?;
-                recipe.bytes.contains_key(layer_id).then_some(id)
+                recipe_depends_on_changed_layer(recipe, layer_id)
+                    .then(|| (id, recipe.root_id.clone()))
             })
             .collect()
     };
 
+    let candidate_roots: Vec<&str> = candidates
+        .iter()
+        .map(|(_, root_id)| root_id.as_str())
+        .collect();
     info!(
-        "[usd-live] component layer changed: doc={changed_doc} layer={layer_id} dependent_candidates={}",
-        candidates.len()
+        "[usd-live] component layer changed: doc={changed_doc} layer={layer_id} dependent_candidates={} roots={candidate_roots:?}",
+        candidate_roots.len()
     );
 
     if candidates.is_empty() {
@@ -1890,14 +2075,38 @@ fn refresh_dependent_stage_assets(
                 doc: changed_doc,
                 persistent_revision: (snapshot.base_revision(), snapshot.runtime_revision()),
                 snapshot,
+                data: OnceLock::new(),
                 serialized: OnceLock::new(),
             })
         })
     else {
         return;
     };
+    let reference_assets = world
+        .get_resource::<PendingRefSpawns>()
+        .map(|pending| {
+            pending
+                .items
+                .iter()
+                .filter(|item| {
+                    item.scene_id == changed_scene
+                        && required_reference_paths
+                            .iter()
+                            .any(|path| path == &item.prim_path)
+                })
+                .map(|item| (item.ref_handle.id(), item.ref_handle.clone()))
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let layer_patch = match mode {
+        DependentStageRefreshMode::Incremental(patch) => patch,
+        DependentStageRefreshMode::Rebuild => DependentStageLayerPatch {
+            rebuild_stage: true,
+            ..DependentStageLayerPatch::default()
+        },
+    };
 
-    for stage_id in candidates {
+    for (stage_id, _) in candidates {
         match component_refresh_decision(changed_doc, layer_id, stage_id, policy_context) {
             ComponentRefreshDecision::Propagate => {}
             ComponentRefreshDecision::Defer => {
@@ -1929,8 +2138,20 @@ fn refresh_dependent_stage_assets(
             target_plan,
             layer_id,
             Arc::clone(&layer_source),
+            layer_patch.clone(),
+            reference_assets.clone(),
         );
     }
+}
+
+/// A changed root document is already projected by its owning canonical
+/// stage. Only a distinct root recipe that composes the changed layer is a
+/// dependent stage and needs refresh.
+fn recipe_depends_on_changed_layer(
+    recipe: &lunco_usd_compose::recipe::StageRecipe,
+    layer_id: &str,
+) -> bool {
+    recipe.root_id != layer_id && recipe.bytes.contains_key(layer_id)
 }
 
 fn request_dependent_stage_refresh(
@@ -1940,6 +2161,8 @@ fn request_dependent_stage_refresh(
     target_plan: Arc<UsdStageProjectionPlan>,
     layer_id: &str,
     layer_source: Arc<DependentStageLayerSource>,
+    layer_patch: DependentStageLayerPatch,
+    reference_assets: HashMap<AssetId<UsdStageAsset>, Handle<UsdStageAsset>>,
 ) {
     let compatible = world
         .resource::<PendingDependentStageRefreshes>()
@@ -1954,24 +2177,83 @@ fn request_dependent_stage_refresh(
         else {
             return;
         };
-        let current_source = pending.changed_layers.get(layer_id);
-        if current_source.is_some_and(|current| {
-            current.doc == layer_source.doc
-                && current.persistent_revision == layer_source.persistent_revision
-        }) {
+        let source_changed = pending.changed_layers.get(layer_id).is_none_or(|current| {
+            current.doc != layer_source.doc
+                || current.persistent_revision != layer_source.persistent_revision
+        });
+        let previous_patch = pending
+            .layer_patches
+            .get(layer_id)
+            .cloned()
+            .unwrap_or_default();
+        let mut merged_patch = previous_patch.clone();
+        merged_patch.merge(layer_patch);
+        let patch_changed = merged_patch != previous_patch;
+        let new_reference_assets = reference_assets
+            .into_iter()
+            .filter(|(id, _)| !pending.reference_assets.contains_key(id))
+            .collect::<HashMap<_, _>>();
+        if !source_changed && !patch_changed && new_reference_assets.is_empty() {
             return;
         }
+        let active = is_authoritative_scene_stage(world, stage_id);
+        let requires_rebuild = merged_patch.rebuild_stage
+            || pending
+                .layer_patches
+                .iter()
+                .any(|(id, patch)| id != layer_id && patch.rebuild_stage)
+            || pending.layer_patches.keys().any(|id| id != layer_id);
         let Some(desired_revision) = pending.desired_revision.checked_add(1) else {
             warn!("[usd-live] dependent stage refresh revision exhausted for {stage_id:?}");
             return;
         };
+        let mut progress_key_to_release = None;
+        let mut progress_key_to_acquire = None;
         let mut refreshes = world.resource_mut::<PendingDependentStageRefreshes>();
         if let Some(pending) = refreshes.by_stage.get_mut(&stage_id) {
+            if source_changed {
+                pending
+                    .changed_layers
+                    .insert(layer_id.to_owned(), layer_source);
+            }
             pending
-                .changed_layers
-                .insert(layer_id.to_owned(), layer_source);
+                .layer_patches
+                .insert(layer_id.to_owned(), merged_patch);
+            pending.reference_assets.extend(new_reference_assets);
             pending.desired_revision = desired_revision;
+            pending.phase = if requires_rebuild {
+                DependentStageRefreshPhase::Rebuild
+            } else {
+                DependentStageRefreshPhase::Patch
+            };
+            pending.live_patch_applied = false;
+            pending.plan_failure = None;
+            pending.priority = if active {
+                AsyncWorkPriority::SimulationRequired
+            } else {
+                AsyncWorkPriority::Interactive
+            };
+            if active {
+                let key = pending.progress_key.unwrap_or(SimulationProgressKey {
+                    owner: SimulationProgressOwner::UsdDependentStageProjection,
+                    operation_id: pending.operation,
+                });
+                pending.progress_key = Some(key);
+                progress_key_to_acquire = Some(key);
+            } else {
+                progress_key_to_release = pending.progress_key.take();
+            }
         }
+        drop(refreshes);
+        if let Some(key) = progress_key_to_acquire
+            && let Some(mut progress) = world.get_resource_mut::<SimulationProgress>()
+        {
+            progress.acquire(
+                key,
+                format!("Preparing updated dependent USD stage {stage_id:?}"),
+            );
+        }
+        release_dependent_stage_progress(world, progress_key_to_release);
         return;
     }
 
@@ -2011,14 +2293,24 @@ fn request_dependent_stage_refresh(
     }
     let identity = u128::from(lunco_hash::fnv1a64(base_recipe.root_id.as_bytes()));
     let work_order = lunco_hash::fnv1a64(base_recipe.root_id.as_bytes());
+    let phase = if layer_patch.rebuild_stage {
+        DependentStageRefreshPhase::Rebuild
+    } else {
+        DependentStageRefreshPhase::Patch
+    };
 
     let pending = PendingDependentStageRefresh {
         operation,
         target_plan,
         base_recipe,
         changed_layers: BTreeMap::from([(layer_id.to_owned(), layer_source)]),
+        layer_patches: BTreeMap::from([(layer_id.to_owned(), layer_patch)]),
+        reference_assets,
         desired_revision,
         submitted_revision: None,
+        phase,
+        live_patch_applied: false,
+        plan_failure: None,
         work_key: None,
         capacity_revision: None,
         work_identity: identity,
@@ -2034,6 +2326,74 @@ fn request_dependent_stage_refresh(
         .resource_mut::<PendingDependentStageRefreshes>()
         .by_stage
         .insert(stage_id, pending);
+}
+
+fn apply_dependent_layer_patch(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+    refresh: &PreparedDependentStagePatch,
+) -> Result<bool, String> {
+    use lunco_usd_bevy_stage::canonical::CanonicalStages;
+
+    if refresh.layers.len() != 1 {
+        return Ok(false);
+    }
+    let layer = &refresh.layers[0];
+    if layer.patch.rebuild_stage {
+        return Ok(false);
+    }
+    let Some(source) = layer.source.as_ref() else {
+        return Err(format!(
+            "incremental dependent patch for `{}` has no prepared source layer",
+            layer.layer_id
+        ));
+    };
+
+    let mut spec_paths = BTreeSet::new();
+    spec_paths.extend(layer.patch.prim_subtrees.iter().cloned());
+    spec_paths.extend(layer.patch.property_subtrees.iter().cloned());
+    let spec_paths = spec_paths
+        .into_iter()
+        .map(|path| {
+            openusd::sdf::Path::new(&path)
+                .map_err(|error| format!("invalid dependent patch path `{path}`: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let fields = layer
+        .patch
+        .fields
+        .iter()
+        .map(|(path, field)| {
+            openusd::sdf::Path::new(path)
+                .map(|path| (path, field.clone()))
+                .map_err(|error| format!("invalid dependent field path `{path}`: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let Some(mut stages) = world.get_non_send_mut::<CanonicalStages>() else {
+        return Ok(false);
+    };
+    let Some(stage) = stages.get_mut(stage_id) else {
+        return Ok(false);
+    };
+    for recipe in &refresh.reference_recipes {
+        if !stage.add_layer_recipe(recipe) {
+            return Err(format!(
+                "dependent stage {:?} cannot accept referenced layer closure `{}`",
+                stage_id, recipe.root_id
+            ));
+        }
+    }
+    stage
+        .projector()
+        .patch_layer(&layer.layer_id, source, &spec_paths, &fields)
+        .map_err(|error| {
+            format!(
+                "failed to patch dependent layer `{}` in stage {:?}: {error}",
+                layer.layer_id, stage_id
+            )
+        })?;
+    Ok(true)
 }
 
 fn poll_dependent_stage_refreshes(world: &mut World) {
@@ -2108,6 +2468,145 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
             continue;
         }
 
+        if let DependentStageRefreshCompletionKind::Patch(result) = &completion.kind {
+            let patch_is_current = world
+                .resource::<PendingDependentStageRefreshes>()
+                .by_stage
+                .get(&completion.stage)
+                .is_some_and(|pending| {
+                    pending.operation == completion.operation
+                        && pending.submitted_revision == Some(completion.revision)
+                        && pending.desired_revision == completion.revision
+                });
+            if !patch_is_current {
+                if let Some(pending) = world
+                    .resource_mut::<PendingDependentStageRefreshes>()
+                    .by_stage
+                    .get_mut(&completion.stage)
+                    && pending.operation == completion.operation
+                    && pending.submitted_revision == Some(completion.revision)
+                {
+                    pending.work_key = None;
+                    pending.submitted_revision = None;
+                    pending.capacity_revision = None;
+                }
+                continue;
+            }
+            match result {
+                Err(error) => {
+                    warn!(
+                        "[usd-e1b] dependent stage {:?} live patch preparation failed: {error}",
+                        completion.stage
+                    );
+                    report_stage_projection_reset_failure(world, completion.stage, error.clone());
+                    let pending = world
+                        .resource_mut::<PendingDependentStageRefreshes>()
+                        .by_stage
+                        .remove(&completion.stage);
+                    if let Some(pending) = pending {
+                        retain_dependent_stage_plan_failure(
+                            world,
+                            completion.stage,
+                            pending,
+                            error.clone(),
+                        );
+                    }
+                }
+                Ok(patch) => {
+                    let _patch_span = bevy::log::info_span!(
+                        "usd_twin_projection_dependent_layer_patch_commit",
+                        stage = ?completion.stage,
+                        revision = completion.revision,
+                    )
+                    .entered();
+                    let live_stage_updated =
+                        match apply_dependent_layer_patch(world, completion.stage, &patch) {
+                            Ok(updated) => updated,
+                            Err(error) => {
+                                report_stage_projection_reset_failure(
+                                    world,
+                                    completion.stage,
+                                    error.clone(),
+                                );
+                                let pending = world
+                                    .resource_mut::<PendingDependentStageRefreshes>()
+                                    .by_stage
+                                    .remove(&completion.stage);
+                                if let Some(pending) = pending {
+                                    retain_dependent_stage_plan_failure(
+                                        world,
+                                        completion.stage,
+                                        pending,
+                                        error,
+                                    );
+                                }
+                                continue;
+                            }
+                        };
+                    let authoritative = is_authoritative_scene_stage(world, completion.stage);
+                    if !live_stage_updated && authoritative {
+                        report_stage_projection_reset_failure(
+                            world,
+                            completion.stage,
+                            "authoritative dependent stage has no canonical live stage to patch"
+                                .to_owned(),
+                        );
+                        let pending = world
+                            .resource_mut::<PendingDependentStageRefreshes>()
+                            .by_stage
+                            .remove(&completion.stage);
+                        if let Some(pending) = pending {
+                            retain_dependent_stage_plan_failure(
+                                world,
+                                completion.stage,
+                                pending,
+                                "authoritative dependent stage has no canonical live stage to patch"
+                                    .to_owned(),
+                            );
+                        }
+                        continue;
+                    }
+                    if live_stage_updated {
+                        // Make the changed subtree visible before the worker
+                        // composes the immutable plan used by a future mount.
+                        let _projection_span = bevy::log::info_span!(
+                            "usd_twin_projection_dependent_patch_live_consume",
+                            stage = ?completion.stage,
+                            revision = completion.revision,
+                        )
+                        .entered();
+                        crate::live_consume::project_stage_changes(world);
+                    }
+                    let progress_key = {
+                        let mut refreshes = world.resource_mut::<PendingDependentStageRefreshes>();
+                        refreshes
+                            .by_stage
+                            .get_mut(&completion.stage)
+                            .filter(|pending| {
+                                pending.operation == completion.operation
+                                    && pending.submitted_revision == Some(completion.revision)
+                            })
+                            .map(|pending| {
+                                pending.live_patch_applied = live_stage_updated;
+                                pending.phase = DependentStageRefreshPhase::Plan;
+                                pending.work_key = None;
+                                pending.submitted_revision = None;
+                                pending.capacity_revision = None;
+                                pending.plan_failure = None;
+                                pending.progress_key.take()
+                            })
+                            .flatten()
+                    };
+                    release_dependent_stage_progress(world, progress_key);
+                }
+            }
+            continue;
+        }
+
+        let DependentStageRefreshCompletionKind::Plan(result) = completion.kind else {
+            continue;
+        };
+
         let prepared = {
             let mut pending = world.resource_mut::<PendingDependentStageRefreshes>();
             let Some(current) = pending.by_stage.get_mut(&completion.stage) else {
@@ -2126,14 +2625,21 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
             }
             pending.by_stage.remove(&completion.stage)
         };
-        let Some(mut prepared) = prepared else {
+        let Some(mut pending_refresh) = prepared else {
             continue;
         };
-        if is_authoritative_scene_stage(world, completion.stage) {
-            let key = prepared.progress_key.unwrap_or(SimulationProgressKey {
-                owner: SimulationProgressOwner::UsdDependentStageProjection,
-                operation_id: prepared.operation,
-            });
+        let requires_full_rebuild = pending_refresh.layer_patches.len() != 1
+            || pending_refresh
+                .layer_patches
+                .values()
+                .any(|patch| patch.rebuild_stage);
+        if requires_full_rebuild && is_authoritative_scene_stage(world, completion.stage) {
+            let key = pending_refresh
+                .progress_key
+                .unwrap_or(SimulationProgressKey {
+                    owner: SimulationProgressOwner::UsdDependentStageProjection,
+                    operation_id: pending_refresh.operation,
+                });
             if let Some(mut progress) = world.get_resource_mut::<SimulationProgress>() {
                 progress.acquire(
                     key,
@@ -2143,26 +2649,77 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
                     ),
                 );
             }
-            prepared.progress_key = Some(key);
+            pending_refresh.progress_key = Some(key);
         }
-        match completion.result {
+        match result {
             Err(error) => {
-                warn!(
-                    "[usd-e1b] dependent stage {:?} refresh preparation failed: {error}",
-                    completion.stage
-                );
-                release_dependent_stage_progress(world, prepared.progress_key);
+                if pending_refresh.live_patch_applied {
+                    report_dependent_stage_plan_failure(world, completion.stage, &error);
+                    retain_dependent_stage_plan_failure(
+                        world,
+                        completion.stage,
+                        pending_refresh,
+                        error,
+                    );
+                } else {
+                    report_stage_projection_reset_failure(world, completion.stage, error.clone());
+                    retain_dependent_stage_plan_failure(
+                        world,
+                        completion.stage,
+                        pending_refresh,
+                        error,
+                    );
+                }
             }
             Ok(None) => {
-                release_dependent_stage_progress(world, prepared.progress_key);
+                release_dependent_stage_progress(world, pending_refresh.progress_key);
+                wake_reference_spawns_for_asset(world, completion.stage);
             }
-            Ok(Some((recipe, projection_plan))) => {
+            Ok(Some(refresh)) => {
                 let current_plan = world
                     .resource::<Assets<UsdStageAsset>>()
                     .get(completion.stage)
-                    .map(|asset| Arc::ptr_eq(&asset.projection_plan, &prepared.target_plan));
+                    .map(|asset| Arc::ptr_eq(&asset.projection_plan, &pending_refresh.target_plan));
                 if current_plan != Some(true) {
-                    release_dependent_stage_progress(world, prepared.progress_key);
+                    release_dependent_stage_progress(world, pending_refresh.progress_key);
+                    wake_reference_spawns_for_asset(world, completion.stage);
+                    continue;
+                }
+                if !requires_full_rebuild {
+                    if is_authoritative_scene_stage(world, completion.stage)
+                        && !pending_refresh.live_patch_applied
+                    {
+                        report_stage_projection_reset_failure(
+                            world,
+                            completion.stage,
+                            "incremental dependent stage plan completed before its live layer patch"
+                                .to_owned(),
+                        );
+                        release_dependent_stage_progress(world, pending_refresh.progress_key);
+                        wake_reference_spawns_for_asset(world, completion.stage);
+                        continue;
+                    }
+                    let recipe = Arc::new(refresh.recipe);
+                    let projection_plan = Arc::new(refresh.projection_plan);
+                    let asset_updated = if let Some(mut asset) = world
+                        .resource_mut::<Assets<UsdStageAsset>>()
+                        .get_mut(completion.stage)
+                    {
+                        asset.recipe = Some(recipe);
+                        asset.projection_plan = Arc::clone(&projection_plan);
+                        true
+                    } else {
+                        false
+                    };
+                    if asset_updated && pending_refresh.live_patch_applied {
+                        if let Some(mut stages) = world
+                            .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>(
+                        ) {
+                            stages.mark_prepared_plan_snapshot(completion.stage, projection_plan);
+                        }
+                    }
+                    release_dependent_stage_progress(world, pending_refresh.progress_key);
+                    wake_reference_spawns_for_asset(world, completion.stage);
                     continue;
                 }
 
@@ -2170,7 +2727,7 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
                     let _span =
                         bevy::log::info_span!("usd_twin_projection_dependent_live_stage_build")
                             .entered();
-                    lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
+                    lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&refresh.recipe)
                 } {
                     Ok(stage) => stage,
                     Err(error) => {
@@ -2178,7 +2735,17 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
                             "[usd-e1b] dependent stage {:?} live rebuild failed: {error}",
                             completion.stage
                         );
-                        release_dependent_stage_progress(world, prepared.progress_key);
+                        report_stage_projection_reset_failure(
+                            world,
+                            completion.stage,
+                            error.to_string(),
+                        );
+                        retain_dependent_stage_plan_failure(
+                            world,
+                            completion.stage,
+                            pending_refresh,
+                            error.to_string(),
+                        );
                         continue;
                     }
                 };
@@ -2187,7 +2754,13 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
                         bevy::log::info_span!("usd_twin_projection_dependent_reset_prepare")
                             .entered();
                     if !prepare_stage_projection_reset(world, completion.stage) {
-                        release_dependent_stage_progress(world, prepared.progress_key);
+                        retain_dependent_stage_plan_failure(
+                            world,
+                            completion.stage,
+                            pending_refresh,
+                            "dependent stage reset could not prepare its live projection"
+                                .to_owned(),
+                        );
                         continue;
                     }
                 }
@@ -2199,8 +2772,8 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
                         true
                     });
                 if replaced {
-                    let recipe = Arc::new(recipe);
-                    let projection_plan = Arc::new(projection_plan);
+                    let recipe = Arc::new(refresh.recipe);
+                    let projection_plan = Arc::new(refresh.projection_plan);
                     let asset_updated = if let Some(mut asset) = world
                         .resource_mut::<Assets<UsdStageAsset>>()
                         .get_mut(completion.stage)
@@ -2223,14 +2796,20 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
                             .entered();
                     refresh_scene_visuals_prepared(world, completion.stage);
                 } else {
-                    report_stage_projection_reset_failure(
+                    let error =
+                        "dependent stage plan was ready but its canonical stage could not be replaced"
+                            .to_owned();
+                    report_stage_projection_reset_failure(world, completion.stage, error.clone());
+                    retain_dependent_stage_plan_failure(
                         world,
                         completion.stage,
-                        "dependent stage plan was ready but its canonical stage could not be replaced"
-                            .to_owned(),
+                        pending_refresh,
+                        error,
                     );
+                    continue;
                 }
-                release_dependent_stage_progress(world, prepared.progress_key);
+                release_dependent_stage_progress(world, pending_refresh.progress_key);
+                wake_reference_spawns_for_asset(world, completion.stage);
             }
         }
     }
@@ -2247,6 +2826,30 @@ fn release_dependent_stage_progress(
     }
 }
 
+fn wake_reference_spawns_for_asset(world: &mut World, asset: AssetId<UsdStageAsset>) {
+    if let Some(mut pending) = world.get_resource_mut::<PendingRefSpawns>() {
+        pending.mark_ready(asset);
+    }
+}
+
+fn retain_dependent_stage_plan_failure(
+    world: &mut World,
+    stage: AssetId<UsdStageAsset>,
+    mut pending: PendingDependentStageRefresh,
+    error: String,
+) {
+    pending.plan_failure = Some(error);
+    pending.work_key = None;
+    pending.submitted_revision = None;
+    pending.capacity_revision = None;
+    release_dependent_stage_progress(world, pending.progress_key.take());
+    world
+        .resource_mut::<PendingDependentStageRefreshes>()
+        .by_stage
+        .insert(stage, pending);
+    wake_reference_spawns_for_asset(world, stage);
+}
+
 fn submit_pending_dependent_stage_refreshes(world: &mut World) {
     let capacity_revision = world.resource::<AsyncWorkAdmission>().capacity_revision();
     let mut requests = world
@@ -2254,7 +2857,8 @@ fn submit_pending_dependent_stage_refreshes(world: &mut World) {
         .by_stage
         .iter()
         .filter(|(_, pending)| {
-            pending.work_key.is_none()
+            pending.plan_failure.is_none()
+                && pending.work_key.is_none()
                 && pending
                     .capacity_revision
                     .is_none_or(|revision| revision != capacity_revision)
@@ -2265,42 +2869,105 @@ fn submit_pending_dependent_stage_refreshes(world: &mut World) {
                 .iter()
                 .map(|(layer_id, source)| (layer_id.clone(), Arc::clone(source)))
                 .collect::<Vec<_>>();
+            let layer_patches = pending.layer_patches.clone();
+            let reference_assets = pending
+                .reference_assets
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
             (
                 *stage,
                 pending.operation,
                 pending.desired_revision,
+                pending.phase,
                 pending.work_identity,
                 pending.work_order,
-                pending.priority,
+                if pending.phase == DependentStageRefreshPhase::Plan {
+                    AsyncWorkPriority::Background
+                } else {
+                    pending.priority
+                },
                 Arc::clone(&pending.base_recipe),
                 changed_layers,
+                layer_patches,
+                reference_assets,
                 pending.progress_key,
             )
         })
         .collect::<Vec<_>>();
-    requests.sort_by_key(|(_, operation, _, identity, order, priority, _, _, _)| {
-        (*priority, *order, *identity, *operation)
-    });
+    requests.sort_by_key(
+        |(_, operation, _, _, identity, order, priority, _, _, _, _, _)| {
+            (*priority, *order, *identity, *operation)
+        },
+    );
 
     for (
         stage,
         operation,
         revision,
+        phase,
         identity,
         order,
         priority,
         base_recipe,
         changed_layers,
+        layer_patches,
+        reference_handles,
         progress_key,
     ) in requests
     {
-        let active = is_authoritative_scene_stage(world, stage);
-        let priority = if active {
-            AsyncWorkPriority::SimulationRequired
-        } else {
-            priority
+        let reference_recipes = {
+            let assets = world.resource::<Assets<UsdStageAsset>>();
+            let pending_refs = world.get_resource::<PendingRefSpawns>();
+            'resolve: {
+                let mut recipes = Vec::with_capacity(reference_handles.len());
+                for handle in &reference_handles {
+                    if let Some(recipe) = assets
+                        .get(handle.id())
+                        .and_then(|asset| asset.recipe.as_ref())
+                    {
+                        recipes.push(Arc::clone(recipe));
+                    } else if let Some(error) =
+                        pending_refs.and_then(|pending| pending.failed.get(&handle.id()))
+                    {
+                        break 'resolve DependentReferenceRecipes::Failed(error.clone());
+                    } else {
+                        break 'resolve DependentReferenceRecipes::Waiting;
+                    }
+                }
+                DependentReferenceRecipes::Ready(recipes)
+            }
         };
-        let progress_key = if active {
+        let reference_recipes = match reference_recipes {
+            DependentReferenceRecipes::Ready(recipes) => recipes,
+            DependentReferenceRecipes::Waiting => {
+                let mut refreshes = world.resource_mut::<PendingDependentStageRefreshes>();
+                if let Some(pending) = refreshes.by_stage.get_mut(&stage)
+                    && pending.operation == operation
+                    && pending.desired_revision == revision
+                {
+                    pending.capacity_revision = Some(capacity_revision);
+                }
+                continue;
+            }
+            DependentReferenceRecipes::Failed(error) => {
+                warn!(
+                    "[usd-live] dependent stage {stage:?} refresh stopped because its added reference failed: {error}"
+                );
+                let retired = world
+                    .resource_mut::<PendingDependentStageRefreshes>()
+                    .by_stage
+                    .remove(&stage);
+                if let Some(retired) = retired {
+                    release_dependent_stage_progress(world, retired.progress_key);
+                }
+                continue;
+            }
+        };
+
+        let active = is_authoritative_scene_stage(world, stage);
+        let priority = dependent_stage_work_priority(phase, active, priority);
+        let progress_key = if active && phase != DependentStageRefreshPhase::Plan {
             let key = progress_key.unwrap_or(SimulationProgressKey {
                 owner: SimulationProgressOwner::UsdDependentStageProjection,
                 operation_id: operation,
@@ -2312,6 +2979,8 @@ fn submit_pending_dependent_stage_refreshes(world: &mut World) {
                 );
             }
             Some(key)
+        } else if phase == DependentStageRefreshPhase::Plan {
+            None
         } else {
             progress_key
         };
@@ -2333,48 +3002,105 @@ fn submit_pending_dependent_stage_refreshes(world: &mut World) {
             )
         };
         let worker_base_recipe = Arc::clone(&base_recipe);
+        let worker_layer_patches = layer_patches.clone();
+        let worker_reference_recipes = reference_recipes.clone();
         let worker_completions = Arc::clone(&completions);
         let worker_wake = wake.clone();
         let job = move || {
-            let _span =
-                bevy::log::info_span!("usd_twin_projection_dependent_plan_prepare", revision)
-                    .entered();
-            let result: Result<
-                Option<(
-                    lunco_usd_compose::recipe::StageRecipe,
-                    UsdStageProjectionPlan,
-                )>,
-                String,
-            > = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut recipe = (*worker_base_recipe).clone();
-                let mut changed = false;
-                for (layer_id, source) in changed_layers {
-                    let bytes = source.persistent_bytes()?;
-                    if recipe
-                        .bytes
-                        .get(&layer_id)
-                        .is_some_and(|existing| existing.as_slice() == bytes.as_ref())
-                    {
-                        continue;
-                    }
-                    recipe.bytes.insert(layer_id, bytes.to_vec());
-                    changed = true;
-                }
-                if !changed {
-                    return Ok(None);
-                }
-                let projection_plan = {
+            let kind = match phase {
+                DependentStageRefreshPhase::Patch => {
                     let _span = bevy::log::info_span!(
-                        "usd_twin_projection_dependent_plan_compose",
+                        "usd_twin_projection_dependent_layer_patch_prepare",
                         revision
                     )
                     .entered();
-                    UsdStageProjectionPlan::from_recipe(&recipe)
-                        .map_err(|error| error.to_string())?
-                };
-                Ok(Some((recipe, projection_plan)))
-            }))
-            .unwrap_or_else(|_| Err("dependent USD stage plan preparation panicked".to_owned()));
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut layers = Vec::with_capacity(changed_layers.len());
+                        for (layer_id, source) in changed_layers {
+                            let patch = worker_layer_patches
+                                .get(&layer_id)
+                                .cloned()
+                                .unwrap_or(DependentStageLayerPatch {
+                                    rebuild_stage: true,
+                                    ..DependentStageLayerPatch::default()
+                                });
+                            if patch.rebuild_stage {
+                                return Err(format!(
+                                    "incremental dependent refresh for `{layer_id}` was classified as a rebuild"
+                                ));
+                            }
+                            layers.push(PreparedDependentLayer {
+                                layer_id,
+                                source: Some(source.persistent_data()?),
+                                patch,
+                            });
+                        }
+                        Ok(PreparedDependentStagePatch {
+                            layers,
+                            reference_recipes: worker_reference_recipes,
+                        })
+                    }))
+                    .unwrap_or_else(|_| {
+                        Err("dependent USD layer patch preparation panicked".to_owned())
+                    });
+                    DependentStageRefreshCompletionKind::Patch(result)
+                }
+                DependentStageRefreshPhase::Plan | DependentStageRefreshPhase::Rebuild => {
+                    let _span = bevy::log::info_span!(
+                        "usd_twin_projection_dependent_plan_prepare",
+                        revision
+                    )
+                    .entered();
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut recipe = (*worker_base_recipe).clone();
+                        let mut changed = false;
+                        for reference_recipe in &worker_reference_recipes {
+                            for (layer_id, bytes) in &reference_recipe.bytes {
+                                if recipe
+                                    .bytes
+                                    .get(layer_id)
+                                    .is_some_and(|existing| existing == bytes)
+                                {
+                                    continue;
+                                }
+                                recipe.bytes.insert(layer_id.clone(), bytes.clone());
+                                changed = true;
+                            }
+                        }
+                        for (layer_id, source) in changed_layers {
+                            let bytes = source.persistent_bytes()?;
+                            let layer_changed = !recipe
+                                .bytes
+                                .get(&layer_id)
+                                .is_some_and(|existing| existing.as_slice() == bytes.as_ref());
+                            if layer_changed {
+                                recipe.bytes.insert(layer_id, bytes.to_vec());
+                                changed = true;
+                            }
+                        }
+                        if !changed && phase != DependentStageRefreshPhase::Rebuild {
+                            return Ok(None);
+                        }
+                        let projection_plan = {
+                            let _span = bevy::log::info_span!(
+                                "usd_twin_projection_dependent_plan_compose",
+                                revision
+                            )
+                            .entered();
+                            UsdStageProjectionPlan::from_recipe(&recipe)
+                                .map_err(|error| error.to_string())?
+                        };
+                        Ok(Some(PreparedDependentStagePlan {
+                            recipe,
+                            projection_plan,
+                        }))
+                    }))
+                    .unwrap_or_else(|_| {
+                        Err("dependent USD stage plan preparation panicked".to_owned())
+                    });
+                    DependentStageRefreshCompletionKind::Plan(result)
+                }
+            };
             worker_completions
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -2382,7 +3108,7 @@ fn submit_pending_dependent_stage_refreshes(world: &mut World) {
                     stage,
                     operation,
                     revision,
-                    result,
+                    kind,
                 });
             worker_wake.wake();
         };
@@ -2422,6 +3148,13 @@ fn submit_pending_dependent_stage_refreshes(world: &mut World) {
                 }
             }
             Err(lunco_core_runtime::AsyncWorkRejection::NativeDispatcherUnavailable) => {
+                let error =
+                    "dependent USD stage preparation requires a worker transport".to_owned();
+                let kind = if phase == DependentStageRefreshPhase::Patch {
+                    DependentStageRefreshCompletionKind::Patch(Err(error))
+                } else {
+                    DependentStageRefreshCompletionKind::Plan(Err(error))
+                };
                 world
                     .resource::<PendingDependentStageRefreshes>()
                     .completions
@@ -2431,10 +3164,7 @@ fn submit_pending_dependent_stage_refreshes(world: &mut World) {
                         stage,
                         operation,
                         revision,
-                        result: Err(
-                            "dependent USD stage preparation requires a worker transport"
-                                .to_owned(),
-                        ),
+                        kind,
                     });
                 world.resource::<TwinProjectionWake>().wake();
             }
@@ -2731,6 +3461,226 @@ fn incremental_api_schemas(schemas: &[String]) -> bool {
 /// [`project_stage_changes`](crate::live_consume::project_stage_changes) reconcile
 /// ECS. Only incremental ops reach here; coarse ops ([`op_needs_rebuild`]) rebuild
 /// instead. Reads/authors the `!Send` stage under short borrows.
+fn child_prim_path(parent_path: &str, name: &str) -> String {
+    if parent_path == "/" || parent_path.is_empty() {
+        format!("/{name}")
+    } else {
+        format!("/{}/{}", parent_path.trim_matches('/'), name)
+    }
+}
+
+fn parent_prim_path(path: &str) -> String {
+    match path.rsplit_once('/') {
+        Some(("", _)) | None => "/".to_owned(),
+        Some((parent, _)) => parent.to_owned(),
+    }
+}
+
+fn dependent_stage_refresh_mode(ops: &[UsdOp]) -> Option<DependentStageRefreshMode> {
+    let persistent = ops
+        .iter()
+        .filter(|op| !op.edit_target().is_view())
+        .collect::<Vec<_>>();
+    if persistent.is_empty() {
+        return None;
+    }
+
+    let mut patch = DependentStageLayerPatch::default();
+    for op in persistent {
+        if op_needs_rebuild(op) {
+            return Some(DependentStageRefreshMode::Rebuild);
+        }
+        match op {
+            UsdOp::AddPrim {
+                parent_path, name, ..
+            } => {
+                let path = child_prim_path(parent_path, name);
+                patch.prim_subtrees.insert(path);
+                patch
+                    .fields
+                    .insert((parent_path.clone(), "primChildren".to_owned()));
+            }
+            UsdOp::RemovePrim { path, .. } | UsdOp::RestorePrim { path, .. } => {
+                patch.prim_subtrees.insert(path.clone());
+                patch
+                    .fields
+                    .insert((parent_prim_path(path), "primChildren".to_owned()));
+            }
+            UsdOp::SetPrimOrder { path, .. } => {
+                patch.fields.insert((path.clone(), "primOrder".to_owned()));
+            }
+            UsdOp::SetStageDocumentation { .. } => {
+                return Some(DependentStageRefreshMode::Rebuild);
+            }
+            UsdOp::SetTranslate { path, .. }
+            | UsdOp::RemoveXformOp { path, .. }
+            | UsdOp::RemoveAttribute { path, .. }
+            | UsdOp::RestoreAttribute { path, .. }
+            | UsdOp::RestoreXformOp { path, .. }
+            | UsdOp::SetRotate { path, .. }
+            | UsdOp::SetScale { path, .. }
+            | UsdOp::SetAttribute { path, .. }
+            | UsdOp::SetAttributeDocumentation { path, .. }
+            | UsdOp::RevolveProfileMesh { path, .. }
+            | UsdOp::ExtrudeProfileMesh { path, .. }
+            | UsdOp::TaperedBeamMesh { path, .. }
+            | UsdOp::SetTimeSample { path, .. }
+            | UsdOp::RemoveTimeSample { path, .. }
+            | UsdOp::SetRelationship { path, .. }
+            | UsdOp::SetConnection { path, .. }
+            | UsdOp::SetPrimDocumentation { path, .. }
+            | UsdOp::SetPrimKind { path, .. }
+            | UsdOp::SetApiSchemas { path, .. }
+            | UsdOp::SetActive { path, .. }
+            | UsdOp::ClearActive { path, .. } => {
+                patch.prim_subtrees.insert(path.clone());
+            }
+            UsdOp::ReplaceSource { .. }
+            | UsdOp::MovePrim { .. }
+            | UsdOp::SetDefaultPrim { .. }
+            | UsdOp::SetStageMetrics { .. }
+            | UsdOp::SetVariantSelection { .. }
+            | UsdOp::SetPayload { .. }
+            | UsdOp::SetReferenceArcs { .. } => {
+                return Some(DependentStageRefreshMode::Rebuild);
+            }
+        }
+    }
+    Some(DependentStageRefreshMode::Incremental(patch))
+}
+
+fn referenced_add_prim_paths(ops: &[UsdOp]) -> Vec<String> {
+    ops.iter()
+        .filter_map(|op| match op {
+            UsdOp::AddPrim {
+                parent_path,
+                name,
+                reference: Some(_),
+                ..
+            } => Some(child_prim_path(parent_path, name)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn promote_referenced_instance_for_op(
+    world: &mut World,
+    scene_id: AssetId<UsdStageAsset>,
+    owned_path: &str,
+    op: &UsdOp,
+) -> Result<(), String> {
+    use lunco_usd_bevy_stage::canonical::CanonicalStages;
+
+    let mut search_path = match op {
+        UsdOp::AddPrim { parent_path, .. } => parent_path.as_str(),
+        _ => owned_path,
+    };
+    loop {
+        let entity = crate::live_consume::find_live_entity(world, scene_id, search_path);
+        if let Some(entity) = entity
+            && let Some(projection) = world.get::<UsdInstanceProjection>(entity).cloned()
+        {
+            let Some(root_entity) = projection.root else {
+                return Err(format!(
+                    "referenced instance at `{search_path}` has no live root identity"
+                ));
+            };
+            let Some(root_path) = world
+                .get::<UsdPrimPath>(root_entity)
+                .map(|prim| prim.path.clone())
+            else {
+                return Err(format!(
+                    "referenced instance root entity {root_entity} has no USD prim path"
+                ));
+            };
+            let within_instance = owned_path == root_path
+                || owned_path
+                    .strip_prefix(&root_path)
+                    .is_some_and(|suffix| root_path.ends_with('/') || suffix.starts_with('/'));
+            if !within_instance {
+                return Err(format!(
+                    "edit target `{owned_path}` does not belong to referenced instance `{root_path}`"
+                ));
+            }
+            // Removing the lightweight root needs no reference composition. The
+            // normal structural sink removes its complete ECS projection.
+            if matches!(op, UsdOp::RemovePrim { path, .. } if path == &root_path) {
+                return Ok(());
+            }
+            if projection.is_promoted() {
+                return Ok(());
+            }
+            let root_sdf_path = openusd::sdf::Path::new(&root_path).map_err(|error| {
+                format!("invalid referenced instance root `{root_path}`: {error}")
+            })?;
+            let _promotion_span = bevy::log::info_span!(
+                "usd_reference_instance_promotion",
+                instance_root = %root_path,
+            )
+            .entered();
+            let promoted = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|stages| stages.get(scene_id))
+                .ok_or_else(|| "the owning scene stage is unavailable".to_owned())?
+                .projector()
+                .author_referenced_prim(
+                    &root_sdf_path,
+                    projection.type_name.as_deref(),
+                    &projection.asset_path,
+                    projection.reference_prim_path.as_deref(),
+                )
+                .map_err(|error| {
+                    format!("failed to compose referenced instance `{root_path}`: {error}")
+                });
+            promoted?;
+            projection.mark_promoted();
+            return Ok(());
+        }
+        let Some((parent, _)) = search_path.rsplit_once('/') else {
+            return Ok(());
+        };
+        if parent.is_empty() {
+            search_path = "/";
+        } else {
+            search_path = parent;
+        }
+        if search_path == "/" {
+            return Ok(());
+        }
+    }
+}
+
+fn report_instance_promotion_failure(
+    world: &mut World,
+    scene_id: AssetId<UsdStageAsset>,
+    path: &str,
+    detail: String,
+) {
+    const PRODUCER: &str = "usd-instance-promotion";
+    let subject = format!("{scene_id:?}:{path}");
+    if is_authoritative_scene_stage(world, scene_id) {
+        world
+            .get_resource_or_insert_with(lunco_core::RuntimeFaults::default)
+            .raise(PRODUCER, None, subject.clone(), detail.clone());
+    }
+    let mut diagnostics =
+        world.get_resource_or_insert_with(lunco_core::RuntimeDiagnostics::default);
+    diagnostics
+        .findings
+        .retain(|finding| !(finding.producer == PRODUCER && finding.subject == subject));
+    diagnostics.findings.push(lunco_core::RuntimeDiagnostic {
+        code: PRODUCER.to_owned(),
+        severity: lunco_core::DiagnosticSeverity::Error,
+        producer: PRODUCER.to_owned(),
+        subject: subject.clone(),
+        message: detail.clone(),
+    });
+    diagnostics
+        .findings
+        .sort_by(|left, right| left.subject.cmp(&right.subject));
+    error!("[usd-live] referenced instance promotion {subject} failed: {detail}");
+}
+
 fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAsset>, op: &UsdOp) {
     let _span = bevy::log::info_span!("usd_twin_projection_apply_incremental_op").entered();
     use lunco_usd_bevy_stage::canonical::CanonicalStages;
@@ -2746,11 +3696,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
     let owned_path = match op {
         UsdOp::AddPrim {
             parent_path, name, ..
-        } => Some(if parent_path == "/" || parent_path.is_empty() {
-            format!("/{name}")
-        } else {
-            format!("/{}/{}", parent_path.trim_matches('/'), name)
-        }),
+        } => Some(child_prim_path(parent_path, name)),
         UsdOp::RemovePrim { path, .. }
         | UsdOp::RestorePrim { path, .. }
         | UsdOp::SetTranslate { path, .. }
@@ -2770,10 +3716,10 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
         | UsdOp::ClearActive { path, .. } => Some(path.clone()),
         _ => None,
     };
-    if let Some(owned_path) = owned_path {
+    if let Some(owned_path) = owned_path.as_deref() {
         let pending_index = world
             .resource::<PendingRefSpawns>()
-            .index_for_path(scene_id, &owned_path);
+            .index_for_path(scene_id, owned_path);
         if let Some(index) = pending_index {
             let exact_root =
                 world.resource::<PendingRefSpawns>().items[index].prim_path == owned_path;
@@ -2836,6 +3782,13 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 return;
             }
         }
+    }
+
+    if let Some(owned_path) = owned_path.as_deref()
+        && let Err(detail) = promote_referenced_instance_for_op(world, scene_id, owned_path, op)
+    {
+        report_instance_promotion_failure(world, scene_id, owned_path, detail);
+        return;
     }
 
     match op {
@@ -3072,11 +4025,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             reference_prim_path,
             ..
         } => {
-            let prim_path = if parent_path == "/" || parent_path.is_empty() {
-                format!("/{name}")
-            } else {
-                format!("{}/{name}", parent_path.trim_end_matches('/'))
-            };
+            let prim_path = child_prim_path(parent_path, name);
             spawn_prim_op(
                 world,
                 scene_id,
@@ -3696,6 +4645,31 @@ fn report_stage_projection_reset_failure(
     error!("[usd-live] stage projection reset {subject} failed: {detail}");
 }
 
+fn report_dependent_stage_plan_failure(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+    detail: &str,
+) {
+    const PRODUCER: &str = "usd-dependent-stage-plan";
+    let subject = format!("{stage_id:?}");
+    let mut diagnostics =
+        world.get_resource_or_insert_with(lunco_core::RuntimeDiagnostics::default);
+    diagnostics
+        .findings
+        .retain(|finding| !(finding.producer == PRODUCER && finding.subject == subject));
+    diagnostics.findings.push(lunco_core::RuntimeDiagnostic {
+        code: PRODUCER.to_owned(),
+        severity: lunco_core::DiagnosticSeverity::Error,
+        producer: PRODUCER.to_owned(),
+        subject: subject.clone(),
+        message: detail.to_owned(),
+    });
+    diagnostics
+        .findings
+        .sort_by(|left, right| left.subject.cmp(&right.subject));
+    error!("[usd-live] dependent stage plan {subject} failed: {detail}");
+}
+
 /// Notify domain projections, then drop `entity`'s [`UsdSceneProjected`] marker
 /// and children and re-insert its [`UsdPrimPath`], re-firing
 /// `on_usd_prim_added` so its subtree rebuilds from the (now-authored) live
@@ -3742,12 +4716,7 @@ pub(crate) fn refresh_prim_subtree(
         return;
     }
 
-    let entity = {
-        let mut q = world.query::<(Entity, &UsdPrimPath)>();
-        q.iter(world)
-            .find(|(_, upp)| upp.stage_handle.id() == scene_id && upp.path == *path)
-            .map(|(e, _)| e)
-    };
+    let entity = crate::live_consume::find_stage_entity(world, scene_id, path);
     if let Some(e) = entity {
         reinstantiate_entity(world, e);
     }
@@ -3928,17 +4897,22 @@ fn ensure_reference_layers_for_rebuild(
     if extra.is_empty() {
         return true;
     }
-    world
-        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
-        .and_then(|stages| stages.get(scene_id))
-        .is_some_and(|cs| cs.add_layer_bytes(extra))
+    let Some(mut stages) =
+        world.get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+    else {
+        return false;
+    };
+    let Some(cs) = stages.get_mut(scene_id) else {
+        return false;
+    };
+    cs.add_layer_bytes(extra)
 }
 
-/// Complete referenced spawns whose asset closure has finished loading: inject
-/// the fetched layer bytes into the scene stage's resolver, then author the prim
-/// and its `references` arc so the openusd sink fires and `project_stage_changes`
-/// instantiates the composed subtree. Exclusive: authors onto the `!Send`
-/// `CanonicalStage`.
+/// Complete referenced spawns whose asset closure has finished loading. The
+/// authored document already owns the reference arc; its prepared asset plan
+/// projects the live subtree. The authoritative scene stage gets only the
+/// lightweight root needed for path reconciliation, and composes the reference
+/// when a later edit requires live-stage ownership.
 pub(crate) fn drain_ref_spawns(world: &mut World) {
     use lunco_usd_bevy_stage::canonical::CanonicalStages;
     if world.resource::<PendingRefSpawns>().items.is_empty() {
@@ -3953,6 +4927,11 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
     };
     let mut pending = std::mem::take(&mut world.resource_mut::<PendingRefSpawns>().items);
     pending.sort_by_key(|item| item.progress_key.operation_id);
+    let _batch_span = bevy::log::info_span!(
+        "usd_reference_spawn_commit_batch",
+        item_count = pending.len(),
+    )
+    .entered();
     let mut still = Vec::new();
     let mut commit_order = PrimaryReferenceCommitOrder::default();
     for mut item in pending {
@@ -4008,6 +4987,30 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             continue;
         }
         item.asset_ready = true;
+        let dependent_plan_state = world
+            .resource::<PendingDependentStageRefreshes>()
+            .by_stage
+            .get(&item.ref_handle.id())
+            .map(|pending| pending.plan_failure.clone());
+        match dependent_plan_state {
+            Some(Some(error)) => {
+                fail_reference_spawn(
+                    world,
+                    &mut item,
+                    format!(
+                        "the referenced asset's current projection plan is unavailable: {error}"
+                    ),
+                );
+                commit_order.block_successors(item.scene_id, authoritative);
+                still.push(item);
+                continue;
+            }
+            Some(None) => {
+                still.push(item);
+                continue;
+            }
+            None => {}
+        }
         let recipe = world
             .resource::<Assets<UsdStageAsset>>()
             .get(item.ref_handle.id())
@@ -4035,7 +5038,10 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             still.push(item);
             continue;
         };
-        let plan = match asset.projection_plan.for_instance(&item.prim_path) {
+        let mut plan = match {
+            let _span = bevy::log::info_span!("usd_reference_instance_plan_remap").entered();
+            asset.projection_plan.for_instance(&item.prim_path)
+        } {
             Ok(plan) => plan,
             Err(error) => {
                 fail_reference_spawn(
@@ -4048,10 +5054,134 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                 continue;
             }
         };
-        let projection = UsdInstanceProjection {
-            root: None,
-            plan: Arc::new(plan),
+        let Ok(instance_root) = openusd::sdf::Path::new(&item.prim_path) else {
+            let detail = format!("invalid USD prim path `{}`", item.prim_path);
+            fail_reference_spawn(world, &mut item, detail);
+            commit_order.block_successors(item.scene_id, authoritative);
+            still.push(item);
+            continue;
         };
+        let mut root_transform = match UsdRead::local_transform_at(&plan, &instance_root, 0.0) {
+            Ok(transform) => transform.unwrap_or_default(),
+            Err(error) => {
+                fail_reference_spawn(
+                    world,
+                    &mut item,
+                    format!("prepared instance root transform is invalid: {error}"),
+                );
+                commit_order.block_successors(item.scene_id, authoritative);
+                still.push(item);
+                continue;
+            }
+        };
+        let mut changed_pose = false;
+        if let Some(translate) = item.translate {
+            if translate.iter().any(|component| !component.is_finite()) {
+                fail_reference_spawn(
+                    world,
+                    &mut item,
+                    "prepared instance root translation is not finite".to_owned(),
+                );
+                commit_order.block_successors(item.scene_id, authoritative);
+                still.push(item);
+                continue;
+            }
+            root_transform.translation = Vec3::new(
+                translate[0] as f32,
+                translate[1] as f32,
+                translate[2] as f32,
+            );
+            if !root_transform.translation.is_finite() {
+                fail_reference_spawn(
+                    world,
+                    &mut item,
+                    "prepared instance root translation exceeds the spatial render range"
+                        .to_owned(),
+                );
+                commit_order.block_successors(item.scene_id, authoritative);
+                still.push(item);
+                continue;
+            }
+            changed_pose = true;
+        }
+        let root_rotation = item.deferred_ops.iter().rev().find_map(|op| match op {
+            UsdOp::SetRotate { path, value, .. } if path == &item.prim_path => Some(*value),
+            _ => None,
+        });
+        if let Some(rotate) = root_rotation {
+            if rotate.iter().any(|component| !component.is_finite())
+                || rotate
+                    .iter()
+                    .any(|component| (*component as f32).is_infinite())
+            {
+                fail_reference_spawn(
+                    world,
+                    &mut item,
+                    "prepared instance root rotation is not representable".to_owned(),
+                );
+                commit_order.block_successors(item.scene_id, authoritative);
+                still.push(item);
+                continue;
+            }
+            root_transform.rotation = euler_xyz_deg_to_quat(Vec3::new(
+                rotate[0] as f32,
+                rotate[1] as f32,
+                rotate[2] as f32,
+            ));
+            changed_pose = true;
+        }
+        if changed_pose {
+            if let Err(error) = plan.set_instance_root_pose(root_transform) {
+                fail_reference_spawn(
+                    world,
+                    &mut item,
+                    format!("prepared instance root pose is invalid: {error}"),
+                );
+                commit_order.block_successors(item.scene_id, authoritative);
+                still.push(item);
+                continue;
+            }
+        }
+        if let Some(scale) = item.deferred_ops.iter().rev().find_map(|op| match op {
+            UsdOp::SetScale { path, value, .. } if path == &item.prim_path => Some(*value),
+            _ => None,
+        }) {
+            if let Err(error) = plan.set_instance_root_scale(scale) {
+                fail_reference_spawn(
+                    world,
+                    &mut item,
+                    format!("prepared instance root scale is invalid: {error}"),
+                );
+                commit_order.block_successors(item.scene_id, authoritative);
+                still.push(item);
+                continue;
+            }
+        }
+        if let Some(catalog_id) = item.deferred_ops.iter().rev().find_map(|op| match op {
+            UsdOp::SetAttribute {
+                path,
+                name,
+                type_name,
+                value,
+                ..
+            } if path == &item.prim_path && name == "lunco:catalogId" && type_name == "string" => {
+                Some(value.clone())
+            }
+            _ => None,
+        }) {
+            if let Err(error) =
+                plan.set_instance_root_string_attribute("lunco:catalogId", catalog_id)
+            {
+                fail_reference_spawn(
+                    world,
+                    &mut item,
+                    format!("prepared instance catalog identity is invalid: {error}"),
+                );
+                commit_order.block_successors(item.scene_id, authoritative);
+                still.push(item);
+                continue;
+            }
+        }
         let root_restore = item.deferred_ops.iter().find_map(|op| match op {
             UsdOp::RestorePrim {
                 path,
@@ -4061,6 +5191,22 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             } if path == &item.prim_path => Some((snapshot_usda.clone(), sibling_order.clone())),
             _ => None,
         });
+        let compose_reference = !authoritative
+            || root_restore.is_some()
+            || item
+                .deferred_ops
+                .iter()
+                .any(|op| !deferred_op_is_represented_by_instance_plan(op, &item.prim_path));
+        let projection = UsdInstanceProjection::new(
+            item.ref_handle.clone(),
+            Arc::new(plan),
+            item.asset_path.clone(),
+            item.reference_prim_path.clone(),
+            item.type_name.clone(),
+        );
+        if compose_reference {
+            projection.mark_promoted();
+        }
         let Ok(sp) = openusd::sdf::Path::new(&item.prim_path) else {
             let detail = format!("invalid USD prim path `{}`", item.prim_path);
             fail_reference_spawn(world, &mut item, detail);
@@ -4068,39 +5214,78 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             still.push(item);
             continue;
         };
-        let stage_result = world
-            .get_non_send::<CanonicalStages>()
-            .and_then(|stages| stages.get(item.scene_id))
-            .map(|cs| {
-                if !cs.add_layer_bytes(recipe.bytes.clone()) {
-                    return Err("the owning stage cannot accept referenced layer bytes".to_owned());
-                }
-                if let Some((snapshot_usda, sibling_order)) = root_restore.as_ref() {
-                    cs.projector()
-                        .restore_prim_subtree(&sp, snapshot_usda, sibling_order)
-                        .map_err(|error| format!("failed to restore the prim subtree: {error}"))?;
-                } else {
-                    cs.projector()
-                        .author_referenced_prim(
-                            &sp,
-                            item.type_name.as_deref(),
-                            &item.asset_path,
-                            item.reference_prim_path.as_deref(),
-                        )
-                        .map_err(|error| format!("failed to author the reference: {error}"))?;
-                }
-                let translated = if root_restore.is_none()
-                    && let Some(translate) = item.translate
-                {
-                    cs.projector()
-                        .author_translate(&sp, translate)
-                        .map_err(|error| format!("failed to apply the spawn transform: {error}"))?;
-                    true
-                } else {
-                    false
-                };
-                Ok(translated)
-            });
+        let stage_result = {
+            let _span = bevy::log::info_span!(
+                "usd_reference_layer_closure_merge",
+                layer_count = recipe.bytes.len(),
+            )
+            .entered();
+            match world.get_non_send_mut::<CanonicalStages>() {
+                Some(mut stages) => match stages.get_mut(item.scene_id) {
+                    Some(cs) => {
+                        if !cs.add_layer_recipe(&recipe) {
+                            Some(Err(
+                                "the owning stage cannot accept referenced layer bytes".to_owned()
+                            ))
+                        } else {
+                            let _author_span =
+                                bevy::log::info_span!("usd_reference_root_author").entered();
+                            let result = if let Some((snapshot_usda, sibling_order)) =
+                                root_restore.as_ref()
+                            {
+                                cs.projector()
+                                    .restore_prim_subtree(&sp, snapshot_usda, sibling_order)
+                                    .map_err(|error| {
+                                        format!("failed to restore the prim subtree: {error}")
+                                    })
+                            } else if authoritative && compose_reference {
+                                cs.projector()
+                                    .author_referenced_prim(
+                                        &sp,
+                                        item.type_name.as_deref(),
+                                        &item.asset_path,
+                                        item.reference_prim_path.as_deref(),
+                                    )
+                                    .map_err(|error| {
+                                        format!("failed to author the reference: {error}")
+                                    })
+                            } else if authoritative {
+                                cs.projector()
+                                    .author_prim(&sp, item.type_name.as_deref())
+                                    .map_err(|error| {
+                                        format!("failed to author the instance root: {error}")
+                                    })
+                            } else {
+                                cs.projector()
+                                    .author_referenced_prim(
+                                        &sp,
+                                        item.type_name.as_deref(),
+                                        &item.asset_path,
+                                        item.reference_prim_path.as_deref(),
+                                    )
+                                    .map_err(|error| {
+                                        format!("failed to author the reference: {error}")
+                                    })
+                            };
+                            Some(result.and_then(|()| {
+                                let translate =
+                                    root_restore.is_none().then_some(item.translate).flatten();
+                                if let Some(translate) = translate {
+                                    cs.projector().author_translate(&sp, translate).map_err(
+                                        |error| {
+                                            format!("failed to apply the spawn transform: {error}")
+                                        },
+                                    )?;
+                                }
+                                Ok(translate.is_some())
+                            }))
+                        }
+                    }
+                    None => None,
+                },
+                None => None,
+            }
+        };
         let translated = match stage_result {
             None => {
                 fail_reference_spawn(
@@ -4156,6 +5341,207 @@ mod tests {
     use lunco_usd_document::document::{LayerId, UsdOp};
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
+
+    #[test]
+    fn changed_root_recipe_is_not_scheduled_as_its_own_dependent_stage() {
+        use lunco_usd_compose::recipe::StageRecipe;
+
+        let root = StageRecipe::new(
+            "scene.usda",
+            HashMap::from([("scene.usda".to_owned(), Vec::new())]),
+        );
+        let dependent = StageRecipe::new(
+            "assembly.usda",
+            HashMap::from([
+                ("assembly.usda".to_owned(), Vec::new()),
+                ("scene.usda".to_owned(), Vec::new()),
+            ]),
+        );
+
+        assert!(!recipe_depends_on_changed_layer(&root, "scene.usda"));
+        assert!(recipe_depends_on_changed_layer(&dependent, "scene.usda"));
+    }
+
+    #[test]
+    fn waypoint_spawn_move_order_and_delete_use_bounded_dependent_patches() {
+        let route = "/Traverse/Route";
+        let waypoint = "/Traverse/Route/W6";
+        let ops = [
+            UsdOp::AddPrim {
+                edit_target: LayerId::root(),
+                parent_path: route.to_owned(),
+                name: "W6".to_owned(),
+                type_name: Some("Xform".to_owned()),
+                reference: Some("../markers/route_point.usda".to_owned()),
+                reference_prim_path: None,
+            },
+            UsdOp::SetTranslate {
+                edit_target: LayerId::runtime(),
+                path: waypoint.to_owned(),
+                value: [12.0, 4.0, -7.0],
+            },
+            UsdOp::SetPrimOrder {
+                edit_target: LayerId::runtime(),
+                path: route.to_owned(),
+                order: Some((0..=6).map(|index| format!("W{index}")).collect()),
+            },
+        ];
+        let Some(DependentStageRefreshMode::Incremental(patch)) =
+            dependent_stage_refresh_mode(&ops)
+        else {
+            panic!("waypoint edits must use an incremental dependent patch");
+        };
+        assert!(patch.prim_subtrees.contains(waypoint));
+        assert!(
+            patch
+                .fields
+                .contains(&(route.to_owned(), "primChildren".to_owned()))
+        );
+        assert!(
+            patch
+                .fields
+                .contains(&(route.to_owned(), "primOrder".to_owned()))
+        );
+
+        let delete = UsdOp::RemovePrim {
+            edit_target: LayerId::runtime(),
+            path: waypoint.to_owned(),
+        };
+        let Some(DependentStageRefreshMode::Incremental(delete_patch)) =
+            dependent_stage_refresh_mode(&[delete])
+        else {
+            panic!("waypoint deletion must use an incremental dependent patch");
+        };
+        assert!(delete_patch.prim_subtrees.contains(waypoint));
+        assert!(
+            delete_patch
+                .fields
+                .contains(&(route.to_owned(), "primChildren".to_owned()))
+        );
+
+        let view_only = UsdOp::SetTranslate {
+            edit_target: LayerId::view(),
+            path: waypoint.to_owned(),
+            value: [0.0; 3],
+        };
+        assert!(dependent_stage_refresh_mode(&[view_only]).is_none());
+    }
+
+    #[test]
+    fn dependent_stage_plan_refresh_runs_below_live_patch_work() {
+        assert_eq!(
+            dependent_stage_work_priority(
+                DependentStageRefreshPhase::Patch,
+                true,
+                AsyncWorkPriority::Interactive,
+            ),
+            AsyncWorkPriority::SimulationRequired,
+        );
+        assert_eq!(
+            dependent_stage_work_priority(
+                DependentStageRefreshPhase::Patch,
+                false,
+                AsyncWorkPriority::Interactive,
+            ),
+            AsyncWorkPriority::Interactive,
+        );
+        assert_eq!(
+            dependent_stage_work_priority(
+                DependentStageRefreshPhase::Plan,
+                true,
+                AsyncWorkPriority::SimulationRequired,
+            ),
+            AsyncWorkPriority::Background,
+        );
+        assert_eq!(
+            dependent_stage_work_priority(
+                DependentStageRefreshPhase::Rebuild,
+                true,
+                AsyncWorkPriority::Interactive,
+            ),
+            AsyncWorkPriority::SimulationRequired,
+        );
+    }
+
+    #[test]
+    fn first_authored_edit_promotes_only_its_prepared_reference_instance() {
+        use lunco_usd_bevy_stage::canonical::{CanonicalStage, CanonicalStages};
+        use lunco_usd_compose::recipe::StageRecipe;
+        use lunco_usd_document::document::LayerId;
+
+        let scene_recipe = StageRecipe::from_source(
+            "scene.usda",
+            "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\" {}\n",
+        );
+        let reference_recipe = Arc::new(StageRecipe::from_source(
+            "reference.usda",
+            "#usda 1.0\n(\n    defaultPrim = \"Asset\"\n)\ndef Xform \"Asset\"\n{\n    def Cube \"Box\"\n    {\n        double size = 2\n    }\n}\n",
+        ));
+        let stage_handle = Handle::<UsdStageAsset>::default();
+        let mut canonical = CanonicalStage::from_recipe(&scene_recipe).expect("open scene");
+        assert!(canonical.add_layer_recipe(&reference_recipe));
+        let instance_root = openusd::sdf::Path::new("/World/Spawned").unwrap();
+        canonical
+            .projector()
+            .author_prim(&instance_root, Some("Xform"))
+            .expect("author lightweight root");
+
+        let mut app = App::new();
+        crate::live_consume::install_live_prim_entity_index(&mut app);
+        app.init_non_send::<CanonicalStages>();
+        app.world_mut()
+            .get_non_send_mut::<CanonicalStages>()
+            .expect("canonical stage resource")
+            .insert(stage_handle.id(), canonical);
+        let root_entity = app
+            .world_mut()
+            .spawn(UsdPrimPath {
+                stage_handle: stage_handle.clone(),
+                path: instance_root.to_string(),
+            })
+            .id();
+        let source =
+            UsdStageAsset::from_recipe((*reference_recipe).clone()).expect("prepare source asset");
+        let plan = source
+            .projection_plan
+            .for_instance(instance_root.as_str())
+            .expect("remap source plan");
+        let mut projection = UsdInstanceProjection::new(
+            Handle::default(),
+            Arc::new(plan),
+            "reference.usda",
+            None,
+            Some("Xform".to_owned()),
+        );
+        projection.root = Some(root_entity);
+        app.world_mut()
+            .entity_mut(root_entity)
+            .insert(projection.clone());
+
+        let op = UsdOp::SetPrimKind {
+            edit_target: LayerId::runtime(),
+            path: "/World/Spawned/Box".to_owned(),
+            kind: Some("component".to_owned()),
+        };
+        promote_referenced_instance_for_op(
+            app.world_mut(),
+            stage_handle.id(),
+            "/World/Spawned/Box",
+            &op,
+        )
+        .expect("promote referenced instance before applying edit");
+
+        assert!(
+            projection.is_promoted(),
+            "cloned readers share promotion state"
+        );
+        let stages = app.world().non_send::<CanonicalStages>();
+        let live = stages.get(stage_handle.id()).expect("live stage remains");
+        assert!(
+            live.view()
+                .has_prim(&openusd::sdf::Path::new("/World/Spawned/Box").unwrap())
+        );
+    }
 
     #[test]
     fn dependency_diagnostics_publish_without_projected_prims() {
@@ -4274,7 +5660,7 @@ mod tests {
 
     #[test]
     fn projection_wake_coalesces_and_consumes_explicitly() {
-        let mut wake = TwinProjectionWake::default();
+        let wake = TwinProjectionWake::default();
         assert!(!wake.is_pending());
 
         wake.wake();
@@ -4289,6 +5675,30 @@ mod tests {
             !wake.is_pending(),
             "the projection owner consumes its wake once"
         );
+    }
+
+    #[test]
+    fn referenced_add_prim_paths_name_only_added_reference_roots() {
+        let paths = referenced_add_prim_paths(&[
+            UsdOp::AddPrim {
+                edit_target: lunco_usd_document::document::LayerId::runtime(),
+                parent_path: "/World/Route".into(),
+                name: "W5".into(),
+                type_name: Some("Xform".into()),
+                reference: Some("lunco://markers/route_point.usda".into()),
+                reference_prim_path: None,
+            },
+            UsdOp::AddPrim {
+                edit_target: lunco_usd_document::document::LayerId::runtime(),
+                parent_path: "/World".into(),
+                name: "Plain".into(),
+                type_name: Some("Xform".into()),
+                reference: None,
+                reference_prim_path: None,
+            },
+        ]);
+
+        assert_eq!(paths, ["/World/Route/W5"]);
     }
 
     #[test]
@@ -4766,10 +6176,12 @@ mod tests {
 
         let scene_recipe = lunco_usd_compose::recipe::StageRecipe::from_source("scene.usda", TINY);
         let mut app = App::new();
+        crate::live_consume::install_live_prim_entity_index(&mut app);
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>()
             .init_non_send::<CanonicalStages>()
             .init_resource::<PendingRefSpawns>()
+            .init_resource::<PendingDependentStageRefreshes>()
             .init_resource::<PendingInstanceProjections>()
             .init_resource::<SimulationProgress>()
             .add_systems(Update, mark_pending_ref_spawns);
@@ -4864,6 +6276,212 @@ mod tests {
         );
     }
 
+    #[derive(Resource, Default)]
+    struct ProjectedDocumentEvents(Vec<lunco_telemetry_core::TelemetryValue>);
+
+    fn capture_projected_document_event(
+        event: On<lunco_telemetry_core::TelemetryEvent>,
+        mut events: ResMut<ProjectedDocumentEvents>,
+    ) {
+        if event.event().name == "usd.document.projected" {
+            events.0.push(event.event().data.clone());
+        }
+    }
+
+    #[test]
+    fn document_projection_event_waits_for_affected_reference_only() {
+        use bevy::prelude::*;
+        use lunco_core_runtime::pacing::{SimulationProgressKey, SimulationProgressOwner};
+
+        let mut app = App::new();
+        app.init_resource::<crate::live_consume::PendingStageProjections>()
+            .init_resource::<PendingRefSpawns>()
+            .init_resource::<PendingInstanceProjections>()
+            .init_resource::<PendingDocumentProjectionAdmissions>()
+            .init_resource::<SimulationProgress>()
+            .init_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
+            .init_resource::<ProjectedDocumentEvents>()
+            .add_observer(capture_projected_document_event);
+
+        let doc = lunco_doc::DocumentId(42);
+        let stage_id = AssetId::<UsdStageAsset>::default();
+        let generation = 7;
+        {
+            let mut backed = app
+                .world_mut()
+                .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>();
+            backed.track_preview(doc, "projection-test".into(), "scene.usda".into());
+            backed.mark_applied(doc, stage_id, generation);
+        }
+        crate::live_consume::queue_stage_projection(
+            app.world_mut(),
+            doc,
+            stage_id,
+            generation,
+            ["/World/Route/W5".to_owned()],
+        );
+        assert!(crate::live_consume::accumulate_pending_stage_changes(
+            app.world_mut(),
+            stage_id,
+            ["/World/Route".to_owned(), "/World/Route/W5".to_owned(),],
+        ));
+
+        let reference_key = SimulationProgressKey {
+            owner: SimulationProgressOwner::SceneReferences,
+            operation_id: 1,
+        };
+        let document_key = SimulationProgressKey::usd_document_projection(doc.raw());
+        app.world_mut()
+            .resource_mut::<PendingDocumentProjectionAdmissions>()
+            .generations
+            .insert(doc, generation);
+        {
+            let mut progress = app.world_mut().resource_mut::<SimulationProgress>();
+            progress.acquire(document_key, "waiting for edited route point");
+            progress.acquire(reference_key, "waiting for edited route point asset");
+        }
+        app.world_mut()
+            .resource_mut::<PendingRefSpawns>()
+            .items
+            .push(RefSpawn {
+                progress_key: reference_key,
+                scene_id: stage_id,
+                prim_path: "/World/Route/W5".into(),
+                type_name: Some("Xform".into()),
+                asset_path: "lunco://markers/route_point.usda".into(),
+                reference_prim_path: None,
+                ref_handle: Handle::default(),
+                translate: Some([1.0, 2.0, 3.0]),
+                deferred_ops: Vec::new(),
+                active: true,
+                held: false,
+                asset_ready: false,
+                failure: None,
+                failure_reported: false,
+                removed: false,
+            });
+
+        crate::live_consume::publish_pending_stage_projections(app.world_mut());
+        assert!(
+            app.world()
+                .resource::<ProjectedDocumentEvents>()
+                .0
+                .is_empty()
+        );
+        assert!(app.world().resource::<SimulationProgress>().is_held());
+        assert_eq!(
+            app.world()
+                .resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
+                .synced_generation(doc),
+            None,
+            "the live document cursor must remain behind while the reference is unresolved"
+        );
+
+        app.world_mut()
+            .resource_mut::<PendingRefSpawns>()
+            .items
+            .clear();
+        app.world_mut()
+            .resource_mut::<PendingInstanceProjections>()
+            .plans
+            .insert(
+                (stage_id, "/World/Route/W5".into()),
+                PendingInstanceProjection {
+                    projection: UsdInstanceProjection::new(
+                        Handle::default(),
+                        Arc::new(UsdStageProjectionPlan::default()),
+                        "",
+                        None,
+                        None,
+                    ),
+                    progress_key: reference_key,
+                    failure_reported: false,
+                },
+            );
+        assert!(crate::live_consume::accumulate_pending_stage_changes(
+            app.world_mut(),
+            stage_id,
+            ["/World/Route/W5".to_owned()],
+        ));
+        crate::live_consume::publish_pending_stage_projections(app.world_mut());
+        assert!(
+            app.world()
+                .resource::<ProjectedDocumentEvents>()
+                .0
+                .is_empty()
+        );
+
+        app.world_mut()
+            .resource_mut::<PendingInstanceProjections>()
+            .plans
+            .clear();
+        app.world_mut()
+            .resource_mut::<SimulationProgress>()
+            .release(reference_key);
+
+        // A separate reference admission elsewhere in the mounted stage must
+        // not hold this document edit's completion or document-projection hold.
+        // That reference retains its own SceneReferences simulation hold.
+        let unrelated_reference_key = SimulationProgressKey {
+            owner: SimulationProgressOwner::SceneReferences,
+            operation_id: 2,
+        };
+        app.world_mut()
+            .resource_mut::<SimulationProgress>()
+            .acquire(
+                unrelated_reference_key,
+                "waiting for unrelated rover reference",
+            );
+        app.world_mut()
+            .resource_mut::<PendingRefSpawns>()
+            .items
+            .push(RefSpawn {
+                progress_key: unrelated_reference_key,
+                scene_id: stage_id,
+                prim_path: "/World/Rover".into(),
+                type_name: Some("Xform".into()),
+                asset_path: "lunco://vessels/rover.usda".into(),
+                reference_prim_path: None,
+                ref_handle: Handle::default(),
+                translate: None,
+                deferred_ops: Vec::new(),
+                active: true,
+                held: false,
+                asset_ready: false,
+                failure: None,
+                failure_reported: false,
+                removed: false,
+            });
+        crate::live_consume::publish_pending_stage_projections(app.world_mut());
+
+        let events = &app.world().resource::<ProjectedDocumentEvents>().0;
+        assert_eq!(events.len(), 1, "one document generation publishes once");
+        let lunco_telemetry_core::TelemetryValue::Map(data) = &events[0] else {
+            panic!("projection event data is not a map");
+        };
+        assert_eq!(
+            data.get("changed_prim_paths"),
+            Some(&lunco_telemetry_core::TelemetryValue::Array(vec![
+                lunco_telemetry_core::TelemetryValue::String("/World/Route".into()),
+                lunco_telemetry_core::TelemetryValue::String("/World/Route/W5".into()),
+            ])),
+            "the completion event includes every structural batch that was reconciled"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
+                .synced_generation(doc),
+            Some(generation)
+        );
+        let progress = app.world().resource::<SimulationProgress>();
+        assert!(progress.contains(unrelated_reference_key));
+        assert!(!progress.contains(document_key));
+        assert!(
+            progress.is_held(),
+            "the document hold is released while the unrelated reference retains its own hold"
+        );
+    }
+
     #[test]
     fn drain_ref_spawns_commits_a_ready_successor_after_its_unready_prefix() {
         use bevy::asset::AssetApp;
@@ -4879,10 +6497,12 @@ mod tests {
 
         let scene_recipe = lunco_usd_compose::recipe::StageRecipe::from_source("scene.usda", TINY);
         let mut app = App::new();
+        crate::live_consume::install_live_prim_entity_index(&mut app);
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>()
             .init_non_send::<CanonicalStages>()
             .init_resource::<PendingRefSpawns>()
+            .init_resource::<PendingDependentStageRefreshes>()
             .init_resource::<PendingInstanceProjections>()
             .init_resource::<SimulationProgress>()
             .add_systems(Update, mark_pending_ref_spawns);
