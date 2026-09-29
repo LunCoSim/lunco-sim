@@ -1362,13 +1362,11 @@ fn render_visible_telemetry_row(
                         ui.id().with(("tb_row", &row.sig)),
                         ChannelDragPayload::from_signal(&row.sig),
                         |ui| {
-                            ui.add_sized(
-                                [label_width, row_height],
-                                egui::Button::selectable(
-                                    selected == Some(&row.sig),
-                                    egui::WidgetText::RichText(label_text),
-                                )
-                                .truncate(),
+                            lunco_workbench_widgets::tree::selectable_label(
+                                ui,
+                                selected == Some(&row.sig),
+                                egui::WidgetText::RichText(label_text),
+                                label_width,
                             )
                         },
                     );
@@ -2367,6 +2365,79 @@ mod tests {
     }
 
     #[test]
+    fn draggable_telemetry_rows_use_left_aligned_tree_labels() {
+        let row = Arc::new(Row {
+            sig: SignalRef::new(ent(1), "x"),
+            unit: None,
+            description: None,
+            provenance: None,
+            group_path: None,
+            model_class: None,
+            model_variable: None,
+            source_asset: None,
+            canonical_name: None,
+            presentation: SignalPresentation::Scalar,
+            exposure: SignalExposure::Public,
+            in_focus: true,
+            active: true,
+            search_fields: Default::default(),
+        });
+        let label = telemetry_row_label(&row, false);
+        let entry = VisibleTelemetryRow::Channel {
+            row,
+            depth: 0,
+            stripe: 0,
+        };
+        let registry = SignalRegistry::default();
+        let theme = TelemetryTheme {
+            text: egui::Color32::WHITE,
+            text_subdued: egui::Color32::GRAY,
+            warning: egui::Color32::YELLOW,
+        };
+        let display_settings = TelemetryDisplaySettings::default();
+        let mut row_text_cache = TelemetryRowTextCache::default();
+        let mut clicked = None;
+        let mut tree_changed = false;
+        let mut row_left = 0.0;
+        let mut label_width = 0.0;
+        let mut input = egui::RawInput::default();
+        input.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(600.0, 200.0),
+        ));
+
+        let output = egui::Context::default().run_ui(input, |ui| {
+            let available = ui.available_rect_before_wrap();
+            row_left = available.left();
+            label_width = (available.width() * 0.55).max(72.0).min(available.width());
+            render_visible_telemetry_row(
+                ui,
+                &entry,
+                &registry,
+                &theme,
+                &display_settings,
+                &mut row_text_cache,
+                None,
+                &mut clicked,
+                &mut tree_changed,
+            );
+        });
+
+        let label_x = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos.x),
+                _ => None,
+            })
+            .expect("the telemetry channel label should be painted");
+        assert!(
+            label_x < row_left + label_width * 0.25,
+            "channel label started at {label_x}, away from the left edge of its column"
+        );
+    }
+
+    #[test]
     fn telemetry_labels_keep_public_names_concise_and_internal_names_distinct() {
         let public = Row {
             sig: SignalRef::new(ent(1), "electrical_power"),
@@ -2564,7 +2635,7 @@ mod tests {
         assert_eq!(tree.children.len(), 2);
         let alpha = tree.children.get(&entity_key(ent(1))).unwrap();
         let unnamed = tree.children.get(&entity_key(ent(2))).unwrap();
-        assert_eq!(alpha.label, "Alpha Rover");
+        assert_eq!(alpha.label.as_ref(), "Alpha Rover");
         assert_eq!(alpha.rows.len(), 1);
         assert!(unnamed.rows.is_empty());
         let a = unnamed.children.get("signal-structure:a").unwrap();
@@ -2723,7 +2794,7 @@ mod tests {
         let scene = tree.children.get("/SandboxScene").unwrap();
         let rover = &scene.children["/SandboxScene/Skid_Rover"];
         let wheel = &rover.children["/SandboxScene/Skid_Rover/Wheel_FL"];
-        assert_eq!(wheel.label, "Wheel FL");
+        assert_eq!(wheel.label.as_ref(), "Wheel FL");
         assert_eq!(wheel.rows[0].sig.path, "axle_torque");
     }
 
@@ -2757,7 +2828,7 @@ mod tests {
             "the removed domain child must not reappear as a telemetry node"
         );
         let motor = &rover.children["/SandboxScene/Rover/Motor_FL"];
-        assert_eq!(motor.label, "Motor FL");
+        assert_eq!(motor.label.as_ref(), "Motor FL");
         let p = &motor.children["signal-structure:p"];
         assert_eq!(p.rows[0].sig.path, "Motor__FL.p.v");
     }
@@ -2851,7 +2922,7 @@ mod tests {
             .get("/Traverse/Rover")
             .unwrap();
         let velocity = rover.children.get("signal-group:linear_velocity").unwrap();
-        assert_eq!(velocity.label, "linear velocity");
+        assert_eq!(velocity.label.as_ref(), "linear velocity");
         assert_eq!(velocity.rows.len(), 4);
         assert_eq!(
             velocity
