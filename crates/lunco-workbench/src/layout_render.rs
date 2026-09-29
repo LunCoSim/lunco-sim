@@ -879,7 +879,8 @@ pub(super) fn render_layout(
 
     // ── Status bar ──────────────────────────────────────────────────
     // Drives off the cross-cutting `StatusBus` resource. Latest event
-    // shows in the strip; click opens a popup with recent history.
+    // shows in the strip; active progress opens the compact status popup,
+    // which expands in place to the recent history view.
     let status_surface_fill = panel_surface_fill(
         theme,
         world

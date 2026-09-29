@@ -208,7 +208,17 @@ private dock layout.
    same StatusBus reader. Consecutive identical discrete snapshots are coalesced by StatusBus
    before the renderers read them. Warning and error rows copy the unmodified
    message without depending on the window width;
-   attention rows emit the owning typed action.
+   attention rows emit the owning typed action. While active progress exists,
+   the same anchored popup presents a compact progress notice automatically.
+   It shows the status source and a truncated first-line summary of the
+   owner-provided message; the full message remains available from its tooltip
+   and in history. The renderer does not infer a phase from free-form text.
+   Determinate work may show its reported percentage, while indeterminate work
+   uses an animated bar without inventing a percentage. “Recent status details”
+   and the status strip open the recent-history view in place, with the
+   longest-running active progress row pinned above the event list. Completion
+   closes the compact notice automatically; an expanded history view remains
+   open until the user closes it. The two views share one popup and never stack.
 
 ### 3.1 Rendering contract — how chrome and 3D share the window
 
