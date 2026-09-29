@@ -498,14 +498,16 @@ behavior pass, and local-embodiment input stays on the interaction cadence.
 Live port-inspector writes and releases use the same queue with a `LocalUser`
 producer identity. `PanelCtx::trigger_command` scopes that session origin over
 deferred workbench dispatch so the cosim owner can admit and capture each
-action. The internal `ReleaseControlInputs` lifecycle event joins the shared
-input queue for the next fixed tick and only clears local input holds.
+action. `ControlAuthorityChanged` admits an internal `ReleaseControlInputs`
+lifecycle event for each live released endpoint. It joins the shared input
+queue for the next fixed tick and clears controller-owned input holds and
+simulated intents while preserving authored program setpoints and physics state.
 Previously admitted inputs retain their tick and sequence and commit before
 the release. The session owner captures the lifecycle record at that commit
 when recording is active. Missing target, generation, tick, or order state
-reports a runtime error and leaves existing holds intact. Session authority
-transitions do not issue this event or rewrite endpoint simulation inputs.
-Twin policy writes any stop setpoint explicitly through `SetPorts`.
+reports a runtime error and leaves existing holds intact. The release does not
+write replacement endpoint values or modify velocity. Twin policy writes any
+stop setpoint explicitly through `SetPorts`.
 Unclassified direct port events remain outside this stream.
 
 ## 4. Async preparation, priority, and result commit

@@ -462,8 +462,8 @@ fn on_release_command(
 ) {
     let cmd = trigger.event();
     // A wire-applied release carries the remote client's avatar, which is not a
-    // local camera entity. It changes session authority without writing the
-    // endpoint's simulation inputs.
+    // local camera entity. The authoritative host publishes the released target
+    // through ControlAuthorityChanged.
     if guard.is_from_sync() {
         if !matches!(*role, lunco_core_session::NetworkRole::Client) {
             let origin = guard.0.unwrap_or(local.0);
@@ -482,11 +482,17 @@ fn on_release_command(
     // A local release is meaningful only for the authoritative local avatar.
     // Validate this before freeing the session table so a stale entity cannot
     // release an otherwise valid possession.
-    if q_avatar.get(cmd.source).is_err() {
+    let Ok(link) = q_avatar.get(cmd.source) else {
         warn!(target = ?cmd.source, "[release] refused: source is not the local embodiment");
         return;
-    }
-    if !matches!(*role, lunco_core_session::NetworkRole::Client) {
+    };
+    if matches!(*role, lunco_core_session::NetworkRole::Client) {
+        if let Some(link) = link {
+            commands.trigger(lunco_cosim_core::commands::ReleaseControlInputs {
+                target: link.target,
+            });
+        }
+    } else {
         let change = lunco_core_session::release_control(&mut registry, local.0);
         let released = change.released.len();
         commands.trigger(change);

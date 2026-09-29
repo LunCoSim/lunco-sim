@@ -631,24 +631,28 @@ enough to promise same-state continuation from an arbitrary capture tick.
   correlation, and next-tick admission identity. A release commits at its own
   sequence after earlier admitted writes; every admitted write remains in the
   queue and capture stream. Simulation-clock Rhai remains on its owning pass.
-- `ReleaseControl` and the internal `ReleaseControlInputs` lifecycle event
-  clear local `PortHolds` at their ordered commit. Neither writes endpoint
-  values. Twin policy owns stop setpoints and expresses them as named
-  `SetPorts` writes. `ReleasePort` removes only its selected hold at the
-  ordered commit and does not change the underlying value.
-- Possession authority changes do not emit lifecycle input releases or rewrite
-  endpoint simulation inputs. The production gate
-  `session_authority_release_preserves_ports.rhai` checks that claim/release
-  keeps nonzero endpoint inputs and creates no lifecycle-release record.
-  Connection loss queues `ControlInputsReleased` for the next fixed tick; the
-  session stream captures it there when recording is active.
+- `ReleaseControl` and `ReleasePort` clear the requested local setpoint holds
+  at their ordered commit without writing replacement endpoint values.
+  `ControlAuthorityChanged` queues `ReleaseControlInputs` for each released
+  endpoint. Its ordered commit clears controller holds and simulated intents,
+  while authored program setpoints and physics state remain active. Twin policy
+  owns stop setpoints and expresses them as named `SetPorts` writes.
+- The production gate `session_authority_release_preserves_ports.rhai` checks
+  that claim/release records the lifecycle release and keeps endpoint values
+  unchanged. Connection loss uses the same next-tick lifecycle release; the
+  session stream captures it when recording is active.
 - The current production acceptance is
   `scripts/api/test_session_input_admission.py`, including the Rhai release
-  verifier and the authority-release preservation scenario. Its last recorded
-  result is from an earlier production binary; rerun it after the current
-  co-simulation source integration. The current physics scenario also checks
-  positive finite mass/inertia across startup ticks so unintended endpoint
-  writes surface through a production verdict.
+  verifier and the authority-release value-preservation scenario. On the
+  current integration, the API gate passed on owned port 4732 with `TESTS_OK
+  13`, `TESTS_OK 10`, and `TESTS_OK 6`; the authority-release capture retained
+  endpoint values and recorded the ordered lifecycle release. The production
+  `tutorial_first_drive` scene gate passed in 770 ticks: it released authority
+  during active Modelica guidance, observed continued movement through the
+  waypoint sensor event, and verified the authored brake step afterward. The
+  current physics scenario also checks positive finite mass/inertia across
+  startup ticks so unintended endpoint writes surface through a production
+  verdict.
 - Unclassified direct `SetPorts`, `ReleasePort`, and `ReleaseControl` events
   without stable producer identity still use the immediate owner path and are
   not captured. This remains an open replay boundary.
@@ -699,14 +703,11 @@ enough to promise same-state continuation from an arbitrary capture tick.
   `origin/main` head. In-progress deterministic changes were preserved in a
   local stash and reapplied; the stash remains until the merged work is fully
   reviewed and validated.
-- `main`'s current possession contract keeps session-authority release
-  independent from endpoint input values. Keep that contract and its authored
-  production regression while continuing fixed-tick ordering and replay work.
-- Control release clears only endpoint-local manual holds and leaves endpoint
-  values unchanged. Authored policy writes an explicit `SetPorts` stop setpoint
-  when required. The physics Rhai gate checks that mass and inertia remain
-  finite. The production API release gate and deterministic physics-profile
-  comparison still need to run on the integrated source tree.
+- Session-authority release clears controller-owned holds and simulated
+  intents at the ordered tick while preserving authored program setpoints,
+  endpoint values, and physics state. Authored policy writes an explicit
+  `SetPorts` stop setpoint when required. The production physics Rhai gate
+  checks that mass and inertia remain finite.
 
 ### D28 USD simulation preview admission continuation (2026-09-28)
 

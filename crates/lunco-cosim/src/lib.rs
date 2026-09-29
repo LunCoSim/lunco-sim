@@ -55,8 +55,8 @@ pub use ports::*;
 
 use lunco_api::executor::{DeferredCommandAppExt, PendingApiRequest, finish_command_result};
 use lunco_cosim_core::{
-    BindingRevision, BrokenConnection, CosimDiagnostics, ForceActuator,
-    PortHolds, RealtimeSafe, SimComponent, SimConnection, SimStatus, TorqueActuator,
+    BindingRevision, BrokenConnection, CosimDiagnostics, ForceActuator, PortHolds, RealtimeSafe,
+    SimComponent, SimConnection, SimStatus, TorqueActuator,
 };
 
 // Typed-command machinery: command contracts are separate from the Bevy-backed
@@ -257,6 +257,7 @@ impl Plugin for CoSimPlugin {
             .add_observer(mark_causal_state_sink::<ForceActuator>)
             .add_observer(mark_causal_state_sink::<TorqueActuator>)
             .add_observer(mark_joint_torque_port)
+            .add_observer(on_control_authority_changed)
             .add_observer(on_release_control_inputs);
         // Every built-in port owner installs its lifecycle hooks in the backend
         // module. Avian groups additionally carry their hooks beside their
@@ -1086,6 +1087,7 @@ fn on_set_ports(
     let producer_id = cmd.producer_id;
     let command_id = active_id.get();
     let origin = active_id.origin();
+    let program_setpoint = authored_simulation_setpoint(origin);
     let correlation_id = pending_request
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
@@ -1134,7 +1136,7 @@ fn on_set_ports(
         // remain in their existing deterministic pass. Their source inputs
         // are captured at the owning boundary instead of logging resolved
         // actuator writes a second time.
-        match apply_port_input_writes(world, &reg, target, &writes) {
+        match apply_port_input_writes(world, &reg, target, &writes, program_setpoint) {
             Ok(()) => finish_command_result(
                 world,
                 command_id,
@@ -1147,6 +1149,30 @@ fn on_set_ports(
             }
         }
     });
+}
+
+fn authored_simulation_setpoint(origin: Option<CommandOrigin>) -> bool {
+    matches!(
+        origin,
+        Some(CommandOrigin::Rhai { context, .. })
+            if context.clock == RuntimeClock::Simulation
+                && authored_simulation_route(context.route)
+    )
+}
+
+fn authored_simulation_route(route: Option<lunco_core::RuntimeRoute>) -> bool {
+    route.is_some_and(|route| {
+        route.scope == lunco_core::RuntimeScope::Twin
+            && route.cycle == lunco_core::RuntimeCycle::Simulation
+    })
+}
+
+fn authored_simulation_producer(producer: lunco_core_session::SessionInputProducer) -> bool {
+    matches!(
+        producer,
+        lunco_core_session::SessionInputProducer::Rhai { route, .. }
+            if authored_simulation_route(route)
+    )
 }
 
 fn should_admit_port_input(
@@ -1213,12 +1239,9 @@ fn admit_port_input(
         input_name,
     )
     .map_err(|message| (message, lunco_api_core::ApiErrorCode::CommandRejected))?;
-    let target_gid = unique_target_global_id(
-        world,
-        target,
-        &format!("live {input_name} admission"),
-    )
-    .map_err(|message| (message, lunco_api_core::ApiErrorCode::CommandRejected))?;
+    let target_gid =
+        unique_target_global_id(world, target, &format!("live {input_name} admission"))
+            .map_err(|message| (message, lunco_api_core::ApiErrorCode::CommandRejected))?;
     let scene_generation = world
         .get_resource::<lunco_core::SceneTransitionCoordinator>()
         .and_then(lunco_core::SceneTransitionCoordinator::completed_generation)
@@ -1382,6 +1405,7 @@ fn apply_port_input_writes(
     registry: &lunco_port_core::ports::PortRegistry,
     target: Entity,
     writes: &[(String, f64)],
+    program_setpoint: bool,
 ) -> Result<(), (String, lunco_api_core::ApiErrorCode)> {
     // TimeTransport is the authoritative user play/pause owner. Modelica's
     // internal readiness pause is not user intent and must not reject controls.
@@ -1397,8 +1421,9 @@ fn apply_port_input_writes(
     validate_port_input_writes(world, registry, target, writes)
         .map_err(|message| (message, lunco_api_core::ApiErrorCode::CommandRejected))?;
 
-    // A setpoint on a wired input outranks the wire until an explicit release
-    // or lifecycle clear.
+    // The source layer is retained with the setpoint: controller input outranks
+    // authored program guidance, and either outranks the wiring fabric. The
+    // authority lifecycle clears only controller-owned holds.
     for (port, value) in writes {
         if !registry.write_port(world, target, port, *value) {
             return Err((
@@ -1407,7 +1432,11 @@ fn apply_port_input_writes(
             ));
         }
         if let Some(mut holds) = world.get_resource_mut::<PortHolds>() {
-            holds.hold(target, port.clone(), *value);
+            if program_setpoint {
+                holds.hold_program(target, port.clone(), *value);
+            } else {
+                holds.hold(target, port.clone(), *value);
+            }
         }
         let mut diagnostics = world.resource_mut::<CosimDiagnostics>();
         diagnostics.remove_fault(target, port);
@@ -1423,6 +1452,7 @@ fn on_commit_session_input_ports(
 ) {
     let commit = trigger.event();
     let payload = commit.record().payload.clone();
+    let program_setpoint = authored_simulation_producer(commit.record().producer);
     let target = commit.target();
     let target_gid = commit.record().target;
     let registry = registry.clone();
@@ -1431,7 +1461,14 @@ fn on_commit_session_input_ports(
             lunco_core_session::SessionInputPayload::PortInputWrites {
                 writes,
                 correlation_id,
-            } => apply_port_input_writes(world, &registry, target, &writes).map_err(
+            } => apply_port_input_writes(
+                world,
+                &registry,
+                target,
+                &writes,
+                program_setpoint,
+            )
+            .map_err(
                 |(message, _error_code)| (correlation_id, "SetPorts", message),
             ),
             lunco_core_session::SessionInputPayload::PortInputRelease {
@@ -1441,9 +1478,14 @@ fn on_commit_session_input_ports(
                 world.resource_mut::<PortHolds>().release(target, &name);
                 Ok(())
             }
-            lunco_core_session::SessionInputPayload::ControlInputRelease { .. }
-            | lunco_core_session::SessionInputPayload::ControlInputsReleased => {
+            lunco_core_session::SessionInputPayload::ControlInputRelease { .. } => {
                 world.resource_mut::<PortHolds>().clear_entity(target);
+                Ok(())
+            }
+            lunco_core_session::SessionInputPayload::ControlInputsReleased => {
+                world
+                    .resource_mut::<PortHolds>()
+                    .clear_control_entity(target);
                 Ok(())
             }
             _ => return,
@@ -1511,9 +1553,9 @@ fn on_release_port(
     });
 }
 
-/// Release the endpoint's manual input holds without changing endpoint values.
-/// External producers join the fixed-tick input queue; simulation-owned calls
-/// release holds at their current owner boundary.
+/// Release all local input holds without changing endpoint values. External
+/// producers join the fixed-tick input queue; simulation-owned calls release
+/// holds at their current owner boundary.
 #[on_command(ReleaseControl)]
 fn on_release_control(
     trigger: On<ReleaseControl>,
@@ -1581,6 +1623,37 @@ fn on_release_control_inputs(trigger: On<ReleaseControlInputs>, mut commands: Co
     });
 }
 
+fn on_control_authority_changed(
+    trigger: On<lunco_core_session::ControlAuthorityChanged>,
+    targets: Query<(Entity, &GlobalEntityId)>,
+    mut commands: Commands,
+) {
+    let mut released = trigger.event().released.clone();
+    released.sort_unstable();
+    released.dedup();
+
+    for target_gid in released {
+        let mut matches = targets
+            .iter()
+            .filter(|(_, global_id)| global_id.get() == target_gid);
+        let Some((target, _)) = matches.next() else {
+            // Scene teardown clears its entity-scoped control state before the
+            // prim disappears. A stale session identity cannot own live input.
+            continue;
+        };
+        if matches.next().is_some() {
+            commands.trigger(lunco_core::RuntimeError {
+                name: "control-input-release".to_owned(),
+                message: format!(
+                    "released control target identity {target_gid} resolves to multiple live entities"
+                ),
+            });
+            continue;
+        }
+        commands.trigger(ReleaseControlInputs { target });
+    }
+}
+
 fn admit_lifecycle_control_release(world: &mut World, target: Entity) -> Result<(), String> {
     let record = (|| {
         let target_id = unique_target_global_id(world, target, "lifecycle control release")?;
@@ -1588,7 +1661,8 @@ fn admit_lifecycle_control_release(world: &mut World, target: Entity) -> Result<
             .get_resource::<lunco_core::SceneTransitionCoordinator>()
             .and_then(lunco_core::SceneTransitionCoordinator::completed_generation)
             .ok_or_else(|| {
-                "lifecycle control release admission requires a committed scene generation".to_owned()
+                "lifecycle control release admission requires a committed scene generation"
+                    .to_owned()
             })?;
         let effective_tick = world
             .get_resource::<lunco_core_runtime::SimTick>()
@@ -1598,7 +1672,8 @@ fn admit_lifecycle_control_release(world: &mut World, target: Entity) -> Result<
             .ok_or_else(|| "lifecycle control release effective tick exhausted".to_owned())?;
         if !world.contains_resource::<lunco_control_core::SimulationInputOrderAllocator>() {
             return Err(
-                "lifecycle control release admission requires the shared input-order allocator".to_owned(),
+                "lifecycle control release admission requires the shared input-order allocator"
+                    .to_owned(),
             );
         }
         if !world.contains_resource::<lunco_core_session::PendingSessionInputs>() {
@@ -1638,6 +1713,65 @@ fn fail_session_input_capture(world: &mut World, message: String) {
 register_commands!(on_set_ports, on_release_port, on_release_control);
 
 #[cfg(test)]
+mod authority_input_release_tests {
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct ReleasedTargets(Vec<Entity>);
+
+    fn record_release(trigger: On<ReleaseControlInputs>, mut released: ResMut<ReleasedTargets>) {
+        released.0.push(trigger.event().target);
+    }
+
+    #[test]
+    fn authority_release_maps_stable_ids_to_one_ordered_lifecycle_event() {
+        let mut app = App::new();
+        app.init_resource::<ReleasedTargets>()
+            .add_observer(on_control_authority_changed)
+            .add_observer(record_release);
+        let high = app.world_mut().spawn(GlobalEntityId::from_raw(22)).id();
+        let low = app.world_mut().spawn(GlobalEntityId::from_raw(11)).id();
+
+        app.world_mut()
+            .trigger(lunco_core_session::ControlAuthorityChanged {
+                session: lunco_command_contracts::SessionId(5),
+                target: None,
+                released: vec![22, 11, 22, 99],
+            });
+        app.world_mut().flush();
+
+        assert_eq!(app.world().resource::<ReleasedTargets>().0, vec![low, high]);
+    }
+
+    #[test]
+    fn authored_twin_simulation_inputs_keep_the_program_hold_owner() {
+        assert!(authored_simulation_producer(
+            lunco_core_session::SessionInputProducer::Rhai {
+                route: Some(lunco_core::RuntimeRoute::twin(
+                    lunco_core::RuntimeCycle::Simulation,
+                    7,
+                )),
+                actor: Some(GlobalEntityId::from_raw(9)),
+                producer_id: None,
+            }
+        ));
+        assert!(!authored_simulation_producer(
+            lunco_core_session::SessionInputProducer::Rhai {
+                route: Some(lunco_core::RuntimeRoute::twin(
+                    lunco_core::RuntimeCycle::Command,
+                    7,
+                )),
+                actor: Some(GlobalEntityId::from_raw(9)),
+                producer_id: None,
+            }
+        ));
+        assert!(!authored_simulation_producer(
+            lunco_core_session::SessionInputProducer::ApiTransport { producer_id: 9 }
+        ));
+    }
+}
+
+#[cfg(test)]
 mod control_intent_tests {
     use super::*;
     use std::collections::HashMap;
@@ -1652,11 +1786,7 @@ mod control_intent_tests {
         errors.0.push(trigger.event().name.clone());
     }
 
-    fn install_session_input_state(
-        app: &mut App,
-        with_committed_scene: bool,
-        recording: bool,
-    ) {
+    fn install_session_input_state(app: &mut App, with_committed_scene: bool, recording: bool) {
         app.init_resource::<lunco_core_session::PendingSessionInputs>()
             .init_resource::<lunco_control_core::SimulationInputOrderAllocator>()
             .insert_resource(lunco_core_runtime::SimTick(40));
@@ -1693,6 +1823,7 @@ mod control_intent_tests {
                 lunco_port_core::InputPorts::with_defaults([
                     ("throttle".to_owned(), 0.25),
                     ("brake".to_owned(), 0.0),
+                    ("program_active".to_owned(), 1.0),
                 ]),
             ))
             .id();
@@ -1700,15 +1831,19 @@ mod control_intent_tests {
             .resource_mut::<PortHolds>()
             .hold(target, "throttle", 0.25);
         app.world_mut()
-            .resource_scope(|world, mut pending: Mut<lunco_core_session::PendingSessionInputs>| {
-                let mut order = world
-                    .resource_mut::<lunco_control_core::SimulationInputOrderAllocator>();
+            .resource_mut::<PortHolds>()
+            .hold_program(target, "throttle", 0.4);
+        app.world_mut()
+            .resource_mut::<PortHolds>()
+            .hold_program(target, "program_active", 1.0);
+        app.world_mut().resource_scope(
+            |world, mut pending: Mut<lunco_core_session::PendingSessionInputs>| {
+                let mut order =
+                    world.resource_mut::<lunco_control_core::SimulationInputOrderAllocator>();
                 pending
                     .admit(
                         &mut order,
-                        lunco_core_session::SessionInputProducer::DirectCommand {
-                            producer_id: 7,
-                        },
+                        lunco_core_session::SessionInputProducer::DirectCommand { producer_id: 7 },
                         GlobalEntityId::from_raw(42),
                         1,
                         41,
@@ -1719,7 +1854,8 @@ mod control_intent_tests {
                         None,
                     )
                     .expect("earlier live write is admitted to the shared input queue");
-            });
+            },
+        );
 
         app.world_mut().trigger(ReleaseControlInputs { target });
         app.world_mut().flush();
@@ -1740,12 +1876,18 @@ mod control_intent_tests {
             0.25,
             "admission must not mutate endpoint values"
         );
-        assert!(app.world().resource::<PortHolds>().get(target, "throttle").is_some());
-        assert!(app
-            .world()
-            .resource::<lunco_core_session::SessionInputStream>()
-            .records()
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<PortHolds>()
+                .get(target, "throttle")
+                .is_some()
+        );
+        assert!(
+            app.world()
+                .resource::<lunco_core_session::SessionInputStream>()
+                .records()
+                .is_empty()
+        );
 
         app.world_mut()
             .resource_mut::<lunco_core_runtime::SimTick>()
@@ -1776,7 +1918,13 @@ mod control_intent_tests {
                 .cmd("brake"),
             0.0
         );
-        assert!(app.world().resource::<PortHolds>().is_empty());
+        let holds = app.world().resource::<PortHolds>();
+        assert_eq!(
+            holds.get(target, "throttle"),
+            Some(0.4),
+            "control release reveals the authored throttle setpoint"
+        );
+        assert_eq!(holds.get(target, "program_active"), Some(1.0));
         assert!(app.world().resource::<ControlRuntimeErrors>().0.is_empty());
     }
 
@@ -1806,10 +1954,12 @@ mod control_intent_tests {
             stream.state(),
             lunco_core_session::SessionInputStreamState::Failed
         );
-        assert!(stream
-            .failure()
-            .unwrap()
-            .contains("committed scene generation"));
+        assert!(
+            stream
+                .failure()
+                .unwrap()
+                .contains("committed scene generation")
+        );
         assert!(stream.records().is_empty());
         let inputs = app
             .world()
@@ -1859,7 +2009,13 @@ mod control_intent_tests {
             .unwrap();
         assert_eq!(inputs.cmd("throttle"), 0.6);
         assert_eq!(inputs.cmd("brake"), 0.2);
-        assert_eq!(app.world().get::<lunco_port_core::Port>(actuator).unwrap().value, 0.6);
+        assert_eq!(
+            app.world()
+                .get::<lunco_port_core::Port>(actuator)
+                .unwrap()
+                .value,
+            0.6
+        );
         assert!(app.world().resource::<PortHolds>().is_empty());
     }
 
@@ -1921,5 +2077,4 @@ mod control_intent_tests {
             "a solver synchronization barrier must not discard a control intent"
         );
     }
-
 }
