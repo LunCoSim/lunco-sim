@@ -36,6 +36,11 @@ should be gated by a revision/change event. Structural edits should invalidate
 structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
+In panel paint code, use `PanelCtx::resource` for reads. Its `resource_scope`
+temporarily removes and reinserts the resource, which marks it changed even
+when the closure only reads it. Scope a mutable borrow only around a real
+state transition; otherwise a steady Builder repaint can wake change-detection
+systems and full-scene reconciliation on the next Update.
 The shell's steady `WorkbenchSnapshot` check compares borrowed dock and
 perspective iterators before materializing owned vectors; preserve that
 allocation-free stable path when changing layout publication.
