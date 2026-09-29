@@ -110,13 +110,17 @@ search for phase-space curves where X can reverse.
 For the entity tree, derive parent and grid facts through indexed lookups along
 named candidates' deduplicated ancestor closure instead of copying every scene
 entity's `ChildOf` and `Grid` membership into the snapshot.
-For Builder telemetry, inspect `telemetry_catalog_snapshot` separately from
-`telemetry_catalog_build_worker`. The first copies only signal metadata and
-owner ancestry; grouping and sorting belong on the worker. Compare the first
-Builder frame with settled `render_workbench` and `EguiPrimaryContextPass`
-samples so a one-time catalog build is not reported as a steady per-frame cost.
-Use the `workbench_panel_render` child zones to separate the active panel costs
-inside `render_workbench` before optimizing a specific Builder surface.
+For Builder telemetry, inspect `telemetry_catalog_snapshot_start`,
+`telemetry_catalog_snapshot`, and `telemetry_catalog_build_worker` separately.
+The start span captures channel identities and owner ancestry once;
+`telemetry_catalog_snapshot` copies at most 64 channel descriptors per
+`Update`. A newer registry or focus key discards a partial batch. Grouping and
+sorting belong on the worker. Compare the first Builder frames with settled
+`render_workbench` and
+`EguiPrimaryContextPass` samples so catalog admission is not reported as a
+steady per-frame cost. Use the `workbench_panel_render` child zones to separate
+the active panel costs inside `render_workbench` before optimizing a specific
+Builder surface.
 
 For startup asset graphs, separate asynchronous source reads from discovery,
 composition, and UI/physics admission. Read all known dependencies in each

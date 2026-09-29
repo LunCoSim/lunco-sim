@@ -50,7 +50,10 @@
 //! `VisualizationConfig`, fire `OpenTab { VIZ_PANEL_KIND }`) and works
 //! without any canvas host wiring.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    sync::Arc,
+};
 
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
@@ -364,6 +367,7 @@ fn model_state_priority(row: &Row) -> (u8, u8, u8) {
     )
 }
 
+#[cfg(test)]
 fn snapshot_rows(reg: &SignalRegistry) -> Vec<Row> {
     reg.iter_scalar()
         .map(|(sig, _history)| {
@@ -637,6 +641,10 @@ fn sort_tree(node: &mut TreeNode) {
 /// corrupt hierarchy can't spin the UI thread, not because 32 is a real limit.
 const MAX_ANCESTOR_DEPTH: usize = 32;
 
+/// Bound the channel metadata copied on one Update when a large telemetry
+/// catalog is admitted or its presentation focus changes.
+const TELEMETRY_CATALOG_ROWS_PER_UPDATE: usize = 64;
+
 #[derive(Default)]
 struct EntityCatalogFacts {
     label: Option<String>,
@@ -650,7 +658,16 @@ struct EntityCatalogFacts {
 pub(crate) struct TelemetryCatalogBuildState {
     desired_key: Option<(u64, u64)>,
     catalog: Arc<Catalog>,
+    snapshot: Option<PendingTelemetryCatalogSnapshot>,
     task: Option<Task<((u64, u64), Catalog)>>,
+}
+
+struct PendingTelemetryCatalogSnapshot {
+    key: (u64, u64),
+    focus_roots: Vec<Entity>,
+    signals: VecDeque<SignalRef>,
+    rows: Vec<Row>,
+    facts: HashMap<Entity, EntityCatalogFacts>,
 }
 
 impl Default for TelemetryCatalogBuildState {
@@ -658,14 +675,49 @@ impl Default for TelemetryCatalogBuildState {
         Self {
             desired_key: None,
             catalog: Arc::new(Catalog::default()),
+            snapshot: None,
             task: None,
         }
     }
 }
 
-/// Snapshot channel metadata and owner hierarchy on invalidation, then derive
-/// the grouped presentation tree on the compute pool. Sample updates do not
-/// change the catalog revision and therefore do not schedule this work.
+fn capture_entity_catalog_facts(
+    owner: Entity,
+    entity_info: &Query<(
+        Option<&Name>,
+        Option<&lunco_core::markers::Callsign>,
+        Option<&lunco_core::CatalogEntryId>,
+        Option<&ChildOf>,
+        Option<&UsdPrimPath>,
+    )>,
+    facts: &mut HashMap<Entity, EntityCatalogFacts>,
+) {
+    let mut cursor = Some(owner);
+    for _ in 0..MAX_ANCESTOR_DEPTH {
+        let Some(entity) = cursor else { break };
+        if facts.contains_key(&entity) {
+            break;
+        }
+        let Ok((name, callsign, catalog_id, parent, usd_path)) = entity_info.get(entity) else {
+            break;
+        };
+        let label = lunco_core::entity_display_name(name, callsign, catalog_id);
+        let parent = parent.map(ChildOf::parent);
+        facts.insert(
+            entity,
+            EntityCatalogFacts {
+                label: (!label.is_empty()).then_some(label),
+                parent,
+                usd_path: usd_path.map(|path| path.path.clone()),
+            },
+        );
+        cursor = parent;
+    }
+}
+
+/// Capture channel metadata and owner hierarchy in bounded Update slices, then
+/// derive the grouped presentation tree on the compute pool. Sample updates do
+/// not change the catalog revision and therefore do not schedule this work.
 pub(crate) fn prepare_telemetry_catalog(
     mut build: ResMut<TelemetryCatalogBuildState>,
     registry: Option<Res<SignalRegistry>>,
@@ -681,57 +733,103 @@ pub(crate) fn prepare_telemetry_catalog(
     let Some(registry) = registry else {
         return;
     };
-    let focus_roots = focus
-        .as_deref()
-        .map(|focus| focus.roots.clone())
-        .unwrap_or_default();
     let key = (
         catalog_key(&registry),
         focus.as_deref().map_or(0, TelemetryFocus::fingerprint),
     );
     build.desired_key = Some(key);
-    if (build.catalog.key, build.catalog.focus_key) == key || build.task.is_some() {
+    if build.task.is_some() {
+        return;
+    }
+    if (build.catalog.key, build.catalog.focus_key) == key {
+        build.snapshot = None;
         return;
     }
 
-    let (rows, facts) = bevy::log::info_span!(
+    if !build
+        .snapshot
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.key == key)
+    {
+        let _snapshot_start =
+            bevy::log::info_span!("telemetry_catalog_snapshot_start", catalog_revision = key.0)
+                .entered();
+        let focus_roots = focus
+            .as_deref()
+            .map(|focus| focus.roots.clone())
+            .unwrap_or_default();
+        // Keep all hierarchy facts from one World snapshot; channel-owned
+        // descriptor copies are the part that is spread across Updates.
+        let mut signals = VecDeque::with_capacity(registry.scalar_count());
+        let mut owners = HashSet::new();
+        for (signal, _) in registry.iter_scalar() {
+            signals.push_back(signal.clone());
+            owners.insert(signal.entity);
+        }
+        let mut facts = HashMap::new();
+        for owner in owners.into_iter().chain(focus_roots.iter().copied()) {
+            capture_entity_catalog_facts(owner, &entity_info, &mut facts);
+        }
+        build.snapshot = Some(PendingTelemetryCatalogSnapshot {
+            key,
+            focus_roots,
+            rows: Vec::with_capacity(signals.len()),
+            signals,
+            facts,
+        });
+    }
+
+    let snapshot = build
+        .snapshot
+        .as_mut()
+        .expect("the requested telemetry snapshot was initialized");
+    let processed = bevy::log::info_span!(
         "telemetry_catalog_snapshot",
-        catalog_revision = key.0
+        catalog_revision = key.0,
+        remaining = snapshot.signals.len()
     )
     .in_scope(|| {
-        let rows = snapshot_rows(&registry);
-        let mut facts = HashMap::new();
-        let owners = rows
-            .iter()
-            .map(|row| row.sig.entity)
-            .chain(focus_roots.iter().copied());
-        for owner in owners {
-            let mut cursor = Some(owner);
-            for _ in 0..MAX_ANCESTOR_DEPTH {
-                let Some(entity) = cursor else { break };
-                if facts.contains_key(&entity) {
-                    break;
-                }
-                let Ok((name, callsign, catalog_id, parent, usd_path)) = entity_info.get(entity)
-                else {
-                    break;
-                };
-                let label = lunco_core::entity_display_name(name, callsign, catalog_id);
-                let parent = parent.map(ChildOf::parent);
-                facts.insert(
-                    entity,
-                    EntityCatalogFacts {
-                        label: (!label.is_empty()).then_some(label),
-                        parent,
-                        usd_path: usd_path.map(|path| path.path.clone()),
-                    },
-                );
-                cursor = parent;
-            }
+        for _ in 0..TELEMETRY_CATALOG_ROWS_PER_UPDATE {
+            let Some(signal) = snapshot.signals.pop_front() else {
+                break;
+            };
+            let meta = registry.meta(&signal);
+            snapshot.rows.push(Row {
+                in_focus: signal.entity != Entity::PLACEHOLDER,
+                active: registry.is_active(&signal),
+                unit: meta.and_then(|meta| meta.unit.clone()),
+                description: meta.and_then(|meta| meta.description.clone()),
+                provenance: meta.and_then(|meta| meta.provenance.clone()),
+                group_path: meta.and_then(|meta| meta.group_path.clone()),
+                model_class: meta.and_then(|meta| meta.model_class.clone()),
+                model_variable: meta.and_then(|meta| meta.model_variable.clone()),
+                source_asset: meta.and_then(|meta| meta.source_asset.clone()),
+                canonical_name: meta.and_then(|meta| meta.canonical_name.clone()),
+                presentation: meta
+                    .map(|meta| meta.presentation.clone())
+                    .unwrap_or_default(),
+                exposure: meta.map_or(SignalExposure::Public, |meta| meta.exposure),
+                search_fields: Default::default(),
+                sig: signal,
+            });
         }
-        (rows, facts)
+        snapshot.signals.is_empty()
     });
+    if !processed {
+        return;
+    }
 
+    let snapshot = build
+        .snapshot
+        .take()
+        .expect("the completed telemetry snapshot is retained");
+    let PendingTelemetryCatalogSnapshot {
+        key,
+        focus_roots,
+        rows,
+        facts,
+        ..
+    } = snapshot;
     if rows.is_empty() {
         build.catalog = Arc::new(Catalog {
             key: key.0,

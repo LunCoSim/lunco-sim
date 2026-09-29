@@ -83,12 +83,14 @@ Modelica runtime telemetry caches each session's `SignalRef` by solver variable 
 not rebuild or clone an owned signal path. The registry clones the key only when it first
 creates the channel; a new solver session clears the prior histories and cached identities.
 
-The telemetry browser's grouped catalog is presentation state. It snapshots channel metadata
-and the signal owners' label/path/parent facts when the registry catalog revision or selected
-focus changes, then deduplicates, groups, and sorts those immutable rows on the async-compute
-pool. A catalog result is published only for the matching registry and focus keys. The panel
-does not build the tree or wait for a worker during `Panel::render`; live sample values remain
-read from `SignalRegistry` when visible rows are painted.
+The telemetry browser's grouped catalog is presentation state. When the registry catalog
+revision or selected focus changes, it snapshots the signal owners' label/path/parent facts
+once and copies at most 64 channel descriptors per `Update` into an immutable batch. A newer
+registry or focus key discards the partial batch. The complete snapshot is deduplicated,
+grouped, and sorted on the async-compute pool, and a catalog result is published only for the
+matching registry and focus keys. The panel does not build the tree or wait for a worker during
+`Panel::render`; live sample values remain read from `SignalRegistry` when visible rows are
+painted.
 
 `ScalarHistory` stores completed retention blocks as immutable shared chunks and keeps only a
 bounded tail mutable. `snapshot()` shares completed chunks and copies that tail; plot workers
