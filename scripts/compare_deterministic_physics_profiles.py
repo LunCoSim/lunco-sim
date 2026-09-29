@@ -35,6 +35,7 @@ PROFILE_RUNS = 2
 DEFAULT_TICK_HZ = 60.0
 EXPECTED_SHARED_ROVERS = 4
 EXPECTED_STATE_SNAPSHOT_COUNT = 6
+MODEL_STATE_TICKS_BEFORE_FINAL = ("0", "1", "180")
 DETERMINISTIC_SEED = 6840157149251759617
 JITTER_REPLAY_PROFILES = (
     (0.25, DETERMINISTIC_SEED),
@@ -1755,7 +1756,9 @@ def main() -> int:
         for ticks in (repeat_ticks, default_ticks, default_repeat_ticks)
     ):
         raise RuntimeError("physics snapshots were captured at different simulation ticks")
-    model_ticks = sorted({*serial_ticks, early_tick}, key=int)
+    model_ticks = sorted(
+        {*MODEL_STATE_TICKS_BEFORE_FINAL, final_stage_tick(serial_output)}, key=int
+    )
     serial_models = model_state_trace(serial_output, model_ticks)
     repeat_models = model_state_trace(repeat_output, model_ticks)
     default_models = model_state_trace(default_output, model_ticks)

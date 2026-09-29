@@ -178,6 +178,39 @@ class DeterministicPhysicsProfileTests(unittest.TestCase):
             model_trace, "780", {"-47.5"}
         )
 
+    def test_modelica_capture_uses_sparse_authored_ticks_not_physics_ticks(self) -> None:
+        model_ticks = ["0", "1", "180", "780"]
+        physics_ticks = ["0", "180", "360", "540", "720", "780"]
+        systems = [f"/Rover{rover:02}/System" for rover in range(1, 21)]
+        model_rows = [
+            f"D4_MODEL_TRACE_V1|{tick}|{identity}|1|0|x={tick}"
+            for tick in model_ticks
+            for identity in systems
+        ]
+        physics_rows = [f"D4_STATE_TRACE_V1|{tick};" for tick in physics_ticks]
+        early_row = "D4_EARLY_STATE_TRACE_V1|1;"
+        output = "\n".join([*model_rows, *physics_rows, early_row])
+
+        traces = deterministic_physics_profiles.model_state_trace(output, model_ticks)
+
+        self.assertEqual(len(traces), len(model_ticks) * len(systems))
+        self.assertEqual(
+            [trace.split("|", 1)[0] for trace in traces],
+            [tick for tick in model_ticks for _ in systems],
+        )
+        with self.assertRaisesRegex(RuntimeError, "expected authored state for 140"):
+            deterministic_physics_profiles.model_state_trace(
+                output, [*physics_ticks, "1"]
+            )
+
+        missing_settle_capture = "\n".join(
+            row for row in model_rows if not row.startswith("D4_MODEL_TRACE_V1|180|")
+        )
+        with self.assertRaisesRegex(RuntimeError, "expected authored state for 80"):
+            deterministic_physics_profiles.model_state_trace(
+                missing_settle_capture, model_ticks
+            )
+
     def test_portable_reference_requires_exact_final_stage_equality(self) -> None:
         reference = {
             "scene-4-serial": {
