@@ -15,7 +15,7 @@ lunco-core = { path = "../lunco-core" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 anyhow = { workspace = true }
 bevy = { workspace = true }
-rhai = { workspace = true }
+rhai = { workspace = true, features = ["metadata"] }
 serde = { workspace = true }
 lunco-api = { path = "../lunco-api" }
 lunco-api-core = { path = "../lunco-api-core" }

@@ -837,3 +837,221 @@ pub fn register(app: &mut App) {
 }
 
 register_commands!(on_run_lint);
+#[cfg(test)]
+mod tests {
+    use super::live_port_collision_findings;
+    use bevy::asset::Handle;
+    use bevy::prelude::*;
+    use lunco_port_core::ports::{
+        PortBackend, PortDeclaration, PortDirection, PortMetadata, PortRegistry,
+    };
+    use lunco_usd_bevy_scene::UsdPrimPath;
+    use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStage};
+    use lunco_usd_compose::recipe::StageRecipe;
+
+    #[derive(Component)]
+    struct ModelicaInput;
+
+    #[derive(Component)]
+    struct RuntimeActuator {
+        name: String,
+    }
+
+    fn modelica_list(world: &World, entity: Entity, out: &mut Vec<PortDeclaration>) {
+        if world.get::<ModelicaInput>(entity).is_some() {
+            out.push(PortDeclaration {
+                name: "release".into(),
+                direction: PortDirection::In,
+            });
+        }
+    }
+
+    fn runtime_actuator_list(world: &World, entity: Entity, out: &mut Vec<PortDeclaration>) {
+        if let Some(actuator) = world.get::<RuntimeActuator>(entity) {
+            out.push(PortDeclaration {
+                name: actuator.name.clone(),
+                direction: PortDirection::InOut,
+            });
+        }
+    }
+
+    fn modelica_input_slot(world: &World, entity: Entity, name: &str) -> Option<u64> {
+        (name == "release" && world.get::<ModelicaInput>(entity).is_some()).then_some(0)
+    }
+
+    fn runtime_actuator_input_slot(world: &World, entity: Entity, name: &str) -> Option<u64> {
+        world
+            .get::<RuntimeActuator>(entity)
+            .is_some_and(|actuator| actuator.name == name)
+            .then_some(0)
+    }
+
+    fn modelica_metadata(
+        _world: &World,
+        _entity: Entity,
+        _name: &str,
+        direction: PortDirection,
+    ) -> PortMetadata {
+        PortMetadata::scalar(
+            direction,
+            None,
+            None,
+            None,
+            "Modelica/OBC",
+            "solver",
+            false,
+            None,
+        )
+    }
+
+    fn runtime_actuator_metadata(
+        _world: &World,
+        _entity: Entity,
+        _name: &str,
+        direction: PortDirection,
+    ) -> PortMetadata {
+        PortMetadata::scalar(
+            direction,
+            None,
+            None,
+            None,
+            "hardware port",
+            "actuator",
+            false,
+            None,
+        )
+    }
+
+    const MODELICA_BACKEND: PortBackend = PortBackend {
+        list: modelica_list,
+        list_entities: |_world, _out| {},
+        topology_key: |_world, _entity| 0,
+        metadata: modelica_metadata,
+        read_output: |_world, _entity, _name| None,
+        read_input: |_world, _entity, _name| Some(0.0),
+        resolve_input: Some(modelica_input_slot),
+        resolve_output: None,
+        read_slot: None,
+        read_input_slot: Some(|_, _, slot| (slot == 0).then_some(0.0)),
+        write_slot: None,
+    };
+
+    const RUNTIME_ACTUATOR_BACKEND: PortBackend = PortBackend {
+        list: runtime_actuator_list,
+        list_entities: |_world, _out| {},
+        topology_key: |_world, _entity| 0,
+        metadata: runtime_actuator_metadata,
+        read_output: |_world, _entity, _name| Some(0.0),
+        read_input: |_world, _entity, _name| Some(0.0),
+        resolve_input: Some(runtime_actuator_input_slot),
+        resolve_output: None,
+        read_slot: None,
+        read_input_slot: Some(|_, _, slot| (slot == 0).then_some(0.0)),
+        write_slot: None,
+    };
+
+    fn composed_fixture() -> CanonicalStage {
+        CanonicalStage::from_recipe(&StageRecipe::from_source(
+            "port_owner_collision.usda",
+            "#usda 1.0\n\
+             def Xform \"Lander1\" {\n\
+                 float inputs:release\n\
+             }\n",
+        ))
+        .expect("duplicate-port fixture composes")
+    }
+
+    fn registry() -> PortRegistry {
+        let mut registry = PortRegistry::default();
+        registry.register(MODELICA_BACKEND);
+        registry.register(RUNTIME_ACTUATOR_BACKEND);
+        registry
+    }
+
+    #[test]
+    fn collision_report_contains_structured_winner_and_shadowed_owner_fields() {
+        let stage = composed_fixture();
+        assert!(
+            stage
+                .view()
+                .prim_paths()
+                .iter()
+                .any(|path| path.to_string() == "/Lander1")
+        );
+
+        let mut world = World::new();
+        world.spawn((
+            UsdPrimPath {
+                stage_handle: Handle::default(),
+                path: "/Lander1".into(),
+            },
+            ModelicaInput,
+            RuntimeActuator {
+                name: "release".into(),
+            },
+        ));
+        world.insert_resource(registry());
+
+        let findings =
+            live_port_collision_findings(&world, Handle::<UsdStageAsset>::default().id());
+        assert_eq!(findings.len(), 1);
+        let finding = &findings[0];
+        assert_eq!(finding.code.as_deref(), Some("port-owner-collision"));
+        assert_eq!(finding.severity, DiagnosticSeverity::Warning);
+        assert_eq!(finding.subject.as_deref(), Some("/Lander1"));
+        assert!(
+            finding
+                .message
+                .contains("PORT_OWNER_COLLISION: `release` has 2 input owners")
+        );
+        assert!(finding.message.contains("Modelica/OBC"));
+        assert!(finding.message.contains("hardware port"));
+        assert!(finding.message.contains("/Lander1.inputs:release"));
+        assert!(finding.message.contains("/Lander1.inputs/outputs:release"));
+        assert!(finding.message.contains("registry precedence 1"));
+        assert!(finding.message.contains("registry precedence 2"));
+        assert!(
+            finding
+                .message
+                .contains("writes may be routed to the winner")
+        );
+    }
+
+    #[test]
+    fn renamed_actuator_has_no_collision_finding() {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source(
+            "port_owner_collision_clean.usda",
+            "#usda 1.0\n\
+             def Xform \"Lander1\" {\n\
+                 float inputs:release\n\
+                 float outputs:dock_release\n\
+             }\n",
+        ))
+        .expect("clean port fixture composes");
+        assert!(
+            stage
+                .view()
+                .prim_paths()
+                .iter()
+                .any(|path| path.to_string() == "/Lander1")
+        );
+
+        let mut world = World::new();
+        world.spawn((
+            UsdPrimPath {
+                stage_handle: Handle::default(),
+                path: "/Lander1".into(),
+            },
+            ModelicaInput,
+            RuntimeActuator {
+                name: "dock_release".into(),
+            },
+        ));
+        world.insert_resource(registry());
+
+        assert!(
+            live_port_collision_findings(&world, Handle::<UsdStageAsset>::default().id(),)
+                .is_empty()
+        );
+    }
+}

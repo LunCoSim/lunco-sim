@@ -7,7 +7,10 @@
 use avian3d::schedule::PhysicsTime;
 use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
-use lunco_api::queries::{ApiQueryError, ApiQueryResult};
+use lunco_api::queries::{
+    ApiQueryError, ApiQueryResult, port_direction_to_api_value, port_info_to_api_value,
+    port_metadata_to_api_value,
+};
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_cosim_core::{
     BindingEpochDirty, BoundConnection, ConnectionBinding, SimComponent, SimConnection, SimStatus,
@@ -172,37 +175,6 @@ impl Plugin for UsdSimCosimApiPlugin {
 // owns it. These are the canonical port verbs; they are not aliases of
 // `CosimStatus` (which stays as richer per-entity cosim introspection).
 
-/// Map a [`lunco_port_core::ports::PortDirection`] to a stable wire string.
-fn port_dir_str(d: lunco_port_core::ports::PortDirection) -> &'static str {
-    match d {
-        lunco_port_core::ports::PortDirection::In => "in",
-        lunco_port_core::ports::PortDirection::Out => "out",
-        lunco_port_core::ports::PortDirection::InOut => "inout",
-    }
-}
-
-fn port_api_value(p: &lunco_port_core::ports::PortInfo) -> ApiValue {
-    let range = match (p.metadata.min, p.metadata.max) {
-        (Some(min), Some(max)) => api_value!({ "min": min, "max": max }),
-        (Some(min), None) => api_value!({ "min": min }),
-        (None, Some(max)) => api_value!({ "max": max }),
-        (None, None) => ApiValue::Unit,
-    };
-    api_value!({
-        "name": p.name.clone(),
-        "direction": port_dir_str(p.direction),
-        "value": p.value,
-        "metadata": {
-            "type": p.metadata.value_type,
-            "unit": p.metadata.unit.clone(),
-            "range": range,
-            "source": p.metadata.source.clone(),
-            "authority": p.metadata.authority.clone(),
-            "writable": p.metadata.writable,
-        },
-    })
-}
-
 /// Resolve the optional `api_id` / `entity` field of a params object to an ECS
 /// `Entity` via the `ApiEntityRegistry`. Returns `None` when absent (the
 /// caller lists all) or when the id doesn't resolve.
@@ -280,12 +252,12 @@ impl lunco_api::ApiQueryProvider for ListPortsProvider {
             let ports: Vec<_> = ports_reg
                 .entity_port_infos(world, e)
                 .iter()
-                .map(port_api_value)
-                .collect();
+                .map(port_info_to_api_value)
+                .collect::<Vec<_>>();
             return api_ok(api_value!({ "ports": ports }));
         }
         // All-entities form: snapshot the registry list first (owned), then
-        // read ports — avoids holding the resource borrow across `entity_ports`.
+        // read each owner's declarations, metadata, and live samples.
         let reg = world
             .get_resource::<lunco_api::ApiEntityRegistry>()
             .ok_or_else(|| {
@@ -301,10 +273,11 @@ impl lunco_api::ApiQueryProvider for ListPortsProvider {
             if ports.is_empty() {
                 continue;
             }
+            let ports = ports.iter().map(port_info_to_api_value).collect::<Vec<_>>();
             rows.push(api_value!({
                 "api_id": api_id.get(),
                 "name": world.get::<Name>(e).map(|n| n.as_str().to_string()).unwrap_or_default(),
-                "ports": ports.iter().map(port_api_value).collect::<Vec<_>>(),
+                "ports": ports,
             }));
         }
         api_ok(api_value!({ "entities": rows }))
@@ -370,18 +343,8 @@ fn causal_binding_status(binding: Option<&ConnectionBinding>) -> &'static str {
 fn causal_port_owner_api_value(owner: &lunco_port_core::ports::PortOwnerInfo) -> ApiValue {
     api_value!({
         "precedence": owner.precedence,
-        "direction": port_dir_str(owner.direction),
-        "metadata": {
-            "type": owner.metadata.value_type,
-            "unit": owner.metadata.unit.clone(),
-            "range": {
-                "min": owner.metadata.min,
-                "max": owner.metadata.max,
-            },
-            "source": owner.metadata.source.clone(),
-            "authority": owner.metadata.authority.clone(),
-            "writable": owner.metadata.writable,
-        },
+        "direction": port_direction_to_api_value(owner.direction),
+        "metadata": port_metadata_to_api_value(&owner.metadata),
     })
 }
 
@@ -503,14 +466,15 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
                             )
                         })
                         .map(|owner| causal_port_owner_api_value(owner));
+                    let owner_values = candidates
+                        .into_iter()
+                        .map(causal_port_owner_api_value)
+                        .collect::<Vec<_>>();
                     api_value!({
                         "name": name.clone(),
                         "current_input": ports.read_input_port(world, entity, &name),
                         "selected_owner": selected,
-                        "owners": candidates
-                            .into_iter()
-                            .map(causal_port_owner_api_value)
-                            .collect::<Vec<_>>(),
+                        "owners": owner_values,
                     })
                 })
                 .collect::<Vec<_>>();

@@ -56,6 +56,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use lunco_core::{Command, SceneTransitionCoordinator, on_command, register_commands};
+use lunco_engineering_values::{Dimension, Unit, UnitReference, UnitScaleExactness};
 use lunco_hooks::HookValue;
 use lunco_spatial::coords::world_pose;
 use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
@@ -178,7 +179,7 @@ pub(crate) fn refresh_link_class_catalog(
     nodes: Query<(Entity, &LinkNode)>,
     changed: Query<(), Or<(Added<LinkNode>, Changed<LinkNode>)>>,
     mut removed: RemovedComponents<LinkNode>,
-    mut topology: Option<ResMut<lunco_port_core::ports::PortTopologyRevision>>,
+    mut topology: ResMut<lunco_port_core::ports::PortTopologyRevision>,
 ) {
     let topology_changed =
         !catalog.initialized || changed.iter().next().is_some() || removed.read().count() > 0;
@@ -202,9 +203,7 @@ pub(crate) fn refresh_link_class_catalog(
         catalog.slot_classes = slot_classes;
         catalog.class_slots = class_slots;
         catalog.revision = catalog.revision.wrapping_add(1);
-        if let Some(topology) = topology.as_mut() {
-            topology.bump();
-        }
+        topology.bump();
     }
     catalog.initialized = true;
 }
@@ -384,7 +383,7 @@ pub(crate) fn update_links(
     mut q_geometry: Query<&mut LinkGeometryState>,
     mut state: ResMut<LinkSolverState>,
     mut commands: Commands,
-    mut topology: Option<ResMut<lunco_port_core::ports::PortTopologyRevision>>,
+    mut topology: ResMut<lunco_port_core::ports::PortTopologyRevision>,
 ) {
     let (Some(config), Some(celestial_time), Some(world_time)) = (
         owner.config.as_deref(),
@@ -743,9 +742,7 @@ pub(crate) fn update_links(
         }
     }
     if port_topology_changed {
-        if let Some(topology) = topology.as_mut() {
-            topology.bump();
-        }
+        topology.bump();
     }
 }
 
@@ -1261,22 +1258,33 @@ pub const LINK_PORT_BACKEND: lunco_port_core::ports::PortBackend =
         },
         topology_key: link_topology_key,
         list: |world, entity, out| {
-            for (name, value) in link_port_rows(world, entity) {
-                out.push(lunco_port_core::ports::PortRef {
+            for (name, _) in link_port_rows(world, entity) {
+                out.push(lunco_port_core::ports::PortDeclaration {
                     name,
                     direction: lunco_port_core::ports::PortDirection::Out,
-                    value,
                 });
             }
         },
-        metadata: Some(|_world, _entity, name, direction| {
+        metadata: |_world, _entity, name, direction| {
             let unit = if name.ends_with("_m") {
-                Some("m")
+                Some(("m", Dimension::LENGTH))
             } else if name.ends_with("_s") {
-                Some("s")
+                Some(("s", Dimension([0, 0, 1, 0, 0, 0, 0])))
             } else {
                 None
-            };
+            }
+            .map(|(symbol, dimension)| {
+                UnitReference::resolved(
+                    Unit::new_with_exactness(
+                        symbol,
+                        dimension,
+                        1.0,
+                        0.0,
+                        UnitScaleExactness::Exact,
+                    )
+                    .expect("celestial link unit definition is valid"),
+                )
+            });
             lunco_port_core::ports::PortMetadata::scalar(
                 direction,
                 unit,
@@ -1285,8 +1293,9 @@ pub const LINK_PORT_BACKEND: lunco_port_core::ports::PortBackend =
                 "celestial link",
                 "ephemeris",
                 false,
+                None,
             )
-        }),
+        },
         read_output: |world, entity, name| {
             if let Some(slot) = resolve_link_port_slot(world, entity, name) {
                 return read_link_port_slot(world, entity, slot);
@@ -1301,7 +1310,6 @@ pub const LINK_PORT_BACKEND: lunco_port_core::ports::PortBackend =
         // write. Returning `None`/`false` is what lets the registry fall through to a
         // backend that DOES own the name.
         read_input: |_, _, _| None,
-        write_input: |_, _, _, _| false,
         resolve_output: Some(resolve_link_port_slot),
         resolve_input: None,
         read_slot: Some(read_link_port_slot),

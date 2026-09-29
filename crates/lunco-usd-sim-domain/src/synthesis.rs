@@ -1328,6 +1328,23 @@ pub fn network_facts(
         .components
         .iter()
         .map(|component| {
+            let mut modifications = BTreeMap::new();
+            for (name, value) in &component.constants {
+                modifications.insert(name.clone(), H::Float(*value));
+            }
+            for (name, value) in &component.parameters {
+                let value = match value {
+                    ModelicaParameterValue::Real(value) => H::Float(*value),
+                    ModelicaParameterValue::Integer(value) => H::Int(i64::from(*value)),
+                    ModelicaParameterValue::Boolean(value) => H::Bool(*value),
+                };
+                if modifications.insert(name.clone(), value).is_some() {
+                    return Err(format!(
+                        "component `{}` supplies `{name}` as both an input value and a Modelica parameter",
+                        component.path
+                    ));
+                }
+            }
             Ok(H::map([
                 ("path", H::str(component.path.clone())),
                 (
@@ -1337,25 +1354,14 @@ pub fn network_facts(
                 ("class", H::str(component.model_class.clone())),
                 ("source_asset", H::str(component.source_asset.clone())),
                 (
-                    "constants",
-                    H::Map(
-                        component
-                            .constants
-                            .iter()
-                            .map(|(name, value)| (name.clone(), H::Float(*value)))
-                            .collect(),
-                    ),
-                ),
-                (
-                    "constant_modifications",
+                    "modifications",
                     H::Array(
-                        component
-                            .constants
+                        modifications
                             .iter()
                             .map(|(name, value)| {
                                 H::map([
                                     ("name", H::str(name.clone())),
-                                    ("value", H::Float(*value)),
+                                    ("value", value.clone()),
                                 ])
                             })
                             .collect(),

@@ -1057,7 +1057,9 @@ fn apply_buffered_client_inputs(
         let reg = ports.clone();
         commands.queue(move |world: &mut World| {
             for (port, value) in &writes {
-                reg.write_port(world, e, port, *value);
+                if let Err(error) = reg.write_port(world, e, port, *value) {
+                    warn!("remote input for entity {gid} port `{port}` was rejected: {error}");
+                }
             }
         });
     }
@@ -1338,7 +1340,9 @@ fn replay_one_tick(
     // NOT a `SetPorts` trigger: that would fire `record_control_input`, re-logging
     // an input we are merely re-simulating (and bumping host ack bookkeeping).
     for (name, value) in &input.writes {
-        ports.write_port(world, chassis, name, *value);
+        if let Err(error) = ports.write_port(world, chassis, name, *value) {
+            warn!("recorded prediction input `{name}` was rejected during replay: {error}");
+        }
     }
 
     let dt = world.resource::<Time<Fixed>>().delta();
@@ -2588,26 +2592,42 @@ mod tests {
                 list_entities: |_, _| {},
                 topology_key: |_, _| 0,
                 list: |world, entity, out| {
-                    if world
-                        .get::<lunco_core::GlobalEntityId>(entity)
-                        .is_some()
-                    {
-                        out.push(lunco_port_core::ports::PortRef {
-                            name: "frame".into(),
+                    if world.get::<lunco_core::GlobalEntityId>(entity).is_some() {
+                        out.push(lunco_port_core::ports::PortDeclaration {
+                            name: "frame".to_owned(),
                             direction: lunco_port_core::ports::PortDirection::In,
-                            value: 0.0,
                         });
                     }
                 },
-                metadata: None,
+                metadata: |_, _, _, direction| {
+                    lunco_port_core::ports::PortMetadata::scalar(
+                        direction,
+                        None,
+                        None,
+                        None,
+                        "prediction test backend",
+                        "test owner",
+                        true,
+                        None,
+                    )
+                },
                 read_output: |_, _, _| None,
                 read_input: |_, _, _| None,
-                write_input: record_target_write,
                 resolve_output: None,
-                resolve_input: None,
+                resolve_input: Some(|world, entity, name| {
+                    (name == "frame" && world.get::<lunco_core::GlobalEntityId>(entity).is_some())
+                        .then_some(0)
+                }),
                 read_slot: None,
                 read_input_slot: None,
-                write_slot: None,
+                write_slot: Some(|world, entity, slot, _value| {
+                    assert_eq!(slot, 0, "prepared prediction test slot is valid");
+                    let gid = world
+                        .get::<lunco_core::GlobalEntityId>(entity)
+                        .map(|gid| gid.get())
+                        .expect("prepared prediction target retains its stable identity");
+                    world.resource_mut::<AppliedTargets>().0.push(gid);
+                }),
             });
 
         for gid in [30, 10, 20, 5] {

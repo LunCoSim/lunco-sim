@@ -182,6 +182,7 @@ pub(super) fn read_network_with_members(
         let source_asset = source_ref.asset;
         let attrs = view.attr_names(&path);
         let mut constants = BTreeMap::new();
+        let mut parameters = BTreeMap::new();
         let mut connectors = BTreeMap::new();
         let mut declared_connectors = BTreeSet::new();
         let mut inputs = BTreeMap::new();
@@ -255,9 +256,59 @@ pub(super) fn read_network_with_members(
                                 .into(),
                     });
                 }
+            } else if let Some(name) = attr.strip_prefix("parameters:") {
+                if name.ends_with(".connect") {
+                    extraction_errors.push(DomainProjectionError {
+                        path: format!("{path}.{attr}"),
+                        message:
+                            "a Modelica parameter is a typed authored value and cannot be connected"
+                                .into(),
+                    });
+                    continue;
+                }
+                let value = if let Some(value) = view.real(&path, &attr) {
+                    if !value.is_finite() {
+                        extraction_errors.push(DomainProjectionError {
+                            path: format!("{path}.{attr}"),
+                            message: "a Modelica real parameter must be finite".into(),
+                        });
+                        continue;
+                    }
+                    ModelicaParameterValue::Real(value)
+                } else if let Some(value) = view.integer(&path, &attr) {
+                    ModelicaParameterValue::Integer(value)
+                } else if let Some(value) = view.boolean(&path, &attr) {
+                    ModelicaParameterValue::Boolean(value)
+                } else {
+                    extraction_errors.push(DomainProjectionError {
+                        path: format!("{path}.{attr}"),
+                        message: "Modelica parameters must be authored as scalar real, integer, or boolean USD values".into(),
+                    });
+                    continue;
+                };
+                if constants.contains_key(name) {
+                    extraction_errors.push(DomainProjectionError {
+                        path: format!("{path}.{attr}"),
+                        message: format!(
+                            "`{name}` is authored as both a constant input and a Modelica parameter"
+                        ),
+                    });
+                    continue;
+                }
+                parameters.insert(name.to_string(), value);
             } else if let Some(name) = attr.strip_prefix("outputs:") {
                 let name = name.strip_suffix(".connect").unwrap_or(name);
                 declared_outputs.insert(name.to_string());
+            }
+        }
+        for name in constants.keys() {
+            if parameters.contains_key(name) {
+                extraction_errors.push(DomainProjectionError {
+                    path: format!("{path}.parameters:{name}"),
+                    message: format!(
+                        "`{name}` is authored as both an input value and a Modelica parameter"
+                    ),
+                });
             }
         }
         components.push(DomainComponent {
@@ -265,6 +316,7 @@ pub(super) fn read_network_with_members(
             source_asset,
             model_class,
             constants,
+            parameters,
             connectors,
             declared_connectors,
             inputs,
@@ -545,6 +597,7 @@ pub fn validate_network(network: &DomainNetwork) -> Vec<DomainProjectionError> {
         for member in component
             .constants
             .keys()
+            .chain(component.parameters.keys())
             .chain(component.declared_connectors.iter())
             .chain(component.inputs.keys())
             .chain(component.declared_outputs.iter())

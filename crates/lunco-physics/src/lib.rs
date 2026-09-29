@@ -131,6 +131,23 @@ pub fn solver_substeps(world: &World) -> Option<u32> {
         .map(|count| count.0)
 }
 
+/// Fingerprint the live physics solver clock profile used by the current
+/// application. Scene and body configuration remain represented by their
+/// owning document/provider generations in evidence records.
+pub fn solver_configuration_fingerprint(world: &World) -> Option<u64> {
+    let substeps = u64::from(solver_substeps(world)?);
+    let fixed_step_ns =
+        u64::try_from(world.get_resource::<Time<Fixed>>()?.timestep().as_nanos()).ok()?;
+    if fixed_step_ns == 0 || substeps == 0 {
+        return None;
+    }
+    let mut fingerprint = lunco_hash::Fnv1a::new();
+    fingerprint.write_bytes(b"lunco.physics.solver-clock.v1");
+    fingerprint.write_u64(substeps);
+    fingerprint.write_u64(fixed_step_ns);
+    Some(fingerprint.finish())
+}
+
 /// Change solver resolution for a live diagnostic run.
 ///
 /// The mutation is immediate and therefore takes effect at the next solver
@@ -730,6 +747,9 @@ impl PhysicsHolds {
     /// this reason; integration resumes only after the complete pending
     /// admission set is ready.
     pub const BODY_ADMISSION: &'static str = "body-admission";
+    /// Solver participants are priming their first live exchange for the
+    /// deterministic initial condition. The scene-test runner owns this reason.
+    pub const INITIAL_CONDITION: &'static str = "initial-condition";
     /// A scripted cutscene / offline recording is choosing when the world moves.
     ///
     /// Held, physics is frozen but `Time<Virtual>` keeps running, so `FixedUpdate` —

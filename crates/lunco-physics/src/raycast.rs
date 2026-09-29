@@ -30,6 +30,9 @@ pub struct RaycastObservation {
     pub ray_origin_body_local: DVec3,
     /// Effective ray direction after the mounted hierarchy, in body-local axes.
     pub direction_body_local: DVec3,
+    /// Stable identity of the rigid body whose local frame owns the two
+    /// body-local geometry samples. `None` until the body has an admitted ID.
+    pub body_global_id: Option<u64>,
     /// Distance returned by Avian for the last valid hit, in metres.
     pub distance: f64,
     /// World-grid position returned by the query, in metres.
@@ -50,6 +53,7 @@ impl Default for RaycastObservation {
             max_distance: 100.0,
             ray_origin_body_local: DVec3::ZERO,
             direction_body_local: DVec3::NEG_Y,
+            body_global_id: None,
             distance: 0.0,
             hit_position: DVec3::ZERO,
             hit_normal: DVec3::ZERO,
@@ -69,7 +73,7 @@ pub fn sample_raycast_observations(
     mount_state: Option<Res<lunco_core::SceneMountState>>,
     parents: Query<&ChildOf>,
     transforms: Query<&Transform>,
-    bodies: Query<(&Position, &Rotation), With<RigidBody>>,
+    bodies: Query<(&Position, &Rotation, Option<&lunco_core::GlobalEntityId>), With<RigidBody>>,
     mut observations: Query<(Entity, &mut RaycastObservation)>,
 ) {
     // A replacement clears the active root before deferred teardown. Do not
@@ -84,23 +88,25 @@ pub fn sample_raycast_observations(
     for (entity, mut observation) in &mut observations {
         let mut cursor = entity;
         let mut mount = Transform::IDENTITY;
-        let Some((body_position, body_rotation, excluded_entities)) = (0..64).find_map(|_| {
-            if let Ok((position, rotation)) = bodies.get(cursor) {
-                let mut excluded = Vec::new();
-                let mut ancestor = entity;
-                while ancestor != cursor {
-                    excluded.push(ancestor);
-                    ancestor = parents.get(ancestor).ok()?.0;
+        let Some((body_position, body_rotation, body_global_id, excluded_entities)) = (0..64)
+            .find_map(|_| {
+                if let Ok((position, rotation, global_id)) = bodies.get(cursor) {
+                    let mut excluded = Vec::new();
+                    let mut ancestor = entity;
+                    while ancestor != cursor {
+                        excluded.push(ancestor);
+                        ancestor = parents.get(ancestor).ok()?.0;
+                    }
+                    excluded.push(cursor);
+                    return Some((position, rotation, global_id.map(|id| id.get()), excluded));
                 }
-                excluded.push(cursor);
-                return Some((position, rotation, excluded));
-            }
-            if let Ok(local) = transforms.get(cursor) {
-                mount = local.mul_transform(mount);
-            }
-            cursor = parents.get(cursor).ok()?.0;
-            None
-        }) else {
+                if let Ok(local) = transforms.get(cursor) {
+                    mount = local.mul_transform(mount);
+                }
+                cursor = parents.get(cursor).ok()?.0;
+                None
+            })
+        else {
             continue;
         };
 
@@ -110,6 +116,7 @@ pub fn sample_raycast_observations(
         let direction_body_local = mount.rotation.as_dquat() * observation.axis;
         observation.ray_origin_body_local = ray_origin_body_local;
         observation.direction_body_local = direction_body_local;
+        observation.body_global_id = body_global_id;
         let origin = body_position.0 + body_rotation * ray_origin_body_local;
         let direction = body_rotation * direction_body_local;
         let Ok(direction) = Dir3::new(direction.as_vec3()) else {

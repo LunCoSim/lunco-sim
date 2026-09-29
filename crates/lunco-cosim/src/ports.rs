@@ -2,7 +2,7 @@
 //! [`PortRegistry`].
 //!
 //! The registry itself, its discovery/access operations, and the value types
-//! ([`PortRef`], [`PortBackend`], [`PortDirection`]) live in
+//! ([`PortDeclaration`], [`PortBackend`], [`PortDirection`]) live in
 //! [`lunco_port_core::ports`] — the neutral substrate *below* every participant — so
 //! that wires, the API, the inspector, and every scripting runtime read/write
 //! through one surface without depending "up" into this engine. This module only
@@ -22,11 +22,17 @@
 //! Registration order *is* resolution precedence (first match wins): Modelica,
 //! avian, then the single-value ports — see [`register_builtin_port_backends`].
 
+use avian3d::prelude::{
+    AngularInertia, CenterOfMass, ComputedAngularInertia, ComputedCenterOfMass,
+};
 use bevy::prelude::*;
+use lunco_engineering_values::{
+    CoordinateFrameId, Dimension, Unit, UnitReference, UnitScaleExactness,
+};
 use std::hash::{Hash, Hasher};
 
 use lunco_port_core::ports::{
-    PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry, PortTopologyRevision,
+    PortBackend, PortDeclaration, PortDirection, PortMetadata, PortRegistry, PortTopologyRevision,
     PortTopologyState, port_entity_map_key, port_name_set_key, push_map,
 };
 use lunco_port_core::{InputPorts, OutputPorts, Port, PortSurface};
@@ -50,8 +56,221 @@ pub struct AvianPort {
     pub dir: PortDirection,
     /// Read the current value. `None` for a port with no readable backing.
     pub read: Option<fn(&World, Entity) -> Option<f64>>,
-    /// Write the value. `None` for a read-only state output. `true` if applied.
-    pub write: Option<fn(&mut World, Entity, f64) -> bool>,
+    /// Commit the value. `None` for a read-only state output.
+    pub write: Option<fn(&mut World, Entity, f64)>,
+    /// Engineering contract declared with this port. Units, frames, and bounds
+    /// are explicit data; consumers never infer them from the public name.
+    pub contract: AvianPortContract,
+}
+
+/// Engineering semantics declared by one Avian port owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AvianPortContract {
+    /// Physical dimension and exact display unit for this scalar.
+    pub unit: AvianUnit,
+    /// Coordinate frame used by this scalar, when it is frame-bound.
+    pub frame: AvianFrame,
+    /// Owner-enforced range, including limits read from the native component.
+    pub range: AvianRange,
+}
+
+impl AvianPortContract {
+    pub const DIMENSIONLESS: Self = Self::new(
+        AvianUnit::Dimensionless,
+        AvianFrame::None,
+        AvianRange::Unbounded,
+    );
+    pub const LENGTH: Self = Self::new(AvianUnit::Meter, AvianFrame::None, AvianRange::Unbounded);
+    pub const LENGTH_WORLD: Self = Self::new(
+        AvianUnit::Meter,
+        AvianFrame::PhysicsWorld,
+        AvianRange::Unbounded,
+    );
+    pub const LENGTH_BODY: Self = Self::new(
+        AvianUnit::Meter,
+        AvianFrame::OwningBody,
+        AvianRange::Unbounded,
+    );
+    pub const LENGTH_BODY_FINITE: Self = Self::new(
+        AvianUnit::Meter,
+        AvianFrame::OwningBody,
+        AvianRange::FiniteF32,
+    );
+    pub const SPEED: Self = Self::new(
+        AvianUnit::MeterPerSecond,
+        AvianFrame::None,
+        AvianRange::Unbounded,
+    );
+    pub const SPEED_WORLD: Self = Self::new(
+        AvianUnit::MeterPerSecond,
+        AvianFrame::PhysicsWorld,
+        AvianRange::Unbounded,
+    );
+    pub const ACCELERATION_WORLD: Self = Self::new(
+        AvianUnit::MeterPerSecondSquared,
+        AvianFrame::PhysicsWorld,
+        AvianRange::Unbounded,
+    );
+    pub const ANGLE_WORLD: Self = Self::new(
+        AvianUnit::Radian,
+        AvianFrame::PhysicsWorld,
+        AvianRange::Unbounded,
+    );
+    pub const ROTATION_WORLD: Self = Self::new(
+        AvianUnit::Dimensionless,
+        AvianFrame::PhysicsWorld,
+        AvianRange::Unbounded,
+    );
+    pub const JOINT_ANGLE: Self = Self::new(
+        AvianUnit::Radian,
+        AvianFrame::None,
+        AvianRange::RevoluteLimits,
+    );
+    pub const ANGULAR_SPEED_WORLD: Self = Self::new(
+        AvianUnit::RadianPerSecond,
+        AvianFrame::PhysicsWorld,
+        AvianRange::Unbounded,
+    );
+    pub const JOINT_ANGULAR_SPEED: Self = Self::new(
+        AvianUnit::RadianPerSecond,
+        AvianFrame::None,
+        AvianRange::Unbounded,
+    );
+    pub const FORCE: Self = Self::new(AvianUnit::Newton, AvianFrame::None, AvianRange::Unbounded);
+    pub const FORCE_WORLD: Self = Self::new(
+        AvianUnit::Newton,
+        AvianFrame::PhysicsWorld,
+        AvianRange::Unbounded,
+    );
+    pub const FORCE_BODY: Self = Self::new(
+        AvianUnit::Newton,
+        AvianFrame::OwningBody,
+        AvianRange::Unbounded,
+    );
+    pub const JOINT_FORCE: Self =
+        Self::new(AvianUnit::Newton, AvianFrame::None, AvianRange::Unbounded);
+    pub const FORCE_ACTUATOR: Self = Self::new(
+        AvianUnit::Newton,
+        AvianFrame::None,
+        AvianRange::ForceActuatorLimit,
+    );
+    pub const TORQUE_WORLD: Self = Self::new(
+        AvianUnit::NewtonMeter,
+        AvianFrame::PhysicsWorld,
+        AvianRange::Unbounded,
+    );
+    pub const TORQUE_ACTUATOR: Self = Self::new(
+        AvianUnit::NewtonMeter,
+        AvianFrame::None,
+        AvianRange::TorqueActuatorLimit,
+    );
+    pub const MASS: Self = Self::new(
+        AvianUnit::Kilogram,
+        AvianFrame::None,
+        AvianRange::PositiveF32,
+    );
+    pub const INERTIA_BODY: Self = Self::new(
+        AvianUnit::KilogramMeterSquared,
+        AvianFrame::OwningBody,
+        AvianRange::PositiveF32,
+    );
+    pub const DISPLACEMENT: Self = Self::new(
+        AvianUnit::Meter,
+        AvianFrame::None,
+        AvianRange::PrismaticLimits,
+    );
+    pub const JOINT_SPEED: Self = Self::new(
+        AvianUnit::MeterPerSecond,
+        AvianFrame::None,
+        AvianRange::Unbounded,
+    );
+    pub const RAY_DISTANCE: Self =
+        Self::new(AvianUnit::Meter, AvianFrame::None, AvianRange::Unbounded);
+    pub const RAY_POSITION: Self = Self::new(
+        AvianUnit::Meter,
+        AvianFrame::PhysicsWorld,
+        AvianRange::Unbounded,
+    );
+    pub const RAY_NORMAL: Self = Self::new(
+        AvianUnit::Dimensionless,
+        AvianFrame::PhysicsWorld,
+        AvianRange::Unbounded,
+    );
+    pub const RAY_TIME: Self =
+        Self::new(AvianUnit::Second, AvianFrame::None, AvianRange::Unbounded);
+    pub const RAY_ORIGIN: Self = Self::new(
+        AvianUnit::Meter,
+        AvianFrame::ObservedBody,
+        AvianRange::Unbounded,
+    );
+    pub const RAY_DIRECTION: Self = Self::new(
+        AvianUnit::Dimensionless,
+        AvianFrame::ObservedBody,
+        AvianRange::Unbounded,
+    );
+
+    pub const fn new(unit: AvianUnit, frame: AvianFrame, range: AvianRange) -> Self {
+        Self { unit, frame, range }
+    }
+}
+
+/// Unit identity and SI dimension for Avian scalar ports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AvianUnit {
+    Dimensionless,
+    Meter,
+    MeterPerSecond,
+    MeterPerSecondSquared,
+    Radian,
+    RadianPerSecond,
+    Newton,
+    NewtonMeter,
+    Kilogram,
+    KilogramMeterSquared,
+    Second,
+}
+
+impl AvianUnit {
+    fn reference(self) -> UnitReference {
+        let (symbol, dimension) = match self {
+            Self::Dimensionless => ("1", Dimension::NONE),
+            Self::Meter => ("m", Dimension::LENGTH),
+            Self::MeterPerSecond => ("m/s", Dimension([1, 0, -1, 0, 0, 0, 0])),
+            Self::MeterPerSecondSquared => ("m/s²", Dimension([1, 0, -2, 0, 0, 0, 0])),
+            Self::Radian => ("rad", Dimension::NONE),
+            Self::RadianPerSecond => ("rad/s", Dimension([0, 0, -1, 0, 0, 0, 0])),
+            Self::Newton => ("N", Dimension([1, 1, -2, 0, 0, 0, 0])),
+            Self::NewtonMeter => ("N·m", Dimension([2, 1, -2, 0, 0, 0, 0])),
+            Self::Kilogram => ("kg", Dimension([0, 1, 0, 0, 0, 0, 0])),
+            Self::KilogramMeterSquared => ("kg·m²", Dimension([2, 1, 0, 0, 0, 0, 0])),
+            Self::Second => ("s", Dimension([0, 0, 1, 0, 0, 0, 0])),
+        };
+        UnitReference::resolved(
+            Unit::new_with_exactness(symbol, dimension, 1.0, 0.0, UnitScaleExactness::Exact)
+                .expect("Avian port unit definition is valid"),
+        )
+    }
+}
+
+/// Frame identity rule for an Avian port's declared value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AvianFrame {
+    None,
+    PhysicsWorld,
+    OwningBody,
+    ObservedBody,
+}
+
+/// Bounds sourced from the owning physics component.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AvianRange {
+    Unbounded,
+    PositiveF32,
+    FiniteF32,
+    RevoluteLimits,
+    PrismaticLimits,
+    ForceActuatorLimit,
+    TorqueActuatorLimit,
 }
 
 /// A group of avian ports gated on a component's presence — one avian kind
@@ -72,6 +291,8 @@ pub struct AvianGroup {
     /// what lets the UI rebuild a row when that backing component appears or
     /// disappears.
     pub topology_key: fn(&World, Entity) -> u64,
+    /// Owning physics subsystem, reported with every port in this group.
+    pub source: &'static str,
     /// The ports this kind exposes.
     pub ports: &'static [AvianPort],
     /// Install the lifecycle and structural checks that can change this group.
@@ -113,26 +334,18 @@ pub(crate) fn register_avian_port_topology(app: &mut App) {
     }
 }
 
-fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {
+fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortDeclaration>) {
     for group in AVIAN {
         if !(group.present)(world, entity) {
             continue;
         }
         for p in group.ports {
-            // A readable port whose backing component is absent (e.g. velocity
-            // on a kinematic body) simply doesn't list; a write-only declared
-            // port lists with value 0.
-            let value = match p.read {
-                Some(read) => match read(world, entity) {
-                    Some(v) => v,
-                    None => continue,
-                },
-                None => 0.0,
-            };
-            out.push(PortRef {
+            // The group owns this declared contract regardless of whether its
+            // backing state currently has a sample. `PortInfo.value` carries
+            // sample availability without changing port identity.
+            out.push(PortDeclaration {
                 name: p.name.to_string(),
                 direction: p.dir,
-                value,
             });
         }
     }
@@ -150,74 +363,123 @@ fn avian_topology_key(world: &World, entity: Entity) -> u64 {
     })
 }
 
-fn avian_unit(name: &str) -> Option<&'static str> {
-    if name.starts_with("position_")
-        || name.starts_with("ray_hit_position_")
-        || name.starts_with("ray_origin_body_local_")
-        || name == "displacement"
-        || name == "ray_distance"
-    {
-        Some("m")
-    } else if name.starts_with("ray_direction_body_local_") {
-        Some("1")
-    } else if name.starts_with("velocity_") || name == "velocity" {
-        Some("m/s")
-    } else if name.starts_with("angvel_") {
-        Some("rad/s")
-    } else if name == "angle" {
-        Some("rad")
-    } else if name.starts_with("force_") || name == "force" {
-        Some("N")
-    } else if name.starts_with("torque_") || name == "torque" {
-        Some("N·m")
-    } else if name == "ray_sample_time" {
-        Some("s")
-    } else {
-        None
-    }
-}
-
 fn avian_metadata(
     world: &World,
     entity: Entity,
     name: &str,
     direction: PortDirection,
 ) -> PortMetadata {
-    const SOURCES: [&str; 8] = [
-        "Avian rigid body",
-        "Avian kinematic body",
-        "Avian force actuator",
-        "Avian torque actuator",
-        "Avian contact solver",
-        "Avian revolute joint",
-        "Avian prismatic joint",
-        "Avian ray query",
-    ];
-    for (group_index, group) in AVIAN.iter().enumerate() {
-        if !(group.present)(world, entity) {
-            continue;
-        }
-        if let Some(port) = group
+    let (group, port) = AVIAN
+        .iter()
+        .filter(|group| (group.present)(world, entity))
+        .find_map(|group| avian_metadata_port(group, name, direction).map(|port| (group, port)))
+        .expect("Avian metadata is requested only for a listed owner port");
+    let (min, max) = match port.contract.range {
+        AvianRange::Unbounded => (None, None),
+        AvianRange::PositiveF32 => (Some(f32::from_bits(1) as f64), Some(f32::MAX as f64)),
+        AvianRange::FiniteF32 => (Some(-(f32::MAX as f64)), Some(f32::MAX as f64)),
+        AvianRange::RevoluteLimits => world
+            .get::<avian3d::prelude::RevoluteJoint>(entity)
+            .and_then(|joint| joint.angle_limit)
+            .map_or((None, None), |limit| {
+                (Some(limit.min as f64), Some(limit.max as f64))
+            }),
+        AvianRange::PrismaticLimits => world
+            .get::<avian3d::prelude::PrismaticJoint>(entity)
+            .and_then(|joint| joint.limits)
+            .map_or((None, None), |limit| {
+                (Some(limit.min as f64), Some(limit.max as f64))
+            }),
+        AvianRange::ForceActuatorLimit => world
+            .get::<lunco_cosim_core::ForceActuator>(entity)
+            .map_or((None, None), |actuator| {
+                (Some(0.0), Some(actuator.max_force_n))
+            }),
+        AvianRange::TorqueActuatorLimit => world
+            .get::<lunco_cosim_core::TorqueActuator>(entity)
+            .map_or((None, None), |actuator| {
+                (Some(-actuator.max_torque_nm), Some(actuator.max_torque_nm))
+            }),
+    };
+    let writable = port.write.is_some()
+        && match port.name {
+            "inertia_xx" | "inertia_yy" | "inertia_zz" => {
+                world.get::<AngularInertia>(entity).is_some()
+                    || world.get::<ComputedAngularInertia>(entity).is_some()
+            }
+            "com_x" | "com_y" | "com_z" => {
+                world.get::<CenterOfMass>(entity).is_some()
+                    || world.get::<ComputedCenterOfMass>(entity).is_some()
+            }
+            _ => true,
+        };
+    PortMetadata::scalar(
+        direction,
+        Some(port.contract.unit.reference()),
+        min,
+        max,
+        group.source,
+        if port.write.is_some() {
+            "control owner"
+        } else {
+            "physics solver"
+        },
+        writable,
+        match port.contract.frame {
+            AvianFrame::None => None,
+            AvianFrame::PhysicsWorld => Some(
+                CoordinateFrameId::new("lunco:physics-world").expect("static frame id is valid"),
+            ),
+            AvianFrame::OwningBody => world
+                .get::<lunco_core::GlobalEntityId>(entity)
+                .map(|identity| identity.get())
+                .map(|identity| format!("lunco:entity/{identity}/body"))
+                .and_then(|frame| CoordinateFrameId::new(frame).ok()),
+            AvianFrame::ObservedBody => world
+                .get::<lunco_physics::raycast::RaycastObservation>(entity)
+                .and_then(|observation| observation.body_global_id)
+                .map(|identity| format!("lunco:entity/{identity}/body"))
+                .and_then(|frame| CoordinateFrameId::new(frame).ok()),
+        },
+    )
+}
+
+/// Resolve metadata for a backend owner declaration. `entity_port_owners`
+/// coalesces an owner's separate input and output declarations with the same
+/// public name into `InOut`; in that case the Avian port table must provide one
+/// shared engineering contract for both sides. The input declaration supplies
+/// write authority, while the output declaration supplies the measured sample.
+fn avian_metadata_port(
+    group: &AvianGroup,
+    name: &str,
+    direction: PortDirection,
+) -> Option<&'static AvianPort> {
+    let find = |direction| {
+        group
             .ports
             .iter()
             .find(|port| port.name == name && port.dir == direction)
-        {
-            return PortMetadata::scalar(
-                direction,
-                avian_unit(name),
-                None,
-                None,
-                SOURCES[group_index],
-                if port.write.is_some() {
-                    "control owner"
-                } else {
-                    "physics solver"
-                },
-                port.write.is_some(),
-            );
+    };
+
+    match direction {
+        PortDirection::In | PortDirection::Out => find(direction),
+        PortDirection::InOut => {
+            if let Some(port) = find(PortDirection::InOut) {
+                return Some(port);
+            }
+            match (find(PortDirection::In), find(PortDirection::Out)) {
+                (Some(input), Some(output)) => {
+                    debug_assert_eq!(
+                        input.contract, output.contract,
+                        "Avian input/output declarations for `{name}` must share one owner contract"
+                    );
+                    Some(input)
+                }
+                (Some(port), None) | (None, Some(port)) => Some(port),
+                (None, None) => None,
+            }
         }
     }
-    PortMetadata::unknown(direction)
 }
 
 /// Encode an avian slot: `(group index << 16) | port index` into [`AVIAN`]. The
@@ -279,14 +541,12 @@ fn avian_read_slot(world: &World, entity: Entity, slot: u64) -> Option<f64> {
     avian_decode(slot)?.read?(world, entity)
 }
 
-fn avian_write_slot(world: &mut World, entity: Entity, slot: u64, value: f64) -> bool {
-    let Some(port) = avian_decode(slot) else {
-        return false;
-    };
-    match port.write {
-        Some(write) => write(world, entity, value),
-        None => false,
-    }
+fn avian_write_slot(world: &mut World, entity: Entity, slot: u64, value: f64) {
+    let port = avian_decode(slot).expect("prepared Avian slot remains live through commit");
+    let write = port
+        .write
+        .expect("prepared writable Avian port has an owner write operation");
+    write(world, entity, value);
 }
 
 // The name-based ops are DERIVED from the resolve→slot model (no duplicated scan):
@@ -299,24 +559,25 @@ fn avian_read_input(world: &World, entity: Entity, name: &str) -> Option<f64> {
     avian_read_slot(world, entity, avian_resolve_input(world, entity, name)?)
 }
 
-fn avian_write_input(world: &mut World, entity: Entity, name: &str, value: f64) -> bool {
-    match avian_resolve_input(world, entity, name) {
-        Some(slot) => avian_write_slot(world, entity, slot, value),
-        None => false,
-    }
-}
-
 /// Modelica `SimComponent` — slot-backed `inputs`/`outputs`.
 fn sim_component_topology_key(
     component: &SimComponent,
     declared: Option<&DeclaredOutputPorts>,
+    signal_layout: Option<&lunco_modelica_runtime::ModelicaSignalLayout>,
 ) -> u64 {
     let inputs = component.inputs.topology_key();
     let outputs = component.outputs.topology_key();
     let declared = declared
         .map(|ports| port_name_set_key(ports.names.iter()))
         .unwrap_or(0);
-    inputs ^ outputs.rotate_left(21) ^ declared.rotate_left(42)
+    let signal_contract = signal_layout.map(|layout| layout.port_contract_topology_key());
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    component.model_name.hash(&mut hasher);
+    inputs.hash(&mut hasher);
+    outputs.hash(&mut hasher);
+    declared.hash(&mut hasher);
+    signal_contract.hash(&mut hasher);
+    hasher.finish()
 }
 
 const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
@@ -328,10 +589,13 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
         );
     },
     topology_key: |world, entity| {
-        let Some(component) = world.get::<SimComponent>(entity) else {
-            return 0;
-        };
-        sim_component_topology_key(component, world.get::<DeclaredOutputPorts>(entity))
+        world.get::<SimComponent>(entity).map_or(0, |component| {
+            sim_component_topology_key(
+                component,
+                world.get::<DeclaredOutputPorts>(entity),
+                world.get::<lunco_modelica_runtime::ModelicaSignalLayout>(entity),
+            )
+        })
     },
     list: |w, e, out| {
         if let Some(c) = w.get::<SimComponent>(e) {
@@ -339,10 +603,9 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
             if let Some(declared) = w.get::<DeclaredOutputPorts>(e) {
                 for name in &declared.names {
                     if !c.outputs.contains_key(name) {
-                        out.push(PortRef {
+                        out.push(PortDeclaration {
                             name: name.clone(),
                             direction: PortDirection::Out,
-                            value: 0.0,
                         });
                     }
                 }
@@ -350,19 +613,21 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
             push_map(out, &c.inputs, PortDirection::In);
         }
     },
-    metadata: Some(|world, entity, _name, direction| {
-        let source = world
-            .get::<SimComponent>(entity)
-            .map(|component| component.model_name.clone())
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| "Modelica component".into());
+    metadata: |world, entity, name, direction| {
+        let source = "Modelica co-simulation component";
         let authority = if matches!(direction, PortDirection::Out) {
             "solver"
         } else {
             "controller / wire"
         };
-        PortMetadata::scalar(direction, None, None, None, source, authority, true)
-    }),
+        let unit = match world.get::<lunco_modelica_runtime::ModelicaSignalLayout>(entity) {
+            Some(layout) => layout
+                .unit_reference(name)
+                .expect("Modelica unit metadata carries a non-empty authored identity"),
+            None => None,
+        };
+        PortMetadata::scalar(direction, unit, None, None, source, authority, true, None)
+    },
     read_output: |w, e, n| {
         w.get::<SimComponent>(e)
             .and_then(|c| c.outputs.get(n).copied())
@@ -370,21 +635,6 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
     read_input: |w, e, n| {
         w.get::<SimComponent>(e)
             .and_then(|c| c.inputs.get(n).copied())
-    },
-    write_input: |w, e, n, v| {
-        if let Some(mut component) = w.get_mut::<SimComponent>(e) {
-            let changed = component
-                .bypass_change_detection()
-                .inputs
-                .set_existing(n, v);
-            if let Some(changed) = changed {
-                if changed {
-                    component.set_changed();
-                }
-                return true;
-            }
-        }
-        false
     },
     resolve_output: Some(|world, entity, name| {
         world
@@ -410,20 +660,17 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
             .copied()
     }),
     write_slot: Some(|world, entity, slot, value| {
-        let Some(mut component) = world.get_mut::<SimComponent>(entity) else {
-            return false;
-        };
+        let mut component = world
+            .get_mut::<SimComponent>(entity)
+            .expect("prepared Modelica input still has its SimComponent");
         let changed = component
             .bypass_change_detection()
             .inputs
-            .set_slot_existing(slot, value);
-        let Some(changed) = changed else {
-            return false;
-        };
+            .set_slot_existing(slot, value)
+            .expect("prepared Modelica input slot remains live through commit");
         if changed {
             component.set_changed();
         }
-        true
     }),
 };
 
@@ -436,10 +683,10 @@ const AVIAN_BACKEND: PortBackend = PortBackend {
     list_entities: avian_entities,
     topology_key: avian_topology_key,
     list: avian_list,
-    metadata: Some(avian_metadata),
+    metadata: avian_metadata,
     read_output: avian_read_output,
     read_input: avian_read_input,
-    write_input: avian_write_input,
+
     resolve_output: Some(avian_resolve_output),
     resolve_input: Some(avian_resolve_input),
     read_slot: Some(avian_read_slot),
@@ -447,10 +694,10 @@ const AVIAN_BACKEND: PortBackend = PortBackend {
     write_slot: Some(avian_write_slot),
 };
 
-fn write_port_value(world: &mut World, entity: Entity, value: f64) -> bool {
-    let Some(mut port) = world.get_mut::<Port>(entity) else {
-        return false;
-    };
+fn write_port_value(world: &mut World, entity: Entity, value: f64) {
+    let mut port = world
+        .get_mut::<Port>(entity)
+        .expect("prepared authored port endpoint remains live through commit");
     let changed = {
         let port = port.bypass_change_detection();
         let changed = port.value.to_bits() != value.to_bits();
@@ -462,7 +709,6 @@ fn write_port_value(world: &mut World, entity: Entity, value: f64) -> bool {
     if changed {
         port.set_changed();
     }
-    true
 }
 
 /// SysML/hardware [`Port`] — one bidirectional `f64` scalar named `value`.
@@ -476,15 +722,14 @@ const PORT_BACKEND: PortBackend = PortBackend {
     },
     topology_key: |world, entity| u64::from(world.get::<Port>(entity).is_some()),
     list: |w, e, out| {
-        if let Some(p) = w.get::<Port>(e) {
-            out.push(PortRef {
+        if w.get::<Port>(e).is_some() {
+            out.push(PortDeclaration {
                 name: PORT_NAME.to_string(),
                 direction: PortDirection::InOut,
-                value: p.value,
             });
         }
     },
-    metadata: Some(|_world, _entity, _name, direction| {
+    metadata: |_world, _entity, _name, direction| {
         PortMetadata::scalar(
             direction,
             None,
@@ -493,8 +738,9 @@ const PORT_BACKEND: PortBackend = PortBackend {
             "hardware port",
             "controller / plant",
             true,
+            None,
         )
-    }),
+    },
     read_output: |w, e, n| {
         if n != PORT_NAME {
             return None;
@@ -506,9 +752,6 @@ const PORT_BACKEND: PortBackend = PortBackend {
             return None;
         }
         w.get::<Port>(e).map(|p| p.value)
-    },
-    write_input: |world, entity, name, value| {
-        name == PORT_NAME && write_port_value(world, entity, value)
     },
     resolve_output: Some(|world, entity, name| {
         (name == PORT_NAME && world.get::<Port>(entity).is_some()).then_some(0)
@@ -527,7 +770,8 @@ const PORT_BACKEND: PortBackend = PortBackend {
             .flatten()
     }),
     write_slot: Some(|world, entity, slot, value| {
-        slot == 0 && write_port_value(world, entity, value)
+        assert_eq!(slot, 0, "prepared scalar Port slot is valid");
+        write_port_value(world, entity, value);
     }),
 };
 
@@ -564,16 +808,15 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
             return;
         };
         for (name, port_entity) in &outputs.ports {
-            if let Some(port) = world.get::<Port>(*port_entity) {
-                out.push(PortRef {
+            if world.get::<Port>(*port_entity).is_some() {
+                out.push(PortDeclaration {
                     name: name.to_string(),
                     direction: PortDirection::Out,
-                    value: port.value,
                 });
             }
         }
     },
-    metadata: Some(|_world, _entity, _name, direction| {
+    metadata: |_world, _entity, _name, direction| {
         PortMetadata::scalar(
             direction,
             None,
@@ -582,8 +825,9 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
             "runtime producer",
             "producer",
             false,
+            None,
         )
-    }),
+    },
     read_output: |world, entity, name| {
         world
             .get::<OutputPorts>(entity)
@@ -592,7 +836,6 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
             .map(|port| port.value)
     },
     read_input: |_world, _entity, _name| None,
-    write_input: |_world, _entity, _name, _value| false,
     resolve_output: Some(|world, entity, name| {
         world.get::<OutputPorts>(entity)?.ports.resolve_slot(name)
     }),
@@ -647,16 +890,15 @@ const PORT_SURFACE_BACKEND: PortBackend = PortBackend {
         let mut ports = surface.ports.iter().collect::<Vec<_>>();
         ports.sort_by(|left, right| left.0.cmp(right.0));
         for (name, authored) in ports {
-            if let Some(endpoint) = world.get::<Port>(authored.endpoint) {
-                out.push(PortRef {
+            if world.get::<Port>(authored.endpoint).is_some() {
+                out.push(PortDeclaration {
                     name: name.to_string(),
                     direction: authored.direction,
-                    value: endpoint.value,
                 });
             }
         }
     },
-    metadata: Some(|_world, _entity, _name, direction| {
+    metadata: |_world, _entity, _name, direction| {
         PortMetadata::scalar(
             direction,
             None,
@@ -669,8 +911,9 @@ const PORT_SURFACE_BACKEND: PortBackend = PortBackend {
                 PortDirection::InOut => "component / connection",
             },
             true,
+            None,
         )
-    }),
+    },
     read_output: |world, entity, name| {
         let authored = world.get::<PortSurface>(entity)?.ports.get(name)?;
         if !matches!(
@@ -691,19 +934,6 @@ const PORT_SURFACE_BACKEND: PortBackend = PortBackend {
         world
             .get::<Port>(authored.endpoint)
             .map(|endpoint| endpoint.value)
-    },
-    write_input: |world, entity, name, value| {
-        let Some(authored) = world
-            .get::<PortSurface>(entity)
-            .and_then(|surface| surface.ports.get(name))
-            .copied()
-        else {
-            return false;
-        };
-        if !matches!(authored.direction, PortDirection::In | PortDirection::InOut) {
-            return false;
-        }
-        write_port_value(world, authored.endpoint, value)
     },
     resolve_output: Some(|world, entity, name| {
         let surface = world.get::<PortSurface>(entity)?;
@@ -744,17 +974,16 @@ const PORT_SURFACE_BACKEND: PortBackend = PortBackend {
             .map(|endpoint| endpoint.value)
     }),
     write_slot: Some(|world, entity, slot, value| {
-        let Some(authored) = world
+        let authored = world
             .get::<PortSurface>(entity)
             .and_then(|surface| surface.ports.get_slot(slot))
             .copied()
-        else {
-            return false;
-        };
-        if !matches!(authored.direction, PortDirection::In | PortDirection::InOut) {
-            return false;
-        }
-        write_port_value(world, authored.endpoint, value)
+            .expect("prepared authored surface slot remains live through commit");
+        assert!(
+            matches!(authored.direction, PortDirection::In | PortDirection::InOut),
+            "prepared authored surface slot remains an input through commit"
+        );
+        write_port_value(world, authored.endpoint, value);
     }),
 };
 
@@ -805,14 +1034,13 @@ const PILOTED_BACKEND: PortBackend = PortBackend {
         // Never manufacture `piloted` on meshes, joints, sensors, or arbitrary
         // Modelica children merely because they happen to have a stable id.
         if w.get::<InputPorts>(e).is_some() {
-            out.push(PortRef {
+            out.push(PortDeclaration {
                 name: "piloted".to_string(),
                 direction: PortDirection::Out,
-                value: piloted_value(w, e),
             });
         }
     },
-    metadata: Some(|_world, _entity, _name, direction| {
+    metadata: |_world, _entity, _name, direction| {
         PortMetadata::scalar(
             direction,
             None,
@@ -821,11 +1049,11 @@ const PILOTED_BACKEND: PortBackend = PortBackend {
             "session registry",
             "possession",
             false,
+            None,
         )
-    }),
+    },
     read_output: |w, e, n| (n == "piloted").then(|| piloted_value(w, e)),
     read_input: |_, _, _| None,
-    write_input: |_, _, _, _| false,
     resolve_output: Some(|_world, _entity, name| (name == "piloted").then_some(0)),
     resolve_input: None,
     read_slot: Some(|world, entity, slot| (slot == 0).then(|| piloted_value(world, entity))),
@@ -852,8 +1080,17 @@ fn piloted_value(w: &World, e: Entity) -> f64 {
 pub(crate) fn check_port_owner_structure(
     input_ports: Query<(Entity, &InputPorts), Changed<InputPorts>>,
     components: Query<
-        (Entity, &SimComponent, Option<&DeclaredOutputPorts>),
-        Or<(Changed<SimComponent>, Changed<DeclaredOutputPorts>)>,
+        (
+            Entity,
+            &SimComponent,
+            Option<&DeclaredOutputPorts>,
+            Option<&lunco_modelica_runtime::ModelicaSignalLayout>,
+        ),
+        Or<(
+            Changed<SimComponent>,
+            Changed<DeclaredOutputPorts>,
+            Changed<lunco_modelica_runtime::ModelicaSignalLayout>,
+        )>,
     >,
     output_ports: Query<(Entity, &OutputPorts), Changed<OutputPorts>>,
     port_surfaces: Query<(Entity, &PortSurface), Changed<PortSurface>>,
@@ -865,8 +1102,18 @@ pub(crate) fn check_port_owner_structure(
             revision.bump();
         }
     }
-    for (entity, component, declared) in &components {
-        if state.changed::<SimComponent>(entity, sim_component_topology_key(component, declared)) {
+    for (entity, component, declared, signal_layout) in &components {
+        let component_changed = state.changed::<SimComponent>(
+            entity,
+            sim_component_topology_key(component, declared, signal_layout),
+        );
+        let signal_contract_changed = signal_layout.is_some_and(|layout| {
+            state.changed::<lunco_modelica_runtime::ModelicaSignalLayout>(
+                entity,
+                layout.port_contract_topology_key(),
+            )
+        });
+        if component_changed || signal_contract_changed {
             revision.bump();
         }
     }
@@ -917,6 +1164,16 @@ pub(crate) fn register_builtin_port_topology(app: &mut App) {
         .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<Port>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<SimComponent>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<SimComponent>)
+        .add_observer(
+            lunco_port_core::ports::bump_port_topology_on_add::<
+                lunco_modelica_runtime::ModelicaSignalLayout,
+            >,
+        )
+        .add_observer(
+            lunco_port_core::ports::bump_port_topology_on_remove::<
+                lunco_modelica_runtime::ModelicaSignalLayout,
+            >,
+        )
         .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<DeclaredOutputPorts>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<DeclaredOutputPorts>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<SimConnection>)
@@ -957,13 +1214,13 @@ mod tests {
 
         assert!(
             ports
-                .entity_ports(&world, mesh)
+                .entity_port_owners(&world, mesh)
                 .iter()
                 .all(|port| port.name != "piloted")
         );
         assert!(
             ports
-                .entity_ports(&world, vessel)
+                .entity_port_owners(&world, vessel)
                 .iter()
                 .any(|port| port.name == "piloted")
         );
@@ -988,19 +1245,24 @@ mod tests {
         );
         assert_eq!(
             registry
-                .entity_ports(&world, producer)
+                .entity_port_infos(&world, producer)
                 .into_iter()
                 .find(|port| port.name == "drive_left")
                 .map(|port| (port.direction, port.value)),
-            Some((PortDirection::Out, 0.75))
+            Some((PortDirection::Out, Some(0.75)))
         );
-        assert!(!registry.write_port(&mut world, producer, "drive_left", 0.1));
+        assert!(
+            registry
+                .write_port(&mut world, producer, "drive_left", 0.1)
+                .is_err()
+        );
         assert_eq!(world.get::<Port>(port).unwrap().value, 0.75);
     }
 
     #[test]
     fn resolved_runtime_surfaces_keep_direction_and_noop_change_detection() {
         let mut world = World::new();
+        world.init_resource::<PortTopologyRevision>();
         let output = world.spawn(Port { value: 0.75 }).id();
         let producer = world
             .spawn(OutputPorts::new(std::collections::HashMap::from([(
@@ -1033,13 +1295,13 @@ mod tests {
             .resolve_output(&world, producer, "drive_left")
             .unwrap();
         assert_eq!(
-            registry.read_resolved(&world, producer, producer_slot),
+            registry.read_resolved(&world, producer, &producer_slot),
             Some(0.75)
         );
 
         let output_slot = registry.resolve_output(&world, surface, "state").unwrap();
         assert_eq!(
-            registry.read_resolved(&world, surface, output_slot),
+            registry.read_resolved(&world, surface, &output_slot),
             Some(0.25)
         );
         assert!(
@@ -1048,23 +1310,36 @@ mod tests {
                 .is_none()
         );
         let input_slot = registry.resolve_input(&world, surface, "command").unwrap();
-        assert!(registry.write_resolved(&mut world, surface, input_slot, 0.5));
+        assert!(
+            registry
+                .write_resolved(&mut world, surface, &input_slot, 0.5)
+                .is_ok()
+        );
         assert_eq!(world.get::<Port>(input).unwrap().value, 0.5);
 
         let scalar_slot = registry.resolve_input(&world, scalar, PORT_NAME).unwrap();
         world.clear_trackers();
-        assert!(registry.write_resolved(&mut world, scalar, scalar_slot, 0.0));
+        assert!(
+            registry
+                .write_resolved(&mut world, scalar, &scalar_slot, 0.0)
+                .is_ok()
+        );
         assert!(
             !world.entity(scalar).get_ref::<Port>().unwrap().is_changed(),
             "an unchanged scalar port value must not dirty its component"
         );
-        assert!(registry.write_resolved(&mut world, scalar, scalar_slot, 1.0));
+        assert!(
+            registry
+                .write_resolved(&mut world, scalar, &scalar_slot, 1.0)
+                .is_ok()
+        );
         assert!(world.entity(scalar).get_ref::<Port>().unwrap().is_changed());
     }
 
     #[test]
     fn sim_component_input_write_reuses_declared_name_and_only_marks_changed_samples() {
         let mut world = World::new();
+        world.init_resource::<PortTopologyRevision>();
         let entity = world
             .spawn(SimComponent {
                 inputs: std::collections::HashMap::from([("throttle".into(), 0.5)]).into(),
@@ -1075,7 +1350,11 @@ mod tests {
         register_builtin_port_backends(&mut registry);
 
         world.clear_trackers();
-        assert!(registry.write_port(&mut world, entity, "throttle", 0.5));
+        assert!(
+            registry
+                .write_port(&mut world, entity, "throttle", 0.5)
+                .is_ok()
+        );
         assert!(
             !world
                 .entity(entity)
@@ -1085,7 +1364,11 @@ mod tests {
             "writing the same sample must not invalidate SimComponent consumers"
         );
 
-        assert!(registry.write_port(&mut world, entity, "throttle", 0.75));
+        assert!(
+            registry
+                .write_port(&mut world, entity, "throttle", 0.75)
+                .is_ok()
+        );
         assert!(
             world
                 .entity(entity)
@@ -1105,6 +1388,10 @@ mod tests {
         );
 
         world.clear_trackers();
-        assert!(!registry.write_port(&mut world, entity, "undeclared", 1.0));
+        assert!(
+            registry
+                .write_port(&mut world, entity, "undeclared", 1.0)
+                .is_err()
+        );
     }
 }

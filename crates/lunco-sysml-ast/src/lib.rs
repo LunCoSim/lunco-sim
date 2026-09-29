@@ -2327,12 +2327,31 @@ fn project_constraint_bindings(
         .copied()
         .filter(|&member| model.kind(member).is_a(ElementKind::Feature))
     {
-        let targets = model
+        let mut targets = model
             .owned_redefinition(member)
             .iter()
             .filter_map(|&redefinition| model.redefined_feature(redefinition))
             .filter(|target| formal_parameters.contains(target))
             .collect::<Vec<_>>();
+        if targets.is_empty() {
+            // A same-named directed member of a typed constraint usage is the
+            // language's implicit parameter redefinition. The semantic model
+            // currently omits that implicit edge, so project the standard
+            // shorthand explicitly from the resolved definition and usage.
+            let member_name = model.effective_name(member);
+            let member_direction = model.direction(member);
+            let implicit_targets = formal_parameters
+                .iter()
+                .copied()
+                .filter(|&formal| {
+                    model.effective_name(formal) == member_name
+                        && model.direction(formal) == member_direction
+                })
+                .collect::<Vec<_>>();
+            if implicit_targets.len() == 1 {
+                targets = implicit_targets;
+            }
+        }
         if targets.is_empty() {
             continue;
         }
@@ -2418,23 +2437,26 @@ fn nearest_constraint_owner(
     None
 }
 
-/// Resolve the standard `ConstraintUsage::constraintDefinition` relation from
-/// its source-backed `FeatureTyping`. The metamodel marks the former as
-/// derived, but the upstream semantic workspace currently materializes the
-/// typing relationship rather than that derived property.
+/// Resolve the predicate definition named by a constraint usage from the
+/// semantic workspace's source-resolved references. Constraint usages in a
+/// requirement membership can carry this relation as a direct reference even
+/// when the upstream model does not materialize an `owned_typing` edge.
 fn constraint_definition_target(workspace: &Workspace, usage: ElementId) -> Option<ElementId> {
     let model = workspace.model();
     if !model.kind(usage).is_a(ElementKind::ConstraintUsage) {
         return None;
     }
 
-    let mut definitions = model
-        .owned_typing(usage)
+    let mut definitions = workspace
+        .references()
         .iter()
-        .filter_map(|&typing| model.general(typing))
+        .filter(|reference| reference.from == usage)
+        .map(|reference| reference.target)
         .filter(|&target| model.kind(target).is_a(ElementKind::Predicate));
     let definition = definitions.next()?;
-    definitions.next().is_none().then_some(definition)
+    definitions
+        .all(|candidate| candidate == definition)
+        .then_some(definition)
 }
 
 fn project_constraint_parameters(

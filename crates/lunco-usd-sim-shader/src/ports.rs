@@ -89,26 +89,9 @@ use lunco_materials::dyn_params::ParamValue;
 use lunco_materials::look::ShaderLook;
 use lunco_materials::naming::to_snake_case;
 use lunco_port_core::ports::{
-    PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry, PortTopologyRevision,
+    PortBackend, PortDeclaration, PortDirection, PortMetadata, PortRegistry, PortTopologyRevision,
     PortTopologyState,
 };
-
-/// Does this entity drive a shader parameter called `key`?
-///
-/// Answered from [`ShaderLook::driven`], which the USD authoring pass filled by
-/// intersecting the prim's connected `inputs:` with the parameters its bound shader
-/// declares. That set is known at author time and does not depend on whether the
-/// WGSL asset has finished loading, so this never has to guess: a name is a shader
-/// drive or it is not, from the first tick.
-///
-/// Anything else is refused, which is what makes a mistyped parameter surface as
-/// propagation's dangling-wire warning instead of a silently dead uniform, and what
-/// keeps a simulation port sharing the prim from being swallowed here.
-fn declares(world: &World, entity: Entity, key: &str) -> bool {
-    world
-        .get::<ShaderLook>(entity)
-        .is_some_and(|look| look.driven().contains(key))
-}
 
 fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
     let key = to_snake_case(name);
@@ -152,22 +135,34 @@ fn read_shader_slot(world: &World, entity: Entity, slot: u64) -> Option<f64> {
     }
 }
 
-fn write_shader_slot(world: &mut World, entity: Entity, slot: u64, value: f64) -> bool {
-    let value = value as f32;
-    let Some(current) = world
+fn write_shader_slot(world: &mut World, entity: Entity, slot: u64, value: f64) {
+    let shader_value_f32 = value as f32;
+    assert!(
+        shader_value_f32.is_finite(),
+        "validated shader scalar must fit f32"
+    );
+    let (original, current_live) = world
         .get::<ShaderLook>(entity)
-        .and_then(|look| look.live().get_slot_entry(slot))
-        .map(|(_, value)| value)
-    else {
-        return false;
-    };
-    if matches!(current, Some(ParamValue::F32(current)) if current.to_bits() == value.to_bits()) {
-        return true;
+        .and_then(|look| {
+            let (name, live) = look.live().get_slot_entry(slot)?;
+            let current_live = *live;
+            let original = current_live.or_else(|| look.values().get(name).copied())?;
+            Some((original, current_live))
+        })
+        .expect("prepared shader input slot remains live through commit");
+    assert!(
+        matches!(original, ParamValue::F32(_)),
+        "only authored f32 shader parameters accept scalar input writes"
+    );
+    let live_value = ParamValue::F32(shader_value_f32);
+    if current_live == Some(live_value) {
+        return;
     }
-    let Some(mut look) = world.get_mut::<ShaderLook>(entity) else {
-        return false;
-    };
-    look.set_live_slot(slot, ParamValue::F32(value)) == Some(true)
+    let mut look = world
+        .get_mut::<ShaderLook>(entity)
+        .expect("prepared shader input retains its ShaderLook");
+    look.set_live_slot(slot, live_value)
+        .expect("prepared shader input slot remains live through commit");
 }
 
 /// Shader parameters are **inputs**: a uniform is something the world writes into,
@@ -193,7 +188,7 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
             return;
         };
         // The prim's DRIVEN parameters plus whatever it authored a value for — the
-        // same set `write_input` accepts, so listing and writing can never disagree.
+        // same set the resolved slot writer accepts, so listing and writing cannot disagree.
         //
         // It used to list every field the bound material's WGSL declares. That was a
         // strictly larger set (a shared shader's full surface, most of it irrelevant
@@ -202,49 +197,37 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
         let mut names: std::collections::BTreeSet<&String> = look.driven().iter().collect();
         names.extend(look.values().keys());
         for name in names {
-            out.push(PortRef {
+            out.push(PortDeclaration {
                 name: name.clone(),
                 direction: PortDirection::In,
-                value: read_value(world, entity, name).unwrap_or(0.0) as f64,
             });
         }
     },
-    metadata: Some(|_world, _entity, _name, direction| {
+    metadata: |world, entity, name, direction| {
+        let key = to_snake_case(name);
+        let authored_scalar = world
+            .get::<ShaderLook>(entity)
+            .filter(|look| look.driven().contains(&key))
+            .and_then(|look| {
+                look.values()
+                    .get(&key)
+                    .copied()
+                    .or_else(|| look.live_value(&key))
+            });
+        let writable = matches!(authored_scalar, Some(ParamValue::F32(_)));
         PortMetadata::scalar(
             direction,
             None,
-            None,
-            None,
+            Some(-(f32::MAX as f64)),
+            Some(f32::MAX as f64),
             "shader parameter",
             "material owner",
-            true,
+            writable,
+            None,
         )
-    }),
+    },
     read_output: |_, _, _| None,
     read_input: |world, entity, name| read_value(world, entity, name).map(|v| v as f64),
-    write_input: |world, entity, name, value| {
-        let key = to_snake_case(name);
-        if !declares(world, entity, &key) {
-            return false;
-        }
-        let Some(mut look) = world.get_mut::<ShaderLook>(entity) else {
-            return false;
-        };
-        let v = value as f32;
-        // Deref immutably first: touching `ShaderLook` mutably sets `Changed`, and
-        // `rebind_changed_shader_look` does real work per change. A held value must
-        // cost nothing, or a static scene re-packs a uniform block every tick.
-        //
-        // Compared by BITS, not by `==`: a NaN — which `src * scale + offset` in
-        // propagation produces the moment a Modelica source diverges — is never
-        // equal to itself, so a value comparison would dirty the look every tick
-        // forever and rebuild the material behind it every tick forever.
-        if matches!(look.live_value(&key), Some(ParamValue::F32(p)) if p.to_bits() == v.to_bits()) {
-            return true;
-        }
-        look.set_live(key, ParamValue::F32(v));
-        true
-    },
     resolve_output: None,
     resolve_input: Some(resolve_shader_input),
     read_slot: None,
@@ -317,7 +300,7 @@ mod tests {
         let e = app.world_mut().spawn(driving("load_frac")).id();
 
         let reg = app.world().resource::<PortRegistry>().clone();
-        assert!(reg.write_port(app.world_mut(), e, "loadFrac", 0.5));
+        assert!(reg.write_port(app.world_mut(), e, "loadFrac", 0.5).is_ok());
 
         let look = app.world().get::<ShaderLook>(e).unwrap();
         assert_eq!(look.live_value("load_frac"), Some(ParamValue::F32(0.5)));
@@ -339,8 +322,8 @@ mod tests {
             .resolve_input(app.world(), e, "loadFrac")
             .expect("the authored driven field resolves at wiring time");
 
-        assert!(reg.write_resolved(app.world_mut(), e, slot, 0.5));
-        assert_eq!(reg.read_resolved(app.world(), e, slot), Some(0.5));
+        assert!(reg.write_resolved(app.world_mut(), e, &slot, 0.5).is_ok());
+        assert_eq!(reg.read_resolved(app.world(), e, &slot), Some(0.5));
         app.update();
         assert_eq!(
             app.world().resource::<PortTopologyRevision>().0,
@@ -348,7 +331,7 @@ mod tests {
             "a live sample must not rescan/rebuild the shader port topology"
         );
         app.world_mut().clear_trackers();
-        assert!(reg.write_resolved(app.world_mut(), e, slot, 0.5));
+        assert!(reg.write_resolved(app.world_mut(), e, &slot, 0.5).is_ok());
         assert!(
             !app.world()
                 .entity(e)
@@ -357,11 +340,11 @@ mod tests {
                 .is_changed(),
             "an unchanged slot write must not schedule a shader rebind"
         );
-        assert!(reg.write_resolved(app.world_mut(), e, slot, 0.75));
-        assert_eq!(reg.read_resolved(app.world(), e, slot), Some(0.75));
+        assert!(reg.write_resolved(app.world_mut(), e, &slot, 0.75).is_ok());
+        assert_eq!(reg.read_resolved(app.world(), e, &slot), Some(0.75));
     }
 
-    /// A prim with no shader is not this backend's business. Returning false is what
+    /// A prim with no shader is not this backend's business. Returning an error is what
     /// lets the next backend claim the name and, failing that, what makes
     /// `propagate_connections` report the wire as dangling instead of eating it.
     #[test]
@@ -369,7 +352,10 @@ mod tests {
         let mut app = app();
         let e = app.world_mut().spawn_empty().id();
         let reg = app.world().resource::<PortRegistry>().clone();
-        assert!(!reg.write_port(app.world_mut(), e, "load_frac", 0.5));
+        assert!(
+            reg.write_port(app.world_mut(), e, "load_frac", 0.5)
+                .is_err()
+        );
     }
 
     /// `inputs:` is the engine's spelling for every port, and a landing leg carries
@@ -382,7 +368,10 @@ mod tests {
         let mut app = app();
         let e = app.world_mut().spawn(driving("load_frac")).id();
         let reg = app.world().resource::<PortRegistry>().clone();
-        assert!(!reg.write_port(app.world_mut(), e, "altitude", 12.0));
+        assert!(
+            reg.write_port(app.world_mut(), e, "altitude", 12.0)
+                .is_err()
+        );
         assert!(!app.world().get::<ShaderLook>(e).unwrap().has_live_values());
     }
 
@@ -395,10 +384,10 @@ mod tests {
         let e = app.world_mut().spawn(driving("glow")).id();
         let reg = app.world().resource::<PortRegistry>().clone();
 
-        assert!(reg.write_port(app.world_mut(), e, "glow", 0.25));
+        assert!(reg.write_port(app.world_mut(), e, "glow", 0.25).is_ok());
         app.world_mut().clear_trackers();
 
-        assert!(reg.write_port(app.world_mut(), e, "glow", 0.25));
+        assert!(reg.write_port(app.world_mut(), e, "glow", 0.25).is_ok());
         assert!(
             !app.world()
                 .entity(e)
@@ -407,7 +396,7 @@ mod tests {
                 .is_changed()
         );
 
-        assert!(reg.write_port(app.world_mut(), e, "glow", 0.75));
+        assert!(reg.write_port(app.world_mut(), e, "glow", 0.75).is_ok());
         assert!(
             app.world()
                 .entity(e)

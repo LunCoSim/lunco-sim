@@ -638,10 +638,10 @@ fn member_output_equation(output, instance) {
 
 fn component_declaration(component, positions) {
     let line = "  " + component.class + " " + component.instance;
-    if component.constant_modifications.len > 0 {
+    if component.modifications.len > 0 {
         line += "(";
-        for index in 0..component.constant_modifications.len {
-            let modification = component.constant_modifications[index];
+        for index in 0..component.modifications.len {
+            let modification = component.modifications[index];
             if index > 0 { line += ", "; }
             line += modification.name + " = " + modification.value.to_string();
         }

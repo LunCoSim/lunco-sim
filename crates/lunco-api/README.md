@@ -73,6 +73,23 @@ Content-Type: application/json
 }
 ```
 
+For coordinated mechanisms spanning multiple entities, `SetPortsBatch` accepts
+per-target write groups and validates the full command before admitting it:
+
+```json
+{
+  "type": "ExecuteCommand",
+  "command": "SetPortsBatch",
+  "params": {
+    "producer_id": 4812,
+    "batches": [
+      {"target": 42, "writes": [["angle", 0.8]]},
+      {"target": 43, "writes": [["angle", -0.8]]}
+    ]
+  }
+}
+```
+
 ### Response
 
 ```json
@@ -113,9 +130,32 @@ Returns all available commands with their field types:
       ]
     }
   ],
-  "queries": ["GetBrokenConnections", "GetReadiness", "ListPorts", "Nearest", "ReadExposures", "ReadPorts"]
+  "queries": ["GetBrokenConnections", "GetReadiness", "ListPorts", "Nearest", "ReadActuatorStatus", "ReadExposures", "ReadPorts", "ReadPortsBatch"]
 }
 ```
+
+`ReadPortsBatch` returns every requested entity's port rows with one shared
+`sim_tick`. `ReadActuatorStatus` compares explicitly named writable input,
+measured output, and measured rate ports. It requires compatible value/frame
+metadata and a resolved rate unit equal to the measured value's unit per second.
+Its `settled` predicate requires both position error and measured rate to be
+within their caller-supplied tolerances. `motion_state` reports `moving` or
+`stationary` from measured rate. The authored Rhai prelude exposes these as
+`read_ports_batch()` and `actuator_status()` while keeping target selection and
+waiting policy in Rhai.
+
+Port rows report `value: f64` only when the owner has a live sample; `()` means
+the port is declared but currently unavailable. Unit definitions, unit identity,
+coordinate frame, bounds, owner, authority, and writability come from that
+owner's metadata contract.
+Port reads encode a unit as `()` when absent, or `{ id, definition }` when
+present. A unit definition is `()` for an unresolved identity; otherwise it
+contains the symbol, seven SI dimension exponents ordered length, mass, time,
+current, temperature, amount, luminous intensity, the scale and offset to SI,
+and scale exactness. `frame` is the stable frame identity string or `()`.
+`GetBrokenConnections` includes the port owner's rejection in each `failure`
+field, so a range or writability fault remains distinguishable from a missing
+port without parsing a log message.
 
 Data-returning queries use the same `POST /api/commands` envelope as commands.
 `ReadExposures` reads the generic runtime capability registry used by HTML/CSS

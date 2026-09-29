@@ -239,9 +239,10 @@ fn add_protocol(app: &mut App) {
     app.add_plugins(crate::protocol::ProtocolPlugin);
 
     // Which wire channel each networked command rides (+ registers its capture
-    // observer). Control inputs ride best-effort; structural commands ride the
-    // reliable bus.
+    // observer). Continuous SetPorts samples ride the best-effort stream;
+    // atomic transactions and structural commands ride the reliable bus.
     app.declare_channel::<lunco_cosim_core::commands::SetPorts>(SyncChannel::ControlStream);
+    app.declare_channel::<lunco_cosim_core::commands::SetPortsBatch>(SyncChannel::CommandBus);
     app.declare_channel::<lunco_cosim_core::commands::ReleaseControl>(SyncChannel::CommandBus);
     app.declare_channel::<lunco_core_session::commands::ClaimControl>(SyncChannel::CommandBus);
     app.declare_channel::<lunco_core_session::commands::ReleaseControlClaim>(

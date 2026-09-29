@@ -13,11 +13,11 @@
 //! | revolute  | `angle`        | target angle (rad)       | current twist (rad)     |
 //! | prismatic | `displacement` | target offset (m)        | current slider offset(m)|
 //!
-//! A prismatic joint additionally exposes two `Out`-only measurements: `velocity`
-//! (m/s), the rate it is sliding at, and `force` (N), the axial reaction reported
-//! by the authored drive. A physical part reads the latter to know its load — a
-//! landing-leg strut's load is that number, and a shader takes its glow straight
-//! off it.
+//! A revolute joint additionally exposes `angular_velocity` (rad/s); a prismatic
+//! joint exposes `velocity` (m/s) and `force` (N), the rate it is sliding at and
+//! the axial reaction reported by the authored drive. A physical part reads the
+//! latter to know its load — a landing-leg strut's load is that number, and a
+//! shader takes its glow straight off it.
 //!
 //! ## USD / Omniverse mapping
 //!
@@ -53,11 +53,15 @@ use avian3d::prelude::{
 };
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    hash::{Hash, Hasher},
+};
 
-use crate::ports::{AvianGroup, AvianPort};
+use crate::ports::{AvianGroup, AvianPort, AvianPortContract};
 use lunco_physics::joint::{
-    JOINT_ANGLE_PORT, JOINT_DISPLACEMENT_PORT, JOINT_FORCE_PORT, JOINT_VELOCITY_PORT,
+    JOINT_ANGLE_PORT, JOINT_ANGULAR_VELOCITY_PORT, JOINT_DISPLACEMENT_PORT, JOINT_FORCE_PORT,
+    JOINT_VELOCITY_PORT,
 };
 use lunco_port_core::ports::PortDirection;
 
@@ -85,11 +89,13 @@ const JOINT_MOTOR_MODEL: MotorModel = MotorModel::SpringDamper {
     damping_ratio: 2.0,
 };
 
-/// The revolute-joint port group: measured `angle` out, commanded `angle` in.
+/// The revolute-joint port group: measured/commanded `angle` in radians.
+/// Authored joint limits are published as metadata on that same port.
 ///
 /// Gated on [`RevoluteJoint`] presence. The `Out` port reads the measured twist;
 /// the `In` port reads the current motor setpoint and writes drive the motor.
 pub const REVOLUTE_JOINT_GROUP: AvianGroup = AvianGroup {
+    source: "Avian revolute joint",
     present: |w, e| w.get::<RevoluteJoint>(e).is_some(),
     entities: |world, out| {
         out.extend(
@@ -102,15 +108,24 @@ pub const REVOLUTE_JOINT_GROUP: AvianGroup = AvianGroup {
     ports: &[
         AvianPort {
             name: JOINT_ANGLE_PORT,
+            contract: AvianPortContract::JOINT_ANGLE,
             dir: PortDirection::Out,
             read: Some(read_measured_angle),
             write: None,
         },
         AvianPort {
             name: JOINT_ANGLE_PORT,
+            contract: AvianPortContract::JOINT_ANGLE,
             dir: PortDirection::In,
             read: Some(|w, e| w.get::<RevoluteJoint>(e).map(|j| j.motor.target_position)),
             write: Some(write_motor_angle),
+        },
+        AvianPort {
+            name: JOINT_ANGULAR_VELOCITY_PORT,
+            contract: AvianPortContract::JOINT_ANGULAR_SPEED,
+            dir: PortDirection::Out,
+            read: Some(read_measured_angular_velocity),
+            write: None,
         },
     ],
     install_topology: register_revolute_joint_topology,
@@ -129,7 +144,17 @@ fn revolute_joint_topology_key(world: &World, entity: Entity) -> u64 {
     let measured = world.get::<Rotation>(joint.body1).is_some()
         && world.get::<Rotation>(joint.body2).is_some()
         && joint.local_hinge_axis1().is_some();
-    1 | (u64::from(measured) << 1)
+    revolute_joint_identity_key(joint, measured)
+}
+
+fn revolute_joint_identity_key(joint: &RevoluteJoint, measured: bool) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    measured.hash(&mut hasher);
+    joint
+        .angle_limit
+        .map(|limit| (limit.min.to_bits(), limit.max.to_bits()))
+        .hash(&mut hasher);
+    hasher.finish()
 }
 
 fn check_revolute_joint_structure(
@@ -142,7 +167,7 @@ fn check_revolute_joint_structure(
         let measured = rotations.get(joint.body1).is_ok()
             && rotations.get(joint.body2).is_ok()
             && joint.local_hinge_axis1().is_some();
-        let key = 1 | (u64::from(measured) << 1);
+        let key = revolute_joint_identity_key(joint, measured);
         if state.changed::<RevoluteJoint>(entity, key) {
             revision.bump();
         }
@@ -167,16 +192,35 @@ fn read_measured_angle(world: &World, entity: Entity) -> Option<f64> {
     Some(twist_angle(joint_frame1, joint_frame2, axis) as f64)
 }
 
-/// Commanded angle (`In`): drive the joint's angular motor to `value` via
-/// position control. Returns `true` (the port exists) even for a non-finite
-/// command, which is ignored as a transient rather than written.
-fn write_motor_angle(world: &mut World, entity: Entity, value: f64) -> bool {
-    let Some(mut j) = world.get_mut::<RevoluteJoint>(entity) else {
-        return false;
+/// Measured revolute-coordinate rate (rad/s), projected onto the joint's
+/// positive world-space hinge axis. Static endpoints contribute zero angular
+/// rate; a dynamic or kinematic endpoint without a velocity sample makes the
+/// output unavailable instead of pretending it is stationary.
+fn read_measured_angular_velocity(world: &World, entity: Entity) -> Option<f64> {
+    let joint = world.get::<RevoluteJoint>(entity)?;
+    let body1_rotation = world.get::<Rotation>(joint.body1)?.0;
+    let axis = lunco_physics::joint::revolute_hinge_axis_world(joint, body1_rotation)?;
+    let angular_rate = |body| {
+        world
+            .get::<AngularVelocity>(body)
+            .map(|velocity| velocity.0)
+            .or_else(|| {
+                world
+                    .get::<RigidBody>(body)
+                    .is_some_and(RigidBody::is_static)
+                    .then_some(DVec3::ZERO)
+            })
     };
-    if !value.is_finite() {
-        return true;
-    }
+    let body1_rate = angular_rate(joint.body1)?;
+    let body2_rate = angular_rate(joint.body2)?;
+    Some((body2_rate - body1_rate).dot(axis))
+}
+
+/// Commit a metadata-validated commanded angle to the revolute motor.
+fn write_motor_angle(world: &mut World, entity: Entity, value: f64) {
+    let mut j = world
+        .get_mut::<RevoluteJoint>(entity)
+        .expect("prepared revolute angle input retains its joint");
     let wake_bodies = !j.motor.enabled || j.motor.target_position != value;
     j.motor.enabled = true;
     j.motor.target_position = value;
@@ -190,7 +234,6 @@ fn write_motor_angle(world: &mut World, entity: Entity, value: f64) -> bool {
     if wake_bodies {
         wake_sleeping_joint_bodies(world, bodies);
     }
-    true
 }
 
 /// A changed drive setpoint is an external input to the constrained island.
@@ -217,18 +260,21 @@ fn wake_sleeping_joint_bodies(world: &mut World, bodies: [Entity; 2]) {
 const PRISMATIC_STATE_PORTS: &[AvianPort] = &[
     AvianPort {
         name: JOINT_DISPLACEMENT_PORT,
+        contract: AvianPortContract::DISPLACEMENT,
         dir: PortDirection::Out,
         read: Some(read_measured_displacement),
         write: None,
     },
     AvianPort {
         name: JOINT_VELOCITY_PORT,
+        contract: AvianPortContract::JOINT_SPEED,
         dir: PortDirection::Out,
         read: Some(read_measured_slide_rate),
         write: None,
     },
     AvianPort {
         name: JOINT_FORCE_PORT,
+        contract: AvianPortContract::JOINT_FORCE,
         dir: PortDirection::Out,
         read: Some(joint_reaction_force),
         write: None,
@@ -238,6 +284,7 @@ const PRISMATIC_STATE_PORTS: &[AvianPort] = &[
 /// The standard prismatic-joint port group. The native joint and its authored
 /// `PhysicsDriveAPI:linear` drive are the only owners of this degree of freedom.
 pub const PRISMATIC_JOINT_GROUP: AvianGroup = AvianGroup {
+    source: "Avian prismatic joint",
     present: |w, e| w.get::<PrismaticJoint>(e).is_some(),
     entities: |world, out| {
         out.extend(
@@ -250,12 +297,14 @@ pub const PRISMATIC_JOINT_GROUP: AvianGroup = AvianGroup {
     ports: &[
         AvianPort {
             name: JOINT_DISPLACEMENT_PORT,
+            contract: AvianPortContract::DISPLACEMENT,
             dir: PortDirection::Out,
             read: Some(read_measured_displacement),
             write: None,
         },
         AvianPort {
             name: JOINT_DISPLACEMENT_PORT,
+            contract: AvianPortContract::DISPLACEMENT,
             dir: PortDirection::In,
             read: Some(|w, e| w.get::<PrismaticJoint>(e).map(|j| j.motor.target_position)),
             write: Some(write_motor_displacement),
@@ -289,7 +338,7 @@ fn prismatic_joint_topology_key(world: &World, entity: Entity) -> u64 {
             lunco_physics::motor_model_force_coefficients(joint.motor.motor_model, mass.0 as f64)
                 .is_some()
         });
-    1 | (u64::from(displacement) << 1) | (u64::from(velocity) << 2) | (u64::from(force) << 3)
+    prismatic_joint_identity_key(joint, displacement, velocity, force)
 }
 
 fn check_prismatic_joint_structure(
@@ -340,7 +389,24 @@ fn prismatic_joint_topology_key_from_queries(
             lunco_physics::motor_model_force_coefficients(joint.motor.motor_model, mass.0 as f64)
                 .is_some()
         });
-    1 | (u64::from(displacement) << 1) | (u64::from(velocity) << 2) | (u64::from(force) << 3)
+    prismatic_joint_identity_key(joint, displacement, velocity, force)
+}
+
+fn prismatic_joint_identity_key(
+    joint: &PrismaticJoint,
+    displacement: bool,
+    velocity: bool,
+    force: bool,
+) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    displacement.hash(&mut hasher);
+    velocity.hash(&mut hasher);
+    force.hash(&mut hasher);
+    joint
+        .limits
+        .map(|limit| (limit.min.to_bits(), limit.max.to_bits()))
+        .hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Measured displacement (`Out`): the signed offset (m) of `body2` relative to
@@ -481,16 +547,11 @@ pub fn joint_reaction_force(world: &World, entity: Entity) -> Option<f64> {
     })
 }
 
-/// Commanded displacement (`In`): drive the joint's linear motor to `value` (m)
-/// via position control — same enable-on-write, finite-guard, and default-fill
-/// contract as [`write_motor_angle`].
-fn write_motor_displacement(world: &mut World, entity: Entity, value: f64) -> bool {
-    let Some(mut j) = world.get_mut::<PrismaticJoint>(entity) else {
-        return false;
-    };
-    if !value.is_finite() {
-        return true;
-    }
+/// Commit a metadata-validated commanded displacement to the prismatic motor.
+fn write_motor_displacement(world: &mut World, entity: Entity, value: f64) {
+    let mut j = world
+        .get_mut::<PrismaticJoint>(entity)
+        .expect("prepared prismatic displacement input retains its joint");
     let wake_bodies = !j.motor.enabled || j.motor.target_position != value;
     j.motor.enabled = true;
     j.motor.target_position = value;
@@ -504,7 +565,6 @@ fn write_motor_displacement(world: &mut World, entity: Entity, value: f64) -> bo
     if wake_bodies {
         wake_sleeping_joint_bodies(world, bodies);
     }
-    true
 }
 
 /// Signed displacement (m) of `body2` relative to `body1` along `axis_world`,

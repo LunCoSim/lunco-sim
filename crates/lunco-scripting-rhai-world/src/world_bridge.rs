@@ -37,7 +37,7 @@
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use lunco_core::DTransform;
@@ -140,42 +140,43 @@ impl ValueBuilder for RhaiBuilder {
     }
 }
 
-fn dynamic_to_value<B: ValueBuilder>(b: &B, d: &Dynamic) -> B::Value {
+fn dynamic_to_value<B: ValueBuilder>(b: &B, d: &Dynamic) -> Result<B::Value, String> {
     if d.is_unit() {
-        b.unit()
+        Ok(b.unit())
     } else if let Ok(x) = d.as_bool() {
-        b.bool(x)
+        Ok(b.bool(x))
     } else if let Ok(i) = d.as_int() {
-        b.int(i)
+        Ok(b.int(i))
     } else if let Ok(f) = d.as_float() {
-        b.float(f)
+        Ok(b.float(f))
     } else if d.is_string() {
-        b.string(&d.clone().into_string().unwrap_or_default())
+        d.clone()
+            .into_string()
+            .map(|value| b.string(&value))
+            .map_err(|error| format!("could not read Rhai string from scenario state: {error}"))
     } else if let Some(bytes) = d.clone().try_cast::<rhai::Blob>() {
-        b.bytes(&bytes)
+        Ok(b.bytes(&bytes))
+    } else if let Some(transform) = d.clone().try_cast::<DTransform>() {
+        Ok(b.transform(transform))
     } else if let Some(vector) = d.clone().try_cast::<DVec3>() {
-        b.array(vec![
-            b.float(vector.x),
-            b.float(vector.y),
-            b.float(vector.z),
-        ])
+        Ok(b.vec3(vector.x, vector.y, vector.z))
     } else if let Some(quaternion) = d.clone().try_cast::<DQuat>() {
-        b.array(vec![
-            b.float(quaternion.x),
-            b.float(quaternion.y),
-            b.float(quaternion.z),
-            b.float(quaternion.w),
-        ])
+        Ok(b.quat(quaternion.x, quaternion.y, quaternion.z, quaternion.w))
     } else if let Some(arr) = d.clone().try_cast::<rhai::Array>() {
-        b.array(arr.iter().map(|x| dynamic_to_value(b, x)).collect())
+        arr.iter()
+            .map(|value| dynamic_to_value(b, value))
+            .collect::<Result<Vec<_>, _>>()
+            .map(|values| b.array(values))
     } else if let Some(m) = d.clone().try_cast::<Map>() {
-        b.map(
-            m.into_iter()
-                .map(|(k, v)| (k.to_string(), dynamic_to_value(b, &v)))
-                .collect(),
-        )
+        m.into_iter()
+            .map(|(key, value)| dynamic_to_value(b, &value).map(|value| (key.to_string(), value)))
+            .collect::<Result<Vec<_>, _>>()
+            .map(|entries| b.map(entries))
     } else {
-        b.string(&d.to_string())
+        Err(format!(
+            "scenario state contains unsupported Rhai value type `{}`",
+            d.type_name()
+        ))
     }
 }
 
@@ -770,43 +771,62 @@ fn publish_sysml_warning(path: &str, qualified_name: Option<&str>, issue: Option
     });
 }
 
-/// Map a rhai value to the engine-wide TelemetryValue for emit. Scalars, arrays,
-/// and maps retain their structure; unit is a bare pulse.
-fn rhai_to_telemetry(value: &Dynamic) -> TelemetryValue {
+/// Convert a Rhai value to the engine-wide telemetry ABI without stringifying
+/// unsupported native values. Scalars, arrays, maps, vectors, and quaternions
+/// retain their typed structure; a unit value is a bare pulse.
+fn rhai_to_telemetry(value: &Dynamic) -> Result<TelemetryValue, String> {
     if value.is_unit() {
-        TelemetryValue::Bool(true)
+        Ok(TelemetryValue::Bool(true))
     } else if value.is::<u64>() {
-        TelemetryValue::U64(value.clone().cast::<u64>())
+        Ok(TelemetryValue::U64(value.clone().cast::<u64>()))
     } else if let Ok(f) = value.as_float() {
-        TelemetryValue::F64(f)
+        Ok(TelemetryValue::F64(f))
     } else if let Ok(i) = value.as_int() {
-        TelemetryValue::I64(i)
+        Ok(TelemetryValue::I64(i))
     } else if let Ok(b) = value.as_bool() {
-        TelemetryValue::Bool(b)
+        Ok(TelemetryValue::Bool(b))
+    } else if value.is_string() {
+        Ok(TelemetryValue::String(
+            value
+                .clone()
+                .into_string()
+                .map_err(|error| error.to_string())?,
+        ))
     } else if let Some(vector) = value.clone().try_cast::<DVec3>() {
-        TelemetryValue::Array(vec![
+        Ok(TelemetryValue::Array(vec![
             TelemetryValue::F64(vector.x),
             TelemetryValue::F64(vector.y),
             TelemetryValue::F64(vector.z),
-        ])
+        ]))
     } else if let Some(quaternion) = value.clone().try_cast::<DQuat>() {
-        TelemetryValue::Array(vec![
+        Ok(TelemetryValue::Array(vec![
             TelemetryValue::F64(quaternion.x),
             TelemetryValue::F64(quaternion.y),
             TelemetryValue::F64(quaternion.z),
             TelemetryValue::F64(quaternion.w),
-        ])
+        ]))
     } else if let Some(items) = value.clone().try_cast::<rhai::Array>() {
-        TelemetryValue::Array(items.iter().map(rhai_to_telemetry).collect())
+        items
+            .iter()
+            .map(rhai_to_telemetry)
+            .collect::<Result<Vec<_>, _>>()
+            .map(TelemetryValue::Array)
     } else if let Some(entries) = value.clone().try_cast::<Map>() {
-        TelemetryValue::Map(
-            entries
-                .into_iter()
-                .map(|(key, value)| (key.to_string(), rhai_to_telemetry(&value)))
-                .collect(),
-        )
+        entries
+            .into_iter()
+            .map(|(key, value)| Ok((key.to_string(), rhai_to_telemetry(&value)?)))
+            .collect::<Result<BTreeMap<_, _>, String>>()
+            .map(TelemetryValue::Map)
     } else {
-        TelemetryValue::String(value.to_string())
+        #[cfg(feature = "sysml")]
+        if let Some(identity) = lunco_sysml_rhai::native_identity_to_dynamic(value) {
+            return rhai_to_telemetry(&identity);
+        }
+
+        Err(format!(
+            "emit does not accept Rhai value type `{}`; convert it to a scalar, vector, quaternion, array, or map",
+            value.type_name()
+        ))
     }
 }
 
@@ -820,17 +840,48 @@ fn screen_position_array(value: &Dynamic) -> Option<[f32; 2]> {
 
 fn context_menu_items(
     value: &Dynamic,
-) -> Option<Vec<lunco_scripting_rhai_core::ui_bridge::ScriptMenuItem>> {
-    let values = value.clone().try_cast::<rhai::Array>()?;
+) -> Result<Vec<lunco_scripting_rhai_core::ui_bridge::ScriptMenuItem>, String> {
+    let values = value.clone().try_cast::<rhai::Array>().ok_or_else(|| {
+        format!(
+            "context-menu items must be an array, got {}",
+            value.type_name()
+        )
+    })?;
     values
         .into_iter()
-        .map(|item| {
-            let map = item.try_cast::<Map>()?;
-            let label = map.get("label")?.clone().into_string().ok()?;
-            let tool = map.get("tool")?.clone().into_string().ok()?;
-            let hook = map.get("hook")?.clone().into_string().ok()?;
-            let args = map.get("args").map(rhai_to_telemetry).unwrap_or_default();
-            Some(lunco_scripting_rhai_core::ui_bridge::ScriptMenuItem {
+        .enumerate()
+        .map(|(index, item)| {
+            let item_type = item.type_name().to_owned();
+            let map = item.try_cast::<Map>().ok_or_else(|| {
+                format!("context-menu item {index} must be an action map, got {item_type}")
+            })?;
+            let string_field = |name: &str| -> Result<String, String> {
+                let value = map
+                    .get(name)
+                    .ok_or_else(|| format!("context-menu item {index} is missing `{name}`"))?;
+                value
+                    .clone()
+                    .into_string()
+                    .map_err(|_| format!("context-menu item {index} `{name}` must be a string"))
+            };
+            let label = string_field("label")?;
+            let tool = string_field("tool")?;
+            let hook = string_field("hook")?;
+            if label.trim().is_empty() || tool.trim().is_empty() || hook.trim().is_empty() {
+                return Err(format!(
+                    "context-menu item {index} label, tool, and hook must not be empty"
+                ));
+            }
+            let args = match map.get("args") {
+                Some(value) => match rhai_to_telemetry(value)? {
+                    TelemetryValue::Map(args) => TelemetryValue::Map(args),
+                    _ => {
+                        return Err(format!("context-menu item {index} `args` must be a map"));
+                    }
+                },
+                None => TelemetryValue::Map(BTreeMap::new()),
+            };
+            Ok(lunco_scripting_rhai_core::ui_bridge::ScriptMenuItem {
                 label,
                 tool,
                 hook,
@@ -1467,9 +1518,12 @@ fn build_world_engine_base(
                 warn!("[rhai-ui] context menu rejected: screen position must be [x, y]");
                 return false;
             };
-            let Some(items) = context_menu_items(&items) else {
-                warn!("[rhai-ui] context menu rejected: items must be typed action maps");
-                return false;
+            let items = match context_menu_items(&items) {
+                Ok(items) => items,
+                Err(error) => {
+                    warn!("[rhai-ui] context menu rejected: {error}");
+                    return false;
+                }
             };
             bridge_core::with_world(|world| {
                 world.trigger(
@@ -1927,8 +1981,9 @@ fn build_world_engine_base(
     // set(id, "Component.field", value) -> bool — a host-side tuning write, not
     // the authoritative command bus. Applies `value` straight onto a supported
     // reflected field (native → reflect, no JSON) and is authority-gated. Use
-    // cmd() for changes that must be replicated, undoable, or owned by a domain
-    // command. Returns false (and logs why) on a bad entity/path/type.
+    // write_ports() for declared scalar ports and cmd() for changes
+    // that must be replicated, undoable, or owned by a domain command. A failed
+    // reflected-field write stays a failure; it never falls through to ports.
     engine.register_fn(
         "set",
         |id: i64, path: ImmutableString, value: Dynamic| -> Result<bool, Box<EvalAltResult>> {
@@ -1936,21 +1991,6 @@ fn build_world_engine_base(
         match bridge_core::set_component_field(id as u64, path.as_str(), |f| apply_dynamic(f, &value)) {
             Ok(()) => Ok(true),
             Err(e) => {
-                // Reflection missed — use the co-sim port registry (the same path
-                // wires and `SetPorts` use). Ports are scalar, so coerce
-                // the value to f64; a non-numeric set genuinely failed.
-                let scalar = value.as_float().ok().or_else(|| value.as_int().ok().map(|i| i as f64));
-                if let Some(v) = scalar {
-                    bridge_core::validate_simulation_port_access(
-                        id as u64,
-                        path.as_str(),
-                        bridge_core::ScriptPortAccess::Write,
-                    )
-                    .map_err(script_runtime_error)?;
-                    if bridge_core::write_port(id as u64, path.as_str(), v) {
-                        return Ok(true);
-                    }
-                }
                 // ONCE per (entity, path). A failing `set` in a scenario's
                 // `on_tick` repeats at frame rate — the same line 60×/s buries
                 // every other log line and tells you nothing the first one
@@ -1964,36 +2004,17 @@ fn build_world_engine_base(
         }
     });
 
-    // port(id, "name") -> f64 | () and port_set(id, "name", value) -> bool.
-    // These are the scalar co-simulation surface for authored programs. They
-    // use the same PortRegistry as wires and the API, but stay native across
-    // the Rhai boundary so a high-rate controller never builds a JSON map for
-    // every actuator write. Unknown ports fail visibly; no port is created.
+    // port(id, "name") -> f64 | (). Reads use the same PortRegistry as wires
+    // and the API; writes use the typed SetPorts command and its shared session,
+    // ownership, metadata, and transaction contract.
     engine.register_fn(
         "port",
         |id: i64, name: ImmutableString| -> Result<Dynamic, Box<EvalAltResult>> {
-            bridge_core::validate_simulation_port_access(
-                id as u64,
-                name.as_str(),
-                bridge_core::ScriptPortAccess::Read,
-            )
-            .map_err(script_runtime_error)?;
+            bridge_core::validate_simulation_port_read_access(id as u64, name.as_str())
+                .map_err(script_runtime_error)?;
             Ok(bridge_core::read_port(id as u64, name.as_str())
                 .map(Dynamic::from_float)
                 .unwrap_or(Dynamic::UNIT))
-        },
-    );
-    engine.register_fn(
-        "port_set",
-        |id: i64, name: ImmutableString, value: f64| -> Result<bool, Box<EvalAltResult>> {
-            bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
-            bridge_core::validate_simulation_port_access(
-                id as u64,
-                name.as_str(),
-                bridge_core::ScriptPortAccess::Write,
-            )
-            .map_err(script_runtime_error)?;
-            Ok(bridge_core::write_port(id as u64, name.as_str(), value))
         },
     );
 
@@ -2010,6 +2031,12 @@ fn build_world_engine_base(
                 -1
             }
         }
+    });
+    engine.register_fn("solver_configuration_fingerprint", || -> Dynamic {
+        bridge_core::with_world(|world| lunco_physics::solver_configuration_fingerprint(world))
+            .flatten()
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT)
     });
     engine.register_fn(
         "set_physics_substeps",
@@ -2472,7 +2499,7 @@ fn build_world_engine_base(
     // providers live in their owning crates (e.g. avian-backed Raycast in
     // lunco-mobility); scripting reaches them generically here without taking a
     // physics dependency. Successful no-data is (); failures return an explicit
-    // `#{ok:false,error}` value.
+    // `#{ok:false,status,code,error}` value.
     engine.register_fn(
         "query",
         |name: ImmutableString, params: Map| -> Result<Dynamic, Box<rhai::EvalAltResult>> {
@@ -2657,7 +2684,8 @@ fn build_world_engine_base(
         "emit",
         |name: ImmutableString, value: Dynamic| -> Result<bool, Box<EvalAltResult>> {
             bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
-            Ok(bridge_core::emit(name.as_str(), rhai_to_telemetry(&value)))
+            let value = rhai_to_telemetry(&value).map_err(script_runtime_error)?;
+            Ok(bridge_core::emit(name.as_str(), value))
         },
     );
     // emit(name) — a bare pulse (no payload).
@@ -2813,6 +2841,23 @@ fn build_world_engine_base(
     crate::tool_libs::bind_registered_tools(&mut engine);
 
     engine
+}
+
+/// Return callable native world-bridge signatures from the engine's actual
+/// registrations. The authoring catalog consumes this output so its callable
+/// surface cannot drift from the functions installed at runtime.
+pub fn world_native_function_signatures() -> &'static [String] {
+    static SIGNATURES: OnceLock<Vec<String>> = OnceLock::new();
+    SIGNATURES.get_or_init(|| {
+        let engine = build_world_engine_base(
+            lunco_assets_runtime::script_source::ScriptSources::default(),
+            lunco_scripting_rhai_core::module_resolver::PreparedModuleAsts::default(),
+        );
+        let mut signatures = engine.gen_fn_signatures(false);
+        signatures.sort_unstable();
+        signatures.dedup();
+        signatures
+    })
 }
 
 pub fn prelude_files_from_sources(
@@ -4472,17 +4517,28 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         &self,
         entity: Entity,
         b: &B,
-    ) -> Option<lunco_scripting::scenario::ScenarioSnapshot<B::Value>> {
-        let st = self.states.get(&entity)?;
+    ) -> Result<Option<lunco_scripting::scenario::ScenarioSnapshot<B::Value>>, Diagnostic> {
+        let Some(st) = self.states.get(&entity) else {
+            return Ok(None);
+        };
         // Walk the persistent `this` map straight into the caller's native value
         // type. The API query uses its typed value builder and serializes only
         // when it creates the external response; a script-facing caller can use
         // RhaiBuilder and get a Dynamic back with zero conversion.
-        let state = dynamic_to_value(b, &st.this);
+        let state = dynamic_to_value(b, &st.this).map_err(|error| {
+            Diagnostic::error(
+                format!("cannot inspect Rhai scenario state: {error}"),
+                None,
+                None,
+            )
+        })?;
         // Report only the lifecycle hooks the program defines — straight from the
         // cached mask (derived at compile), no AST re-scan.
         let hooks = st.program.mask.hook_names();
-        Some(lunco_scripting::scenario::ScenarioSnapshot { state, hooks })
+        Ok(Some(lunco_scripting::scenario::ScenarioSnapshot {
+            state,
+            hooks,
+        }))
     }
 
     fn maintain(&mut self) {
@@ -6314,7 +6370,8 @@ mod tests {
         let document_id = 114_932_766_189_908_u64;
         payload.insert("doc_id".into(), Dynamic::from(document_id));
 
-        let value = super::rhai_to_telemetry(&Dynamic::from_map(payload));
+        let value = super::rhai_to_telemetry(&Dynamic::from_map(payload))
+            .expect("supported Rhai maps must retain their typed telemetry payload");
         let TelemetryValue::Map(value) = value else {
             panic!("structured Rhai event payload must remain a map");
         };
@@ -6376,7 +6433,8 @@ mod tests {
                     if name == "translation" && values.len() == 3)
         ));
 
-        let telemetry = super::rhai_to_telemetry(&Dynamic::from(DVec3::new(4.0, 5.0, 6.0)));
+        let telemetry = super::rhai_to_telemetry(&Dynamic::from(DVec3::new(4.0, 5.0, 6.0)))
+            .expect("a vector must retain its typed telemetry representation");
         assert!(matches!(telemetry, TelemetryValue::Array(values) if values.len() == 3));
     }
 

@@ -25,8 +25,9 @@ use avian3d::prelude::{
 };
 use bevy::math::DVec3;
 use bevy::prelude::*;
+use std::hash::{Hash, Hasher};
 
-use crate::ports::{AvianGroup, AvianPort};
+use crate::ports::{AvianGroup, AvianPort, AvianPortContract};
 use lunco_cosim_core::{ForceActuator, TorqueActuator};
 use lunco_physics::joint::{JointTorqueActuator, bounded_brake_torque, revolute_hinge_axis_world};
 use lunco_port_core::ports::PortDirection;
@@ -260,39 +261,30 @@ fn stable_name_hash(name: Option<&Name>) -> u64 {
 
 /// Ensure `entity` carries [`PendingForces`], then mutate it. The `force_*`
 /// write closures use this so an un-driven body stays clean until first written.
-fn with_pending(world: &mut World, entity: Entity, set: impl FnOnce(&mut PendingForces)) -> bool {
-    // The port binding may name a body that a concurrent scene reload just
-    // despawned (LoadScene tears the old scene down while propagation is still
-    // running). `entity_mut` would panic on that stale id, so fetch fallibly and
-    // bail cleanly — next tick propagates against the fresh scene.
-    let Ok(mut em) = world.get_entity_mut(entity) else {
-        return false;
-    };
+fn with_pending(world: &mut World, entity: Entity, set: impl FnOnce(&mut PendingForces)) {
+    let mut em = world
+        .get_entity_mut(entity)
+        .expect("prepared Avian force input still has its owning entity");
     if !em.contains::<PendingForces>() {
         em.insert(PendingForces::default());
     }
-    if let Some(mut pf) = em.get_mut::<PendingForces>() {
-        set(&mut pf);
-        true
-    } else {
-        false
-    }
+    let mut pending = em
+        .get_mut::<PendingForces>()
+        .expect("PendingForces was inserted before applying the port write");
+    set(&mut pending);
 }
 
 /// Ensure an actuator command exists, then update it from the port write.
-fn with_pending_actuator_command(world: &mut World, entity: Entity, value: f64) -> bool {
-    let Ok(mut em) = world.get_entity_mut(entity) else {
-        return false;
-    };
+fn with_pending_actuator_command(world: &mut World, entity: Entity, value: f64) {
+    let mut em = world
+        .get_entity_mut(entity)
+        .expect("prepared actuator command still has its owning entity");
     if !em.contains::<PendingActuatorCommand>() {
         em.insert(PendingActuatorCommand::default());
     }
-    if let Some(mut command) = em.get_mut::<PendingActuatorCommand>() {
-        command.value = value;
-        true
-    } else {
-        false
-    }
+    em.get_mut::<PendingActuatorCommand>()
+        .expect("PendingActuatorCommand was inserted before applying the port write")
+        .value = value;
 }
 
 /// Contact as a PHYSICS fact, on any collider — no instrument required.
@@ -315,6 +307,7 @@ fn with_pending_actuator_command(world: &mut World, entity: Entity, value: f64) 
 /// Read on demand from the contact graph — no mirror component, no per-tick sync
 /// system, matching every other port in this module.
 pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
+    source: "Avian contact solver",
     present: |w, e| w.get::<Collider>(e).is_some(),
     entities: |world, out| {
         out.extend(world.query_filtered::<Entity, With<Collider>>().iter(world));
@@ -323,6 +316,7 @@ pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
     ports: &[
         AvianPort {
             name: "contact",
+            contract: AvianPortContract::DIMENSIONLESS,
             dir: PortDirection::Out,
             read: Some(|w, e| {
                 Some(if lunco_physics::contact_from_world(w, e).0 {
@@ -335,6 +329,7 @@ pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "contact_force",
+            contract: AvianPortContract::FORCE,
             dir: PortDirection::Out,
             read: Some(|w, e| Some(lunco_physics::contact_from_world(w, e).1)),
             write: None,
@@ -351,6 +346,7 @@ pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
         // there is one mass, in the one place UsdPhysics puts it.
         AvianPort {
             name: "mass",
+            contract: AvianPortContract::MASS,
             dir: PortDirection::Out,
             read: Some(|w, e| w.get::<ColliderMassProperties>(e).map(|m| m.mass as f64)),
             write: None,
@@ -378,6 +374,7 @@ fn collider_contact_topology_key(world: &World, entity: Entity) -> u64 {
 /// A USD-authored force actuator. Its command is scalar force; position and
 /// direction are structural facts read from the USD prim.
 pub const FORCE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
+    source: "Avian force actuator",
     present: |w, e| w.get::<ForceActuator>(e).is_some(),
     entities: |world, out| {
         out.extend(
@@ -386,11 +383,20 @@ pub const FORCE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
                 .iter(world),
         );
     },
-    topology_key: |world, entity| u64::from(world.get::<ForceActuator>(entity).is_some()),
+    topology_key: |world, entity| {
+        world
+            .get::<ForceActuator>(entity)
+            .map(force_actuator_topology_key)
+            .unwrap_or(0)
+    },
     ports: &[AvianPort {
         name: "force_command",
+        contract: AvianPortContract::FORCE_ACTUATOR,
         dir: PortDirection::In,
-        read: Some(|w, e| Some(w.get::<PendingActuatorCommand>(e).map_or(0.0, |p| p.value))),
+        read: Some(|w, e| {
+            w.get::<PendingActuatorCommand>(e)
+                .map(|command| command.value)
+        }),
         write: Some(with_pending_actuator_command),
     }],
     install_topology: register_force_actuator_topology,
@@ -398,12 +404,32 @@ pub const FORCE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
 
 fn register_force_actuator_topology(app: &mut App) {
     app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<ForceActuator>)
-        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<ForceActuator>);
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<ForceActuator>)
+        .add_systems(PostUpdate, check_force_actuator_structure);
+}
+
+fn force_actuator_topology_key(actuator: &ForceActuator) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    actuator.max_force_n.to_bits().hash(&mut hasher);
+    hasher.finish()
+}
+
+fn check_force_actuator_structure(
+    changed: Query<(Entity, &ForceActuator), Changed<ForceActuator>>,
+    mut state: ResMut<lunco_port_core::ports::PortTopologyState>,
+    mut revision: ResMut<lunco_port_core::ports::PortTopologyRevision>,
+) {
+    for (entity, actuator) in &changed {
+        if state.changed::<ForceActuator>(entity, force_actuator_topology_key(actuator)) {
+            revision.bump();
+        }
+    }
 }
 
 /// A USD-authored torque actuator. Its command is scalar torque; its axis and
 /// limit are structural facts read from the USD prim.
 pub const TORQUE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
+    source: "Avian torque actuator",
     present: |w, e| w.get::<TorqueActuator>(e).is_some(),
     entities: |world, out| {
         out.extend(
@@ -412,11 +438,20 @@ pub const TORQUE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
                 .iter(world),
         );
     },
-    topology_key: |world, entity| u64::from(world.get::<TorqueActuator>(entity).is_some()),
+    topology_key: |world, entity| {
+        world
+            .get::<TorqueActuator>(entity)
+            .map(torque_actuator_topology_key)
+            .unwrap_or(0)
+    },
     ports: &[AvianPort {
         name: "torque_command",
+        contract: AvianPortContract::TORQUE_ACTUATOR,
         dir: PortDirection::In,
-        read: Some(|w, e| Some(w.get::<PendingActuatorCommand>(e).map_or(0.0, |p| p.value))),
+        read: Some(|w, e| {
+            w.get::<PendingActuatorCommand>(e)
+                .map(|command| command.value)
+        }),
         write: Some(with_pending_actuator_command),
     }],
     install_topology: register_torque_actuator_topology,
@@ -424,7 +459,26 @@ pub const TORQUE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
 
 fn register_torque_actuator_topology(app: &mut App) {
     app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<TorqueActuator>)
-        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<TorqueActuator>);
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<TorqueActuator>)
+        .add_systems(PostUpdate, check_torque_actuator_structure);
+}
+
+fn torque_actuator_topology_key(actuator: &TorqueActuator) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    actuator.max_torque_nm.to_bits().hash(&mut hasher);
+    hasher.finish()
+}
+
+fn check_torque_actuator_structure(
+    changed: Query<(Entity, &TorqueActuator), Changed<TorqueActuator>>,
+    mut state: ResMut<lunco_port_core::ports::PortTopologyState>,
+    mut revision: ResMut<lunco_port_core::ports::PortTopologyRevision>,
+) {
+    for (entity, actuator) in &changed {
+        if state.changed::<TorqueActuator>(entity, torque_actuator_topology_key(actuator)) {
+            revision.bump();
+        }
+    }
 }
 
 /// The rigid-body port group: position/velocity outputs + force inputs.
@@ -433,6 +487,7 @@ fn register_torque_actuator_topology(app: &mut App) {
 /// (present on every body); velocity ports from [`LinearVelocity`] (dynamic
 /// bodies only — absent on a kinematic body, so those ports simply don't list).
 pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
+    source: "Avian rigid body",
     present: |w, e| w.get::<RigidBody>(e).is_some(),
     entities: |world, out| {
         out.extend(
@@ -445,36 +500,42 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
     ports: &[
         AvianPort {
             name: "position_x",
+            contract: AvianPortContract::LENGTH_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.x)),
             write: None,
         },
         AvianPort {
             name: "position_y",
+            contract: AvianPortContract::LENGTH_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.y)),
             write: None,
         },
         AvianPort {
             name: "position_z",
+            contract: AvianPortContract::LENGTH_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.z)),
             write: None,
         },
         AvianPort {
             name: "velocity_x",
+            contract: AvianPortContract::SPEED_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.x)),
             write: None,
         },
         AvianPort {
             name: "velocity_y",
+            contract: AvianPortContract::SPEED_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.y)),
             write: None,
         },
         AvianPort {
             name: "velocity_z",
+            contract: AvianPortContract::SPEED_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.z)),
             write: None,
@@ -484,6 +545,7 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         // includes every native force and constraint that changed the body.
         AvianPort {
             name: "acceleration_x",
+            contract: AvianPortContract::ACCELERATION_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| {
                 w.get::<SolvedLinearAcceleration>(e)
@@ -494,6 +556,7 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "acceleration_y",
+            contract: AvianPortContract::ACCELERATION_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| {
                 w.get::<SolvedLinearAcceleration>(e)
@@ -504,6 +567,7 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "acceleration_z",
+            contract: AvianPortContract::ACCELERATION_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| {
                 w.get::<SolvedLinearAcceleration>(e)
@@ -514,6 +578,7 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "acceleration_valid",
+            contract: AvianPortContract::DIMENSIONLESS,
             dir: PortDirection::Out,
             read: Some(|w, e| {
                 Some(
@@ -534,6 +599,7 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         // zero until its authored release state has been installed.
         AvianPort {
             name: "state_valid",
+            contract: AvianPortContract::DIMENSIONLESS,
             dir: PortDirection::Out,
             read: Some(|w, e| {
                 Some(if w.get::<lunco_core::PhysicsStateReady>(e).is_some() {
@@ -553,6 +619,7 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         // recompute the magnitude from three ports it had to wire separately.
         AvianPort {
             name: "speed",
+            contract: AvianPortContract::SPEED,
             dir: PortDirection::Out,
             read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.length())),
             write: None,
@@ -561,24 +628,28 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         // wraps a `DQuat` in the f64 build. Read-only — write attitude via torque.
         AvianPort {
             name: "quat_w",
+            contract: AvianPortContract::ROTATION_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| w.get::<Rotation>(e).map(|r| r.0.w)),
             write: None,
         },
         AvianPort {
             name: "quat_x",
+            contract: AvianPortContract::ROTATION_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| w.get::<Rotation>(e).map(|r| r.0.x)),
             write: None,
         },
         AvianPort {
             name: "quat_y",
+            contract: AvianPortContract::ROTATION_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| w.get::<Rotation>(e).map(|r| r.0.y)),
             write: None,
         },
         AvianPort {
             name: "quat_z",
+            contract: AvianPortContract::ROTATION_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| w.get::<Rotation>(e).map(|r| r.0.z)),
             write: None,
@@ -588,6 +659,7 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         // Derived from `Rotation`; control laws that want body rates read `angvel_*`.
         AvianPort {
             name: "yaw",
+            contract: AvianPortContract::ANGLE_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| {
                 w.get::<Rotation>(e)
@@ -597,6 +669,7 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "pitch",
+            contract: AvianPortContract::ANGLE_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| {
                 w.get::<Rotation>(e)
@@ -606,6 +679,7 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "roll",
+            contract: AvianPortContract::ANGLE_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| {
                 w.get::<Rotation>(e)
@@ -617,18 +691,21 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         // `torque_*` inputs to close an attitude/spin-damping loop.
         AvianPort {
             name: "angvel_x",
+            contract: AvianPortContract::ANGULAR_SPEED_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| w.get::<AngularVelocity>(e).map(|v| v.0.x)),
             write: None,
         },
         AvianPort {
             name: "angvel_y",
+            contract: AvianPortContract::ANGULAR_SPEED_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| w.get::<AngularVelocity>(e).map(|v| v.0.y)),
             write: None,
         },
         AvianPort {
             name: "angvel_z",
+            contract: AvianPortContract::ANGULAR_SPEED_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| w.get::<AngularVelocity>(e).map(|v| v.0.z)),
             write: None,
@@ -637,59 +714,68 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         // value pending this tick (0 once applied/cleared).
         AvianPort {
             name: "force_x",
+            contract: AvianPortContract::FORCE_WORLD,
             dir: PortDirection::In,
-            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f.x))),
+            read: Some(|w, e| w.get::<PendingForces>(e).map(|forces| forces.f.x)),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.f.x = v)),
         },
         AvianPort {
             name: "force_y",
+            contract: AvianPortContract::FORCE_WORLD,
             dir: PortDirection::In,
-            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f.y))),
+            read: Some(|w, e| w.get::<PendingForces>(e).map(|forces| forces.f.y)),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.f.y = v)),
         },
         AvianPort {
             name: "force_z",
+            contract: AvianPortContract::FORCE_WORLD,
             dir: PortDirection::In,
-            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f.z))),
+            read: Some(|w, e| w.get::<PendingForces>(e).map(|forces| forces.f.z)),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.f.z = v)),
         },
         // Body-frame force inputs: rotated into world by the body's attitude at
         // apply time (`apply_local_force`). Thrust along the vehicle's own axes.
         AvianPort {
             name: "force_local_x",
+            contract: AvianPortContract::FORCE_BODY,
             dir: PortDirection::In,
-            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f_local.x))),
+            read: Some(|w, e| w.get::<PendingForces>(e).map(|forces| forces.f_local.x)),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.f_local.x = v)),
         },
         AvianPort {
             name: "force_local_y",
+            contract: AvianPortContract::FORCE_BODY,
             dir: PortDirection::In,
-            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f_local.y))),
+            read: Some(|w, e| w.get::<PendingForces>(e).map(|forces| forces.f_local.y)),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.f_local.y = v)),
         },
         AvianPort {
             name: "force_local_z",
+            contract: AvianPortContract::FORCE_BODY,
             dir: PortDirection::In,
-            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f_local.z))),
+            read: Some(|w, e| w.get::<PendingForces>(e).map(|forces| forces.f_local.z)),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.f_local.z = v)),
         },
         // World-space torque inputs (N·m): reaction wheels, thrust-vector moment.
         AvianPort {
             name: "torque_x",
+            contract: AvianPortContract::TORQUE_WORLD,
             dir: PortDirection::In,
-            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.torque.x))),
+            read: Some(|w, e| w.get::<PendingForces>(e).map(|forces| forces.torque.x)),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.torque.x = v)),
         },
         AvianPort {
             name: "torque_y",
+            contract: AvianPortContract::TORQUE_WORLD,
             dir: PortDirection::In,
-            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.torque.y))),
+            read: Some(|w, e| w.get::<PendingForces>(e).map(|forces| forces.torque.y)),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.torque.y = v)),
         },
         AvianPort {
             name: "torque_z",
+            contract: AvianPortContract::TORQUE_WORLD,
             dir: PortDirection::In,
-            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.torque.z))),
+            read: Some(|w, e| w.get::<PendingForces>(e).map(|forces| forces.torque.z)),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.torque.z = v)),
         },
         // Mass properties (read+write). The triple moves together — propellant
@@ -699,42 +785,49 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         // contract (`NoAuto*` markers + `Computed*`).
         AvianPort {
             name: "mass",
+            contract: AvianPortContract::MASS,
             dir: PortDirection::InOut,
             read: Some(read_mass),
             write: Some(write_mass),
         },
         AvianPort {
             name: "inertia_xx",
+            contract: AvianPortContract::INERTIA_BODY,
             dir: PortDirection::InOut,
             read: Some(|w, e| inertia_diagonal(w, e).map(|d| d.x)),
             write: Some(|w, e, v| write_inertia_axis(w, e, 0, v)),
         },
         AvianPort {
             name: "inertia_yy",
+            contract: AvianPortContract::INERTIA_BODY,
             dir: PortDirection::InOut,
             read: Some(|w, e| inertia_diagonal(w, e).map(|d| d.y)),
             write: Some(|w, e, v| write_inertia_axis(w, e, 1, v)),
         },
         AvianPort {
             name: "inertia_zz",
+            contract: AvianPortContract::INERTIA_BODY,
             dir: PortDirection::InOut,
             read: Some(|w, e| inertia_diagonal(w, e).map(|d| d.z)),
             write: Some(|w, e, v| write_inertia_axis(w, e, 2, v)),
         },
         AvianPort {
             name: "com_x",
+            contract: AvianPortContract::LENGTH_BODY_FINITE,
             dir: PortDirection::InOut,
             read: Some(|w, e| center_of_mass(w, e).map(|c| c.x)),
             write: Some(|w, e, v| write_com_axis(w, e, 0, v)),
         },
         AvianPort {
             name: "com_y",
+            contract: AvianPortContract::LENGTH_BODY_FINITE,
             dir: PortDirection::InOut,
             read: Some(|w, e| center_of_mass(w, e).map(|c| c.y)),
             write: Some(|w, e, v| write_com_axis(w, e, 1, v)),
         },
         AvianPort {
             name: "com_z",
+            contract: AvianPortContract::LENGTH_BODY_FINITE,
             dir: PortDirection::InOut,
             read: Some(|w, e| center_of_mass(w, e).map(|c| c.z)),
             write: Some(|w, e, v| write_com_axis(w, e, 2, v)),
@@ -771,7 +864,14 @@ fn register_rigid_body_topology(app: &mut App) {
         )
         .add_observer(
             lunco_port_core::ports::bump_port_topology_on_remove::<lunco_core::PhysicsStateReady>,
-        );
+        )
+        .add_observer(
+            lunco_port_core::ports::bump_port_topology_on_add::<lunco_core::GlobalEntityId>,
+        )
+        .add_observer(
+            lunco_port_core::ports::bump_port_topology_on_remove::<lunco_core::GlobalEntityId>,
+        )
+        .add_systems(PostUpdate, check_rigid_body_frame_identity);
 }
 
 fn rigid_body_topology_key(world: &World, entity: Entity) -> u64 {
@@ -800,7 +900,28 @@ fn rigid_body_topology_key(world: &World, entity: Entity) -> u64 {
     if world.get::<ComputedCenterOfMass>(entity).is_some() {
         key |= 1 << 7;
     }
-    key
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    world
+        .get::<lunco_core::GlobalEntityId>(entity)
+        .map(lunco_core::GlobalEntityId::get)
+        .hash(&mut hasher);
+    hasher.finish()
+}
+
+fn check_rigid_body_frame_identity(
+    changed_ids: Query<(Entity, &lunco_core::GlobalEntityId), Changed<lunco_core::GlobalEntityId>>,
+    rigid_bodies: Query<(), With<RigidBody>>,
+    mut state: ResMut<lunco_port_core::ports::PortTopologyState>,
+    mut revision: ResMut<lunco_port_core::ports::PortTopologyRevision>,
+) {
+    for (entity, global_id) in &changed_ids {
+        if rigid_bodies.get(entity).is_ok()
+            && state.changed::<lunco_core::GlobalEntityId>(entity, global_id.get())
+        {
+            revision.bump();
+        }
+    }
 }
 
 /// Position inputs for an authored kinematic body.
@@ -816,6 +937,7 @@ fn rigid_body_topology_key(world: &World, entity: Entity) -> u64 {
 /// for simulated vehicles: a dynamic body's authored mobility does not satisfy
 /// this group, so resolving the input fails closed.
 pub const KINEMATIC_POSITION_GROUP: AvianGroup = AvianGroup {
+    source: "Avian kinematic body",
     present: |w, e| {
         w.get::<lunco_core::Mobility>(e)
             .is_some_and(|mobility| *mobility == lunco_core::Mobility::Kinematic)
@@ -834,18 +956,21 @@ pub const KINEMATIC_POSITION_GROUP: AvianGroup = AvianGroup {
     ports: &[
         AvianPort {
             name: "position_x",
+            contract: AvianPortContract::LENGTH_WORLD,
             dir: PortDirection::In,
             read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.x)),
             write: Some(|w, e, value| write_kinematic_position_axis(w, e, value, 0)),
         },
         AvianPort {
             name: "position_y",
+            contract: AvianPortContract::LENGTH_WORLD,
             dir: PortDirection::In,
             read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.y)),
             write: Some(|w, e, value| write_kinematic_position_axis(w, e, value, 1)),
         },
         AvianPort {
             name: "position_z",
+            contract: AvianPortContract::LENGTH_WORLD,
             dir: PortDirection::In,
             read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.z)),
             write: Some(|w, e, value| write_kinematic_position_axis(w, e, value, 2)),
@@ -886,22 +1011,16 @@ fn check_kinematic_position_structure(
     }
 }
 
-fn write_kinematic_position_axis(
-    world: &mut World,
-    entity: Entity,
-    value: f64,
-    axis: usize,
-) -> bool {
-    if !value.is_finite()
-        || world.get::<lunco_core::Mobility>(entity) != Some(&lunco_core::Mobility::Kinematic)
-    {
-        return world.get::<lunco_core::Mobility>(entity) == Some(&lunco_core::Mobility::Kinematic);
-    }
-    let Some(mut position) = world.get_mut::<Position>(entity) else {
-        return false;
-    };
+fn write_kinematic_position_axis(world: &mut World, entity: Entity, value: f64, axis: usize) {
+    let mobility = world
+        .get::<lunco_core::Mobility>(entity)
+        .expect("prepared kinematic position input retains its mobility");
+    assert_eq!(*mobility, lunco_core::Mobility::Kinematic);
+    assert!(axis < 3, "kinematic position axis is declared by its owner");
+    let mut position = world
+        .get_mut::<Position>(entity)
+        .expect("prepared kinematic position input retains Position");
     position.0[axis] = value;
-    true
 }
 
 // ── Mass-property read/write helpers ────────────────────────────────────────
@@ -937,16 +1056,15 @@ fn read_mass(w: &World, e: Entity) -> Option<f64> {
     w.get::<ComputedMass>(e).map(|m| m.value())
 }
 
-fn write_mass(w: &mut World, e: Entity, v: f64) -> bool {
-    if w.get::<RigidBody>(e).is_none() {
-        return false;
+fn write_mass(w: &mut World, e: Entity, v: f64) {
+    assert!(
+        w.get::<RigidBody>(e).is_some(),
+        "prepared mass input retains RigidBody"
+    );
+    let mass = Mass(validated_f32_port_value(v));
+    if w.get::<Mass>(e) != Some(&mass) || w.get::<NoAutoMass>(e).is_none() {
+        w.entity_mut(e).insert((mass, NoAutoMass));
     }
-    let mass = Mass(v as f32);
-    if w.get::<Mass>(e) == Some(&mass) && w.get::<NoAutoMass>(e).is_some() {
-        return true;
-    }
-    w.entity_mut(e).insert((mass, NoAutoMass));
-    true
 }
 
 fn inertia_diagonal(w: &World, e: Entity) -> Option<DVec3> {
@@ -954,58 +1072,76 @@ fn inertia_diagonal(w: &World, e: Entity) -> Option<DVec3> {
         .map(|i| i.value().diagonal())
 }
 
-fn write_inertia_axis(w: &mut World, e: Entity, axis: usize, v: f64) -> bool {
-    if w.get::<RigidBody>(e).is_none() {
-        return false;
-    }
+fn write_inertia_axis(w: &mut World, e: Entity, axis: usize, v: f64) {
+    assert!(
+        w.get::<RigidBody>(e).is_some(),
+        "prepared inertia input retains RigidBody"
+    );
+    assert!(axis < 3, "inertia axis is declared by its owner");
     // Start from the current override if present, else the effective computed
     // diagonal — so writing one axis preserves the others (and the local frame).
     let (mut principal, local_frame) = match w.get::<AngularInertia>(e) {
         Some(ai) => (ai.principal, ai.local_frame),
         None => (
-            inertia_diagonal(w, e).unwrap_or(DVec3::ZERO).as_vec3(),
+            inertia_diagonal(w, e)
+                .expect("writable inertia ports require an effective or authored baseline")
+                .as_vec3(),
             Quat::IDENTITY,
         ),
     };
     match axis {
-        0 => principal.x = v as f32,
-        1 => principal.y = v as f32,
-        _ => principal.z = v as f32,
+        0 => principal.x = validated_f32_port_value(v),
+        1 => principal.y = validated_f32_port_value(v),
+        2 => principal.z = validated_f32_port_value(v),
+        _ => unreachable!("inertia axis is declared by its owner"),
     }
     let inertia = AngularInertia {
         principal,
         local_frame,
     };
-    if w.get::<AngularInertia>(e) == Some(&inertia) && w.get::<NoAutoAngularInertia>(e).is_some() {
-        return true;
+    if w.get::<AngularInertia>(e) != Some(&inertia) || w.get::<NoAutoAngularInertia>(e).is_none() {
+        w.entity_mut(e).insert((inertia, NoAutoAngularInertia));
     }
-    w.entity_mut(e).insert((inertia, NoAutoAngularInertia));
-    true
 }
 
 fn center_of_mass(w: &World, e: Entity) -> Option<DVec3> {
     w.get::<ComputedCenterOfMass>(e).map(|c| c.0)
 }
 
-fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) -> bool {
-    if w.get::<RigidBody>(e).is_none() {
-        return false;
-    }
+fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) {
+    assert!(
+        w.get::<RigidBody>(e).is_some(),
+        "prepared centre-of-mass input retains RigidBody"
+    );
+    assert!(axis < 3, "centre-of-mass axis is declared by its owner");
     let mut c = match w.get::<CenterOfMass>(e) {
         Some(com) => com.0,
-        None => center_of_mass(w, e).unwrap_or(DVec3::ZERO).as_vec3(),
+        None => center_of_mass(w, e)
+            .expect("writable centre-of-mass ports require an effective or authored baseline")
+            .as_vec3(),
     };
     match axis {
-        0 => c.x = v as f32,
-        1 => c.y = v as f32,
-        _ => c.z = v as f32,
+        0 => c.x = validated_f32_port_value(v),
+        1 => c.y = validated_f32_port_value(v),
+        2 => c.z = validated_f32_port_value(v),
+        _ => unreachable!("centre-of-mass axis is declared by its owner"),
     }
     let center = CenterOfMass(c);
-    if w.get::<CenterOfMass>(e) == Some(&center) && w.get::<NoAutoCenterOfMass>(e).is_some() {
-        return true;
+    if w.get::<CenterOfMass>(e) != Some(&center) || w.get::<NoAutoCenterOfMass>(e).is_none() {
+        w.entity_mut(e).insert((center, NoAutoCenterOfMass));
     }
-    w.entity_mut(e).insert((center, NoAutoCenterOfMass));
-    true
+}
+
+/// Convert a metadata-validated scalar at an Avian component's native `f32`
+/// boundary. The owning port contract bounds these values to the finite `f32`
+/// range before this function is reached.
+fn validated_f32_port_value(value: f64) -> f32 {
+    let narrowed = value as f32;
+    assert!(
+        narrowed.is_finite(),
+        "port metadata allowed a non-finite f32 conversion"
+    );
+    narrowed
 }
 
 /// Apply each entity's nonzero accumulated [`PendingForces`] into avian, then
@@ -1286,22 +1422,32 @@ mod tests {
         let mut world = World::new();
         let body = world.spawn(RigidBody::Dynamic).id();
 
-        assert!(write_mass(&mut world, body, 4000.0));
-        assert!(write_inertia_axis(&mut world, body, 0, 4625.0));
-        assert!(write_inertia_axis(&mut world, body, 1, 6250.0));
-        assert!(write_inertia_axis(&mut world, body, 2, 4625.0));
-        assert!(write_com_axis(&mut world, body, 0, 0.0));
-        assert!(write_com_axis(&mut world, body, 1, 0.4));
-        assert!(write_com_axis(&mut world, body, 2, 0.0));
+        write_mass(&mut world, body, 4000.0);
+        write_inertia_axis(&mut world, body, 0, 4625.0);
+        write_inertia_axis(&mut world, body, 1, 6250.0);
+        write_inertia_axis(&mut world, body, 2, 4625.0);
+        write_com_axis(&mut world, body, 0, 0.0);
+        write_com_axis(&mut world, body, 1, 0.4);
+        write_com_axis(&mut world, body, 2, 0.0);
+
+        assert_eq!(world.get::<Mass>(body).unwrap().0, 4000.0);
+        assert_eq!(
+            world.get::<AngularInertia>(body).unwrap().principal,
+            Vec3::new(4625.0, 6250.0, 4625.0)
+        );
+        assert_eq!(
+            world.get::<CenterOfMass>(body).unwrap().0,
+            Vec3::new(0.0, 0.4, 0.0)
+        );
         world.clear_trackers();
 
-        assert!(write_mass(&mut world, body, 4000.0));
-        assert!(write_inertia_axis(&mut world, body, 0, 4625.0));
-        assert!(write_inertia_axis(&mut world, body, 1, 6250.0));
-        assert!(write_inertia_axis(&mut world, body, 2, 4625.0));
-        assert!(write_com_axis(&mut world, body, 0, 0.0));
-        assert!(write_com_axis(&mut world, body, 1, 0.4));
-        assert!(write_com_axis(&mut world, body, 2, 0.0));
+        write_mass(&mut world, body, 4000.0);
+        write_inertia_axis(&mut world, body, 0, 4625.0);
+        write_inertia_axis(&mut world, body, 1, 6250.0);
+        write_inertia_axis(&mut world, body, 2, 4625.0);
+        write_com_axis(&mut world, body, 0, 0.0);
+        write_com_axis(&mut world, body, 1, 0.4);
+        write_com_axis(&mut world, body, 2, 0.0);
 
         let body_ref = world.entity(body);
         assert!(!body_ref.get_ref::<Mass>().unwrap().is_changed());

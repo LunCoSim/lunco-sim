@@ -60,7 +60,11 @@
 
 use bevy::light::{PointLight, SpotLight};
 use bevy::prelude::*;
-use lunco_port_core::ports::{PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry};
+use lunco_core::GlobalEntityId;
+use lunco_engineering_values::{Dimension, Unit, UnitReference, UnitScaleExactness};
+use lunco_port_core::ports::{
+    PortBackend, PortDeclaration, PortDirection, PortMetadata, PortRegistry,
+};
 
 /// The light ports, in `list` order.
 const LIGHT_PORTS: [&str; 5] = [
@@ -133,47 +137,6 @@ impl ScenePropertySlot {
     }
 }
 
-fn read_light(world: &World, entity: Entity, name: &str) -> Option<f32> {
-    if let Some(light) = world.get::<PointLight>(entity) {
-        return match name {
-            "light_intensity" => Some(light.intensity),
-            "light_radius" => Some(light.radius),
-            "light_color_r" => Some(light.color.to_linear().red),
-            "light_color_g" => Some(light.color.to_linear().green),
-            "light_color_b" => Some(light.color.to_linear().blue),
-            _ => None,
-        };
-    }
-    if let Some(light) = world.get::<SpotLight>(entity) {
-        return match name {
-            "light_intensity" => Some(light.intensity),
-            "light_radius" => Some(light.radius),
-            "light_color_r" => Some(light.color.to_linear().red),
-            "light_color_g" => Some(light.color.to_linear().green),
-            "light_color_b" => Some(light.color.to_linear().blue),
-            _ => None,
-        };
-    }
-    None
-}
-
-fn read_transform(world: &World, entity: Entity, name: &str) -> Option<f32> {
-    let t = world.get::<Transform>(entity)?;
-    match name {
-        "translation_x" => Some(t.translation.x),
-        "translation_y" => Some(t.translation.y),
-        "translation_z" => Some(t.translation.z),
-        "scale_x" => Some(t.scale.x),
-        "scale_y" => Some(t.scale.y),
-        "scale_z" => Some(t.scale.z),
-        _ => None,
-    }
-}
-
-fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
-    read_light(world, entity, name).or_else(|| read_transform(world, entity, name))
-}
-
 fn read_light_slot(world: &World, entity: Entity, slot: ScenePropertySlot) -> Option<f32> {
     let read = |color: Color, intensity: f32, radius: f32| match slot {
         ScenePropertySlot::LightIntensity => Some(intensity),
@@ -206,6 +169,10 @@ fn read_transform_slot(world: &World, entity: Entity, slot: ScenePropertySlot) -
 
 fn read_value_slot(world: &World, entity: Entity, slot: ScenePropertySlot) -> Option<f32> {
     read_light_slot(world, entity, slot).or_else(|| read_transform_slot(world, entity, slot))
+}
+
+fn read_input(world: &World, entity: Entity, name: &str) -> Option<f64> {
+    read_value_slot(world, entity, ScenePropertySlot::from_name(name)?).map(f64::from)
 }
 
 fn resolve_input_slot(world: &World, entity: Entity, name: &str) -> Option<u64> {
@@ -282,6 +249,123 @@ fn write_transform_slot(
     true
 }
 
+fn write_scene_property_slot(world: &mut World, entity: Entity, slot: u64, value: f64) {
+    let slot = ScenePropertySlot::from_slot(slot)
+        .expect("prepared scene-property slot remains live through commit");
+    write_scene_property(world, entity, slot, value)
+}
+
+fn write_scene_property(world: &mut World, entity: Entity, slot: ScenePropertySlot, value: f64) {
+    // USD scene-property ports target Bevy's native `f32` Transform and light
+    // components. Their metadata bounds writes to the finite `f32` range before
+    // this explicit storage-boundary conversion.
+    let scene_value_f32 = value as f32;
+    assert!(
+        scene_value_f32.is_finite(),
+        "validated scene property must fit f32"
+    );
+    let applied = match slot {
+        ScenePropertySlot::LightIntensity
+        | ScenePropertySlot::LightRadius
+        | ScenePropertySlot::LightColorR
+        | ScenePropertySlot::LightColorG
+        | ScenePropertySlot::LightColorB => write_light_slot(world, entity, slot, scene_value_f32),
+        ScenePropertySlot::TranslationX
+        | ScenePropertySlot::TranslationY
+        | ScenePropertySlot::TranslationZ
+        | ScenePropertySlot::ScaleX
+        | ScenePropertySlot::ScaleY
+        | ScenePropertySlot::ScaleZ => write_transform_slot(world, entity, slot, scene_value_f32),
+    };
+    assert!(
+        applied,
+        "prepared scene-property slot must commit successfully"
+    );
+}
+
+fn transform_translation_frame(
+    world: &World,
+    entity: Entity,
+) -> Option<lunco_engineering_values::CoordinateFrameId> {
+    let frame = if let Some(parent) = world.get::<ChildOf>(entity) {
+        let identity = world.get::<GlobalEntityId>(parent.parent())?.get();
+        format!("lunco:entity/{identity}/local")
+    } else {
+        let identity = world.get::<GlobalEntityId>(entity)?.get();
+        format!("lunco:scene/{identity}/world")
+    };
+    lunco_engineering_values::CoordinateFrameId::new(frame).ok()
+}
+
+fn meters() -> UnitReference {
+    UnitReference::resolved(
+        Unit::new_with_exactness("m", Dimension::LENGTH, 1.0, 0.0, UnitScaleExactness::Exact)
+            .expect("meter unit definition is valid"),
+    )
+}
+
+fn lumens() -> UnitReference {
+    UnitReference::resolved(
+        Unit::new_with_exactness(
+            "lm",
+            Dimension([0, 0, 0, 0, 0, 0, 1]),
+            1.0,
+            0.0,
+            UnitScaleExactness::Exact,
+        )
+        .expect("lumen unit definition is valid"),
+    )
+}
+
+fn dimensionless() -> UnitReference {
+    UnitReference::resolved(
+        Unit::new_with_exactness("1", Dimension::NONE, 1.0, 0.0, UnitScaleExactness::Exact)
+            .expect("dimensionless unit definition is valid"),
+    )
+}
+
+fn scene_property_metadata(
+    world: &World,
+    entity: Entity,
+    name: &str,
+    direction: PortDirection,
+) -> PortMetadata {
+    let float_max = f32::MAX as f64;
+    let slot = ScenePropertySlot::from_name(name)
+        .expect("scene property metadata is requested only for a declared slot");
+    let (unit, min, max, frame) = match slot {
+        ScenePropertySlot::LightIntensity => (Some(lumens()), Some(0.0), Some(float_max), None),
+        ScenePropertySlot::LightRadius => (Some(meters()), Some(0.0), Some(float_max), None),
+        ScenePropertySlot::LightColorR
+        | ScenePropertySlot::LightColorG
+        | ScenePropertySlot::LightColorB => (Some(dimensionless()), None, Some(float_max), None),
+        ScenePropertySlot::TranslationX
+        | ScenePropertySlot::TranslationY
+        | ScenePropertySlot::TranslationZ => (
+            Some(meters()),
+            Some(-float_max),
+            Some(float_max),
+            transform_translation_frame(world, entity),
+        ),
+        ScenePropertySlot::ScaleX | ScenePropertySlot::ScaleY | ScenePropertySlot::ScaleZ => (
+            Some(dimensionless()),
+            Some(-float_max),
+            Some(float_max),
+            None,
+        ),
+    };
+    PortMetadata::scalar(
+        direction,
+        unit,
+        min,
+        max,
+        "USD scene property",
+        "scene author",
+        true,
+        frame,
+    )
+}
+
 /// True when the value already at `name` is bit-identical to `v`.
 ///
 /// Compared by BITS, not by `==`: a NaN — which `src * factor + offset` in
@@ -290,76 +374,6 @@ fn write_transform_slot(
 /// forever. This guard is what keeps a static scene free: mutably dereferencing a
 /// `Transform` or a `PointLight` sets `Changed`, and Bevy's transform propagation
 /// and light clustering both do real work per change.
-fn unchanged(world: &World, entity: Entity, name: &str, v: f32) -> bool {
-    read_value(world, entity, name).is_some_and(|cur| cur.to_bits() == v.to_bits())
-}
-
-fn write_light(world: &mut World, entity: Entity, name: &str, v: f32) -> bool {
-    if !LIGHT_PORTS.contains(&name) {
-        return false;
-    }
-    if unchanged(world, entity, name, v) {
-        return true;
-    }
-    if let Some(mut light) = world.get_mut::<PointLight>(entity) {
-        match name {
-            "light_intensity" => light.intensity = v,
-            "light_radius" => light.radius = v,
-            _ => {
-                let mut lin = light.color.to_linear();
-                match name {
-                    "light_color_r" => lin.red = v,
-                    "light_color_g" => lin.green = v,
-                    "light_color_b" => lin.blue = v,
-                    _ => return false,
-                }
-                light.color = Color::LinearRgba(lin);
-            }
-        }
-        return true;
-    }
-    if let Some(mut light) = world.get_mut::<SpotLight>(entity) {
-        match name {
-            "light_intensity" => light.intensity = v,
-            "light_radius" => light.radius = v,
-            _ => {
-                let mut lin = light.color.to_linear();
-                match name {
-                    "light_color_r" => lin.red = v,
-                    "light_color_g" => lin.green = v,
-                    "light_color_b" => lin.blue = v,
-                    _ => return false,
-                }
-                light.color = Color::LinearRgba(lin);
-            }
-        }
-        return true;
-    }
-    false
-}
-
-fn write_transform(world: &mut World, entity: Entity, name: &str, v: f32) -> bool {
-    if world.get::<Transform>(entity).is_none() || !TRANSFORM_PORTS.contains(&name) {
-        return false;
-    }
-    if unchanged(world, entity, name, v) {
-        return true;
-    }
-    let Some(mut t) = world.get_mut::<Transform>(entity) else {
-        return false;
-    };
-    match name {
-        "translation_x" => t.translation.x = v,
-        "translation_y" => t.translation.y = v,
-        "translation_z" => t.translation.z = v,
-        "scale_x" => t.scale.x = v,
-        "scale_y" => t.scale.y = v,
-        "scale_z" => t.scale.z = v,
-        _ => return false,
-    }
-    true
-}
-
 /// Scene properties are **inputs**: something the simulation writes into, never a
 /// source another prim reads. See the module docs for why that is not negotiable.
 pub(crate) const SCENE_PROPERTY_BACKEND: PortBackend = PortBackend {
@@ -397,64 +411,36 @@ pub(crate) const SCENE_PROPERTY_BACKEND: PortBackend = PortBackend {
     },
     list: |world, entity, out| {
         // Listing exactly what the entity HAS is what keeps `ListPorts` and
-        // `write_input` telling the same story: every name reported here is one a
+        // the resolved slot writer telling the same story: every name reported here is one a
         // write would be accepted for, and no name is hidden because it currently
         // happens to hold a default.
         if world.get::<PointLight>(entity).is_some() || world.get::<SpotLight>(entity).is_some() {
             for name in LIGHT_PORTS {
-                out.push(PortRef {
+                out.push(PortDeclaration {
                     name: name.to_string(),
                     direction: PortDirection::In,
-                    value: read_light(world, entity, name).unwrap_or(0.0) as f64,
                 });
             }
         }
         if world.get::<Transform>(entity).is_some() {
             for name in TRANSFORM_PORTS {
-                out.push(PortRef {
+                out.push(PortDeclaration {
                     name: name.to_string(),
                     direction: PortDirection::In,
-                    value: read_transform(world, entity, name).unwrap_or(0.0) as f64,
                 });
             }
         }
     },
-    metadata: Some(|_world, _entity, name, direction| {
-        let unit = match name {
-            "exposure_ev100" => Some("EV100"),
-            "illuminance" => Some("lux"),
-            _ => None,
-        };
-        PortMetadata::scalar(
-            direction,
-            unit,
-            None,
-            None,
-            "USD scene property",
-            "scene author",
-            true,
-        )
-    }),
+    metadata: scene_property_metadata,
     read_output: |_, _, _| None,
-    read_input: |world, entity, name| read_value(world, entity, name).map(|v| v as f64),
-    write_input: |world, entity, name, value| {
-        let v = value as f32;
-        write_light(world, entity, name, v) || write_transform(world, entity, name, v)
-    },
+    read_input,
     resolve_output: None,
     resolve_input: Some(resolve_input_slot),
     read_slot: None,
     read_input_slot: Some(|world, entity, slot| {
         read_value_slot(world, entity, ScenePropertySlot::from_slot(slot)?).map(f64::from)
     }),
-    write_slot: Some(|world, entity, slot, value| {
-        let Some(slot) = ScenePropertySlot::from_slot(slot) else {
-            return false;
-        };
-        let value = value as f32;
-        write_light_slot(world, entity, slot, value)
-            || write_transform_slot(world, entity, slot, value)
-    }),
+    write_slot: Some(write_scene_property_slot),
 };
 
 /// Register the scene-property backend.
@@ -539,8 +525,14 @@ mod tests {
             .id();
         let reg = app.world().resource::<PortRegistry>().clone();
 
-        assert!(reg.write_port(app.world_mut(), e, "light_intensity", 680_000.0));
-        assert!(reg.write_port(app.world_mut(), e, "light_radius", 0.66));
+        assert!(
+            reg.write_port(app.world_mut(), e, "light_intensity", 680_000.0)
+                .is_ok()
+        );
+        assert!(
+            reg.write_port(app.world_mut(), e, "light_radius", 0.66)
+                .is_ok()
+        );
 
         let light = app.world().get::<PointLight>(e).unwrap();
         assert_eq!(light.intensity, 680_000.0);
@@ -552,8 +544,14 @@ mod tests {
         let resolved = reg
             .resolve_input(app.world(), e, "light_intensity")
             .expect("light input resolves once to a typed slot");
-        assert_eq!(reg.read_resolved(app.world(), e, resolved), Some(680_000.0));
-        assert!(reg.write_resolved(app.world_mut(), e, resolved, 700_000.0));
+        assert_eq!(
+            reg.read_resolved(app.world(), e, &resolved),
+            Some(680_000.0)
+        );
+        assert!(
+            reg.write_resolved(app.world_mut(), e, &resolved, 700_000.0)
+                .is_ok()
+        );
         assert_eq!(
             app.world().get::<PointLight>(e).unwrap().intensity,
             700_000.0
@@ -587,8 +585,14 @@ mod tests {
             .id();
         let reg = app.world().resource::<PortRegistry>().clone();
 
-        assert!(reg.write_port(app.world_mut(), e, "light_intensity", 500_000.0));
-        assert!(reg.write_port(app.world_mut(), e, "light_radius", 0.5));
+        assert!(
+            reg.write_port(app.world_mut(), e, "light_intensity", 500_000.0)
+                .is_ok()
+        );
+        assert!(
+            reg.write_port(app.world_mut(), e, "light_radius", 0.5)
+                .is_ok()
+        );
 
         let light = app.world().get::<SpotLight>(e).unwrap();
         assert_eq!(light.intensity, 500_000.0);
@@ -616,7 +620,7 @@ mod tests {
         assert_eq!(reg.read_output_port(app.world(), e, "translation_y"), None);
     }
 
-    /// A prim with no `PointLight` is not this backend's business. Returning false
+    /// A prim with no `PointLight` is not this backend's business. Returning an error
     /// is what lets the next backend claim the name and, failing that, what makes
     /// `propagate_connections` report the wire as dangling instead of eating it.
     #[test]
@@ -624,9 +628,12 @@ mod tests {
         let mut app = app();
         let e = app.world_mut().spawn(Transform::default()).id();
         let reg = app.world().resource::<PortRegistry>().clone();
-        assert!(!reg.write_port(app.world_mut(), e, "light_intensity", 1.0));
+        assert!(
+            reg.write_port(app.world_mut(), e, "light_intensity", 1.0)
+                .is_err()
+        );
         // …while the transform on the same entity still works.
-        assert!(reg.write_port(app.world_mut(), e, "scale_y", 2.0));
+        assert!(reg.write_port(app.world_mut(), e, "scale_y", 2.0).is_ok());
     }
 
     /// A name this backend does not own is refused even when the component is
@@ -640,8 +647,11 @@ mod tests {
             .spawn((PointLight::default(), Transform::default()))
             .id();
         let reg = app.world().resource::<PortRegistry>().clone();
-        assert!(!reg.write_port(app.world_mut(), e, "intensity", 1.0));
-        assert!(!reg.write_port(app.world_mut(), e, "throttle", 1.0));
+        assert!(
+            reg.write_port(app.world_mut(), e, "intensity", 1.0)
+                .is_err()
+        );
+        assert!(reg.write_port(app.world_mut(), e, "throttle", 1.0).is_err());
     }
 
     /// Holding a value must not dirty the component: `Changed<Transform>` drives
@@ -653,10 +663,10 @@ mod tests {
         let e = app.world_mut().spawn(Transform::default()).id();
         let reg = app.world().resource::<PortRegistry>().clone();
 
-        assert!(reg.write_port(app.world_mut(), e, "scale_y", 2.5));
+        assert!(reg.write_port(app.world_mut(), e, "scale_y", 2.5).is_ok());
         app.world_mut().clear_trackers();
 
-        assert!(reg.write_port(app.world_mut(), e, "scale_y", 2.5));
+        assert!(reg.write_port(app.world_mut(), e, "scale_y", 2.5).is_ok());
         assert!(
             !app.world()
                 .entity(e)
@@ -665,7 +675,7 @@ mod tests {
                 .is_changed()
         );
 
-        assert!(reg.write_port(app.world_mut(), e, "scale_y", 3.0));
+        assert!(reg.write_port(app.world_mut(), e, "scale_y", 3.0).is_ok());
         assert!(
             app.world()
                 .entity(e)
@@ -675,7 +685,7 @@ mod tests {
         );
     }
 
-    /// `list` reports exactly what the entity has, so `ListPorts` and `write_input`
+    /// `list` reports exactly what the entity has, so `ListPorts` and slot writes
     /// cannot disagree about which names exist.
     #[test]
     fn list_reports_only_the_components_present() {
@@ -683,7 +693,7 @@ mod tests {
         let e = app.world_mut().spawn(Transform::default()).id();
         let reg = app.world().resource::<PortRegistry>().clone();
         let names: Vec<String> = reg
-            .entity_ports(app.world(), e)
+            .entity_port_owners(app.world(), e)
             .into_iter()
             .map(|p| p.name)
             .collect();

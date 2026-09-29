@@ -738,8 +738,8 @@ fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first
         "generic readiness/binding diagnostics report an unresolved runtime fault"));
     f.push(t_true(s.scene_generation != () && s.start_count == 1,
         "scenario on_start ran once after a committed scene generation was available"));
-    f.push(t_true(s.start_tick == 0,
-        "scenario on_start ran at SimTick 0 after startup readiness completed"));
+    f.push(t_true(s.start_tick != () && s.start_tick >= 0,
+        "scenario on_start captured its admitted global SimTick baseline"));
     f.push(t_true(s.generation_stable == true,
         "the active scenario retained the same committed scene generation through its run"));
     f.push(t_true(s.spatial_query_ids_ordered == true,
@@ -856,10 +856,10 @@ fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first
     }
     f.push(t_present(first_tick, "first authoritative behavior tick snapshot"));
     if first_tick != () {
-        f.push(t_true(first_tick.tick == 1 && first_tick.cycle == "simulation"
+        f.push(t_true(first_tick.tick == s.start_tick + 1 && first_tick.cycle == "simulation"
             && first_tick.phase == "behavior" && first_tick.clock == "simulation"
             && first_tick.generation == s.scene_generation,
-            "first dependency reads ran in the scene generation captured by on_start"));
+            "first dependency reads ran one admitted tick after on_start in its captured scene generation"));
         f.push(t_true(first_tick.physics_compute_threads >= 1,
             "first dependency reads observed the admitted physics compute profile"));
         f.push(t_true(first_tick.actor_identity == s.actor_identity,

@@ -170,9 +170,12 @@ impl ApiQueryProvider for ScriptInspectProvider {
         // Live FSM + per-entity state from the Rhai scenario driver. The driver
         // builds the typed API value; JSON is introduced only below when this
         // provider constructs its external API response.
-        let intro = world
-            .get_resource::<ScenarioDriver<RhaiScenarioRuntime>>()
-            .and_then(|d| d.introspect(entity, &ApiValueBuilder));
+        let intro = match world.get_resource::<ScenarioDriver<RhaiScenarioRuntime>>() {
+            Some(driver) => driver
+                .introspect(entity, &ApiValueBuilder)
+                .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error.message))?,
+            None => None,
+        };
 
         // Compile/runtime health, the SAME block ScriptStatus returns.
         let status = match doc_raw {

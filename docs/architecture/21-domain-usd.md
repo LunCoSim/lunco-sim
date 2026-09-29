@@ -704,7 +704,7 @@ anchors, `physics:limitLower/Upper` or `physics:min/maxDistance`):
 
 | USD prim | Avian joint | Notes |
 |---|---|---|
-| `PhysicsRevoluteJoint` | `RevoluteJoint` | 1-DOF hinge; exposes `angle` port |
+| `PhysicsRevoluteJoint` | `RevoluteJoint` | 1-DOF hinge; exposes measured/commanded `angle` (rad), with authored limits carried by its port metadata and enforced by `SetPorts` |
 | `PhysicsPrismaticJoint` | `PrismaticJoint` | 1-DOF slider; exposes `displacement` port |
 | `PhysicsFixedJoint` | `FixedJoint` | rigid weld |
 | `PhysicsSphericalJoint` | `SphericalJoint` | ball; `physics:coneAngle0/1Limit` → swing, limits → twist |

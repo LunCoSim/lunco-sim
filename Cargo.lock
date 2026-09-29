@@ -7059,6 +7059,7 @@ dependencies = [
  "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-engineering-values",
  "lunco-exposure-core",
  "lunco-hooks",
  "lunco-lint",
@@ -7478,6 +7479,7 @@ dependencies = [
  "lunco-core",
  "lunco-core-runtime",
  "lunco-embodiment-core",
+ "lunco-engineering-values",
  "lunco-environment",
  "lunco-hooks",
  "lunco-input-core",
@@ -7564,6 +7566,7 @@ dependencies = [
  "bevy",
  "lunco-command-contracts",
  "lunco-command-macro",
+ "lunco-engineering-values",
  "lunco-hash",
  "lunco-id",
  "lunco-runtime-context",
@@ -7609,7 +7612,9 @@ dependencies = [
  "lunco-core-runtime",
  "lunco-core-session",
  "lunco-cosim-core",
+ "lunco-engineering-values",
  "lunco-hooks",
+ "lunco-modelica-runtime",
  "lunco-physics",
  "lunco-port-core",
  "lunco-time",
@@ -7622,6 +7627,7 @@ dependencies = [
  "bevy",
  "lunco-core",
  "lunco-port-core",
+ "serde",
 ]
 
 [[package]]
@@ -8484,6 +8490,7 @@ dependencies = [
  "lunco-core",
  "lunco-core-runtime",
  "lunco-core-session",
+ "lunco-cosim-core",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-experiments",
@@ -8652,6 +8659,7 @@ dependencies = [
  "crossbeam-channel",
  "lunco-core-runtime",
  "lunco-doc",
+ "lunco-engineering-values",
  "lunco-modelica-ast",
  "lunco-signal",
  "lunco-storage",
@@ -8983,6 +8991,7 @@ dependencies = [
  "lunco-api-core",
  "lunco-core",
  "lunco-core-runtime",
+ "lunco-hash",
  "lunco-hooks",
  "lunco-readiness",
  "lunco-spatial",
@@ -8995,6 +9004,7 @@ name = "lunco-port-core"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-engineering-values",
 ]
 
 [[package]]
@@ -10258,6 +10268,8 @@ name = "lunco-usd-bevy-scene-ports"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-core",
+ "lunco-engineering-values",
  "lunco-port-core",
 ]
 
@@ -13756,6 +13768,7 @@ dependencies = [
  "once_cell",
  "rhai_codegen",
  "serde",
+ "serde_json",
  "smallvec",
  "smartstring",
  "thin-vec",

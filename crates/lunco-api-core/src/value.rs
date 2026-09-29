@@ -934,7 +934,7 @@ impl serde::Serializer for ApiValueSerializer {
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
         Ok(StructVariantSerializer {
             variant,
-            fields: Vec::new(),
+            fields: MapSerializer::default(),
         })
     }
 }
@@ -954,9 +954,10 @@ impl SequenceSerializer {
 
     fn finish(self) -> ApiValue {
         let values = ApiValue::Array(self.values);
-        self.variant
-            .map(|variant| ApiValue::map([(variant, values.clone())]))
-            .unwrap_or(values)
+        match self.variant {
+            Some(variant) => ApiValue::map([(variant, values)]),
+            None => values,
+        }
     }
 }
 
@@ -1024,7 +1025,9 @@ impl SerializeTupleVariant for SequenceSerializer {
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        let variant = self.variant.expect("tuple variant has a variant name");
+        let variant = self
+            .variant
+            .ok_or_else(|| ApiValueError("tuple variant has no variant name".into()))?;
         Ok(ApiValue::map([(variant, ApiValue::Array(self.values))]))
     }
 }
@@ -1036,12 +1039,14 @@ struct MapSerializer {
 }
 
 impl MapSerializer {
-    fn insert(&mut self, key: String, value: ApiValue) {
-        if let Some((_, existing)) = self.entries.iter_mut().find(|(name, _)| name == &key) {
-            *existing = value;
-        } else {
-            self.entries.push((key, value));
+    fn insert(&mut self, key: String, value: ApiValue) -> Result<(), ApiValueError> {
+        if self.entries.iter().any(|(name, _)| name == &key) {
+            return Err(ApiValueError(format!(
+                "duplicate API map key `{key}` during serialization"
+            )));
         }
+        self.entries.push((key, value));
+        Ok(())
     }
 }
 
@@ -1068,8 +1073,7 @@ impl SerializeMap for MapSerializer {
             .pending_key
             .take()
             .ok_or_else(|| ApiValueError("map value has no preceding key".into()))?;
-        self.insert(key, value.serialize(ApiValueSerializer)?);
-        Ok(())
+        self.insert(key, value.serialize(ApiValueSerializer)?)
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
@@ -1089,8 +1093,7 @@ impl SerializeStruct for MapSerializer {
         key: &'static str,
         value: &T,
     ) -> Result<(), Self::Error> {
-        self.insert(key.to_owned(), value.serialize(ApiValueSerializer)?);
-        Ok(())
+        self.insert(key.to_owned(), value.serialize(ApiValueSerializer)?)
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
@@ -1100,7 +1103,7 @@ impl SerializeStruct for MapSerializer {
 
 struct StructVariantSerializer {
     variant: &'static str,
-    fields: Vec<(String, ApiValue)>,
+    fields: MapSerializer,
 }
 
 impl SerializeStructVariant for StructVariantSerializer {
@@ -1113,12 +1116,12 @@ impl SerializeStructVariant for StructVariantSerializer {
         value: &T,
     ) -> Result<(), Self::Error> {
         self.fields
-            .push((key.to_owned(), value.serialize(ApiValueSerializer)?));
-        Ok(())
+            .insert(key.to_owned(), value.serialize(ApiValueSerializer)?)
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        Ok(ApiValue::map([(self.variant, ApiValue::Map(self.fields))]))
+        let fields = SerializeStruct::end(self.fields)?;
+        Ok(ApiValue::map([(self.variant, fields)]))
     }
 }
 

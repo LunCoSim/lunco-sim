@@ -172,15 +172,13 @@ fn refresh_live_values(
             continue;
         }
         for row in &mut entity.ports {
-            if let Some(value) = registry.read_port_for_handle(
+            row.info.value = registry.read_port_for_handle(
                 world,
                 row.owner,
                 row.entity,
                 &row.info.name,
                 row.info.direction,
-            ) {
-                row.info.value = value;
-            }
+            );
         }
     }
 }
@@ -574,13 +572,17 @@ impl PortPanel {
         }
 
         ui.vertical(|ui| {
-            ui.label(info.metadata.value_type);
+            ui.label(info.metadata.value_type.as_str());
             ui.small(
                 info.metadata
                     .unit
-                    .as_deref()
+                    .as_ref()
+                    .map(|unit| unit.id())
                     .unwrap_or("unitless / unspecified"),
             );
+            if let Some(frame) = &info.metadata.frame {
+                ui.small(format!("frame: {frame}"));
+            }
             if let Some(range) = range_label(&info.metadata) {
                 ui.small(range);
             }
@@ -597,10 +599,12 @@ impl PortPanel {
         }
 
         let key = (row.entity, info.name.clone());
-        let draft = self
-            .drafts
-            .entry(key)
-            .or_insert_with(|| format!("{:.9}", row.held.unwrap_or(info.value)));
+        let draft = self.drafts.entry(key).or_insert_with(|| {
+            row.held
+                .or(info.value)
+                .map(|value| format!("{value:.9}"))
+                .unwrap_or_default()
+        });
         let validation = draft
             .parse::<f64>()
             .map_err(|_| "enter a number".to_owned())
@@ -665,7 +669,12 @@ fn port_matches(row: &PortRow, entity_label: &str, filter: &str) -> bool {
         &row.info.name,
         &row.info.metadata.source,
         &row.info.metadata.authority,
-        row.info.metadata.unit.as_deref().unwrap_or_default(),
+        row.info
+            .metadata
+            .unit
+            .as_ref()
+            .map(|unit| unit.id())
+            .unwrap_or_default(),
     ]
     .iter()
     .any(|value| value.to_lowercase().contains(filter))
@@ -679,11 +688,11 @@ fn direction_label(direction: PortDirection) -> &'static str {
     }
 }
 
-fn format_value(value: f64) -> String {
-    if value.is_finite() {
-        format!("{value:.6}")
-    } else {
-        "invalid".into()
+fn format_value(value: Option<f64>) -> String {
+    match value {
+        Some(value) if value.is_finite() => format!("{value:.6}"),
+        Some(_) => "invalid".into(),
+        None => "unavailable".into(),
     }
 }
 
@@ -708,7 +717,7 @@ mod tests {
             info: PortInfo {
                 name: "throttle".into(),
                 direction: PortDirection::In,
-                value: 0.0,
+                value: Some(0.0),
                 metadata: PortMetadata::scalar(
                     PortDirection::In,
                     None,
@@ -717,6 +726,7 @@ mod tests {
                     "rover controller",
                     "operator",
                     true,
+                    None,
                 ),
             },
             wired: false,
@@ -735,7 +745,7 @@ mod tests {
             info: PortInfo {
                 name: "throttle".into(),
                 direction: PortDirection::In,
-                value: 0.0,
+                value: Some(0.0),
                 metadata: PortMetadata::scalar(
                     PortDirection::In,
                     None,
@@ -744,6 +754,7 @@ mod tests {
                     "rover controller",
                     "operator",
                     true,
+                    None,
                 ),
             },
             wired: false,
@@ -782,6 +793,7 @@ mod tests {
             "control",
             "operator",
             true,
+            None,
         );
         assert!(metadata.validate(0.5).is_ok());
         assert!(metadata.validate(2.0).is_err());
@@ -812,11 +824,15 @@ mod tests {
         assert_eq!(view.entities[0].ports[0].info.name, "throttle");
 
         let registry = world.resource::<PortRegistry>().clone();
-        assert!(registry.write_port(&mut world, owned, "throttle", 0.75));
+        assert!(
+            registry
+                .write_port(&mut world, owned, "throttle", 0.75)
+                .is_ok()
+        );
         populate_port_view(&mut world);
         assert_eq!(
             world.resource::<PortView>().entities[0].ports[0].info.value,
-            0.0
+            Some(0.0)
         );
 
         world
@@ -826,7 +842,7 @@ mod tests {
         populate_port_view(&mut world);
         assert_eq!(
             world.resource::<PortView>().entities[0].ports[0].info.value,
-            0.75
+            Some(0.75)
         );
 
         let second = world

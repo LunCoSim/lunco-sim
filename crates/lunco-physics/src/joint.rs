@@ -12,6 +12,9 @@ use bevy::prelude::*;
 /// The port name a revolute joint exposes in both directions.
 pub const JOINT_ANGLE_PORT: &str = "angle";
 
+/// The port name a revolute joint exposes for its measured coordinate rate.
+pub const JOINT_ANGULAR_VELOCITY_PORT: &str = "angular_velocity";
+
 /// The port name a prismatic joint exposes in both directions.
 pub const JOINT_DISPLACEMENT_PORT: &str = "displacement";
 

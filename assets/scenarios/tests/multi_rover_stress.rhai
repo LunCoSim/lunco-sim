@@ -25,6 +25,11 @@ fn state_scalar(value) {
     value.to_string()
 }
 
+fn relative_sample_tick(value, startup_tick) {
+    if value == () { return "<unit>"; }
+    (value - startup_tick).to_string()
+}
+
 fn state_vector(value) {
     if value == () { return "<unit>"; }
     let text = "";
@@ -103,7 +108,7 @@ fn emit_modelica_state_blocks(tick, identity, variables) {
     }
 }
 
-fn modelica_clock_state(rover_paths, rovers, capture_values) {
+fn modelica_clock_state(rover_paths, rovers, trace_tick, capture_values) {
     let clocks = [];
     let model_count = 0;
     let variables_count = 0;
@@ -129,7 +134,7 @@ fn modelica_clock_state(rover_paths, rovers, capture_values) {
                     variables_count += fields_count;
                     if fields_count == 0 { complete = false; }
                     if capture_values {
-                        emit_modelica_state_blocks(sim_tick(),
+                        emit_modelica_state_blocks(trace_tick,
                             rover_paths[i] + "/" + name(entity), variables);
                     }
                 } else {
@@ -151,12 +156,13 @@ fn modelica_clock_state(rover_paths, rovers, capture_values) {
        variables_count: variables_count, row: row }
 }
 
-fn deterministic_state_sample(rover_paths, rovers, capture_modelica_values) {
+fn deterministic_state_sample(rover_paths, rovers, trace_tick, startup_tick,
+                              capture_modelica_values) {
     if rover_paths.len() != rovers.len() {
-        return #{ valid: false, row: sim_tick().to_string() + "|invalid-roster" };
+        return #{ valid: false, row: trace_tick.to_string() + "|invalid-roster" };
     }
     let valid = true;
-    let row = sim_tick().to_string();
+    let row = trace_tick.to_string();
     for i in 0..rovers.len() {
         let path = rover_paths[i];
         let rover = rovers[i];
@@ -243,10 +249,11 @@ fn deterministic_state_sample(rover_paths, rovers, capture_modelica_values) {
             row += "," + state_scalar(wheel.normal_force_n);
             row += "," + state_scalar(wheel.suspension_compression_m);
             row += "," + state_vector(wheel.tire_force_n);
-            row += "," + state_scalar(wheel.sample_tick);
+            row += "," + relative_sample_tick(wheel.sample_tick, startup_tick);
         }
     }
-    let modelica = modelica_clock_state(rover_paths, rovers, capture_modelica_values);
+    let modelica = modelica_clock_state(rover_paths, rovers, trace_tick,
+        capture_modelica_values);
     row += "|modelica=" + modelica.row;
     #{ valid: valid && modelica.complete
             && modelica.count == rovers.len() && modelica.variables_count > 0,
@@ -310,7 +317,8 @@ fn on_start(me, ctx) {
     this.deterministic_trace_ticks = [];
     this.early_determinism_trace_captured = false;
     this.deterministic_trace_valid = true;
-    this.startup_tick_valid = sim_tick() == 0;
+    this.startup_tick = sim_tick();
+    print("D4_STARTUP_BASELINE_V1|" + this.startup_tick.to_string());
     this.first_behavior_tick_valid = false;
     this.guidance_checked = false;
     this.guidance_command_ready = false;
@@ -428,38 +436,40 @@ fn on_start(me, ctx) {
         return;
     }
 
-    let initial = deterministic_state_sample(this.rover_paths, this.rovers, true);
+    let initial = deterministic_state_sample(this.rover_paths, this.rovers,
+        0, this.startup_tick, true);
     this.deterministic_trace_valid = this.deterministic_trace_valid && initial.valid;
-    this.deterministic_trace_ticks.push(sim_tick());
+    this.deterministic_trace_ticks.push(0);
     print("D4_STATE_TRACE_V1|" + initial.row);
     print("[multi-rover-stress] discovered " + this.rovers.len() + " rover(s)");
 }
 
 fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
+    let scenario_tick = sim_tick() - this.startup_tick;
     this.t += dt();
 
     if !this.early_determinism_trace_captured {
         this.early_determinism_trace_captured = true;
-        this.first_behavior_tick_valid = sim_tick() == 1;
-        let capture_modelica_values = sim_tick() < 10 || sim_tick() > 20;
+        this.first_behavior_tick_valid = scenario_tick == 1;
+        let capture_modelica_values = scenario_tick < 10 || scenario_tick > 20;
         let sample = deterministic_state_sample(this.rover_paths, this.rovers,
-            capture_modelica_values);
+            scenario_tick, this.startup_tick, capture_modelica_values);
         this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
         print("D4_EARLY_STATE_TRACE_V1|" + sample.row);
     }
-    if sim_tick() <= 30 || (sim_tick() <= 150 && sim_tick() % 10 == 0) {
-        let capture_modelica_values = sim_tick() >= 10 && sim_tick() <= 20;
+    if scenario_tick <= 30 || (scenario_tick <= 150 && scenario_tick % 10 == 0) {
+        let capture_modelica_values = scenario_tick >= 10 && scenario_tick <= 20;
         let sample = deterministic_state_sample(this.rover_paths, this.rovers,
-            capture_modelica_values);
+            scenario_tick, this.startup_tick, capture_modelica_values);
         this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
         print("D4_TICK_STATE_TRACE_V1|" + sample.row);
     }
-    if this.rovers.len() == 20 && (sim_tick() == 1 || sim_tick() == 2
-        || sim_tick() == 11 || sim_tick() == 80) {
+    if this.rovers.len() == 20 && (scenario_tick == 1 || scenario_tick == 2
+        || scenario_tick == 11 || scenario_tick == 80) {
         for i in 0..this.rovers.len() {
             trace_articulated_body_state(
-                sim_tick(), this.rover_paths[i], this.rovers[i]);
+                scenario_tick, this.rover_paths[i], this.rovers[i]);
         }
     }
 
@@ -468,9 +478,10 @@ fn on_tick(me, ctx) {
             for rover in this.rovers { brake(rover); }
             return;
         }
-        let sample = deterministic_state_sample(this.rover_paths, this.rovers, true);
+        let sample = deterministic_state_sample(this.rover_paths, this.rovers,
+            scenario_tick, this.startup_tick, true);
         this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
-        this.deterministic_trace_ticks.push(sim_tick());
+        this.deterministic_trace_ticks.push(scenario_tick);
         print("D4_STATE_TRACE_V1|" + sample.row);
         for i in 0..this.rovers.len() {
             let at = world_pos(this.rovers[i]);
@@ -519,30 +530,28 @@ fn on_tick(me, ctx) {
 
     if this.t >= this.next_determinism_sample_s {
         let sample = deterministic_state_sample(this.rover_paths, this.rovers,
-            false);
+            scenario_tick, this.startup_tick, false);
         this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
-        this.deterministic_trace_ticks.push(sim_tick());
+        this.deterministic_trace_ticks.push(scenario_tick);
         print("D4_STATE_TRACE_V1|" + sample.row);
         this.next_determinism_sample_s += 3.0;
     }
 
     if this.t < SETTLE_SECONDS + DRIVE_SECONDS { return; }
     if this.deterministic_trace_ticks.len() == 0
-        || this.deterministic_trace_ticks[this.deterministic_trace_ticks.len() - 1] != sim_tick() {
+        || this.deterministic_trace_ticks[this.deterministic_trace_ticks.len() - 1] != scenario_tick {
         let sample = deterministic_state_sample(this.rover_paths, this.rovers,
-            false);
+            scenario_tick, this.startup_tick, false);
         this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
-        this.deterministic_trace_ticks.push(sim_tick());
+        this.deterministic_trace_ticks.push(scenario_tick);
         print("D4_STATE_TRACE_V1|" + sample.row);
     }
     let checks = [];
     let modelica_profile = modelica_worker_step_profile();
     checks.push(t_true(this.authored_pose_valid,
         "authored rover transforms are active and seeded before physics runs"));
-    checks.push(t_true(this.startup_tick_valid,
-        "on_start ran at SimTick 0 after the complete startup admission boundary"));
     checks.push(t_true(this.first_behavior_tick_valid,
-        "the first on_tick ran at SimTick 1"));
+        "the first on_tick ran one admitted tick after scenario startup"));
     checks.push(t_true(this.guidance_checked && this.guidance_command_ready,
         "every rover received its authored Modelica guidance setpoint"));
     checks.push(t_true(this.physics_profile_known && this.physics_compute_threads >= 1,

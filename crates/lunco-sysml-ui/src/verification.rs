@@ -44,6 +44,7 @@ pub(crate) enum VerificationRunOutcome {
     Passed,
     Failed,
     Inconclusive,
+    Unverified,
     Error,
     Cancelled,
     NoVerdict,
@@ -998,6 +999,9 @@ fn classify_scene_test_report(
                 VerificationVerdict::Inconclusive => {
                     (VerificationRunOutcome::Inconclusive, "INCONCLUSIVE", 1)
                 }
+                VerificationVerdict::Unverified => {
+                    (VerificationRunOutcome::Unverified, "UNVERIFIED", 1)
+                }
                 VerificationVerdict::Error => (VerificationRunOutcome::Error, "ERROR", 1),
             };
             if report.process_exit_code != expected_exit_code {
@@ -1080,6 +1084,11 @@ mod tests {
                 VerificationVerdict::Inconclusive,
                 1,
                 VerificationRunOutcome::Inconclusive,
+            ),
+            (
+                VerificationVerdict::Unverified,
+                1,
+                VerificationRunOutcome::Unverified,
             ),
             (VerificationVerdict::Error, 1, VerificationRunOutcome::Error),
         ] {

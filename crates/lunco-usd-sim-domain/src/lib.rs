@@ -1,8 +1,9 @@
 //! Runtime projection of composed USD component networks into Modelica wrappers.
 //!
 //! A reusable part applies `LunCoProgramAPI` for its model facet. Modelica remains the
-//! authority for equations and member types; USD supplies instances, constant
-//! input opinions, and ordinary property connections between public members.
+//! authority for equations and member types; USD supplies instances, typed
+//! parameters, constant input opinions, and ordinary property connections
+//! between public members.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -394,6 +395,8 @@ pub struct DomainComponent {
     /// Constant public inputs, supplied to the selected synthesis policy as
     /// component modifications.
     pub constants: BTreeMap<String, f64>,
+    /// Typed static Modelica parameters authored on the USD component.
+    pub parameters: BTreeMap<String, ModelicaParameterValue>,
     /// Acausal member name to the connected `connectors:*` property path.
     pub connectors: BTreeMap<String, Vec<String>>,
     /// All declared acausal members, including currently unconnected pins.
@@ -406,6 +409,15 @@ pub struct DomainComponent {
     /// USD-authored metadata, not a solver direction: acausal Modelica flow
     /// remains reversible and runtime sign still controls animated direction.
     pub topology_role: String,
+}
+
+/// Primitive scalar values that can be authored as Modelica component
+/// parameters in USD and emitted as typed Modelica modifications.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ModelicaParameterValue {
+    Real(f64),
+    Integer(i32),
+    Boolean(bool),
 }
 
 /// One network root and its public causal boundary.
@@ -3185,6 +3197,7 @@ mod tests {
             source_asset: "lunco://models/LunCo/Electrical/DCMotor.mo".into(),
             model_class: "LunCo.Electrical.DCMotor".into(),
             constants: BTreeMap::from([("rated_power".into(), 2000.0)]),
+            parameters: BTreeMap::new(),
             connectors: target
                 .map(|target| BTreeMap::from([("p".into(), vec![target.into()])]))
                 .unwrap_or_default(),

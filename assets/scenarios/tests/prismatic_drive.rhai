@@ -65,8 +65,8 @@ fn on_tick(me, ctx) {
     // what keeps the two claims independent.
     if this.phase == "authored" && this.t >= this.hold_s {
         this.authored = x;
-        set(this.lift, "displacement", COMMANDED);
-        this.sent = true;
+        let write = write_ports(this.lift, [["displacement", COMMANDED]]);
+        this.sent = write != () && write.ok == true;
         this.phase = "commanded";
         print("[drive] commanded displacement=" + COMMANDED);
     }

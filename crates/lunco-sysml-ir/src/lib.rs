@@ -10,7 +10,11 @@
 //! unsupported construct is retained as a source-linked diagnostic and cannot
 //! accidentally become a passing verification result.
 
-use lunco_engineering_values::{Quantity, Unit};
+pub use lunco_engineering_values::EvidenceVerdict as VerificationVerdict;
+use lunco_engineering_values::{
+    CoordinateFrameId, EvidenceArtifactReference, EvidenceConstraintIdentity, EvidenceEnvelope,
+    EvidenceProviderGeneration, EvidenceSourceIdentity, Quantity, SimulationSampleInterval, Unit,
+};
 use lunco_hash::Fnv1a;
 use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlConstraint, SysmlConstraintKind, SysmlDiagnosticKind,
@@ -435,6 +439,7 @@ define_ir_diagnostic_codes! {
     ConstraintUsageBindingTypeMismatch => "SYSML-IR-059",
     ConstraintUsageBindingNavigationUnsupported => "SYSML-IR-060",
     ObservationValueInvalid => "SYSML-IR-061",
+    EvidenceProvenanceInvalid => "SYSML-IR-062",
 }
 
 /// A source-linked diagnostic. Diagnostics are part of the contract and are
@@ -2300,7 +2305,7 @@ pub struct BindingContract {
     pub provider: BindingProvider,
     pub required: bool,
     pub unit: Option<Unit>,
-    pub frame: Option<String>,
+    pub frame: Option<CoordinateFrameId>,
     pub time_basis: Option<String>,
     #[serde(default)]
     pub source_revision: Option<u64>,
@@ -2330,6 +2335,12 @@ pub enum ObservationProvenance {
         document_generation: Option<u64>,
         stage_generation: u64,
     },
+    ProviderSnapshot {
+        provider: String,
+        generation: u64,
+        document_id: Option<String>,
+        document_generation: Option<u64>,
+    },
 }
 
 /// One observation with its provider state and optional typed value.
@@ -2341,7 +2352,7 @@ pub struct FeatureObservation {
     pub value: Option<IrValue>,
     pub detail: Option<String>,
     #[serde(default)]
-    pub frame: Option<String>,
+    pub frame: Option<CoordinateFrameId>,
     #[serde(default)]
     pub time_basis: Option<String>,
     #[serde(default)]
@@ -2368,16 +2379,6 @@ impl EvaluationContext {
         let observation = matches.next()?;
         matches.next().is_none().then_some(observation)
     }
-}
-
-/// Explicit verification outcome with four states suitable for reports and UI.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum VerificationVerdict {
-    Pass,
-    Fail,
-    Inconclusive,
-    Error,
 }
 
 /// One expression result and the aggregate constraint verdict.
@@ -2442,10 +2443,36 @@ pub struct RequirementEvaluationReport {
     pub requirement: SysmlElementHandle,
     pub verification: Option<SysmlElementHandle>,
     pub verdict: VerificationVerdict,
+    /// Numeric comparison policy applied by the evaluator. It is retained so
+    /// the evidence envelope identifies the exact result policy.
+    pub evaluation_options: EvaluationOptions,
     pub constraints: Vec<RequiredConstraintEvaluation>,
     /// Selection and observation-contract diagnostics. Constraint-local
     /// diagnostics remain attached to their corresponding result above.
     pub diagnostics: Vec<IrDiagnostic>,
+}
+
+/// Exact evaluation inputs and result retained inside a requirement evidence
+/// envelope. Provider samples are preserved with their typed paths and source
+/// provenance so the verdict can be independently reviewed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RequirementEvidenceResult {
+    pub report: RequirementEvaluationReport,
+    pub observations: EvaluationContext,
+}
+
+/// Complete source-pinned evidence record for one requirement verification.
+pub type RequirementEvidenceEnvelope = EvidenceEnvelope<RequirementEvidenceResult>;
+
+/// Provenance supplied by the owning runtime when packaging a verification.
+/// Every field is explicit: callers cannot infer a sample interval, physics
+/// configuration, provider generation, or artifact from unrelated state.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RequirementEvidenceContext {
+    pub provider_generations: Vec<EvidenceProviderGeneration>,
+    pub sample_interval: Option<SimulationSampleInterval>,
+    pub physics_configuration_fingerprint: Option<u64>,
+    pub artifacts: Vec<EvidenceArtifactReference>,
 }
 
 /// Explicit project policy for auditing requirement organization.
@@ -2757,6 +2784,7 @@ pub fn evaluate_requirement(
         requirement,
         verification,
         verdict: VerificationVerdict::Error,
+        evaluation_options: options,
         constraints: Vec::new(),
         diagnostics: Vec::new(),
     };
@@ -2891,7 +2919,325 @@ pub fn evaluate_requirement(
                     .then_some(VerificationVerdict::Error)
             })),
     );
+    if report.verification.is_none() && report.verdict == VerificationVerdict::Pass {
+        report.verdict = VerificationVerdict::Unverified;
+    }
     report
+}
+
+/// Evaluate one standard `require` membership after applying its usage-site
+/// feature bindings. The verification must explicitly cover the requirement,
+/// and observations must target the bound dependency paths of this membership.
+pub fn evaluate_required_constraint(
+    analysis: &SysmlAnalysis,
+    requirement: SysmlElementHandle,
+    verification: SysmlElementHandle,
+    constraint_name: &str,
+    context: &EvaluationContext,
+    options: EvaluationOptions,
+) -> Result<RequiredConstraintEvaluation, IrDiagnostic> {
+    let Some(requirement_record) = analysis
+        .requirements()
+        .iter()
+        .find(|record| record.element.handle == requirement)
+    else {
+        return Err(IrDiagnostic {
+            severity: DiagnosticSeverity::Error,
+            code: IrDiagnosticCode::RequirementNotFound,
+            source: None,
+            message: "element handle does not identify a requirement record".to_owned(),
+        });
+    };
+    let Some(verification_record) = analysis
+        .verifications()
+        .iter()
+        .find(|record| record.element.handle == verification)
+    else {
+        return Err(error(
+            IrDiagnosticCode::VerificationNotFound,
+            &element_source(&requirement_record.element),
+            "verification handle is not present in this SysML source snapshot",
+        ));
+    };
+    if !verification_record
+        .verified_requirements
+        .contains(&requirement)
+    {
+        return Err(error(
+            IrDiagnosticCode::VerificationDoesNotCoverRequirement,
+            &element_source(&verification_record.element),
+            "verification case does not resolve a verify membership to this requirement",
+        ));
+    }
+
+    let compiled = compile_required_constraints(analysis, requirement);
+    let mut matching = compiled.constraints.into_iter().filter(|membership| {
+        membership
+            .compiled
+            .constraint
+            .as_ref()
+            .is_some_and(|constraint| constraint.qualified_name == constraint_name)
+    });
+    let Some(membership) = matching.next() else {
+        return Err(error(
+            IrDiagnosticCode::ConstraintNotFound,
+            &element_source(&requirement_record.element),
+            &format!(
+                "constraint `{constraint_name}` is not a required membership of this requirement"
+            ),
+        ));
+    };
+    if matching.next().is_some() {
+        return Err(error(
+            IrDiagnosticCode::ConstraintUsageBindingInvalid,
+            &element_source(&requirement_record.element),
+            &format!(
+                "constraint `{constraint_name}` has multiple required memberships; select a membership identity"
+            ),
+        ));
+    }
+
+    let evaluation = evaluate_constraint(&membership.compiled, context, options);
+    Ok(RequiredConstraintEvaluation {
+        membership: membership.membership,
+        definition: membership.definition,
+        evaluation,
+    })
+}
+
+/// Bind a completed requirement evaluation to the exact source, constraint
+/// IR, observations, provider generations, simulation sample, physics
+/// configuration, and artifact references that produced it.
+pub fn build_requirement_evidence_envelope(
+    analysis: &SysmlAnalysis,
+    constraints: &RequirementConstraintIrReport,
+    observations: EvaluationContext,
+    report: RequirementEvaluationReport,
+    evidence: RequirementEvidenceContext,
+) -> Result<RequirementEvidenceEnvelope, String> {
+    if constraints.requirement != report.requirement
+        || !handle_belongs_to_analysis(analysis, report.requirement)
+    {
+        return Err("requirement evidence and compiled constraints must belong to the same source snapshot and requirement".to_owned());
+    }
+    if *constraints != compile_required_constraints(analysis, report.requirement) {
+        return Err(
+            "requirement evidence constraints do not match the compiled source snapshot".to_owned(),
+        );
+    }
+
+    let evaluated = evaluate_requirement(
+        analysis,
+        report.requirement,
+        report.verification,
+        &observations,
+        report.evaluation_options,
+    );
+    if evaluated.constraints != report.constraints
+        || evaluated
+            .diagnostics
+            .iter()
+            .any(|diagnostic| !report.diagnostics.contains(diagnostic))
+    {
+        return Err(
+            "requirement evidence result does not match its source constraints and observations"
+                .to_owned(),
+        );
+    }
+    let has_additional_error = report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.severity == DiagnosticSeverity::Error
+            && !evaluated.diagnostics.contains(diagnostic)
+    });
+    let expected_verdict = if has_additional_error {
+        VerificationVerdict::Error
+    } else {
+        evaluated.verdict
+    };
+    if report.verdict != expected_verdict {
+        return Err(
+            "requirement evidence verdict does not match its evaluated constraints and diagnostics"
+                .to_owned(),
+        );
+    }
+
+    let mut runtime_provider_seen = false;
+    let mut observed_generations = Vec::new();
+    for observation in &observations.observations {
+        if !observation
+            .path
+            .belongs_to(analysis.source_revision(), analysis.source_fingerprint())
+            || observation
+                .source_revision
+                .is_some_and(|revision| revision != analysis.source_revision())
+        {
+            return Err(
+                "requirement evidence contains an observation from a different source revision"
+                    .to_owned(),
+            );
+        }
+
+        let expected_generation = match observation.provenance.as_ref() {
+            Some(ObservationProvenance::SysmlSource {
+                source_revision,
+                source_fingerprint,
+            }) if *source_revision == analysis.source_revision()
+                && *source_fingerprint == analysis.source_fingerprint()
+                && observation.provider == BindingProvider::SourceLiteral =>
+            {
+                EvidenceProviderGeneration::new(
+                    "source_literal",
+                    *source_revision,
+                    None,
+                    None,
+                )
+            }
+            Some(ObservationProvenance::UsdStage {
+                document_id,
+                document_generation,
+                stage_generation,
+            }) if observation.provider == BindingProvider::Usd =>
+            {
+                EvidenceProviderGeneration::new(
+                    "usd",
+                    *stage_generation,
+                    document_id.map(|id| id.to_string()),
+                    *document_generation,
+                )
+            }
+            Some(ObservationProvenance::ProviderSnapshot {
+                provider: provenance_provider,
+                generation: provenance_generation,
+                document_id,
+                document_generation,
+            }) if provenance_provider == binding_provider_identity(&observation.provider) =>
+            {
+                EvidenceProviderGeneration::new(
+                    provenance_provider.clone(),
+                    *provenance_generation,
+                    document_id.clone(),
+                    *document_generation,
+                )
+            }
+            Some(_) => {
+                return Err("observation provenance does not match its declared provider or source snapshot".to_owned());
+            }
+            None => return Err("every requirement observation must carry explicit provider provenance".to_owned()),
+        }
+        .map_err(|error| error.to_string())?;
+        if !evidence
+            .provider_generations
+            .iter()
+            .any(|generation| generation == &expected_generation)
+        {
+            return Err(format!(
+                "requirement evidence is missing provider generation `{}` at generation {}",
+                expected_generation.provider(),
+                expected_generation.generation()
+            ));
+        }
+        observed_generations.push(expected_generation);
+        runtime_provider_seen |= observation.provider != BindingProvider::SourceLiteral;
+    }
+
+    observed_generations.sort_unstable();
+    observed_generations.dedup();
+    let mut supplied_generations = evidence.provider_generations.clone();
+    supplied_generations.sort_unstable();
+    if observed_generations != supplied_generations {
+        return Err("evidence provider generations must exactly match the generations attached to observations".to_owned());
+    }
+    if runtime_provider_seen && evidence.sample_interval.is_none() {
+        return Err(
+            "runtime requirement evidence must identify its simulation sample interval".to_owned(),
+        );
+    }
+    if runtime_provider_seen && evidence.physics_configuration_fingerprint.is_none() {
+        return Err(
+            "runtime requirement evidence must identify its physics configuration fingerprint"
+                .to_owned(),
+        );
+    }
+
+    let requirement_name = analysis
+        .requirements()
+        .iter()
+        .find(|requirement| requirement.element.handle == report.requirement)
+        .map(|requirement| requirement.element.qualified_name.as_str())
+        .ok_or_else(|| "requirement evidence handle does not identify a requirement".to_owned())?;
+    let constraint_fingerprint =
+        fingerprint_requirement_evaluation_policy(constraints, report.evaluation_options);
+    let source = EvidenceSourceIdentity::new(
+        format!("sysml://{:016x}", analysis.source_fingerprint()),
+        analysis.source_revision(),
+        analysis.source_fingerprint(),
+    )
+    .map_err(|error| error.to_string())?;
+    let constraint = EvidenceConstraintIdentity::new(requirement_name, constraint_fingerprint)
+        .map_err(|error| error.to_string())?;
+    EvidenceEnvelope::new(
+        source,
+        constraint,
+        evidence.provider_generations,
+        evidence.sample_interval,
+        evidence.physics_configuration_fingerprint,
+        evidence.artifacts,
+        RequirementEvidenceResult {
+            report,
+            observations,
+        },
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// Fingerprint the ordered `require` memberships and their compiled IR.
+pub fn fingerprint_required_constraint_report(report: &RequirementConstraintIrReport) -> u64 {
+    let mut hash = Fnv1a::new();
+    hash.write_bytes(b"lunco.sysml.requirement-constraints.v1");
+    hash.write_u64(report.requirement.source_revision);
+    hash.write_u64(report.requirement.source_fingerprint);
+    hash.write_u64(report.requirement.element_id as u64);
+    for constraint in &report.constraints {
+        hash.write_u64(constraint.membership.source_revision);
+        hash.write_u64(constraint.membership.source_fingerprint);
+        hash.write_u64(constraint.membership.element_id as u64);
+        if let Some(definition) = constraint.definition {
+            hash.write_u64(definition.source_revision);
+            hash.write_u64(definition.source_fingerprint);
+            hash.write_u64(definition.element_id as u64);
+        }
+        if let Some(compiled) = &constraint.compiled.constraint {
+            hash.write_u64(compiled.fingerprint);
+        } else {
+            hash.write_bytes(b"constraint-ir-unavailable");
+        }
+    }
+    for diagnostic in &report.diagnostics {
+        hash.write_bytes(diagnostic.message.as_bytes());
+    }
+    hash.finish()
+}
+
+fn fingerprint_requirement_evaluation_policy(
+    report: &RequirementConstraintIrReport,
+    options: EvaluationOptions,
+) -> u64 {
+    let mut hash = Fnv1a::new();
+    hash.write_bytes(b"lunco.sysml.requirement-evaluation-policy.v1");
+    hash.write_u64(fingerprint_required_constraint_report(report));
+    hash.write_u64(options.absolute_tolerance.to_bits());
+    hash.write_u64(options.relative_tolerance.to_bits());
+    hash.finish()
+}
+
+fn binding_provider_identity(provider: &BindingProvider) -> &'static str {
+    match provider {
+        BindingProvider::SourceLiteral => "source_literal",
+        BindingProvider::Usd => "usd",
+        BindingProvider::Modelica => "modelica",
+        BindingProvider::Telemetry => "telemetry",
+        BindingProvider::Derived => "derived",
+        BindingProvider::External => "external",
+    }
 }
 
 /// Audit requirement organization under an explicit project policy.
@@ -3129,11 +3475,13 @@ fn aggregate_verdict(
 ) -> VerificationVerdict {
     let mut verdict = VerificationVerdict::Pass;
     let mut any = false;
+    let mut unverified = false;
     for next in verdicts {
         any = true;
         match next {
             VerificationVerdict::Error => return VerificationVerdict::Error,
             VerificationVerdict::Fail => verdict = VerificationVerdict::Fail,
+            VerificationVerdict::Unverified => unverified = true,
             VerificationVerdict::Inconclusive if verdict == VerificationVerdict::Pass => {
                 verdict = VerificationVerdict::Inconclusive;
             }
@@ -3141,7 +3489,11 @@ fn aggregate_verdict(
         }
     }
     if any {
-        verdict
+        if verdict == VerificationVerdict::Pass && unverified {
+            VerificationVerdict::Unverified
+        } else {
+            verdict
+        }
     } else {
         VerificationVerdict::Inconclusive
     }
@@ -3881,21 +4233,20 @@ fn validate_observation_contract(
             observation.provider, contract.provider
         )));
     }
-    for (label, expected, actual) in [
-        ("frame", contract.frame.as_ref(), observation.frame.as_ref()),
-        (
-            "time basis",
-            contract.time_basis.as_ref(),
-            observation.time_basis.as_ref(),
-        ),
-    ] {
-        if let Some(expected) = expected {
-            if actual != Some(expected) {
-                return Err(EvaluationFailure::Error(format!(
-                    "observation {label} {:?} does not satisfy binding contract {:?}",
-                    actual, expected
-                )));
-            }
+    if let Some(expected) = contract.frame.as_ref() {
+        if observation.frame.as_ref() != Some(expected) {
+            return Err(EvaluationFailure::Error(format!(
+                "observation frame {:?} does not satisfy binding contract {:?}",
+                observation.frame, expected
+            )));
+        }
+    }
+    if let Some(expected) = contract.time_basis.as_ref() {
+        if observation.time_basis.as_ref() != Some(expected) {
+            return Err(EvaluationFailure::Error(format!(
+                "observation time basis {:?} does not satisfy binding contract {:?}",
+                observation.time_basis, expected
+            )));
         }
     }
     if let Some(expected_unit) = &contract.unit {
@@ -4354,6 +4705,20 @@ mod tests {
     use super::*;
     use lunco_sysml_ast::SysmlAnalysis;
 
+    fn requirement_analysis() -> (SysmlAnalysis, SysmlElementHandle) {
+        let analysis = SysmlAnalysis::from_files_without_stdlib([(
+            "evidence.sysml",
+            "package Evidence { requirement def Probe; requirement probe : Probe; }",
+        )]);
+        let requirement = analysis
+            .requirements()
+            .first()
+            .expect("requirement usage is projected")
+            .element
+            .handle;
+        (analysis, requirement)
+    }
+
     #[test]
     fn compiles_one_resolved_constraint_smoke() {
         let analysis = SysmlAnalysis::from_files_without_stdlib([(
@@ -4369,5 +4734,107 @@ mod tests {
         assert_eq!(ir.parameters.len(), 1);
         assert_eq!(ir.expressions.len(), 1);
         assert_ne!(ir.fingerprint, 0);
+    }
+
+    #[test]
+    fn requirement_evidence_rejects_unavailable_observations_without_provenance() {
+        let (analysis, requirement) = requirement_analysis();
+        let constraints = compile_required_constraints(&analysis, requirement);
+        let observation = FeatureObservation {
+            path: SysmlFeaturePath::single(SysmlFeatureHandle {
+                element: requirement,
+            }),
+            provider: BindingProvider::Modelica,
+            state: ObservationState::Unavailable,
+            value: None,
+            detail: Some("solver sample unavailable".to_owned()),
+            frame: None,
+            time_basis: None,
+            source_revision: Some(analysis.source_revision()),
+            provenance: None,
+            contract: None,
+        };
+        let context = EvaluationContext {
+            observations: vec![observation],
+        };
+        let report = evaluate_requirement(
+            &analysis,
+            requirement,
+            None,
+            &context,
+            EvaluationOptions::default(),
+        );
+
+        let error = build_requirement_evidence_envelope(
+            &analysis,
+            &constraints,
+            context,
+            report,
+            RequirementEvidenceContext {
+                provider_generations: Vec::new(),
+                sample_interval: None,
+                physics_configuration_fingerprint: None,
+                artifacts: Vec::new(),
+            },
+        )
+        .expect_err("unavailable observations still need an owning provider revision");
+
+        assert!(error.contains("explicit provider provenance"), "{error}");
+    }
+
+    #[test]
+    fn requirement_evidence_binds_provider_and_sample_generations() {
+        let (analysis, requirement) = requirement_analysis();
+        let constraints = compile_required_constraints(&analysis, requirement);
+        let generation = EvidenceProviderGeneration::new("modelica", 7, None, None).unwrap();
+        let observation = FeatureObservation {
+            path: SysmlFeaturePath::single(SysmlFeatureHandle {
+                element: requirement,
+            }),
+            provider: BindingProvider::Modelica,
+            state: ObservationState::Unavailable,
+            value: None,
+            detail: Some("solver sample unavailable".to_owned()),
+            frame: None,
+            time_basis: None,
+            source_revision: Some(analysis.source_revision()),
+            provenance: Some(ObservationProvenance::ProviderSnapshot {
+                provider: "modelica".to_owned(),
+                generation: 7,
+                document_id: None,
+                document_generation: None,
+            }),
+            contract: None,
+        };
+        let context = EvaluationContext {
+            observations: vec![observation],
+        };
+        let report = evaluate_requirement(
+            &analysis,
+            requirement,
+            None,
+            &context,
+            EvaluationOptions::default(),
+        );
+
+        let evidence = build_requirement_evidence_envelope(
+            &analysis,
+            &constraints,
+            context,
+            report,
+            RequirementEvidenceContext {
+                provider_generations: vec![generation],
+                sample_interval: Some(SimulationSampleInterval::new("physics", 12, 12).unwrap()),
+                physics_configuration_fingerprint: Some(0xabc),
+                artifacts: Vec::new(),
+            },
+        )
+        .expect("evidence must bind the provider sample and fixed-step provenance");
+
+        assert_eq!(evidence.source().revision(), analysis.source_revision());
+        assert_eq!(evidence.sample_interval().unwrap().start_tick(), 12);
+        assert_eq!(evidence.sample_interval().unwrap().end_tick(), 12);
+        assert_eq!(evidence.provider_generations()[0].generation(), 7);
+        assert_eq!(evidence.physics_configuration_fingerprint(), Some(0xabc));
     }
 }

@@ -119,6 +119,7 @@ enum EvidenceFilter {
     #[default]
     All,
     Failed,
+    Unverified,
     Stale,
     Missing,
 }
@@ -751,10 +752,11 @@ impl SysmlRequirementsPanel {
                             ui.separator();
                             ui.label(&evidence.channel);
                             ui.label(format!(
-                                "{} checks · {} fail · {} inconclusive · {} errors",
+                                "{} checks · {} fail · {} inconclusive · {} unverified · {} errors",
                                 evidence.checks,
                                 evidence.failures,
                                 evidence.inconclusive,
+                                evidence.unverified,
                                 evidence.errors,
                             ));
                             let revision_state = if Some(evidence.source_revision)
@@ -1018,6 +1020,11 @@ impl SysmlRequirementsPanel {
                 "inconclusive",
                 theme.tokens.warning,
             ),
+            (
+                EvidenceState::Unverified,
+                "unverified",
+                theme.tokens.warning,
+            ),
             (EvidenceState::Error, "error", theme.tokens.error),
             (EvidenceState::Stale, "stale", theme.tokens.warning),
             (
@@ -1040,6 +1047,11 @@ impl SysmlRequirementsPanel {
             (
                 ExecutionState::Inconclusive,
                 "inconclusive",
+                theme.tokens.warning,
+            ),
+            (
+                ExecutionState::Unverified,
+                "unverified",
                 theme.tokens.warning,
             ),
             (ExecutionState::Error, "error", theme.tokens.error),
@@ -1302,6 +1314,11 @@ impl SysmlRequirementsPanel {
                 .iter()
                 .filter(|case| case.outcome == VerificationRunOutcome::Inconclusive)
                 .count();
+            let unverified = suite
+                .cases
+                .iter()
+                .filter(|case| case.outcome == VerificationRunOutcome::Unverified)
+                .count();
             let errors = suite
                 .cases
                 .iter()
@@ -1353,7 +1370,7 @@ impl SysmlRequirementsPanel {
                     ui,
                     theme,
                     &format!(
-                        "revision {} · {passed} passed · {failed} failed · {inconclusive} inconclusive · {errors} errors · {run_errors} run errors · {no_verdict} no verdict · {cancelled} cancelled{}",
+                        "revision {} · {passed} passed · {failed} failed · {inconclusive} inconclusive · {unverified} unverified · {errors} errors · {run_errors} run errors · {no_verdict} no verdict · {cancelled} cancelled{}",
                         suite.source_revision,
                         if suite.stopped { " · stopped" } else { "" }
                     ),
@@ -1508,6 +1525,7 @@ impl SysmlRequirementsPanel {
                 .selected_text(match self.filters.evidence {
                     EvidenceFilter::All => "Any evidence",
                     EvidenceFilter::Failed => "Evidence: failed",
+                    EvidenceFilter::Unverified => "Evidence: unverified",
                     EvidenceFilter::Stale => "Evidence: stale",
                     EvidenceFilter::Missing => "Evidence: missing",
                 })
@@ -1515,6 +1533,7 @@ impl SysmlRequirementsPanel {
                     for (filter, label) in [
                         (EvidenceFilter::All, "Any evidence"),
                         (EvidenceFilter::Failed, "Failed evidence"),
+                        (EvidenceFilter::Unverified, "Unverified evidence"),
                         (EvidenceFilter::Stale, "Stale evidence"),
                         (EvidenceFilter::Missing, "No evidence"),
                     ] {
@@ -1806,6 +1825,9 @@ impl SysmlRequirementsPanel {
                                         }
                                         VerificationRunOutcome::Inconclusive => {
                                             ("INCONCLUSIVE", theme.tokens.warning)
+                                        }
+                                        VerificationRunOutcome::Unverified => {
+                                            ("UNVERIFIED", theme.tokens.warning)
                                         }
                                         VerificationRunOutcome::Error => {
                                             ("ERROR", theme.tokens.error)
@@ -2362,6 +2384,7 @@ enum ExecutionState {
     Pass,
     Fail,
     Inconclusive,
+    Unverified,
     Error,
     RunError,
     Partial,
@@ -2382,6 +2405,7 @@ struct ExecutionSummary {
     running: usize,
     failed: usize,
     inconclusive: usize,
+    unverified: usize,
     error: usize,
     stale: usize,
     no_verdict: usize,
@@ -2402,6 +2426,7 @@ fn execution_summary(
         running: 0,
         failed: 0,
         inconclusive: 0,
+        unverified: 0,
         error: 0,
         stale: 0,
         no_verdict: 0,
@@ -2448,6 +2473,7 @@ fn execution_summary(
             VerificationRunOutcome::Passed => summary.passed += 1,
             VerificationRunOutcome::Failed => summary.failed += 1,
             VerificationRunOutcome::Inconclusive => summary.inconclusive += 1,
+            VerificationRunOutcome::Unverified => summary.unverified += 1,
             VerificationRunOutcome::Error => summary.error += 1,
             VerificationRunOutcome::Cancelled => summary.cancelled += 1,
             VerificationRunOutcome::NoVerdict => summary.no_verdict += 1,
@@ -2460,6 +2486,8 @@ fn execution_summary(
         ExecutionState::Error
     } else if summary.inconclusive > 0 {
         ExecutionState::Inconclusive
+    } else if summary.unverified > 0 {
+        ExecutionState::Unverified
     } else if summary.run_error > 0 {
         ExecutionState::RunError
     } else if summary.no_verdict > 0 {
@@ -2489,6 +2517,7 @@ fn execution_label(summary: &ExecutionSummary) -> String {
         ExecutionState::Pass => format!("PASS · {}/{}", summary.passed, summary.mapped),
         ExecutionState::Fail => format!("FAIL · {}/{} failed", summary.failed, summary.mapped),
         ExecutionState::Inconclusive => format!("INCONCLUSIVE · {}", summary.inconclusive),
+        ExecutionState::Unverified => format!("UNVERIFIED · {}", summary.unverified),
         ExecutionState::Error => format!("ERROR · {}", summary.error),
         ExecutionState::RunError => format!("RUN ERROR · {}", summary.run_error),
         ExecutionState::Partial => format!("PARTIAL · {}/{}", summary.passed, summary.mapped),
@@ -2510,6 +2539,7 @@ fn execution_color(state: ExecutionState, theme: &lunco_theme::Theme) -> egui::C
         | ExecutionState::NoVerdict
         | ExecutionState::RunError => theme.tokens.error,
         ExecutionState::Inconclusive
+        | ExecutionState::Unverified
         | ExecutionState::Partial
         | ExecutionState::Stale
         | ExecutionState::NoVerify
@@ -2526,6 +2556,9 @@ fn execution_explanation(state: ExecutionState) -> &'static str {
         ExecutionState::Fail => "At least one linked scene test failed on the current revision.",
         ExecutionState::Inconclusive => {
             "At least one linked verification lacks enough evidence for a pass or fail."
+        }
+        ExecutionState::Unverified => {
+            "At least one linked verification did not establish whether its requirements are met."
         }
         ExecutionState::Error => {
             "At least one linked verification encountered an evaluation error."
@@ -2552,6 +2585,7 @@ enum EvidenceState {
     Pass,
     Fail,
     Inconclusive,
+    Unverified,
     Error,
     Stale,
     NoEvidence,
@@ -2567,6 +2601,7 @@ fn evidence_state(
     let mut current_failures = 0_u64;
     let mut current_inconclusive = 0_u64;
     let mut current_errors = 0_u64;
+    let mut current_unverified = 0_u64;
     let mut has_stale_evidence = false;
     for evidence in requirement_evidence_records(requirement, view_model, runs) {
         if Some(evidence.source_revision) == view_model.source_revision {
@@ -2574,6 +2609,7 @@ fn evidence_state(
             current_failures = current_failures.saturating_add(evidence.failures);
             current_inconclusive = current_inconclusive.saturating_add(evidence.inconclusive);
             current_errors = current_errors.saturating_add(evidence.errors);
+            current_unverified = current_unverified.saturating_add(evidence.unverified);
         } else if evidence.checks > 0 {
             has_stale_evidence = true;
         }
@@ -2584,6 +2620,8 @@ fn evidence_state(
         EvidenceState::Fail
     } else if current_inconclusive > 0 {
         EvidenceState::Inconclusive
+    } else if current_unverified > 0 {
+        EvidenceState::Unverified
     } else if current_checks > 0 {
         EvidenceState::Pass
     } else if has_stale_evidence {
@@ -2614,6 +2652,11 @@ fn evidence_status(
             "INCONCLUSIVE",
             theme.tokens.warning,
             "Current-revision requirement evidence did not support a pass or fail.",
+        ),
+        EvidenceState::Unverified => (
+            "UNVERIFIED",
+            theme.tokens.warning,
+            "Current-revision requirement evidence does not establish verification.",
         ),
         EvidenceState::Error => (
             "ERROR",
@@ -2652,15 +2695,18 @@ fn render_requirement_evidence(
             ("FAIL", theme.tokens.error)
         } else if evidence.inconclusive > 0 {
             ("INCONCLUSIVE", theme.tokens.warning)
+        } else if evidence.unverified > 0 {
+            ("UNVERIFIED", theme.tokens.warning)
         } else {
             ("PASS", theme.tokens.success)
         };
         let label = format!(
-            "{} · {} checks · {} fail · {} inconclusive · {} error · {}",
+            "{} · {} checks · {} fail · {} inconclusive · {} unverified · {} error · {}",
             evidence.channel,
             evidence.checks,
             evidence.failures,
             evidence.inconclusive,
+            evidence.unverified,
             evidence.errors,
             state
         );
@@ -2691,6 +2737,7 @@ fn render_requirement_evidence(
                         VerificationVerdict::Pass => ("PASS", theme.tokens.success),
                         VerificationVerdict::Fail => ("FAIL", theme.tokens.error),
                         VerificationVerdict::Inconclusive => ("INCONCLUSIVE", theme.tokens.warning),
+                        VerificationVerdict::Unverified => ("UNVERIFIED", theme.tokens.warning),
                         VerificationVerdict::Error => ("ERROR", theme.tokens.error),
                     };
                     ui.colored_label(color, label);
@@ -2757,6 +2804,7 @@ fn requirement_evidence_records(
         existing.checks = existing.checks.max(incoming.checks);
         existing.failures = existing.failures.max(incoming.failures);
         existing.inconclusive = existing.inconclusive.max(incoming.inconclusive);
+        existing.unverified = existing.unverified.max(incoming.unverified);
         existing.errors = existing.errors.max(incoming.errors);
         existing.sim_tick = existing.sim_tick.max(incoming.sim_tick);
         for detail in &incoming.details {
@@ -2980,6 +3028,7 @@ fn requirement_matches_filters(
     let evidence_matches = match filters.evidence {
         EvidenceFilter::All => true,
         EvidenceFilter::Failed => evidence == EvidenceState::Fail,
+        EvidenceFilter::Unverified => evidence == EvidenceState::Unverified,
         EvidenceFilter::Stale => evidence == EvidenceState::Stale,
         EvidenceFilter::Missing => evidence == EvidenceState::NoEvidence,
     };
@@ -2995,6 +3044,7 @@ fn requirement_matches_filters(
                 | ExecutionState::NotRun
                 | ExecutionState::Cancelled
                 | ExecutionState::Inconclusive
+                | ExecutionState::Unverified
                 | ExecutionState::Error
                 | ExecutionState::NoVerdict
                 | ExecutionState::RunError
@@ -3105,6 +3155,7 @@ fn verification_case_status(
         VerificationRunOutcome::Passed => ("PASS", theme.tokens.success),
         VerificationRunOutcome::Failed => ("FAIL", theme.tokens.error),
         VerificationRunOutcome::Inconclusive => ("INCONCLUSIVE", theme.tokens.warning),
+        VerificationRunOutcome::Unverified => ("UNVERIFIED", theme.tokens.warning),
         VerificationRunOutcome::Error => ("ERROR", theme.tokens.error),
         VerificationRunOutcome::Cancelled => ("CANCELLED", theme.tokens.text_subdued),
         VerificationRunOutcome::NoVerdict => ("NO VERDICT", theme.tokens.error),

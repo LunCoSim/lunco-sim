@@ -688,8 +688,8 @@ pub trait ScenarioRuntime: Send + Sync + 'static {
         &self,
         _entity: Entity,
         _builder: &B,
-    ) -> Option<ScenarioSnapshot<B::Value>> {
-        None
+    ) -> Result<Option<ScenarioSnapshot<B::Value>>, Diagnostic> {
+        Ok(None)
     }
 
     /// Per-run global maintenance (e.g. hot-reload of shared modules). Runs once
@@ -2566,20 +2566,23 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         &self,
         entity: Entity,
         builder: &B,
-    ) -> Option<ScenarioIntrospection<B::Value>> {
-        let fsm = self.fsm.get(&entity)?;
-        let (state, hooks) = match self.runtime.snapshot(entity, builder) {
-            Some(s) => (s.state, s.hooks),
-            None => (builder.unit(), Vec::new()),
+    ) -> Result<Option<ScenarioIntrospection<B::Value>>, Diagnostic> {
+        let Some(fsm) = self.fsm.get(&entity) else {
+            return Ok(None);
         };
-        Some(ScenarioIntrospection {
+        let (state, hooks) = match self.runtime.snapshot(entity, builder) {
+            Ok(Some(snapshot)) => (snapshot.state, snapshot.hooks),
+            Ok(None) => (builder.unit(), Vec::new()),
+            Err(error) => return Err(error),
+        };
+        Ok(Some(ScenarioIntrospection {
             generation: fsm.generation,
             started: fsm.started,
             compiled: fsm.compiled,
             gid: fsm.gid,
             state,
             hooks,
-        })
+        }))
     }
 }
 

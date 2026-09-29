@@ -24,14 +24,12 @@ use lunco_doc::DocumentId;
 #[cfg(feature = "rhai")]
 use lunco_scripting::ScriptRegistry;
 #[cfg(feature = "rhai")]
-use lunco_scripting::scenario::{
-    ScenarioExecutionGate, ScenarioPreparationAdmissions,
-};
-#[cfg(feature = "rhai")]
 use lunco_scripting::doc::{
     ScenarioParameters, ScenarioReloadPolicy, ScriptDocument, ScriptLanguage, ScriptOp,
     ScriptedModel,
 };
+#[cfg(feature = "rhai")]
+use lunco_scripting::scenario::{ScenarioExecutionGate, ScenarioPreparationAdmissions};
 #[cfg(feature = "rhai")]
 use lunco_scripting_bridge_core as bridge_core;
 #[cfg(feature = "rhai")]
@@ -1490,10 +1488,6 @@ pub(crate) fn register_command_policies(app: &mut App) {
     );
     reg.register(
         bridge_core::capability::FIELD_MUTATE,
-        CommandPolicy::OWNED_CONTROL,
-    );
-    reg.register(
-        bridge_core::capability::PORT_MUTATE,
         CommandPolicy::OWNED_CONTROL,
     );
     reg.register(

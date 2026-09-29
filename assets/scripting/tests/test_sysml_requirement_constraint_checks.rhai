@@ -39,7 +39,7 @@ checks.push(t_true(linked_requirement != ()
 
 let pass_check = sysml_requirements::constraint_check("payload-at-limit",
     "payload", "payloadCapacity", "VerifyPayloadCapacity", CONSTRAINT,
-    #{payloadKg: 625.0, capacityKg: 625.0}, "external", 0.0);
+    #{payloadKg: 625.0, capacityKg: 625.0}, "derived", 0.0);
 let passed = sysml_requirements::evaluate(source, [pass_check]);
 let pass_result = if passed.results.len() == 1 { passed.results[0] } else { () };
 checks.push(t_true(passed.ok == true && pass_result != ()
@@ -52,7 +52,7 @@ checks.push(t_true(passed.ok == true && pass_result != ()
 
 let fail_check = sysml_requirements::constraint_check("payload-over-limit",
     "payload", "payloadCapacity", VERIFICATION, CONSTRAINT,
-    #{payloadKg: 625.001, capacityKg: 625.0}, "external", 0.0);
+    #{payloadKg: 625.001, capacityKg: 625.0}, "derived", 0.0);
 let failed = sysml_requirements::evaluate(source, [fail_check]);
 let fail_result = if failed.results.len() == 1 { failed.results[0] } else { () };
 checks.push(t_true(failed.ok == false && fail_result != ()
@@ -61,7 +61,7 @@ checks.push(t_true(failed.ok == false && fail_result != ()
 
 let missing_check = sysml_requirements::constraint_check("payload-missing-limit",
     "payload", "payloadCapacity", VERIFICATION, CONSTRAINT,
-    #{payloadKg: 10.0}, "external", 0.0);
+    #{payloadKg: 10.0}, "derived", 0.0);
 let missing = sysml_requirements::evaluate(source, [missing_check]);
 let missing_result = if missing.results.len() == 1 { missing.results[0] } else { () };
 checks.push(t_true(missing.ok == false && missing_result != ()
@@ -70,7 +70,7 @@ checks.push(t_true(missing.ok == false && missing_result != ()
 
 let typo_check = sysml_requirements::constraint_check("payload-unknown-binding",
     "payload", "payloadCapacity", VERIFICATION, CONSTRAINT,
-    #{paylodKg: 10.0, capacityKg: 625.0}, "external", 0.0);
+    #{paylodKg: 10.0, capacityKg: 625.0}, "derived", 0.0);
 let typo = sysml_requirements::evaluate(source, [typo_check]);
 let typo_result = if typo.results.len() == 1 { typo.results[0] } else { () };
 checks.push(t_true(typo.ok == false && typo_result != ()
@@ -80,7 +80,7 @@ checks.push(t_true(typo.ok == false && typo_result != ()
 
 let unlinked_check = sysml_requirements::constraint_check("payload-unlinked-constraint",
     "payload", "payloadCapacity", VERIFICATION, UNRELATED_CONSTRAINT,
-    #{payloadKg: 10.0, capacityKg: 625.0}, "external", 0.0);
+    #{payloadKg: 10.0, capacityKg: 625.0}, "derived", 0.0);
 let unlinked = sysml_requirements::evaluate(source, [unlinked_check]);
 let unlinked_result = if unlinked.results.len() == 1 { unlinked.results[0] } else { () };
 checks.push(t_true(unlinked.ok == false && unlinked_result != ()

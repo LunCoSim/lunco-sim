@@ -539,6 +539,38 @@ pub struct ModelicaSignalLayout {
 }
 
 impl ModelicaSignalLayout {
+    /// Typed authored unit identity for a Modelica signal, when declared.
+    ///
+    /// A Modelica `unit` attribute supplies a stable symbol but does not, by
+    /// itself, resolve dimensions or scale. Keep it explicitly unresolved so
+    /// generic port consumers can compare matching identities without
+    /// guessing conversions.
+    pub fn unit_reference(
+        &self,
+        variable: &str,
+    ) -> Result<
+        Option<lunco_engineering_values::UnitReference>,
+        lunco_engineering_values::UnitReferenceError,
+    > {
+        self.metadata
+            .get(variable)
+            .and_then(|metadata| metadata.unit.as_deref())
+            .map(lunco_engineering_values::UnitReference::identified)
+            .transpose()
+    }
+
+    /// Stable key for the authored unit contracts exposed on Modelica ports.
+    pub fn port_contract_topology_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for (name, metadata) in &self.metadata {
+            name.hash(&mut hasher);
+            metadata.unit.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     pub fn group_path(&self, variable: &str) -> Option<&str> {
         if let Some(path) = self.exact_paths.get(variable) {
             return Some(path);

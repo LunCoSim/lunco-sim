@@ -92,7 +92,8 @@ fn on_tick(me, ctx) {
             "the active Rhai prelude is empty or failed to compile"));
         for function_name in [
             "compile_timeline", "point3", "report_verdict", "set_property", "links",
-            "world_point"
+            "world_point", "read_ports", "read_ports_batch", "actuator_status",
+            "write_ports", "write_ports_batch"
         ] {
             failures.push(t_true(prelude != () && contains_function(prelude, function_name),
                 "active prelude is missing " + function_name));
@@ -176,6 +177,7 @@ fn on_tick(me, ctx) {
         "lunco://scripting/prelude/math.rhai",
         "lunco://scripting/prelude/mission.rhai",
         "lunco://scripting/prelude/nav.rhai",
+        "lunco://scripting/prelude/ports.rhai",
         "lunco://scripting/prelude/readiness.rhai",
         "lunco://scripting/prelude/tasks.rhai",
         "lunco://scripting/prelude/terrain.rhai",

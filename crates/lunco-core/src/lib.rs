@@ -70,7 +70,9 @@ pub use markers::{
     SOLAR_ANGULAR_DIAMETER_DEG, ScenarioProgramPrim, ScriptParams, SunAngularDiameter,
     TRIGGER_COLLISION_LAYER, TriggerZone, UsdPrimKind,
 };
-pub use math::DTransform;
+pub use math::{
+    CoordinateTransform, CoordinateTransformError, DTransform, FramedPose, FramedPosition,
+};
 pub use mobility::Mobility;
 pub use model_state::ModelStateRevision;
 pub use physics_state::*;

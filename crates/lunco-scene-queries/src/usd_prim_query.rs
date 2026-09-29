@@ -98,8 +98,9 @@ use lunco_usd_bevy_scene::{UsdPrimPath, read_primitive_axis, usd_axis_to_quat};
 use lunco_usd_bevy_stage::read::{UsdRead, UsdReadSource};
 use lunco_usd_bevy_stage::view::StageView;
 use lunco_usd_bevy_stage::{
-    MaterialPurpose, UsdStageAsset, canonical::CanonicalStages, effective_purpose,
-    is_descendant_or_self, resolve_bound_shader, stage_convention,
+    MaterialPurpose, UsdStageAsset,
+    canonical::{CanonicalStage, CanonicalStages},
+    effective_purpose, is_descendant_or_self, resolve_bound_shader, stage_convention,
 };
 use lunco_usd_bevy_twin::{DocBackedTwinScenes, scene_document_for, stage_asset_for_document};
 use lunco_usd_document::document::UsdDocument;
@@ -1195,11 +1196,39 @@ fn execute_query_paths(
             .collect()
     };
 
+    let needs_native_view = options.include_collision_bounds
+        || options.include_collision_geometry
+        || options.include_geometry_bounds
+        || options.include_topology;
     if let Some((reader, _)) = selected_reader.as_ref() {
-        return match reader {
-            UsdReadSource::Prepared(_) => read_paths(reader, None),
-            UsdReadSource::Live(view) => read_paths(reader, Some(view)),
-        };
+        match reader {
+            UsdReadSource::Live(view) => return read_paths(reader, Some(view)),
+            UsdReadSource::Prepared(_) if !needs_native_view => {
+                return read_paths(reader, None);
+            }
+            // Prepared projection plans provide authored structure but not the
+            // native stage required for composed geometry and topology queries.
+            // Build the native view from the exact composed recipe owned by
+            // this stage asset, preserving its resolved references and paths.
+            UsdReadSource::Prepared(_) => {
+                let recipe = stage_asset
+                    .and_then(|asset| asset.recipe.as_deref())
+                    .ok_or_else(|| {
+                        ApiQueryError::new(
+                            ApiErrorCode::InternalError,
+                            "QueryUsdPrim: native geometry query requires a stage recipe",
+                        )
+                    })?;
+                let canonical = CanonicalStage::from_recipe(recipe).map_err(|error| {
+                    ApiQueryError::new(
+                        ApiErrorCode::InternalError,
+                        format!("QueryUsdPrim: composed stage could not be opened: {error}"),
+                    )
+                })?;
+                let view = canonical.view();
+                return read_paths(&view, Some(&view));
+            }
+        }
     }
 
     // Read everything under one short canonical-stage borrow. An Editor fork

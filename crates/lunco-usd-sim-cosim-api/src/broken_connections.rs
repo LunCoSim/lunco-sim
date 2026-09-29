@@ -55,6 +55,7 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
                         "global_id": b.global_id.map(|g| g.get()),
                         "has_port_surface": b.has_port_surface,
                         "dropped_value": b.dropped_value,
+                        "failure": b.failure.as_deref(),
                     })
                 })
                 .collect::<Vec<_>>()

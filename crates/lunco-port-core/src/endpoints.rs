@@ -91,9 +91,10 @@ pub struct PortSurfacePending;
 /// consumed by the authored mechanical controller or free-flight realization.
 ///
 /// The command port named `"brake"` here is not the output port named `"brake"`
-/// in [`OutputPorts`]. They carry different values — an analog command in
-/// `[-1, 1]` here, a discretized `1.0`/`0.0` gate there — and are deliberately
-/// kept in two components so the two `"brake"`s can never be conflated.
+/// in [`OutputPorts`]. The input carries the authored command value; the output
+/// carries the realized gate. They are deliberately kept in two components so
+/// the two `"brake"`s can never be conflated. Port limits belong to the owning
+/// component's metadata and are never inferred from this name.
 #[derive(Component, Debug, Clone, Default)]
 pub struct InputPorts {
     /// Current value per accepted input-port name. Only seeded keys are
@@ -130,7 +131,6 @@ impl InputPorts {
     pub fn cmd(&self, name: &str) -> f64 {
         self.values.get(name).copied().unwrap_or(0.0)
     }
-
 }
 
 /// The [`InputPorts`] governing `entity` — its own, or the nearest ancestor's.
@@ -250,5 +250,4 @@ mod tests {
         assert_eq!(inputs.cmd("undeclared"), 0.0);
         assert!(!inputs.brake_active);
     }
-
 }

@@ -840,6 +840,7 @@ fn catch_verdict(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
         "FAIL" => VerificationVerdict::Fail,
         "INCONCLUSIVE" => VerificationVerdict::Inconclusive,
         "ERROR" => VerificationVerdict::Error,
+        "UNVERIFIED" => VerificationVerdict::Unverified,
         _ => return,
     };
     let name = evt.name.clone();
@@ -993,8 +994,8 @@ fn scene_materialized(world: &mut World) -> bool {
 }
 
 /// True once every Modelica participant has compiled (or reached a terminal
-/// error), and all authored USD joints have crossed
-/// both deferred admission stages.
+/// error) and is quiescent at a finite state, and all authored USD joints have
+/// crossed both deferred admission stages.
 ///
 /// A terminal Modelica error is not an initialized solver and must keep physics
 /// fail-closed in the normal application. The scene-test runner still advances
@@ -1011,7 +1012,7 @@ fn participants_ready(world: &mut World) -> bool {
                     && !model.is_stepping
                     && (model.paused
                         || (model.current_time.is_finite()
-                            && model.current_time == 0.0
+                            && model.current_time >= 0.0
                             && !model.variables.is_empty()
                             && model.variables.values().all(|value| value.is_finite()))))
         })
@@ -1083,30 +1084,76 @@ fn physics_admission_ready(world: &mut World) -> bool {
     q_pending.iter(world).next().is_none()
 }
 
-fn startup_ready(world: &mut World) -> bool {
-    let scene_time_ready = world
-        .get_resource::<lunco_time::SceneTimeState>()
-        .is_none_or(lunco_time::SceneTimeState::is_ready);
-    let progress_ready = world
-        .get_resource::<lunco_core_runtime::SimulationProgress>()
-        .is_none_or(|progress| !progress.is_held());
+fn set_scene_test_startup_hold(app: &mut App, held: bool) -> Result<(), &'static str> {
+    let Some(mut holds) = app
+        .world_mut()
+        .get_resource_mut::<lunco_physics::PhysicsHolds>()
+    else {
+        return Err("PhysicsHolds resource is not installed");
+    };
+    holds.set(lunco_physics::PhysicsHolds::INITIAL_CONDITION, held);
+    Ok(())
+}
+
+fn pause_modelica_participants(world: &mut World) -> Result<(), &'static str> {
+    if world
+        .get_resource::<lunco_core_runtime::SimulationBarrier>()
+        .is_none()
+    {
+        return Err("SimulationBarrier resource is not installed");
+    }
+    let mut participants = world.query_filtered::<&mut ModelicaModel, With<UsdSourcedCosim>>();
+    for mut participant in participants.iter_mut(world) {
+        participant.paused = true;
+        participant.is_stepping = false;
+        participant.in_flight_step = None;
+    }
+    let Some(mut barrier) = world.get_resource_mut::<lunco_core_runtime::SimulationBarrier>()
+    else {
+        return Err("SimulationBarrier resource is not installed");
+    };
+    barrier.held = false;
+    barrier.worst_lag_secs = 0.0;
+    barrier.worst_entity = None;
+    Ok(())
+}
+
+fn resume_modelica_participants(world: &mut World) {
+    let mut participants = world.query_filtered::<&mut ModelicaModel, With<UsdSourcedCosim>>();
+    for mut participant in participants.iter_mut(world) {
+        if participant.last_error.is_none() && participant.is_compiled {
+            participant.paused = false;
+        }
+    }
+}
+
+fn modelica_exchanges_ready(world: &mut World) -> bool {
+    let sources_ready = {
+        let mut participants = world.query_filtered::<&ModelicaModel, With<UsdSourcedCosim>>();
+        participants.iter(world).all(|participant| {
+            participant.last_error.is_some()
+                || (participant.is_compiled
+                    && !participant.is_compiling
+                    && !participant.paused
+                    && !participant.is_stepping
+                    && participant.current_time > 0.0
+                    && !participant.variables.is_empty())
+        })
+    };
+    if !sources_ready {
+        return false;
+    }
+
     let expected_terminal_fault = world
         .get_resource::<lunco_core::RuntimeFaults>()
         .is_some_and(lunco_core::RuntimeFaults::active)
         && world
             .get_resource::<ExpectedRuntimeFaults>()
             .is_some_and(|expected| !expected.0.is_empty());
-    let coupling_ready = expected_terminal_fault
+    expected_terminal_fault
         || world
             .get_resource::<lunco_core_runtime::SimulationBarrier>()
-            .is_none_or(|barrier| !barrier.held);
-
-    scene_materialized(world)
-        && scene_time_ready
-        && progress_ready
-        && coupling_ready
-        && participants_ready(world)
-        && physics_admission_ready(world)
+            .is_some_and(|barrier| !barrier.held)
 }
 
 /// Explain a bounded readiness failure with the live state that kept the gate
@@ -1271,6 +1318,76 @@ fn log_scene_readiness_blockers(world: &mut World) {
     );
 }
 
+fn hold_scenarios_closed(app: &mut App) -> Result<(), &'static str> {
+    let Some(mut gate) = app
+        .world_mut()
+        .get_resource_mut::<lunco_scripting::scenario::ScenarioExecutionGate>()
+    else {
+        return Err("ScenarioExecutionGate resource is not installed");
+    };
+    gate.enabled = false;
+    let Some(mut arm) = app
+        .world_mut()
+        .get_resource_mut::<lunco_scripting::scenario::ScenarioReadinessArm>()
+    else {
+        return Err("ScenarioReadinessArm resource is not installed");
+    };
+    arm.0 = false;
+    Ok(())
+}
+
+fn arm_scenarios_after_startup(app: &mut App) -> Result<(), &'static str> {
+    let Some(mut arm) = app
+        .world_mut()
+        .get_resource_mut::<lunco_scripting::scenario::ScenarioReadinessArm>()
+    else {
+        return Err("ScenarioReadinessArm resource is not installed");
+    };
+    arm.0 = true;
+    Ok(())
+}
+
+fn discard_fixed_overstep_while_barrier_held(app: &mut App) -> Result<(), &'static str> {
+    let barrier = app
+        .world()
+        .get_resource::<lunco_core_runtime::SimulationBarrier>()
+        .ok_or("SimulationBarrier resource is not installed")?;
+    if !barrier.held {
+        return Ok(());
+    }
+    let Some(mut fixed) = app.world_mut().get_resource_mut::<Time<Fixed>>() else {
+        return Err("Time<Fixed> resource is not installed while the barrier is held");
+    };
+    lunco_time::discard_fixed_overstep(&mut fixed);
+    Ok(())
+}
+
+fn reproject_test_transport(app: &mut App) -> Result<(), &'static str> {
+    let transport = *app
+        .world()
+        .get_resource::<lunco_time::TimeTransport>()
+        .ok_or("TimeTransport resource is not installed")?;
+    let progress_held = app
+        .world()
+        .get_resource::<lunco_core_runtime::SimulationProgress>()
+        .ok_or("SimulationProgress resource is not installed")?
+        .is_held();
+    let barrier_held = app
+        .world()
+        .get_resource::<lunco_core_runtime::SimulationBarrier>()
+        .ok_or("SimulationBarrier resource is not installed")?
+        .held;
+    let Some(mut virtual_time) = app.world_mut().get_resource_mut::<Time<Virtual>>() else {
+        return Err("Time<Virtual> resource is not installed");
+    };
+    lunco_time::project_transport_state(
+        &transport,
+        &mut virtual_time,
+        progress_held || barrier_held,
+    );
+    Ok(())
+}
+
 fn dirty_authored_scene_document(world: &World) -> Option<String> {
     let registry = world.get_resource::<lunco_doc_bevy::DocumentRegistry<UsdDocument>>()?;
     registry.ids().find_map(|doc| {
@@ -1390,43 +1507,70 @@ pub fn run() -> u8 {
     app.finish();
     app.cleanup();
 
-    // A scene test is allowed to contain deliberate negative Modelica fixtures
-    // (the linter self-test does). Use the readiness system's explicit policy
-    // input for that test contract; otherwise a terminal compile error correctly
-    // holds the production world and also prevents the fixture's Rhai verdict
-    // from ever running. This changes no production policy and does not bypass
-    // active compilation or unresolved physics admission.
-    if let Some(mut settings) = app
+    if let Err(error) = hold_scenarios_closed(&mut app) {
+        eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
+        return finish_scene_test(
+            &app,
+            &cli,
+            2,
+            SceneTestProcessStatus::RunnerError,
+            Some(error.to_owned()),
+        );
+    }
+    let Some(mut settings) = app
         .world_mut()
         .get_resource_mut::<lunco_readiness::ReadinessSettings>()
-    {
-        settings.ignore_failed_models = true;
-    }
+    else {
+        let error = "ReadinessSettings resource is not installed";
+        eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
+        return finish_scene_test(
+            &app,
+            &cli,
+            2,
+            SceneTestProcessStatus::RunnerError,
+            Some(error.to_owned()),
+        );
+    };
+    // Negative Modelica fixtures still reach the production Rhai linter; active
+    // compilation and physical admission remain required before the verdict.
+    settings.ignore_failed_models = true;
 
-    // Load assets, admit every simulation-required participant, and complete
-    // the production scenario startup lifecycle at zero duration. The scene
-    // lifecycle owns its scenario gate; the runner observes that admission
-    // rather than overriding it. Asynchronous owners can make progress while
-    // every fixed consumer remains on the initial tick.
+    // Pump wall-clock loading and compilation without consuming a fixed tick.
+    // Release simulation only after the scene projection and ground owner have
+    // reached their terminal materialized state.
     app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
     let readiness_started = Instant::now();
-    let readiness_waits = {
+    let load_waits = {
         let mut waits = 0u32;
         while readiness_started.elapsed() < cli.readiness_timeout {
+            if let Err(error) = hold_scenarios_closed(&mut app) {
+                eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
+                return finish_scene_test(
+                    &app,
+                    &cli,
+                    2,
+                    SceneTestProcessStatus::RunnerError,
+                    Some(error.to_owned()),
+                );
+            }
             app.update();
             waits += 1;
             std::thread::yield_now();
-            if startup_ready(app.world_mut()) || app.should_exit().is_some() {
+            if scene_materialized(app.world_mut()) || app.should_exit().is_some() {
                 break;
             }
         }
         waits
     };
-    if !startup_ready(app.world_mut()) {
+    let scene_ready = scene_materialized(app.world_mut());
+    println!(
+        "[test] scene-readiness freeze held {load_waits} updates ({:.1}s wall)",
+        readiness_started.elapsed().as_secs_f64()
+    );
+    if !scene_ready {
         log_scene_readiness_blockers(app.world_mut());
-        log_participant_readiness_blockers(app.world_mut());
         println!(
-            "luncosim test NO-VERDICT  scene={}  — startup readiness did not complete \
+            "luncosim test NO-VERDICT  scene={}  — scene materialization did not complete \
              within the {:.1}s timeout",
             cli.scene,
             cli.readiness_timeout.as_secs_f64()
@@ -1437,7 +1581,7 @@ pub fn run() -> u8 {
             2,
             SceneTestProcessStatus::RunnerError,
             Some(format!(
-                "Startup readiness did not complete within the {:.1}s timeout.",
+                "Scene materialization did not complete within the {:.1}s timeout.",
                 cli.readiness_timeout.as_secs_f64()
             )),
         );
@@ -1448,7 +1592,7 @@ pub fn run() -> u8 {
     let fixed_overstep = fixed.overstep();
     if startup_tick != 0 || !fixed_elapsed.is_zero() || !fixed_overstep.is_zero() {
         let error = format!(
-            "fixed simulation advanced before startup readiness completed (SimTick={startup_tick}, fixed_elapsed={fixed_elapsed:?}, fixed_overstep={fixed_overstep:?})"
+            "fixed simulation advanced before scene materialization completed (SimTick={startup_tick}, fixed_elapsed={fixed_elapsed:?}, fixed_overstep={fixed_overstep:?})"
         );
         eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
         return finish_scene_test(
@@ -1459,10 +1603,227 @@ pub fn run() -> u8 {
             Some(error),
         );
     }
+    if let Err(error) = pause_modelica_participants(app.world_mut()) {
+        eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
+        return finish_scene_test(
+            &app,
+            &cli,
+            2,
+            SceneTestProcessStatus::RunnerError,
+            Some(error.to_owned()),
+        );
+    }
+    if let Err(error) = set_scene_test_startup_hold(&mut app, true) {
+        eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
+        return finish_scene_test(
+            &app,
+            &cli,
+            2,
+            SceneTestProcessStatus::RunnerError,
+            Some(error.to_owned()),
+        );
+    }
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(dt));
+
+    let admission_waits = {
+        let mut waits = 0u32;
+        while readiness_started.elapsed() < cli.readiness_timeout {
+            if physics_admission_ready(app.world_mut()) {
+                break;
+            }
+            if let Err(error) = hold_scenarios_closed(&mut app) {
+                eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
+                return finish_scene_test(
+                    &app,
+                    &cli,
+                    2,
+                    SceneTestProcessStatus::RunnerError,
+                    Some(error.to_owned()),
+                );
+            }
+            app.update();
+            waits += 1;
+            std::thread::yield_now();
+            if app.should_exit().is_some() {
+                break;
+            }
+        }
+        waits
+    };
+    let admission_is_ready = physics_admission_ready(app.world_mut());
     println!(
-        "[test] startup readiness admitted after {readiness_waits} updates ({:.1}s wall) at SimTick=0",
+        "[test] physics-admission warmup held {admission_waits} updates ({:.1}s wall)",
         readiness_started.elapsed().as_secs_f64()
     );
+    if !admission_is_ready {
+        log_participant_readiness_blockers(app.world_mut());
+        println!(
+            "luncosim test NO-VERDICT  scene={}  — physics admission did not complete \
+             before the {:.1}s readiness timeout",
+            cli.scene,
+            cli.readiness_timeout.as_secs_f64()
+        );
+        return finish_scene_test(
+            &app,
+            &cli,
+            2,
+            SceneTestProcessStatus::RunnerError,
+            Some(format!(
+                "Physics admission did not complete before the {:.1}s readiness timeout.",
+                cli.readiness_timeout.as_secs_f64()
+            )),
+        );
+    }
+
+    // Release all compiled participants together while the runner-owned
+    // startup hold keeps their first successful exchange out of the physical
+    // initial condition. This reason is independent from the readiness policy
+    // hold, which may clear during the final body-admission update.
+    resume_modelica_participants(app.world_mut());
+    let participant_waits = {
+        let mut waits = 0u32;
+        while readiness_started.elapsed() < cli.readiness_timeout {
+            // Worker responses land in Update, after this frame's
+            // PreUpdate readiness projection. Wait for both the first exchange
+            // and its cleared readiness state before leaving admission.
+            let verification_source_ready = cli.verification.is_none()
+                || matches!(verification_source_revision(app.world(), &cli), Ok(Some(_)));
+            if modelica_exchanges_ready(app.world_mut())
+                && participants_ready(app.world_mut())
+                && verification_source_ready
+            {
+                break;
+            }
+            // Advance only when no causal result is in flight. Once the first
+            // communication point raises the barrier, pump worker responses at
+            // zero duration; when it clears, one more fixed tick may be needed
+            // to reach another participant's first communication point. This
+            // keeps readiness latency out of the physical initial condition
+            // while still allowing models with different periods to prime.
+            let Some(barrier) = app
+                .world()
+                .get_resource::<lunco_core_runtime::SimulationBarrier>()
+            else {
+                let error = "SimulationBarrier resource is not installed";
+                eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
+                return finish_scene_test(
+                    &app,
+                    &cli,
+                    2,
+                    SceneTestProcessStatus::RunnerError,
+                    Some(error.to_owned()),
+                );
+            };
+            let barrier_held = barrier.held;
+            app.insert_resource(TimeUpdateStrategy::ManualDuration(if barrier_held {
+                Duration::ZERO
+            } else {
+                dt
+            }));
+            if let Err(error) = hold_scenarios_closed(&mut app) {
+                eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
+                return finish_scene_test(
+                    &app,
+                    &cli,
+                    2,
+                    SceneTestProcessStatus::RunnerError,
+                    Some(error.to_owned()),
+                );
+            }
+            app.update();
+            waits += 1;
+            if let Err(error) = discard_fixed_overstep_while_barrier_held(&mut app) {
+                eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
+                return finish_scene_test(
+                    &app,
+                    &cli,
+                    2,
+                    SceneTestProcessStatus::RunnerError,
+                    Some(error.to_owned()),
+                );
+            }
+            std::thread::yield_now();
+            if app.should_exit().is_some() {
+                break;
+            }
+        }
+        waits
+    };
+    let participants_are_ready =
+        modelica_exchanges_ready(app.world_mut()) && participants_ready(app.world_mut());
+    let verification_source_ready = cli.verification.is_none()
+        || matches!(verification_source_revision(app.world(), &cli), Ok(Some(_)));
+    if participants_are_ready && verification_source_ready {
+        if let Err(error) = set_scene_test_startup_hold(&mut app, false) {
+            eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
+            return finish_scene_test(
+                &app,
+                &cli,
+                2,
+                SceneTestProcessStatus::RunnerError,
+                Some(error.to_string()),
+            );
+        }
+        // The final worker response may have released the coupling barrier in
+        // the same update that made the participant set ready.  Do not wait for
+        // another render frame to project the playing transport: the test clock
+        // must be live before the scenario gate opens below.
+        if let Err(error) = reproject_test_transport(&mut app) {
+            eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
+            return finish_scene_test(
+                &app,
+                &cli,
+                2,
+                SceneTestProcessStatus::RunnerError,
+                Some(error.to_owned()),
+            );
+        }
+        // The final participant iteration may have used a zero manual duration
+        // while the barrier was held.  The response can clear that barrier in
+        // the same update that makes the set ready, so restore the authored
+        // fixed step before entering the test loop.
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(dt));
+    }
+    println!(
+        "[test] participant-readiness warmup held {participant_waits} updates after {load_waits} load and {admission_waits} physics-admission updates ({:.1}s wall)",
+        readiness_started.elapsed().as_secs_f64()
+    );
+    if !participants_are_ready {
+        log_participant_readiness_blockers(app.world_mut());
+        println!(
+            "luncosim test NO-VERDICT  scene={}  — participant readiness did not complete \
+             before the {:.1}s readiness timeout",
+            cli.scene,
+            cli.readiness_timeout.as_secs_f64()
+        );
+        return finish_scene_test(
+            &app,
+            &cli,
+            2,
+            SceneTestProcessStatus::RunnerError,
+            Some(format!(
+                "Participant readiness did not complete within the {:.1}s readiness timeout.",
+                cli.readiness_timeout.as_secs_f64()
+            )),
+        );
+    }
+    if !verification_source_ready {
+        let diagnostic = match verification_source_revision(app.world(), &cli) {
+            Ok(None) => format!(
+                "SysML analysis did not become ready within the {:.1}s readiness timeout.",
+                cli.readiness_timeout.as_secs_f64()
+            ),
+            Err(error) => error,
+            Ok(Some(_)) => unreachable!("verification readiness changed without an update"),
+        };
+        return finish_scene_test(
+            &app,
+            &cli,
+            2,
+            SceneTestProcessStatus::RunnerError,
+            Some(diagnostic),
+        );
+    }
 
     if let Some(dirty) = dirty_authored_scene_document(app.world()) {
         println!(
@@ -1524,12 +1885,25 @@ pub fn run() -> u8 {
     }
 
     // The scene and every simulation-required participant are ready. Apply the
-    // exact celestial test cadence and admit the same manual fixed step used by
-    // the production scene-test loop.
+    // readiness arm and let the scripting owner open its lifecycle gate on the
+    // next production readiness pass.
+    if let Err(error) = arm_scenarios_after_startup(&mut app) {
+        eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
+        return finish_scene_test(
+            &app,
+            &cli,
+            2,
+            SceneTestProcessStatus::RunnerError,
+            Some(error.to_owned()),
+        );
+    }
+    // Apply the exact celestial test cadence and admit the same manual fixed
+    // step used by the production scene-test loop.
     app.insert_resource(lunco_celestial_spatial::cadence::CelestialCadenceSettings::EXACT);
     app.insert_resource(TimeUpdateStrategy::ManualDuration(dt));
-    // SimTick is the process-wide fixed-cycle authority and remains monotonic
-    // through scene replacement. Use it directly as the test horizon.
+    // SimTick is process-wide and includes readiness priming. Snapshot it here
+    // so max_ticks measures only the authored test interval.
+    let test_start_tick = app.world().resource::<lunco_core_runtime::SimTick>().0;
     let mut ticks = 0u64;
     let mut updates = 0u64;
     let mut early_exit = false;
@@ -1549,9 +1923,23 @@ pub fn run() -> u8 {
         }
         app.update();
         updates += 1;
-        ticks = app.world().resource::<lunco_core_runtime::SimTick>().0;
+        let sim_tick = app.world().resource::<lunco_core_runtime::SimTick>().0;
+        let Some(test_ticks) = sim_tick.checked_sub(test_start_tick) else {
+            let error = format!(
+                "SimTick moved backwards during the scene test: start={test_start_tick}, current={sim_tick}"
+            );
+            eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
+            return finish_scene_test(
+                &app,
+                &cli,
+                2,
+                SceneTestProcessStatus::RunnerError,
+                Some(error),
+            );
+        };
+        ticks = test_ticks;
         let fixed = app.world().resource::<Time<Fixed>>();
-        let expected_fixed_elapsed = fixed.timestep().as_nanos().saturating_mul(ticks as u128);
+        let expected_fixed_elapsed = fixed.timestep().as_nanos().saturating_mul(sim_tick as u128);
         if fixed.elapsed().as_nanos() != expected_fixed_elapsed {
             let world = app.world();
             let virtual_time = world.resource::<Time<Virtual>>();
@@ -1571,11 +1959,14 @@ pub fn run() -> u8 {
                 .get_resource::<lunco_time::SceneTimeState>()
                 .map(|state| state.phase);
             let transport = world.get_resource::<lunco_time::TimeTransport>();
-            let scenario_gate = world
-                .get_resource::<lunco_scripting::scenario::ScenarioExecutionGate>();
+            let scenario_gate =
+                world.get_resource::<lunco_scripting::scenario::ScenarioExecutionGate>();
             let error = format!(
-                "fixed-cycle clocks diverged at SimTick={ticks}: Time<Fixed>::elapsed()={:?}, expected {} ns; Time<Virtual>(paused={}, delta={:?}); transport={transport:?}; progress={blockers:?}; barrier_held={barrier_held}; scene_time_phase={scene_time_phase:?}; scenario_gate={scenario_gate:?}",
-                fixed.elapsed(), expected_fixed_elapsed, virtual_time.is_paused(), virtual_time.delta()
+                "fixed-cycle clocks diverged at SimTick={sim_tick}: Time<Fixed>::elapsed()={:?}, expected {} ns; Time<Virtual>(paused={}, delta={:?}); transport={transport:?}; progress={blockers:?}; barrier_held={barrier_held}; scene_time_phase={scene_time_phase:?}; scenario_gate={scenario_gate:?}",
+                fixed.elapsed(),
+                expected_fixed_elapsed,
+                virtual_time.is_paused(),
+                virtual_time.delta()
             );
             eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
             return finish_scene_test(
@@ -1903,6 +2294,10 @@ pub fn run() -> u8 {
                 VerificationVerdict::Error => (
                     "ERROR",
                     format!("The scenario reported ERROR on channel {channel}."),
+                ),
+                VerificationVerdict::Unverified => (
+                    "UNVERIFIED",
+                    format!("The scenario reported UNVERIFIED on channel {channel}."),
                 ),
                 VerificationVerdict::Pass => unreachable!("PASS was handled above"),
             };

@@ -78,7 +78,7 @@ fn test_avian_body_ports_listed() {
         .id();
 
     let names: Vec<String> = ports()
-        .entity_ports(app.world(), e)
+        .entity_port_owners(app.world(), e)
         .into_iter()
         .map(|p| p.name)
         .collect();
@@ -133,8 +133,16 @@ fn authored_kinematic_body_accepts_position_inputs() {
         .id();
 
     let registry = ports();
-    assert!(registry.write_port(app.world_mut(), marker, "position_x", 8.0));
-    assert!(registry.write_port(app.world_mut(), marker, "position_z", -5.0));
+    assert!(
+        registry
+            .write_port(app.world_mut(), marker, "position_x", 8.0)
+            .is_ok()
+    );
+    assert!(
+        registry
+            .write_port(app.world_mut(), marker, "position_z", -5.0)
+            .is_ok()
+    );
     assert_eq!(
         app.world().get::<Position>(marker).unwrap().0,
         DVec3::new(8.0, 2.0, -5.0)
@@ -156,7 +164,11 @@ fn dynamic_mobility_never_accepts_position_inputs_during_admission() {
         ))
         .id();
 
-    assert!(!ports().write_port(app.world_mut(), vehicle, "position_x", 99.0));
+    assert!(
+        ports()
+            .write_port(app.world_mut(), vehicle, "position_x", 99.0)
+            .is_err()
+    );
     assert_eq!(app.world().get::<Position>(vehicle).unwrap().0.x, 1.0);
 }
 

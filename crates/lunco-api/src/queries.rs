@@ -1,11 +1,15 @@
 use crate::registry::ApiEntityRegistry;
 use bevy::prelude::*;
 use lunco_api_core::{
-    ApiErrorCode, ApiQuerySchema, ApiResponse, ApiValue, ApiValueError, IntoApiValue,
-    api_value_from_serializable, api_value_from_u64,
+    ApiErrorCode, ApiQueryParameterSchema, ApiQuerySchema, ApiResponse, ApiValue, ApiValueError,
+    IntoApiValue, api_value_from_serializable, api_value_from_u64,
 };
+use lunco_engineering_values::{Unit, UnitReference, UnitScaleExactness};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+pub mod ports;
+pub use ports::{ReadActuatorStatusProvider, ReadPortsBatchProvider};
 
 /// Typed result from a read-only API query provider.
 pub type ApiQueryResult = Result<Option<ApiValue>, ApiQueryError>;
@@ -210,10 +214,81 @@ impl Plugin for ApiQueryRegistryPlugin {
 /// `{ api_id, ports: [{ name, value, direction, metadata }] }`
 pub struct ReadPortsProvider;
 
-fn port_info_to_api_value(
-    port: &lunco_port_core::ports::PortInfo,
-) -> Result<ApiValue, ApiValueError> {
-    let range = match (port.metadata.min, port.metadata.max) {
+pub(super) fn port_unit_api_schema() -> &'static str {
+    "{ id, definition: { symbol, dimension_si: [i8; 7], scale_to_si, offset_to_si, scale_exactness } | () } | ()"
+}
+
+pub(super) fn port_metadata_api_schema() -> String {
+    format!(
+        "{{ type, unit: {}, frame: string | (), range, source, authority, writable }}",
+        port_unit_api_schema()
+    )
+}
+
+pub(super) fn port_info_api_schema() -> String {
+    format!(
+        "{{ name, value: f64 | (), direction, metadata: {} }}",
+        port_metadata_api_schema()
+    )
+}
+
+/// Convert a resolved unit definition into the stable port-query wire shape.
+pub(super) fn unit_definition_to_api_value(unit: &Unit) -> ApiValue {
+    let dimension = unit.dimension().0;
+    ApiValue::map([
+        ("symbol", ApiValue::str(unit.symbol())),
+        (
+            "dimension_si",
+            ApiValue::Array(
+                dimension
+                    .into_iter()
+                    .map(IntoApiValue::into_api_value)
+                    .collect(),
+            ),
+        ),
+        ("scale_to_si", unit.scale_to_si().into_api_value()),
+        ("offset_to_si", unit.offset_to_si().into_api_value()),
+        (
+            "scale_exactness",
+            ApiValue::str(match unit.scale_exactness() {
+                UnitScaleExactness::Exact => "exact",
+                UnitScaleExactness::Approximate => "approximate",
+                UnitScaleExactness::Unspecified => "unspecified",
+            }),
+        ),
+    ])
+}
+
+/// Convert a unit identity into the stable port-query wire shape.
+pub(super) fn unit_reference_to_api_value(unit: Option<&UnitReference>) -> ApiValue {
+    match unit {
+        Some(unit) => ApiValue::map([
+            ("id", ApiValue::str(unit.id())),
+            (
+                "definition",
+                unit.definition()
+                    .map(unit_definition_to_api_value)
+                    .unwrap_or(ApiValue::Unit),
+            ),
+        ]),
+        None => ApiValue::Unit,
+    }
+}
+
+pub(super) fn coordinate_frame_to_api_value(
+    frame: Option<&lunco_engineering_values::CoordinateFrameId>,
+) -> ApiValue {
+    frame
+        .map(|frame| ApiValue::str(frame.as_str()))
+        .unwrap_or(ApiValue::Unit)
+}
+
+/// Convert owner-provided port metadata to the canonical API representation.
+///
+/// `ReadPorts`, `ListPorts`, and causal-owner inspection use this projection so
+/// units, frames, bounds, and write authority have one wire contract.
+pub fn port_metadata_to_api_value(metadata: &lunco_port_core::ports::PortMetadata) -> ApiValue {
+    let range = match (metadata.min, metadata.max) {
         (Some(min), Some(max)) => {
             ApiValue::map([("min", ApiValue::Float(min)), ("max", ApiValue::Float(max))])
         }
@@ -221,34 +296,76 @@ fn port_info_to_api_value(
         (None, Some(max)) => ApiValue::map([("max", ApiValue::Float(max))]),
         (None, None) => ApiValue::Unit,
     };
-    Ok(ApiValue::map([
+
+    ApiValue::map([
+        ("type", ApiValue::str(metadata.value_type.as_str())),
+        ("unit", unit_reference_to_api_value(metadata.unit.as_ref())),
+        (
+            "frame",
+            coordinate_frame_to_api_value(metadata.frame.as_ref()),
+        ),
+        ("range", range),
+        ("source", ApiValue::str(metadata.source.clone())),
+        ("authority", ApiValue::str(metadata.authority.clone())),
+        ("writable", ApiValue::Bool(metadata.writable)),
+    ])
+}
+
+/// Convert a port direction to the stable wire representation used by port APIs.
+pub fn port_direction_to_api_value(direction: lunco_port_core::ports::PortDirection) -> ApiValue {
+    ApiValue::str(match direction {
+        lunco_port_core::ports::PortDirection::In => "in",
+        lunco_port_core::ports::PortDirection::Out => "out",
+        lunco_port_core::ports::PortDirection::InOut => "inout",
+    })
+}
+
+/// Convert one port reading and its owner metadata to the canonical API shape.
+pub fn port_info_to_api_value(port: &lunco_port_core::ports::PortInfo) -> ApiValue {
+    ApiValue::map([
         ("name", ApiValue::str(port.name.clone())),
-        ("value", api_value_from_serializable(&port.value)?),
         (
-            "direction",
-            ApiValue::str(match port.direction {
-                lunco_port_core::ports::PortDirection::In => "in",
-                lunco_port_core::ports::PortDirection::Out => "out",
-                lunco_port_core::ports::PortDirection::InOut => "inout",
-            }),
+            "value",
+            port.value
+                .map(IntoApiValue::into_api_value)
+                .unwrap_or(ApiValue::Unit),
         ),
-        (
-            "metadata",
-            ApiValue::map([
-                ("type", ApiValue::str(port.metadata.value_type)),
-                ("unit", port.metadata.unit.clone().into_api_value()),
-                ("range", range),
-                ("source", ApiValue::str(port.metadata.source.clone())),
-                ("authority", ApiValue::str(port.metadata.authority.clone())),
-                ("writable", ApiValue::Bool(port.metadata.writable)),
-            ]),
-        ),
-    ]))
+        ("direction", port_direction_to_api_value(port.direction)),
+        ("metadata", port_metadata_to_api_value(&port.metadata)),
+    ])
+}
+
+pub(crate) fn read_entity_ports(
+    world: &World,
+    registry: &lunco_port_core::ports::PortRegistry,
+    entity: Entity,
+) -> Vec<ApiValue> {
+    registry
+        .entity_port_infos(world, entity)
+        .iter()
+        .map(port_info_to_api_value)
+        .collect()
 }
 
 impl ApiQueryProvider for ReadPortsProvider {
     fn name(&self) -> &'static str {
         "ReadPorts"
+    }
+
+    fn schema(&self) -> ApiQuerySchema {
+        ApiQuerySchema {
+            name: self.name().to_owned(),
+            description: Some("Read every declared port and owner-provided value contract for one stable entity identity.".to_owned()),
+            parameters: Some(vec![ApiQueryParameterSchema {
+                name: "api_id".to_owned(),
+                type_name: "u64".to_owned(),
+                required: true,
+                description: "Stable entity identity whose ports are read.".to_owned(),
+                allowed_values: None,
+            }]),
+            exactly_one_of: Vec::new(),
+            response: Some(format!("{{ api_id, ports: [{}] }}", port_info_api_schema())),
+        }
     }
 
     fn simulation_read_scope(&self, _params: &ApiValue) -> SimulationQueryReadScope {
@@ -270,29 +387,30 @@ impl ApiQueryProvider for ReadPortsProvider {
             ));
         };
         let gid = lunco_core::GlobalEntityId::from_raw(api_id);
-        let Some(entity) = world.resource::<ApiEntityRegistry>().resolve(&gid) else {
+        let Some(entities) = world.get_resource::<ApiEntityRegistry>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "ReadPorts: ApiEntityRegistry resource is not present",
+            ));
+        };
+        let Some(entity) = entities.resolve(&gid) else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::EntityNotFound,
                 format!("ReadPorts: no entity for api_id {api_id}"),
             ));
         };
         // `PortRegistry` is `Clone` (a Vec of `'static` backends), so clone it out
-        // to release the immutable world borrow before `entity_ports` reborrows
-        // `&World` to read component values.
+        // before collecting owner metadata and live samples from `&World`.
         let Some(registry) = world
             .get_resource::<lunco_port_core::ports::PortRegistry>()
             .cloned()
         else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "ReadPorts: PortRegistry not present (no cosim plugin)".to_string(),
+                "ReadPorts: PortRegistry resource is not present",
             ));
         };
-        let ports = registry.entity_port_infos(world, entity);
-        let ports = ports
-            .into_iter()
-            .map(|port| port_info_to_api_value(&port))
-            .collect::<Result<Vec<_>, _>>()?;
+        let ports = read_entity_ports(world, &registry, entity);
         Ok(Some(ApiValue::map([
             ("api_id", api_value_from_u64(api_id)),
             ("ports", ApiValue::Array(ports)),
@@ -579,6 +697,8 @@ pub fn register_builtin_queries(registry: &mut ApiQueryRegistry) {
     // Not spatial, but built-in and transform/physics-agnostic (it only reads the
     // `PortRegistry`), so it registers here with the other always-available queries.
     registry.register(ReadPortsProvider);
+    registry.register(ReadPortsBatchProvider);
+    registry.register(ReadActuatorStatusProvider);
     // Readiness status — backs `GET /api/ready`. Always available; degrades to
     // `readiness_tracked: false` when the readiness substrate isn't installed.
     registry.register(ReadinessProvider);
@@ -828,19 +948,28 @@ mod tests {
         let port = lunco_port_core::ports::PortInfo {
             name: "throttle".into(),
             direction: lunco_port_core::ports::PortDirection::In,
-            value: 0.5,
+            value: Some(0.5),
             metadata: lunco_port_core::ports::PortMetadata::scalar(
                 lunco_port_core::ports::PortDirection::In,
-                Some("m/s"),
+                Some(lunco_engineering_values::UnitReference::resolved(
+                    lunco_engineering_values::Unit::new(
+                        "m/s",
+                        lunco_engineering_values::Dimension([1, 0, -1, 0, 0, 0, 0]),
+                        1.0,
+                        0.0,
+                    )
+                    .expect("valid speed unit"),
+                )),
                 Some(-1.0),
                 Some(1.0),
                 "control surface",
                 "operator",
                 true,
+                None,
             ),
         };
 
-        let value = port_info_to_api_value(&port).expect("port projects to an API value");
+        let value = port_info_to_api_value(&port);
         let metadata = value.get("metadata").expect("metadata is present");
         let range = metadata.get("range").expect("range is present");
         assert_eq!(
@@ -851,7 +980,13 @@ mod tests {
             metadata.get("type").and_then(ApiValue::as_str),
             Some("scalar")
         );
-        assert_eq!(metadata.get("unit").and_then(ApiValue::as_str), Some("m/s"));
+        assert_eq!(
+            metadata
+                .get("unit")
+                .and_then(|unit| unit.get("id"))
+                .and_then(ApiValue::as_str),
+            Some("m/s")
+        );
         assert_eq!(range.get("min").and_then(ApiValue::as_f64), Some(-1.0));
         assert_eq!(range.get("max").and_then(ApiValue::as_f64), Some(1.0));
         assert_eq!(

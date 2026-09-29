@@ -19,11 +19,9 @@
 //! * [`CosimDiagnostics::broken`] holds only terminal failures: a ready (or
 //!   failed) endpoint that still cannot accept the named input.
 //!
-//! It does NOT invent a finer "pending vs structural vs type-mismatch"
-//! classification the substrate can't yet vouch for — that needs the typed
-//! causality/unit metadata a later stage adds. Reporting only what is known keeps
-//! the endpoint truthful, the property the report's "queued ≠ succeeded" critique
-//! is about.
+//! Every rejected write keeps its owner-supplied reason, including range and
+//! writability failures. Pending endpoints retain the latest resolution reason
+//! without being promoted to terminal faults.
 
 use bevy::prelude::*;
 use lunco_core::GlobalEntityId;
@@ -45,6 +43,8 @@ pub struct BrokenConnection {
     pub has_port_surface: bool,
     /// The accumulated value that was dropped (what the source(s) resolved to).
     pub dropped_value: f64,
+    /// Owner-supplied rejection reason, including range and writability details.
+    pub failure: Option<String>,
 }
 
 /// A force-producing feedback cycle in the current co-simulation fabric.
@@ -245,6 +245,7 @@ mod tests {
             port: Arc::from("demand"),
             has_port_surface: true,
             dropped_value: 3.5,
+            failure: Some("value must be ≤ 1".into()),
         };
 
         assert!(diagnostics.record_fault(fault.clone()));

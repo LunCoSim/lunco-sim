@@ -6,7 +6,10 @@
 
 use bevy::math::{DQuat, DVec2, DVec3};
 use lunco_core::DTransform;
-use lunco_engineering_values::{Dimension, Quantity, Unit, UnitScaleExactness};
+use lunco_engineering_values::{
+    CoordinateFrameId, Dimension, EvidenceArtifactReference, EvidenceProviderGeneration, Quantity,
+    SimulationSampleInterval, Unit, UnitScaleExactness,
+};
 use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlConstraintKind, SysmlDiagnostic, SysmlElement,
     SysmlElementHandle, SysmlEnumValue, SysmlExpression, SysmlExpressionKind,
@@ -24,8 +27,9 @@ use lunco_sysml_ir::{
     RequiredConstraintEvaluation, RequiredConstraintIr, RequiredConstraintParameterBinding,
     RequirementAuditCode, RequirementAuditFinding, RequirementAuditPolicy, RequirementAuditReport,
     RequirementAuditSeverity, RequirementConstraintIrReport, RequirementEvaluationReport,
-    VerificationVerdict, audit_requirements, compile_constraint_by_name,
-    compile_required_constraints, evaluate_constraint, evaluate_requirement,
+    RequirementEvidenceContext, VerificationVerdict, audit_requirements,
+    build_requirement_evidence_envelope, compile_constraint_by_name, compile_required_constraints,
+    evaluate_constraint, evaluate_required_constraint, evaluate_requirement,
 };
 use lunco_sysml_modelica::{lower_constraint, supports_standard_function_lowering};
 use rhai::{Array, Dynamic, Engine, Map};
@@ -139,6 +143,59 @@ impl SysmlModelValue {
     }
 }
 
+/// Lower native SysML identities to the exact map/array representation used
+/// by the telemetry ABI. Numeric identity fields stay integer-valued so a
+/// source fingerprint is never rounded through a floating-point serializer.
+pub fn native_identity_to_dynamic(value: &Dynamic) -> Option<Dynamic> {
+    if let Some(handle) = value.clone().try_cast::<SysmlElementHandle>() {
+        return Some(element_handle_dynamic(handle));
+    }
+    if let Some(handle) = value.clone().try_cast::<SysmlFeatureHandle>() {
+        return Some(feature_handle_dynamic(handle));
+    }
+    if let Some(path) = value.clone().try_cast::<SysmlFeaturePath>() {
+        return Some(Dynamic::from_array(
+            path.features()
+                .iter()
+                .copied()
+                .map(feature_handle_dynamic)
+                .collect(),
+        ));
+    }
+    if let Some(source) = value.clone().try_cast::<SysmlSourceRef>() {
+        let mut record = Map::new();
+        record.insert("file".into(), Dynamic::from(source.file));
+        record.insert("start".into(), Dynamic::from_int(i64::from(source.start)));
+        record.insert("end".into(), Dynamic::from_int(i64::from(source.end)));
+        record.insert("revision".into(), Dynamic::from(source.revision));
+        return Some(Dynamic::from_map(record));
+    }
+    None
+}
+
+fn element_handle_dynamic(handle: SysmlElementHandle) -> Dynamic {
+    let mut record = Map::new();
+    record.insert(
+        "source_revision".into(),
+        Dynamic::from(handle.source_revision),
+    );
+    record.insert(
+        "source_fingerprint".into(),
+        Dynamic::from(handle.source_fingerprint),
+    );
+    record.insert(
+        "element_id".into(),
+        Dynamic::from_int(i64::from(handle.element_id)),
+    );
+    Dynamic::from_map(record)
+}
+
+fn feature_handle_dynamic(handle: SysmlFeatureHandle) -> Dynamic {
+    let mut record = Map::new();
+    record.insert("element".into(), element_handle_dynamic(handle.element));
+    Dynamic::from_map(record)
+}
+
 /// A source-backed requirement record selected from a [`SysmlModelValue`].
 #[derive(Clone, Debug)]
 pub struct SysmlRequirementValue {
@@ -188,6 +245,12 @@ fn model_source_literal_observation(
         "source_revision".into(),
         Dynamic::from(model.analysis.source_revision()),
     );
+    observation.insert(
+        "provider_generation".into(),
+        Dynamic::from(model.analysis.source_revision()),
+    );
+    observation.insert("document_id".into(), Dynamic::UNIT);
+    observation.insert("document_generation".into(), Dynamic::UNIT);
     if !path.belongs_to(
         model.analysis.source_revision(),
         model.analysis.source_fingerprint(),
@@ -296,7 +359,7 @@ fn required_constraint_irs_value(
     requirement: SysmlRequirementValue,
 ) -> Dynamic {
     let compiled = compile_required_constraints(&model.analysis, requirement.inner.element.handle);
-    requirement_constraint_ir_dynamic(&compiled)
+    requirement_constraint_ir_dynamic(&compiled, &model.analysis)
 }
 
 fn standard_functions_dynamic() -> Dynamic {
@@ -444,6 +507,89 @@ pub fn evaluate_constraint_value(
     evaluation_report_dynamic(&report)
 }
 
+/// Evaluate one requirement-owned constraint usage after its authored
+/// parameter bindings have been applied. This preserves usage-site feature
+/// paths while retaining the same typed observation and provenance contract
+/// used by standalone constraint evaluation.
+pub fn evaluate_required_constraint_value(
+    model: &mut SysmlModelValue,
+    requirement: SysmlRequirementValue,
+    verification: SysmlVerificationValue,
+    constraint_name: &str,
+    observations: Array,
+    absolute_tolerance: f64,
+    relative_tolerance: f64,
+) -> Dynamic {
+    let requirement_source = Some(SysmlSourceRef {
+        file: requirement.inner.element.file.clone(),
+        start: requirement.inner.element.start,
+        end: requirement.inner.element.end,
+        revision: model.analysis.source_revision(),
+    });
+    let (context, input_diagnostics) = evaluation_context_from_dynamic(
+        &model.analysis,
+        observations,
+        None,
+        requirement_source,
+        constraint_name,
+    );
+    let evaluated = evaluate_required_constraint(
+        &model.analysis,
+        requirement.inner.element.handle,
+        verification.inner.element.handle,
+        constraint_name,
+        &context,
+        EvaluationOptions {
+            absolute_tolerance,
+            relative_tolerance,
+        },
+    );
+    let (mut report, membership, definition) = match evaluated {
+        Ok(evaluated) => (
+            evaluated.evaluation,
+            Some(evaluated.membership),
+            evaluated.definition,
+        ),
+        Err(diagnostic) => (
+            EvaluationReport {
+                verdict: VerificationVerdict::Error,
+                expression_results: Vec::new(),
+                diagnostics: vec![diagnostic],
+            },
+            None,
+            None,
+        ),
+    };
+    report.diagnostics.extend(input_diagnostics);
+    if report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+    {
+        report.verdict = VerificationVerdict::Error;
+    }
+    let mut value = evaluation_report_dynamic(&report)
+        .try_cast::<Map>()
+        .unwrap_or_default();
+    value.insert(
+        "requirement".into(),
+        Dynamic::from(requirement.inner.element.handle),
+    );
+    value.insert(
+        "verification".into(),
+        Dynamic::from(verification.inner.element.handle),
+    );
+    value.insert(
+        "membership".into(),
+        membership.map(Dynamic::from).unwrap_or(Dynamic::UNIT),
+    );
+    value.insert(
+        "definition".into(),
+        definition.map(Dynamic::from).unwrap_or(Dynamic::UNIT),
+    );
+    Dynamic::from_map(value)
+}
+
 /// Evaluate all standard `require` constraint memberships on one typed
 /// requirement, checking the typed verification case's `verify` relationship.
 pub fn evaluate_requirement_value(
@@ -452,8 +598,16 @@ pub fn evaluate_requirement_value(
     verification: SysmlVerificationValue,
     observations: Array,
     tolerances: Dynamic,
+    evidence: Map,
 ) -> Dynamic {
-    let tolerances = tolerances.try_cast::<Map>().unwrap_or_default();
+    let evaluation_options = match evaluation_options_from_dynamic(tolerances) {
+        Ok(options) => options,
+        Err(message) => return evidence_error_value(message),
+    };
+    let evidence_context = match evidence_context_from_map(&evidence) {
+        Ok(context) => context,
+        Err(message) => return evidence_error_value(message),
+    };
     let source = Some(SysmlSourceRef {
         file: requirement.inner.element.file.clone(),
         start: requirement.inner.element.start,
@@ -472,7 +626,7 @@ pub fn evaluate_requirement_value(
         requirement.inner.element.handle,
         Some(verification.inner.element.handle),
         &context,
-        evaluation_options_from_map(&tolerances),
+        evaluation_options,
     );
     report.diagnostics.extend(input_diagnostics);
     if report
@@ -482,7 +636,62 @@ pub fn evaluate_requirement_value(
     {
         report.verdict = VerificationVerdict::Error;
     }
-    requirement_evaluation_dynamic(&report)
+
+    let required_constraints =
+        compile_required_constraints(&model.analysis, requirement.inner.element.handle);
+    match build_requirement_evidence_envelope(
+        &model.analysis,
+        &required_constraints,
+        context,
+        report.clone(),
+        evidence_context,
+    ) {
+        Ok(envelope) => match rhai::serde::to_dynamic(envelope) {
+            Ok(envelope) => {
+                let mut result = requirement_evaluation_map(&report);
+                result.insert("evidence".into(), envelope);
+                result.insert("status".into(), Dynamic::from("complete"));
+                Dynamic::from_map(result)
+            }
+            Err(error) => {
+                let message = format!("requirement evidence serialization failed: {error}");
+                mark_evidence_failure(&model.analysis, &requirement, &mut report, &message);
+                let mut result = requirement_evaluation_map(&report);
+                result.insert("evidence".into(), Dynamic::UNIT);
+                result.insert("status".into(), Dynamic::from("evidence_error"));
+                result.insert("evidence_error".into(), Dynamic::from(message));
+                Dynamic::from_map(result)
+            }
+        },
+        Err(message) => {
+            mark_evidence_failure(&model.analysis, &requirement, &mut report, &message);
+            let mut result = requirement_evaluation_map(&report);
+            result.insert("evidence".into(), Dynamic::UNIT);
+            result.insert("status".into(), Dynamic::from("evidence_error"));
+            result.insert("evidence_error".into(), Dynamic::from(message));
+            Dynamic::from_map(result)
+        }
+    }
+}
+
+fn mark_evidence_failure(
+    analysis: &SysmlAnalysis,
+    requirement: &SysmlRequirementValue,
+    report: &mut RequirementEvaluationReport,
+    message: &str,
+) {
+    report.verdict = VerificationVerdict::Error;
+    report.diagnostics.push(IrDiagnostic {
+        severity: DiagnosticSeverity::Error,
+        code: IrDiagnosticCode::EvidenceProvenanceInvalid,
+        source: Some(SysmlSourceRef {
+            file: requirement.inner.element.file.clone(),
+            start: requirement.inner.element.start,
+            end: requirement.inner.element.end,
+            revision: analysis.source_revision(),
+        }),
+        message: message.to_owned(),
+    });
 }
 
 /// Run an explicit policy-driven audit of requirement organization.
@@ -496,8 +705,18 @@ pub fn audit_requirements_value(
     audit_requirements(&model.analysis, policy)
 }
 
-fn evaluation_options_from_map(tolerances: &Map) -> EvaluationOptions {
-    fn read(tolerances: &Map, key: &str) -> f64 {
+fn evaluation_options_from_dynamic(value: Dynamic) -> Result<EvaluationOptions, String> {
+    let tolerances = value
+        .try_cast::<Map>()
+        .ok_or_else(|| "evaluation tolerances must be a map".to_owned())?;
+    for key in tolerances.keys() {
+        if !matches!(key.as_str(), "absolute_tolerance" | "relative_tolerance") {
+            return Err(format!(
+                "evaluation tolerances contain unexpected field `{key}`"
+            ));
+        }
+    }
+    let read = |key: &str| {
         tolerances
             .get(key)
             .and_then(|value| {
@@ -506,12 +725,13 @@ fn evaluation_options_from_map(tolerances: &Map) -> EvaluationOptions {
                     .ok()
                     .or_else(|| value.as_int().ok().map(|integer| integer as f64))
             })
-            .unwrap_or(f64::NAN)
-    }
-    EvaluationOptions {
-        absolute_tolerance: read(tolerances, "absolute_tolerance"),
-        relative_tolerance: read(tolerances, "relative_tolerance"),
-    }
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| format!("evaluation tolerance `{key}` must be a finite number"))
+    };
+    Ok(EvaluationOptions {
+        absolute_tolerance: read("absolute_tolerance")?,
+        relative_tolerance: read("relative_tolerance")?,
+    })
 }
 
 fn evaluation_context_from_dynamic(
@@ -637,34 +857,181 @@ fn evaluation_context_from_dynamic(
             });
             continue;
         }
-        let frame = record
-            .get("frame")
-            .and_then(|value| value.clone().into_string().ok());
+        let frame = match frame_id_field(&record, "frame") {
+            Ok(frame) => frame,
+            Err(message) => {
+                diagnostics.push(IrDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    code: IrDiagnosticCode::ObservationValueInvalid,
+                    source: source.clone(),
+                    message: format!("frame for `{feature_name}` is invalid: {message}"),
+                });
+                continue;
+            }
+        };
         let time_basis = record
             .get("time_basis")
             .and_then(|value| value.clone().into_string().ok());
         let source_revision = record.get("source_revision").and_then(dynamic_u64);
-        let provenance = match &provider {
-            BindingProvider::SourceLiteral => Some(ObservationProvenance::SysmlSource {
-                source_revision: source_revision.unwrap_or_else(|| analysis.source_revision()),
-                source_fingerprint: analysis.source_fingerprint(),
-            }),
-            BindingProvider::Usd => {
-                record
-                    .get("stage_generation")
-                    .and_then(dynamic_u64)
-                    .map(|stage_generation| ObservationProvenance::UsdStage {
-                        document_id: record.get("doc_id").and_then(dynamic_u64),
-                        document_generation: record
-                            .get("document_generation")
-                            .and_then(dynamic_u64),
+        let has_generation = ["provider_generation", "stage_generation", "source_revision"]
+            .iter()
+            .any(|name| record.get(*name).is_some_and(|value| !value.is_unit()));
+        let provenance = if state == ObservationState::Unavailable && !has_generation {
+            None
+        } else {
+            match &provider {
+                BindingProvider::SourceLiteral => {
+                    let Some(source_revision) = source_revision else {
+                        diagnostics.push(IrDiagnostic {
+                        severity: DiagnosticSeverity::Error,
+                        code: IrDiagnosticCode::EvidenceProvenanceInvalid,
+                        source: source.clone(),
+                        message: format!(
+                            "source-literal observation for `{feature_name}` requires `source_revision`"
+                        ),
+                    });
+                        continue;
+                    };
+                    let Some(generation) = record.get("provider_generation").and_then(dynamic_u64)
+                    else {
+                        diagnostics.push(IrDiagnostic {
+                        severity: DiagnosticSeverity::Error,
+                        code: IrDiagnosticCode::EvidenceProvenanceInvalid,
+                        source: source.clone(),
+                        message: format!(
+                            "source-literal observation for `{feature_name}` requires `provider_generation`"
+                        ),
+                    });
+                        continue;
+                    };
+                    if generation != source_revision {
+                        diagnostics.push(IrDiagnostic {
+                        severity: DiagnosticSeverity::Error,
+                        code: IrDiagnosticCode::EvidenceProvenanceInvalid,
+                        source: source.clone(),
+                        message: format!(
+                            "source-literal provider generation for `{feature_name}` does not match its source revision"
+                        ),
+                    });
+                        continue;
+                    }
+                    Some(ObservationProvenance::SysmlSource {
+                        source_revision,
+                        source_fingerprint: analysis.source_fingerprint(),
+                    })
+                }
+                BindingProvider::Usd => {
+                    let Some(stage_generation) =
+                        record.get("stage_generation").and_then(dynamic_u64)
+                    else {
+                        diagnostics.push(IrDiagnostic {
+                            severity: DiagnosticSeverity::Error,
+                            code: IrDiagnosticCode::EvidenceProvenanceInvalid,
+                            source: source.clone(),
+                            message: format!(
+                                "USD observation for `{feature_name}` requires `stage_generation`"
+                            ),
+                        });
+                        continue;
+                    };
+                    let document_id = match observation_optional_u64(&record, "doc_id") {
+                        Ok(document_id) => document_id,
+                        Err(message) => {
+                            diagnostics.push(IrDiagnostic {
+                                severity: DiagnosticSeverity::Error,
+                                code: IrDiagnosticCode::EvidenceProvenanceInvalid,
+                                source: source.clone(),
+                                message: format!("USD observation for `{feature_name}`: {message}"),
+                            });
+                            continue;
+                        }
+                    };
+                    let document_generation =
+                        match observation_optional_u64(&record, "document_generation") {
+                            Ok(generation) => generation,
+                            Err(message) => {
+                                diagnostics.push(IrDiagnostic {
+                                    severity: DiagnosticSeverity::Error,
+                                    code: IrDiagnosticCode::EvidenceProvenanceInvalid,
+                                    source: source.clone(),
+                                    message: format!(
+                                        "USD observation for `{feature_name}`: {message}"
+                                    ),
+                                });
+                                continue;
+                            }
+                        };
+                    Some(ObservationProvenance::UsdStage {
+                        document_id,
+                        document_generation,
                         stage_generation,
                     })
+                }
+                BindingProvider::Modelica
+                | BindingProvider::Telemetry
+                | BindingProvider::Derived
+                | BindingProvider::External => {
+                    let Some(generation) = record.get("provider_generation").and_then(dynamic_u64)
+                    else {
+                        diagnostics.push(IrDiagnostic {
+                        severity: DiagnosticSeverity::Error,
+                        code: IrDiagnosticCode::EvidenceProvenanceInvalid,
+                        source: source.clone(),
+                        message: format!(
+                            "{} observation for `{feature_name}` requires `provider_generation`",
+                            provider_identity(&provider)
+                        ),
+                    });
+                        continue;
+                    };
+                    let document_id = match observation_optional_string(&record, "document_id") {
+                        Ok(document_id) => document_id,
+                        Err(message) => {
+                            diagnostics.push(IrDiagnostic {
+                                severity: DiagnosticSeverity::Error,
+                                code: IrDiagnosticCode::EvidenceProvenanceInvalid,
+                                source: source.clone(),
+                                message: format!(
+                                    "provider observation for `{feature_name}`: {message}"
+                                ),
+                            });
+                            continue;
+                        }
+                    };
+                    let document_generation =
+                        match observation_optional_u64(&record, "document_generation") {
+                            Ok(generation) => generation,
+                            Err(message) => {
+                                diagnostics.push(IrDiagnostic {
+                                    severity: DiagnosticSeverity::Error,
+                                    code: IrDiagnosticCode::EvidenceProvenanceInvalid,
+                                    source: source.clone(),
+                                    message: format!(
+                                        "provider observation for `{feature_name}`: {message}"
+                                    ),
+                                });
+                                continue;
+                            }
+                        };
+                    if document_generation.is_some() && document_id.is_none() {
+                        diagnostics.push(IrDiagnostic {
+                        severity: DiagnosticSeverity::Error,
+                        code: IrDiagnosticCode::EvidenceProvenanceInvalid,
+                        source: source.clone(),
+                        message: format!(
+                            "provider observation for `{feature_name}` has a document generation without a document identity"
+                        ),
+                    });
+                        continue;
+                    }
+                    Some(ObservationProvenance::ProviderSnapshot {
+                        provider: provider_identity(&provider).to_owned(),
+                        generation,
+                        document_id,
+                        document_generation,
+                    })
+                }
             }
-            BindingProvider::Modelica
-            | BindingProvider::Telemetry
-            | BindingProvider::Derived
-            | BindingProvider::External => None,
         };
         let contract = if let Some(dynamic_contract) = record.get("contract") {
             let Some(contract_record) = dynamic_contract.clone().try_cast::<Map>() else {
@@ -705,6 +1072,20 @@ fn evaluation_context_from_dynamic(
                 });
                 continue;
             }
+            let frame = match frame_id_field(&contract_record, "frame") {
+                Ok(frame) => frame,
+                Err(message) => {
+                    diagnostics.push(IrDiagnostic {
+                        severity: DiagnosticSeverity::Error,
+                        code: IrDiagnosticCode::InvalidBindingContract,
+                        source: source.clone(),
+                        message: format!(
+                            "frame in the binding contract for `{feature_name}` is invalid: {message}"
+                        ),
+                    });
+                    continue;
+                }
+            };
             Some(BindingContract {
                 path: path.clone(),
                 provider: contract_provider,
@@ -715,9 +1096,7 @@ fn evaluation_context_from_dynamic(
                 unit: contract_record
                     .get("unit")
                     .and_then(|value| value.clone().try_cast::<Unit>()),
-                frame: contract_record
-                    .get("frame")
-                    .and_then(|value| value.clone().into_string().ok()),
+                frame,
                 time_basis: contract_record
                     .get("time_basis")
                     .and_then(|value| value.clone().into_string().ok()),
@@ -894,6 +1273,219 @@ fn dynamic_u64(value: &Dynamic) -> Option<u64> {
     })
 }
 
+fn evidence_required_field<'a>(map: &'a Map, name: &str) -> Result<&'a Dynamic, String> {
+    map.get(name)
+        .ok_or_else(|| format!("evidence context requires `{name}`"))
+}
+
+fn evidence_required_string(map: &Map, name: &str) -> Result<String, String> {
+    evidence_required_field(map, name)?
+        .clone()
+        .into_string()
+        .map_err(|_| format!("evidence field `{name}` must be a non-empty string"))
+        .and_then(|value| {
+            if value.trim().is_empty() {
+                Err(format!(
+                    "evidence field `{name}` must be a non-empty string"
+                ))
+            } else {
+                Ok(value)
+            }
+        })
+}
+
+fn evidence_required_u64(map: &Map, name: &str) -> Result<u64, String> {
+    dynamic_u64(evidence_required_field(map, name)?)
+        .ok_or_else(|| format!("evidence field `{name}` must be an unsigned integer"))
+}
+
+fn evidence_optional_string(map: &Map, name: &str) -> Result<Option<String>, String> {
+    let value = evidence_required_field(map, name)?;
+    if value.is_unit() {
+        return Ok(None);
+    }
+    let value = value
+        .clone()
+        .into_string()
+        .map_err(|_| format!("evidence field `{name}` must be a string or ()"))?;
+    if value.trim().is_empty() {
+        return Err(format!("evidence field `{name}` must not be empty"));
+    }
+    Ok(Some(value))
+}
+
+fn evidence_optional_u64(map: &Map, name: &str) -> Result<Option<u64>, String> {
+    let value = evidence_required_field(map, name)?;
+    if value.is_unit() {
+        return Ok(None);
+    }
+    dynamic_u64(value)
+        .map(Some)
+        .ok_or_else(|| format!("evidence field `{name}` must be an unsigned integer or ()"))
+}
+
+fn sample_interval_from_dynamic(
+    value: &Dynamic,
+) -> Result<Option<SimulationSampleInterval>, String> {
+    if value.is_unit() {
+        return Ok(None);
+    }
+    let record = value
+        .clone()
+        .try_cast::<Map>()
+        .ok_or_else(|| "sample interval must be a map or ()".to_owned())?;
+    for key in record.keys() {
+        if !matches!(key.as_str(), "clock" | "start_tick" | "end_tick") {
+            return Err(format!("sample interval has unexpected field `{key}`"));
+        }
+    }
+    let clock = evidence_required_string(&record, "clock")?;
+    let start_tick = evidence_required_u64(&record, "start_tick")?;
+    let end_tick = evidence_required_u64(&record, "end_tick")?;
+    SimulationSampleInterval::new(clock, start_tick, end_tick)
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+fn sample_interval_dynamic(interval: &SimulationSampleInterval) -> Dynamic {
+    let mut record = Map::new();
+    record.insert("clock".into(), Dynamic::from(interval.clock().to_owned()));
+    record.insert("start_tick".into(), Dynamic::from(interval.start_tick()));
+    record.insert("end_tick".into(), Dynamic::from(interval.end_tick()));
+    Dynamic::from_map(record)
+}
+
+/// Validate an authored interval through the shared typed value and return
+/// its canonical map form with exact unsigned tick fields.
+fn sysml_sample_interval(value: Dynamic) -> Dynamic {
+    match sample_interval_from_dynamic(&value) {
+        Ok(Some(interval)) => {
+            let mut result = Map::new();
+            result.insert("ok".into(), Dynamic::from_bool(true));
+            result.insert("interval".into(), sample_interval_dynamic(&interval));
+            Dynamic::from_map(result)
+        }
+        Ok(None) => sample_interval_error("sample interval must be a map"),
+        Err(error) => sample_interval_error(error),
+    }
+}
+
+fn sample_interval_error(error: impl Into<String>) -> Dynamic {
+    let mut result = Map::new();
+    result.insert("ok".into(), Dynamic::from_bool(false));
+    result.insert("error".into(), Dynamic::from(error.into()));
+    Dynamic::from_map(result)
+}
+
+fn observation_optional_u64(record: &Map, name: &str) -> Result<Option<u64>, String> {
+    let value = record
+        .get(name)
+        .ok_or_else(|| format!("observation provenance requires `{name}`; use () when absent"))?;
+    if value.is_unit() {
+        return Ok(None);
+    }
+    dynamic_u64(value)
+        .map(Some)
+        .ok_or_else(|| format!("observation provenance `{name}` must be an unsigned integer or ()"))
+}
+
+fn observation_optional_string(record: &Map, name: &str) -> Result<Option<String>, String> {
+    let value = record
+        .get(name)
+        .ok_or_else(|| format!("observation provenance requires `{name}`; use () when absent"))?;
+    if value.is_unit() {
+        return Ok(None);
+    }
+    let value = value
+        .clone()
+        .into_string()
+        .map_err(|_| format!("observation provenance `{name}` must be a string or ()"))?;
+    if value.trim().is_empty() {
+        return Err(format!("observation provenance `{name}` must not be empty"));
+    }
+    Ok(Some(value))
+}
+
+/// Parse the required, explicit evidence metadata supplied by an authored
+/// verification policy. Missing generations or sample clocks never inherit a
+/// value from the surrounding simulation context.
+fn evidence_context_from_map(map: &Map) -> Result<RequirementEvidenceContext, String> {
+    let provider_values = evidence_required_field(map, "provider_generations")?
+        .clone()
+        .try_cast::<Array>()
+        .ok_or_else(|| "evidence `provider_generations` must be an array".to_owned())?;
+    let mut provider_generations = Vec::with_capacity(provider_values.len());
+    for (index, value) in provider_values.into_iter().enumerate() {
+        let provider = value
+            .try_cast::<Map>()
+            .ok_or_else(|| format!("evidence provider generation {index} must be a map"))?;
+        provider_generations.push(
+            EvidenceProviderGeneration::new(
+                evidence_required_string(&provider, "provider")?,
+                evidence_required_u64(&provider, "generation")?,
+                evidence_optional_string(&provider, "document_id")?,
+                evidence_optional_u64(&provider, "document_generation")?,
+            )
+            .map_err(|error| error.to_string())?,
+        );
+    }
+
+    let sample_interval =
+        sample_interval_from_dynamic(evidence_required_field(map, "sample_interval")?)?;
+
+    let artifact_values = evidence_required_field(map, "artifacts")?
+        .clone()
+        .try_cast::<Array>()
+        .ok_or_else(|| "evidence `artifacts` must be an array".to_owned())?;
+    let mut artifacts = Vec::with_capacity(artifact_values.len());
+    for (index, value) in artifact_values.into_iter().enumerate() {
+        let artifact = value
+            .try_cast::<Map>()
+            .ok_or_else(|| format!("evidence artifact {index} must be a map"))?;
+        artifacts.push(
+            EvidenceArtifactReference::new(
+                evidence_required_string(&artifact, "uri")?,
+                evidence_optional_string(&artifact, "media_type")?,
+                evidence_optional_u64(&artifact, "fingerprint")?,
+            )
+            .map_err(|error| error.to_string())?,
+        );
+    }
+
+    Ok(RequirementEvidenceContext {
+        provider_generations,
+        sample_interval,
+        physics_configuration_fingerprint: evidence_optional_u64(
+            map,
+            "physics_configuration_fingerprint",
+        )?,
+        artifacts,
+    })
+}
+
+fn evidence_error_value(message: impl Into<String>) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("ok".into(), Dynamic::from_bool(false));
+    value.insert("verdict".into(), Dynamic::from("error"));
+    value.insert("status".into(), Dynamic::from("evidence_error"));
+    value.insert("evidence".into(), Dynamic::UNIT);
+    value.insert("error".into(), Dynamic::from(message.into()));
+    Dynamic::from_map(value)
+}
+
+fn frame_id_field(record: &Map, field: &str) -> Result<Option<CoordinateFrameId>, String> {
+    let Some(value) = record.get(field) else {
+        return Ok(None);
+    };
+    let value = value
+        .clone()
+        .into_string()
+        .map_err(|_| format!("`{field}` must be a non-empty string"))?;
+    CoordinateFrameId::new(value)
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
 fn parse_binding_provider(value: &str) -> Option<BindingProvider> {
     match value {
         "source_literal" => Some(BindingProvider::SourceLiteral),
@@ -903,6 +1495,17 @@ fn parse_binding_provider(value: &str) -> Option<BindingProvider> {
         "derived" => Some(BindingProvider::Derived),
         "external" => Some(BindingProvider::External),
         _ => None,
+    }
+}
+
+fn provider_identity(provider: &BindingProvider) -> &'static str {
+    match provider {
+        BindingProvider::SourceLiteral => "source_literal",
+        BindingProvider::Usd => "usd",
+        BindingProvider::Modelica => "modelica",
+        BindingProvider::Telemetry => "telemetry",
+        BindingProvider::Derived => "derived",
+        BindingProvider::External => "external",
     }
 }
 
@@ -926,6 +1529,7 @@ fn evaluation_report_dynamic(report: &EvaluationReport) -> Dynamic {
             VerificationVerdict::Fail => "fail",
             VerificationVerdict::Inconclusive => "inconclusive",
             VerificationVerdict::Error => "error",
+            VerificationVerdict::Unverified => "unverified",
         }),
     );
     value.insert(
@@ -951,7 +1555,7 @@ fn evaluation_report_dynamic(report: &EvaluationReport) -> Dynamic {
     Dynamic::from_map(value)
 }
 
-fn requirement_evaluation_dynamic(report: &RequirementEvaluationReport) -> Dynamic {
+fn requirement_evaluation_map(report: &RequirementEvaluationReport) -> Map {
     let mut value = Map::new();
     value.insert("requirement".into(), Dynamic::from(report.requirement));
     value.insert(
@@ -968,7 +1572,21 @@ fn requirement_evaluation_dynamic(report: &RequirementEvaluationReport) -> Dynam
             VerificationVerdict::Fail => "fail",
             VerificationVerdict::Inconclusive => "inconclusive",
             VerificationVerdict::Error => "error",
+            VerificationVerdict::Unverified => "unverified",
         }),
+    );
+    value.insert(
+        "evaluation_options".into(),
+        Dynamic::from_map(Map::from_iter([
+            (
+                "absolute_tolerance".into(),
+                Dynamic::from(report.evaluation_options.absolute_tolerance),
+            ),
+            (
+                "relative_tolerance".into(),
+                Dynamic::from(report.evaluation_options.relative_tolerance),
+            ),
+        ])),
     );
     value.insert(
         "ok".into(),
@@ -994,7 +1612,7 @@ fn requirement_evaluation_dynamic(report: &RequirementEvaluationReport) -> Dynam
                 .collect(),
         ),
     );
-    Dynamic::from_map(value)
+    value
 }
 
 fn required_constraint_evaluation_dynamic(evaluation: &RequiredConstraintEvaluation) -> Dynamic {
@@ -1190,6 +1808,7 @@ pub fn register_sysml_types(engine: &mut Engine) {
         .register_fn("sysml_model_is", |value: Dynamic| {
             value.try_cast::<SysmlModelValue>().is_some()
         })
+        .register_fn("sysml_sample_interval", sysml_sample_interval)
         .register_fn("sysml_quantity_is", |value: Dynamic| {
             value.try_cast::<SysmlQuantityValue>().is_some()
         })
@@ -1614,6 +2233,10 @@ pub fn register_sysml_types(engine: &mut Engine) {
         .register_fn("required_constraint_irs", required_constraint_irs_value)
         .register_fn("modelica_constraint", modelica_constraint_value)
         .register_fn("evaluate_constraint", evaluate_constraint_value)
+        .register_fn(
+            "evaluate_required_constraint",
+            evaluate_required_constraint_value,
+        )
         .register_fn("evaluate_requirement", evaluate_requirement_value)
         .register_fn("audit_requirements", audit_requirements_value)
         .register_fn("sysml_standard_functions", standard_functions_dynamic)
@@ -2215,7 +2838,10 @@ fn compiled_constraint_dynamic(compiled: &CompiledConstraint) -> Dynamic {
     Dynamic::from_map(value)
 }
 
-fn requirement_constraint_ir_dynamic(report: &RequirementConstraintIrReport) -> Dynamic {
+fn requirement_constraint_ir_dynamic(
+    report: &RequirementConstraintIrReport,
+    analysis: &SysmlAnalysis,
+) -> Dynamic {
     let mut value = Map::new();
     value.insert("requirement".into(), Dynamic::from(report.requirement));
     value.insert(
@@ -2224,7 +2850,7 @@ fn requirement_constraint_ir_dynamic(report: &RequirementConstraintIrReport) -> 
             report
                 .constraints
                 .iter()
-                .map(required_constraint_ir_dynamic)
+                .map(|constraint| required_constraint_ir_dynamic(constraint, analysis))
                 .collect(),
         ),
     );
@@ -2241,14 +2867,39 @@ fn requirement_constraint_ir_dynamic(report: &RequirementConstraintIrReport) -> 
     Dynamic::from_map(value)
 }
 
-fn required_constraint_ir_dynamic(required: &RequiredConstraintIr) -> Dynamic {
+fn required_constraint_ir_dynamic(
+    required: &RequiredConstraintIr,
+    analysis: &SysmlAnalysis,
+) -> Dynamic {
     let mut value = Map::new();
     value.insert("membership".into(), Dynamic::from(required.membership));
+    value.insert(
+        "membership_qualified_name".into(),
+        analysis
+            .elements()
+            .iter()
+            .find(|element| element.handle == required.membership)
+            .map(|element| Dynamic::from(element.qualified_name.clone()))
+            .unwrap_or(Dynamic::UNIT),
+    );
     value.insert(
         "definition".into(),
         required
             .definition
             .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
+    value.insert(
+        "definition_qualified_name".into(),
+        required
+            .definition
+            .and_then(|definition| {
+                analysis
+                    .elements()
+                    .iter()
+                    .find(|element| element.handle == definition)
+            })
+            .map(|element| Dynamic::from(element.qualified_name.clone()))
             .unwrap_or(Dynamic::UNIT),
     );
     value.insert(
@@ -2735,4 +3386,42 @@ fn diagnostic_dynamic(diagnostic: &SysmlDiagnostic) -> Dynamic {
     value.insert("end".into(), Dynamic::from_int(diagnostic.end as i64));
     value.insert("message".into(), Dynamic::from(diagnostic.message.clone()));
     Dynamic::from_map(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evaluation_options_require_explicit_typed_values() {
+        let valid = Map::from_iter([
+            ("absolute_tolerance".into(), Dynamic::from(1.0e-6)),
+            ("relative_tolerance".into(), Dynamic::from(2.0e-6)),
+        ]);
+        assert_eq!(
+            evaluation_options_from_dynamic(Dynamic::from_map(valid)).unwrap(),
+            EvaluationOptions {
+                absolute_tolerance: 1.0e-6,
+                relative_tolerance: 2.0e-6,
+            }
+        );
+
+        assert!(evaluation_options_from_dynamic(Dynamic::UNIT).is_err());
+        assert!(evaluation_options_from_dynamic(Dynamic::from_map(Map::new())).is_err());
+        assert!(
+            evaluation_options_from_dynamic(Dynamic::from_map(Map::from_iter([
+                ("absolute_tolerance".into(), Dynamic::from(1.0)),
+                ("relative_tolerance".into(), Dynamic::from("2.0")),
+            ])))
+            .is_err()
+        );
+        assert!(
+            evaluation_options_from_dynamic(Dynamic::from_map(Map::from_iter([
+                ("absolute_tolerance".into(), Dynamic::from(1.0)),
+                ("relative_tolerance".into(), Dynamic::from(2.0)),
+                ("tolerance".into(), Dynamic::from(3.0)),
+            ])))
+            .is_err()
+        );
+    }
 }

@@ -1086,14 +1086,18 @@ The whole-simulation guarantee remains open because:
    eligible fixed tick and through the web worker's coarse-to-full result; physics
    admission publishes a scene-scoped progress key while body and joint state is
    pending; and scenario startup waits for scene time, readiness, and external
-   progress holds. The USD bridge seeds authored body poses in `PreUpdate`, and
-   active Modelica participants publish their initialized t=0 output snapshot,
-   so neither owner needs a fixed-step warm-up. Rhai compilation, dependency
-   planning, initialization, and `on_start` complete before the fixed runner
-   admits the first fixed tick. The scene-test runner checks that both `SimTick`
-   and `Time<Fixed>` remain at zero during admission. The production `sensor`
-   and multi-rover Rhai tests now require `on_start` at tick 0 and the first
-   behavior sample at tick 1; their comparison harnesses use raw global ticks.
+   progress holds. The USD bridge seeds authored body poses in `PreUpdate`.
+   Scene tests first pump wall-time materialization at zero fixed duration, then
+   hold scenarios closed while fixed ticks admit Avian body/joint state and
+   exchange each Modelica participant's first initialized outputs. This priming
+   advances monotonic process-wide `SimTick`; the runner snapshots its value
+   immediately before opening the scenario lifecycle gate and measures
+   `max_ticks` from that baseline. Rhai `on_start` therefore records the global
+   startup tick, and the first `on_tick` runs at baseline plus one. Sensor and
+   multi-rover acceptance traces use scenario-relative ticks for repeatable
+   comparisons while retaining global tick evidence in scenario state or the
+   startup-baseline diagnostic. The updated production scenarios have not yet
+   been rerun on a binary built from this tree.
    The updated production scenarios have not yet been rerun on a binary built
    from this tree. The sensor actor-order check, first-sample validity contract,
    and initial altimeter miss remain covered by its authored scenario. The first
@@ -1314,12 +1318,13 @@ These findings and their owner-specific file evidence are maintained in
    required by the active scene and scenario. Keep simulation-required async
    work on exact `SimulationProgress` keys, including physical body/joint
    admission, and keep presentation readiness on its own status path. Seed
-   authored poses and admit joints during lifecycle preparation; the Modelica
-   compile snapshot supplies initialized outputs at t=0, so no timed solver
-   exchange is needed before startup. Verify a fresh process calls `on_start`
-   at tick 0 and its first `on_tick` at tick 1. Measure the serial and any
-   deterministic parallel solver profile before selecting the production
-   default.
+   authored poses before solver admission and complete the first Modelica
+   exchange while the scenario gate is closed. Scene-test `on_start` records
+   the process-wide `SimTick` baseline after this priming; its first `on_tick`
+   must observe baseline plus one, while comparison traces use scenario-relative
+   ticks. Hosts without fixed-step priming may start at global tick zero. Measure
+   the serial and any deterministic parallel solver profile before selecting
+   the production default.
 8. **Real-time owner isolation.** Route main-world command reads/writes through
    typed tick-stamped requests and immutable snapshots, then move the whole
    authoritative tick to one paced simulation owner. Keep fixed `dt`, report

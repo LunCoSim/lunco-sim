@@ -574,9 +574,8 @@ fn run_admitted_fixed_main_schedule(world: &mut World) {
         fixed.advance_by(timestep);
         drop(fixed);
         *world.resource_mut::<Time>() = world.resource::<Time<Fixed>>().as_generic();
-        let _ = world.try_schedule_scope(bevy::app::FixedMain, |world, schedule| {
-            schedule.run(world)
-        });
+        let _ =
+            world.try_schedule_scope(bevy::app::FixedMain, |world, schedule| schedule.run(world));
     }
 
     *world.resource_mut::<Time>() = world.resource::<Time<Virtual>>().as_generic();
@@ -957,10 +956,21 @@ fn project_time_transport(
     let coupling_held = coupling.is_some_and(|state| state.held);
     let admission_held = progress.is_some_and(|state| state.is_held());
     let scene_time_pending = scene_time.is_some_and(|state| !state.is_ready());
-    let paused = matches!(transport.mode, TransportMode::Paused)
-        || coupling_held
-        || admission_held
-        || scene_time_pending;
+    project_transport_state(
+        &transport,
+        &mut virtual_time,
+        coupling_held || admission_held || scene_time_pending,
+    );
+}
+
+/// Apply transport and an owner-supplied causal hold to Bevy's virtual clock.
+/// The scheduled time spine and lifecycle owners use this same projection.
+pub fn project_transport_state(
+    transport: &TimeTransport,
+    virtual_time: &mut Time<Virtual>,
+    causal_hold: bool,
+) {
+    let paused = matches!(transport.mode, TransportMode::Paused) || causal_hold;
     let relative_speed = advance_clock(transport.rate, paused);
 
     // Frozen transport is projected onto Bevy's `paused` flag, never onto
@@ -980,7 +990,21 @@ fn project_time_transport(
         virtual_time.set_relative_speed_f64(configured);
     }
     if frozen != virtual_time.is_paused() {
-        if frozen { virtual_time.pause(); } else { virtual_time.unpause(); }
+        if frozen {
+            virtual_time.pause();
+        } else {
+            virtual_time.unpause();
+        }
+    }
+}
+
+/// Discard the unconsumed fixed-clock fraction after a causal barrier is raised.
+/// A held simulation must resume from a whole admitted tick, not from residual
+/// overstep accumulated earlier in the same render update.
+pub fn discard_fixed_overstep(fixed: &mut Time<Fixed>) {
+    let overstep = fixed.overstep();
+    if !overstep.is_zero() {
+        fixed.discard_overstep(overstep);
     }
 }
 
@@ -1075,8 +1099,7 @@ impl Plugin for TimePlugin {
         .expect("Bevy TimePlugin fixed runner must be installed before LunCo TimePlugin");
         app.add_systems(
             RunFixedMainLoop,
-            run_admitted_fixed_main_schedule
-                .in_set(RunFixedMainLoopSystems::FixedMainLoop),
+            run_admitted_fixed_main_schedule.in_set(RunFixedMainLoopSystems::FixedMainLoop),
         );
 
         app.add_systems(PostUpdate, advance_world_clock.in_set(WorldTimeSet));
@@ -1342,9 +1365,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<Time<Fixed>>()
             .set_timestep(Duration::from_secs(1));
-        app.world_mut()
-            .resource_mut::<Time<Virtual>>()
-            .unpause();
+        app.world_mut().resource_mut::<Time<Virtual>>().unpause();
         app.world_mut()
             .resource_mut::<Time<Virtual>>()
             .advance_by(Duration::from_secs(4));
@@ -1361,7 +1382,10 @@ mod tests {
             Duration::from_secs(2),
             "the remaining fixed time stays queued while the owner resolves its barrier"
         );
-        assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), Duration::from_secs(2));
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().elapsed(),
+            Duration::from_secs(2)
+        );
         assert_eq!(
             app.world().resource::<Time<Fixed>>().elapsed()
                 + app.world().resource::<Time<Fixed>>().overstep(),
@@ -1381,8 +1405,14 @@ mod tests {
         app.world_mut().run_schedule(RunFixedMainLoop);
 
         assert_eq!(app.world().resource::<FixedBurstCount>().0, 4);
-        assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), Duration::from_secs(4));
-        assert_eq!(app.world().resource::<Time<Fixed>>().overstep(), Duration::ZERO);
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().elapsed(),
+            Duration::from_secs(4)
+        );
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().overstep(),
+            Duration::ZERO
+        );
         assert_eq!(
             app.world().resource::<Time<Fixed>>().elapsed()
                 + app.world().resource::<Time<Fixed>>().overstep(),
@@ -1442,9 +1472,18 @@ mod tests {
         app.update();
 
         assert!(app.world().resource::<Time<Virtual>>().is_paused());
-        assert_eq!(app.world().resource::<Time<Virtual>>().delta(), Duration::ZERO);
-        assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), Duration::ZERO);
-        assert_eq!(app.world().resource::<Time<Fixed>>().overstep(), Duration::ZERO);
+        assert_eq!(
+            app.world().resource::<Time<Virtual>>().delta(),
+            Duration::ZERO
+        );
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().elapsed(),
+            Duration::ZERO
+        );
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().overstep(),
+            Duration::ZERO
+        );
         assert_eq!(app.world().resource::<lunco_core_runtime::SimTick>().0, 0);
 
         app.world_mut()
@@ -1469,22 +1508,27 @@ mod tests {
         app.update();
         app.add_systems(
             PreUpdate,
-            acquire_pre_update_progress
-                .in_set(lunco_core_runtime::SimulationProgressAdmissionSet),
+            acquire_pre_update_progress.in_set(lunco_core_runtime::SimulationProgressAdmissionSet),
         );
 
         app.update();
 
         assert!(!app.world().resource::<Time<Virtual>>().is_paused());
         assert_eq!(app.world().resource::<Time<Virtual>>().delta(), timestep);
-        assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), Duration::ZERO);
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().elapsed(),
+            Duration::ZERO
+        );
         assert_eq!(app.world().resource::<lunco_core_runtime::SimTick>().0, 0);
         assert_eq!(app.world().resource::<Time<Fixed>>().overstep(), timestep);
 
         app.update();
         assert!(app.world().resource::<Time<Virtual>>().is_paused());
         assert_eq!(app.world().resource::<Time<Fixed>>().overstep(), timestep);
-        assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), Duration::ZERO);
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().elapsed(),
+            Duration::ZERO
+        );
 
         app.world_mut()
             .resource_mut::<lunco_core_runtime::SimulationProgress>()
@@ -1493,9 +1537,15 @@ mod tests {
                 operation_id: 2,
             });
         app.update();
-        assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), timestep * 2);
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().elapsed(),
+            timestep * 2
+        );
         assert_eq!(app.world().resource::<lunco_core_runtime::SimTick>().0, 2);
-        assert_eq!(app.world().resource::<Time<Fixed>>().overstep(), Duration::ZERO);
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().overstep(),
+            Duration::ZERO
+        );
     }
 
     #[test]

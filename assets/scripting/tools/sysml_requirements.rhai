@@ -562,16 +562,27 @@ fn _expected(report, check) {
 }
 
 /// Create a generic requirement-linked SysML constraint check record.
-/// `bindings` can be keyed by declared parameter name for scalar inputs, or be
-/// a list of provider observations carrying their complete typed SysML feature
-/// paths. Constraint logic remains authored in SysML.
+/// `bindings` can be keyed by declared parameter name for Rhai-derived or
+/// source-literal scalar inputs, or be a list of fully typed provider
+/// observations carrying their feature paths and provenance. Runtime USD,
+/// Modelica, telemetry, and external providers must use typed observations.
+/// Constraint logic remains authored in SysML.
 fn constraint_check(id, component, requirement, verification,
                     constraint_name, bindings, provider, tolerance) {
+    if provider == () || provider == "" {
+        throw("SysML constraint bindings require an explicit provider mode");
+    }
+    if provider != "derived" && provider != "source_literal" && provider != "typed" {
+        throw("SysML constraint bindings require provider mode derived, source_literal, or typed");
+    }
+    if type_of(bindings) == "array" && provider != "typed" {
+        throw("typed SysML constraint observation lists require provider mode typed");
+    }
     #{id: id, component: component, requirement: requirement,
       verification: verification, kind: "constraint",
       constraint: constraint_name,
       bindings: if bindings == () { #{} } else { bindings },
-      provider: if provider == () || provider == "" { "derived" } else { provider },
+      provider: provider,
       tolerance: if tolerance == () { 0.0 } else { tolerance }}
 }
 
@@ -583,6 +594,15 @@ fn required_constraints_check(id, component, requirement, verification,
     let check = constraint_check(id, component, requirement, verification,
         constraint_name, bindings, provider, tolerance);
     check.kind = "required_constraints";
+    check
+}
+
+/// Evaluate one named require membership using its authored usage bindings.
+fn required_constraint_check(id, component, requirement, verification,
+                             constraint_name, bindings, provider, tolerance) {
+    let check = constraint_check(id, component, requirement, verification,
+        constraint_name, bindings, provider, tolerance);
+    check.kind = "required_constraint";
     check
 }
 
@@ -611,15 +631,27 @@ fn required_constraint_ir(source_model, requirement, constraint_name) {
             error: "required constraint IR is unavailable",
             diagnostics: if compiled == () { [] } else { compiled.diagnostics }};
     }
+    let matched_constraint = ();
     for membership in compiled.constraints {
         let value = membership.compiled;
         if value == () || value.constraint == ()
             || value.constraint.qualified_name != constraint_name {
             continue;
         }
+        if matched_constraint != () {
+            return #{ok: false, valid: false,
+                error: "required constraint identity is ambiguous: " + constraint_name,
+                diagnostics: compiled.diagnostics};
+        }
+        matched_constraint = membership;
+    }
+    if matched_constraint != () {
+        let value = matched_constraint.compiled;
         return #{ok: value.valid == true, valid: value.valid == true,
             constraint: value.constraint,
-            parameter_bindings: membership.parameter_bindings,
+            usage: matched_constraint.membership_qualified_name,
+            definition: matched_constraint.definition_qualified_name,
+            parameter_bindings: matched_constraint.parameter_bindings,
             diagnostics: value.diagnostics};
     }
     #{ok: false, valid: false,
@@ -737,7 +769,7 @@ fn _constraint_observations(model, check, requirement) {
     if check.constraint == () || check.constraint == "" {
         return #{ok: false, error: "SysML constraint identity is missing"};
     }
-    let ir = if check.kind == "required_constraints" {
+    let ir = if check.kind == "required_constraints" || check.kind == "required_constraint" {
         let typed_requirement = model.requirement(requirement);
         required_constraint_ir(model, typed_requirement, check.constraint)
     } else {
@@ -753,6 +785,11 @@ fn _constraint_observations(model, check, requirement) {
     let bindings = if check.bindings == () { #{} } else { check.bindings };
     let observations = [];
     if type_of(bindings) == "array" {
+        if check.provider != "typed" {
+            return #{ok: false,
+                error: "typed constraint observations require provider mode typed",
+                ir: ir};
+        }
         for candidate in bindings {
             if type_of(candidate) != "map" {
                 return #{ok: false,
@@ -760,9 +797,11 @@ fn _constraint_observations(model, check, requirement) {
                     ir: ir};
             }
             let observation = candidate;
-            if observation.provider == () { observation.provider = check.provider; }
-            if observation.state == () {
-                observation.state = if observation.value == () { "unavailable" } else { "value" };
+            if observation.provider == () || observation.provider == ""
+                || observation.state == () || observation.path == () {
+                return #{ok: false,
+                    error: "typed constraint observations require provider, state, and resolved path",
+                    ir: ir};
             }
             observations.push(observation);
         }
@@ -771,6 +810,15 @@ fn _constraint_observations(model, check, requirement) {
     if type_of(bindings) != "map" {
         return #{ok: false,
             error: "constraint bindings must be a parameter map or typed observation list",
+            ir: ir};
+    }
+    let scalar_generation = if check.provider == "derived" {
+        sim_tick()
+    } else if check.provider == "source_literal" { model.source_revision } else { () };
+    if check.provider != "typed"
+        && (scalar_generation == () || model.source_revision == ()) {
+        return #{ok: false,
+            error: "scalar constraint provider generation or SysML source revision is unavailable",
             ir: ir};
     }
     let known_names = #{};
@@ -790,7 +838,19 @@ fn _constraint_observations(model, check, requirement) {
     for parameter in ir.constraint.parameters {
         let parameter_dependencies = [];
         for path in ir.constraint.dependencies {
-            if path.len() > 0 && path[0] == parameter.feature {
+            let is_parameter_path = path.len() > 0 && path[0] == parameter.feature;
+            let is_bound_value_path = false;
+            if ir.parameter_bindings != () {
+                for binding in ir.parameter_bindings {
+                    if binding.parameter == parameter.feature
+                        && binding.value != ()
+                        && binding.value.kind == "feature_reference"
+                        && binding.value.path == path {
+                        is_bound_value_path = true;
+                    }
+                }
+            }
+            if is_parameter_path || is_bound_value_path {
                 parameter_dependencies.push(path);
             }
         }
@@ -799,9 +859,21 @@ fn _constraint_observations(model, check, requirement) {
         let supplied = bindings[parameter.name];
         if supplied == () { supplied = bindings[parameter.qualified_name]; }
         for path in parameter_dependencies {
+            if check.provider == "typed" && supplied == () {
+                return #{ok: false,
+                    error: "typed constraint bindings must explicitly report every provider feature",
+                    ir: ir};
+            }
+            if check.provider == "typed" && type_of(supplied) != "map" {
+                return #{ok: false,
+                    error: "typed constraint parameter values must be provider observation maps",
+                    ir: ir};
+            }
             let observation = ();
             if supplied != () {
-                if path.len() == 1 {
+                if check.provider == "typed" && type_of(supplied) == "map" {
+                    observation = supplied;
+                } else if path.len() == 1 {
                     observation = supplied;
                 } else if type_of(supplied) == "map" {
                     if supplied.path == path {
@@ -833,19 +905,33 @@ fn _constraint_observations(model, check, requirement) {
                     }});
             } else if type_of(observation) == "map" {
                 if observation.path != () && observation.path != path {
+                    let observed_target = if type_of(observation.path) == "array"
+                        && observation.path.len() > 0 {
+                        observation.path[observation.path.len() - 1].element.element_id.to_string()
+                    } else { "<missing>" };
+                    let expected_target = if path.len() > 0 {
+                        path[path.len() - 1].element.element_id.to_string()
+                    } else { "<missing>" };
                     return #{ok: false,
-                        error: "binding observation path does not match the resolved SysML dependency",
+                        error: "binding observation path does not match resolved dependency for parameter "
+                            + parameter.name + " (target " + observed_target + " != "
+                            + expected_target + ")",
                         ir: ir};
                 }
-                if observation.provider == () { observation.provider = check.provider; }
-                if observation.state == () {
-                    observation.state = if observation.value == () { "unavailable" } else { "value" };
+                if observation.provider == () || observation.provider == ""
+                    || observation.state == () || check.provider != "typed" {
+                    return #{ok: false,
+                        error: "typed parameter bindings require provider mode typed and explicit provider and state",
+                        ir: ir};
                 }
                 observation.path = path;
                 observations.push(observation);
             } else if path.len() == 1 {
                 observations.push(#{path: path, provider: check.provider,
-                    state: "value", value: observation});
+                    state: "value", value: observation,
+                    provider_generation: scalar_generation,
+                    source_revision: model.source_revision,
+                    document_id: (), document_generation: ()});
             } else {
                 observations.push(#{path: path, provider: check.provider,
                     state: "unavailable",
@@ -856,37 +942,144 @@ fn _constraint_observations(model, check, requirement) {
     #{ok: true, observations: observations, ir: ir}
 }
 
-fn _constraint_is_required(report, requirement, constraint_name) {
+fn _constraint_is_required(report, requirement, constraint_name, model) {
     let identity = requirement_name(report, requirement);
     if identity.ok != true {
         return #{ok: false, error: identity.error};
     }
-    let record = ();
-    for candidate in report.requirement_records {
-        if _record_name(candidate) == identity.name {
-            record = candidate;
-            break;
+    let typed_requirement = model.requirement(identity.name);
+    if typed_requirement == () {
+        return #{ok: false,
+            error: "typed SysML requirement record is unavailable: " + identity.name};
+    }
+    let required = required_constraint_ir(model, typed_requirement, constraint_name);
+    if required == () || required.ok != true {
+        return #{ok: false,
+            error: if required == () { "required constraint IR is unavailable" }
+                else if required.error != () { required.error }
+                else { "constraint is not required by " + identity.name + ": " + constraint_name }};
+    }
+    if required.usage == () || required.usage == "" {
+        return #{ok: false,
+            error: "required constraint membership has no source identity: " + constraint_name};
+    }
+    #{ok: true, requirement: identity.name,
+        usage: required.usage,
+        definition: required.definition}
+}
+
+fn _requirement_evidence_context(observations) {
+    let provider_generations = [];
+    let runtime_provider_seen = false;
+    let sample_interval = ();
+    let runtime_interval_missing = false;
+    for observation in observations {
+        if observation.state == "unavailable"
+            && observation.provider_generation == ()
+            && observation.stage_generation == ()
+            && observation.source_revision == () {
+            continue;
+        }
+        let provider = observation.provider;
+        let generation = ();
+        let document_id = ();
+        let document_generation = ();
+        if provider == "source_literal" {
+            generation = observation.provider_generation;
+        } else if provider == "usd" {
+            generation = observation.stage_generation;
+            document_id = if observation.doc_id == () { () }
+                else { observation.doc_id.to_string() };
+            document_generation = observation.document_generation;
+            runtime_provider_seen = true;
+        } else {
+            generation = observation.provider_generation;
+            document_id = observation.document_id;
+            document_generation = observation.document_generation;
+            runtime_provider_seen = true;
+            let supplied_interval = observation.sample_interval;
+            if supplied_interval == () {
+                runtime_interval_missing = true;
+            } else {
+                let interval_result = sysml_sample_interval(supplied_interval);
+                if interval_result.ok != true {
+                    return #{ok: false,
+                        error: "runtime observation has an invalid sample interval: "
+                            + interval_result.error};
+                }
+                let normalized_interval = interval_result.interval;
+                if sample_interval == () {
+                    sample_interval = normalized_interval;
+                } else if sample_interval.clock != normalized_interval.clock
+                    || sample_interval.start_tick != normalized_interval.start_tick
+                    || sample_interval.end_tick != normalized_interval.end_tick {
+                    return #{ok: false,
+                        error: "runtime observations have conflicting sample intervals"};
+                }
+            }
+        }
+        if provider == () || generation == () {
+            return #{ok: false,
+                error: "runtime observation is missing its provider generation"};
+        }
+        let duplicate = false;
+        for existing in provider_generations {
+            if existing.provider == provider
+                && existing.document_id == document_id {
+                if existing.generation != generation
+                    || existing.document_generation != document_generation {
+                    return #{ok: false,
+                        error: "one provider/document identity has conflicting generations"};
+                }
+                duplicate = true;
+                break;
+            }
+        }
+        if !duplicate {
+            provider_generations.push(#{
+                provider: provider,
+                generation: generation,
+                document_id: document_id,
+                document_generation: document_generation,
+            });
         }
     }
-    if record == () {
-        return #{ok: false,
-            error: "SysML requirement record is unavailable: " + identity.name};
-    }
-    if record.constraints == () {
-        return #{ok: false,
-            error: "SysML requirement has no projected require/assume memberships: " + identity.name};
-    }
-    for membership in record.constraints {
-        if membership.kind != "require" { continue; }
-        if membership.qualified_name == constraint_name
-            || membership.definition_name == constraint_name {
-            return #{ok: true, requirement: identity.name,
-                usage: membership.qualified_name,
-                definition: membership.definition_name};
+
+    let physics_configuration_fingerprint = ();
+    if runtime_provider_seen {
+        if sample_interval != () && runtime_interval_missing {
+            return #{ok: false,
+                error: "runtime observations must all identify their sample interval when any observation supplies one"};
+        }
+        if sample_interval == () {
+            let sample_tick = sim_tick();
+            let interval_result = sysml_sample_interval(#{
+                clock: "simulation",
+                start_tick: sample_tick,
+                end_tick: sample_tick,
+            });
+            if interval_result.ok != true {
+                return #{ok: false,
+                    error: "current simulation tick is not a valid evidence sample: "
+                        + interval_result.error};
+            }
+            sample_interval = interval_result.interval;
+        }
+        physics_configuration_fingerprint = solver_configuration_fingerprint();
+        if physics_configuration_fingerprint == () {
+            return #{ok: false,
+                error: "physics solver configuration fingerprint is unavailable"};
         }
     }
-    #{ok: false, error: "constraint is not a required constraint of "
-        + identity.name + ": " + constraint_name}
+    #{
+        ok: true,
+        context: #{
+            provider_generations: provider_generations,
+            sample_interval: sample_interval,
+            physics_configuration_fingerprint: physics_configuration_fingerprint,
+            artifacts: [],
+        },
+    }
 }
 
 fn _check_constraint(report, check, model) {
@@ -905,7 +1098,7 @@ fn _check_constraint(report, check, model) {
             constraint_source_revision: model.source_revision};
     }
     let membership = _constraint_is_required(report, check.requirement,
-        check.constraint);
+        check.constraint, model);
     if membership.ok != true {
         return #{ok: false, id: check.id, component: check.component,
             requirement: check.requirement, verification: check.verification,
@@ -947,9 +1140,40 @@ fn _check_constraint(report, check, model) {
                 error: "typed requirement or verification record is unavailable",
                 source_revision: report.source_revision};
         }
+        let evidence = _requirement_evidence_context(bound.observations);
+        if evidence.ok != true {
+            return #{ok: false, id: check.id, component: check.component,
+                requirement: check.requirement, verification: check.verification,
+                kind: check.kind, constraint: check.constraint, verdict: "error",
+                error: evidence.error,
+                observations: bound.observations,
+                source_revision: report.source_revision};
+        }
         evaluation = model.evaluate_requirement(typed_requirement,
             typed_verification, bound.observations,
-            #{absolute_tolerance: tolerance, relative_tolerance: tolerance});
+            #{absolute_tolerance: tolerance, relative_tolerance: tolerance},
+            evidence.context);
+    } else if check.kind == "required_constraint" {
+        let verification_identity = verification_name(report, check.verification);
+        if verification_identity.ok != true {
+            return #{ok: false, id: check.id, component: check.component,
+                requirement: check.requirement, verification: check.verification,
+                kind: check.kind, constraint: check.constraint, verdict: "error",
+                error: verification_identity.error,
+                source_revision: report.source_revision};
+        }
+        let typed_requirement = model.requirement(membership.requirement);
+        let typed_verification = model.verification(verification_identity.name);
+        if typed_requirement == () || typed_verification == () {
+            return #{ok: false, id: check.id, component: check.component,
+                requirement: check.requirement, verification: check.verification,
+                kind: check.kind, constraint: check.constraint, verdict: "error",
+                error: "typed requirement or verification record is unavailable",
+                source_revision: report.source_revision};
+        }
+        evaluation = model.evaluate_required_constraint(typed_requirement,
+            typed_verification, check.constraint, bound.observations,
+            tolerance, tolerance);
     } else {
         evaluation = model.evaluate_constraint(check.constraint,
             bound.observations, tolerance, tolerance);
@@ -992,7 +1216,8 @@ fn _failure(check, message) {
 fn _result_verdict(result) {
     if result.verdict != () {
         if result.verdict == "pass" || result.verdict == "fail"
-            || result.verdict == "inconclusive" || result.verdict == "error" {
+            || result.verdict == "inconclusive" || result.verdict == "error"
+            || result.verdict == "unverified" {
             return result.verdict;
         }
         return "error";
@@ -1008,6 +1233,7 @@ fn _merge_verdict(current, next) {
     if current == "inconclusive" || next == "inconclusive" {
         return "inconclusive";
     }
+    if current == "unverified" || next == "unverified" { return "unverified"; }
     if current == "" { return next; }
     "pass"
 }
@@ -1024,7 +1250,8 @@ fn _check_one(report, check, indexes, model) {
     if !_indexed_coverage(indexes, check.requirement, check.verification) {
         return _failure(check, "no SysML verification case covers this requirement");
     }
-    if check.kind == "constraint" || check.kind == "required_constraints" {
+    if check.kind == "constraint" || check.kind == "required_constraint"
+        || check.kind == "required_constraints" {
         return _check_constraint(report, check, model);
     }
 
@@ -1306,7 +1533,8 @@ fn evaluate(source_report, checks) {
         return #{ok: false, verdict: "error", results: [], failures: [],
             non_pass_results: [message], error: message, check_count: 0,
             requirement_count: 0, pass_count: 0, failure_count: 0,
-            inconclusive_count: 0, error_count: 1, non_pass_count: 1};
+            inconclusive_count: 0, error_count: 1, unverified_count: 0,
+            non_pass_count: 1};
     }
     let indexes = _indexes(source_report);
     let identities = _resolve_check_identities(checks, indexes);
@@ -1316,11 +1544,12 @@ fn evaluate(source_report, checks) {
         return #{ok: false, verdict: "error", results: [failure], failures: [],
             non_pass_results: [failure], check_count: 0, requirement_count: 0,
             pass_count: 0, failure_count: 0, inconclusive_count: 0,
-            error_count: 1, non_pass_count: 1};
+            error_count: 1, unverified_count: 0, non_pass_count: 1};
     }
     let needs_model = false;
     for check in checks {
-        if check.kind == "constraint" || check.kind == "required_constraints" {
+        if check.kind == "constraint" || check.kind == "required_constraint"
+            || check.kind == "required_constraints" {
             needs_model = true;
         }
     }
@@ -1332,7 +1561,7 @@ fn evaluate(source_report, checks) {
             return #{ok: false, verdict: "error", results: [failure], failures: [],
                 non_pass_results: [failure], check_count: 0, requirement_count: 0,
                 pass_count: 0, failure_count: 0, inconclusive_count: 0,
-                error_count: 1, non_pass_count: 1};
+                error_count: 1, unverified_count: 0, non_pass_count: 1};
         }
         model = sysml_model(source_report.path);
     }
@@ -1340,6 +1569,7 @@ fn evaluate(source_report, checks) {
     let failure_count = 0;
     let inconclusive_count = 0;
     let error_count = 0;
+    let unverified_count = 0;
     let non_pass_count = 0;
     let verdict = "";
     for check in checks {
@@ -1366,6 +1596,8 @@ fn evaluate(source_report, checks) {
             inconclusive_count += 1;
         } else if result_verdict == "error" {
             error_count += 1;
+        } else if result_verdict == "unverified" {
+            unverified_count += 1;
         }
         result_chunk.push(result);
         if result_chunk.len() >= 64 {
@@ -1398,7 +1630,7 @@ fn evaluate(source_report, checks) {
             if requirement == () || requirement == "" { continue; }
             if requirement_summary[requirement] == () {
                 requirement_summary[requirement] = #{checks: 0, passes: 0,
-                    failures: 0, inconclusive: 0, errors: 0};
+                    failures: 0, inconclusive: 0, errors: 0, unverified: 0};
                 requirement_names.push(requirement);
             }
             requirement_summary[requirement].checks += 1;
@@ -1407,6 +1639,8 @@ fn evaluate(source_report, checks) {
             else if check_verdict == "fail" { requirement_summary[requirement].failures += 1; }
             else if check_verdict == "inconclusive" {
                 requirement_summary[requirement].inconclusive += 1;
+            } else if check_verdict == "unverified" {
+                requirement_summary[requirement].unverified += 1;
             } else { requirement_summary[requirement].errors += 1; }
         }
     }
@@ -1421,6 +1655,7 @@ fn evaluate(source_report, checks) {
       requirement_summary: requirement_summary,
       pass_count: pass_count, failure_count: failure_count,
       inconclusive_count: inconclusive_count, error_count: error_count,
+      unverified_count: unverified_count,
       non_pass_count: non_pass_count, verification: verification,
       source_revision: source_report.source_revision,
       source_files: source_report.source_files}
@@ -1436,7 +1671,8 @@ fn evaluate_stream(source_report, checks, channel, title) {
         return #{ok: false, verdict: "error", results: [], failures: [],
             non_pass_results: [message], error: message,
             check_count: 0, requirement_count: 0, pass_count: 0, failure_count: 0,
-            inconclusive_count: 0, error_count: 1, non_pass_count: 1,
+            inconclusive_count: 0, error_count: 1, unverified_count: 0,
+            non_pass_count: 1,
             streamed: true};
     }
     let indexes = _indexes(source_report);
@@ -1447,12 +1683,13 @@ fn evaluate_stream(source_report, checks, channel, title) {
         return #{ok: false, verdict: "error", results: [failure], failures: [],
             non_pass_results: [failure], check_count: 0, requirement_count: 0,
             pass_count: 0, failure_count: 0, inconclusive_count: 0, error_count: 1,
-            non_pass_count: 1,
+            unverified_count: 0, non_pass_count: 1,
             streamed: true};
     }
     let needs_model = false;
     for check in checks {
-        if check.kind == "constraint" || check.kind == "required_constraints" {
+        if check.kind == "constraint" || check.kind == "required_constraint"
+            || check.kind == "required_constraints" {
             needs_model = true;
         }
     }
@@ -1464,7 +1701,7 @@ fn evaluate_stream(source_report, checks, channel, title) {
             return #{ok: false, verdict: "error", results: [failure], failures: [],
                 non_pass_results: [failure], check_count: 0, requirement_count: 0,
                 pass_count: 0, failure_count: 0, inconclusive_count: 0, error_count: 1,
-                non_pass_count: 1,
+                unverified_count: 0, non_pass_count: 1,
                 streamed: true};
         }
         model = sysml_model(source_report.path);
@@ -1477,6 +1714,7 @@ fn evaluate_stream(source_report, checks, channel, title) {
     let failure_count = 0;
     let inconclusive_count = 0;
     let error_count = 0;
+    let unverified_count = 0;
     let non_pass_count = 0;
     let verdict = "";
     let failures = [];
@@ -1494,7 +1732,7 @@ fn evaluate_stream(source_report, checks, channel, title) {
         result.verdict = result_verdict;
         verdict = _merge_verdict(verdict, result_verdict);
         if channel != () && channel != "" {
-            emit(channel + "_EVIDENCE_RESULT", #{schema_version: 2,
+            emit(channel + "_EVIDENCE_RESULT", #{schema_version: 3,
                 title: title, channel: channel, verification: verification,
                 source_revision: source_report.source_revision,
                 result_count: checks.len(), verdict: result_verdict,
@@ -1513,12 +1751,14 @@ fn evaluate_stream(source_report, checks, channel, title) {
             inconclusive_count += 1;
         } else if result_verdict == "error" {
             error_count += 1;
+        } else if result_verdict == "unverified" {
+            unverified_count += 1;
         }
         let requirement = result.requirement;
         if requirement != () && requirement != "" {
             if requirement_summary[requirement] == () {
                 requirement_summary[requirement] = #{checks: 0, passes: 0,
-                    failures: 0, inconclusive: 0, errors: 0};
+                    failures: 0, inconclusive: 0, errors: 0, unverified: 0};
                 requirement_names.push(requirement);
             }
             requirement_summary[requirement].checks += 1;
@@ -1526,17 +1766,20 @@ fn evaluate_stream(source_report, checks, channel, title) {
             else if result_verdict == "fail" { requirement_summary[requirement].failures += 1; }
             else if result_verdict == "inconclusive" {
                 requirement_summary[requirement].inconclusive += 1;
+            } else if result_verdict == "unverified" {
+                requirement_summary[requirement].unverified += 1;
             } else { requirement_summary[requirement].errors += 1; }
         }
     }
     if checks.is_empty() { verdict = "inconclusive"; }
     if channel != () && channel != "" {
-        emit(channel + "_EVIDENCE_STREAM_SUMMARY", #{schema_version: 2,
+        emit(channel + "_EVIDENCE_STREAM_SUMMARY", #{schema_version: 3,
             title: title, channel: channel, verification: verification,
             source_revision: source_report.source_revision,
             result_count: checks.len(), verdict: verdict,
             pass_count: pass_count, failure_count: failure_count,
             inconclusive_count: inconclusive_count, error_count: error_count,
+            unverified_count: unverified_count,
             non_pass_count: non_pass_count,
             requirement_count: requirement_names.len(),
             requirement_names: requirement_names,
@@ -1548,6 +1791,7 @@ fn evaluate_stream(source_report, checks, channel, title) {
       requirement_names: requirement_names, requirement_summary: requirement_summary,
       pass_count: pass_count, failure_count: failure_count,
       inconclusive_count: inconclusive_count, error_count: error_count,
+      unverified_count: unverified_count,
       non_pass_count: non_pass_count, verification: verification,
       source_revision: source_report.source_revision,
       source_files: source_report.source_files}

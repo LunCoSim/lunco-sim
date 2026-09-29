@@ -115,6 +115,7 @@ pub(crate) struct RuntimeRequirementEvidence {
     pub failures: u64,
     pub inconclusive: u64,
     pub errors: u64,
+    pub unverified: u64,
     pub details: Vec<RuntimeEvidenceCheck>,
 }
 
@@ -924,7 +925,7 @@ pub(crate) fn capture_verification_evidence(
     let TelemetryValue::Map(payload) = &event.data else {
         return;
     };
-    if telemetry_unsigned(payload.get("schema_version")) != Some(2) {
+    if telemetry_unsigned(payload.get("schema_version")) != Some(3) {
         return;
     }
     let Some(source_revision) = telemetry_unsigned(payload.get("source_revision")) else {
@@ -1008,11 +1009,12 @@ pub(crate) fn capture_verification_evidence(
         let TelemetryValue::Map(summary) = summary else {
             continue;
         };
-        let (Some(checks), Some(failures), Some(inconclusive), Some(errors)) = (
+        let (Some(checks), Some(failures), Some(inconclusive), Some(errors), Some(unverified)) = (
             telemetry_unsigned(summary.get("checks")),
             telemetry_unsigned(summary.get("failures")),
             telemetry_unsigned(summary.get("inconclusive")),
             telemetry_unsigned(summary.get("errors")),
+            telemetry_unsigned(summary.get("unverified")),
         ) else {
             continue;
         };
@@ -1029,6 +1031,7 @@ pub(crate) fn capture_verification_evidence(
                 failures: 0,
                 inconclusive: 0,
                 errors: 0,
+                unverified: 0,
                 details: Vec::new(),
             });
         requirement.channel.clone_from(&channel);
@@ -1039,6 +1042,7 @@ pub(crate) fn capture_verification_evidence(
         requirement.failures = failures;
         requirement.inconclusive = inconclusive;
         requirement.errors = errors;
+        requirement.unverified = unverified;
     }
 }
 
@@ -1054,7 +1058,7 @@ pub(crate) fn scene_test_requirement_evidence(
         let TelemetryValue::Map(payload) = &event.data else {
             continue;
         };
-        if telemetry_unsigned(payload.get("schema_version")) != Some(2) {
+        if telemetry_unsigned(payload.get("schema_version")) != Some(3) {
             continue;
         }
         let Some(source_revision) = telemetry_unsigned(payload.get("source_revision")) else {
@@ -1097,12 +1101,20 @@ pub(crate) fn scene_test_requirement_evidence(
                 let TelemetryValue::Map(summary) = summary else {
                     continue;
                 };
-                let (Some(checks), Some(failures), Some(inconclusive), Some(errors)) = (
+                let (
+                    Some(checks),
+                    Some(failures),
+                    Some(inconclusive),
+                    Some(errors),
+                    Some(unverified),
+                ) = (
                     telemetry_unsigned(summary.get("checks")),
                     telemetry_unsigned(summary.get("failures")),
                     telemetry_unsigned(summary.get("inconclusive")),
                     telemetry_unsigned(summary.get("errors")),
-                ) else {
+                    telemetry_unsigned(summary.get("unverified")),
+                )
+                else {
                     continue;
                 };
                 summaries.push((
@@ -1115,6 +1127,7 @@ pub(crate) fn scene_test_requirement_evidence(
                     failures,
                     inconclusive,
                     errors,
+                    unverified,
                 ));
             }
         }
@@ -1141,8 +1154,18 @@ pub(crate) fn scene_test_requirement_evidence(
         );
     }
 
-    for (channel, verification, revision, sim_tick, name, checks, failures, inconclusive, errors) in
-        summaries
+    for (
+        channel,
+        verification,
+        revision,
+        sim_tick,
+        name,
+        checks,
+        failures,
+        inconclusive,
+        errors,
+        unverified,
+    ) in summaries
     {
         let requirement = evidence
             .entry((channel.clone(), name.clone()))
@@ -1156,6 +1179,7 @@ pub(crate) fn scene_test_requirement_evidence(
                 failures: 0,
                 inconclusive: 0,
                 errors: 0,
+                unverified: 0,
                 details: Vec::new(),
             });
         requirement.channel = channel;
@@ -1166,6 +1190,7 @@ pub(crate) fn scene_test_requirement_evidence(
         requirement.failures = failures;
         requirement.inconclusive = inconclusive;
         requirement.errors = errors;
+        requirement.unverified = unverified;
     }
     evidence.into_values().collect()
 }
@@ -1278,6 +1303,7 @@ fn append_report_evidence_detail(
             failures: 0,
             inconclusive: 0,
             errors: 0,
+            unverified: 0,
             details: Vec::new(),
         });
     requirement.verification.clone_from(&verification);
@@ -1307,6 +1333,9 @@ fn append_report_evidence_detail(
             requirement.inconclusive = requirement.inconclusive.saturating_add(1)
         }
         VerificationVerdict::Error => requirement.errors = requirement.errors.saturating_add(1),
+        VerificationVerdict::Unverified => {
+            requirement.unverified = requirement.unverified.saturating_add(1)
+        }
     }
     if requirement.details.len() < MAX_EVIDENCE_DETAILS_PER_REQUIREMENT {
         requirement.details.push(detail);
@@ -1347,6 +1376,7 @@ fn append_evidence_check(
             failures: 0,
             inconclusive: 0,
             errors: 0,
+            unverified: 0,
             details: Vec::new(),
         });
     requirement.channel = channel_name.to_owned();
@@ -1361,6 +1391,9 @@ fn append_evidence_check(
             requirement.inconclusive = requirement.inconclusive.saturating_add(1)
         }
         VerificationVerdict::Error => requirement.errors = requirement.errors.saturating_add(1),
+        VerificationVerdict::Unverified => {
+            requirement.unverified = requirement.unverified.saturating_add(1)
+        }
     }
 
     let detail = RuntimeEvidenceCheck {
@@ -1395,6 +1428,7 @@ fn evidence_verdict(result: &BTreeMap<String, TelemetryValue>) -> VerificationVe
         Some("fail") => VerificationVerdict::Fail,
         Some("inconclusive") => VerificationVerdict::Inconclusive,
         Some("error") => VerificationVerdict::Error,
+        Some("unverified") => VerificationVerdict::Unverified,
         Some(_) => VerificationVerdict::Error,
         None if matches!(result.get("ok"), Some(TelemetryValue::Bool(true))) => {
             VerificationVerdict::Pass

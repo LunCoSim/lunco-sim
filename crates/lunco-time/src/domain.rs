@@ -1289,7 +1289,10 @@ mod tests {
             rate: None,
         });
 
-        assert_eq!(app.world().resource::<crate::TimeTransport>().mode, TransportMode::Paused);
+        assert_eq!(
+            app.world().resource::<crate::TimeTransport>().mode,
+            TransportMode::Paused
+        );
         assert!(!app.world().resource::<Time<Virtual>>().is_paused());
         assert_eq!(
             app.world().resource::<Time<Fixed>>().overstep(),
@@ -1323,10 +1326,8 @@ mod tests {
     fn scene_epoch_installation_preserves_the_global_fixed_cycle() {
         let selected_epoch = 2_461_234.5;
         let mut coordinator = lunco_core::SceneTransitionCoordinator::default();
-        let transition_id = coordinator.start(lunco_core::SceneTransition::load(
-            "scene.usda",
-            "/World",
-        ));
+        let transition_id =
+            coordinator.start(lunco_core::SceneTransition::load("scene.usda", "/World"));
         let mut app = App::new();
         let mut fixed = Time::<Fixed>::from_hz(60.0);
         fixed.advance_by(std::time::Duration::from_secs(3));
@@ -1369,8 +1370,14 @@ mod tests {
         assert_eq!(mission.anchor.tick0, 11);
         assert_eq!(mission.epoch_jd(11), selected_epoch);
         assert_eq!(mission.sim_secs(11), 0.0);
-        assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), std::time::Duration::from_secs(3));
-        assert_eq!(app.world().resource::<Time<Fixed>>().overstep(), std::time::Duration::from_millis(20));
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().elapsed(),
+            std::time::Duration::from_secs(3)
+        );
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().overstep(),
+            std::time::Duration::from_millis(20)
+        );
         assert_eq!(
             app.world().resource::<crate::TimeTransport>().mode,
             TransportMode::Playing

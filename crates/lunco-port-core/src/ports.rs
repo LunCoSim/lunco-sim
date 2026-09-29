@@ -40,12 +40,17 @@
 use bevy::prelude::*;
 use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, Index, IndexMut};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::InputPorts;
+use lunco_engineering_values::{CoordinateFrameId, UnitReference};
+
+/// Maximum number of entity targets accepted by one atomic scalar-port batch.
+pub const MAX_PORT_BATCH_TARGETS: usize = 256;
 
 /// Incrementally maintained identity for a set of port names.
 ///
@@ -114,7 +119,7 @@ static NEXT_PORT_MAP_LAYOUT_ID: AtomicU32 = AtomicU32::new(1);
 fn next_port_map_layout_id() -> u32 {
     NEXT_PORT_MAP_LAYOUT_ID
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-        .unwrap_or(0)
+        .expect("process-local port-map layout identifier space exhausted")
 }
 
 /// A dynamic name-to-value map with a compact, process-local slot for hot reads.
@@ -602,16 +607,16 @@ impl IndexMut<&str> for ScalarPortMap {
 /// Durable invalidation generation for the shared runtime port surface.
 ///
 /// Port identity is not a sampled value. A consumer may be hidden when an
-/// owner changes its declared ports, so a transient event would be lossy. The
-/// owner-side structural checks advance this monotonic generation after a
-/// component's identity key changes; consumers retain the last generation they
+/// owner changes its declared contract, so a transient event would be lossy.
+/// Owner checks advance this monotonic generation after a component's port
+/// surface or published metadata changes; consumers retain the last generation they
 /// projected and rebuild only when it differs. Live port values must not advance
 /// it.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PortTopologyRevision(pub u64);
 
 impl PortTopologyRevision {
-    /// Advance the invalidation generation after a declared port surface change.
+    /// Advance the invalidation generation after a port surface or contract change.
     #[inline]
     pub fn bump(&mut self) {
         self.0 = self.0.wrapping_add(1);
@@ -679,6 +684,22 @@ pub enum PortDirection {
     InOut,
 }
 
+/// Runtime value kind carried by a port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Reflect)]
+pub enum PortValueType {
+    /// Continuous engineering scalar exchanged as `f64`.
+    Scalar,
+}
+
+impl PortValueType {
+    /// Stable API/UI spelling for this kind.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Scalar => "scalar",
+        }
+    }
+}
+
 /// Metadata describing the value and control contract of a discovered port.
 ///
 /// The runtime currently exposes scalar `f64` values end to end. Keeping that
@@ -688,9 +709,11 @@ pub enum PortDirection {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PortMetadata {
     /// Stable value kind shown to generic consumers.
-    pub value_type: &'static str,
-    /// Authored/physical unit, when the owner knows one.
-    pub unit: Option<String>,
+    pub value_type: PortValueType,
+    /// Resolved engineering unit, when the owner knows its dimension and scale.
+    pub unit: Option<UnitReference>,
+    /// Coordinate frame of this scalar, when it represents a frame-bound value.
+    pub frame: Option<CoordinateFrameId>,
     /// Inclusive lower validation bound, if one exists.
     pub min: Option<f64>,
     /// Inclusive upper validation bound, if one exists.
@@ -707,16 +730,18 @@ impl PortMetadata {
     /// Build metadata for the scalar port contract.
     pub fn scalar(
         direction: PortDirection,
-        unit: Option<&str>,
+        unit: Option<UnitReference>,
         min: Option<f64>,
         max: Option<f64>,
         source: impl Into<String>,
         authority: impl Into<String>,
         writable: bool,
+        frame: Option<CoordinateFrameId>,
     ) -> Self {
         Self {
-            value_type: "scalar",
-            unit: unit.map(str::to_owned),
+            value_type: PortValueType::Scalar,
+            unit,
+            frame,
             min,
             max,
             source: source.into(),
@@ -725,21 +750,34 @@ impl PortMetadata {
         }
     }
 
-    /// Metadata for a backend that has not supplied a richer description.
-    pub fn unknown(direction: PortDirection) -> Self {
-        Self::scalar(
-            direction,
-            None,
-            None,
-            None,
-            "unknown backend",
-            "backend owner",
-            false,
-        )
+    /// Validate the owner-declared contract before it is used to admit writes.
+    pub fn validate_contract(&self) -> Result<(), PortMetadataError> {
+        if self.source.trim().is_empty() {
+            return Err(PortMetadataError::EmptySource);
+        }
+        if self.authority.trim().is_empty() {
+            return Err(PortMetadataError::EmptyAuthority);
+        }
+        if self.min.is_some_and(|min| !min.is_finite()) {
+            return Err(PortMetadataError::NonFiniteMinimum);
+        }
+        if self.max.is_some_and(|max| !max.is_finite()) {
+            return Err(PortMetadataError::NonFiniteMaximum);
+        }
+        if self.min.zip(self.max).is_some_and(|(min, max)| min > max) {
+            return Err(PortMetadataError::ReversedRange);
+        }
+        Ok(())
     }
 
     /// Validate a value before dispatching it to a writable port.
     pub fn validate(&self, value: f64) -> Result<(), String> {
+        self.validate_contract()
+            .map_err(|error| error.to_string())?;
+        self.validate_value(value)
+    }
+
+    fn validate_value(&self, value: f64) -> Result<(), String> {
         if !value.is_finite() {
             return Err("value must be finite".into());
         }
@@ -757,6 +795,35 @@ impl PortMetadata {
     }
 }
 
+/// Invalid owner-provided port contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortMetadataError {
+    /// The subsystem that owns the value is missing.
+    EmptySource,
+    /// The authority responsible for changes is missing.
+    EmptyAuthority,
+    /// The inclusive lower bound is not finite.
+    NonFiniteMinimum,
+    /// The inclusive upper bound is not finite.
+    NonFiniteMaximum,
+    /// The inclusive lower bound exceeds the upper bound.
+    ReversedRange,
+}
+
+impl fmt::Display for PortMetadataError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::EmptySource => "port metadata source must not be empty",
+            Self::EmptyAuthority => "port metadata authority must not be empty",
+            Self::NonFiniteMinimum => "port metadata lower bound must be finite",
+            Self::NonFiniteMaximum => "port metadata upper bound must be finite",
+            Self::ReversedRange => "port metadata lower bound exceeds upper bound",
+        })
+    }
+}
+
+impl std::error::Error for PortMetadataError {}
+
 /// A discovered port with its live value and owner-provided metadata.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PortInfo {
@@ -765,8 +832,9 @@ pub struct PortInfo {
     pub name: String,
     /// Causality.
     pub direction: PortDirection,
-    /// Snapshot of the current value.
-    pub value: f64,
+    /// Current owner sample. `None` means the port is declared but has not
+    /// produced a readable sample; it is never encoded as a numeric zero.
+    pub value: Option<f64>,
     /// Owner-provided type, unit, validation, source, and authority.
     pub metadata: PortMetadata,
 }
@@ -830,47 +898,25 @@ pub struct PortCollision {
     pub owners: Vec<PortOwnerInfo>,
 }
 
-/// Why the registry could not apply an input write to its precedence winner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PortWriteError {
-    /// No registered owner declares this input name.
-    NoInputOwner,
-    /// The winning input owner has a different causality than the caller requires.
-    DirectionMismatch {
-        /// Causality requested by the caller.
-        expected: PortDirection,
-        /// Causality declared by the winning owner.
-        actual: PortDirection,
-    },
-    /// The precedence-winning owner declined its own declared input.
-    OwnerRejected,
-}
-
-/// A discovered port: identity, causality, current value.
-///
-/// Returned by [`PortRegistry::entity_ports`] for listing/introspection. The
-/// `value` is a snapshot read at call time; live consumers read through the
-/// registry directly.
+/// A declared port identity and causality, supplied by its owning backend.
+/// A declaration does not imply that the owner has produced a live sample.
 #[derive(Debug, Clone)]
-pub struct PortRef {
+pub struct PortDeclaration {
     /// Port name — the key in the owning backend, or the canonical name for a
     /// single-value backend.
     pub name: String,
     /// Causality.
     pub direction: PortDirection,
-    /// Snapshot of the current value.
-    pub value: f64,
 }
 
-/// Append every `(name, value)` in `map` as a [`PortRef`] of direction `dir`.
+/// Append every declared name in `map` as a [`PortDeclaration`] of direction `dir`.
 /// Helper for map-backed backends (e.g. Modelica `inputs`/`outputs`).
 #[inline]
-pub fn push_map(out: &mut Vec<PortRef>, map: &PortMap<f64>, dir: PortDirection) {
-    for (name, value) in map {
-        out.push(PortRef {
+pub fn push_map(out: &mut Vec<PortDeclaration>, map: &PortMap<f64>, dir: PortDirection) {
+    for name in map.keys() {
+        out.push(PortDeclaration {
             name: name.to_string(),
             direction: dir,
-            value: *value,
         });
     }
 }
@@ -920,9 +966,9 @@ where
 /// Ops are plain `fn` pointers (non-capturing closures), so a backend is `Copy`
 /// and the registry is cheap to clone out of the world for `&mut World` access.
 /// Each op is causality-correct: `read_output`/`read_input` see only the matching
-/// direction; `write_input` accepts only an existing input slot (the strictness
-/// that lets `propagate` report dangling wires). A single-value backend is
-/// bidirectional — its one scalar *is* both its output and input.
+/// direction. Writable inputs use an owner-resolved slot so validation and
+/// application address the same port. A single-value backend is bidirectional —
+/// its one scalar *is* both its output and input.
 #[derive(Clone, Copy)]
 pub struct PortBackend {
     /// Append entities owned by this backend to `out`.
@@ -931,36 +977,31 @@ pub struct PortBackend {
     /// need to inspect all ports must use [`PortRegistry::port_entities`]
     /// instead of scanning every ECS entity and probing every backend.
     pub list_entities: fn(&mut World, &mut Vec<Entity>),
-    /// Return a key for this backend's port identity on `entity`.
+    /// Return a key for this backend's declared contract on `entity`.
     ///
-    /// The key must ignore live values and change when the backend's port names
-    /// or directions change. The owning plugin's change-filtered structural
+    /// The key must ignore live values and change when port names, directions,
+    /// bounds, units, frames, writability, or other published metadata change.
+    /// The owning plugin's change-filtered structural
     /// check publishes [`PortTopologyRevision`] when that key changes; the key
     /// is evaluated only on the changed-owner path. It lets consumers cache
     /// metadata while still observing dynamic authored surfaces.
     pub topology_key: fn(&World, Entity) -> u64,
-    /// Append this backend's ports on `entity` (outputs then inputs) to `out`.
-    pub list: fn(&World, Entity, &mut Vec<PortRef>),
-    /// Describe one port returned by `list`, or `None` for the generic scalar
-    /// fallback. The callback belongs to the backend owner so consumers never
-    /// need a second type/name switch to reconstruct its contract.
-    pub metadata: Option<fn(&World, Entity, &str, PortDirection) -> PortMetadata>,
+    /// Append this backend's declared ports on `entity` (outputs then inputs) to `out`.
+    pub list: fn(&World, Entity, &mut Vec<PortDeclaration>),
+    /// Describe every port returned by `list`. This callback is mandatory so
+    /// the owning backend, rather than a registry fallback, defines each port's
+    /// value, unit, bounds, authority, source, and writability contract.
+    pub metadata: fn(&World, Entity, &str, PortDirection) -> PortMetadata,
     /// Read the **output** named `name`, or `None`.
     pub read_output: fn(&World, Entity, &str) -> Option<f64>,
     /// Read the **input** named `name`, or `None`.
     pub read_input: fn(&World, Entity, &str) -> Option<f64>,
-    /// Write `value` to **input** `name`; `true` iff the port existed here.
-    pub write_input: fn(&mut World, Entity, &str, f64) -> bool,
-
     // ── Optional resolve→slot fast path (the FMI valueReference model) ──────────
     //
-    // A backend with dynamic names or a multi-owner presence scan can expose
-    // these so a hot consumer (the propagation master) resolves an endpoint to
-    // a process-local `slot` ONCE and then exchanges by slot every tick — one
-    // owner access, no repeated name lookup. Input write ownership and readable
-    // input-side sources are resolved separately. `None` means the
-    // precedence-winning owner intentionally uses the named operation. See
-    // [`PortRegistry::resolve_output`].
+    // A backend with dynamic names or a multi-owner presence scan resolves an
+    // endpoint to a process-local slot once. Input write ownership and readable
+    // input-side sources are resolved separately. Every writable input provides
+    // an input resolver and slot writer. See [`PortRegistry::resolve_output`].
     /// Resolve an **output** name to a backend-private `slot` (opaque `u64`),
     /// or `None` if this backend doesn't own it. Encodes causality: only an
     /// `Out`/`InOut` port resolves here.
@@ -977,9 +1018,13 @@ pub struct PortBackend {
     /// from `read_slot` because one name may expose distinct input and output
     /// values on the same entity.
     pub read_input_slot: Option<fn(&World, Entity, u64) -> Option<f64>>,
-    /// Write `value` to a previously-resolved input `slot`; `false` if it no
-    /// longer backs a live input.
-    pub write_slot: Option<fn(&mut World, Entity, u64, f64) -> bool>,
+    /// Commit `value` to a previously-resolved input slot.
+    ///
+    /// The registry preflights every write in a batch against the same
+    /// exclusive `World` before invoking any writer. This callback is therefore
+    /// an infallible commit operation: it must only update the already-resolved
+    /// value and must not alter port topology.
+    pub write_slot: Option<fn(&mut World, Entity, u64, f64)>,
 }
 
 /// A process-local resolved locator for one port on one backend — the FMI
@@ -993,12 +1038,20 @@ pub struct PortBackend {
 /// [`read_resolved`](PortRegistry::read_resolved) /
 /// [`write_resolved`](PortRegistry::write_resolved): the resolver folds over
 /// backends ONCE, then the hot loop exchanges by slot with no re-scan.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedPort {
     /// Index of the owning backend in the registry (its registration order).
     backend: usize,
     /// Backend-private opaque locator.
     slot: u64,
+    /// Canonical name required to validate the live owner contract.
+    name: Arc<str>,
+    /// Declared direction at resolution, preserved for live metadata reads.
+    direction: PortDirection,
+    /// Required owner contract at resolution time.
+    metadata: PortMetadata,
+    /// Structural revision at which the owner and metadata were resolved.
+    revision: u64,
     /// Causality side used to resolve this locator.
     side: ResolvedPortSide,
 }
@@ -1007,6 +1060,150 @@ pub struct ResolvedPort {
 enum ResolvedPortSide {
     Input,
     Output,
+}
+
+/// Why a value could not be admitted by the owning input port.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PortWriteErrorKind {
+    /// No backend owns this input name on the target.
+    UnknownInput,
+    /// An owning backend did not declare the resolved port row.
+    MetadataUnavailable,
+    /// The owner explicitly marked the input as non-writable.
+    NotWritable,
+    /// The owner did not provide a resolved slot writer for this input.
+    UnsupportedWritePath,
+    /// The owner supplied an invalid port contract.
+    InvalidMetadata { reason: String },
+    /// The proposed value violated the owner-supplied contract.
+    InvalidValue {
+        value: f64,
+        unit: Option<String>,
+        min: Option<f64>,
+        max: Option<f64>,
+        reason: String,
+    },
+    /// A cached resolved handle no longer identifies this input.
+    StaleResolution,
+    /// The shared topology revision resource is required for safe write
+    /// preparation and resolved-handle validation.
+    TopologyRevisionUnavailable,
+    /// A batch contains more than one write to the same input.
+    DuplicateWrite,
+}
+
+/// Structured failure returned by the shared port write boundary.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PortWriteError {
+    /// Target input name.
+    pub port: String,
+    /// Port owner when resolution found one.
+    pub owner: Option<String>,
+    /// Rejection category and owner-supplied reason.
+    pub kind: PortWriteErrorKind,
+}
+
+impl fmt::Display for PortWriteError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let owner = self
+            .owner
+            .as_deref()
+            .map(|owner| format!(" (owner: {owner})"))
+            .unwrap_or_default();
+        match &self.kind {
+            PortWriteErrorKind::UnknownInput => {
+                write!(formatter, "unknown input port `{}`", self.port)
+            }
+            PortWriteErrorKind::MetadataUnavailable => write!(
+                formatter,
+                "input port `{}` has no owner metadata{owner}",
+                self.port
+            ),
+            PortWriteErrorKind::NotWritable => write!(
+                formatter,
+                "input port `{}` is not writable{owner}",
+                self.port
+            ),
+            PortWriteErrorKind::UnsupportedWritePath => write!(
+                formatter,
+                "input port `{}` has no resolved slot writer{owner}",
+                self.port
+            ),
+            PortWriteErrorKind::InvalidMetadata { reason } => write!(
+                formatter,
+                "input port `{}` has invalid owner metadata{owner}: {reason}",
+                self.port
+            ),
+            PortWriteErrorKind::InvalidValue {
+                value,
+                unit,
+                min,
+                max,
+                reason,
+            } => {
+                let range = match (min, max) {
+                    (Some(min), Some(max)) => format!("; allowed range {min}..={max}"),
+                    (Some(min), None) => format!("; allowed minimum {min}"),
+                    (None, Some(max)) => format!("; allowed maximum {max}"),
+                    (None, None) => String::new(),
+                };
+                write!(
+                    formatter,
+                    "value {value}{} for input port `{}` was rejected{owner}{range}: {reason}",
+                    unit.as_deref()
+                        .map(|unit| format!(" {unit}"))
+                        .unwrap_or_default(),
+                    self.port
+                )
+            }
+            PortWriteErrorKind::StaleResolution => {
+                write!(formatter, "resolved input port `{}` is stale", self.port)
+            }
+            PortWriteErrorKind::TopologyRevisionUnavailable => write!(
+                formatter,
+                "input port `{}` cannot be written without the shared topology revision{owner}",
+                self.port
+            ),
+            PortWriteErrorKind::DuplicateWrite => write!(
+                formatter,
+                "input port `{}` appears more than once in the write batch{owner}",
+                self.port
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PortWriteError {}
+
+/// A validated write awaiting application at the same exclusive world boundary.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedPortWrite {
+    backend: usize,
+    entity: Entity,
+    name: Arc<str>,
+    owner: String,
+    direction: PortDirection,
+    metadata: PortMetadata,
+    revision: u64,
+    slot: u64,
+    value: f64,
+}
+
+impl PreparedPortWrite {
+    /// Target entity prepared by the owner registry.
+    pub fn entity(&self) -> Entity {
+        self.entity
+    }
+
+    /// Canonical input name prepared by the owner registry.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Finite scalar value validated against the owner contract.
+    pub fn value(&self) -> f64 {
+        self.value
+    }
 }
 
 /// The single registry of port-bearing backends — **the** read/write/list surface
@@ -1049,51 +1246,30 @@ const INPUT_PORTS_BACKEND: PortBackend = PortBackend {
     topology_key: |world, entity| {
         world
             .get::<InputPorts>(entity)
-            .map(|inputs| inputs.values.topology_key())
-            .unwrap_or(0)
+            .map_or(0, |inputs| inputs.values.topology_key())
     },
     list: |world, entity, out| {
         if let Some(inputs) = world.get::<InputPorts>(entity) {
             push_map(out, &inputs.values, PortDirection::In);
         }
     },
-    metadata: Some(|_world, _entity, name, direction| {
-        let (min, max) = match name {
-            "throttle" | "steer" | "brake" => (Some(-1.0), Some(1.0)),
-            "speed_boost" => (Some(0.0), Some(1.0)),
-            _ => (None, None),
-        };
+    metadata: |_world, _entity, _name, direction| {
         PortMetadata::scalar(
             direction,
             None,
-            min,
-            max,
-            "control surface",
-            "control owner",
+            None,
+            None,
+            "input surface",
+            "input owner",
             true,
+            None,
         )
-    }),
+    },
     read_output: |_world, _entity, _name| None,
     read_input: |world, entity, name| {
         world
             .get::<InputPorts>(entity)
             .and_then(|inputs| inputs.values.get(name).copied())
-    },
-    write_input: |world, entity, name, value| {
-        let Some(mut inputs) = world.get_mut::<InputPorts>(entity) else {
-            return false;
-        };
-        let changed = inputs
-            .bypass_change_detection()
-            .values
-            .set_existing(name, value);
-        let Some(changed) = changed else {
-            return false;
-        };
-        if changed {
-            inputs.set_changed();
-        }
-        true
     },
     resolve_output: None,
     resolve_input: Some(|world, entity, name| {
@@ -1108,47 +1284,44 @@ const INPUT_PORTS_BACKEND: PortBackend = PortBackend {
             .copied()
     }),
     write_slot: Some(|world, entity, slot, value| {
-        let Some(mut inputs) = world.get_mut::<InputPorts>(entity) else {
-            return false;
-        };
+        let mut inputs = world
+            .get_mut::<InputPorts>(entity)
+            .expect("prepared input slot still belongs to its InputPorts component");
         let changed = inputs
             .bypass_change_detection()
             .values
-            .set_slot_existing(slot, value);
-        let Some(changed) = changed else {
-            return false;
-        };
+            .set_slot_existing(slot, value)
+            .expect("prepared input slot remains live through the exclusive commit");
         if changed {
             inputs.set_changed();
         }
-        true
     }),
 };
 
-fn backend_port_directions(
-    backend: &PortBackend,
-    world: &World,
-    entity: Entity,
-) -> BTreeMap<String, PortDirection> {
-    let mut ports = Vec::new();
-    (backend.list)(world, entity, &mut ports);
-    let mut by_name = BTreeMap::new();
-    for port in ports {
-        by_name
-            .entry(port.name)
-            .and_modify(|direction| {
-                *direction = match (*direction, port.direction) {
-                    (PortDirection::In, PortDirection::In)
-                    | (PortDirection::Out, PortDirection::Out) => *direction,
-                    _ => PortDirection::InOut,
-                };
-            })
-            .or_insert(port.direction);
-    }
-    by_name
-}
-
 impl PortRegistry {
+    fn resolved_port(
+        &self,
+        world: &World,
+        entity: Entity,
+        backend: usize,
+        name: &str,
+        slot: u64,
+        side: ResolvedPortSide,
+    ) -> Option<ResolvedPort> {
+        let (direction, metadata) =
+            self.port_metadata_for_backend(world, entity, backend, name, side)?;
+        let revision = world.get_resource::<PortTopologyRevision>()?.0;
+        Some(ResolvedPort {
+            backend,
+            slot,
+            name: Arc::from(name),
+            direction,
+            metadata,
+            revision,
+            side,
+        })
+    }
+
     /// Register a backend. Later registrations have lower precedence on name
     /// collisions. Call from a plugin `build`.
     ///
@@ -1213,21 +1386,9 @@ impl PortRegistry {
             })
     }
 
-    /// Enumerate every exposed port on `entity`, across all backends.
-    /// The backbone of `ListPorts`.
-    pub fn entity_ports(&self, world: &World, entity: Entity) -> Vec<PortRef> {
-        let mut out = Vec::new();
-        for backend in &self.backends {
-            (backend.list)(world, entity, &mut out);
-        }
-        out
-    }
-
     /// Enumerate every exposed port with owner-provided metadata.
-    ///
-    /// This is the native/API inspection surface. The older [`Self::entity_ports`]
-    /// remains the compact value-only surface used by compatibility consumers;
-    /// both are produced from the same backend list callbacks.
+    /// The sample comes from the owning backend's live reader, independently
+    /// from the stable declaration list.
     pub fn entity_port_infos(&self, world: &World, entity: Entity) -> Vec<PortInfo> {
         self.entity_port_infos_with_handles(world, entity)
             .into_iter()
@@ -1271,20 +1432,20 @@ impl PortRegistry {
                         }),
                 }
                 .map_or((None, None), |(slot, reader)| (Some(slot), Some(reader)));
+                let handle = PortHandle {
+                    backend: backend_index,
+                    slot,
+                    reader,
+                };
+                let value =
+                    self.read_port_for_handle(world, handle, entity, &port.name, port.direction);
                 (
-                    PortHandle {
-                        backend: backend_index,
-                        slot,
-                        reader,
-                    },
+                    handle,
                     PortInfo {
-                        metadata: backend
-                            .metadata
-                            .map(|describe| describe(world, entity, &port.name, port.direction))
-                            .unwrap_or_else(|| PortMetadata::unknown(port.direction)),
+                        metadata: (backend.metadata)(world, entity, &port.name, port.direction),
                         name: port.name,
                         direction: port.direction,
-                        value: port.value,
+                        value,
                     },
                 )
             }));
@@ -1303,11 +1464,23 @@ impl PortRegistry {
     pub fn entity_port_owners(&self, world: &World, entity: Entity) -> Vec<PortOwnerInfo> {
         let mut out = Vec::new();
         for (precedence, backend) in self.backends.iter().enumerate() {
-            for (name, direction) in backend_port_directions(backend, world, entity) {
-                let metadata = backend
-                    .metadata
-                    .map(|describe| describe(world, entity, &name, direction))
-                    .unwrap_or_else(|| PortMetadata::unknown(direction));
+            let mut ports = Vec::new();
+            (backend.list)(world, entity, &mut ports);
+            let mut by_name = BTreeMap::new();
+            for port in ports {
+                by_name
+                    .entry(port.name)
+                    .and_modify(|direction| {
+                        *direction = match (*direction, port.direction) {
+                            (PortDirection::In, PortDirection::In)
+                            | (PortDirection::Out, PortDirection::Out) => *direction,
+                            _ => PortDirection::InOut,
+                        };
+                    })
+                    .or_insert(port.direction);
+            }
+            for (name, direction) in by_name {
+                let metadata = (backend.metadata)(world, entity, &name, direction);
                 out.push(PortOwnerInfo {
                     name,
                     direction,
@@ -1399,32 +1572,44 @@ impl PortRegistry {
     }
 
     /// Read the **output** named `name` on `entity` — the value a connection reads
-    /// from its *source*. Searches outputs only (plus bidirectional single-value
-    /// ports). Critical when a name exists as both input and output on one entity.
+    /// from its *source*. Searches the precedence-winning declared output owner
+    /// only, even when that owner has not produced a sample yet.
     pub fn read_output_port(&self, world: &World, entity: Entity, name: &str) -> Option<f64> {
-        self.backends
-            .iter()
-            .find_map(|b| (b.read_output)(world, entity, name))
+        let owner = self.port_owner_index(world, entity, name, ResolvedPortSide::Output)?;
+        (self.backends[owner].read_output)(world, entity, name)
     }
 
     /// Read the current value of port `name`, preferring an **output**, then
-    /// falling back to an **input**. The backbone of `GetPort`.
+    /// using the input owner only when no output owner declares that name. A
+    /// declared but unsampled output remains unsampled instead of exposing a
+    /// lower-precedence or opposite-direction value.
     pub fn read_port(&self, world: &World, entity: Entity, name: &str) -> Option<f64> {
-        if let Some(v) = self.read_output_port(world, entity, name) {
-            return Some(v);
+        if let Some(owner) = self.port_owner_index(world, entity, name, ResolvedPortSide::Output) {
+            return (self.backends[owner].read_output)(world, entity, name);
         }
-        self.backends
-            .iter()
-            .find_map(|b| (b.read_input)(world, entity, name))
+        self.read_input_port(world, entity, name)
     }
 
     /// Read the **input** value of port `name` — the commanded side, skipping
     /// outputs. Use where the input specifically is wanted (e.g. a joint's
     /// commanded motor setpoint vs its measured angle, both named `angle`).
     pub fn read_input_port(&self, world: &World, entity: Entity, name: &str) -> Option<f64> {
-        self.backends
-            .iter()
-            .find_map(|b| (b.read_input)(world, entity, name))
+        let owner = self.port_owner_index(world, entity, name, ResolvedPortSide::Input)?;
+        (self.backends[owner].read_input)(world, entity, name)
+    }
+
+    /// Read the input value from its precedence-winning owner without falling
+    /// through to another backend when that owner's current sample is absent.
+    pub fn read_owned_input_port(&self, world: &World, entity: Entity, name: &str) -> Option<f64> {
+        let owner = self.port_owner_index(world, entity, name, ResolvedPortSide::Input)?;
+        (self.backends[owner].read_input)(world, entity, name)
+    }
+
+    /// Read the output value from its precedence-winning owner without falling
+    /// through to another backend when that owner's current sample is absent.
+    pub fn read_owned_output_port(&self, world: &World, entity: Entity, name: &str) -> Option<f64> {
+        let owner = self.port_owner_index(world, entity, name, ResolvedPortSide::Output)?;
+        (self.backends[owner].read_output)(world, entity, name)
     }
 
     /// Read a port through the backend that produced its inspection row.
@@ -1462,123 +1647,296 @@ impl PortRegistry {
     /// from their component contract; the ordinary list surface covers
     /// map-backed and authored-output participants.
     pub fn has_output_port(&self, world: &World, entity: Entity, name: &str) -> bool {
-        self.backends.iter().any(|backend| {
-            if backend
-                .resolve_output
-                .is_some_and(|resolve| resolve(world, entity, name).is_some())
-            {
-                return true;
-            }
-            let mut ports = Vec::new();
-            (backend.list)(world, entity, &mut ports);
-            ports.iter().any(|port| {
-                port.name == name
-                    && matches!(port.direction, PortDirection::Out | PortDirection::InOut)
-            })
-        })
+        self.port_owner_index(world, entity, name, ResolvedPortSide::Output)
+            .is_some()
     }
 
     /// Whether an input port is declared by an owning backend, independently of
     /// its current value.
     pub fn has_input_port(&self, world: &World, entity: Entity, name: &str) -> bool {
-        self.backends.iter().any(|backend| {
-            if backend
-                .resolve_input
-                .is_some_and(|resolve| resolve(world, entity, name).is_some())
-            {
+        self.port_owner_index(world, entity, name, ResolvedPortSide::Input)
+            .is_some()
+    }
+
+    /// Return metadata for the precedence-winning owner of an input port.
+    ///
+    /// Input and output ports may share a public name (for example a joint's
+    /// commanded and measured `angle`). This resolves the input side and passes
+    /// its declared direction to the metadata provider instead of merging the
+    /// directions into one diagnostic owner record.
+    pub fn input_port_metadata(
+        &self,
+        world: &World,
+        entity: Entity,
+        name: &str,
+    ) -> Option<PortMetadata> {
+        self.port_metadata_for_side(world, entity, name, ResolvedPortSide::Input)
+    }
+
+    /// Return metadata for the precedence-winning owner of an output port.
+    /// Output samples may share their public name with a distinct commanded
+    /// input, so this resolves the output side independently.
+    pub fn output_port_metadata(
+        &self,
+        world: &World,
+        entity: Entity,
+        name: &str,
+    ) -> Option<PortMetadata> {
+        self.port_metadata_for_side(world, entity, name, ResolvedPortSide::Output)
+    }
+
+    fn port_metadata_for_side(
+        &self,
+        world: &World,
+        entity: Entity,
+        name: &str,
+        side: ResolvedPortSide,
+    ) -> Option<PortMetadata> {
+        let backend_index = self.port_owner_index(world, entity, name, side)?;
+        self.port_metadata_for_backend(world, entity, backend_index, name, side)
+            .map(|(_, metadata)| metadata)
+    }
+
+    fn port_owner_index(
+        &self,
+        world: &World,
+        entity: Entity,
+        name: &str,
+        side: ResolvedPortSide,
+    ) -> Option<usize> {
+        self.backends.iter().position(|backend| {
+            let resolver = match side {
+                ResolvedPortSide::Input => backend.resolve_input,
+                ResolvedPortSide::Output => backend.resolve_output,
+            };
+            if resolver.is_some_and(|resolve| resolve(world, entity, name).is_some()) {
                 return true;
             }
             let mut ports = Vec::new();
             (backend.list)(world, entity, &mut ports);
             ports.iter().any(|port| {
                 port.name == name
-                    && matches!(port.direction, PortDirection::In | PortDirection::InOut)
+                    && match side {
+                        ResolvedPortSide::Input => {
+                            matches!(port.direction, PortDirection::In | PortDirection::InOut)
+                        }
+                        ResolvedPortSide::Output => {
+                            matches!(port.direction, PortDirection::Out | PortDirection::InOut)
+                        }
+                    }
             })
         })
     }
 
-    /// Write `value` to the precedence-winning declared input owner for `name`.
-    ///
-    /// Owner identity and causality come from the backend's public port list;
-    /// the write is then sent directly to that owner. An owner that declines its
-    /// declared input is an error and does not expose a lower-precedence owner.
-    /// Strictly rejects undeclared names, which lets API and propagation callers
-    /// report dangling ports instead of silently creating them.
-    pub fn write_port(&self, world: &mut World, entity: Entity, name: &str, value: f64) -> bool {
-        self.write_input_port(world, entity, name, value).is_ok()
-    }
-
-    /// Write `value` through the precedence-winning input owner and return its
-    /// declared causality. `InOut` remains eligible for ordinary input writes.
-    pub fn write_input_port(
+    /// Validate and write one **input** through its precedence-winning owner.
+    /// Every producer uses this contract, including wires and resolved-slot
+    /// writers. The call owns an exclusive world boundary, so metadata
+    /// validation and backend application observe one topology state.
+    pub fn write_port(
         &self,
         world: &mut World,
         entity: Entity,
         name: &str,
         value: f64,
-    ) -> Result<PortDirection, PortWriteError> {
-        self.write_input_port_checked(world, entity, name, value, None)
+    ) -> Result<(), PortWriteError> {
+        let prepared = self.prepare_input_write(world, entity, name, value)?;
+        self.apply_prepared_input_writes(world, std::slice::from_ref(&prepared))
     }
 
-    /// Write `value` only when the precedence-winning input owner declares the
-    /// requested causality. The registry resolves and writes through the same
-    /// backend, so a lower-precedence owner cannot receive the named write.
-    pub fn write_input_port_with_direction(
-        &self,
-        world: &mut World,
-        entity: Entity,
-        name: &str,
-        value: f64,
-        expected: PortDirection,
-    ) -> Result<PortDirection, PortWriteError> {
-        self.write_input_port_checked(world, entity, name, value, Some(expected))
-    }
-
-    fn write_input_port_checked(
-        &self,
-        world: &mut World,
-        entity: Entity,
-        name: &str,
-        value: f64,
-        expected: Option<PortDirection>,
-    ) -> Result<PortDirection, PortWriteError> {
-        let Some((backend_index, actual)) = self.resolve_input_owner(world, entity, name) else {
-            return Err(PortWriteError::NoInputOwner);
-        };
-        if let Some(expected) = expected
-            && expected != actual
-        {
-            return Err(PortWriteError::DirectionMismatch {
-                expected,
-                actual,
-            });
-        }
-        let backend = self
-            .backends
-            .get(backend_index)
-            .expect("resolved input owner belongs to this registry");
-        if !(backend.write_input)(world, entity, name, value) {
-            return Err(PortWriteError::OwnerRejected);
-        }
-        Ok(actual)
-    }
-
-    /// Return the first input-capable owner of `name` in registry order.
-    /// Output-only owners do not shadow input owners; `InOut` owners do.
-    fn resolve_input_owner(
+    /// Validate a write without changing simulation state. Callers that need
+    /// an all-or-none multi-port operation prepare every write before applying
+    /// any of them.
+    pub fn prepare_input_write(
         &self,
         world: &World,
         entity: Entity,
         name: &str,
-    ) -> Option<(usize, PortDirection)> {
-        for (backend_index, backend) in self.backends.iter().enumerate() {
-            if let Some(direction) = backend_port_directions(backend, world, entity).remove(name)
-                && matches!(direction, PortDirection::In | PortDirection::InOut)
-            {
-                return Some((backend_index, direction));
-            }
+        value: f64,
+    ) -> Result<PreparedPortWrite, PortWriteError> {
+        let Some(owner) = self.port_owner_index(world, entity, name, ResolvedPortSide::Input)
+        else {
+            return Err(PortWriteError {
+                port: name.to_owned(),
+                owner: None,
+                kind: PortWriteErrorKind::UnknownInput,
+            });
+        };
+        let (direction, metadata) = self
+            .port_metadata_for_backend(world, entity, owner, name, ResolvedPortSide::Input)
+            .ok_or_else(|| PortWriteError {
+                port: name.to_owned(),
+                owner: None,
+                kind: PortWriteErrorKind::MetadataUnavailable,
+            })?;
+        metadata
+            .validate_contract()
+            .map_err(|error| PortWriteError {
+                port: name.to_owned(),
+                owner: Some(metadata.source.clone()),
+                kind: PortWriteErrorKind::InvalidMetadata {
+                    reason: error.to_string(),
+                },
+            })?;
+        if !metadata.writable {
+            return Err(PortWriteError {
+                port: name.to_owned(),
+                owner: Some(metadata.source),
+                kind: PortWriteErrorKind::NotWritable,
+            });
         }
-        None
+        metadata
+            .validate_value(value)
+            .map_err(|reason| PortWriteError {
+                port: name.to_owned(),
+                owner: Some(metadata.source.clone()),
+                kind: PortWriteErrorKind::InvalidValue {
+                    value,
+                    unit: metadata.unit.as_ref().map(|unit| unit.id().to_owned()),
+                    min: metadata.min,
+                    max: metadata.max,
+                    reason,
+                },
+            })?;
+        let backend = &self.backends[owner];
+        let slot = backend
+            .resolve_input
+            .and_then(|resolve| resolve(world, entity, name))
+            .filter(|_| backend.write_slot.is_some())
+            .ok_or_else(|| PortWriteError {
+                port: name.to_owned(),
+                owner: Some(metadata.source.clone()),
+                kind: PortWriteErrorKind::UnsupportedWritePath,
+            })?;
+        let revision = world
+            .get_resource::<PortTopologyRevision>()
+            .map(|revision| revision.0)
+            .ok_or_else(|| PortWriteError {
+                port: name.to_owned(),
+                owner: Some(metadata.source.clone()),
+                kind: PortWriteErrorKind::TopologyRevisionUnavailable,
+            })?;
+        Ok(PreparedPortWrite {
+            backend: owner,
+            entity,
+            name: Arc::from(name),
+            owner: metadata.source.clone(),
+            direction,
+            metadata,
+            revision,
+            slot,
+            value,
+        })
+    }
+
+    /// Validate every prepared write before committing any of them.
+    ///
+    /// Commit callbacks are infallible and only mutate already-resolved values.
+    /// Since the caller holds the exclusive `World`, no system can observe a
+    /// partial batch, and all validation failures leave simulation state intact.
+    pub fn apply_prepared_input_writes(
+        &self,
+        world: &mut World,
+        prepared: &[PreparedPortWrite],
+    ) -> Result<(), PortWriteError> {
+        let mut unique = std::collections::HashSet::with_capacity(prepared.len());
+        let mut writers = Vec::with_capacity(prepared.len());
+        for write in prepared {
+            if !unique.insert((write.entity, Arc::clone(&write.name))) {
+                return Err(PortWriteError {
+                    port: write.name.to_string(),
+                    owner: Some(write.owner.clone()),
+                    kind: PortWriteErrorKind::DuplicateWrite,
+                });
+            }
+            writers.push(self.preflight_prepared_input_write(world, write)?);
+        }
+
+        for (write, commit) in prepared.iter().zip(writers) {
+            commit(world, write.entity, write.slot, write.value);
+        }
+        Ok(())
+    }
+
+    fn preflight_prepared_input_write(
+        &self,
+        world: &World,
+        prepared: &PreparedPortWrite,
+    ) -> Result<fn(&mut World, Entity, u64, f64), PortWriteError> {
+        let stale = || PortWriteError {
+            port: prepared.name.to_string(),
+            owner: Some(prepared.owner.clone()),
+            kind: PortWriteErrorKind::StaleResolution,
+        };
+        let Some(revision) = world.get_resource::<PortTopologyRevision>() else {
+            return Err(PortWriteError {
+                port: prepared.name.to_string(),
+                owner: Some(prepared.owner.clone()),
+                kind: PortWriteErrorKind::TopologyRevisionUnavailable,
+            });
+        };
+        if revision.0 != prepared.revision
+            || self.port_owner_index(
+                world,
+                prepared.entity,
+                &prepared.name,
+                ResolvedPortSide::Input,
+            ) != Some(prepared.backend)
+        {
+            return Err(stale());
+        }
+        let Some((direction, metadata)) = self.port_metadata_for_backend(
+            world,
+            prepared.entity,
+            prepared.backend,
+            &prepared.name,
+            ResolvedPortSide::Input,
+        ) else {
+            return Err(stale());
+        };
+        if direction != prepared.direction || metadata != prepared.metadata {
+            return Err(stale());
+        }
+        metadata
+            .validate_contract()
+            .map_err(|error| PortWriteError {
+                port: prepared.name.to_string(),
+                owner: Some(metadata.source.clone()),
+                kind: PortWriteErrorKind::InvalidMetadata {
+                    reason: error.to_string(),
+                },
+            })?;
+        if !metadata.writable {
+            return Err(PortWriteError {
+                port: prepared.name.to_string(),
+                owner: Some(metadata.source),
+                kind: PortWriteErrorKind::NotWritable,
+            });
+        }
+        metadata
+            .validate_value(prepared.value)
+            .map_err(|reason| PortWriteError {
+                port: prepared.name.to_string(),
+                owner: Some(metadata.source.clone()),
+                kind: PortWriteErrorKind::InvalidValue {
+                    value: prepared.value,
+                    unit: metadata.unit.as_ref().map(|unit| unit.id().to_owned()),
+                    min: metadata.min,
+                    max: metadata.max,
+                    reason,
+                },
+            })?;
+        let backend = self.backends.get(prepared.backend).ok_or_else(stale)?;
+        let slot = backend
+            .resolve_input
+            .and_then(|resolve| resolve(world, prepared.entity, &prepared.name));
+        if slot != Some(prepared.slot) {
+            return Err(stale());
+        }
+        backend.write_slot.ok_or_else(|| PortWriteError {
+            port: prepared.name.to_string(),
+            owner: Some(prepared.owner.clone()),
+            kind: PortWriteErrorKind::UnsupportedWritePath,
+        })
     }
 
     // ── Resolve→slot fast path ─────────────────────────────────────────────────
@@ -1599,21 +1957,10 @@ impl PortRegistry {
         entity: Entity,
         name: &str,
     ) -> Option<ResolvedPort> {
-        for (i, b) in self.backends.iter().enumerate() {
-            if let Some(resolve) = b.resolve_output {
-                if let Some(slot) = resolve(world, entity, name) {
-                    return Some(ResolvedPort {
-                        backend: i,
-                        slot,
-                        side: ResolvedPortSide::Output,
-                    });
-                }
-            }
-            if (b.read_output)(world, entity, name).is_some() {
-                return None;
-            }
-        }
-        None
+        let owner = self.port_owner_index(world, entity, name, ResolvedPortSide::Output)?;
+        let resolve = self.backends[owner].resolve_output?;
+        let slot = resolve(world, entity, name)?;
+        self.resolved_port(world, entity, owner, name, slot, ResolvedPortSide::Output)
     }
 
     /// Resolve the precedence-winning declared input endpoint to a
@@ -1626,14 +1973,10 @@ impl PortRegistry {
     /// which addresses that same owner and never falls through to a shadowed
     /// input.
     pub fn resolve_input(&self, world: &World, entity: Entity, name: &str) -> Option<ResolvedPort> {
-        let (backend_index, _) = self.resolve_input_owner(world, entity, name)?;
-        let backend = self.backends.get(backend_index)?;
-        let slot = (backend.resolve_input?)(world, entity, name)?;
-        Some(ResolvedPort {
-            backend: backend_index,
-            slot,
-            side: ResolvedPortSide::Input,
-        })
+        let owner = self.port_owner_index(world, entity, name, ResolvedPortSide::Input)?;
+        let resolve = self.backends[owner].resolve_input?;
+        let slot = resolve(world, entity, name)?;
+        self.resolved_port(world, entity, owner, name, slot, ResolvedPortSide::Input)
     }
 
     /// Resolve a readable **input-side** source to a slot. This is distinct
@@ -1647,26 +1990,18 @@ impl PortRegistry {
         entity: Entity,
         name: &str,
     ) -> Option<ResolvedPort> {
-        for (i, backend) in self.backends.iter().enumerate() {
-            if (backend.read_input)(world, entity, name).is_some() {
-                let slot = (backend.resolve_input?)(world, entity, name)?;
-                if backend.read_input_slot.is_none() {
-                    return None;
-                }
-                return Some(ResolvedPort {
-                    backend: i,
-                    slot,
-                    side: ResolvedPortSide::Input,
-                });
-            }
-        }
-        None
+        let owner = self.port_owner_index(world, entity, name, ResolvedPortSide::Input)?;
+        let backend = &self.backends[owner];
+        (backend.read_input)(world, entity, name)?;
+        backend.read_input_slot?;
+        let slot = (backend.resolve_input?)(world, entity, name)?;
+        self.resolved_port(world, entity, owner, name, slot, ResolvedPortSide::Input)
     }
 
     /// Read the value at a resolved port. `None` if the slot no longer backs a
     /// live value. A compiled consumer rebuilds handles from the shared topology
     /// revision; this operation never retries through name resolution.
-    pub fn read_resolved(&self, world: &World, entity: Entity, r: ResolvedPort) -> Option<f64> {
+    pub fn read_resolved(&self, world: &World, entity: Entity, r: &ResolvedPort) -> Option<f64> {
         let backend = self.backends.get(r.backend)?;
         let read = match r.side {
             ResolvedPortSide::Input => backend.read_input_slot?,
@@ -1675,48 +2010,145 @@ impl PortRegistry {
         read(world, entity, r.slot)
     }
 
-    /// Write to a resolved input port. `false` if the slot no longer backs a live
-    /// input (component removed) — the caller reports the dangling target.
+    /// Validate and write through a previously-resolved input owner. A stale
+    /// slot is an explicit failure; it is never rerouted to a lower-precedence
+    /// backend by name.
     pub fn write_resolved(
         &self,
         world: &mut World,
         entity: Entity,
-        r: ResolvedPort,
+        r: &ResolvedPort,
         value: f64,
-    ) -> bool {
+    ) -> Result<(), PortWriteError> {
         if r.side != ResolvedPortSide::Input {
-            return false;
+            return Err(PortWriteError {
+                port: r.name.to_string(),
+                owner: None,
+                kind: PortWriteErrorKind::StaleResolution,
+            });
         }
-        match self
-            .backends
-            .get(r.backend)
-            .and_then(|backend| backend.write_slot)
+        let Some(revision) = world.get_resource::<PortTopologyRevision>() else {
+            return Err(PortWriteError {
+                port: r.name.to_string(),
+                owner: Some(r.metadata.source.clone()),
+                kind: PortWriteErrorKind::TopologyRevisionUnavailable,
+            });
+        };
+        if revision.0 != r.revision {
+            return Err(PortWriteError {
+                port: r.name.to_string(),
+                owner: None,
+                kind: PortWriteErrorKind::StaleResolution,
+            });
+        }
+        let prepared = self.prepare_input_write(world, entity, &r.name, value)?;
+        if prepared.backend != r.backend
+            || prepared.slot != r.slot
+            || prepared.revision != r.revision
+            || prepared.direction != r.direction
+            || prepared.metadata != r.metadata
         {
-            Some(write) => write(world, entity, r.slot, value),
-            None => false,
+            return Err(PortWriteError {
+                port: r.name.to_string(),
+                owner: Some(r.metadata.source.clone()),
+                kind: PortWriteErrorKind::StaleResolution,
+            });
         }
+        self.apply_prepared_input_writes(world, std::slice::from_ref(&prepared))
+    }
+
+    fn port_metadata_for_backend(
+        &self,
+        world: &World,
+        entity: Entity,
+        backend_index: usize,
+        name: &str,
+        side: ResolvedPortSide,
+    ) -> Option<(PortDirection, PortMetadata)> {
+        let backend = self.backends.get(backend_index)?;
+        let mut ports = Vec::new();
+        (backend.list)(world, entity, &mut ports);
+        let direction = ports
+            .iter()
+            .find(|port| {
+                port.name == name
+                    && match side {
+                        ResolvedPortSide::Input => {
+                            matches!(port.direction, PortDirection::In | PortDirection::InOut)
+                        }
+                        ResolvedPortSide::Output => {
+                            matches!(port.direction, PortDirection::Out | PortDirection::InOut)
+                        }
+                    }
+            })?
+            .direction;
+        Some((
+            direction,
+            (backend.metadata)(world, entity, name, direction),
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        PortBackend, PortCollisionDirection, PortDirection, PortMetadata, PortNameSetKey, PortRef,
-        PortRegistry, ScalarPortMap, port_name_set_key,
+        PortBackend, PortCollisionDirection, PortDeclaration, PortDirection, PortMetadata,
+        PortNameSetKey, PortRegistry, PortTopologyRevision, PortValueType, ScalarPortMap,
+        port_name_set_key,
     };
     use crate::InputPorts;
     use bevy::prelude::*;
 
-    fn duplicate_input_list(_world: &World, _entity: Entity, out: &mut Vec<PortRef>) {
-        out.push(PortRef {
+    fn test_metadata(
+        _world: &World,
+        _entity: Entity,
+        _name: &str,
+        direction: PortDirection,
+    ) -> PortMetadata {
+        PortMetadata::scalar(
+            direction,
+            None,
+            None,
+            None,
+            "test backend",
+            "test owner",
+            true,
+            None,
+        )
+    }
+
+    fn read_only_test_metadata(
+        _world: &World,
+        _entity: Entity,
+        _name: &str,
+        direction: PortDirection,
+    ) -> PortMetadata {
+        PortMetadata::scalar(
+            direction,
+            None,
+            None,
+            None,
+            "test backend",
+            "test observer",
+            false,
+            None,
+        )
+    }
+
+    fn test_world() -> World {
+        let mut world = World::new();
+        world.insert_resource(PortTopologyRevision::default());
+        world
+    }
+
+    fn duplicate_input_list(_world: &World, _entity: Entity, out: &mut Vec<PortDeclaration>) {
+        out.push(PortDeclaration {
             name: "release".into(),
             direction: PortDirection::In,
-            value: 0.0,
         });
-        out.push(PortRef {
+        out.push(PortDeclaration {
             name: "release".into(),
             direction: PortDirection::In,
-            value: 0.0,
         });
     }
 
@@ -1819,16 +2251,14 @@ mod tests {
         assert_eq!(key.finish(), port_name_set_key(std::iter::once(&names[0])));
     }
 
-    fn duplicate_inout_list(_world: &World, _entity: Entity, out: &mut Vec<PortRef>) {
-        out.push(PortRef {
+    fn duplicate_inout_list(_world: &World, _entity: Entity, out: &mut Vec<PortDeclaration>) {
+        out.push(PortDeclaration {
             name: "release".into(),
             direction: PortDirection::InOut,
-            value: 0.0,
         });
-        out.push(PortRef {
+        out.push(PortDeclaration {
             name: "release".into(),
             direction: PortDirection::InOut,
-            value: 0.0,
         });
     }
 
@@ -1838,7 +2268,16 @@ mod tests {
         _name: &str,
         direction: PortDirection,
     ) -> PortMetadata {
-        PortMetadata::scalar(direction, None, None, None, "Modelica/OBC", "solver", true)
+        PortMetadata::scalar(
+            direction,
+            None,
+            None,
+            None,
+            "Modelica/OBC",
+            "solver",
+            false,
+            None,
+        )
     }
 
     fn owner_b_metadata(
@@ -1855,11 +2294,21 @@ mod tests {
             "dock/runtime actuator",
             "actuator",
             true,
+            None,
         )
     }
 
-    fn write_input(_world: &mut World, _entity: Entity, _name: &str, _value: f64) -> bool {
-        true
+    fn resolve_release_slot(_world: &World, _entity: Entity, name: &str) -> Option<u64> {
+        (name == "release").then_some(0)
+    }
+
+    fn accept_release_slot(_world: &mut World, _entity: Entity, slot: u64, _value: f64) {
+        assert_eq!(slot, 0, "prepared release slot is valid");
+    }
+
+    fn trace_release_slot(world: &mut World, _entity: Entity, slot: u64, _value: f64) {
+        assert_eq!(slot, 0, "prepared release slot is valid");
+        world.resource_mut::<ShadowWriteTrace>().0 += 1;
     }
 
     fn no_read(_world: &World, _entity: Entity, _name: &str) -> Option<f64> {
@@ -1870,86 +2319,81 @@ mod tests {
         list_entities: |_world, _out| {},
         topology_key: |_world, _entity| 0,
         list: duplicate_input_list,
-        metadata: Some(owner_a_metadata),
+        metadata: owner_a_metadata,
         read_output: no_read,
         read_input: no_read,
-        write_input,
+        resolve_input: Some(resolve_release_slot),
+        write_slot: Some(accept_release_slot),
         resolve_output: None,
-        resolve_input: None,
         read_slot: None,
         read_input_slot: None,
-        write_slot: None,
     };
 
     const OWNER_B_INPUT: PortBackend = PortBackend {
         list_entities: |_world, _out| {},
         topology_key: |_world, _entity| 0,
         list: duplicate_input_list,
-        metadata: Some(owner_b_metadata),
+        metadata: owner_b_metadata,
         read_output: no_read,
         read_input: no_read,
-        write_input,
+        resolve_input: Some(resolve_release_slot),
+        write_slot: Some(accept_release_slot),
         resolve_output: None,
-        resolve_input: None,
         read_slot: None,
         read_input_slot: None,
-        write_slot: None,
     };
 
     const OWNER_A_INOUT: PortBackend = PortBackend {
         list_entities: |_world, _out| {},
         topology_key: |_world, _entity| 0,
         list: duplicate_inout_list,
-        metadata: Some(owner_a_metadata),
+        metadata: owner_a_metadata,
         read_output: no_read,
         read_input: no_read,
-        write_input,
+        resolve_input: Some(resolve_release_slot),
+        write_slot: Some(accept_release_slot),
         resolve_output: None,
-        resolve_input: None,
         read_slot: None,
         read_input_slot: None,
-        write_slot: None,
     };
 
     const OWNER_B_INOUT: PortBackend = PortBackend {
         list_entities: |_world, _out| {},
         topology_key: |_world, _entity| 0,
         list: duplicate_inout_list,
-        metadata: Some(owner_b_metadata),
+        metadata: owner_b_metadata,
         read_output: no_read,
         read_input: no_read,
-        write_input,
+        resolve_input: Some(resolve_release_slot),
+        write_slot: Some(accept_release_slot),
         resolve_output: None,
-        resolve_input: None,
         read_slot: None,
         read_input_slot: None,
-        write_slot: None,
     };
 
     #[test]
-    fn input_writes_and_fast_resolution_stay_with_the_declared_precedence_owner() {
+    fn declared_input_owner_is_never_shadowed_by_a_lower_precedence_slot() {
         #[derive(Component)]
         struct StatePort(f64);
 
         #[derive(Component)]
         struct ShadowedInput(f64);
 
-        let mut world = World::new();
+        let mut world = test_world();
         let entity = world.spawn((StatePort(0.25), ShadowedInput(0.75))).id();
         let mut registry = PortRegistry::default();
         registry.register(PortBackend {
             list_entities: |_world, _out| {},
             topology_key: |_world, _entity| 1,
             list: |world, entity, out| {
-                if let Some(state) = world.get::<StatePort>(entity) {
-                    out.push(PortRef {
+                if world.get::<StatePort>(entity).is_some() {
+                    out.push(PortDeclaration {
                         name: "shared".into(),
                         direction: PortDirection::InOut,
-                        value: state.0,
                     });
                 }
             },
-            metadata: None,
+            metadata: read_only_test_metadata,
             read_output: |world, entity, name| {
                 (name == "shared")
                     .then(|| world.get::<StatePort>(entity).map(|state| state.0))
@@ -1959,16 +2403,6 @@ mod tests {
                 (name == "shared")
                     .then(|| world.get::<StatePort>(entity).map(|state| state.0))
                     .flatten()
-            },
-            write_input: |world, entity, name, value| {
-                if name != "shared" {
-                    return false;
-                }
-                let Some(mut state) = world.get_mut::<StatePort>(entity) else {
-                    return false;
-                };
-                state.0 = value;
-                true
             },
             resolve_output: None,
             resolve_input: None,
@@ -1980,30 +2414,19 @@ mod tests {
             list_entities: |_world, _out| {},
             topology_key: |_world, _entity| 1,
             list: |world, entity, out| {
-                if let Some(input) = world.get::<ShadowedInput>(entity) {
-                    out.push(PortRef {
+                if world.get::<ShadowedInput>(entity).is_some() {
+                    out.push(PortDeclaration {
                         name: "shared".into(),
                         direction: PortDirection::In,
-                        value: input.0,
                     });
                 }
             },
-            metadata: None,
+            metadata: test_metadata,
             read_output: |_, _, _| None,
             read_input: |world, entity, name| {
                 (name == "shared")
                     .then(|| world.get::<ShadowedInput>(entity).map(|input| input.0))
                     .flatten()
-            },
-            write_input: |world, entity, name, value| {
-                if name != "shared" {
-                    return false;
-                }
-                let Some(mut input) = world.get_mut::<ShadowedInput>(entity) else {
-                    return false;
-                };
-                input.0 = value;
-                true
             },
             resolve_output: None,
             resolve_input: Some(|world, entity, name| {
@@ -2016,14 +2439,11 @@ mod tests {
                     .flatten()
             }),
             write_slot: Some(|world, entity, slot, value| {
-                if slot != 0 {
-                    return false;
-                }
-                let Some(mut input) = world.get_mut::<ShadowedInput>(entity) else {
-                    return false;
-                };
+                assert_eq!(slot, 0, "prepared shadow slot is valid");
+                let mut input = world
+                    .get_mut::<ShadowedInput>(entity)
+                    .expect("prepared shadow slot still has its input component");
                 input.0 = value;
-                true
             }),
         });
 
@@ -2039,30 +2459,20 @@ mod tests {
             None,
             "the lower In owner's slot cannot bypass the winning InOut owner"
         );
-        assert_eq!(
-            registry.write_input_port_with_direction(
-                &mut world,
-                entity,
-                "shared",
-                0.0,
-                PortDirection::In,
-            ),
-            Err(super::PortWriteError::DirectionMismatch {
-                expected: PortDirection::In,
-                actual: PortDirection::InOut,
+        assert!(matches!(
+            registry.write_port(&mut world, entity, "shared", 0.5),
+            Err(super::PortWriteError {
+                kind: super::PortWriteErrorKind::NotWritable,
+                ..
             })
-        );
+        ));
         assert_eq!(world.get::<StatePort>(entity).unwrap().0, 0.25);
-        assert_eq!(world.get::<ShadowedInput>(entity).unwrap().0, 0.75);
-
-        assert!(registry.write_port(&mut world, entity, "shared", 0.5));
-        assert_eq!(world.get::<StatePort>(entity).unwrap().0, 0.5);
         assert_eq!(world.get::<ShadowedInput>(entity).unwrap().0, 0.75);
     }
 
     #[test]
     fn generic_input_ports_are_listed_and_written_through_the_registry() {
-        let mut world = World::new();
+        let mut world = test_world();
         let entity = world.spawn(InputPorts::new(&["throttle", "arm"])).id();
         let registry = PortRegistry::default();
 
@@ -2071,7 +2481,11 @@ mod tests {
             Some(0.0)
         );
         world.clear_trackers();
-        assert!(registry.write_port(&mut world, entity, "throttle", 0.0));
+        assert!(
+            registry
+                .write_port(&mut world, entity, "throttle", 0.0)
+                .is_ok()
+        );
         assert!(
             !world
                 .entity(entity)
@@ -2080,7 +2494,11 @@ mod tests {
                 .is_changed(),
             "writing an unchanged command must not redirty its endpoint"
         );
-        assert!(registry.write_port(&mut world, entity, "throttle", 0.75));
+        assert!(
+            registry
+                .write_port(&mut world, entity, "throttle", 0.75)
+                .is_ok()
+        );
         assert!(
             world
                 .entity(entity)
@@ -2089,13 +2507,17 @@ mod tests {
                 .is_changed(),
             "a changed command must still publish its new value"
         );
-        assert!(!registry.write_port(&mut world, entity, "undeclared", 1.0));
+        assert!(
+            registry
+                .write_port(&mut world, entity, "undeclared", 1.0)
+                .is_err()
+        );
         assert_eq!(
             registry.read_input_port(&world, entity, "throttle"),
             Some(0.75)
         );
 
-        let ports = registry.entity_ports(&world, entity);
+        let ports = registry.entity_port_owners(&world, entity);
         assert!(
             ports
                 .iter()
@@ -2105,13 +2527,17 @@ mod tests {
 
     #[test]
     fn generic_input_resolved_slot_updates_samples_and_rejects_retired_entries() {
-        let mut world = World::new();
+        let mut world = test_world();
         let entity = world.spawn(InputPorts::new(&["throttle"])).id();
         let registry = PortRegistry::default();
         let slot = registry.resolve_input(&world, entity, "throttle").unwrap();
 
         world.clear_trackers();
-        assert!(registry.write_resolved(&mut world, entity, slot, 0.5));
+        assert!(
+            registry
+                .write_resolved(&mut world, entity, &slot, 0.5)
+                .is_ok()
+        );
         assert_eq!(
             registry.read_input_port(&world, entity, "throttle"),
             Some(0.5)
@@ -2125,7 +2551,11 @@ mod tests {
         );
 
         world.clear_trackers();
-        assert!(registry.write_resolved(&mut world, entity, slot, 0.5));
+        assert!(
+            registry
+                .write_resolved(&mut world, entity, &slot, 0.5)
+                .is_ok()
+        );
         assert!(
             !world
                 .entity(entity)
@@ -2140,11 +2570,17 @@ mod tests {
             inputs.values.insert("throttle".into(), 0.0);
         }
         assert!(
-            !registry.write_resolved(&mut world, entity, slot, 0.75),
+            registry
+                .write_resolved(&mut world, entity, &slot, 0.75)
+                .is_err(),
             "retired handles must not fall back to a name lookup"
         );
         let current = registry.resolve_input(&world, entity, "throttle").unwrap();
-        assert!(registry.write_resolved(&mut world, entity, current, 0.75));
+        assert!(
+            registry
+                .write_resolved(&mut world, entity, &current, 0.75)
+                .is_ok()
+        );
         assert_eq!(
             registry.read_input_port(&world, entity, "throttle"),
             Some(0.75)
@@ -2153,16 +2589,20 @@ mod tests {
 
     #[test]
     fn readable_input_sources_resolve_to_input_slots() {
-        let mut world = World::new();
+        let mut world = test_world();
         let entity = world.spawn(InputPorts::new(&["throttle"])).id();
         let registry = PortRegistry::default();
         let slot = registry
             .resolve_input_read(&world, entity, "throttle")
             .expect("declared input has a readable slot");
 
-        assert_eq!(registry.read_resolved(&world, entity, slot), Some(0.0));
-        assert!(registry.write_resolved(&mut world, entity, slot, 0.75));
-        assert_eq!(registry.read_resolved(&world, entity, slot), Some(0.75));
+        assert_eq!(registry.read_resolved(&world, entity, &slot), Some(0.0));
+        assert!(
+            registry
+                .write_resolved(&mut world, entity, &slot, 0.75)
+                .is_ok()
+        );
+        assert_eq!(registry.read_resolved(&world, entity, &slot), Some(0.75));
 
         {
             let mut inputs = world.get_mut::<InputPorts>(entity).unwrap();
@@ -2170,7 +2610,7 @@ mod tests {
             inputs.values.insert("throttle".into(), 0.25);
         }
         assert_eq!(
-            registry.read_resolved(&world, entity, slot),
+            registry.read_resolved(&world, entity, &slot),
             None,
             "a retired input slot is rejected without a name lookup"
         );
@@ -2178,12 +2618,12 @@ mod tests {
         let current = registry
             .resolve_input_read(&world, entity, "throttle")
             .expect("the current input surface resolves after its owner rebuilds");
-        assert_eq!(registry.read_resolved(&world, entity, current), Some(0.25));
+        assert_eq!(registry.read_resolved(&world, entity, &current), Some(0.25));
     }
 
     #[test]
     fn topology_key_ignores_live_values_but_tracks_port_identity() {
-        let mut world = World::new();
+        let mut world = test_world();
         let entity = world.spawn(InputPorts::new(&["throttle"])).id();
         let registry = PortRegistry::default();
         let (handle, info) = registry
@@ -2194,7 +2634,11 @@ mod tests {
         assert_eq!(info.name, "throttle");
         let initial = registry.entity_port_topology_key(&world, entity);
 
-        assert!(registry.write_port(&mut world, entity, "throttle", 0.75));
+        assert!(
+            registry
+                .write_port(&mut world, entity, "throttle", 0.75)
+                .is_ok()
+        );
         assert_eq!(registry.entity_port_topology_key(&world, entity), initial);
         assert_eq!(
             registry.read_port_for_handle(&world, handle, entity, "throttle", PortDirection::In,),
@@ -2214,7 +2658,7 @@ mod tests {
         #[derive(Component)]
         struct ProbeInput(f64);
 
-        let mut world = World::new();
+        let mut world = test_world();
         let entity = world.spawn(ProbeInput(0.5)).id();
         let mut registry = PortRegistry::default();
         registry.register(PortBackend {
@@ -2227,22 +2671,20 @@ mod tests {
             },
             topology_key: |world, entity| u64::from(world.get::<ProbeInput>(entity).is_some()),
             list: |world, entity, out| {
-                if let Some(input) = world.get::<ProbeInput>(entity) {
-                    out.push(PortRef {
+                if world.get::<ProbeInput>(entity).is_some() {
+                    out.push(PortDeclaration {
                         name: "shared".into(),
                         direction: PortDirection::In,
-                        value: input.0,
                     });
                 }
             },
-            metadata: None,
+            metadata: read_only_test_metadata,
             read_output: |_, _, _| None,
             read_input: |world, entity, name| {
                 (name == "shared")
                     .then(|| world.get::<ProbeInput>(entity).map(|input| input.0))
                     .flatten()
             },
-            write_input: |_, _, _, _| false,
             resolve_output: None,
             resolve_input: Some(|world, entity, name| {
                 (name == "shared" && world.get::<ProbeInput>(entity).is_some()).then_some(0)
@@ -2269,17 +2711,16 @@ mod tests {
 
     #[test]
     fn resolved_port_presence_skips_full_surface_listing() {
-        let mut world = World::new();
+        let mut world = test_world();
         let entity = world.spawn_empty().id();
         let mut registry = PortRegistry::default();
         registry.register(PortBackend {
             list_entities: |_, _| {},
             topology_key: |_, _| 0,
             list: |_, _, _| panic!("resolved presence must not enumerate port rows"),
-            metadata: None,
+            metadata: read_only_test_metadata,
             read_output: |_, _, _| None,
             read_input: |_, _, _| None,
-            write_input: |_, _, _, _| false,
             resolve_output: Some(|_, _, name| (name == "signal").then_some(0)),
             resolve_input: Some(|_, _, name| (name == "signal").then_some(0)),
             read_slot: Some(|_, _, _| None),
@@ -2296,23 +2737,21 @@ mod tests {
         #[derive(Component)]
         struct DeclaredOutput;
 
-        let mut world = World::new();
+        let mut world = test_world();
         let entity = world.spawn(DeclaredOutput).id();
         let mut registry = PortRegistry::default();
         registry.register(PortBackend {
             list_entities: |_, _| {},
             topology_key: |_, _| 1,
             list: |_, _, out| {
-                out.push(PortRef {
+                out.push(PortDeclaration {
                     name: "signal".into(),
                     direction: PortDirection::Out,
-                    value: 0.0,
                 });
             },
-            metadata: None,
+            metadata: test_metadata,
             read_output: |_, _, _| None,
             read_input: |_, _, _| None,
-            write_input: |_, _, _, _| false,
             resolve_output: Some(|world, entity, name| {
                 (name == "signal" && world.get::<DeclaredOutput>(entity).is_some()).then_some(7)
             }),
@@ -2327,17 +2766,16 @@ mod tests {
         let resolved = registry
             .resolve_output(&world, entity, "signal")
             .expect("the declared source resolves before its first sample");
-        assert_eq!(registry.read_resolved(&world, entity, resolved), Some(2.5));
+        assert_eq!(registry.read_resolved(&world, entity, &resolved), Some(2.5));
 
         let mut precedence = PortRegistry::default();
         precedence.register(PortBackend {
             list_entities: |_, _| {},
             topology_key: |_, _| 1,
             list: |_, _, _| {},
-            metadata: None,
+            metadata: read_only_test_metadata,
             read_output: |_, _, name| (name == "signal").then_some(1.0),
             read_input: |_, _, _| None,
-            write_input: |_, _, _, _| false,
             resolve_output: None,
             resolve_input: None,
             read_slot: None,
@@ -2348,10 +2786,9 @@ mod tests {
             list_entities: |_, _| {},
             topology_key: |_, _| 1,
             list: |_, _, _| {},
-            metadata: None,
+            metadata: read_only_test_metadata,
             read_output: |_, _, name| (name == "signal").then_some(2.0),
             read_input: |_, _, _| None,
-            write_input: |_, _, _, _| false,
             resolve_output: Some(|_, _, name| (name == "signal").then_some(8)),
             resolve_input: None,
             read_slot: Some(|_, _, slot| (slot == 8).then_some(2.0)),
@@ -2367,7 +2804,7 @@ mod tests {
 
     #[test]
     fn registry_discovers_backend_owned_entities_once() {
-        let mut world = World::new();
+        let mut world = test_world();
         let first = world.spawn(InputPorts::new(&["first"])).id();
         let second = world.spawn(InputPorts::new(&["second"])).id();
         world.spawn_empty();
@@ -2383,10 +2820,9 @@ mod tests {
             },
             topology_key: |_world, _entity| 0,
             list: duplicate_input_list,
-            metadata: None,
+            metadata: read_only_test_metadata,
             read_output: no_read,
             read_input: no_read,
-            write_input,
             resolve_output: None,
             resolve_input: None,
             read_slot: None,
@@ -2401,8 +2837,8 @@ mod tests {
     }
 
     #[test]
-    fn generic_input_metadata_exposes_control_bounds_and_write_contract() {
-        let mut world = World::new();
+    fn generic_input_metadata_declares_only_the_known_scalar_contract() {
+        let mut world = test_world();
         let entity = world
             .spawn(InputPorts::new(&["throttle", "arm", "speed_boost"]))
             .id();
@@ -2410,20 +2846,20 @@ mod tests {
 
         let infos = registry.entity_port_infos(&world, entity);
         let throttle = infos.iter().find(|port| port.name == "throttle").unwrap();
-        assert_eq!(throttle.metadata.value_type, "scalar");
-        assert_eq!(throttle.metadata.min, Some(-1.0));
-        assert_eq!(throttle.metadata.max, Some(1.0));
-        assert_eq!(throttle.metadata.source, "control surface");
+        assert_eq!(throttle.metadata.value_type, PortValueType::Scalar);
+        assert_eq!(throttle.metadata.min, None);
+        assert_eq!(throttle.metadata.max, None);
+        assert_eq!(throttle.metadata.source, "input surface");
         assert!(throttle.metadata.writable);
         assert!(throttle.metadata.validate(1.0).is_ok());
-        assert!(throttle.metadata.validate(1.01).is_err());
+        assert!(throttle.metadata.validate(100.0).is_ok());
 
         let speed_boost = infos
             .iter()
             .find(|port| port.name == "speed_boost")
             .unwrap();
-        assert_eq!(speed_boost.metadata.min, Some(0.0));
-        assert_eq!(speed_boost.metadata.max, Some(1.0));
+        assert_eq!(speed_boost.metadata.min, None);
+        assert_eq!(speed_boost.metadata.max, None);
 
         let arm = infos.iter().find(|port| port.name == "arm").unwrap();
         assert_eq!(arm.metadata.min, None);
@@ -2433,7 +2869,7 @@ mod tests {
 
     #[test]
     fn registry_reports_distinct_input_owners_in_write_precedence_order() {
-        let mut world = World::new();
+        let mut world = test_world();
         let entity = world.spawn_empty().id();
         let mut registry = PortRegistry::default();
         registry.register(OWNER_A_INPUT);
@@ -2451,12 +2887,18 @@ mod tests {
             "dock/runtime actuator"
         );
         assert_eq!(collisions[0].owners[1].precedence, 2);
-        assert!(registry.write_port(&mut world, entity, "release", 1.0));
+        assert!(matches!(
+            registry.write_port(&mut world, entity, "release", 1.0),
+            Err(super::PortWriteError {
+                kind: super::PortWriteErrorKind::NotWritable,
+                ..
+            })
+        ));
     }
 
     #[test]
     fn registry_reports_inout_collision_once_for_both_access_sides() {
-        let mut world = World::new();
+        let mut world = test_world();
         let entity = world.spawn_empty().id();
         let mut registry = PortRegistry::default();
         registry.register(OWNER_A_INOUT);
@@ -2466,5 +2908,64 @@ mod tests {
         assert_eq!(collisions.len(), 1);
         assert_eq!(collisions[0].direction, PortCollisionDirection::InOut);
         assert_eq!(collisions[0].owners.len(), 2);
+    }
+
+    #[derive(Resource, Default)]
+    struct ShadowWriteTrace(usize);
+
+    #[test]
+    fn metadata_reads_and_writes_stop_at_the_same_input_owner() {
+        let mut world = test_world();
+        let entity = world.spawn_empty().id();
+        world.insert_resource(ShadowWriteTrace::default());
+        let mut registry = PortRegistry::default();
+        registry.register(PortBackend {
+            list_entities: |_, _| {},
+            topology_key: |_, _| 0,
+            list: duplicate_input_list,
+            metadata: owner_a_metadata,
+            read_output: no_read,
+            read_input: no_read,
+            resolve_input: Some(resolve_release_slot),
+            write_slot: None,
+            resolve_output: None,
+            read_slot: None,
+            read_input_slot: None,
+        });
+        registry.register(PortBackend {
+            list_entities: |_, _| {},
+            topology_key: |_, _| 0,
+            list: duplicate_input_list,
+            metadata: owner_b_metadata,
+            read_output: no_read,
+            read_input: |_, _, name| (name == "release").then_some(0.75),
+            resolve_input: Some(resolve_release_slot),
+            write_slot: Some(trace_release_slot),
+            resolve_output: None,
+            read_slot: None,
+            read_input_slot: None,
+        });
+
+        let metadata = registry
+            .input_port_metadata(&world, entity, "release")
+            .expect("winning owner metadata exists");
+        assert_eq!(metadata.source, "Modelica/OBC");
+        assert_eq!(
+            registry.read_input_port(&world, entity, "release"),
+            None,
+            "the declared owner has no sample, so the shadow sample is not exposed"
+        );
+        assert_eq!(
+            registry.read_owned_input_port(&world, entity, "release"),
+            None,
+            "an absent sample from the authoritative owner must not read a shadow owner"
+        );
+        assert!(
+            registry
+                .write_port(&mut world, entity, "release", 0.5)
+                .is_err(),
+            "a refusing authoritative owner must not fall through to a shadow writer"
+        );
+        assert_eq!(world.resource::<ShadowWriteTrace>().0, 0);
     }
 }

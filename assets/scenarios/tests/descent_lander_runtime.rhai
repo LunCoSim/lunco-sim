@@ -164,8 +164,11 @@ fn on_tick(me, ctx) {
         if this.post_handoff_elapsed >= 0.5 {
             if !this.stale_command_injected {
                 this.stale_command_injected = true;
-                this.stale_command_ok = set(this.lander, "guidance_throttle", 1.0)
-                    && set(this.lander, "guidance_yaw", 1.0);
+                let throttle_command = write_ports(this.lander, [["guidance_throttle", 1.0]]);
+                let yaw_command = write_ports(this.lander, [["guidance_yaw", 1.0]]);
+                let throttle_accepted = throttle_command != () && throttle_command.ok == true;
+                let yaw_accepted = yaw_command != () && yaw_command.ok == true;
+                this.stale_command_ok = throttle_accepted && yaw_accepted;
             }
             if scalar_ok(torque_x) && torque_x.abs() > this.max_post_handoff_torque {
                 this.max_post_handoff_torque = torque_x.abs();

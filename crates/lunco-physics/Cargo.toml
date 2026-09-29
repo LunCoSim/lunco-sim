@@ -35,6 +35,7 @@ big_space = { workspace = true }
 lunco-readiness = { workspace = true }
 # Canonical WorldGrid and render/world conversion for physics queries.
 lunco-core = { path = "../lunco-core" }
+lunco-hash = { path = "../lunco-hash" }
 lunco-spatial = { path = "../lunco-spatial" }
 # Physics escape diagnostics carry the authoritative simulation epoch on the
 # shared telemetry event, when the time spine is installed.

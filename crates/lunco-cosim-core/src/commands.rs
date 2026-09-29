@@ -49,6 +49,27 @@ pub struct SetPorts {
     pub producer_id: Option<u64>,
 }
 
+/// Named input writes for one endpoint in an atomic multi-endpoint command.
+#[derive(bevy::prelude::Reflect, serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct PortInputBatch {
+    /// Endpoint whose inputs are written and included in authority checks.
+    #[reflect(@lunco_core::AuthzTarget)]
+    pub target: Entity,
+    /// Named input values for this endpoint.
+    pub writes: Vec<(String, f64)>,
+}
+
+/// Apply named input writes to several entities as one validated fixed-tick transaction.
+#[Command]
+pub struct SetPortsBatch {
+    /// Every target whose ownership is required by the host authority gate.
+    pub batches: Vec<PortInputBatch>,
+    /// Stable producer identity for external producers admitted to session inputs.
+    #[serde(default)]
+    #[reflect(default)]
+    pub producer_id: Option<u64>,
+}
+
 /// Release one manual input-port intent and hand that port back to its wiring.
 #[Command]
 pub struct ReleasePort {

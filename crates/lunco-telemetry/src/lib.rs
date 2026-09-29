@@ -1296,7 +1296,7 @@ fn clone_clock(c: &ChannelClock) -> ChannelClock {
     ChannelClock {
         next_due_t: c.next_due_t,
         last_emitted: c.last_emitted,
-        resolved: c.resolved,
+        resolved: c.resolved.clone(),
         resolve_failed: c.resolve_failed,
     }
 }
@@ -1365,7 +1365,7 @@ fn read_port(
 ) -> Option<TelemetryValue> {
     let registry = world.get_resource::<PortRegistry>()?;
 
-    if let Some(r) = clock.resolved {
+    if let Some(r) = clock.resolved.as_ref() {
         if let Some(v) = registry.read_resolved(world, entity, r) {
             return Some(TelemetryValue::F64(v));
         }
@@ -1383,9 +1383,9 @@ fn read_port(
     }
 
     if let Some(r) = registry.resolve_output(world, entity, name) {
-        clock.resolved = Some(r);
+        clock.resolved = Some(r.clone());
         return registry
-            .read_resolved(world, entity, r)
+            .read_resolved(world, entity, &r)
             .map(TelemetryValue::F64);
     }
 
@@ -1481,13 +1481,12 @@ mod tests {
     fn list_test_output(
         world: &World,
         entity: Entity,
-        out: &mut Vec<lunco_port_core::ports::PortRef>,
+        out: &mut Vec<lunco_port_core::ports::PortDeclaration>,
     ) {
-        if let Some(source) = world.get::<TestOutput>(entity) {
-            out.push(lunco_port_core::ports::PortRef {
+        if world.get::<TestOutput>(entity).is_some() {
+            out.push(lunco_port_core::ports::PortDeclaration {
                 name: "value".to_string(),
                 direction: PortDirection::Out,
-                value: source.0,
             });
         }
     }
@@ -1496,15 +1495,32 @@ mod tests {
         (name == "value").then(|| world.get::<TestOutput>(entity).map(|source| source.0))?
     }
 
+    fn test_output_metadata(
+        _world: &World,
+        _entity: Entity,
+        _name: &str,
+        direction: PortDirection,
+    ) -> lunco_port_core::ports::PortMetadata {
+        lunco_port_core::ports::PortMetadata::scalar(
+            direction,
+            None,
+            None,
+            None,
+            "telemetry test output",
+            "test producer",
+            false,
+            None,
+        )
+    }
+
     const TEST_OUTPUT_BACKEND: lunco_port_core::ports::PortBackend =
         lunco_port_core::ports::PortBackend {
             list_entities: |_world, _out| {},
             topology_key: |_world, _entity| 0,
             list: list_test_output,
-            metadata: None,
+            metadata: test_output_metadata,
             read_output: read_test_output,
             read_input: |_, _, _| None,
-            write_input: |_, _, _, _| false,
             resolve_output: None,
             resolve_input: None,
             read_slot: None,
@@ -1515,13 +1531,12 @@ mod tests {
     fn list_test_declared_output(
         world: &World,
         entity: Entity,
-        out: &mut Vec<lunco_port_core::ports::PortRef>,
+        out: &mut Vec<lunco_port_core::ports::PortDeclaration>,
     ) {
         if world.get::<TestDeclaredOutput>(entity).is_some() {
-            out.push(lunco_port_core::ports::PortRef {
+            out.push(lunco_port_core::ports::PortDeclaration {
                 name: "value".to_string(),
                 direction: PortDirection::Out,
-                value: world.get::<TestOutput>(entity).map_or(0.0, |value| value.0),
             });
         }
     }
@@ -1537,10 +1552,9 @@ mod tests {
             list_entities: |_world, _out| {},
             topology_key: |_world, _entity| 0,
             list: list_test_declared_output,
-            metadata: None,
+            metadata: test_output_metadata,
             read_output: read_test_declared_output,
             read_input: |_, _, _| None,
-            write_input: |_, _, _, _| false,
             resolve_output: None,
             resolve_input: None,
             read_slot: None,

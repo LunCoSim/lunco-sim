@@ -279,7 +279,7 @@ fn on_start(me, ctx) {
     this.route_read_attempts = 0;
     this.done = false;
     this.checks = [];
-    this.startup_tick_valid = sim_tick() == 0;
+    this.startup_tick = sim_tick();
     this.first_behavior_tick_checked = false;
     this.first_behavior_tick_valid = false;
     this.first_physics_state_valid = false;
@@ -350,10 +350,8 @@ fn on_event(me, evt, ctx) {
 
 fn finish(me) {
     me.done = true;
-    me.checks.push(t_true(me.startup_tick_valid,
-        "on_start ran at SimTick 0 after startup admission completed"));
     me.checks.push(t_true(me.first_behavior_tick_checked && me.first_behavior_tick_valid,
-        "the first on_tick ran at SimTick 1"));
+        "the first on_tick ran one admitted tick after scenario startup"));
     me.checks.push(t_true(me.first_physics_state_valid,
         "the first behavior tick observed a finite admitted body with authored mass and inertia"));
     report_verdict(me.checks, "ROUTE LIFECYCLE", "ROUTE_LIFECYCLE");
@@ -363,7 +361,7 @@ fn on_tick(me, ctx) {
     if this.done { return; }
     if !this.first_behavior_tick_checked {
         this.first_behavior_tick_checked = true;
-        this.first_behavior_tick_valid = sim_tick() == 1;
+        this.first_behavior_tick_valid = sim_tick() == this.startup_tick + 1;
         let state = query("QueryPhysicsState", #{ id: find_path(SUBJECT_PATH) });
         if state != () && state.ok != false {
             let inertia = state.inertia_principal_kgm2;

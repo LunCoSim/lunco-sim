@@ -14,6 +14,7 @@ lunco-core = { path = "../lunco-core" }
 lunco-exposure-core = { path = "../lunco-exposure-core" }
 lunco-celestial = { path = "../lunco-celestial" }
 lunco-port-core = { path = "../lunco-port-core" }
+lunco-engineering-values = { path = "../lunco-engineering-values" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-readiness = { path = "../lunco-readiness" }
 lunco-hooks = { path = "../lunco-hooks" }

@@ -161,7 +161,8 @@ fn structured_verdict(report) {
     if report == () || type_of(report) != "map" { return "error"; }
     if report.verdict != () {
         if report.verdict == "pass" || report.verdict == "fail"
-            || report.verdict == "inconclusive" || report.verdict == "error" {
+            || report.verdict == "inconclusive" || report.verdict == "error"
+            || report.verdict == "unverified" {
             return report.verdict;
         }
         return "error";
@@ -176,12 +177,14 @@ fn structured_verdict(report) {
 
 fn report_verdict_state(title, verdict, channel, reasons, check_count) {
     if verdict != "pass" && verdict != "fail"
-        && verdict != "inconclusive" && verdict != "error" {
+        && verdict != "inconclusive" && verdict != "error"
+        && verdict != "unverified" {
         reasons.push("unsupported requirement verdict: " + verdict.to_string());
         verdict = "error";
     }
     let label = if verdict == "error" { "ERROR" }
         else if verdict == "inconclusive" { "INCONCLUSIVE" }
+        else if verdict == "unverified" { "UNVERIFIED" }
         else if verdict == "fail" { "FAIL" } else { "PASS" };
     if verdict == "pass" {
         print("TESTS_OK " + check_count);
@@ -194,7 +197,9 @@ fn report_verdict_state(title, verdict, channel, reasons, check_count) {
     print("TESTS_" + label + " " + reasons.len() + "/" + check_count);
     print(title + ": " + label);
     emit(channel, label);
-    let kind = if verdict == "inconclusive" { "warn" } else { "error" };
+    let kind = if verdict == "inconclusive" || verdict == "unverified" {
+        "warn"
+    } else { "error" };
     notify_kind(title + ": " + label, kind);
     false
 }
@@ -209,7 +214,8 @@ fn report_structured_verdict(report, title, channel) {
     let verdict = structured_verdict(report);
     if report != () && report.verdict != ()
         && report.verdict != "pass" && report.verdict != "fail"
-        && report.verdict != "inconclusive" && report.verdict != "error" {
+        && report.verdict != "inconclusive" && report.verdict != "error"
+        && report.verdict != "unverified" {
         reasons.push("unsupported requirement verdict: " + report.verdict.to_string());
     }
     let ok = verdict == "pass";
@@ -230,6 +236,7 @@ fn report_structured_verdict(report, title, channel) {
     let failure_count = 0;
     let inconclusive_count = 0;
     let error_count = 0;
+    let unverified_count = 0;
     let non_pass_count = 0;
     if report != () {
         if report.source_revision != () { source_revision = report.source_revision; }
@@ -287,6 +294,11 @@ fn report_structured_verdict(report, title, channel) {
                     if result.path != () { line += "path=" + result.path.to_string() + " "; }
                     if result.error != () { line += result.error.to_string(); }
                     if result.verdict != () { line += " [" + result.verdict + "]"; }
+                    if result.diagnostics != () {
+                        for diagnostic in result.diagnostics {
+                            line += " diagnostic=" + diagnostic.to_string();
+                        }
+                    }
                     reasons.push(line);
                 } else if result != "" {
                     reasons.push(result.to_string());
@@ -297,6 +309,7 @@ fn report_structured_verdict(report, title, channel) {
         if report.failure_count != () { failure_count = report.failure_count; }
         if report.inconclusive_count != () { inconclusive_count = report.inconclusive_count; }
         if report.error_count != () { error_count = report.error_count; }
+        if report.unverified_count != () { unverified_count = report.unverified_count; }
         if report.non_pass_count != () { non_pass_count = report.non_pass_count; }
     }
     if result_count == 0 && report != () && report.streamed == true {
@@ -316,6 +329,8 @@ fn report_structured_verdict(report, title, channel) {
             "requirement evaluation did not produce enough evidence"
         } else if verdict == "error" {
             "requirement evaluation encountered an error"
+        } else if verdict == "unverified" {
+            "requirement evaluation did not establish verification"
         } else {
             "requirement evaluation unavailable"
         };
@@ -323,14 +338,15 @@ fn report_structured_verdict(report, title, channel) {
     }
     let chunked_results = result_chunks.len() > 1 || check_count > 64;
     let inline_results = !chunked_results && result_count <= 64;
-    let evidence = #{schema_version: 2, ok: ok, title: title, channel: channel,
+    let evidence = #{schema_version: 3, ok: ok, title: title, channel: channel,
         verdict: verdict, verification: verification,
         requirement_count: requirement_count, check_count: check_count,
         requirement_names: requirement_names, requirement_summary: requirement_summary,
         source_revision: source_revision, source_files: source_files,
         result_count: result_count, pass_count: pass_count,
         failure_count: failure_count, inconclusive_count: inconclusive_count,
-        error_count: error_count, non_pass_count: non_pass_count,
+        error_count: error_count, unverified_count: unverified_count,
+        non_pass_count: non_pass_count,
         evidence_chunked: !inline_results,
         evidence_result_events: if evidence_result_events != () {
             evidence_result_events
@@ -345,7 +361,7 @@ fn report_structured_verdict(report, title, channel) {
         let result_index = 0;
         for chunk in result_chunks {
             for result in chunk {
-                emit(channel + "_EVIDENCE_RESULT", #{schema_version: 2,
+                emit(channel + "_EVIDENCE_RESULT", #{schema_version: 3,
                     title: title, channel: channel, verification: verification,
                     source_revision: source_revision, result_count: check_count,
                     failure_count: failure_count, non_pass_count: non_pass_count,

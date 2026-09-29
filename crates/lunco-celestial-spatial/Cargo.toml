@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 lunco-core-runtime = { path = "../lunco-core-runtime" }
+lunco-engineering-values = { path = "../lunco-engineering-values" }
 lunco-api-core = { path = "../lunco-api-core" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 # BigSpace/runtime adapter for celestial mechanics. The sibling

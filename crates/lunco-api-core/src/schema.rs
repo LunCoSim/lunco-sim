@@ -67,6 +67,8 @@ pub enum ApiRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ApiErrorCode {
     EntityNotFound = 404,
+    /// The caller lacks authority to read or mutate the requested target.
+    Unauthorized = 403,
     /// The command is valid, but the current simulation state rejects it.
     CommandRejected = 409,
     CommandNotFound = 400,

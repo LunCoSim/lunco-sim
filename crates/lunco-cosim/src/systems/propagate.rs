@@ -222,7 +222,7 @@ impl CompiledWiring {
                     // Resolve the target's input handle once (fast-path backends only).
                     let resolved = registry.resolve_input(world, c.end_element, &c.end_connector);
                     let has_port_surface = resolved.is_some()
-                        || !registry.entity_ports(world, c.end_element).is_empty();
+                        || !registry.entity_port_owners(world, c.end_element).is_empty();
                     self.targets.push(CompiledTarget {
                         entity: c.end_element,
                         name: Arc::clone(&name),
@@ -668,7 +668,7 @@ fn propagate_connections_with_cache(
                 registry.read_output_port(world, w.src_entity, &w.src_port)
             }
         };
-        let src = match w.src_resolved {
+        let src = match &w.src_resolved {
             Some(resolved) => registry.read_resolved(world, w.src_entity, resolved),
             None => read_src(w),
         };
@@ -717,10 +717,13 @@ fn propagate_connections_with_cache(
         // "succeeds" and nothing happens, which is indistinguishable from a
         // broken port to whoever sent it.
         let value = scratch.held_values[i].unwrap_or(scratch.accumulator[i]);
-        let written = match t.resolved {
-            Some(resolved) => registry.write_resolved(world, t.entity, resolved, value),
-            None => registry.write_port(world, t.entity, &t.name, value),
+        let failure = match &t.resolved {
+            Some(resolved) => registry
+                .write_resolved(world, t.entity, resolved, value)
+                .err(),
+            None => registry.write_port(world, t.entity, &t.name, value).err(),
         };
+        let written = failure.is_none();
         // A target on an entity that exposes NO PORT SURFACE AT ALL is not a
         // dangling wire, and reporting it as one buried the real diagnostic:
         //
@@ -746,6 +749,7 @@ fn propagate_connections_with_cache(
             port: Arc::clone(&t.name),
             has_port_surface: t.has_port_surface,
             dropped_value: scratch.accumulator[i],
+            failure: failure.map(|error| error.to_string()),
         };
         let model_status = world
             .get::<SimComponent>(t.entity)
@@ -786,9 +790,15 @@ fn propagate_connections_with_cache(
                     .map(|n| n.to_string())
                     .unwrap_or_else(|| format!("{:?}", t.entity));
                 warn!(
-                    "[cosim] connection targets unknown input port '{}' on {} ({:?}) — value dropped \
-                     (declare the port or fix the wire)",
-                    t.name, label, t.entity
+                    "[cosim] connection input '{}' on {} ({:?}) rejected value {}: {}",
+                    t.name,
+                    label,
+                    t.entity,
+                    unresolved.dropped_value,
+                    unresolved
+                        .failure
+                        .as_deref()
+                        .unwrap_or("input write rejected")
                 );
             }
         }
@@ -837,6 +847,7 @@ mod wire_order_tests {
     fn wire_summation_order_is_spawn_order_independent() {
         fn compile(spawn_order: &[u64]) -> Vec<(Option<u64>, String)> {
             let mut world = World::new();
+            world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
             world.init_resource::<PortRegistry>();
 
             // Three distinct sources with stable network ids 10/20/30.
@@ -964,6 +975,7 @@ mod wire_order_tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         world.init_resource::<CosimDiagnostics>();
         world.init_resource::<PropagationCache>();
         let mut registry = PortRegistry::default();
@@ -1018,6 +1030,7 @@ mod wire_order_tests {
     fn a_hold_outranks_its_wire_until_explicit_release() {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         world.init_resource::<CosimDiagnostics>();
         world.init_resource::<PropagationCache>();
         world.init_resource::<PortHolds>();
@@ -1090,6 +1103,7 @@ mod wire_order_tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         world.init_resource::<PortRegistry>();
         world.init_resource::<PropagationCache>();
         world.init_resource::<CosimDiagnostics>();
@@ -1149,6 +1163,7 @@ mod wire_order_tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         world.init_resource::<PortRegistry>();
         world.init_resource::<PropagationCache>();
         world.init_resource::<CosimDiagnostics>();
@@ -1191,6 +1206,7 @@ mod wire_order_tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         world.init_resource::<CosimDiagnostics>();
         world.init_resource::<PropagationCache>();
         let mut registry = PortRegistry::default();
@@ -1258,6 +1274,7 @@ mod wire_order_tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         world.init_resource::<PortRegistry>();
         world.init_resource::<PropagationCache>();
         world.init_resource::<CosimDiagnostics>();
@@ -1331,6 +1348,7 @@ mod wire_order_tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         init_builtin_ports(&mut world);
         world.init_resource::<CosimDiagnostics>();
 
@@ -1383,6 +1401,7 @@ mod wire_order_tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         init_builtin_ports(&mut world);
         world.init_resource::<CosimDiagnostics>();
 
@@ -1429,6 +1448,7 @@ mod wire_order_tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         init_builtin_ports(&mut world);
         world.init_resource::<CosimDiagnostics>();
         world.init_resource::<lunco_core::RuntimeFaults>();
@@ -1472,6 +1492,7 @@ mod wire_order_tests {
         );
 
         let mut unsafe_world = World::new();
+        unsafe_world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         init_builtin_ports(&mut unsafe_world);
         unsafe_world.init_resource::<CosimDiagnostics>();
         unsafe_world.init_resource::<lunco_core::RuntimeFaults>();
@@ -1518,6 +1539,7 @@ mod wire_order_tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         init_builtin_ports(&mut world);
         world.init_resource::<CosimDiagnostics>();
         world.init_resource::<lunco_core::RuntimeFaults>();
@@ -1568,6 +1590,7 @@ mod wire_order_tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         world.init_resource::<PortRegistry>();
         world.init_resource::<PropagationCache>();
         world.init_resource::<CosimDiagnostics>();
@@ -1595,6 +1618,7 @@ mod wire_order_tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         world.init_resource::<PortRegistry>();
         world.init_resource::<PropagationCache>();
         world.init_resource::<CosimDiagnostics>();

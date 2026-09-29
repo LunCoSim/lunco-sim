@@ -49,7 +49,8 @@ fn on_event(me, evt, ctx) {
             // The USD event is authored as latched, and the Modelica input is
             // the authoritative per-GNC state. Do not keep a second mutable
             // latch in this shared supervisor script.
-            if !set(gnc, "landing_engine_cutoff_latched", 1.0) {
+            let latch = write_ports(gnc, [["landing_engine_cutoff_latched", 1.0]]);
+            if latch == () || latch.ok != true {
                 print("[Lander] landing transition failed: engine-cutoff latch is not writable");
                 return;
             }
@@ -58,11 +59,13 @@ fn on_event(me, evt, ctx) {
         }
         if evt.name == "lander_flight_handoff" {
             if evt.source != gnc { return; }
-            if !set(gnc, "landing_handoff_latched", 1.0) {
+            let latch = write_ports(gnc, [["landing_handoff_latched", 1.0]]);
+            if latch == () || latch.ok != true {
                 print("[Lander] landing transition failed: handoff latch is not writable");
                 return;
             }
-            if !set(gnc, "engage", 0.0) {
+            let disengage = write_ports(gnc, [["engage", 0.0]]);
+            if disengage == () || disengage.ok != true {
                 print("[Lander] landing transition failed: GNC engage port is not writable");
                 return;
             }

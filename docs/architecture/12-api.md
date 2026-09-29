@@ -105,6 +105,8 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `GetShareLink` | `{"doc_id": u64?}` | Generate a sharing URL for the document source. |
 | `CosimStatus` | `{"include_values": bool?, "include_entities": bool?}` | List USD-driven cosim entities with live telemetry. Both options default to `true`; `include_values: false` omits input/output maps and verbose model/error details, while `include_entities: false` returns only counts, synchronization state, and an aggregate Modelica step profile. |
 | `ReadPorts` | `{"api_id": u64}` | Read every exposed scalar port and its owner-supplied type, unit, range, source, authority, and write contract. |
+| `ReadPortsBatch` | `{"api_ids": u64[]}` | Read declared ports for multiple stable entity identities with one shared simulation tick. |
+| `ReadActuatorStatus` | `{"api_id": u64, "command_port": string, "measured_port": string, "rate_port": string, "tolerance": f64, "rate_tolerance": f64}` | Report target, measured value, error, rate, limits, and whether an actuator is within position and motion tolerances. |
 | `CausalTrace` | `{"target": u64, "correlation_id": u64?}` | Explain one semantic edge through its authored binding, selected port owner, USD connection/admission state, current measured channels, classified producer origin, and optional fixed-tick admission stamp. |
 | `ReadSessionInputStream` | `{}` | Read the bounded in-memory capture of physical frames and admitted held/edge semantic inputs, including producer, admission, and typed payload records. |
 | `ReadSessionInputArchiveExport` | `{}` | Read the latest durable session-input archive export state, capture/export identities, filename, record and byte counts, and terminal failure. |
@@ -161,15 +163,16 @@ content changes. `DiscoverSchema` lists this contract, including the exactly-
 one-of input rule.
 
 `ReadPorts` is the read-only projection of the shared `lunco-port-core::ports::PortRegistry`.
-Each returned port has `metadata.type` (currently `scalar`), optional `unit`,
-optional inclusive `range` bounds, the owning `source`, the current control
-`authority`, and `writable`. Consumers must use `writable` and the declared
-bounds before sending `SetPorts`; the command path remains authoritative and
-rejects undeclared inputs rather than creating them.
+Each returned port has `value` (`f64` when sampled, `()` when the declared
+owner has no live sample), `metadata.type` (currently `scalar`), optional
+typed `unit`, optional `frame`, optional inclusive `range` bounds, the owning
+`source`, current control `authority`, and `writable`. Consumers must use
+`writable` and the declared bounds before sending `SetPorts`; the command path
+remains authoritative and rejects undeclared inputs rather than creating them.
 Input writes and fast-path input locators use the same precedence-winning
 declared owner. A selected owner's refusal is terminal; it cannot redirect the
 write to a lower-precedence owner. Live `RunLint` reports duplicate public
-names as errors.
+names as warnings.
 
 `CausalTrace` is the read-only diagnostic path for answering “what happened to
 this action?” after a semantic edge. Its bounded edge ledger is keyed by the

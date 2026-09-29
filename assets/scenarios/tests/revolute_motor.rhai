@@ -59,7 +59,8 @@ fn on_tick(me, ctx) {
 
     if this.phase == "rest" && this.t >= this.settle_s {
         this.at_rest = a;
-        this.write_ok = set(this.hinge, "angle", TARGET);
+        let write = write_ports(this.hinge, [["angle", TARGET]]);
+        this.write_ok = write != () && write.ok == true;
         this.sent = this.write_ok;
         this.phase = "driven";
         print("[motor] commanded angle=" + TARGET);

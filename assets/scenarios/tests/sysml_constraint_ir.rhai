@@ -271,7 +271,7 @@ fn on_tick(me, ctx) {
     let verification_name = "SysmlRequirementConstraint::VerifyPayloadCapacity";
     let pass_check = sysml_requirements::constraint_check("aggregate-pass",
         "payload", "payloadCapacity", verification_name, constraint_name,
-        #{payloadKg: 625.0, capacityKg: 625.0}, "external", 0.0);
+        #{payloadKg: 625.0, capacityKg: 625.0}, "derived", 0.0);
     let requirement_pass = sysml_requirements::evaluate(
         requirement_source, [pass_check]);
     checks.push(t_true(requirement_pass.verdict == "pass"
@@ -282,7 +282,7 @@ fn on_tick(me, ctx) {
 
     let fail_check = sysml_requirements::constraint_check("aggregate-fail",
         "payload", "payloadCapacity", verification_name, constraint_name,
-        #{payloadKg: 625.001, capacityKg: 625.0}, "external", 0.0);
+        #{payloadKg: 625.001, capacityKg: 625.0}, "derived", 0.0);
     let requirement_fail = sysml_requirements::evaluate(
         requirement_source, [fail_check]);
     checks.push(t_true(requirement_fail.verdict == "fail"
@@ -293,7 +293,7 @@ fn on_tick(me, ctx) {
 
     let inconclusive_check = sysml_requirements::constraint_check("aggregate-inconclusive",
         "payload", "payloadCapacity", verification_name, constraint_name,
-        #{payloadKg: 625.0}, "external", 0.0);
+        #{payloadKg: 625.0}, "derived", 0.0);
     let requirement_inconclusive = sysml_requirements::evaluate(
         requirement_source, [inconclusive_check]);
     checks.push(t_true(requirement_inconclusive.verdict == "inconclusive"
@@ -305,7 +305,7 @@ fn on_tick(me, ctx) {
     let error_check = sysml_requirements::constraint_check("aggregate-error",
         "payload", "payloadCapacity", verification_name,
         "SysmlRequirementConstraint::UnrelatedCapacityCheck",
-        #{payloadKg: 10.0, capacityKg: 625.0}, "external", 0.0);
+        #{payloadKg: 10.0, capacityKg: 625.0}, "derived", 0.0);
     let requirement_error = sysml_requirements::evaluate(
         requirement_source, [error_check]);
     checks.push(t_true(requirement_error.verdict == "error"

@@ -818,6 +818,14 @@ pub enum SessionInputPayload {
         /// Correlation id from the admitted command.
         correlation_id: u64,
     },
+    /// Atomic input writes across multiple stable targets at one fixed tick.
+    /// The record's `target` is the first batch target in stable-ID order.
+    PortInputTransaction {
+        /// Per-target writes, ordered by stable target identity.
+        batches: Vec<PortInputTargetWrites>,
+        /// Correlation id from the admitted command.
+        correlation_id: u64,
+    },
     /// Release one named port hold at a fixed simulation tick.
     PortInputRelease {
         /// Port whose manual hold is released.
@@ -833,6 +841,15 @@ pub enum SessionInputPayload {
     },
     /// Release every local input hold at a lifecycle boundary.
     ControlInputsReleased,
+}
+
+/// Named writes for one participant in a multi-target port transaction.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PortInputTargetWrites {
+    /// Stable target identity receiving these writes.
+    pub target: lunco_core::GlobalEntityId,
+    /// Ordered `(port_name, value)` input writes.
+    pub writes: Vec<(String, f64)>,
 }
 
 fn validate_session_input(
@@ -964,6 +981,79 @@ fn validate_session_input(
                 return Err("port input writes require a nonzero correlation id".to_owned());
             }
         }
+        SessionInputPayload::PortInputTransaction {
+            batches,
+            correlation_id,
+        } => {
+            if batches.len() < 2 {
+                return Err("port input transaction requires at least two targets".to_owned());
+            }
+            if batches.len() > lunco_port_core::ports::MAX_PORT_BATCH_TARGETS {
+                return Err(format!(
+                    "port input transaction exceeds {} targets",
+                    lunco_port_core::ports::MAX_PORT_BATCH_TARGETS
+                ));
+            }
+            if batches.iter().any(|batch| batch.writes.is_empty()) {
+                return Err(
+                    "every port input transaction target requires at least one write".to_owned(),
+                );
+            }
+            if batches
+                .iter()
+                .any(|batch| batch.writes.len() > MAX_PORT_INPUT_WRITES_PER_TARGET)
+            {
+                return Err(format!(
+                    "port input transaction target exceeds {MAX_PORT_INPUT_WRITES_PER_TARGET} writes"
+                ));
+            }
+            if batches.iter().any(|batch| batch.target.get() == 0) {
+                return Err("port input transaction target identities must be nonzero".to_owned());
+            }
+            if batches
+                .windows(2)
+                .any(|pair| pair[0].target.get() >= pair[1].target.get())
+            {
+                return Err(
+                    "port input transaction targets must be strictly sorted and unique".to_owned(),
+                );
+            }
+            if batches.iter().any(|batch| {
+                batch
+                    .writes
+                    .iter()
+                    .map(|(name, _)| name)
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+                    != batch.writes.len()
+            }) {
+                return Err(
+                    "port input transaction port names must be unique per target".to_owned(),
+                );
+            }
+            if batches
+                .iter()
+                .flat_map(|batch| &batch.writes)
+                .any(|(name, _)| name.trim().is_empty())
+            {
+                return Err("port input transaction write names must not be empty".to_owned());
+            }
+            if batches
+                .iter()
+                .flat_map(|batch| &batch.writes)
+                .any(|(_, value)| !value.is_finite())
+            {
+                return Err("port input transaction values must be finite".to_owned());
+            }
+            if *correlation_id == 0 {
+                return Err("port input transaction requires a nonzero correlation id".to_owned());
+            }
+            if batches.first().map(|batch| batch.target) != Some(target) {
+                return Err(
+                    "session input target must be the first port transaction target".to_owned(),
+                );
+            }
+        }
         SessionInputPayload::PortInputRelease {
             name,
             correlation_id,
@@ -1062,7 +1152,8 @@ fn validate_session_input(
             | SessionInputProducer::Rhai { .. }
             | SessionInputProducer::LocalUser { .. },
             SessionInputPayload::ModelicaInputChange { .. }
-            | SessionInputPayload::PortInputWrites { .. },
+            | SessionInputPayload::PortInputWrites { .. }
+            | SessionInputPayload::PortInputTransaction { .. },
         )
         | (
             SessionInputProducer::ApiTransport { .. }
@@ -1071,10 +1162,7 @@ fn validate_session_input(
             SessionInputPayload::PortInputRelease { .. }
             | SessionInputPayload::ControlInputRelease { .. },
         )
-        | (
-            SessionInputProducer::RuntimeLifecycle,
-            SessionInputPayload::ControlInputsReleased,
-        ) => {}
+        | (SessionInputProducer::RuntimeLifecycle, SessionInputPayload::ControlInputsReleased) => {}
         (SessionInputProducer::PhysicalController { .. }, _) => {
             return Err("physical controller producer requires a physical intent frame".to_owned());
         }
@@ -1102,6 +1190,9 @@ fn validate_session_input(
 /// Maximum number of typed session inputs that may wait for their fixed-tick
 /// commit boundary.
 pub const MAX_PENDING_SESSION_INPUTS: usize = 4096;
+
+/// Maximum named writes admitted for one target in a session input.
+pub const MAX_PORT_INPUT_WRITES_PER_TARGET: usize = 4096;
 
 /// Admitted input waiting for its effective fixed tick. The serializable
 /// record is the replay contract; `origin` carries the live command context to
@@ -1206,6 +1297,79 @@ impl PendingSessionInputs {
         self.pending.iter()
     }
 
+    /// Remove admitted writes superseded by a release before their fixed-tick
+    /// commit. A cross-target transaction is canceled as one unit so its
+    /// participants can never observe only a subset of its writes.
+    pub fn cancel_port_input_writes(
+        &mut self,
+        target: lunco_core::GlobalEntityId,
+        port: Option<&str>,
+    ) -> Vec<SessionInputRecord> {
+        let mut canceled = Vec::new();
+        let mut index = 0;
+        while index < self.pending.len() {
+            let (remove, canceled_record) = {
+                let input = &mut self.pending[index];
+                let transaction_is_canceled = matches!(
+                    &input.record.payload,
+                    SessionInputPayload::PortInputTransaction { batches, .. }
+                        if batches.iter().any(|batch| {
+                            batch.target == target
+                                && batch
+                                    .writes
+                                    .iter()
+                                    .any(|(name, _)| port.is_none_or(|port| name == port))
+                        })
+                );
+                if transaction_is_canceled {
+                    (true, Some(input.record.clone()))
+                } else {
+                    let canceled_write_batch = match &input.record.payload {
+                        SessionInputPayload::PortInputWrites {
+                            writes,
+                            correlation_id,
+                        } if input.record.target == target => {
+                            let removed: Vec<_> = writes
+                                .iter()
+                                .filter(|(name, _)| port.is_none_or(|port| name == port))
+                                .cloned()
+                                .collect();
+                            (!removed.is_empty()).then_some((removed, *correlation_id))
+                        }
+                        _ => None,
+                    };
+                    let canceled_record = canceled_write_batch.map(|(writes, correlation_id)| {
+                        let mut record = input.record.clone();
+                        record.payload = SessionInputPayload::PortInputWrites {
+                            writes,
+                            correlation_id,
+                        };
+                        record
+                    });
+                    let remove = match &mut input.record.payload {
+                        SessionInputPayload::PortInputWrites { writes, .. }
+                            if input.record.target == target =>
+                        {
+                            writes.retain(|(name, _)| !port.is_none_or(|port| name == port));
+                            writes.is_empty()
+                        }
+                        _ => false,
+                    };
+                    (remove, canceled_record)
+                }
+            };
+            if let Some(record) = canceled_record {
+                canceled.push(record);
+            }
+            if remove {
+                self.pending.remove(index);
+            } else {
+                index += 1;
+            }
+        }
+        canceled
+    }
+
     /// Take inputs whose tick is due, preserving their shared admission order.
     pub fn take_due(&mut self, tick: u64) -> Vec<PendingSessionInput> {
         self.pending
@@ -1231,6 +1395,7 @@ impl PendingSessionInputs {
 pub struct SessionInputCommit {
     record: SessionInputRecord,
     target: Entity,
+    targets: Vec<Entity>,
     origin: Option<lunco_core::CommandOrigin>,
 }
 
@@ -1243,6 +1408,11 @@ impl SessionInputCommit {
     /// Target entity resolved from the record's stable `GlobalEntityId`.
     pub fn target(&self) -> Entity {
         self.target
+    }
+
+    /// Resolved participants, in the stable-ID order authored by the record.
+    pub fn targets(&self) -> &[Entity] {
+        &self.targets
     }
 
     /// Live command origin retained for the owner that consumes this action.
@@ -1338,6 +1508,31 @@ pub fn commit_due_session_inputs(world: &mut World) {
             continue;
         };
 
+        let target_ids = match &record.payload {
+            SessionInputPayload::PortInputTransaction { batches, .. } => {
+                batches.iter().map(|batch| batch.target).collect::<Vec<_>>()
+            }
+            _ => vec![record.target],
+        };
+        let mut targets = Vec::with_capacity(target_ids.len());
+        let mut targets_resolved = true;
+        for target_id in &target_ids {
+            let Some(Some(entity)) = entities_by_gid.get(target_id) else {
+                report_session_input_error(
+                    world,
+                    format!(
+                        "session input transaction target {target_id} does not resolve uniquely at commit"
+                    ),
+                );
+                targets_resolved = false;
+                break;
+            };
+            targets.push(*entity);
+        }
+        if !targets_resolved || targets.first().copied() != Some(target) {
+            continue;
+        }
+
         if let SessionInputPayload::RuntimeSpawn { active_frame, .. } = &record.payload {
             let Some(frame) = entities_by_gid.get(active_frame) else {
                 report_session_input_error(
@@ -1382,6 +1577,7 @@ pub fn commit_due_session_inputs(world: &mut World) {
         world.trigger(SessionInputCommit {
             record,
             target,
+            targets,
             origin: input.origin(),
         });
         world.flush();

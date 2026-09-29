@@ -5,7 +5,7 @@
 //! into the co-simulation port registry; it does not own a second observation
 //! or sampling implementation.
 
-use crate::ports::{AvianGroup, AvianPort};
+use crate::ports::{AvianGroup, AvianPort, AvianPortContract};
 use bevy::prelude::*;
 use lunco_physics::raycast::RaycastObservation;
 use lunco_port_core::ports::PortDirection;
@@ -15,6 +15,7 @@ use lunco_port_core::ports::PortDirection;
 /// origin/direction ports expose the effective mounted geometry already used by
 /// the raw query, including every transform between the sensor and rigid body.
 pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
+    source: "Avian ray query",
     present: |world, entity| world.get::<RaycastObservation>(entity).is_some(),
     entities: |world, out| {
         out.extend(
@@ -23,10 +24,16 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
                 .iter(world),
         );
     },
-    topology_key: |world, entity| u64::from(world.get::<RaycastObservation>(entity).is_some()),
+    topology_key: |world, entity| {
+        world
+            .get::<RaycastObservation>(entity)
+            .map(|observation| raycast_frame_topology_key(observation.body_global_id))
+            .unwrap_or_default()
+    },
     ports: &[
         AvianPort {
             name: "ray_distance",
+            contract: AvianPortContract::RAY_DISTANCE,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
                 world
@@ -37,6 +44,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "ray_hit_valid",
+            contract: AvianPortContract::DIMENSIONLESS,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
                 world
@@ -47,6 +55,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "ray_hit_position_x",
+            contract: AvianPortContract::RAY_POSITION,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
                 world
@@ -57,6 +66,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "ray_hit_position_y",
+            contract: AvianPortContract::RAY_POSITION,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
                 world
@@ -67,6 +77,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "ray_hit_position_z",
+            contract: AvianPortContract::RAY_POSITION,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
                 world
@@ -77,6 +88,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "ray_hit_normal_x",
+            contract: AvianPortContract::RAY_NORMAL,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
                 world
@@ -87,6 +99,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "ray_hit_normal_y",
+            contract: AvianPortContract::RAY_NORMAL,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
                 world
@@ -97,6 +110,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "ray_hit_normal_z",
+            contract: AvianPortContract::RAY_NORMAL,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
                 world
@@ -107,6 +121,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "ray_sample_time",
+            contract: AvianPortContract::RAY_TIME,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
                 world
@@ -117,6 +132,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "ray_origin_body_local_x",
+            contract: AvianPortContract::RAY_ORIGIN,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
                 world
@@ -127,6 +143,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "ray_origin_body_local_y",
+            contract: AvianPortContract::RAY_ORIGIN,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
                 world
@@ -137,6 +154,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "ray_origin_body_local_z",
+            contract: AvianPortContract::RAY_ORIGIN,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
                 world
@@ -147,6 +165,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "ray_direction_body_local_x",
+            contract: AvianPortContract::RAY_DIRECTION,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
                 world
@@ -157,6 +176,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "ray_direction_body_local_y",
+            contract: AvianPortContract::RAY_DIRECTION,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
                 world
@@ -167,6 +187,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "ray_direction_body_local_z",
+            contract: AvianPortContract::RAY_DIRECTION,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
                 world
@@ -181,7 +202,25 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
 
 fn register_raycast_topology(app: &mut App) {
     app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<RaycastObservation>)
-        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<RaycastObservation>);
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<RaycastObservation>)
+        .add_systems(PostUpdate, check_raycast_structure);
+}
+
+fn raycast_frame_topology_key(body_global_id: Option<u64>) -> u64 {
+    body_global_id.map_or(0, |body_id| body_id.rotate_left(1) | 1)
+}
+
+fn check_raycast_structure(
+    changed: Query<(Entity, &RaycastObservation), Changed<RaycastObservation>>,
+    mut state: ResMut<lunco_port_core::ports::PortTopologyState>,
+    mut revision: ResMut<lunco_port_core::ports::PortTopologyRevision>,
+) {
+    for (entity, observation) in &changed {
+        let key = raycast_frame_topology_key(observation.body_global_id);
+        if state.changed::<RaycastObservation>(entity, key) {
+            revision.bump();
+        }
+    }
 }
 
 #[cfg(test)]

@@ -28,8 +28,8 @@
 //! visible type error rather than silent poison.
 
 use bevy::math::{DQuat, DVec2, DVec3, EulerRot};
-pub use lunco_core::DTransform;
 use lunco_core::DTransform as CoreDTransform;
+pub use lunco_core::{CoordinateTransform, DTransform, FramedPose, FramedPosition};
 use rhai::{Dynamic, Engine, EvalAltResult, Position};
 
 /// Construct a Rhai runtime error for a value that cannot satisfy the native
@@ -401,6 +401,62 @@ fn native_transform_apply_point(
     )
 }
 
+fn native_coordinate_transform(
+    source_frame: String,
+    target_frame: String,
+    transform: DTransform,
+) -> Result<CoordinateTransform, Box<EvalAltResult>> {
+    CoordinateTransform::new(source_frame, target_frame, transform)
+        .map_err(|error| invalid_value(error.to_string()))
+}
+
+fn native_framed_position(
+    frame: String,
+    position: DVec3,
+) -> Result<FramedPosition, Box<EvalAltResult>> {
+    FramedPosition::new(frame, finite_vec3(position, "framed position")?)
+        .map_err(|error| invalid_value(error.to_string()))
+}
+
+fn native_framed_pose(frame: String, pose: DTransform) -> Result<FramedPose, Box<EvalAltResult>> {
+    FramedPose::new(frame, pose).map_err(|error| invalid_value(error.to_string()))
+}
+
+fn native_transform_position_between_frames(
+    transform: CoordinateTransform,
+    position: FramedPosition,
+) -> Result<FramedPosition, Box<EvalAltResult>> {
+    transform
+        .apply_position(&position)
+        .map_err(|error| invalid_value(error.to_string()))
+}
+
+fn native_transform_pose_between_frames(
+    transform: CoordinateTransform,
+    pose: FramedPose,
+) -> Result<FramedPose, Box<EvalAltResult>> {
+    transform
+        .apply_pose(&pose)
+        .map_err(|error| invalid_value(error.to_string()))
+}
+
+fn native_compose_coordinate_transforms(
+    first: CoordinateTransform,
+    next: CoordinateTransform,
+) -> Result<CoordinateTransform, Box<EvalAltResult>> {
+    first
+        .then(&next)
+        .map_err(|error| invalid_value(error.to_string()))
+}
+
+fn native_inverse_coordinate_transform(
+    transform: CoordinateTransform,
+) -> Result<CoordinateTransform, Box<EvalAltResult>> {
+    transform
+        .inverse()
+        .map_err(|error| invalid_value(error.to_string()))
+}
+
 /// Lift a binary vector op, returning `()` on degenerate input.
 fn binary(
     f: impl Fn(DVec3, DVec3) -> DVec3 + Send + Sync + 'static,
@@ -446,6 +502,9 @@ pub fn register(engine: &mut Engine) {
         .register_type_with_name::<DVec3>("Vec3")
         .register_type_with_name::<DQuat>("Quat")
         .register_type_with_name::<DTransform>("Transform")
+        .register_type_with_name::<CoordinateTransform>("CoordinateTransform")
+        .register_type_with_name::<FramedPosition>("FramedPosition")
+        .register_type_with_name::<FramedPose>("FramedPose")
         .register_fn("vec3", |x: f64, y: f64, z: f64| {
             finite_vec3(DVec3::new(x, y, z), "vec3")
         })
@@ -489,11 +548,46 @@ pub fn register(engine: &mut Engine) {
         .register_fn("transform_is_finite", native_transform_is_finite)
         .register_fn("transform_compose", native_transform_compose)
         .register_fn("transform_apply_point", native_transform_apply_point)
+        .register_fn("coordinate_transform", native_coordinate_transform)
+        .register_fn("framed_position", native_framed_position)
+        .register_fn("framed_pose", native_framed_pose)
+        .register_fn(
+            "transform_position_between_frames",
+            native_transform_position_between_frames,
+        )
+        .register_fn(
+            "transform_pose_between_frames",
+            native_transform_pose_between_frames,
+        )
+        .register_fn(
+            "compose_coordinate_transforms",
+            native_compose_coordinate_transforms,
+        )
+        .register_fn(
+            "inverse_coordinate_transform",
+            native_inverse_coordinate_transform,
+        )
         .register_get("translation", |transform: &mut DTransform| {
             transform.translation
         })
         .register_get("rotation", |transform: &mut DTransform| transform.rotation)
         .register_get("scale", |transform: &mut DTransform| transform.scale);
+
+    engine
+        .register_get("source_frame", |transform: &mut CoordinateTransform| {
+            transform.source().to_string()
+        })
+        .register_get("target_frame", |transform: &mut CoordinateTransform| {
+            transform.target().to_string()
+        })
+        .register_get("frame", |position: &mut FramedPosition| {
+            position.frame().to_string()
+        })
+        .register_get("position", |position: &mut FramedPosition| {
+            position.position()
+        })
+        .register_get("frame", |pose: &mut FramedPose| pose.frame().to_string())
+        .register_get("pose", |pose: &mut FramedPose| pose.pose());
 
     // The familiar names are overloaded for native values as well as the
     // legacy arrays.  Existing scripts continue to exchange arrays, while new

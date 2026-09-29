@@ -902,7 +902,7 @@ fn commit_controller_session_input(
                 return;
             };
             commands.trigger(lunco_control_core::SemanticIntentEdge {
-                target: commit.target(),
+                target: commit.targets()[0],
                 intent,
                 kind,
                 correlation_id: *correlation_id,
@@ -989,6 +989,7 @@ fn commit_controller_session_input(
         lunco_core_session::SessionInputPayload::RuntimeSpawn { .. }
         | lunco_core_session::SessionInputPayload::ModelicaInputChange { .. }
         | lunco_core_session::SessionInputPayload::PortInputWrites { .. }
+        | lunco_core_session::SessionInputPayload::PortInputTransaction { .. }
         | lunco_core_session::SessionInputPayload::PortInputRelease { .. }
         | lunco_core_session::SessionInputPayload::ControlInputRelease { .. }
         | lunco_core_session::SessionInputPayload::ControlInputsReleased => {}

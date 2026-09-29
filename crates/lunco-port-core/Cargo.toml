@@ -7,6 +7,7 @@ description = "Shared ECS port surfaces and registry for LunCoSim"
 
 [dependencies]
 bevy = { workspace = true }
+lunco-engineering-values = { path = "../lunco-engineering-values" }
 
 [lints]
 workspace = true

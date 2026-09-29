@@ -55,8 +55,8 @@ pub use ports::*;
 
 use lunco_api::executor::{DeferredCommandAppExt, PendingApiRequest, finish_command_result};
 use lunco_cosim_core::{
-    BindingRevision, BrokenConnection, CosimDiagnostics, ForceActuator,
-    PortHolds, RealtimeSafe, SimComponent, SimConnection, SimStatus, TorqueActuator,
+    BindingRevision, BrokenConnection, CosimDiagnostics, ForceActuator, PortHolds, RealtimeSafe,
+    SimComponent, SimConnection, SimStatus, TorqueActuator,
 };
 
 // Typed-command machinery: command contracts are separate from the Bevy-backed
@@ -67,7 +67,9 @@ use lunco_command_contracts::{Ack, OpId};
 use lunco_core::{
     ActiveCommandId, CommandOrigin, GlobalEntityId, RuntimeClock, on_command, register_commands,
 };
-use lunco_cosim_core::commands::{ReleaseControl, ReleaseControlInputs, ReleasePort, SetPorts};
+use lunco_cosim_core::commands::{
+    PortInputBatch, ReleaseControl, ReleaseControlInputs, ReleasePort, SetPorts, SetPortsBatch,
+};
 
 fn endpoint_ready_on_add<T: Component>(
     trigger: On<Add, T>,
@@ -180,6 +182,7 @@ fn reset_scene_state(
 impl Plugin for CoSimPlugin {
     fn build(&self, app: &mut App) {
         app.register_deferred_command::<SetPorts>();
+        app.register_deferred_command::<SetPortsBatch>();
         app.register_deferred_command::<ReleasePort>();
         app.register_deferred_command::<ReleaseControl>();
         app.init_resource::<lunco_core_session::CommandPolicyRegistry>();
@@ -196,6 +199,7 @@ impl Plugin for CoSimPlugin {
                 lunco_core_session::CommandPolicy::OWNED_CONTROL,
             );
         app.register_type::<SimComponent>()
+            .register_type::<PortInputBatch>()
             .register_type::<PendingForces>()
             .register_type::<ForceActuator>()
             .register_type::<TorqueActuator>()
@@ -502,7 +506,11 @@ mod binding_lifecycle_tests {
             .world()
             .resource::<lunco_port_core::ports::PortRegistry>()
             .clone();
-        assert!(registry.write_port(app.world_mut(), entity, "throttle", 0.5));
+        assert!(
+            registry
+                .write_port(app.world_mut(), entity, "throttle", 0.5)
+                .is_ok()
+        );
         app.update();
         assert_eq!(
             app.world()
@@ -530,6 +538,144 @@ mod binding_lifecycle_tests {
             .resource::<lunco_port_core::ports::PortTopologyRevision>()
             .0;
         assert_ne!(after_remove, after_shape_change);
+    }
+
+    #[test]
+    fn set_ports_enforces_live_revolute_joint_angle_metadata_bounds() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+        let joint = app
+            .world_mut()
+            .spawn(
+                RevoluteJoint::new(Entity::PLACEHOLDER, Entity::PLACEHOLDER)
+                    .with_angle_limits(-0.7, 1.2),
+            )
+            .id();
+        let registry = app
+            .world()
+            .resource::<lunco_port_core::ports::PortRegistry>()
+            .clone();
+
+        let angle = registry
+            .input_port_metadata(app.world(), joint, "angle")
+            .expect("the commanded angle has an input owner");
+        assert_eq!(angle.unit.as_ref().map(|unit| unit.id()), Some("rad"));
+        assert!((angle.min.expect("lower limit") + 0.7).abs() < 1.0e-6);
+        assert!((angle.max.expect("upper limit") - 1.2).abs() < 1.0e-6);
+        assert!(angle.writable);
+
+        let angle_owner = registry
+            .entity_port_owners(app.world(), joint)
+            .into_iter()
+            .find(|owner| owner.name == "angle")
+            .expect("the revolute joint has one coalesced angle owner");
+        assert_eq!(angle_owner.direction, PortDirection::InOut);
+        assert!(angle_owner.metadata.writable);
+        assert!((angle_owner.metadata.min.expect("owner lower limit") + 0.7).abs() < 1.0e-6);
+        assert!((angle_owner.metadata.max.expect("owner upper limit") - 1.2).abs() < 1.0e-6);
+
+        let rejection =
+            apply_port_input_writes(app.world_mut(), &registry, joint, &[("angle".into(), 1.21)])
+                .expect_err("an out-of-range target is rejected before it is applied");
+        assert!(rejection.0.contains("1.2"));
+        assert_eq!(
+            app.world()
+                .get::<RevoluteJoint>(joint)
+                .unwrap()
+                .motor
+                .target_position,
+            0.0,
+            "validation must finish before any batch write is applied"
+        );
+        assert!(app.world().resource::<PortHolds>().is_empty());
+
+        apply_port_input_writes(app.world_mut(), &registry, joint, &[("angle".into(), 1.2)])
+            .expect("the inclusive upper bound is a valid target");
+        assert_eq!(
+            app.world()
+                .get::<RevoluteJoint>(joint)
+                .unwrap()
+                .motor
+                .target_position,
+            1.2
+        );
+    }
+
+    #[test]
+    fn set_ports_batch_validates_every_target_before_committing_any_write() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+        let first_id = GlobalEntityId::from_raw(10);
+        let second_id = GlobalEntityId::from_raw(20);
+        let first = app
+            .world_mut()
+            .spawn((
+                first_id,
+                RevoluteJoint::new(Entity::PLACEHOLDER, Entity::PLACEHOLDER)
+                    .with_angle_limits(-1.0, 1.0),
+            ))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn((
+                second_id,
+                RevoluteJoint::new(Entity::PLACEHOLDER, Entity::PLACEHOLDER)
+                    .with_angle_limits(-1.0, 1.0),
+            ))
+            .id();
+        let registry = app
+            .world()
+            .resource::<lunco_port_core::ports::PortRegistry>()
+            .clone();
+        let invalid = [
+            (first_id, vec![("angle".to_owned(), 0.5)]),
+            (second_id, vec![("angle".to_owned(), 1.1)]),
+        ];
+
+        let error =
+            apply_port_input_transaction(app.world_mut(), &registry, &[first, second], &invalid)
+                .expect_err("one invalid target rejects the complete transaction");
+        assert!(error.0.contains("1"));
+        assert_eq!(
+            app.world()
+                .get::<RevoluteJoint>(first)
+                .unwrap()
+                .motor
+                .target_position,
+            0.0
+        );
+        assert_eq!(
+            app.world()
+                .get::<RevoluteJoint>(second)
+                .unwrap()
+                .motor
+                .target_position,
+            0.0
+        );
+        assert!(app.world().resource::<PortHolds>().is_empty());
+
+        let valid = [
+            (first_id, vec![("angle".to_owned(), 0.5)]),
+            (second_id, vec![("angle".to_owned(), -0.5)]),
+        ];
+        apply_port_input_transaction(app.world_mut(), &registry, &[first, second], &valid)
+            .expect("all validated target writes commit together");
+        assert_eq!(
+            app.world()
+                .get::<RevoluteJoint>(first)
+                .unwrap()
+                .motor
+                .target_position,
+            0.5
+        );
+        assert_eq!(
+            app.world()
+                .get::<RevoluteJoint>(second)
+                .unwrap()
+                .motor
+                .target_position,
+            -0.5
+        );
     }
 
     #[test]
@@ -608,7 +754,7 @@ mod binding_lifecycle_tests {
             .clone();
         assert!(
             registry
-                .entity_ports(app.world(), entity)
+                .entity_port_owners(app.world(), entity)
                 .iter()
                 .all(|port| port.name != "position_x" || port.direction != PortDirection::In)
         );
@@ -625,7 +771,7 @@ mod binding_lifecycle_tests {
         assert_ne!(after_transition, before_transition);
         assert!(
             registry
-                .entity_ports(app.world(), entity)
+                .entity_port_owners(app.world(), entity)
                 .iter()
                 .any(|port| { port.name == "position_x" && port.direction == PortDirection::In })
         );
@@ -655,9 +801,9 @@ mod binding_lifecycle_tests {
         let initial_key = registry.entity_port_topology_key(app.world(), entity);
         assert!(
             registry
-                .entity_ports(app.world(), entity)
+                .entity_port_infos(app.world(), entity)
                 .iter()
-                .any(|port| port.name == "position_x")
+                .any(|port| { port.name == "position_x" && port.value == Some(0.0) })
         );
 
         app.world_mut()
@@ -675,10 +821,10 @@ mod binding_lifecycle_tests {
             "a backing-component removal must change the cached candidate key"
         );
         assert!(
-            !registry
-                .entity_ports(app.world(), entity)
+            registry
+                .entity_port_infos(app.world(), entity)
                 .iter()
-                .any(|port| port.name == "position_x")
+                .any(|port| { port.name == "position_x" && port.value.is_none() })
         );
 
         app.world_mut()
@@ -697,9 +843,9 @@ mod binding_lifecycle_tests {
         );
         assert!(
             registry
-                .entity_ports(app.world(), entity)
+                .entity_port_infos(app.world(), entity)
                 .iter()
-                .any(|port| port.name == "position_x")
+                .any(|port| { port.name == "position_x" && port.value == Some(0.0) })
         );
 
         app.world_mut()
@@ -726,10 +872,10 @@ mod binding_lifecycle_tests {
             .0;
         assert_ne!(after_second_remove, after_position);
         assert!(
-            !registry
-                .entity_ports(app.world(), entity)
+            registry
+                .entity_port_infos(app.world(), entity)
                 .iter()
-                .any(|port| port.name == "position_x")
+                .any(|port| { port.name == "position_x" && port.value.is_none() })
         );
     }
 
@@ -1015,6 +1161,7 @@ mod binding_lifecycle_tests {
                 port: "drive_left".into(),
                 has_port_surface: true,
                 dropped_value: 1.0,
+                failure: None,
             };
             diagnostics.record_fault(broken.clone());
             diagnostics.mark_landed(entity, "drive_right");
@@ -1097,7 +1244,7 @@ fn on_set_ports(
         if should_admit {
             let result = validate_port_input_writes(world, &reg, target, &writes)
                 .map_err(|message| (message, lunco_api_core::ApiErrorCode::CommandRejected))
-                .and_then(|()| {
+                .and_then(|_| {
                     admit_port_input(
                         world,
                         target,
@@ -1141,6 +1288,75 @@ fn on_set_ports(
                 correlation_id,
                 Ok(Ack::new(OpId::new())),
                 lunco_api_core::ApiErrorCode::InternalError,
+            ),
+            Err((message, error_code)) => {
+                finish_command_result(world, command_id, correlation_id, Err(message), error_code)
+            }
+        }
+    });
+}
+
+#[on_command(SetPortsBatch)]
+fn on_set_ports_batch(
+    trigger: On<SetPortsBatch>,
+    registry: Res<lunco_port_core::ports::PortRegistry>,
+    active_id: Res<ActiveCommandId>,
+    pending_request: Option<Res<PendingApiRequest>>,
+    mut commands: Commands,
+) {
+    let command = trigger.event();
+    let input_batches = command.batches.clone();
+    let producer_id = command.producer_id;
+    let registry = registry.clone();
+    let command_id = active_id.get();
+    let origin = active_id.origin();
+    let correlation_id = pending_request
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
+    commands.queue(move |world: &mut World| {
+        let admission_correlation_id = correlation_id
+            .or(command_id)
+            .unwrap_or_else(|| OpId::new().0);
+        let result =
+            canonicalize_port_input_batches(world, input_batches).and_then(|(targets, batches)| {
+                let should_admit = targets
+                    .iter()
+                    .any(|target| should_admit_port_input(world, *target, origin, producer_id));
+                let transaction = lunco_core_session::SessionInputPayload::PortInputTransaction {
+                    batches: batches
+                        .iter()
+                        .map(
+                            |(target, writes)| lunco_core_session::PortInputTargetWrites {
+                                target: *target,
+                                writes: writes.clone(),
+                            },
+                        )
+                        .collect(),
+                    correlation_id: admission_correlation_id,
+                };
+                if should_admit {
+                    validate_port_input_transaction(world, &registry, &targets, &batches)?;
+                    admit_port_inputs(
+                        world,
+                        &targets,
+                        "SetPortsBatch",
+                        producer_id,
+                        origin,
+                        admission_correlation_id,
+                        transaction,
+                    )
+                } else {
+                    apply_port_input_transaction(world, &registry, &targets, &batches)
+                        .map(|()| Ack::new(OpId::new()))
+                }
+            });
+        match result {
+            Ok(ack) => finish_command_result(
+                world,
+                command_id,
+                correlation_id,
+                Ok(ack),
+                lunco_api_core::ApiErrorCode::CommandRejected,
             ),
             Err((message, error_code)) => {
                 finish_command_result(world, command_id, correlation_id, Err(message), error_code)
@@ -1201,9 +1417,35 @@ fn admit_port_input(
     correlation_id: u64,
     payload: lunco_core_session::SessionInputPayload,
 ) -> Result<Ack, (String, lunco_api_core::ApiErrorCode)> {
+    admit_port_inputs(
+        world,
+        &[target],
+        input_name,
+        requested_producer_id,
+        origin,
+        correlation_id,
+        payload,
+    )
+}
+
+fn admit_port_inputs(
+    world: &mut World,
+    targets: &[Entity],
+    input_name: &str,
+    requested_producer_id: Option<u64>,
+    origin: Option<CommandOrigin>,
+    correlation_id: u64,
+    payload: lunco_core_session::SessionInputPayload,
+) -> Result<Ack, (String, lunco_api_core::ApiErrorCode)> {
     if correlation_id == 0 {
         return Err((
             format!("{input_name} input correlation id must be nonzero"),
+            lunco_api_core::ApiErrorCode::CommandRejected,
+        ));
+    }
+    if targets.is_empty() {
+        return Err((
+            format!("{input_name} requires at least one target"),
             lunco_api_core::ApiErrorCode::CommandRejected,
         ));
     }
@@ -1213,12 +1455,48 @@ fn admit_port_input(
         input_name,
     )
     .map_err(|message| (message, lunco_api_core::ApiErrorCode::CommandRejected))?;
-    let target_gid = unique_target_global_id(
-        world,
-        target,
-        &format!("live {input_name} admission"),
-    )
-    .map_err(|message| (message, lunco_api_core::ApiErrorCode::CommandRejected))?;
+    let target_gids = targets
+        .iter()
+        .map(|target| world.get::<GlobalEntityId>(*target).copied())
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            (
+                format!("live {input_name} admission requires stable target identities"),
+                lunco_api_core::ApiErrorCode::CommandRejected,
+            )
+        })?;
+    if target_gids
+        .windows(2)
+        .any(|pair| pair[0].get() >= pair[1].get())
+    {
+        return Err((
+            format!("{input_name} target identities must be strictly sorted and unique"),
+            lunco_api_core::ApiErrorCode::CommandRejected,
+        ));
+    }
+    for (target, target_gid) in targets.iter().zip(&target_gids) {
+        let mut matches = world
+            .iter_entities()
+            .filter(|entity| entity.get::<GlobalEntityId>() == Some(target_gid));
+        let uniquely_resolved = matches
+            .next()
+            .is_some_and(|entity| entity.id() == *target && matches.next().is_none());
+        if !uniquely_resolved {
+            return Err((
+                format!("live {input_name} target identity {target_gid} does not resolve uniquely"),
+                lunco_api_core::ApiErrorCode::CommandRejected,
+            ));
+        }
+    }
+    let target_gid = target_gids[0];
+    if let lunco_core_session::SessionInputPayload::PortInputTransaction { batches, .. } = &payload
+        && batches.first().map(|batch| batch.target) != Some(target_gid)
+    {
+        return Err((
+            "SetPortsBatch record target must be its first stable-ID participant".to_owned(),
+            lunco_api_core::ApiErrorCode::CommandRejected,
+        ));
+    }
     let scene_generation = world
         .get_resource::<lunco_core::SceneTransitionCoordinator>()
         .and_then(lunco_core::SceneTransitionCoordinator::completed_generation)
@@ -1292,7 +1570,15 @@ fn admit_port_input(
     Ok(Ack::with_data(
         OpId::new(),
         lunco_hooks::HookValue::map([
-            ("target_gid", lunco_hooks::HookValue::UInt(target_gid.get())),
+            (
+                "target_gids",
+                lunco_hooks::HookValue::Array(
+                    target_gids
+                        .iter()
+                        .map(|target| lunco_hooks::HookValue::UInt(target.get()))
+                        .collect(),
+                ),
+            ),
             (
                 "producer_kind",
                 lunco_hooks::HookValue::str(producer.kind()),
@@ -1312,76 +1598,113 @@ fn admit_port_input(
     ))
 }
 
-fn validate_port_input_writes(
+fn canonicalize_port_input_batches(
     world: &mut World,
-    registry: &lunco_port_core::ports::PortRegistry,
-    target: Entity,
-    writes: &[(String, f64)],
-) -> Result<(), String> {
-    if writes.is_empty() {
-        return Err("SetPorts requires at least one input-port write".to_owned());
+    batches: Vec<PortInputBatch>,
+) -> Result<
+    (Vec<Entity>, Vec<(GlobalEntityId, Vec<(String, f64)>)>),
+    (String, lunco_api_core::ApiErrorCode),
+> {
+    if batches.len() < 2 || batches.len() > lunco_port_core::ports::MAX_PORT_BATCH_TARGETS {
+        return Err((
+            format!(
+                "SetPortsBatch requires 2..={} distinct targets",
+                lunco_port_core::ports::MAX_PORT_BATCH_TARGETS
+            ),
+            lunco_api_core::ApiErrorCode::CommandRejected,
+        ));
     }
-    if writes.iter().any(|(name, _)| name.trim().is_empty()) {
-        return Err("SetPorts input-port names must not be empty".to_owned());
+    let mut entries = batches
+        .into_iter()
+        .map(|batch| {
+            world
+                .get::<GlobalEntityId>(batch.target)
+                .copied()
+                .map(|target_gid| (target_gid, batch.target, batch.writes))
+                .ok_or_else(|| {
+                    (
+                        format!(
+                            "SetPortsBatch target {:?} has no stable GlobalEntityId",
+                            batch.target
+                        ),
+                        lunco_api_core::ApiErrorCode::CommandRejected,
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(|(target_gid, _, _)| target_gid.get());
+    if entries.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err((
+            "SetPortsBatch target identities must be unique".to_owned(),
+            lunco_api_core::ApiErrorCode::CommandRejected,
+        ));
     }
-    if writes.iter().any(|(_, value)| !value.is_finite()) {
-        return Err("SetPorts input values must be finite".to_owned());
-    }
-    let invalid_writes = writes
-        .iter()
-        .filter(|(port, _)| !registry.has_input_port(world, target, port))
-        .cloned()
-        .collect::<Vec<_>>();
-    if invalid_writes.is_empty() {
-        return Ok(());
-    }
-
-    let has_port_surface = !registry.entity_ports(world, target).is_empty();
-    let label = world
-        .get::<Name>(target)
-        .map(|name| name.to_string())
-        .unwrap_or_else(|| format!("{target:?}"));
-    if has_port_surface {
-        let global_id = world.get::<GlobalEntityId>(target).copied();
-        let mut diagnostics = world.resource_mut::<CosimDiagnostics>();
-        for (port, value) in &invalid_writes {
-            if diagnostics.has_landed(target, port) {
-                continue;
-            }
-            let inserted = diagnostics.record_fault(BrokenConnection {
-                entity: target,
-                global_id,
-                port: Arc::from(port.as_str()),
-                has_port_surface: true,
-                dropped_value: *value,
-            });
-            if inserted {
-                warn!(
-                    "[cosim] SetPorts targets unknown input port '{}' on {} ({:?}) — batch rejected",
-                    port, label, target
-                );
-            }
+    for (target_gid, target, _) in &entries {
+        let mut matches = world
+            .iter_entities()
+            .filter(|entity| entity.get::<GlobalEntityId>() == Some(target_gid));
+        let uniquely_resolved = matches
+            .next()
+            .is_some_and(|entity| entity.id() == *target && matches.next().is_none());
+        if !uniquely_resolved {
+            return Err((
+                format!("SetPortsBatch target identity {target_gid} does not resolve uniquely"),
+                lunco_api_core::ApiErrorCode::CommandRejected,
+            ));
         }
     }
-    Err(if has_port_surface {
-        format!(
-            "unknown input port(s) on {label}: {}",
-            invalid_writes
-                .iter()
-                .map(|(port, _)| port.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    } else {
-        format!("{label} has no writable input-port surface")
-    })
+    let targets = entries.iter().map(|entry| entry.1).collect();
+    let writes = entries
+        .into_iter()
+        .map(|(target_gid, _, writes)| (target_gid, writes))
+        .collect();
+    Ok((targets, writes))
 }
 
-fn apply_port_input_writes(
+fn validate_port_input_transaction(
     world: &mut World,
     registry: &lunco_port_core::ports::PortRegistry,
+    targets: &[Entity],
+    batches: &[(GlobalEntityId, Vec<(String, f64)>)],
+) -> Result<Vec<lunco_port_core::ports::PreparedPortWrite>, (String, lunco_api_core::ApiErrorCode)>
+{
+    if targets.len() < 2 || targets.len() != batches.len() {
+        return Err((
+            "SetPortsBatch transaction participant count is invalid".to_owned(),
+            lunco_api_core::ApiErrorCode::CommandRejected,
+        ));
+    }
+    if batches
+        .windows(2)
+        .any(|pair| pair[0].0.get() >= pair[1].0.get())
+    {
+        return Err((
+            "SetPortsBatch participants must be in strictly increasing stable-ID order".to_owned(),
+            lunco_api_core::ApiErrorCode::CommandRejected,
+        ));
+    }
+    for (target, (target_id, _)) in targets.iter().zip(batches) {
+        if world.get::<GlobalEntityId>(*target) != Some(target_id) {
+            return Err((
+                format!("SetPortsBatch target entity {target:?} no longer matches {target_id}"),
+                lunco_api_core::ApiErrorCode::CommandRejected,
+            ));
+        }
+        validate_port_input_target_state(world, *target)?;
+    }
+    let mut prepared = Vec::new();
+    for (target, (_, writes)) in targets.iter().zip(batches) {
+        prepared.extend(
+            validate_port_input_writes(world, registry, *target, writes)
+                .map_err(|message| (message, lunco_api_core::ApiErrorCode::CommandRejected))?,
+        );
+    }
+    Ok(prepared)
+}
+
+fn validate_port_input_target_state(
+    world: &World,
     target: Entity,
-    writes: &[(String, f64)],
 ) -> Result<(), (String, lunco_api_core::ApiErrorCode)> {
     // TimeTransport is the authoritative user play/pause owner. Modelica's
     // internal readiness pause is not user intent and must not reject controls.
@@ -1394,26 +1717,134 @@ fn apply_port_input_writes(
             lunco_api_core::ApiErrorCode::CommandRejected,
         ));
     }
-    validate_port_input_writes(world, registry, target, writes)
-        .map_err(|message| (message, lunco_api_core::ApiErrorCode::CommandRejected))?;
+    Ok(())
+}
 
-    // A setpoint on a wired input outranks the wire until an explicit release
-    // or lifecycle clear.
-    for (port, value) in writes {
-        if !registry.write_port(world, target, port, *value) {
-            return Err((
-                format!("port backend refused declared input '{port}' on {target:?}"),
-                lunco_api_core::ApiErrorCode::InternalError,
-            ));
-        }
-        if let Some(mut holds) = world.get_resource_mut::<PortHolds>() {
-            holds.hold(target, port.clone(), *value);
-        }
+fn apply_validated_port_input_writes(
+    world: &mut World,
+    registry: &lunco_port_core::ports::PortRegistry,
+    prepared: Vec<lunco_port_core::ports::PreparedPortWrite>,
+) -> Result<(), (String, lunco_api_core::ApiErrorCode)> {
+    let committed_values = prepared
+        .iter()
+        .map(|write| (write.entity(), write.name().to_owned(), write.value()))
+        .collect::<Vec<_>>();
+    registry
+        .apply_prepared_input_writes(world, &prepared)
+        .map_err(|error| {
+            (
+                error.to_string(),
+                lunco_api_core::ApiErrorCode::CommandRejected,
+            )
+        })?;
+    for (target, port, value) in committed_values {
+        world
+            .resource_mut::<PortHolds>()
+            .hold(target, port.clone(), value);
         let mut diagnostics = world.resource_mut::<CosimDiagnostics>();
-        diagnostics.remove_fault(target, port);
-        diagnostics.mark_landed(target, port);
+        diagnostics.remove_fault(target, &port);
+        diagnostics.mark_landed(target, &port);
     }
     Ok(())
+}
+
+fn apply_port_input_transaction(
+    world: &mut World,
+    registry: &lunco_port_core::ports::PortRegistry,
+    targets: &[Entity],
+    batches: &[(GlobalEntityId, Vec<(String, f64)>)],
+) -> Result<(), (String, lunco_api_core::ApiErrorCode)> {
+    let prepared = validate_port_input_transaction(world, registry, targets, batches)?;
+    apply_validated_port_input_writes(world, registry, prepared)
+}
+
+fn validate_port_input_writes(
+    world: &mut World,
+    registry: &lunco_port_core::ports::PortRegistry,
+    target: Entity,
+    writes: &[(String, f64)],
+) -> Result<Vec<lunco_port_core::ports::PreparedPortWrite>, String> {
+    if writes.is_empty() {
+        return Err("SetPorts requires at least one input-port write".to_owned());
+    }
+    if writes.len() > lunco_core_session::MAX_PORT_INPUT_WRITES_PER_TARGET {
+        return Err(format!(
+            "SetPorts exceeds {} writes per target",
+            lunco_core_session::MAX_PORT_INPUT_WRITES_PER_TARGET
+        ));
+    }
+    if writes
+        .iter()
+        .map(|(name, _)| name)
+        .collect::<std::collections::HashSet<_>>()
+        .len()
+        != writes.len()
+    {
+        return Err("SetPorts port names must be unique per target".to_owned());
+    }
+    if writes.iter().any(|(name, _)| name.trim().is_empty()) {
+        return Err("SetPorts input-port names must not be empty".to_owned());
+    }
+    let label = world
+        .get::<Name>(target)
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| format!("{target:?}"));
+    let has_port_surface = !registry.entity_port_owners(world, target).is_empty();
+    let global_id = world.get::<GlobalEntityId>(target).copied();
+    let mut prepared = Vec::with_capacity(writes.len());
+    for (port, value) in writes {
+        match registry.prepare_input_write(world, target, port, *value) {
+            Ok(write) => prepared.push(write),
+            Err(error) => {
+                if matches!(
+                    error.kind,
+                    lunco_port_core::ports::PortWriteErrorKind::UnknownInput
+                ) && has_port_surface
+                {
+                    let inserted =
+                        world
+                            .resource_mut::<CosimDiagnostics>()
+                            .record_fault(BrokenConnection {
+                                entity: target,
+                                global_id,
+                                port: Arc::from(port.as_str()),
+                                has_port_surface: true,
+                                dropped_value: *value,
+                                failure: Some(error.to_string()),
+                            });
+                    if inserted {
+                        warn!(
+                            "[cosim] SetPorts rejected input '{}' on {} ({:?}): {error}",
+                            port, label, target,
+                        );
+                    }
+                }
+                let message = if matches!(
+                    error.kind,
+                    lunco_port_core::ports::PortWriteErrorKind::UnknownInput
+                ) && !has_port_surface
+                {
+                    format!("{label} has no writable input-port surface")
+                } else {
+                    error.to_string()
+                };
+                return Err(message);
+            }
+        }
+    }
+    Ok(prepared)
+}
+
+fn apply_port_input_writes(
+    world: &mut World,
+    registry: &lunco_port_core::ports::PortRegistry,
+    target: Entity,
+    writes: &[(String, f64)],
+) -> Result<(), (String, lunco_api_core::ApiErrorCode)> {
+    validate_port_input_target_state(world, target)?;
+    let prepared = validate_port_input_writes(world, registry, target, writes)
+        .map_err(|message| (message, lunco_api_core::ApiErrorCode::CommandRejected))?;
+    apply_validated_port_input_writes(world, registry, prepared)
 }
 
 fn on_commit_session_input_ports(
@@ -1423,10 +1854,17 @@ fn on_commit_session_input_ports(
 ) {
     let commit = trigger.event();
     let payload = commit.record().payload.clone();
-    let target = commit.target();
+    let targets = commit.targets().to_vec();
     let target_gid = commit.record().target;
     let registry = registry.clone();
     commands.queue(move |world: &mut World| {
+        let Some(&target) = targets.first() else {
+            world.trigger(lunco_core::RuntimeError {
+                name: "cosim-session-input".to_owned(),
+                message: "committed port input has no resolved target".to_owned(),
+            });
+            return;
+        };
         let result = match payload {
             lunco_core_session::SessionInputPayload::PortInputWrites {
                 writes,
@@ -1434,6 +1872,19 @@ fn on_commit_session_input_ports(
             } => apply_port_input_writes(world, &registry, target, &writes).map_err(
                 |(message, _error_code)| (correlation_id, "SetPorts", message),
             ),
+            lunco_core_session::SessionInputPayload::PortInputTransaction {
+                batches,
+                correlation_id,
+            } => {
+                let ordered_batches = batches
+                    .into_iter()
+                    .map(|batch| (batch.target, batch.writes))
+                    .collect::<Vec<_>>();
+                apply_port_input_transaction(world, &registry, &targets, &ordered_batches)
+                    .map_err(|(message, _error_code)| {
+                        (correlation_id, "SetPortsBatch", message)
+                    })
+            }
             lunco_core_session::SessionInputPayload::PortInputRelease {
                 name,
                 correlation_id: _,
@@ -1588,7 +2039,8 @@ fn admit_lifecycle_control_release(world: &mut World, target: Entity) -> Result<
             .get_resource::<lunco_core::SceneTransitionCoordinator>()
             .and_then(lunco_core::SceneTransitionCoordinator::completed_generation)
             .ok_or_else(|| {
-                "lifecycle control release admission requires a committed scene generation".to_owned()
+                "lifecycle control release admission requires a committed scene generation"
+                    .to_owned()
             })?;
         let effective_tick = world
             .get_resource::<lunco_core_runtime::SimTick>()
@@ -1598,7 +2050,8 @@ fn admit_lifecycle_control_release(world: &mut World, target: Entity) -> Result<
             .ok_or_else(|| "lifecycle control release effective tick exhausted".to_owned())?;
         if !world.contains_resource::<lunco_control_core::SimulationInputOrderAllocator>() {
             return Err(
-                "lifecycle control release admission requires the shared input-order allocator".to_owned(),
+                "lifecycle control release admission requires the shared input-order allocator"
+                    .to_owned(),
             );
         }
         if !world.contains_resource::<lunco_core_session::PendingSessionInputs>() {
@@ -1635,7 +2088,12 @@ fn fail_session_input_capture(world: &mut World, message: String) {
     }
 }
 
-register_commands!(on_set_ports, on_release_port, on_release_control);
+register_commands!(
+    on_set_ports,
+    on_set_ports_batch,
+    on_release_port,
+    on_release_control
+);
 
 #[cfg(test)]
 mod control_intent_tests {
@@ -1652,11 +2110,7 @@ mod control_intent_tests {
         errors.0.push(trigger.event().name.clone());
     }
 
-    fn install_session_input_state(
-        app: &mut App,
-        with_committed_scene: bool,
-        recording: bool,
-    ) {
+    fn install_session_input_state(app: &mut App, with_committed_scene: bool, recording: bool) {
         app.init_resource::<lunco_core_session::PendingSessionInputs>()
             .init_resource::<lunco_control_core::SimulationInputOrderAllocator>()
             .insert_resource(lunco_core_runtime::SimTick(40));
@@ -1699,16 +2153,14 @@ mod control_intent_tests {
         app.world_mut()
             .resource_mut::<PortHolds>()
             .hold(target, "throttle", 0.25);
-        app.world_mut()
-            .resource_scope(|world, mut pending: Mut<lunco_core_session::PendingSessionInputs>| {
-                let mut order = world
-                    .resource_mut::<lunco_control_core::SimulationInputOrderAllocator>();
+        app.world_mut().resource_scope(
+            |world, mut pending: Mut<lunco_core_session::PendingSessionInputs>| {
+                let mut order =
+                    world.resource_mut::<lunco_control_core::SimulationInputOrderAllocator>();
                 pending
                     .admit(
                         &mut order,
-                        lunco_core_session::SessionInputProducer::DirectCommand {
-                            producer_id: 7,
-                        },
+                        lunco_core_session::SessionInputProducer::DirectCommand { producer_id: 7 },
                         GlobalEntityId::from_raw(42),
                         1,
                         41,
@@ -1719,7 +2171,8 @@ mod control_intent_tests {
                         None,
                     )
                     .expect("earlier live write is admitted to the shared input queue");
-            });
+            },
+        );
 
         app.world_mut().trigger(ReleaseControlInputs { target });
         app.world_mut().flush();
@@ -1740,12 +2193,18 @@ mod control_intent_tests {
             0.25,
             "admission must not mutate endpoint values"
         );
-        assert!(app.world().resource::<PortHolds>().get(target, "throttle").is_some());
-        assert!(app
-            .world()
-            .resource::<lunco_core_session::SessionInputStream>()
-            .records()
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<PortHolds>()
+                .get(target, "throttle")
+                .is_some()
+        );
+        assert!(
+            app.world()
+                .resource::<lunco_core_session::SessionInputStream>()
+                .records()
+                .is_empty()
+        );
 
         app.world_mut()
             .resource_mut::<lunco_core_runtime::SimTick>()
@@ -1806,10 +2265,12 @@ mod control_intent_tests {
             stream.state(),
             lunco_core_session::SessionInputStreamState::Failed
         );
-        assert!(stream
-            .failure()
-            .unwrap()
-            .contains("committed scene generation"));
+        assert!(
+            stream
+                .failure()
+                .unwrap()
+                .contains("committed scene generation")
+        );
         assert!(stream.records().is_empty());
         let inputs = app
             .world()
@@ -1859,7 +2320,13 @@ mod control_intent_tests {
             .unwrap();
         assert_eq!(inputs.cmd("throttle"), 0.6);
         assert_eq!(inputs.cmd("brake"), 0.2);
-        assert_eq!(app.world().get::<lunco_port_core::Port>(actuator).unwrap().value, 0.6);
+        assert_eq!(
+            app.world()
+                .get::<lunco_port_core::Port>(actuator)
+                .unwrap()
+                .value,
+            0.6
+        );
         assert!(app.world().resource::<PortHolds>().is_empty());
     }
 
@@ -1921,5 +2388,4 @@ mod control_intent_tests {
             "a solver synchronization barrier must not discard a control intent"
         );
     }
-
 }

@@ -28,6 +28,7 @@ use lunco_api::queries::{
     ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, ApiVisibility,
 };
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value, api_value_from_serializable};
+use std::collections::BTreeMap;
 
 fn query_ok(value: ApiValue) -> ApiQueryResult {
     Ok(Some(value))
@@ -66,445 +67,478 @@ fn push_completion(
     }
 }
 
-/// World-bridge built-in verbs: `(name, signature, returns, doc)`. Hand-kept in
-/// step with the registrations in `world_bridge::build_world_engine` (and the
-/// language-neutral logic in `bridge_core`). Same surface in every backend.
-const VERBS: &[(&str, &str, &str, &str)] = &[
+#[derive(Clone)]
+struct NativeVerbEntry {
+    name: String,
+    signature: String,
+    returns: String,
+    doc: Option<&'static str>,
+}
+
+/// Derive native call signatures from the exact Engine registration path used
+/// to build scenario runtimes. Human descriptions remain curated by name, but
+/// a documented verb with no runtime registration is an authoring-catalog
+/// error instead of a stale callable claim.
+fn native_verb_entries() -> Result<Vec<NativeVerbEntry>, ApiQueryError> {
+    let mut entries = Vec::new();
+    let mut documented = BTreeMap::new();
+    for (name, returns, doc) in VERB_DOCS {
+        if documented.insert(*name, (*returns, *doc)).is_some() {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                format!("duplicate Rhai verb documentation for `{name}`"),
+            ));
+        }
+    }
+
+    for signature in lunco_scripting_rhai_world::world_bridge::world_native_function_signatures() {
+        let Some((name, _)) = signature.split_once('(') else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                format!("Rhai runtime registered a malformed function signature `{signature}`"),
+            ));
+        };
+        if name.contains("::") {
+            continue;
+        }
+        let (returns, doc) = documented
+            .get(name)
+            .copied()
+            .map(|(returns, doc)| (returns.to_owned(), Some(doc)))
+            .unwrap_or_else(|| {
+                let return_type = signature
+                    .rsplit_once(" -> ")
+                    .map_or("()", |(_, return_type)| return_type);
+                (return_type.to_owned(), None)
+            });
+        entries.push(NativeVerbEntry {
+            name: name.to_owned(),
+            signature: signature.clone(),
+            returns,
+            doc,
+        });
+    }
+
+    entries.sort_unstable_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.signature.cmp(&right.signature))
+    });
+    entries.dedup_by(|left, right| left.name == right.name && left.signature == right.signature);
+
+    let registered_names = entries
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    if let Some((missing, _, _)) = VERB_DOCS
+        .iter()
+        .find(|(name, _, _)| !registered_names.contains(name))
+    {
+        return Err(ApiQueryError::new(
+            ApiErrorCode::InternalError,
+            format!("documented Rhai verb `{missing}` has no runtime registration"),
+        ));
+    }
+    Ok(entries)
+}
+
+/// Curated descriptions and product return-type labels for public native
+/// verbs. Callable signatures are read from the runtime registration schema.
+const VERB_DOCS: &[(&str, &str, &str)] = &[
     (
         "cmd",
-        "cmd(name, #{params})",
         "#{ id: u64, ok, status, data, error }",
         "WRITE. Fire a command by name through ApiCommandEvent — every #[Command] is reachable with no per-command binding. `status` is applied, rejected, failed, or pending; `data` carries command-specific result data (a spawned gid, stdout, etc.). Use command_result(id) when a deferred owner has not finished yet.",
     ),
     (
         "command_result",
-        "command_result(id: u64)",
         "#{ id, ok, status, data, error }",
         "READ. Get the shared terminal result of a prior cmd() call. Deferred commands remain status=pending until their owner records applied, rejected, or failed; do not treat acceptance as applied.",
     ),
     (
         "get",
-        "get(id, \"Component.field\")",
         "value | ()",
         "READ. Generic reflection read of a live component field. Vectors come back as [x,y,z] arrays; () if absent.",
     ),
     (
         "set",
-        "set(id, \"Component.field\", value)",
         "bool",
         "LOCAL WRITE. The mirror of get(): write a supported value straight onto a reflected component field (native → reflect, no JSON). This is host-side tuning, not the authoritative/replicated/undoable command bus; it is authority-gated and false on bad path/type.",
     ),
     (
         "get_setting",
-        "get_setting(\"Resource.field\")",
         "value | ()",
         "READ. Reflection read of a global Resource field — settings/config live in resources, not components. () if absent.",
     ),
     (
         "get_twin_setting",
-        "get_twin_setting(\"namespace.key\")",
         "value | ()",
         "READ. Read a scalar project-owned setting from the active Twin manifest. () when the Twin or key is absent.",
     ),
     (
         "get_exposure",
-        "get_exposure(\"namespace\", \"property\")",
         "value | ()",
         "READ. Read one raw scalar from the generic engine exposure registry. Presentation policy belongs in Rhai; () means the producer or property is unavailable.",
     ),
     (
         "input_binding",
-        "input_binding(\"forward\")",
         "string | ()",
         "READ. Resolve a semantic input binding from the active user settings. Tutorials use this for current labels; () means the intent is unbound.",
     ),
     (
         "set_setting",
-        "set_setting(\"Resource.field\", value)",
         "bool",
         "LOCAL WRITE. The resource twin of set(): tune a supported reflect-registered Resource field from a host-authoritative scenario. Use cmd() for authoritative, replicated, or undoable changes. false on bad path/type.",
     ),
     (
         "set_twin_setting",
-        "set_twin_setting(\"namespace.key\", value)",
         "bool",
         "WRITE. Persist a scalar project-owned setting on the active Twin through SetTwinSetting. false when no Twin is active or the key/value is invalid.",
     ),
     (
         "query",
-        "query(name, #{params})",
         "value | ()",
-        "READ. Invoke a registered ApiQueryProvider by name (Raycast, Nearest, …). Successful data is returned directly; no-data is (); failures return #{ok:false,error}.",
+        "READ. Invoke a registered ApiQueryProvider by name (Raycast, Nearest, …). Successful data is returned directly; no-data is (); failures return #{ok:false,status,code,error}, where status distinguishes not_found, invalid, unauthorized, rejected, and failed.",
     ),
     (
         "vadd",
-        "vadd(a, b)",
         "Vec3 | [x,y,z] | ()",
         "Pure vector addition. Native Vec3 operands stay in glam; array operands retain the compatibility contract.",
     ),
     (
         "vsub",
-        "vsub(a, b)",
         "Vec3 | [x,y,z] | ()",
         "Pure vector subtraction; native Vec3 operands avoid an array round-trip.",
     ),
     (
         "vcross",
-        "vcross(a, b)",
         "Vec3 | [x,y,z] | ()",
         "Pure vector cross product; native Vec3 operands stay in glam.",
     ),
     (
         "vscale",
-        "vscale(a, scalar)",
         "Vec3 | [x,y,z] | ()",
         "Pure vector scaling; native Vec3 operands are checked in Rust.",
     ),
     (
         "vlen",
-        "vlen(a)",
         "f64 | ()",
         "Pure vector length (native Vec3 or array).",
     ),
     (
         "norm_squared",
-        "norm_squared(v)",
         "f64 | ()",
         "Pure squared Euclidean norm of one vector (native Vec3 or array).",
     ),
     (
         "vdot",
-        "vdot(a, b)",
         "f64 | ()",
         "Pure vector dot product (native Vec3 or array).",
     ),
     (
         "vnorm",
-        "vnorm(a)",
         "Vec3 | [x,y,z] | ()",
         "Pure checked normalization; native Vec3 stays native.",
     ),
     (
         "vec3",
-        "vec3(x, y, z)",
         "Vec3",
         "Construct a finite native glam DVec3. Invalid values are a script error.",
     ),
     (
         "vec3_from",
-        "vec3_from(value)",
         "Vec3",
         "Admit either a finite Vec3 or a three-element array into the native math path; malformed input is an error.",
     ),
     (
         "vec3_array",
-        "vec3_array(value)",
         "[x,y,z]",
         "Explicitly lower a native Vec3 at a report/command boundary.",
     ),
     (
         "quat",
-        "quat(x, y, z, w)",
         "Quat",
         "Construct and normalize a finite native glam DQuat. Zero-length input is an error.",
     ),
     (
         "quat_from",
-        "quat_from(value)",
         "Quat",
         "Admit either a finite Quat or an xyzw array into the native orientation path.",
     ),
     (
         "quat_array",
-        "quat_array(value)",
         "[x,y,z,w]",
         "Explicitly lower a native Quat at a report/command boundary.",
     ),
     (
         "quat_from_euler_xyz_deg",
-        "quat_from_euler_xyz_deg(Vec3)",
         "Quat",
         "Build a native Quat from USD rotateXYZ degrees using the shared Rust Euler convention.",
     ),
     (
         "quat_to_euler_xyz_deg",
-        "quat_to_euler_xyz_deg(Quat)",
         "Vec3",
         "Decompose a native Quat into the shared USD rotateXYZ degree convention.",
     ),
+    ("quat_inverse", "Quat", "Checked native quaternion inverse."),
     (
-        "quat_inverse",
-        "quat_inverse(Quat)",
-        "Quat",
-        "Checked native quaternion inverse.",
+        "coordinate_transform",
+        "CoordinateTransform",
+        "Bind a rigid Transform to explicit source and target frame identities. Frame scale is rejected; convert units separately.",
     ),
     (
-        "clamp",
-        "clamp(value, lo, hi)",
-        "f64",
-        "Finite-safe scalar clamp.",
+        "framed_position",
+        "FramedPosition",
+        "Tag a finite native Vec3 position with the coordinate frame in which it is expressed.",
     ),
+    (
+        "framed_pose",
+        "FramedPose",
+        "Tag a finite Transform with the coordinate frame in which it is expressed.",
+    ),
+    (
+        "transform_position_between_frames",
+        "FramedPosition",
+        "Convert a framed position through a CoordinateTransform; mismatched frame identities are errors.",
+    ),
+    (
+        "transform_pose_between_frames",
+        "FramedPose",
+        "Convert a framed pose through a CoordinateTransform; mismatched frame identities are errors.",
+    ),
+    (
+        "compose_coordinate_transforms",
+        "CoordinateTransform",
+        "Compose two frame transforms when the first target frame equals the next source frame.",
+    ),
+    (
+        "inverse_coordinate_transform",
+        "CoordinateTransform",
+        "Reverse a rigid coordinate mapping while swapping its source and target frames.",
+    ),
+    ("clamp", "f64", "Finite-safe scalar clamp."),
     (
         "qrot",
-        "qrot(quaternion, vector)",
         "Vec3 | [x,y,z] | ()",
         "Rotate a vector by a native Quat or xyzw array; mixed/array calls retain the array form.",
     ),
     (
         "angle_deg",
-        "angle_deg(a, b)",
         "f64 | ()",
         "Unsigned angle between directions in degrees.",
     ),
     (
         "yaw_delta_deg",
-        "yaw_delta_deg(previous, current)",
         "f64 | ()",
         "Signed per-step heading delta in degrees.",
     ),
     (
         "world_pos",
-        "world_pos(id)",
         "[x, y, z] | ()",
         "f64 position in the active simulation frame (site-local on a surface); stable across camera recentering and celestial ancestor motion.",
     ),
     (
         "world_pos3",
-        "world_pos3(id)",
         "Vec3 | ()",
         "Native glam position for hot-loop geometry/control code; use vec3_array only when emitting a wire/report value.",
     ),
     (
         "nav_command",
-        "nav_command(id, target, speed, radius)",
         "#{ throttle, steer, brake, arrived } | ()",
         "Compute one authored-capability-aware navigation command through the shared host law; () means the authoritative pose or steering geometry is unavailable and the caller must hold brake.",
     ),
     (
         "usd_document_generation",
-        "usd_document_generation(doc_id: u64)",
         "u64 | ()",
         "Read the authoritative USD document generation as a cheap structural invalidation clock; perform detailed topology queries only after it changes.",
     ),
     (
         "geolocation",
-        "geolocation(id)",
         "#{lat, lon, height} | ()",
         "Where on the BODY an entity is — lat/lon in degrees, height in metres (body datum). Works for any positioned entity, including route points, masts, and markers. () when the scene has no SiteAnchor.",
     ),
     (
         "world_forward",
-        "world_forward(id)",
         "[x, y, z] | ()",
         "Unit forward/heading vector in the active simulation frame.",
     ),
     (
         "world_forward3",
-        "world_forward3(id)",
         "Vec3 | ()",
         "Native glam heading for hot-loop geometry/control code.",
     ),
     (
         "world_rotation",
-        "world_rotation(id)",
         "[x, y, z, w] | ()",
         "Orientation quaternion in the active simulation frame. Derive any axis rhai-side (up/forward/right = quat * unit); feeds tilt/tip-over checks.",
     ),
     (
         "world_rotation_quat",
-        "world_rotation_quat(id)",
         "Quat | ()",
         "Native glam orientation for hot-loop geometry/control code; array world_rotation remains the compatibility/report form.",
     ),
     (
         "find",
-        "find(name)",
         "id (i64)",
         "Entity id with the given canonical Name, or -1 if none.",
     ),
     (
         "name",
-        "name(id)",
         "string | ()",
         "The entity's human-readable presentation label; QueryEntity supplies the canonical USD path.",
     ),
     (
         "parent",
-        "parent(id)",
         "id | ()",
         "Parent entity id, or () if no parent / parent unregistered.",
     ),
     (
         "children",
-        "children(id)",
         "[id, ...]",
         "Direct, registered child entity ids (empty if none).",
     ),
     (
         "owner_of",
-        "owner_of(id)",
         "i64 | ()",
         "READ. Session currently controlling the entity, if any.",
     ),
     (
         "controller",
-        "controller(id)",
         "string | ()",
         "READ. Role of the current controller, if any.",
     ),
     (
         "is_controlled",
-        "is_controlled(id)",
         "bool",
         "READ. Whether a control session currently owns the entity.",
     ),
     (
         "list_entities",
-        "list_entities()",
         "[#{ id, name, type, pos, catalog_id, input_surface, control_bound, celestial_body }]",
         "Every registered entity with display metadata; `catalog_id` is empty when the entity was not catalog-spawned and `input_surface` reports the authoritative InputPorts readiness.",
     ),
     (
         "add",
-        "add(id, \"Comp\", #{fields})",
         "bool",
         "STRUCTURAL. Insert/replace a reflected component, built from its default + the field map (native → reflect). The C of CRUD; requires the type to register ReflectDefault. false on bad entity/type/field.",
     ),
     (
         "remove",
-        "remove(id, \"Comp\")",
         "bool",
         "STRUCTURAL. Strip a reflected component from an entity. false if absent.",
     ),
     (
         "despawn",
-        "despawn(id)",
         "bool",
         "STRUCTURAL. Despawn an entity (+ children); replicates on a networked host. Runtime SPAWN has no generic verb — use cmd(\"SpawnEntity\", #{entry_id, position}) so clients can reconstruct from the catalog.",
     ),
     (
         "emit",
-        "emit(name, value?)",
         "bool",
         "Fire a TelemetryEvent on the shared bus; an active scenario receives it on its next eligible pass (fixed Simulation, or paused Lifecycle). The event keeps its producer tick stamp; execution_context() describes the consumer pass. `value` may be a scalar, array, or map and keeps its typed structure.",
     ),
     (
         "bind_policy",
-        "bind_policy(id, entry, source)",
         "#{ id, ok, status, value, error }",
         "PRIVILEGED POLICY. Compile and install an inline Rhai policy into an installable hook seam; requires Operator authority. A rejected replacement removes the old implementation.",
     ),
     (
         "unbind_policy",
-        "unbind_policy(id)",
         "#{ id, ok, status, value, error }",
         "PRIVILEGED POLICY. Remove exactly the installed policy implementation; it never restores a hidden fallback. Requires Operator authority.",
     ),
     (
         "invoke_hook",
-        "invoke_hook(id, [args])",
         "#{ id, ok, status, value, error }",
         "READ. Invoke a reflected hook with native Rhai values. `status=unavailable` means no implementation; `status=fault` means an installed policy failed.",
     ),
     (
         "list_hooks",
-        "list_hooks()",
         "[#{id, owner, description, input, output, policy_file, policy_entry, deterministic, required, installable, declared, installed, backend}]",
         "READ. Reflect every declared hook contract, authored policy binding, and current implementation. `input` and `output` describe the HookValue ABI accepted by invoke_hook.",
     ),
     (
         "policy_status",
-        "policy_status()",
         "#{scope, installed, failed, required_failures, error}",
         "READ. Report the last application/Twin policy-set transition, including source/compile failures and whether any failed policy was mandatory.",
     ),
     (
         "subscribe",
-        "subscribe(name)",
         "()",
         "OPTIONAL, call in on_start to filter this scenario's on_event deliveries by exact name. With no subscribe calls, all event names are delivered. Subscriptions affect event selection only; they do not select an execution cycle.",
     ),
     (
         "subscribe_prefix",
-        "subscribe_prefix(prefix)",
         "()",
         "OPTIONAL, call in on_start to include events with this name prefix (e.g. \"enter:\"). Prefix and exact-name subscriptions combine; they do not select an execution cycle.",
     ),
     (
         "sim_tick",
-        "sim_tick()",
         "i64",
         "Current admitted simulation tick; calling outside the simulation cycle raises a Rhai invocation error.",
     ),
     (
+        "solver_configuration_fingerprint",
+        "u64 | ()",
+        "READ. Fingerprint of the live fixed-step and Avian solver clock profile. Scene and body configuration are identified by their owning document/provider generations.",
+    ),
+    (
         "dt",
-        "dt()",
         "f64",
         "Fixed-step integration delta in seconds — multiply rates by this. Calling outside the simulation cycle raises a Rhai invocation error.",
     ),
     (
         "elapsed_seconds",
-        "elapsed_seconds()",
         "f64",
         "Admitted simulation seconds derived from SimTick; excludes scheduler overstep while a causal barrier is held. Calling outside the simulation cycle raises a Rhai invocation error.",
     ),
     (
         "clock_snapshot",
-        "clock_snapshot()",
         "map",
         "READ. Snapshot of fixed, virtual, physics, mission, wall, clock-tree, transport, and co-simulation clocks. `sim_tick` is the deterministic master; wall time is diagnostic-only.",
     ),
     (
         "execution_context",
-        "execution_context()",
         "map",
         "READ. The cycle owner's scope, cycle, phase, clock sample, logical sequence, and optional event producer sequence. Nested Rhai calls inherit this context.",
     ),
     (
         "param",
-        "param(id, key, default?)",
         "f64 | ()",
         "READ. Read the authored USD `lunco:param:<key>` value from ScriptParams.",
     ),
     (
         "twin_root",
-        "twin_root()",
         "string",
         "READ. Absolute root of the active Twin, or an empty string.",
     ),
     (
         "twin_name",
-        "twin_name()",
         "string",
         "READ. Stable twin:// authority of the active Twin, or an empty string.",
     ),
     (
         "asset_source_relative_uri",
-        "asset_source_relative_uri(document, relative)",
         "string | error",
         "READ. Resolve a safe document-relative asset while preserving the document's registered source authority (for example, twin://name). This is URI algebra only; it does not read files.",
     ),
     (
         "is_unattended",
-        "is_unattended()",
         "bool",
         "READ. Whether the current run has no interactive controller.",
     ),
     (
         "rand",
-        "rand()",
         "f64",
         "Uniform [0,1). DETERMINISTIC — seeded per hook from (entity, tick, hook), so identical on every networked peer and every replay. Use this, never an OS/wall-clock source.",
     ),
     (
         "rand_range",
-        "rand_range(lo, hi)",
         "f64",
         "Deterministic uniform float in [lo, hi).",
     ),
     (
         "rand_int",
-        "rand_int(lo, hi)",
         "i64",
         "Deterministic uniform integer in [lo, hi) (half-open).",
     ),
@@ -677,16 +711,24 @@ impl ApiQueryProvider for ScriptCompleteProvider {
             }
         };
         let mut candidates: Vec<(String, ApiValue)> = Vec::new();
-        for (name, signature, _, doc) in VERBS {
+        let mut verbs_by_name: BTreeMap<String, (Vec<String>, Option<&'static str>)> =
+            BTreeMap::new();
+        for entry in native_verb_entries()? {
+            let group = verbs_by_name
+                .entry(entry.name)
+                .or_insert_with(|| (Vec::new(), entry.doc));
+            group.0.push(entry.signature);
+        }
+        for (name, (signatures, doc)) in verbs_by_name {
             push_completion(
                 &mut candidates,
                 &prefix,
-                (*name).to_owned(),
+                name.clone(),
                 api_value!({
-                    "label": *name,
+                    "label": name,
                     "kind": "verb",
-                    "detail": *signature,
-                    "documentation": *doc,
+                    "detail": signatures.join(" | "),
+                    "documentation": doc,
                 }),
             );
         }
@@ -875,10 +917,15 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
 
     fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         // Built-in verbs + hooks (static).
-        let verbs: Vec<ApiValue> = VERBS
-            .iter()
-            .map(|(name, signature, returns, doc)| {
-                api_value!({ "name": *name, "signature": *signature, "returns": *returns, "doc": *doc })
+        let verbs: Vec<ApiValue> = native_verb_entries()?
+            .into_iter()
+            .map(|entry| {
+                api_value!({
+                    "name": entry.name,
+                    "signature": entry.signature,
+                    "returns": entry.returns,
+                    "doc": entry.doc,
+                })
             })
             .collect();
         let hooks: Vec<ApiValue> = HOOKS
@@ -934,4 +981,29 @@ pub fn register_queries(app: &mut App) {
     app.world_mut()
         .resource_mut::<ApiQueryRegistry>()
         .register(ScriptCompleteProvider);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_catalog_signatures_come_from_live_registrations() {
+        let entries = native_verb_entries().expect("every documented verb is registered");
+        assert!(entries.iter().any(|entry| {
+            entry.name == "coordinate_transform"
+                && entry.signature.starts_with("coordinate_transform(")
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.name == "solver_configuration_fingerprint"
+                && entry
+                    .signature
+                    .starts_with("solver_configuration_fingerprint(")
+        }));
+        assert!(
+            entries
+                .iter()
+                .all(|entry| !entry.signature.contains("signature("))
+        );
+    }
 }

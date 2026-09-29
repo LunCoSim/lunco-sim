@@ -35,6 +35,7 @@ pub(crate) enum VerificationRunOutcome {
     Passed,
     Failed,
     Inconclusive,
+    Unverified,
     Error,
     Cancelled,
     NoVerdict,

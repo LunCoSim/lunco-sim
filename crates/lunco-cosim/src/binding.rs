@@ -72,7 +72,9 @@ fn seed_bound_connection(world: &mut World, registry: &PortRegistry, spec: &SimC
         return false;
     };
     let value = source * spec.scale + spec.offset;
-    registry.write_port(world, spec.end_element, &spec.end_connector, value)
+    registry
+        .write_port(world, spec.end_element, &spec.end_connector, value)
+        .is_ok()
 }
 
 /// Every producer, including tests and runtime-created wheel edges, enters the
@@ -231,8 +233,24 @@ pub fn bind_connections(world: &mut World) {
             entity,
             global_id: world.get::<lunco_core::GlobalEntityId>(entity).copied(),
             port: Arc::from(port.as_str()),
-            has_port_surface: !registry.entity_ports(world, entity).is_empty(),
+            has_port_surface: !registry.entity_port_owners(world, entity).is_empty(),
             dropped_value: 0.0,
+            failure: Some(if !target_ok {
+                format!(
+                    "connection target input `{}` is not declared",
+                    spec.end_connector
+                )
+            } else {
+                let source_direction = if spec.start_is_input {
+                    "readable input"
+                } else {
+                    "output"
+                };
+                format!(
+                    "connection source `{}` has no matching {source_direction} contract",
+                    spec.start_connector
+                )
+            }),
         };
         let inserted = world
             .resource_mut::<CosimDiagnostics>()
@@ -263,6 +281,7 @@ mod tests {
     fn world_with_ports(target_port: &str) -> (World, Entity, Entity) {
         let mut world = World::new();
         world.init_resource::<PortRegistry>();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         world.init_resource::<BindingRevision>();
         world.init_resource::<CosimDiagnostics>();
         let source = world
@@ -507,7 +526,11 @@ mod tests {
         world.resource_mut::<BindingRevision>().seal_epoch();
         world.run_system_once(bind_connections).unwrap();
         let registry = world.resource::<PortRegistry>().clone();
-        registry.write_port(&mut world, target, "target", 9.0);
+        assert!(
+            registry
+                .write_port(&mut world, target, "target", 9.0)
+                .is_ok()
+        );
 
         world
             .get_mut::<InputPorts>(source)

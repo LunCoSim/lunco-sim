@@ -231,7 +231,9 @@ pub(crate) fn on_inspector_component_edit(
         InspectorComponentEdit::JointSetpoint { holder, value } => {
             commands.queue(move |world: &mut World| {
                 let registry = world.resource::<PortRegistry>().clone();
-                registry.write_port(world, holder, JOINT_ANGLE_PORT, value);
+                if let Err(error) = registry.write_port(world, holder, JOINT_ANGLE_PORT, value) {
+                    warn!("joint setpoint write rejected: {error}");
+                }
             });
         }
         InspectorComponentEdit::Anchor { entity, value } => {

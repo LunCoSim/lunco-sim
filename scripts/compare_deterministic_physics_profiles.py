@@ -40,13 +40,13 @@ def rover_state_records(trace: str) -> list[str]:
     return rover_payload.split(";")
 
 
-def raw_sim_tick(trace: str) -> str:
+def scenario_trace_tick(trace: str) -> str:
     try:
         tick = int(rover_state_records(trace)[0])
     except ValueError as error:
-        raise RuntimeError("Rhai state trace has an invalid simulation tick") from error
+        raise RuntimeError("Rhai state trace has an invalid scenario-relative tick") from error
     if tick < 0:
-        raise RuntimeError(f"Rhai state trace has negative simulation tick {tick}")
+        raise RuntimeError(f"Rhai state trace has negative scenario-relative tick {tick}")
     return str(tick)
 
 
@@ -56,16 +56,18 @@ def validate_startup_trace(output: str, label: str) -> None:
         raise RuntimeError(
             f"{label}: expected six Rhai lifecycle snapshots, found {len(lifecycle_traces)}"
         )
-    startup_tick = raw_sim_tick(lifecycle_traces[0])
+    startup_tick = scenario_trace_tick(lifecycle_traces[0])
     if startup_tick != "0":
-        raise RuntimeError(f"{label}: on_start ran at SimTick={startup_tick}, expected 0")
+        raise RuntimeError(
+            f"{label}: initial scenario trace used tick={startup_tick}, expected relative tick 0"
+        )
     behavior_traces = TICK_TRACE_PATTERN.findall(output)
     if not behavior_traces:
         raise RuntimeError(f"{label}: Rhai emitted no fixed behavior snapshots")
-    first_behavior_tick = raw_sim_tick(behavior_traces[0])
+    first_behavior_tick = scenario_trace_tick(behavior_traces[0])
     if first_behavior_tick != "1":
         raise RuntimeError(
-            f"{label}: first on_tick ran at SimTick={first_behavior_tick}, expected 1"
+            f"{label}: first on_tick ran at relative tick={first_behavior_tick}, expected 1"
         )
 
 
@@ -234,7 +236,7 @@ def canonical_physics_trace(
     observed_ticks: list[str] = []
     for trace in traces:
         records = rover_state_records(trace)
-        tick = raw_sim_tick(trace)
+        tick = scenario_trace_tick(trace)
         if tick not in expected_sample_ticks:
             continue
         observed_ticks.append(tick)
@@ -339,7 +341,7 @@ def canonical_modelica_trace(
     for trace in TICK_TRACE_PATTERN.findall(output):
         if "authoredTf=" not in trace:
             continue
-        tick = raw_sim_tick(trace)
+        tick = scenario_trace_tick(trace)
         if tick in physics_ticks:
             fine_ticks.add(tick)
     expected = {
@@ -364,7 +366,7 @@ def compare_scenario_matrix(
     for rover_count, scene_runs in runs.items():
         for label, _, _, output, _ in scene_runs:
             validate_startup_trace(output, label)
-    reference_ticks = [raw_sim_tick(trace) for trace in reference_traces]
+    reference_ticks = [scenario_trace_tick(trace) for trace in reference_traces]
     if len(reference_ticks) < 32 or len(set(reference_ticks)) != len(reference_ticks):
         raise RuntimeError(
             f"the {reference_rover_count}-rover Rhai scenario did not emit at least 32 unique "
@@ -760,7 +762,7 @@ def main() -> int:
         raise RuntimeError(
             f"expected one authored early physics snapshot per run ({counts})"
         )
-    early_tick = raw_sim_tick(early_traces[0][0])
+    early_tick = scenario_trace_tick(early_traces[0][0])
     if any(traces[0].split(";", 1)[0] != early_tick for traces in early_traces):
         raise RuntimeError("early physics snapshots were captured at different ticks")
     tick_traces = [
@@ -778,13 +780,13 @@ def main() -> int:
             f"expected at least 32 authored physics snapshots in the 20-rover runs "
             f"({counts})"
         )
-    tick_numbers = [[raw_sim_tick(trace) for trace in traces] for traces in tick_traces]
+    tick_numbers = [[scenario_trace_tick(trace) for trace in traces] for traces in tick_traces]
     if any(ticks != tick_numbers[0] for ticks in tick_numbers[1:]):
         raise RuntimeError("early physics snapshots were captured at different ticks")
-    serial_ticks = [raw_sim_tick(trace) for trace in serial_trace]
-    repeat_ticks = [raw_sim_tick(trace) for trace in repeat_trace]
-    default_ticks = [raw_sim_tick(trace) for trace in default_trace]
-    default_repeat_ticks = [raw_sim_tick(trace) for trace in default_repeat_trace]
+    serial_ticks = [scenario_trace_tick(trace) for trace in serial_trace]
+    repeat_ticks = [scenario_trace_tick(trace) for trace in repeat_trace]
+    default_ticks = [scenario_trace_tick(trace) for trace in default_trace]
+    default_repeat_ticks = [scenario_trace_tick(trace) for trace in default_repeat_trace]
     if any(
         ticks != serial_ticks
         for ticks in (repeat_ticks, default_ticks, default_repeat_ticks)

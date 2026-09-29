@@ -13,7 +13,7 @@ pub const MAX_SESSION_INPUT_RECORDS: usize = 65_536;
 pub const MAX_SESSION_INPUT_ARCHIVE_BYTES: usize = 16 * 1024 * 1024;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"LCSINP\0\0";
-const ARCHIVE_VERSION: u16 = 5;
+const ARCHIVE_VERSION: u16 = 6;
 const FIRST_ARCHIVE_VERSION: u16 = 1;
 const HEADER_BYTES: usize = 8 + 2 + 4 + 4;
 const MAX_ARCHIVE_PAYLOAD_BYTES: usize = MAX_SESSION_INPUT_ARCHIVE_BYTES - HEADER_BYTES;
@@ -80,6 +80,10 @@ enum ArchivePayload {
         correlation_id: u64,
     },
     ControlInputsReleased,
+    PortInputTransaction {
+        batches: Vec<crate::PortInputTargetWrites>,
+        correlation_id: u64,
+    },
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -171,6 +175,13 @@ impl From<&SessionInputRecord> for ArchiveRecord {
                 correlation_id,
             } => ArchivePayload::PortInputWrites {
                 writes: writes.clone(),
+                correlation_id: *correlation_id,
+            },
+            crate::SessionInputPayload::PortInputTransaction {
+                batches,
+                correlation_id,
+            } => ArchivePayload::PortInputTransaction {
+                batches: batches.clone(),
                 correlation_id: *correlation_id,
             },
             crate::SessionInputPayload::PortInputRelease {
@@ -278,6 +289,13 @@ impl From<ArchiveRecord> for SessionInputRecord {
                 correlation_id,
             } => crate::SessionInputPayload::PortInputWrites {
                 writes,
+                correlation_id,
+            },
+            ArchivePayload::PortInputTransaction {
+                batches,
+                correlation_id,
+            } => crate::SessionInputPayload::PortInputTransaction {
+                batches,
                 correlation_id,
             },
             ArchivePayload::PortInputRelease {
@@ -447,18 +465,25 @@ impl SessionInputCaptureArchive {
         }
         if version < 5
             && wire_records.iter().any(|record| {
-                matches!(
-                    &record.producer,
-                    ArchiveProducer::RuntimeLifecycle
-                ) || matches!(
-                    &record.payload,
-                    ArchivePayload::ControlInputRelease { .. }
-                        | ArchivePayload::ControlInputsReleased
-                )
+                matches!(&record.producer, ArchiveProducer::RuntimeLifecycle)
+                    || matches!(
+                        &record.payload,
+                        ArchivePayload::ControlInputRelease { .. }
+                            | ArchivePayload::ControlInputsReleased
+                    )
             })
         {
             return Err(format!(
                 "control-release records require session input archive version 5 or newer, got {version}"
+            ));
+        }
+        if version < 6
+            && wire_records.iter().any(|record| {
+                matches!(&record.payload, ArchivePayload::PortInputTransaction { .. })
+            })
+        {
+            return Err(format!(
+                "session input archive version {version} contains a version six transaction record variant"
             ));
         }
         if wire_records.len() != record_count {
@@ -547,8 +572,20 @@ fn estimated_encoded_record_bytes(record: &SessionInputRecord) -> usize {
         crate::SessionInputPayload::PortInputWrites { writes, .. } => writes
             .iter()
             .fold(FIXED_RECORD_BOUND + VARINT_BOUND, |total, (name, _)| {
-                add_text(total, name)
+                add_text(total, name).saturating_add(std::mem::size_of::<f64>())
             }),
+        crate::SessionInputPayload::PortInputTransaction { batches, .. } => {
+            batches
+                .iter()
+                .fold(FIXED_RECORD_BOUND + VARINT_BOUND, |total, batch| {
+                    batch.writes.iter().fold(
+                        total.saturating_add(VARINT_BOUND * 2),
+                        |total, (name, _)| {
+                            add_text(total, name).saturating_add(std::mem::size_of::<f64>())
+                        },
+                    )
+                })
+        }
         crate::SessionInputPayload::PortInputRelease { name, .. } => {
             add_text(FIXED_RECORD_BOUND, name)
         }
@@ -1010,9 +1047,11 @@ mod tests {
         for version in [3_u16, 4] {
             let mut bytes = encode_wire_records(std::slice::from_ref(&record));
             bytes[8..10].copy_from_slice(&version.to_le_bytes());
-            assert!(SessionInputCaptureArchive::from_bytes(&bytes)
-                .expect_err("earlier release records apply retired value-writing semantics")
-                .contains("require session input archive version 5"));
+            assert!(
+                SessionInputCaptureArchive::from_bytes(&bytes)
+                    .expect_err("earlier release records apply retired value-writing semantics")
+                    .contains("require session input archive version 5")
+            );
         }
     }
 
@@ -1049,9 +1088,11 @@ mod tests {
         let mut version_four = encode_wire_records(&[record]);
         version_four[8..10].copy_from_slice(&4_u16.to_le_bytes());
 
-        assert!(SessionInputCaptureArchive::from_bytes(&version_four)
-            .expect_err("version four lifecycle records imply value-writing behavior")
-            .contains("require session input archive version 5"));
+        assert!(
+            SessionInputCaptureArchive::from_bytes(&version_four)
+                .expect_err("version four lifecycle records imply value-writing behavior")
+                .contains("require session input archive version 5")
+        );
     }
 
     #[test]

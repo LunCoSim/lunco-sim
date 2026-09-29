@@ -80,6 +80,37 @@ API identities from `me` as well as signed ids returned by `find_path`. `name(id
 remains a human-readable presentation label and must not be used to construct
 scene paths.
 
+The scalar-port prelude provides `read_ports(entity)`,
+`read_ports_batch(entities)`, `write_ports(entity, writes)`,
+`write_ports_batch(batches)`, and `actuator_status(entity, command_port,
+measured_port, rate_port, tolerance, rate_tolerance)`. Port reads include the
+owner's unit, frame, limits, authority, and writability contract. Batch reads
+share one `sim_tick`; batch writes are admitted as one validated transaction.
+`actuator_status` reports settled only when both the target error and measured
+rate are within their supplied tolerances. Scripts select targets and decide
+how long to wait; the port owner supplies the measured state. All script port
+writes use `write_ports(...)`, so fixed-tick admission, ownership, metadata
+validation, and the command result contract are shared with other producers.
+`set(entity, component_field, value)` writes reflected component fields only; it
+does not resolve port names.
+
+Native geometric values can carry explicit coordinate-frame identities. Use
+`framed_position(frame, vec3(...))` or `framed_pose(frame, transform(...))` to
+tag a value, then pass a rigid mapping created by
+`coordinate_transform(source_frame, target_frame, transform(...))` to
+`transform_position_between_frames` or `transform_pose_between_frames`.
+`compose_coordinate_transforms` checks that adjacent frame IDs match, and
+`inverse_coordinate_transform` reverses a mapping. Coordinate mappings reject
+scale; callers must convert units explicitly. These operations do not infer a
+transform graph or guess a value's frame.
+
+SysML verification scripts pass observation windows through
+`sysml_sample_interval(#{clock, start_tick, end_tick})`. It validates the
+clock and non-negative integer ticks with the shared `SimulationSampleInterval`
+type, then returns canonical unsigned tick fields for evidence aggregation.
+This keeps Rhai integer representation details out of cross-provider interval
+comparison and preserves exact tick values.
+
 `name(id)` and the `name` field from `list_entities()` are presentation labels
 resolved from authored `ui:displayName`, catalog identity, or the `Name` leaf.
 Use the API id for machine identity and `QueryEntity` when a full USD path is

@@ -166,17 +166,15 @@ enum SetModelInputError {
         /// Raw document id.
         doc: u64,
     },
+    /// The shared runtime port registry is not installed by the host.
+    PortRegistryUnavailable {
+        /// Raw document id.
+        doc: u64,
+    },
     /// The input name is empty.
     EmptyInputName {
         /// Raw document id.
         doc: u64,
-    },
-    /// The runtime value is not finite.
-    NonFiniteValue {
-        /// Raw document id.
-        doc: u64,
-        /// The rejected input name.
-        name: String,
     },
     /// A declared shared port refused the write.
     PortWriteRejected {
@@ -184,6 +182,8 @@ enum SetModelInputError {
         doc: u64,
         /// The rejected input name.
         name: String,
+        /// Owner-provided validation detail.
+        reason: String,
     },
     /// The named input isn't declared on the model.
     UnknownInput {
@@ -224,14 +224,16 @@ impl SetModelInputError {
             Self::EntityMissingModel { doc } => {
                 format!("doc {doc}'s linked entity has no `ModelicaModel` component")
             }
+            Self::PortRegistryUnavailable { doc } => {
+                format!(
+                    "doc {doc} cannot write Modelica inputs because PortRegistry is not installed"
+                )
+            }
             Self::EmptyInputName { doc } => {
                 format!("doc {doc} Modelica input name must not be empty")
             }
-            Self::NonFiniteValue { doc, name } => {
-                format!("doc {doc} Modelica input `{name}` must have a finite value")
-            }
-            Self::PortWriteRejected { doc, name } => {
-                format!("doc {doc} declared Modelica input port `{name}` rejected the write")
+            Self::PortWriteRejected { doc, name, reason } => {
+                format!("doc {doc} Modelica input port `{name}` rejected the write: {reason}")
             }
             Self::UnknownInput {
                 doc,
@@ -314,11 +316,11 @@ pub fn execute_set_model_input(
 
     let (doc, entity) =
         resolve_model_input_target(world, doc_raw, target_gid).map_err(|error| error.message())?;
-    validate_model_input_target(world, doc.raw(), entity, name, value)
-        .map_err(|error| error.message())?;
     let target = world.get::<GlobalEntityId>(entity).copied();
 
     if let Some(target) = target.filter(|_| !deterministic_simulation_origin(origin)) {
+        validate_model_input_target(world, doc.raw(), entity, name, value)
+            .map_err(|error| error.message())?;
         let scene_generation = world
             .get_resource::<lunco_core::SceneTransitionCoordinator>()
             .and_then(lunco_core::SceneTransitionCoordinator::completed_generation)
@@ -470,30 +472,62 @@ fn validate_model_input_target(
     if name.trim().is_empty() {
         return Err(SetModelInputError::EmptyInputName { doc: doc_raw });
     }
-    if !value.is_finite() {
-        return Err(SetModelInputError::NonFiniteValue {
-            doc: doc_raw,
-            name: name.to_owned(),
-        });
-    }
-    let port_exists = world
-        .get_resource::<lunco_port_core::ports::PortRegistry>()
-        .is_some_and(|registry| registry.has_input_port(world, entity, name));
-    if port_exists {
-        return Ok(());
-    }
-    let Some(model) = world.get::<ModelicaModel>(entity) else {
+    if world.get::<ModelicaModel>(entity).is_none() {
         return Err(SetModelInputError::EntityMissingModel { doc: doc_raw });
-    };
-    if !model.inputs.contains_key(name) {
-        return Err(SetModelInputError::UnknownInput {
+    }
+    let registry = world
+        .get_resource::<lunco_port_core::ports::PortRegistry>()
+        .ok_or(SetModelInputError::PortRegistryUnavailable { doc: doc_raw })?;
+    registry
+        .prepare_input_write(world, entity, name, value)
+        .map(|_| ())
+        .map_err(|error| map_port_write_error(world, registry, entity, doc_raw, name, error))
+}
+
+fn map_port_write_error(
+    world: &World,
+    registry: &lunco_port_core::ports::PortRegistry,
+    entity: Entity,
+    doc_raw: u64,
+    name: &str,
+    error: lunco_port_core::ports::PortWriteError,
+) -> SetModelInputError {
+    if matches!(
+        &error.kind,
+        lunco_port_core::ports::PortWriteErrorKind::UnknownInput
+    ) {
+        let model_name = world
+            .get::<ModelicaModel>(entity)
+            .expect("SetModelInput target retains its ModelicaModel component")
+            .model_name
+            .clone();
+        let mut known_inputs = registry
+            .entity_port_infos(world, entity)
+            .into_iter()
+            .filter(|port| {
+                matches!(
+                    port.direction,
+                    lunco_port_core::ports::PortDirection::In
+                        | lunco_port_core::ports::PortDirection::InOut
+                )
+            })
+            .map(|port| port.name)
+            .collect::<Vec<_>>();
+        known_inputs.sort_unstable();
+        known_inputs.dedup();
+        SetModelInputError::UnknownInput {
             doc: doc_raw,
             name: name.to_owned(),
-            model_name: model.model_name.clone(),
-            known_inputs: model.inputs.keys().cloned().collect(),
-        });
+            model_name,
+            known_inputs,
+        }
+    } else {
+        SetModelInputError::PortWriteRejected {
+            doc: doc_raw,
+            name: name.to_owned(),
+            reason: error.to_string(),
+        }
     }
-    Ok(())
 }
 
 fn apply_model_input_to_entity(
@@ -503,51 +537,25 @@ fn apply_model_input_to_entity(
     name: &str,
     value: f64,
 ) -> Result<(), SetModelInputError> {
-    validate_model_input_target(world, doc_raw, entity, name, value)?;
-    // Port-first (doc 34, Decision 2). Route the write through the shared
-    // `PortRegistry` so it lands in `SimComponent.inputs` — the source of truth
-    // the co-sim sync (`sync_modelica_inputs`) copies into `ModelicaModel.inputs`
-    // every tick. A *direct* `ModelicaModel.inputs` write would be clobbered
-    // within one frame on any co-sim'd entity (wired lander, rover, …). Bare
-    // workbench / batch models have no registered port, so their authoritative
-    // input owner is the direct `ModelicaModel.inputs` state below (which also
-    // owns the friendly `UnknownInput` validation for the no-cosim case).
+    if name.trim().is_empty() {
+        return Err(SetModelInputError::EmptyInputName { doc: doc_raw });
+    }
+    if world.get::<ModelicaModel>(entity).is_none() {
+        return Err(SetModelInputError::EntityMissingModel { doc: doc_raw });
+    }
     let registry = world
         .get_resource::<lunco_port_core::ports::PortRegistry>()
-        .cloned();
-    let has_port = registry
-        .as_ref()
-        .is_some_and(|registry| registry.has_input_port(world, entity, name));
-    if has_port {
-        if !registry.is_some_and(|registry| registry.write_port(world, entity, name, value)) {
-            return Err(SetModelInputError::PortWriteRejected {
-                doc: doc_raw,
-                name: name.to_owned(),
-            });
-        }
-        bevy::log::debug!(
-            "[SetModelInput] doc={} {}={} (via port)",
-            doc_raw,
-            name,
-            value
-        );
-        return Ok(());
-    }
-
-    let Some(mut model) = world.get_mut::<ModelicaModel>(entity) else {
-        return Err(SetModelInputError::EntityMissingModel { doc: doc_raw });
-    };
-    if !model.inputs.contains_key(name) {
-        let known: Vec<String> = model.inputs.keys().cloned().collect();
-        return Err(SetModelInputError::UnknownInput {
-            doc: doc_raw,
-            name: name.to_string(),
-            model_name: model.model_name.clone(),
-            known_inputs: known,
-        });
-    }
-    model.inputs.insert(name.to_string(), value);
-    bevy::log::debug!("[SetModelInput] doc={} {}={}", doc_raw, name, value);
+        .cloned()
+        .ok_or(SetModelInputError::PortRegistryUnavailable { doc: doc_raw })?;
+    registry
+        .write_port(world, entity, name, value)
+        .map_err(|error| map_port_write_error(world, &registry, entity, doc_raw, name, error))?;
+    bevy::log::debug!(
+        "[SetModelInput] doc={} {}={} (via port)",
+        doc_raw,
+        name,
+        value
+    );
     Ok(())
 }
 
@@ -572,10 +580,19 @@ pub(crate) fn commit_session_input(
     let value = *value;
     let correlation_id = *correlation_id;
     commands.queue(move |world: &mut World| {
-        let doc_raw = world
+        let Some(doc_raw) = world
             .get_resource::<DocumentRegistry<ModelicaDocument>>()
             .and_then(|registry| registry.document_of(target))
-            .map_or(0, DocumentId::raw);
+            .map(DocumentId::raw)
+        else {
+            world.trigger(lunco_core::RuntimeError {
+                name: "modelica-session-input".to_owned(),
+                message: format!(
+                    "SetModelInput correlation {correlation_id} for target {target_gid} has no live Modelica document identity at its admitted tick"
+                ),
+            });
+            return;
+        };
         if let Err(error) = apply_model_input_to_entity(world, doc_raw, target, &name, value) {
             world.trigger(lunco_core::RuntimeError {
                 name: "modelica-session-input".to_owned(),
@@ -593,19 +610,22 @@ mod tests {
     use super::{SetModelInputError, apply_model_input_to_entity};
     use bevy::prelude::*;
     use lunco_modelica_runtime::ModelicaModel;
-    use lunco_port_core::ports::{PortBackend, PortDirection, PortRef, PortRegistry};
+    use lunco_port_core::ports::{
+        PortBackend, PortDeclaration, PortDirection, PortMetadata, PortRegistry,
+        PortTopologyRevision,
+    };
 
     #[test]
-    fn declared_port_write_failure_does_not_mutate_model_snapshot() {
-        fn list_declared_input(_world: &World, _entity: Entity, out: &mut Vec<PortRef>) {
-            out.push(PortRef {
+    fn non_writable_declared_port_rejects_without_mutating_model_snapshot() {
+        fn list_declared_input(_world: &World, _entity: Entity, out: &mut Vec<PortDeclaration>) {
+            out.push(PortDeclaration {
                 name: "throttle".to_owned(),
                 direction: PortDirection::In,
-                value: 0.0,
             });
         }
 
         let mut world = World::new();
+        world.insert_resource(PortTopologyRevision::default());
         let entity = world
             .spawn(ModelicaModel {
                 model_name: "RoverDrivetrain".to_owned(),
@@ -618,12 +638,28 @@ mod tests {
             list_entities: |_world, _out| {},
             topology_key: |_world, _entity| 1,
             list: list_declared_input,
-            metadata: None,
+            metadata: |_world, _entity, _name, direction| {
+                PortMetadata::scalar(
+                    direction,
+                    None,
+                    None,
+                    None,
+                    "Modelica input test",
+                    "test model",
+                    false,
+                    None,
+                )
+            },
             read_output: |_world, _entity, _name| None,
             read_input: |_world, _entity, _name| None,
-            write_input: |_world, _entity, _name, _value| false,
+            resolve_input: Some(|world, entity, name| {
+                (name == "throttle"
+                    && world
+                        .get::<ModelicaModel>(entity)
+                        .is_some_and(|model| model.inputs.contains_key(name)))
+                .then_some(0)
+            }),
             resolve_output: None,
-            resolve_input: None,
             read_slot: None,
             read_input_slot: None,
             write_slot: None,
@@ -631,17 +667,66 @@ mod tests {
         world.insert_resource(ports);
 
         let error = apply_model_input_to_entity(&mut world, 17, entity, "throttle", 0.75)
-            .expect_err("a declared port that rejects writes must fail visibly");
+            .expect_err("a declared non-writable port must fail visibly");
 
         assert!(matches!(
             error,
-            SetModelInputError::PortWriteRejected { doc: 17, ref name }
+            SetModelInputError::PortWriteRejected { doc: 17, ref name, .. }
                 if name == "throttle"
         ));
         assert_eq!(
             world.get::<ModelicaModel>(entity).unwrap().inputs["throttle"],
             0.0,
             "the rejected port write must not fall through to ModelicaModel.inputs"
+        );
+    }
+
+    #[test]
+    fn modelica_model_input_is_written_by_its_registered_port_owner() {
+        let mut world = World::new();
+        world.insert_resource(PortTopologyRevision::default());
+        let entity = world
+            .spawn(ModelicaModel {
+                model_name: "RoverDrivetrain".to_owned(),
+                inputs: [("throttle".to_owned(), 0.0)].into(),
+                ..Default::default()
+            })
+            .id();
+        let mut ports = PortRegistry::default();
+        super::super::model_ports::register_port_backend(&mut ports);
+        world.insert_resource(ports);
+
+        apply_model_input_to_entity(&mut world, 17, entity, "throttle", 0.75)
+            .expect("the Modelica port backend owns standalone model inputs");
+
+        assert_eq!(
+            world.get::<ModelicaModel>(entity).unwrap().inputs["throttle"],
+            0.75
+        );
+    }
+
+    #[test]
+    fn modelica_input_without_a_registered_owner_is_not_written_directly() {
+        let mut world = World::new();
+        world.insert_resource(PortTopologyRevision::default());
+        let entity = world
+            .spawn(ModelicaModel {
+                model_name: "RoverDrivetrain".to_owned(),
+                inputs: [("throttle".to_owned(), 0.0)].into(),
+                ..Default::default()
+            })
+            .id();
+        world.insert_resource(PortRegistry::default());
+
+        let error = apply_model_input_to_entity(&mut world, 17, entity, "throttle", 0.75)
+            .expect_err("writes require a published owner contract");
+
+        assert!(
+            matches!(error, SetModelInputError::UnknownInput { doc: 17, ref name, .. } if name == "throttle")
+        );
+        assert_eq!(
+            world.get::<ModelicaModel>(entity).unwrap().inputs["throttle"],
+            0.0
         );
     }
 }

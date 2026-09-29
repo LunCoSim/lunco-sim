@@ -51,7 +51,7 @@ use lunco_networking_core::session::{IncomingSnapshots, SnapshotSample};
 use lunco_spatial::ActivePhysicsFrame;
 
 use lunco_api::executor::{
-    authz_target_gid_value, globalize_command_ids_value, resolve_command_ids_value,
+    authz_target_gids_value, globalize_command_ids_value, resolve_command_ids_value,
 };
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api_codec::{value_from_json, value_to_json};
@@ -905,7 +905,7 @@ fn capture_command<C: Event + Reflect + TypePath>(
 /// the end of a frame's batch so a possession that arrives alongside them is
 /// recorded first (see [`drain_sync_inbox`]).
 fn is_control_command(type_name: &str) -> bool {
-    matches!(type_name, "SetPorts" | "ReleaseControl")
+    matches!(type_name, "SetPorts" | "SetPortsBatch" | "ReleaseControl")
 }
 
 fn is_declared_wire_command(channels: &SyncChannelRegistry, type_name: &str) -> bool {
@@ -953,12 +953,12 @@ pub fn apply_sync_command(
         // The gid to authorize against is the command's `#[authz_target]`
         // field (schema-driven), read from the raw global-gid wire params —
         // no hardcoded field name.
-        let target_gid = {
+        let target_gids = {
             let type_reg = type_registry.read();
             match type_reg.get_with_short_type_path(&ev.type_name) {
                 Some(registration) => {
-                    match authz_target_gid_value(&ev.params, registration.type_id(), &type_reg) {
-                        Ok(target_gid) => target_gid,
+                    match authz_target_gids_value(&ev.params, registration.type_id(), &type_reg) {
+                        Ok(target_gids) => target_gids,
                         Err(error) => {
                             warn!(
                                 "[sync] rejected malformed authorization target for '{}': {error}",
@@ -968,31 +968,49 @@ pub fn apply_sync_command(
                         }
                     }
                 }
-                None => None,
+                None => Vec::new(),
             }
         };
-        if let Err(reject) = authorize(
-            &session_registry,
-            &rbac,
-            &command_policies,
-            &control_paths,
-            ev.origin,
-            &ev.type_name,
-            target_gid,
-        ) {
+        let authorization = if target_gids.is_empty() {
+            authorize(
+                &session_registry,
+                &rbac,
+                &command_policies,
+                &control_paths,
+                ev.origin,
+                &ev.type_name,
+                None,
+            )
+        } else {
+            target_gids.iter().try_for_each(|target_gid| {
+                authorize(
+                    &session_registry,
+                    &rbac,
+                    &command_policies,
+                    &control_paths,
+                    ev.origin,
+                    &ev.type_name,
+                    Some(*target_gid),
+                )
+            })
+        };
+        if let Err(reject) = authorization {
             // Diagnostic: show the gid the command targets, who (if anyone) the
             // host thinks owns it, and the full ownership table — so a drive
             // rejected despite a successful possession reveals whether it's a
             // target/possession gid mismatch (articulated root vs clicked link)
             // or an empty/stale ownership table (registry desync).
-            let owner = target_gid.and_then(|g| session_registry.owner_of(g));
+            let owners = target_gids
+                .iter()
+                .map(|gid| (*gid, session_registry.owner_of(*gid)))
+                .collect::<Vec<_>>();
             warn!(
-                "[sync] rejected {} from {}: {:?} | target_gid={:?} current_owner={:?} owners={:?}",
+                "[sync] rejected {} from {}: {:?} | target_gids={:?} target_owners={:?} owners={:?}",
                 ev.type_name,
                 ev.origin,
                 reject,
-                target_gid,
-                owner,
+                target_gids,
+                owners,
                 session_registry.snapshot(),
             );
             return;

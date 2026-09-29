@@ -16,6 +16,7 @@ lunco-id = { path = "../lunco-id" }
 # Deterministic provenance hashing remains an identity concern of this ECS
 # component until that component is migrated as a whole.
 lunco-hash = { path = "../lunco-hash" }
+lunco-engineering-values = { path = "../lunco-engineering-values" }
 
 [lints]
 workspace = true

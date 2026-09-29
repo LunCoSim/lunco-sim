@@ -88,6 +88,9 @@ pub mod model_tabs_types;
 /// package browser. Value types live in `lunco-modelica-index`.
 pub mod package_tree;
 
+/// PortRegistry owner for standalone Modelica model inputs.
+mod model_ports;
+
 pub mod sim_default;
 /// Pure simulation-target & run-configuration resolution (which class to
 /// run, what bounds to run it with). No `World`/UI deps — the `ui/` layer
@@ -135,6 +138,7 @@ pub struct ModelicaCorePlugin;
 
 impl Plugin for ModelicaCorePlugin {
     fn build(&self, app: &mut App) {
+        model_ports::install(app);
         app.init_resource::<lunco_modelica_library::worker_bridge::ModelicaWorkerBridge>();
         build_modelica_core(app);
         if !app.is_plugin_added::<lunco_modelica_source_roots::ModelicaSourceRootsPlugin>() {

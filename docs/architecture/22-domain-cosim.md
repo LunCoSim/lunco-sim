@@ -99,7 +99,7 @@ Every participant's state is exposed as **named scalar ports** through the share
 **`PortRegistry`** — the single surface wires, the HTTP API (`ListPorts`/`ReadPorts`/
 `GetPort`/`SetPorts`), the inspector, rhai, and Python all use. Avian rigid bodies, joints,
 and sensors are exposed declaratively via the `AVIAN` spec table (an `AvianGroup`
-per kind), not a mirror component. Each group owns its identity-only topology key
+per kind), not a mirror component. Each group owns its port and metadata contract key
 and its lifecycle/structural invalidation hook, including checks for in-place
 values that change membership. Live samples are excluded from the key. The
 available ports:

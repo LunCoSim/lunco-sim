@@ -555,50 +555,134 @@ pub fn globalize_command_ids_value(
     )
 }
 
-/// Read the global ID of the field marked `#[authz_target]`.
-pub fn authz_target_gid_value(
+/// Read every global ID marked `#[authz_target]` anywhere in a command's reflected shape.
+pub fn authz_target_gids_value(
     params: &ApiValue,
     type_id: std::any::TypeId,
     reg: &bevy::reflect::TypeRegistry,
-) -> Result<Option<u64>, String> {
+) -> Result<Vec<u64>, String> {
+    let mut targets = Vec::new();
+    collect_authz_targets(params, type_id, reg, &mut targets)?;
+    let mut unique = std::collections::HashSet::with_capacity(targets.len());
+    if targets.iter().any(|target| !unique.insert(*target)) {
+        return Err("authorization target identities must be unique".to_owned());
+    }
+    Ok(targets)
+}
+
+fn collect_authz_targets(
+    value: &ApiValue,
+    type_id: std::any::TypeId,
+    reg: &bevy::reflect::TypeRegistry,
+    targets: &mut Vec<u64>,
+) -> Result<(), String> {
     use bevy::reflect::TypeInfo;
 
     let Some(type_info) = reg.get_type_info(type_id) else {
-        return Ok(None);
+        return Ok(());
     };
-    let TypeInfo::Struct(struct_info) = type_info else {
-        return Ok(None);
-    };
-    let Some(field) = (0..struct_info.field_len())
-        .filter_map(|index| struct_info.field_at(index))
-        .find(|field| field.has_attribute::<lunco_core::AuthzTarget>())
-    else {
-        return Ok(None);
-    };
-    let Some(value) = params.get(field.name()) else {
-        // An optional authorization target is an intentionally unscoped command
-        // request. The command handler remains responsible for resolving its
-        // semantic default (for example, a WorldRoot host).
-        if matches!(reg.get_type_info(field.type_id()), Some(TypeInfo::Enum(info)) if info.variant("None").is_some())
-        {
-            return Ok(None);
+    match type_info {
+        TypeInfo::Struct(info) => {
+            for index in 0..info.field_len() {
+                let Some(field) = info.field_at(index) else {
+                    continue;
+                };
+                let Some(field_value) = value.get(field.name()) else {
+                    if field.has_attribute::<lunco_core::AuthzTarget>() {
+                        if matches!(reg.get_type_info(field.type_id()), Some(TypeInfo::Enum(enum_info)) if enum_info.variant("None").is_some())
+                        {
+                            continue;
+                        }
+                        return Err(format!(
+                            "authorization target field '{}' is missing",
+                            field.name()
+                        ));
+                    }
+                    continue;
+                };
+                if field.has_attribute::<lunco_core::AuthzTarget>() {
+                    collect_authz_target_values(
+                        field_value,
+                        field.type_id(),
+                        reg,
+                        field.name(),
+                        targets,
+                    )?;
+                } else {
+                    collect_authz_targets(field_value, field.type_id(), reg, targets)?;
+                }
+            }
         }
+        TypeInfo::List(info) => {
+            let ApiValue::Array(values) = value else {
+                return Err("authorization target list must be an array".to_owned());
+            };
+            let item_type_id = info.item_ty().id();
+            for item in values {
+                collect_authz_targets(item, item_type_id, reg, targets)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn collect_authz_target_values(
+    value: &ApiValue,
+    type_id: std::any::TypeId,
+    reg: &bevy::reflect::TypeRegistry,
+    field_name: &str,
+    targets: &mut Vec<u64>,
+) -> Result<(), String> {
+    use bevy::reflect::TypeInfo;
+    let Some(type_info) = reg.get_type_info(type_id) else {
         return Err(format!(
-            "authorization target field '{}' is missing",
-            field.name()
+            "authorization target field '{field_name}' has no reflected type"
         ));
     };
-    if matches!(value, ApiValue::Unit)
-        && matches!(reg.get_type_info(field.type_id()), Some(TypeInfo::Enum(info)) if info.variant("None").is_some())
-    {
-        return Ok(None);
+    match type_info {
+        TypeInfo::List(_info) => {
+            let ApiValue::Array(values) = value else {
+                return Err(format!(
+                    "authorization target field '{field_name}' must be an array"
+                ));
+            };
+            for value in values {
+                targets.push(api_value_u64(value).ok_or_else(|| {
+                    format!("authorization target field '{field_name}' must contain unsigned IDs")
+                })?);
+            }
+            if values.is_empty() {
+                return Err(format!(
+                    "authorization target field '{field_name}' must not be empty"
+                ));
+            }
+        }
+        TypeInfo::Enum(info) if info.variant("None").is_some() => {
+            if matches!(value, ApiValue::Unit)
+                || matches!(value, ApiValue::Map(entries) if entries.iter().any(|(key, _)| key == "None"))
+            {
+                return Ok(());
+            }
+            let nested = match value {
+                ApiValue::Map(entries) => entries
+                    .iter()
+                    .find(|(key, _)| key == "Some")
+                    .map(|(_, value)| value),
+                _ => None,
+            }
+            .ok_or_else(|| {
+                format!("authorization target option '{field_name}' must be Some or None")
+            })?;
+            targets.push(api_value_u64(nested).ok_or_else(|| {
+                format!("authorization target field '{field_name}' must contain an unsigned ID")
+            })?);
+        }
+        _ => targets.push(api_value_u64(value).ok_or_else(|| {
+            format!("authorization target field '{field_name}' must be an unsigned ID")
+        })?),
     }
-    api_value_u64(value).map(Some).ok_or_else(|| {
-        format!(
-            "authorization target field '{}' must be an unsigned ID",
-            field.name()
-        )
-    })
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -1620,7 +1704,7 @@ mod tests {
 
 #[cfg(test)]
 mod id_codec_tests {
-    use super::{authz_target_gid_value, globalize_command_ids_value, resolve_command_ids_value};
+    use super::{authz_target_gids_value, globalize_command_ids_value, resolve_command_ids_value};
     use crate::registry::ApiEntityRegistry;
     use bevy::prelude::*;
     use bevy::reflect::TypeRegistry;
@@ -1718,12 +1802,12 @@ mod id_codec_tests {
         let (reg, _ent, _e, gid) = setup();
         let params = ApiValue::map([("target", api_value_from_u64(gid.get()))]);
         assert_eq!(
-            authz_target_gid_value(&params, TypeId::of::<TControl>(), &reg),
-            Ok(Some(gid.get()))
+            authz_target_gids_value(&params, TypeId::of::<TControl>(), &reg),
+            Ok(vec![gid.get()])
         );
         assert_eq!(
-            authz_target_gid_value(&params, TypeId::of::<TDrive>(), &reg),
-            Ok(None)
+            authz_target_gids_value(&params, TypeId::of::<TDrive>(), &reg),
+            Ok(Vec::new())
         );
     }
 
@@ -1732,14 +1816,14 @@ mod id_codec_tests {
         let (reg, _entities, _entity, _gid) = setup();
         let missing = ApiValue::Map(Vec::new());
         assert!(
-            authz_target_gid_value(&missing, TypeId::of::<TControl>(), &reg)
+            authz_target_gids_value(&missing, TypeId::of::<TControl>(), &reg)
                 .expect_err("required target must not be treated as targetless")
                 .contains("target field 'target' is missing")
         );
 
         let invalid = ApiValue::map([("target", ApiValue::str("not-an-id"))]);
         assert!(
-            authz_target_gid_value(&invalid, TypeId::of::<TControl>(), &reg)
+            authz_target_gids_value(&invalid, TypeId::of::<TControl>(), &reg)
                 .expect_err("invalid target must not be treated as targetless")
                 .contains("target field 'target' must be an unsigned ID")
         );

@@ -34,12 +34,14 @@ indices, so the tick does not hash every target against the hold table.
 
 `PortRegistry::entity_port_infos` is the inspection projection used by the native
 Ports panel and `ReadPorts`/`ListPorts`. It preserves the backend-owned live value
-and adds the scalar type, optional unit and inclusive bounds, source, current
-authority, and manual-writability contract. Consumers do not reconstruct those
-facts from a port name; writes still go through the existing typed `SetPorts`
-command.
+as an optional sample: a declared output that has not produced a value stays
+unavailable instead of appearing as `0.0`. The projection adds scalar type,
+typed optional unit and frame, inclusive bounds, source, current authority, and
+manual-writability contract. Consumers do not reconstruct those facts from a
+port name; writes go through typed `SetPorts` or `SetPortsBatch` commands.
 
-`SetPorts` validates every named input before accepting it. External API,
+`SetPorts` validates every named input against its owner metadata, including
+writability and any inclusive bounds, before accepting the batch. External API,
 identified direct typed, and non-Simulation Rhai commands with stable producer
 identity receive an admission receipt for the next fixed tick. Live
 port-inspector commands carry the active local session identity into that same
@@ -60,6 +62,13 @@ hold-release record at its commit when active. A missing stable target, scene
 generation, tick, or shared order stamp reports a runtime error and keeps the
 existing holds. Session authority changes alone do not issue this event or
 alter endpoint inputs.
+
+`SetPortsBatch` writes inputs on 2 to 256 stable targets as one session-input
+transaction. The host requires ownership of every target. All target identities,
+lifecycle fences, write names, writability contracts, and metadata bounds are
+validated before admission or application. One record captures all participants
+at one effective tick; a release affecting a queued participant cancels the
+whole transaction.
 
 `PortRegistry::port_entities` is the corresponding discovery projection. Each
 backend enumerates the component or authored surface it owns, and the registry
@@ -89,7 +98,7 @@ backing-component presence that changes the emitted rows.
 
 Avian's foreign components are exposed declaratively via the `AVIAN` spec table
 (`ports.rs`). **Adding a port group:** declare the `AvianGroup` (present-predicate,
-entity enumerator, identity-only topology key, and `AvianPort`s with read/write
+entity enumerator, port and metadata contract key, and `AvianPort`s with read/write
 closures), provide its lifecycle/structural invalidation hook, and list it in
 `AVIAN`. The group key must match the rows emitted by its port definitions; live
 samples never belong in that key.

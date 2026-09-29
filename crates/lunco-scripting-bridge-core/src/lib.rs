@@ -40,13 +40,13 @@ use std::{
 
 use lunco_api::discovery::find_api_command;
 use lunco_api::executor::{
-    ApiCommandEvent, authz_target_gid_value, command_result_value, validate_command_params_value,
+    ApiCommandEvent, authz_target_gids_value, command_result_value, validate_command_params_value,
 };
 use lunco_api::queries::{
     ApiQueryRegistry, ApiVisibility, SimulationQueryReadScope, execute_query_value,
 };
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_api_core::{ApiValue, api_value_from_u64};
+use lunco_api_core::{ApiErrorCode, ApiValue, api_value_from_u64};
 use lunco_command_contracts::{OpId, SessionId};
 use lunco_core::{CommandResults, DTransform, GlobalEntityId};
 use lunco_core_session::{CommandPolicyRegistry, SessionRbac, SessionRegistry, authorize};
@@ -505,10 +505,6 @@ pub fn take_script_rejects() -> Vec<String> {
 /// These operations mutate ECS directly rather than dispatching a command, so
 /// they name their capability explicitly at the owning reflection seam.
 pub mod capability {
-    /// Write a live co-simulation input port. Unlike `SetPorts`, the generic
-    /// `set()` fallback is a raw write and does not create a persistent hold;
-    /// it is therefore still an owned mutation, not a read.
-    pub const PORT_MUTATE: &str = "ScriptPortMutate";
     /// Structurally mutate a target entity from a script (`add` / `remove` a
     /// component, `despawn`). Registered `OWNED_CONTROL` (see
     /// `commands::register_command_policies`) so a remote script may only
@@ -649,29 +645,28 @@ pub fn track_simulation_entity_write(gid: i64) -> Result<(), String> {
 
 fn validate_simulation_target_dependency(
     world: &World,
-    target_gid: Option<u64>,
+    target_gids: &[u64],
     operation: &str,
 ) -> Result<(), String> {
     if execution_context().clock != lunco_core::RuntimeClock::Simulation {
         return Ok(());
     }
-    let Some(gid) = target_gid else {
-        return Ok(());
-    };
-    let Some(entity) = resolve_entity(world, gid) else {
-        return Ok(());
-    };
     let Some(participants) =
         world.get_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
     else {
         return Ok(());
     };
-    if participants.is_modelica_participant(entity) {
-        let scenario = resolve_entity(world, current_self());
-        if !scenario.is_some_and(|scenario| {
-            participants.scenario_declares_modelica_dependency(scenario, entity)
-                || participants.scenario_declares_write(scenario, entity)
-        }) {
+    let scenario = resolve_entity(world, current_self());
+    for gid in target_gids {
+        let Some(entity) = resolve_entity(world, *gid) else {
+            continue;
+        };
+        if participants.is_modelica_participant(entity)
+            && !scenario.is_some_and(|scenario| {
+                participants.scenario_declares_modelica_dependency(scenario, entity)
+                    || participants.scenario_declares_write(scenario, entity)
+            })
+        {
             return Err(format!(
                 "{operation} targets Modelica entity {gid} without this scenario's declared dependency; include it in simulation_dependencies(me, ctx)"
             ));
@@ -746,14 +741,13 @@ pub fn enforce_script_authority(
 /// The `#[authz_target]` gid a command authorizes against, read from the
 /// typed script params via its reflect schema. `None` for a target-less command
 /// (or an unknown name).
-fn command_target_gid(world: &World, name: &str, params: &ApiValue) -> Result<Option<u64>, String> {
+fn command_target_gids(world: &World, name: &str, params: &ApiValue) -> Result<Vec<u64>, String> {
     let app_reg = world.resource::<AppTypeRegistry>();
     let type_reg = app_reg.read();
-    Ok(type_reg
+    type_reg
         .get_with_short_type_path(name)
-        .map(|r| authz_target_gid_value(params, r.type_id(), &type_reg))
-        .transpose()?
-        .flatten())
+        .map(|registration| authz_target_gids_value(params, registration.type_id(), &type_reg))
+        .unwrap_or_else(|| Ok(Vec::new()))
 }
 
 /// Run `f` with the scoped World, or return `None` outside a script evaluation.
@@ -885,11 +879,11 @@ pub fn cmd_value(name: &str, mut params: ApiValue) -> ApiValue {
         }
         drop(type_reg);
 
-        let target_gid = match command_target_gid(world, name, &params) {
-            Ok(target_gid) => target_gid,
+        let target_gids = match command_target_gids(world, name, &params) {
+            Ok(target_gids) => target_gids,
             Err(error) => return command_result_error(id, "rejected", error),
         };
-        if let Err(error) = validate_simulation_target_dependency(world, target_gid, name) {
+        if let Err(error) = validate_simulation_target_dependency(world, &target_gids, name) {
             return command_result_error(id, "rejected", error);
         }
 
@@ -917,12 +911,14 @@ pub fn cmd_value(name: &str, mut params: ApiValue) -> ApiValue {
                 && world
                     .get_resource::<CommandPolicyRegistry>()
                     .is_some_and(|reg| reg.policy_for(name).ownership_gated)
+                && !target_gids.is_empty()
                 && match (
-                    target_gid,
                     world.get_resource::<lunco_core_session::LocalSession>(),
                     world.get_resource::<SessionRegistry>(),
                 ) {
-                    (Some(gid), Some(local), Some(reg)) => reg.owns(local.0, gid),
+                    (Some(local), Some(reg)) => {
+                        target_gids.iter().all(|gid| reg.owns(local.0, *gid))
+                    }
                     _ => false,
                 };
             if !allowed && !owns_target {
@@ -952,7 +948,7 @@ pub fn cmd_value(name: &str, mut params: ApiValue) -> ApiValue {
             // `capture_command` serializes the command for the wire — means the
             // client and host agree on the seq the reconcile acks against.
             if owns_target && name == "SetPorts" {
-                if let Some(gid) = target_gid {
+                if let Some(gid) = target_gids.first().copied() {
                     let tick = world
                         .get_resource::<lunco_core_runtime::SimTick>()
                         .map_or(0, |t| t.0);
@@ -976,8 +972,15 @@ pub fn cmd_value(name: &str, mut params: ApiValue) -> ApiValue {
         // unset authority (local / host-trusted launch) stays ungated after the
         // shared public-command schema gate above.
         if script_authority().is_some() {
-            if let Err(error) = enforce_script_authority(world, name, target_gid) {
-                return command_result_error(id, "rejected", error);
+            let authorization_targets = if target_gids.is_empty() {
+                vec![None]
+            } else {
+                target_gids.iter().copied().map(Some).collect()
+            };
+            for target_gid in authorization_targets {
+                if let Err(error) = enforce_script_authority(world, name, target_gid) {
+                    return command_result_error(id, "rejected", error);
+                }
             }
         }
         world.trigger(ApiCommandEvent {
@@ -1045,8 +1048,16 @@ pub fn command_result<B: ValueBuilder>(b: &B, id: u64) -> B::Value {
 /// `Ok(None)` is a successful provider response with no data. Missing providers
 /// and provider errors are `Err`, so callers can distinguish an empty answer
 /// from a broken or unavailable query surface.
-pub fn query_value(name: &str, params: ApiValue) -> Result<Option<ApiValue>, String> {
-    let access = with_world(|world| -> Result<(), String> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScriptQueryError {
+    /// Canonical API category for the failure.
+    pub code: ApiErrorCode,
+    /// Owner-provided diagnostic.
+    pub message: String,
+}
+
+pub fn query_value(name: &str, params: ApiValue) -> Result<Option<ApiValue>, ScriptQueryError> {
+    let access = with_world(|world| -> Result<(), ScriptQueryError> {
         if execution_context().clock != lunco_core::RuntimeClock::Simulation {
             return Ok(());
         }
@@ -1059,10 +1070,20 @@ pub fn query_value(name: &str, params: ApiValue) -> Result<Option<ApiValue>, Str
         match provider.simulation_read_scope(&params) {
             SimulationQueryReadScope::EntityTargets => {}
             SimulationQueryReadScope::SceneGeneration => {
-                validate_simulation_scene_query_access(world, name)?;
+                validate_simulation_scene_query_access(world, name).map_err(|message| {
+                    ScriptQueryError {
+                        code: ApiErrorCode::Unauthorized,
+                        message,
+                    }
+                })?;
             }
             SimulationQueryReadScope::ScenarioDeclared => {
-                validate_simulation_query_read(world, name)?;
+                validate_simulation_query_read(world, name).map_err(|message| {
+                    ScriptQueryError {
+                        code: ApiErrorCode::Unauthorized,
+                        message,
+                    }
+                })?;
             }
         }
         for target in provider.simulation_entity_reads(&params) {
@@ -1071,35 +1092,62 @@ pub fn query_value(name: &str, params: ApiValue) -> Result<Option<ApiValue>, Str
                 Some(target.get()),
                 name,
                 ScriptEntityAccess::Read,
-            )?;
+            )
+            .map_err(|message| ScriptQueryError {
+                code: ApiErrorCode::Unauthorized,
+                message,
+            })?;
         }
         Ok(())
     });
     if let Some(Err(error)) = access {
-        return Err(format!("query '{name}' denied: {error}"));
+        return Err(ScriptQueryError {
+            code: error.code,
+            message: format!("query '{name}' denied: {}", error.message),
+        });
     }
     with_world(|world| execute_query_value(world, name, &params))
-        .ok_or_else(|| "no world in scope".to_string())?
-        .map_err(|error| {
-            format!(
-                "query '{name}' failed ({}): {}",
-                error.code as u16, error.message
-            )
+        .ok_or_else(|| ScriptQueryError {
+            code: ApiErrorCode::InternalError,
+            message: "no world in scope".to_owned(),
+        })?
+        .map_err(|error| ScriptQueryError {
+            code: error.code,
+            message: format!("query '{name}' failed: {}", error.message),
         })
+}
+
+fn script_query_error_status(code: ApiErrorCode) -> &'static str {
+    match code {
+        ApiErrorCode::Unauthorized => "unauthorized",
+        ApiErrorCode::DeserializationError => "invalid",
+        ApiErrorCode::EntityNotFound | ApiErrorCode::CommandNotFound => "not_found",
+        ApiErrorCode::CommandRejected => "rejected",
+        ApiErrorCode::InternalError => "failed",
+    }
+}
+
+fn script_query_error_value(error: &ScriptQueryError) -> ApiValue {
+    ApiValue::map([
+        ("ok", ApiValue::Bool(false)),
+        (
+            "status",
+            ApiValue::str(script_query_error_status(error.code)),
+        ),
+        ("code", ApiValue::Int(error.code as u16 as i64)),
+        ("error", ApiValue::str(error.message.clone())),
+    ])
 }
 
 /// `query` as a native value. Successful data remains the provider's native
 /// value; a successful no-data response is unit. Errors become an explicit
-/// `#{ ok: false, error: "..." }` value so a script can branch without losing
-/// the provider's diagnostic.
+/// `#{ ok: false, status, code, error }` value so a script can branch on the
+/// typed failure category without parsing the provider's diagnostic.
 pub fn query<B: ValueBuilder>(b: &B, name: &str, params: ApiValue) -> B::Value {
     match query_value(name, params) {
         Ok(Some(data)) => build_from_value(b, &data),
         Ok(None) => b.unit(),
-        Err(error) => b.map(vec![
-            ("ok".to_string(), b.bool(false)),
-            ("error".to_string(), b.string(&error)),
-        ]),
+        Err(error) => build_from_value(b, &script_query_error_value(&error)),
     }
 }
 
@@ -1176,15 +1224,6 @@ fn validate_simulation_query_read(world: &World, operation: &str) -> Result<(), 
     ))
 }
 
-/// Direction of a scenario's direct port access.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScriptPortAccess {
-    /// Read a published output or the current input value.
-    Read,
-    /// Write an input port.
-    Write,
-}
-
 /// Reject live-port access during dependency planning and require the calling
 /// scenario's Modelica or generic entity access declaration at simulation time.
 ///
@@ -1193,11 +1232,7 @@ pub enum ScriptPortAccess {
 /// shared barrier but do not authorize a scenario's access. Port access from
 /// application/presentation cycles observes committed state without joining
 /// the authoritative simulation barrier.
-pub fn validate_simulation_port_access(
-    gid: u64,
-    name: &str,
-    access: ScriptPortAccess,
-) -> Result<(), String> {
+pub fn validate_simulation_port_read_access(gid: u64, name: &str) -> Result<(), String> {
     if execution_context().clock != lunco_core::RuntimeClock::Simulation {
         return Ok(());
     }
@@ -1206,57 +1241,27 @@ pub fn validate_simulation_port_access(
         let Some(entity) = resolve_entity(world, gid) else {
             return Ok(());
         };
-        let Some(registry) = world.get_resource::<lunco_port_core::ports::PortRegistry>() else {
-            return Ok(());
-        };
-        let is_port = match access {
-            ScriptPortAccess::Read => {
-                registry.has_output_port(world, entity, name)
-                    || registry.has_input_port(world, entity, name)
-            }
-            ScriptPortAccess::Write => registry.has_input_port(world, entity, name),
-        };
+        let registry = world
+            .get_resource::<lunco_port_core::ports::PortRegistry>()
+            .ok_or_else(|| "PortRegistry resource is not present".to_owned())?;
+        let is_port = registry.has_output_port(world, entity, name)
+            || registry.has_input_port(world, entity, name);
         if !is_port {
             return Ok(());
         }
         if phase == lunco_core::RuntimePhase::DependencyPlan {
             return Err(format!(
-                "simulation_dependencies may resolve entity ids but cannot read or write live port {name:?} on entity {gid}"
+                "simulation_dependencies may resolve entity ids but cannot read live port {name:?} on entity {gid}"
             ));
         }
         validate_simulation_entity_access(
             world,
             Some(gid),
             &format!("Modelica port {name:?}"),
-            match access {
-                ScriptPortAccess::Read => ScriptEntityAccess::Read,
-                ScriptPortAccess::Write => ScriptEntityAccess::Write,
-            },
+            ScriptEntityAccess::Read,
         )
     })
-    .unwrap_or(Ok(()))
-}
-
-/// Write a co-sim port input on entity `gid` — the same path `SetPorts` and wires
-/// use. `true` if a writable input port of that name existed. Strict: never
-/// creates a port (an unknown name returns `false`).
-pub fn write_port(gid: u64, name: &str, value: f64) -> bool {
-    with_world(|world| {
-        if enforce_script_mutation(world, capability::PORT_MUTATE, Some(gid)).is_err() {
-            return false;
-        }
-        let Some(entity) = resolve_entity(world, gid) else {
-            return false;
-        };
-        let Some(registry) = world
-            .get_resource::<lunco_port_core::ports::PortRegistry>()
-            .cloned()
-        else {
-            return false;
-        };
-        registry.write_port(world, entity, name, value)
-    })
-    .unwrap_or(false)
+    .ok_or_else(|| "no active world is available to the script bridge".to_owned())?
 }
 
 // ── Verbs: reads ────────────────────────────────────────────────────────────
@@ -1848,6 +1853,23 @@ pub fn telemetry_value<B: ValueBuilder>(b: &B, v: &TelemetryValue) -> B::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_errors_have_machine_readable_status_and_api_code() {
+        let value = script_query_error_value(&ScriptQueryError {
+            code: ApiErrorCode::Unauthorized,
+            message: "query target is outside the simulation access plan".to_owned(),
+        });
+        assert_eq!(value.get("ok"), Some(&ApiValue::Bool(false)));
+        assert_eq!(value.get("status"), Some(&ApiValue::str("unauthorized")));
+        assert_eq!(value.get("code"), Some(&ApiValue::Int(403)));
+        assert_eq!(
+            value.get("error"),
+            Some(&ApiValue::str(
+                "query target is outside the simulation access plan"
+            ))
+        );
+    }
     use lunco_core_session::{AuthorityRole, CommandPolicy, UserSession};
 
     #[test]
@@ -2102,7 +2124,6 @@ mod tests {
         set_script_client_local(true);
 
         for capability in [
-            capability::PORT_MUTATE,
             capability::FIELD_MUTATE,
             capability::STRUCTURAL_MUTATE,
             capability::SETTING_MUTATE,

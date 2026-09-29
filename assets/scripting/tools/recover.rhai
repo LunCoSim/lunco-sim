@@ -39,9 +39,9 @@ fn vessel(id) {
     cmd("RecoverVessel", #{entity_id: id});
 }
 
-/// How far a vessel's up-axis may fall before this library calls it overturned:
-/// `up · world_up` at or below this is more than ~78 degrees of roll. A vessel
-/// on its side reads ~0.0; fully inverted reads -1.0.
+// How far a vessel's up-axis may fall before this library calls it overturned:
+// `up · world_up` at or below this is more than ~78 degrees of roll. A vessel
+// on its side reads ~0.0; fully inverted reads -1.0.
 const OVERTURNED_UP_DOT = 0.2;
 
 /// Is this vessel overturned? Reads the entity's world rotation and compares its
