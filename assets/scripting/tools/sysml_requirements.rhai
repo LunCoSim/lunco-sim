@@ -921,7 +921,8 @@ fn _constraint_observations(model, check, requirement) {
                 if observation.provider == () || observation.provider == ""
                     || observation.state == () || check.provider != "typed" {
                     return #{ok: false,
-                        error: "typed parameter bindings require provider mode typed and explicit provider and state",
+                        error: "typed parameter binding for " + parameter.name
+                            + " requires provider mode typed and explicit provider and state",
                         ir: ir};
                 }
                 observation.path = path;
