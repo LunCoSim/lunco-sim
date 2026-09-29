@@ -732,7 +732,48 @@ pub(crate) fn on_pbr_material_requested(trigger: On<PbrMaterialRequested>, mut c
 // ─────────────────────────────────────────────────────────────────────
 
 /// Inspector panel — editable entity parameters.
-pub struct Inspector;
+#[derive(Default)]
+pub struct Inspector {
+    editable_parts_cache: Option<EditablePartsCache>,
+}
+
+struct EditablePartsCache {
+    root: Entity,
+    stage_revision: Option<u64>,
+    parts: Vec<Entity>,
+}
+
+impl Inspector {
+    /// Reuse the selected USD root's material-bearing entity index until its
+    /// selection or projected stage changes.
+    fn cached_editable_parts<'a>(&'a mut self, ctx: &PanelCtx, root: Entity) -> &'a [Entity] {
+        let stage_revision = ctx
+            .get::<lunco_usd_bevy_scene::UsdPrimPath>(root)
+            .and_then(|_| {
+                ctx.resource::<lunco_usd_bevy_scene::UsdStageRevision>()
+                    .map(|revision| revision.0)
+            });
+        let current = stage_revision.is_some()
+            && self
+                .editable_parts_cache
+                .as_ref()
+                .is_some_and(|cache| cache.root == root && cache.stage_revision == stage_revision);
+
+        if !current {
+            self.editable_parts_cache = Some(EditablePartsCache {
+                root,
+                stage_revision,
+                parts: editable_parts(ctx, root),
+            });
+        }
+
+        &self
+            .editable_parts_cache
+            .as_ref()
+            .expect("the material part index was just populated")
+            .parts
+    }
+}
 
 impl Panel for Inspector {
     fn id(&self) -> PanelId {
@@ -1160,7 +1201,7 @@ fn usd_preview_transform_section(
     });
 }
 
-fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+fn inspector_content(panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     // Esc / Backspace deselection lives in the Bevy `handle_entity_selection`
     // system (the single mutation path), not here.
 
@@ -1375,7 +1416,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
     // resync would now overwrite them on the next document change.
 
     // ── Materials ────────────────────────────────────────────────
-    let parts = editable_parts(ctx, entity);
+    let parts = panel.cached_editable_parts(ctx, entity);
     if !parts.is_empty() {
         let stored = ctx
             .resource::<lunco_scene_selection::SelectionTarget>()

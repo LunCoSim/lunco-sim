@@ -67,7 +67,10 @@ topology revision, filter, and expansion state; update the sampling request
 only when the expanded entity set changes.
 In the Inspector's material part selector, keep the entity index separate from
 its display text. Format the active label only for the selected part and format
-the other labels only while the dropdown is open.
+the other labels only while the dropdown is open. Retain the material-bearing
+entity index for projected USD roots by selected root and `UsdStageRevision`;
+rebuild it only when either changes. Recompute for non-USD roots or when the
+revision resource is unavailable.
 When deriving a chosen part's material controls, filter the selected root's
 existing material-bearing entity list instead of walking that part's child tree
 again.
