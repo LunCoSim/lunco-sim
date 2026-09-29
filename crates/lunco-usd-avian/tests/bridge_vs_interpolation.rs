@@ -1,9 +1,10 @@
 //! The bridge READ pass and Avian's render interpolation must share one pose
 //! contract. Production enables `PhysicsInterpolationPlugin::interpolate_all()`:
 //! the fixed bridge writes the solved pose, Avian eases `Transform` after the
-//! fixed loop, and Avian restores the solved endpoint in `FixedFirst` before the
-//! next bridge READ. The render sample must therefore never become physics
-//! truth.
+//! fixed loop, and `PreUpdate` runs before `FixedFirst` restores the solved
+//! endpoint. Admission therefore seeds only unseen bodies; reads of established
+//! bodies happen at the fixed physics boundary. The render sample must never
+//! become physics truth.
 //!
 //! A body under constant velocity must travel `v * t`, and its solved
 //! `Position` must never be dragged backwards by the render easing.
@@ -79,12 +80,11 @@ fn make_app() -> App {
     app
 }
 
-/// The eased `Transform` differs from `Position` between ticks, but
-/// `bevy_transform_interpolation::complete_translation_easing` runs in
-/// `FixedFirst` and restores `Transform` to the solved endpoint before the
-/// bridge's READ pass. This test pins that production arrangement: if the
-/// restore is removed, reordered, or the bridge READ moves ahead of it, the
-/// solved pose starts tracking the render pose and this fails.
+/// The eased `Transform` differs from `Position` between ticks.
+/// `bevy_transform_interpolation::complete_translation_easing` restores it in
+/// `FixedFirst`, after the `PreUpdate` scene-admission pass. This test pins the
+/// bridge's admission and fixed-step ownership: an established body's render
+/// sample must not feed back into its solved position.
 #[test]
 fn interpolation_does_not_drag_the_solved_position() {
     let mut app = make_app();

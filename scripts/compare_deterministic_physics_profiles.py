@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare authored multi-rover snapshots across repeats, scene sizes, and Compute widths."""
+"""Compare authored multi-rover snapshots across pacing, scene sizes, and Compute widths."""
 
 from __future__ import annotations
 
@@ -22,6 +22,16 @@ SCENES_BY_ROVER_COUNT = {
 }
 PROFILE_RUNS = 2
 EXPECTED_SHARED_ROVERS = 4
+EXPECTED_STRESS_SAMPLE_TICKS = tuple(
+    str(tick) for tick in (*range(1, 31), *range(40, 151, 10))
+)
+DETERMINISTIC_SEED = 6840157149251759617
+JITTER_REPLAY_PROFILES = (
+    (0.25, DETERMINISTIC_SEED),
+    (0.25, 1234567890123456789),
+    (0.5, DETERMINISTIC_SEED),
+    (0.5, 1234567890123456789),
+)
 AUTHORED_MODEL_TRACE_TICKS = tuple(str(tick) for tick in range(10, 21))
 AUTHORED_ARTICULATED_BODY_TRACE_TICKS = ("1", "2", "11", "80")
 TRACE_PATTERN = re.compile(r"D4_STATE_TRACE_V1\|([^\r\n]*)")
@@ -69,11 +79,48 @@ def validate_startup_trace(output: str, label: str) -> None:
         )
 
 
-def canonical_scenario_physics_row(record: str) -> str:
+def validate_physics_trace_ticks(output: str, label: str) -> None:
+    observed = [
+        raw_sim_tick(trace) for trace in TICK_TRACE_PATTERN.findall(output)
+    ]
+    if observed == list(EXPECTED_STRESS_SAMPLE_TICKS):
+        return
+    observed_set = set(observed)
+    expected_set = set(EXPECTED_STRESS_SAMPLE_TICKS)
+    repeated = sorted(
+        {tick for tick in observed_set if observed.count(tick) > 1}, key=int
+    )
+    missing = sorted(expected_set - observed_set, key=int)
+    unexpected = sorted(observed_set - expected_set, key=int)
+    raise RuntimeError(
+        f"{label}: authored physics trace tick sequence is incomplete or out of "
+        f"order; missing={missing}, repeated={repeated}, unexpected={unexpected}, "
+        f"observed_count={len(observed)}, expected_count={len(EXPECTED_STRESS_SAMPLE_TICKS)}"
+    )
+
+
+def canonical_scenario_physics_row(
+    record: str, normalize_fixture_contact_counts: bool = True
+) -> str:
     fields = record.split("|")
+    fields = [field for field in fields if not field.startswith("authoredTf=")]
+    for index, field in enumerate(fields):
+        if not field.startswith("clock="):
+            continue
+        values = field.partition("=")[2].split(",")
+        if len(values) != 7:
+            raise RuntimeError("Rhai clock snapshot has an invalid field count")
+        # Physics holds and coupling barriers can clear Time<Physics>::delta
+        # after a completed step without changing elapsed time. Rhai checks
+        # clock conservation per tick; state equality retains both elapsed
+        # clocks and excludes this transient delta.
+        fields[index] = "clock=" + ",".join((*values[:3], *values[4:]))
+        break
     for index, field in enumerate(fields):
         if not field.startswith("avianContact="):
             continue
+        if not normalize_fixture_contact_counts:
+            break
         values = field.partition("=")[2].split(",")
         if len(values) != 7:
             raise RuntimeError("Rhai contact snapshot has an invalid field count")
@@ -87,10 +134,14 @@ def run_profile(
     binary: str,
     threads: int,
     scene: str = SCENE,
+    jitter: float = 0.0,
+    seed: int = DETERMINISTIC_SEED,
+    tick_hz: float | None = None,
 ) -> tuple[int, list[str], str, float]:
     print(
         f"Running production scene {Path(scene).stem} with Compute width "
-        f"{threads or 'default'}",
+        f"{threads or 'default'}, jitter {jitter}, seed {seed}, "
+        f"tick rate {tick_hz or 'default'} Hz",
         flush=True,
     )
     command = [
@@ -103,12 +154,15 @@ def run_profile(
         "--threads",
         str(threads),
         "--jitter",
-        "0",
+        str(jitter),
         "--seed",
-        "6840157149251759617",
+        str(seed),
     ]
+    if tick_hz is not None:
+        command.extend(("--tick-hz", str(tick_hz)))
     config = ROOT / "target" / "scene-tests" / (
-        f"deterministic-{Path(scene).stem}-{threads}-{os.getpid()}-"
+        f"deterministic-{Path(scene).stem}-{threads}-{jitter}-{seed}-"
+        f"{tick_hz or 'default'}hz-{os.getpid()}-"
         f"{time.monotonic_ns()}"
     )
     config.parent.mkdir(parents=True, exist_ok=True)
@@ -142,10 +196,19 @@ def run_profile(
             line
             for line in output.splitlines()
             if re.search(
-                r"(ERROR|NO-VERDICT|TESTS_|MULTI-ROVER|D4_|FAIL:|Failed to load asset|"
+                r"(ERROR|NO-VERDICT|TESTS_|MULTI-ROVER|D4_CLOCK_SYNC_FAIL|D4_ON_TICK_GAP|FAIL:|Failed to load asset|"
                 r"on_start\(\) failed|on_tick\(\) failed)",
                 line,
                 re.IGNORECASE,
+            )
+            and not any(
+                marker in line
+                for marker in (
+                    "D4_MODEL_TRACE_V1|",
+                    "D4_TICK_STATE_TRACE_V1|",
+                    "D4_STATE_TRACE_V1|",
+                    "D4_EARLY_STATE_TRACE_V1|",
+                )
             )
         ]
         tail = "\n".join((relevant or output.splitlines()[-12:])[-24:])
@@ -154,6 +217,7 @@ def run_profile(
             f"{result.returncode}:\n{tail}"
         )
 
+    validate_physics_trace_ticks(output, f"{Path(scene).stem} --threads {threads}")
     profiles = PROFILE_PATTERN.findall(output)
     traces = TRACE_PATTERN.findall(output)
     if len(profiles) != 1:
@@ -214,13 +278,9 @@ def canonical_physics_trace(
     expected_rovers: int,
     shared_positions: set[str],
     expected_sample_ticks: set[str],
+    normalize_fixture_contact_counts: bool = True,
 ) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
     traces = TICK_TRACE_PATTERN.findall(output)
-    if len(traces) < len(expected_sample_ticks):
-        raise RuntimeError(
-            f"expected at least {len(expected_sample_ticks)} Rhai physics snapshots for "
-            f"the {expected_rovers}-rover scene, found {len(traces)}"
-        )
     mapping_trace = next(
         (trace for trace in traces if "authoredTf=" in trace), None
     )
@@ -261,7 +321,10 @@ def canonical_physics_trace(
                     source_path, f"RoverAtX[{source_position}]"
                 )
             normalized = re.sub(r"\|bevyEntity=[^|]*", "", normalized)
-            selected[position] = canonical_scenario_physics_row(normalized)
+            selected[position] = canonical_scenario_physics_row(
+                normalized,
+                normalize_fixture_contact_counts=normalize_fixture_contact_counts,
+            )
         if set(selected) != shared_positions:
             raise RuntimeError(
                 f"physics tick {tick} did not contain all shared rover states"
@@ -275,6 +338,117 @@ def canonical_physics_trace(
         missing = sorted(expected_sample_ticks - set(observed_ticks), key=int)
         raise RuntimeError(f"Rhai physics trace omitted comparison ticks {missing}")
     return path_positions, canonical_by_tick
+
+
+def canonical_full_scene_trace(
+    output: str,
+    rover_count: int,
+    expected_sample_ticks: set[str],
+) -> tuple[dict[str, tuple[str, ...]], dict[tuple[str, str, str], str]]:
+    traces = TICK_TRACE_PATTERN.findall(output)
+    mapping_trace = next(
+        (trace for trace in traces if "authoredTf=" in trace), None
+    )
+    if mapping_trace is None:
+        raise RuntimeError("Rhai produced no authored rover transforms")
+    path_positions = authored_roster(mapping_trace, rover_count)
+    positions = set(path_positions.values())
+    all_path_positions, physics = canonical_physics_trace(
+        output,
+        rover_count,
+        positions,
+        expected_sample_ticks,
+        normalize_fixture_contact_counts=False,
+    )
+    if all_path_positions != path_positions:
+        raise RuntimeError("authored rover roster changed between state samples")
+    models = canonical_modelica_trace(
+        output, path_positions, positions, set(physics)
+    )
+    return physics, models
+
+
+def compare_full_roster_replays(
+    reference_run: tuple[str, int, list[str], str, float],
+    candidate_runs: list[tuple[str, int, list[str], str, float]],
+) -> None:
+    reference_label, _, reference_traces, reference_output, _ = reference_run
+    validate_startup_trace(reference_output, reference_label)
+    reference_tick_traces = TICK_TRACE_PATTERN.findall(reference_output)
+    expected_ticks = {raw_sim_tick(trace) for trace in reference_tick_traces}
+    if len(expected_ticks) != len(reference_tick_traces):
+        raise RuntimeError(f"{reference_label}: repeated comparison tick")
+    reference_physics, reference_models = canonical_full_scene_trace(
+        reference_output, 4, expected_ticks
+    )
+
+    for label, _, traces, output, _ in candidate_runs:
+        validate_startup_trace(output, label)
+        physics, models = canonical_full_scene_trace(output, 4, expected_ticks)
+        if physics != reference_physics:
+            changed_tick = next((
+                tick
+                for tick in sorted(set(physics) | set(reference_physics), key=int)
+                if physics.get(tick) != reference_physics.get(tick)
+            ), "unknown")
+            reference_rows = reference_physics.get(changed_tick, ())
+            candidate_rows = physics.get(changed_tick, ())
+            changed_row = next((
+                (left, right)
+                for left, right in zip(reference_rows, candidate_rows)
+                if left != right
+            ), None)
+            if changed_row is None:
+                detail = "roster or sampled ticks differ"
+            else:
+                reference_fields = dict(
+                    field.split("=", 1)
+                    for field in changed_row[0].split("|")
+                    if "=" in field
+                )
+                candidate_fields = dict(
+                    field.split("=", 1)
+                    for field in changed_row[1].split("|")
+                    if "=" in field
+                )
+                changed_field = next((
+                    field
+                    for field in dict.fromkeys((
+                        *reference_fields.keys(), *candidate_fields.keys()
+                    ))
+                    if reference_fields.get(field) != candidate_fields.get(field)
+                ), "unknown")
+                detail = (
+                    f"{changed_row[0].split('|', 1)[0]} field={changed_field} "
+                    f"reference={reference_fields.get(changed_field)!r} "
+                    f"candidate={candidate_fields.get(changed_field)!r}"
+                )
+            raise RuntimeError(
+                f"{label}: full-roster physics differs exactly at SimTick "
+                f"{changed_tick} relative to {reference_label}; {detail}; "
+                "numeric_tolerance=0"
+            )
+        if models != reference_models:
+            changed = next(
+                (
+                    key
+                    for key in sorted(
+                        set(models) | set(reference_models),
+                        key=lambda item: (int(item[0]), float(item[1]), item[2]),
+                    )
+                    if models.get(key) != reference_models.get(key)
+                ),
+                None,
+            )
+            raise RuntimeError(
+                f"{label}: full-roster Modelica state differs exactly from "
+                f"{reference_label} at {changed}; numeric_tolerance=0"
+            )
+        if traces != reference_traces:
+            raise RuntimeError(
+                f"{label}: authored lifecycle/milestone states differ from "
+                f"{reference_label} after per-tick physics and Modelica traces matched"
+            )
 
 
 def canonical_modelica_trace(
@@ -356,12 +530,39 @@ def canonical_modelica_trace(
     return canonical
 
 
+def first_modelica_trace_difference(
+    reference: dict[tuple[str, str, str], str],
+    candidate: dict[tuple[str, str, str], str],
+    *,
+    common_samples_only: bool = False,
+) -> tuple[tuple[str, str, str] | None, int]:
+    keys = (
+        set(reference) & set(candidate)
+        if common_samples_only
+        else set(reference) | set(candidate)
+    )
+    ordered_keys = sorted(
+        keys,
+        key=lambda item: (int(item[0]), float(item[1]), item[2]),
+    )
+    changed = next(
+        (
+            key
+            for key in ordered_keys
+            if reference.get(key) != candidate.get(key)
+        ),
+        None,
+    )
+    return changed, len(ordered_keys)
+
+
 def compare_scenario_matrix(
     runs: dict[int, list[tuple[str, int, list[str], str, float]]],
 ) -> tuple[int, int]:
     reference_rover_count = max(runs)
     reference_traces = TICK_TRACE_PATTERN.findall(runs[reference_rover_count][0][3])
-    for rover_count, scene_runs in runs.items():
+    for rover_count in sorted(runs, reverse=True):
+        scene_runs = runs[rover_count]
         for label, _, _, output, _ in scene_runs:
             validate_startup_trace(output, label)
     reference_ticks = [raw_sim_tick(trace) for trace in reference_traces]
@@ -397,10 +598,16 @@ def compare_scenario_matrix(
         )
 
     reference_physics = None
-    reference_models = None
     reference_label = None
+    modelica_reference_by_scene: dict[
+        int, tuple[str, dict[tuple[str, str, str], str]]
+    ] = {}
+    eight_rover_reference: tuple[
+        str, dict[str, tuple[str, ...]], dict[tuple[str, str, str], str]
+    ] | None = None
     compared_runs = 0
-    for rover_count, scene_runs in runs.items():
+    for rover_count in sorted(runs, reverse=True):
+        scene_runs = runs[rover_count]
         for label, _, _, output, _ in scene_runs:
             path_positions, physics = canonical_physics_trace(
                 output, rover_count, shared_positions, expected_sample_ticks,
@@ -413,9 +620,71 @@ def compare_scenario_matrix(
                 shared_positions,
                 set(physics),
             )
+            if rover_count == 8:
+                # The 8-rover scene adds four lanes that are absent from the
+                # 4-rover fixture. Cross-fixture normalization compares only
+                # the four shared lanes, so compare the complete 8-rover
+                # roster across repeats and both Compute profiles here.
+                all_positions = set(path_positions.values())
+                all_path_positions, all_physics = canonical_physics_trace(
+                    output,
+                    rover_count,
+                    all_positions,
+                    expected_sample_ticks,
+                    normalize_fixture_contact_counts=False,
+                )
+                if all_path_positions != path_positions:
+                    raise RuntimeError(
+                        f"{label}: authored 8-rover roster changed while comparing "
+                        "its complete state"
+                    )
+                all_models = canonical_modelica_trace(
+                    output,
+                    all_path_positions,
+                    all_positions,
+                    set(all_physics),
+                )
+                if eight_rover_reference is None:
+                    eight_rover_reference = (label, all_physics, all_models)
+                else:
+                    full_roster_label, full_roster_physics, full_roster_models = (
+                        eight_rover_reference
+                    )
+                    if all_physics != full_roster_physics:
+                        changed_ticks = [
+                            tick
+                            for tick in sorted(
+                                set(all_physics) | set(full_roster_physics), key=int
+                            )
+                            if all_physics.get(tick) != full_roster_physics.get(tick)
+                        ]
+                        raise RuntimeError(
+                            f"full 8-rover physics differs between {full_roster_label} "
+                            f"and {label}; first changed tick: "
+                            f"{changed_ticks[0] if changed_ticks else 'unknown'}; "
+                            "numeric_tolerance=0"
+                        )
+                    if all_models != full_roster_models:
+                        changed = next(
+                            (
+                                key
+                                for key in sorted(
+                                    set(all_models) | set(full_roster_models),
+                                    key=lambda item: (
+                                        int(item[0]), float(item[1]), item[2]
+                                    ),
+                                )
+                                if all_models.get(key) != full_roster_models.get(key)
+                            ),
+                            None,
+                        )
+                        raise RuntimeError(
+                            f"full 8-rover Modelica state differs between "
+                            f"{full_roster_label} and {label} at {changed}; "
+                            "numeric_tolerance=0"
+                        )
             if reference_physics is None:
                 reference_physics = physics
-                reference_models = models
                 reference_label = label
             else:
                 if physics != reference_physics:
@@ -427,25 +696,42 @@ def compare_scenario_matrix(
                     raise RuntimeError(
                         f"shared rover physics differs between {reference_label} and "
                         f"{label}; first changed tick: "
-                        f"{changed_ticks[0] if changed_ticks else 'unknown'}"
+                        f"{changed_ticks[0] if changed_ticks else 'unknown'}; "
+                        "numeric_tolerance=0"
                     )
-                if models != reference_models:
-                    changed = next(
-                        (
-                            key
-                            for key in sorted(
-                                set(models) | set(reference_models),
-                                key=lambda item: (
-                                    int(item[0]), float(item[1]), item[2]
-                                ),
-                            )
-                            if models.get(key) != reference_models.get(key)
-                        ),
-                        None,
-                    )
+
+            scene_reference = modelica_reference_by_scene.get(rover_count)
+            if scene_reference is None:
+                modelica_reference_by_scene[rover_count] = (label, models)
+            else:
+                scene_reference_label, scene_reference_models = scene_reference
+                changed, _ = first_modelica_trace_difference(
+                    scene_reference_models, models
+                )
+                if changed is not None:
                     raise RuntimeError(
-                        f"shared rover Modelica state differs between {reference_label} "
-                        f"and {label} at {changed}"
+                        f"{rover_count}-rover Modelica state differs between "
+                        f"{scene_reference_label} and {label} at {changed}; "
+                        "numeric_tolerance=0"
+                    )
+
+            if rover_count != reference_rover_count:
+                reference_modelica = modelica_reference_by_scene[
+                    reference_rover_count
+                ][1]
+                changed, common_sample_count = first_modelica_trace_difference(
+                    reference_modelica, models, common_samples_only=True
+                )
+                if common_sample_count == 0:
+                    raise RuntimeError(
+                        f"{label}: no common authored Modelica samples with the "
+                        f"{reference_rover_count}-rover reference"
+                    )
+                if changed is not None:
+                    raise RuntimeError(
+                        f"shared rover Modelica state differs between "
+                        f"{reference_label} and {label} at {changed}; "
+                        "numeric_tolerance=0"
                     )
             compared_runs += 1
     return len(shared_positions), compared_runs
@@ -738,11 +1024,97 @@ def main() -> int:
                 f"{rover_count}-rover scene did not establish repeated serial and "
                 f"default Compute profiles: {widths}"
             )
-    shared_rovers, compared_runs = compare_scenario_matrix(scene_runs)
+
+    jitter_runs = []
+    for jitter, seed in JITTER_REPLAY_PROFILES:
+        for repeat in range(1, PROFILE_RUNS + 1):
+            width, traces, output, elapsed = run_profile(
+                binary,
+                1,
+                SCENES_BY_ROVER_COUNT[4],
+                jitter=jitter,
+                seed=seed,
+            )
+            if width != 1:
+                raise RuntimeError(
+                    f"4-rover jitter profile reported Compute width {width}, expected 1"
+                )
+            jitter_runs.append(
+                (
+                    f"4 jitter {jitter} seed {seed} repeat {repeat}",
+                    width,
+                    traces,
+                    output,
+                    elapsed,
+                )
+            )
+    replay_errors = []
+    for start in range(0, len(jitter_runs), PROFILE_RUNS):
+        profile_repeats = jitter_runs[start : start + PROFILE_RUNS]
+        try:
+            compare_full_roster_replays(profile_repeats[0], profile_repeats[1:])
+        except RuntimeError as error:
+            replay_errors.append(str(error))
+    for start in range(0, len(jitter_runs), PROFILE_RUNS):
+        profile_run = jitter_runs[start]
+        try:
+            compare_full_roster_replays(scene_runs[4][0], [profile_run])
+        except RuntimeError as error:
+            replay_errors.append(str(error))
+
+    tick_rate_runs = []
+    for repeat in range(1, PROFILE_RUNS + 1):
+        width, traces, output, elapsed = run_profile(
+            binary,
+            1,
+            SCENES_BY_ROVER_COUNT[4],
+            tick_hz=30.0,
+        )
+        if width != 1:
+            raise RuntimeError(
+                f"4-rover 30 Hz profile reported Compute width {width}, expected 1"
+            )
+        tick_rate_runs.append(
+            (f"4 30 Hz repeat {repeat}", width, traces, output, elapsed)
+        )
+    try:
+        compare_full_roster_replays(tick_rate_runs[0], tick_rate_runs[1:])
+    except RuntimeError as error:
+        replay_errors.append(str(error))
+
+    try:
+        shared_rovers, compared_runs = compare_scenario_matrix(scene_runs)
+    except RuntimeError as error:
+        replay_errors.append(str(error))
+    else:
+        print(
+            "DETERMINISTIC_SCENARIO_MATRIX_OK "
+            f"scene_sizes=4,8,20 shared_rovers={shared_rovers} "
+            "full_roster_8_runs=4 "
+            f"runs={compared_runs} compared=physics,Modelica",
+            flush=True,
+        )
+
+    if replay_errors:
+        print("DETERMINISM_COMPARISON_FAILURES", file=sys.stderr)
+        for error in replay_errors:
+            print(f"- {error}", file=sys.stderr)
+        return 1
+
     print(
-        "DETERMINISTIC_SCENARIO_MATRIX_OK "
-        f"scene_sizes=4,8,20 shared_rovers={shared_rovers} "
-        f"runs={compared_runs} compared=physics,Modelica",
+        "DETERMINISTIC_JITTER_PROFILES_OK "
+        "scene_size=4 compute_width=1 jitter=0.25,0.5 "
+        f"seeds={JITTER_REPLAY_PROFILES[0][1]},{JITTER_REPLAY_PROFILES[1][1]} "
+        f"profiles={len(JITTER_REPLAY_PROFILES)} repeats_per_profile={PROFILE_RUNS} "
+        f"runs={len(JITTER_REPLAY_PROFILES) * PROFILE_RUNS} "
+        "compared=full_roster_physics,Modelica "
+        "against=fixed_step comparison=exact numeric_tolerance=0",
+        flush=True,
+    )
+    print(
+        "DETERMINISTIC_TICK_RATE_PROFILE_OK "
+        "scene_size=4 compute_width=1 tick_hz=30 repeats=2 "
+        "compared=full_roster_physics,Modelica comparison=exact",
         flush=True,
     )
 

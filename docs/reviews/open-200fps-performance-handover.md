@@ -414,15 +414,18 @@ build were preserved. Do not use those runs to claim a performance gain.
 
 #### 2026-08-30 bridge read change-gating verification
 
-The measured owner is `lunco-usd-avian::pose_to_position`. The bridge uses
-Bevy's change detection as the wake signal, scopes changed plain spatial inputs
-to bodies below the changed physical ancestor, and keeps the exact
-`BridgeShadow::is_representation_only` check as the semantic authority. An
-unrelated render-only branch no longer makes every body enter the pose path.
-First reads and active-frame handoffs still traverse all bodies because they
-transport initial pose or frame state. Bodies without `PhysicsPoseSeeded` remain
-eligible until their initial pose is written; late materialization is handled by
-the authoritative lifecycle query, without a recovery scan.
+The measured owner is the pose-to-position bridge in `lunco-usd-avian-core`.
+Its fixed-step reader uses Bevy change detection as the wake signal, scopes
+changed plain spatial inputs to bodies below the changed physical ancestor,
+and keeps the exact `BridgeShadow::is_representation_only` check as the semantic
+authority. An unrelated render-only branch no longer makes every body enter
+the pose path.
+Initial admission and fixed-boundary active-frame handoffs traverse all bodies
+because they transport initial pose or frame state. Bodies without
+`PhysicsPoseSeeded` remain eligible until their initial pose is written; late
+materialization is handled by the authoritative lifecycle query, without a
+recovery scan. Established bodies are read only at the fixed physics boundary,
+after presentation interpolation restores the solved endpoint.
 
 Focused verification passed:
 
