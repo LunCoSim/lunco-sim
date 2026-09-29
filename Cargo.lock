@@ -9239,6 +9239,8 @@ dependencies = [
  "avian3d",
  "bevy",
  "big_space",
+ "lunco-api",
+ "lunco-api-core",
  "lunco-assets-core",
  "lunco-celestial-spatial",
  "lunco-core",

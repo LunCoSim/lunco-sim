@@ -746,17 +746,6 @@ enough to promise same-state continuation from an arbitrary capture tick.
   `on_start`/first `on_tick` boundary was 0/1 and the first-tick actor, scene,
   IMU, altimeter, and contact snapshot matched with digest
   `92753352336a37dd97ed30837833bba97c64db68ef0649b8f1e29727583999da`.
-- `scripts/compare_deterministic_physics_profiles.py` passed all 12 production
-  runs and both gates, `DETERMINISTIC_SCENARIO_MATRIX_OK` and
-  `DETERMINISTIC_PHYSICS_PROFILES_OK`. The 4/8/20 rover fixtures matched at
-  42 physics samples across the four shared authored lanes. Repeated and
-  cross-profile 20-rover traces matched at Compute widths 1 and 24: six
-  full-roster checkpoints, 42 physics snapshots, 280 full Modelica system
-  snapshots across authored ticks 0, 1, 10–20, and 180, plus 80 articulated
-  body records at ticks 1, 2, 11, and 80. Digest:
-  `c0b6cfc74ed7a8b33c7fa4b00dfd3ba1e1637d585cf6a16f0c117acdc9473dc6`.
-  The comparator derives full Modelica samples from the Rhai-authored trace
-  schedule; physics-only ticks do not imply a full Modelica snapshot.
 - The production `port_owner_collision` Rhai scene passed 11 assertions in two
   ticks and emitted one `PORT_OWNER_COLLISION` error naming both input owners
   and registry precedence. The rule is Rhai policy over typed runtime registry
@@ -847,11 +836,6 @@ enough to promise same-state continuation from an arbitrary capture tick.
   passed. `cargo build --locked -j 4 -p lunco-luncosim --bin luncosim
   --no-default-features --features api-transport` passed; it reported the
   pre-existing unused `ApiResponse` import in `lunco-api-transport`.
-- `python3 scripts/compare_deterministic_physics_profiles.py` passed both
-  production gates across the 4-, 8-, and 20-rover fixtures: 12 runs,
-  Compute widths 1 and 24, matching physics and Modelica traces, digest
-  `c0b6cfc74ed7a8b33c7fa4b00dfd3ba1e1637d585cf6a16f0c117acdc9473dc6`.
-  The 4-rover startup no longer logged connection-binding failures.
 - `python3 scripts/compare_deterministic_startup_dependencies.py` passed twice
   after the change: four production runs, first behavior tick 1, matching
   actor and sensor/physics snapshot across Compute widths 1 and 24, digest
@@ -903,3 +887,44 @@ enough to promise same-state continuation from an arbitrary capture tick.
   and recipe identity, not a live AssetServer source transaction. The broader
   replay, cross-machine numeric, browser-worker, and performance gaps remain
   open as recorded above.
+
+## Rhai deterministic-reference comparison (2026-09-29)
+
+- `luncosim test --determinism-reference PATH` loads the reference JSON into
+  typed scene-runner records and exposes selected metadata/rows through the
+  existing Rhai query bridge. Rhai owns profile selection, exact state
+  comparison, and the authored verdict. Modelica variables are compared by
+  sorted field in the scenario; the scene also verifies that an altered physics
+  row is rejected. No full state trace or result bundle is built.
+- Reproduce from the repository root with the default-feature production
+  binary and checked-in reference. Linux/macOS:
+
+  ```sh
+  cargo build --bin luncosim -j 4
+  scripts/test-deterministic-physics-profiles.sh
+  ```
+
+  Windows PowerShell:
+
+  ```powershell
+  cargo build --bin luncosim -j 4
+  .\scripts\test-deterministic-physics-profiles.ps1
+  ```
+
+- The regular `cargo build --bin luncosim -j 4` succeeded on top of local
+  `main` tip `de52c3608` after clearing this checkout's generated `target/`
+  outputs to recover disk space. The production
+  `scripts/test-deterministic-physics-profiles.sh` matrix then passed all ten
+  profiles on that integrated source and printed
+  `DETERMINISTIC_PHYSICS_PROFILES_OK`: serial and default Compute widths for
+  the 4/8/20-rover fixtures, plus four seeded
+  jitter profiles. The matrix leaves the fixed step at 60 Hz and uses the
+  unpaced manual clock. It relies on scene-test exit status and does not parse
+  logs. The authored gate includes 24 assertions per 4-rover run, including a
+  negative control that verifies a deliberately altered state row fails.
+- The PowerShell wrapper was reviewed but not executed here because neither
+  `pwsh` nor `powershell` is installed. The Windows command is available for
+  the other-machine run.
+- This is same-host fixture comparison evidence. Cross-machine execution,
+  whole-session replay, browser workers, and broader scene coverage remain
+  open. The unrelated untracked `scripts/perf/` work remains untouched.

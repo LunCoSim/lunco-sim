@@ -110,21 +110,28 @@ non-empty footprint.
    terminal errors. Keep public command behavior assertions in authored Rhai;
    test only the generic batch and FIFO seam in Rust.
 
-For cross-run determinism, each production scene test must emit its sampled
-state from Rhai through public queries and reach its own authored verdict. A
-narrow production harness may launch separate scene-test processes with the
-same explicit seed and controlled execution profiles, then compare Rhai traces
-at identical global `SimTick` values. Keep saved evidence bounded to selected
-checkpoints; do not emit a per-tick state log. Include an explicit final-stage
-record and require exact final physics, Modelica, and articulated-state equality
-before comparing earlier checkpoints. The multi-rover harness can write a
-portable reference with `--record-reference PATH` and compare it with
-`--compare-reference PATH`; both use exact numeric equality. Require the
-terminal `luncosim test PASS` summary to match the expected scene and authored
-verdict channel; Rhai print/log lines are diagnostic and may be filtered by the
-host. A fresh-scene startup test asserts that `on_start` observes tick 0 and
-the first `on_tick` observes tick 1; startup
-readiness must hold the shared clock until those callbacks can begin in order.
+For cross-run determinism, keep profile selection and state comparison in the
+authored Rhai test. It reads the runner's typed parameters, selects a matching
+profile from `scripts/tests/fixtures/deterministic-physics-reference.json`, and
+requests only the expected row for each selected state. Rust decodes that JSON
+at the `luncosim test --determinism-reference PATH` process boundary and serves
+typed rows through the existing `query(...)` bridge. Rhai compares the six
+selected physics checkpoints, the sparse Modelica checkpoints, articulated
+checkpoints, and the explicit final stage with exact equality
+(`numeric_tolerance=0`). It also deliberately alters one selected physics row
+and verifies the comparison rejects it. It retains only the selected tick
+numbers and the first mismatch message; it does not accumulate a state trace or
+emit a result bundle.
+`report_verdict` and the scene-test process exit code are the completion
+contract. The Bash and PowerShell matrices in
+`scripts/test-deterministic-physics-profiles.sh` and
+`scripts/test-deterministic-physics-profiles.ps1` invoke the production test
+for each profile and stop on a nonzero exit; they do not parse logs or compare
+JSON. Rhai print/log lines remain diagnostics.
+
+A fresh-scene startup test asserts that `on_start` observes tick 0 and the first
+`on_tick` observes tick 1; startup readiness must hold the shared clock until
+those callbacks can begin in order.
 For USD Modelica networks, the startup gate also covers member-source resolution,
 network synthesis, and generated port-surface publication; the binding epoch
 must not classify authored connections while that interface is pending. Solver

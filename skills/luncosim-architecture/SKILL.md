@@ -85,23 +85,23 @@ queued, or stay kinematic.
 Physics operations that can accumulate into shared bodies use `PhysicsOrderKey`
 from the stable logical stage source, instance root, and authored prim path.
 Joint solving, motor warm-start, custom prismatic correction, raycast and jointed tire forces,
-and raycast mass-property folds consume stable key order. The production
-`multi_rover_stress_20` Rhai gate compares physics and Modelica state across
-repeated single-thread and default-pool runs. It records six full
-lifecycle/checkpoint states, the first behavior state at tick 1, an explicit
-final-stage state, and articulated-body samples at ticks 1, 11, 80, and final;
-it does not emit per-tick traces. The comparator requires exact final physics,
-Modelica, and articulated equality before checking earlier selected states.
-The matrix leaves `--tick-hz` unset and runs its manual clock without wall-time
-pacing at the default 60 Hz fixed step. By default it compares against
-`scripts/tests/fixtures/deterministic-physics-reference.json`; use
-`--compare-reference PATH` to select another baseline or
-`--record-reference PATH` to intentionally replace one. The reference records
-source, input, binary, and machine metadata and requires exact equality
-(`numeric_tolerance=0`). Its tracked-source fingerprint excludes only the
-reference file, so the committed fixture remains valid. This remains
-fixture-specific evidence. Do not claim whole-simulation replay determinism
-while the remaining reviewed gaps are open.
+and raycast mass-property folds consume stable key order.
+The production `multi_rover_stress` Rhai gate selects a profile from typed
+scene-test parameters and compares only the requested reference row at each
+sample. Rust loads the portable JSON at the `--determinism-reference PATH`
+process boundary and exposes typed values through the existing Rhai query
+bridge. Rhai owns profile matching and exact comparison (`numeric_tolerance=0`)
+for six physics checkpoints, selected Modelica and articulated checkpoints,
+and the explicit final physics, Modelica, and articulated state. The test keeps
+only checkpoint tick numbers and the first mismatch; it also verifies Rhai
+rejects a deliberately altered physics row and does not emit or retain a trace
+bundle. The Bash and PowerShell matrices in
+`scripts/test-deterministic-physics-profiles.sh` and
+`scripts/test-deterministic-physics-profiles.ps1` invoke regular production
+`luncosim test` processes and trust their exit status. They leave `--tick-hz`
+unset, so the default fixed step is 60 Hz; the runner advances the manual clock
+without wall-time pacing. This remains fixture-specific evidence. Do not claim
+whole-simulation replay determinism while the remaining reviewed gaps are open.
 
 Reflected commands sent through `ApiCommandEvent` retain whether they came from
 an API transport or a Rhai evaluation; generated `CommandOccurred` facts carry
