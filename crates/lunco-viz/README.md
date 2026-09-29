@@ -43,7 +43,10 @@ The telemetry browser snapshots channel metadata and the relevant owner
 hierarchy when `SignalRegistry::catalog_revision` or `TelemetryFocus` changes.
 It sorts and derives the grouped tree on the async-compute pool; sample updates
 do not rebuild the catalog, and panel rendering never waits for a pending tree.
-Rows read their latest values from the shared registry when painted.
+Rows read their latest values from the shared registry when painted. Lowercased
+filter fields are prepared with the catalog, and descendant visibility counts
+are cached until the catalog, focus, filter, scope, or archived-row setting
+changes; repainting an unchanged tree does not rescan its descendants.
 
 Persisted bindings are reconciled from stable `GlobalEntityId` identity only
 when the visualization registry or an identity publication changes. Unchanged

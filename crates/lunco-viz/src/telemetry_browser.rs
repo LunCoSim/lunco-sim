@@ -301,11 +301,15 @@ struct Row {
     exposure: SignalExposure,
     in_focus: bool,
     active: bool,
+    /// Lowercased values keep runtime filter matching allocation-free during
+    /// repaint; the catalog worker rebuilds them with each catalog revision.
+    search_fields: [String; 5],
 }
 
 #[derive(Clone, Debug)]
 struct TreeNode {
     label: String,
+    filter_label: String,
     id: String,
     children: std::collections::BTreeMap<String, TreeNode>,
     rows: Vec<Row>,
@@ -313,8 +317,10 @@ struct TreeNode {
 
 impl TreeNode {
     fn new(id: String, label: String) -> Self {
+        let filter_label = label.to_lowercase();
         Self {
             label,
+            filter_label,
             id,
             children: Default::default(),
             rows: Vec::new(),
@@ -376,6 +382,7 @@ fn snapshot_rows(reg: &SignalRegistry) -> Vec<Row> {
                 exposure: meta.map_or(SignalExposure::Public, |m| m.exposure),
                 in_focus: sig.entity != Entity::PLACEHOLDER,
                 active: reg.is_active(sig),
+                search_fields: Default::default(),
             }
         })
         .collect()
@@ -491,10 +498,17 @@ fn build_tree_rows(
     for row in deduplicated_rows_from_snapshot(rows) {
         // Keep the signal identity independent from the row move below.
         let sig = row.sig.clone();
-        let row = Row {
+        let mut row = Row {
             in_focus: sig.entity != Entity::PLACEHOLDER && in_focus(sig.entity),
             ..row
         };
+        row.search_fields = normalized_search_fields(
+            &row.sig.path,
+            row.description.as_deref(),
+            row.model_class.as_deref(),
+            row.model_variable.as_deref(),
+            row.source_asset.as_deref(),
+        );
 
         let group_path = row.group_path.as_deref().filter(|path| !path.is_empty());
         let mut lineage: Vec<(String, String)> =
@@ -813,27 +827,28 @@ fn entity_in_focus(
     false
 }
 
-/// Case-insensitive substring filter over authored labels, descriptions, and
-/// stable signal paths.
-fn filter_match(
-    filter: &str,
-    label: &str,
+/// Normalize immutable row fields while the catalog worker constructs its tree.
+fn normalized_search_fields(
     path: &str,
     description: Option<&str>,
     model_class: Option<&str>,
     model_variable: Option<&str>,
     source_asset: Option<&str>,
-) -> bool {
-    if filter.is_empty() {
-        return true;
-    }
-    let f = filter.to_lowercase();
-    path.to_lowercase().contains(&f)
-        || label.to_lowercase().contains(&f)
-        || description.is_some_and(|text| text.to_lowercase().contains(&f))
-        || model_class.is_some_and(|text| text.to_lowercase().contains(&f))
-        || model_variable.is_some_and(|text| text.to_lowercase().contains(&f))
-        || source_asset.is_some_and(|text| text.to_lowercase().contains(&f))
+) -> [String; 5] {
+    [
+        path.to_lowercase(),
+        description.unwrap_or_default().to_lowercase(),
+        model_class.unwrap_or_default().to_lowercase(),
+        model_variable.unwrap_or_default().to_lowercase(),
+        source_asset.unwrap_or_default().to_lowercase(),
+    ]
+}
+
+/// Match against catalog-normalized text and a once-per-state normalized query.
+fn filter_match_prepared(filter: &str, label: &str, search_fields: &[String]) -> bool {
+    filter.is_empty()
+        || label.contains(filter)
+        || search_fields.iter().any(|field| field.contains(filter))
 }
 
 /// Convert a signal identity into structural display nodes. Generated USD
@@ -895,15 +910,7 @@ fn row_visible(
     (show_archived || row.active)
         && (show_model_variables || row.exposure == SignalExposure::Public)
         && (!scoped || row.in_focus)
-        && filter_match(
-            filter,
-            label,
-            &row.sig.path,
-            row.description.as_deref(),
-            row.model_class.as_deref(),
-            row.model_variable.as_deref(),
-            row.source_asset.as_deref(),
-        )
+        && filter_match_prepared(filter, label, &row.search_fields)
 }
 
 /// Display the authored/operator channel name. Public and internal rows share
@@ -958,39 +965,77 @@ fn telemetry_row_label_color(row: &Row, theme: &lunco_theme::Theme) -> egui::Col
     }
 }
 
-fn tree_any_row(node: &TreeNode, predicate: impl Fn(&Row) -> bool + Copy) -> bool {
-    node.rows.iter().any(predicate)
-        || node
-            .children
-            .values()
-            .any(|child| tree_any_row(child, predicate))
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct NodeVisibility {
+    public: usize,
+    complete: usize,
+    focused: usize,
 }
 
-fn visible_count(
+#[derive(Debug)]
+struct VisibilityCache {
+    catalog_key: u64,
+    focus_key: u64,
+    filter: String,
+    normalized_filter: String,
+    scoped: bool,
+    show_archived: bool,
+    // TreeNode IDs are local grouping identities and may repeat under different
+    // owners, so the current immutable catalog node address keys its count.
+    counts: HashMap<usize, NodeVisibility>,
+    root: NodeVisibility,
+}
+
+impl VisibilityCache {
+    fn matches(
+        &self,
+        catalog_key: u64,
+        focus_key: u64,
+        filter: &str,
+        scoped: bool,
+        show_archived: bool,
+    ) -> bool {
+        self.catalog_key == catalog_key
+            && self.focus_key == focus_key
+            && self.filter == filter
+            && self.scoped == scoped
+            && self.show_archived == show_archived
+    }
+}
+
+/// Build one bottom-up visibility summary per catalog/filter state so rendered
+/// branches can reuse descendant counts.
+fn collect_visibility(
     node: &TreeNode,
     scoped: bool,
-    show_model_variables: bool,
     show_archived: bool,
     filter: &str,
-) -> usize {
-    node.rows
-        .iter()
-        .filter(|r| {
-            row_visible(
-                r,
-                scoped,
-                show_model_variables,
-                show_archived,
-                filter,
-                &node.label,
-            )
-        })
-        .count()
-        + node
-            .children
-            .values()
-            .map(|c| visible_count(c, scoped, show_model_variables, show_archived, filter))
-            .sum::<usize>()
+    counts: &mut HashMap<usize, NodeVisibility>,
+) -> NodeVisibility {
+    let mut visibility = NodeVisibility::default();
+    for row in &node.rows {
+        if row.in_focus && (row.active || show_archived) {
+            visibility.focused += 1;
+        }
+        if (!show_archived && !row.active)
+            || (scoped && !row.in_focus)
+            || !filter_match_prepared(filter, &node.filter_label, &row.search_fields)
+        {
+            continue;
+        }
+        visibility.complete += 1;
+        if row.exposure == SignalExposure::Public {
+            visibility.public += 1;
+        }
+    }
+    for child in node.children.values() {
+        let child_visibility = collect_visibility(child, scoped, show_archived, filter, counts);
+        visibility.public += child_visibility.public;
+        visibility.complete += child_visibility.complete;
+        visibility.focused += child_visibility.focused;
+    }
+    counts.insert(node as *const TreeNode as usize, visibility);
+    visibility
 }
 
 #[cfg(test)]
@@ -999,8 +1044,8 @@ fn entity_key(entity: Entity) -> String {
 }
 
 /// The virtual catalog root is never shown.
-fn display_roots(root: &TreeNode) -> Vec<&TreeNode> {
-    root.children.values().collect()
+fn display_roots(root: &TreeNode) -> impl Iterator<Item = &TreeNode> {
+    root.children.values()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1014,11 +1059,20 @@ fn render_tree_node(
     show_archived: bool,
     display_settings: &TelemetryDisplaySettings,
     filter: &str,
+    counts: &HashMap<usize, NodeVisibility>,
     selected: Option<&SignalRef>,
     depth: usize,
     clicked: &mut Option<SignalRef>,
 ) {
-    let visible = visible_count(node, scoped, show_model_variables, show_archived, filter);
+    let visible = counts
+        .get(&(node as *const TreeNode as usize))
+        .map_or(0, |count| {
+            if show_model_variables {
+                count.complete
+            } else {
+                count.public
+            }
+        });
     if visible == 0 {
         return;
     }
@@ -1050,6 +1104,7 @@ fn render_tree_node(
                     show_archived,
                     display_settings,
                     filter,
+                    counts,
                     selected,
                     depth + 1,
                     clicked,
@@ -1067,7 +1122,7 @@ fn render_tree_node(
                             show_model_variables,
                             show_archived,
                             filter,
-                            &node.label,
+                            &node.filter_label,
                         )
                     }) {
                         let latest = registry
@@ -1348,6 +1403,7 @@ fn unit_tooltip(unit: Option<&str>) -> &'static str {
 /// itself. See the module docs for the two plot-creation doors.
 pub struct TelemetryBrowserPanel {
     filter: String,
+    visibility_cache: Option<VisibilityCache>,
     selected: Option<SignalRef>,
     preview: Option<PreviewCache>,
     /// Narrow the list to [`TelemetryFocus`] — the selected vessel and everything
@@ -1366,6 +1422,7 @@ impl Default for TelemetryBrowserPanel {
     fn default() -> Self {
         Self {
             filter: String::new(),
+            visibility_cache: None,
             selected: None,
             preview: None,
             focus_only: true,
@@ -1602,11 +1659,40 @@ impl Panel for TelemetryBrowserPanel {
         // channels" case below needs to know the difference between "no channels"
         // and "none in scope".
         let scoped = self.focus_only && !focus.is_empty();
-        if scoped
-            && !tree_any_row(&catalog.root, |row| {
-                row.in_focus && (row.active || display_settings.show_archived)
-            })
-        {
+        if self.visibility_cache.as_ref().is_none_or(|cache| {
+            !cache.matches(
+                key,
+                focus_key,
+                &self.filter,
+                scoped,
+                display_settings.show_archived,
+            )
+        }) {
+            let mut counts = HashMap::new();
+            let normalized_filter = self.filter.to_lowercase();
+            let root = collect_visibility(
+                &catalog.root,
+                scoped,
+                display_settings.show_archived,
+                &normalized_filter,
+                &mut counts,
+            );
+            self.visibility_cache = Some(VisibilityCache {
+                catalog_key: key,
+                focus_key,
+                filter: self.filter.clone(),
+                normalized_filter,
+                scoped,
+                show_archived: display_settings.show_archived,
+                counts,
+                root,
+            });
+        }
+        let visibility = self
+            .visibility_cache
+            .as_ref()
+            .expect("visibility cache was populated for the current catalog");
+        if scoped && visibility.root.focused == 0 {
             ui.label(
                 egui::RichText::new(
                     "The selection publishes no telemetry yet — start its simulation or untick \
@@ -1616,14 +1702,12 @@ impl Panel for TelemetryBrowserPanel {
             );
             return;
         }
-        if visible_count(
-            &catalog.root,
-            scoped,
-            self.show_model_variables,
-            display_settings.show_archived,
-            &self.filter,
-        ) == 0
-        {
+        let visible = if self.show_model_variables {
+            visibility.root.complete
+        } else {
+            visibility.root.public
+        };
+        if visible == 0 {
             ui.label(
                 egui::RichText::new(
                     "No channels match the current display filters. Change the filter or \
@@ -1635,21 +1719,10 @@ impl Panel for TelemetryBrowserPanel {
         }
 
         if !self.show_model_variables {
-            let public_count = visible_count(
-                &catalog.root,
-                scoped,
-                false,
-                display_settings.show_archived,
-                &self.filter,
-            );
-            let complete_count = visible_count(
-                &catalog.root,
-                scoped,
-                true,
-                display_settings.show_archived,
-                &self.filter,
-            );
-            let hidden_count = complete_count.saturating_sub(public_count);
+            let hidden_count = visibility
+                .root
+                .complete
+                .saturating_sub(visibility.root.public);
             if hidden_count > 0 {
                 ui.label(
                     egui::RichText::new(format!(
@@ -1682,7 +1755,8 @@ impl Panel for TelemetryBrowserPanel {
                         self.show_model_variables,
                         display_settings.show_archived,
                         &display_settings,
-                        &self.filter,
+                        &visibility.normalized_filter,
+                        &visibility.counts,
                         self.selected.as_ref(),
                         0,
                         &mut clicked,
@@ -1849,6 +1923,7 @@ mod tests {
             exposure: SignalExposure::Public,
             in_focus: false,
             active: true,
+            search_fields: Default::default(),
         };
         assert_eq!(telemetry_row_label(&public, false), "electrical power");
 
@@ -2042,51 +2117,37 @@ mod tests {
     }
 
     #[test]
-    fn filter_matches_path_and_group_case_insensitively() {
-        assert!(filter_match(
-            "",
-            "Rover",
-            "wheel.speed",
-            None,
-            None,
-            None,
-            None
+    fn prepared_filter_matches_normalized_catalog_fields() {
+        let row_fields = normalized_search_fields("wheel.speed", None, None, None, None);
+        let label = "Rover".to_lowercase();
+        assert!(filter_match_prepared("", &label, &row_fields));
+        assert!(filter_match_prepared(
+            "SPEED".to_lowercase().as_str(),
+            &label,
+            &row_fields
         ));
-        assert!(filter_match(
-            "SPEED",
-            "Rover",
-            "wheel.speed",
-            None,
-            None,
-            None,
-            None
+        assert!(filter_match_prepared(
+            "rov".to_lowercase().as_str(),
+            &label,
+            &row_fields
         ));
-        assert!(filter_match(
-            "rov",
-            "Rover",
-            "wheel.speed",
-            None,
-            None,
-            None,
-            None
+        assert!(!filter_match_prepared(
+            "thrust".to_lowercase().as_str(),
+            &label,
+            &row_fields
         ));
-        assert!(!filter_match(
-            "thrust",
-            "Rover",
-            "wheel.speed",
-            None,
-            None,
-            None,
-            None
-        ));
-        assert!(filter_match(
-            "camerapayload",
-            "power draw",
+
+        let metadata_fields = normalized_search_fields(
             "science_power",
             None,
             Some("LunCo.Electrical.CameraPayload"),
             Some("power_draw_w"),
             Some("lunco://models/LunCo/Electrical/CameraPayload.mo"),
+        );
+        assert!(filter_match_prepared(
+            "camerapayload".to_lowercase().as_str(),
+            &"power draw".to_lowercase(),
+            &metadata_fields
         ));
     }
 
@@ -2458,6 +2519,7 @@ mod tests {
             exposure: SignalExposure::Internal,
             in_focus: false,
             active: true,
+            search_fields: Default::default(),
         };
         assert_eq!(telemetry_row_label(&internal, false), "pin voltage");
         internal.model_variable = Some("p.i".into());
