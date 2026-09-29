@@ -51,7 +51,7 @@ ARTICULATED_BODY_TRACE_PATTERN = re.compile(
 )
 PROFILE_PATTERN = re.compile(r"D4_PROFILE_V1\|(\d+)")
 TICK_HZ_PATTERN = re.compile(r"\btick_hz=([0-9]+(?:\.[0-9]+)?)\b")
-REFERENCE_SCHEMA = "luncosim-deterministic-physics-reference-v3"
+REFERENCE_SCHEMA = "luncosim-deterministic-physics-reference-v4"
 ARTICULATED_CHECKPOINT_TICKS = ("1", "11", "80")
 PORTABLE_ARTICULATED_CHECKPOINT_TICKS = ("11", "80")
 
@@ -1367,11 +1367,17 @@ def make_reference_case(
         raise RuntimeError(f"{label}: final stage is not a selected physics checkpoint")
     bodies = articulated_body_trace(output, rover_count)
     final = portable_state_point(final_tick, physics, models, bodies)
-    selected_ticks = sorted(physics, key=int)
-    checkpoints = [
-        portable_state_point(tick, physics, models, bodies)
-        for tick in selected_ticks
+    physics_checkpoints = [
+        {"tick": tick, "physics": list(physics[tick])}
+        for tick in sorted(physics, key=int)
         if tick != final_tick
+    ]
+    modelica_checkpoint_ticks = sorted(
+        {tick for tick, _, _ in models if tick != final_tick}, key=int
+    )
+    modelica_checkpoints = [
+        {"tick": tick, "systems": canonical_modelica_point(models, tick)}
+        for tick in modelica_checkpoint_ticks
     ]
     articulated_checkpoints = [
         {"tick": tick, "rovers": canonical_articulated_point(bodies, tick)}
@@ -1388,7 +1394,8 @@ def make_reference_case(
         },
         "effective_compute_width": width,
         "first_behavior_tick": scenario_trace_tick(EARLY_TRACE_PATTERN.findall(output)[0]),
-        "checkpoints": checkpoints,
+        "physics_checkpoints": physics_checkpoints,
+        "modelica_checkpoints": modelica_checkpoints,
         "articulated_checkpoints": articulated_checkpoints,
         "final": final,
     }
@@ -1520,9 +1527,18 @@ def compare_profile_cases(
                 f"{name}: final physics, Modelica, or articulated stage differs "
                 "exactly from the recorded machine; numeric_tolerance=0"
             )
-        if reference.get("checkpoints") != candidate.get("checkpoints"):
+        if reference.get("physics_checkpoints") != candidate.get(
+            "physics_checkpoints"
+        ):
             raise RuntimeError(
-                f"{name}: a selected pre-final checkpoint differs from the "
+                f"{name}: a selected physics checkpoint differs from the "
+                "recorded machine; numeric_tolerance=0"
+            )
+        if reference.get("modelica_checkpoints") != candidate.get(
+            "modelica_checkpoints"
+        ):
+            raise RuntimeError(
+                f"{name}: a selected Modelica checkpoint differs from the "
                 "recorded machine; numeric_tolerance=0"
             )
         if reference.get("articulated_checkpoints") != candidate.get(

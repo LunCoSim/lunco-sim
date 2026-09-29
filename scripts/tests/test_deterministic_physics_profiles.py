@@ -182,21 +182,49 @@ class DeterministicPhysicsProfileTests(unittest.TestCase):
         reference = {
             "scene-4-serial": {
                 "parameters": {"tick_hz": 60.0},
-                "checkpoints": [{"tick": "0", "physics": ["p=0"]}],
+                "physics_checkpoints": [
+                    {"tick": "360", "physics": ["p=10"]}
+                ],
+                "modelica_checkpoints": [
+                    {
+                        "tick": "180",
+                        "systems": [{"system": "rover", "variables": "x=1"}],
+                    }
+                ],
                 "articulated_checkpoints": [
                     {"tick": "11", "rovers": [{"bodies": "wheel=p0"}]}
                 ],
-                "final": {"tick": "780", "physics": ["p=20"]},
+                "final": {
+                    "tick": "780",
+                    "physics": ["p=20"],
+                    "modelica": [
+                        {"system": "rover", "variables": "x=2"}
+                    ],
+                },
             }
         }
         candidate = {
             "scene-4-serial": {
                 "parameters": {"tick_hz": 60.0},
-                "checkpoints": [{"tick": "0", "physics": ["p=0"]}],
+                "physics_checkpoints": [
+                    {"tick": "360", "physics": ["p=10"]}
+                ],
+                "modelica_checkpoints": [
+                    {
+                        "tick": "180",
+                        "systems": [{"system": "rover", "variables": "x=1"}],
+                    }
+                ],
                 "articulated_checkpoints": [
                     {"tick": "11", "rovers": [{"bodies": "wheel=p0"}]}
                 ],
-                "final": {"tick": "780", "physics": ["p=20"]},
+                "final": {
+                    "tick": "780",
+                    "physics": ["p=20"],
+                    "modelica": [
+                        {"system": "rover", "variables": "x=2"}
+                    ],
+                },
             }
         }
         deterministic_physics_profiles.compare_profile_cases(reference, candidate)
@@ -215,11 +243,31 @@ class DeterministicPhysicsProfileTests(unittest.TestCase):
         candidate["scene-4-serial"]["articulated_checkpoints"] = [
             {"tick": "11", "rovers": [{"bodies": "wheel=p0"}]}
         ]
+        candidate["scene-4-serial"]["modelica_checkpoints"] = [
+            {
+                "tick": "180",
+                "systems": [{"system": "rover", "variables": "x=1.1"}],
+            }
+        ]
+        with self.assertRaisesRegex(RuntimeError, "selected Modelica checkpoint"):
+            deterministic_physics_profiles.compare_profile_cases(reference, candidate)
+
+        candidate["scene-4-serial"]["modelica_checkpoints"] = [
+            {
+                "tick": "180",
+                "systems": [{"system": "rover", "variables": "x=1"}],
+            }
+        ]
         candidate["scene-4-serial"]["final"] = {
             "tick": "780",
-            "physics": ["p=20.000000000000004"],
+            "physics": ["p=20"],
+            "modelica": [
+                {"system": "rover", "variables": "x=2.000000000000004"}
+            ],
         }
-        with self.assertRaisesRegex(RuntimeError, "final physics.*differs exactly"):
+        with self.assertRaisesRegex(
+            RuntimeError, "final physics, Modelica.*differs exactly"
+        ):
             deterministic_physics_profiles.compare_profile_cases(reference, candidate)
 
     def _eight_rover_trace(
