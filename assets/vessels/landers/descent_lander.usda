@@ -1666,7 +1666,7 @@ def Xform "DescentLander" (
         {
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/PlumePhotometry.mo@
-            float inputs:throttle.connect = </DescentLander.inputs:external_throttle>
+            float inputs:throttle.connect = </DescentLander/MainPropulsion.outputs:engine_activity>
             float inputs:thrust_n.connect = </DescentLander/MainPropulsion.outputs:thrust_n>
             float inputs:maximum_thrust_n.connect = </DescentLander/MainPropulsion.outputs:maximum_thrust_n>
             float inputs:propellant_flow_kgs.connect = </DescentLander/MainPropulsion.outputs:propellant_flow>
