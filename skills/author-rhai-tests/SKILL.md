@@ -127,8 +127,11 @@ the first `on_tick` observes tick 1; startup
 readiness must hold the shared clock until those callbacks can begin in order.
 For USD Modelica networks, the startup gate also covers member-source resolution,
 network synthesis, and generated port-surface publication; the binding epoch
-must not classify authored connections while that interface is pending. Keep
-the production scene-test's connection diagnostics in the pass condition.
+must not classify authored connections while that interface is pending. Solver
+compilation publishes the initialized time-zero state; do not advance Modelica
+or physics clocks to prime a first exchange before opening the scenario gate.
+The first live exchange uses the shared fixed tick and its normal causal barrier.
+Keep the production scene-test's connection diagnostics in the pass condition.
 Do not normalize startup ticks or reset elapsed time to make a trace begin at
 zero. The production fixed runner completes a started causal cycle and retains
 its remaining fixed time while an owner hold is active; verify startup stays at

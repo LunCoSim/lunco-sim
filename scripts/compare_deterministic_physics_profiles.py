@@ -66,9 +66,9 @@ def scenario_trace_tick(trace: str) -> str:
     try:
         tick = int(rover_state_records(trace)[0])
     except ValueError as error:
-        raise RuntimeError("Rhai state trace has an invalid scenario-relative tick") from error
+        raise RuntimeError("Rhai state trace has an invalid simulation tick") from error
     if tick < 0:
-        raise RuntimeError(f"Rhai state trace has negative scenario-relative tick {tick}")
+        raise RuntimeError(f"Rhai state trace has negative simulation tick {tick}")
     return str(tick)
 
 
@@ -82,7 +82,7 @@ def validate_startup_trace(output: str, label: str) -> None:
     startup_tick = scenario_trace_tick(lifecycle_traces[0])
     if startup_tick != "0":
         raise RuntimeError(
-            f"{label}: initial scenario trace used tick={startup_tick}, expected relative tick 0"
+            f"{label}: initial scenario trace used tick={startup_tick}, expected global SimTick=0"
         )
     behavior_traces = EARLY_TRACE_PATTERN.findall(output)
     if len(behavior_traces) != 1:
@@ -93,7 +93,7 @@ def validate_startup_trace(output: str, label: str) -> None:
     first_behavior_tick = scenario_trace_tick(behavior_traces[0])
     if first_behavior_tick != "1":
         raise RuntimeError(
-            f"{label}: first on_tick ran at relative tick={first_behavior_tick}, expected 1"
+            f"{label}: first on_tick ran at global SimTick={first_behavior_tick}, expected 1"
         )
     final_stages = FINAL_STAGE_PATTERN.findall(output)
     if len(final_stages) != 1:
@@ -626,6 +626,12 @@ def canonical_modelica_trace(
         tick = scenario_trace_tick(trace)
         if tick in physics_ticks:
             fine_ticks.add(tick)
+    final_tick = final_stage_tick(output)
+    if final_tick not in fine_ticks:
+        raise RuntimeError(
+            f"Rhai state trace omitted authored full state at final SimTick={final_tick}"
+        )
+    require_final_modelica_stage(canonical, final_tick, shared_positions)
     expected = {
         (tick, position)
         for tick in fine_ticks | {"0"}
@@ -638,6 +644,24 @@ def canonical_modelica_trace(
             "selected physics checkpoints and first behavior sample"
         )
     return canonical
+
+
+def require_final_modelica_stage(
+    model_trace: dict[tuple[str, str, str], str],
+    final_tick: str,
+    shared_positions: set[str],
+) -> None:
+    sampled_positions = {
+        position
+        for tick, position, _ in model_trace
+        if tick == final_tick
+    }
+    missing = sorted(shared_positions - sampled_positions, key=float)
+    if missing:
+        raise RuntimeError(
+            f"Rhai Modelica trace omitted final-stage variables at "
+            f"SimTick={final_tick} for rover lanes {missing}"
+        )
 
 
 def first_modelica_trace_difference(
@@ -1685,7 +1709,7 @@ def main() -> int:
         scenario_trace_tick(traces[0]) != early_tick for traces in early_traces
     ):
         raise RuntimeError(
-            "the first behavior snapshot was not captured at scenario-relative tick 1"
+            "the first behavior snapshot was not captured at global SimTick 1"
         )
     tick_traces = [
         TRACE_PATTERN.findall(output)

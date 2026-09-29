@@ -19,6 +19,32 @@ admitted simulation tick. At `FixedUpdate`, it checks fixed elapsed time as
 tolerance. A physics hold fails the gate. These clock checks establish cycle
 ordering; they are separate from state replay comparisons.
 
+The scene-test runner previously held Avian physics while advancing fixed time
+to prime each Modelica participant, then armed scenarios at a later global
+tick. That made startup clocks diverge and let the first sample occur after
+tick 1. The runner no longer pauses Modelica or advances a physics-only
+initial-condition phase. It pumps scene materialization, solver compilation,
+and physical admission with a zero-duration manual clock, then requires
+`SimTick=0`, zero fixed elapsed time, and zero fixed overstep before arming
+scenarios. Compiled Modelica `t=0` state is the readiness fact; the first live
+exchange is dispatched from the shared `SimTick=1` fixed cycle, whose normal
+barrier prevents later clock progress until worker results arrive. The
+production `sensor` Rhai scene passed 58 assertions with `on_start=0` and its
+first behavior sample at tick 1. Four startup-comparator runs at Compute widths
+1 and 24 matched the first-tick snapshot, digest
+`92753352336a37dd97ed30837833bba97c64db68ef0649b8f1e29727583999da`.
+
+The next full matrix run exposed a test-coverage defect: the stress fixture
+recorded full Modelica variables at ticks 0, 1, and 180, while its actual final
+stage was tick 780. The comparator tried to compare the candidate at 780 with
+the reference's last full-value sample at 180, so it reported a final-state
+mismatch even though both captured runs matched exactly at all three shared
+Modelica samples. No portable reference was written. The Rhai fixture now adds
+full Modelica variables at the final stage alongside its existing selected
+samples, and the comparator requires those final-stage values for every shared
+rover before it compares or records a run. This keeps the trace sparse while
+making the required final Modelica comparison real.
+
 The bridge regression found that `PreUpdate` read the render-interpolated
 `Transform` of an already-seeded body before `FixedFirst` restored the solved
 endpoint. That presentation sample was written back to Avian `Position` and
@@ -43,12 +69,13 @@ A Windows attempt at commit `889b7e908` completed the first 20-rover scene with
 the production runner's PASS summary (`channel=MULTI_ROVER_STRESS`, 780 ticks),
 but the Python comparator stopped before trace/reference comparison because
 captured output omitted the Rhai `TESTS_OK` and `MULTI-ROVER STRESS: PASS` log
-lines. The scene runner emits its terminal PASS only after receiving the
-authored typed verdict and checking scene connection faults. Both determinism
-comparators now validate that terminal summary against the expected scene and
-channel; the physics comparator also checks its tick count against the authored
-final-stage trace. The Windows run must be repeated before cross-machine state
-equality is considered verified.
+lines. That checkout predates the comparator fix: both determinism comparators
+now validate the runner's terminal PASS summary against the expected scene and
+channel, and the physics comparator checks its tick count against the authored
+final-stage trace. The Windows scene itself passed, but that run produced no
+state comparison. Rerun from a build of the current committed source with the
+matching committed reference fixture before counting any cross-machine
+comparison as evidence.
 
 These runs establish same-build determinism for the covered fixtures, timing
 profiles, and Compute widths. Whole-session replay, controlled asynchronous
