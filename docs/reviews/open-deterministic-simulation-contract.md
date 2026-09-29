@@ -43,7 +43,9 @@ checkpoint tick numbers and the first mismatch; final state is checked
 separately at the end of the run. The runner reads JSON at the explicit
 --determinism-reference PATH process boundary and exposes typed values through
 the existing Rhai query API. No serialized Rhai result event or log parser is
-part of the verdict path.
+part of the verdict path. Both profile launchers enable scoped Rhai INFO output
+so a failed profile prints the authored assertion that caused its terminal
+nonzero verdict while preserving the caller's other log filters.
 
 The bridge regression found that `PreUpdate` read the render-interpolated
 `Transform` of an already-seeded body before `FixedFirst` restored the solved
