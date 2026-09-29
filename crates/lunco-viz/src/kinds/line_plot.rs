@@ -796,12 +796,6 @@ fn render_toolbar(
     config: &VisualizationConfig,
     actions: impl FnOnce(&mut egui::Ui, &mut PanelCtx),
 ) -> Option<Edit> {
-    let current_y_paths: std::collections::HashSet<SignalRef> = config
-        .inputs
-        .iter()
-        .filter(|b| b.role == ROLE_Y.role)
-        .map(|b| b.source.clone())
-        .collect();
     let style = LinePlotStyle::load_cached(ctx.ui.ctx(), config);
 
     let mut edit: Option<Edit> = None;
@@ -906,7 +900,9 @@ fn render_toolbar(
                     let catalog = toolbar_signal_catalog(ui.ctx(), registry);
                     let mut has_addable = false;
                     for signal in &catalog.signals {
-                        if current_y_paths.contains(&signal.source) {
+                        if config.inputs.iter().any(|binding| {
+                            binding.role == ROLE_Y.role && binding.source == signal.source
+                        }) {
                             continue;
                         }
                         has_addable = true;
