@@ -1252,7 +1252,10 @@ The whole-simulation guarantee remains open because:
    typed runner parameters, compares six physics checkpoints, sparse Modelica
    and articulated checkpoints, and the explicit final physics, Modelica, and
    articulated state with exact equality (`numeric_tolerance=0`). It retains
-   only checkpoint tick numbers and the first mismatch; it also verifies an
+   only checkpoint tick numbers and the first mismatch. Physics pose rows use
+   `world_pos`/`world_rotation`, backed by Avian `Position`/`Rotation` for rigid
+   bodies; render `Transform` is excluded from initial pose checks and replay
+   comparisons. The gate also verifies an
    altered physics row is rejected and emits no trace or result bundle.
    `report_verdict` emits the status, check count, and authored failure
    messages in a typed telemetry map. The scene-test runner prints those

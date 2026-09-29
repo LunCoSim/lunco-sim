@@ -191,15 +191,6 @@ fn deterministic_state_sample(rover_paths, rovers, capture_modelica_values,
         let identity = "RoverAtX[" + state_scalar(lane_x) + "]";
         let position = world_pos(rover);
         let rotation = world_rotation(rover);
-        let local_x = ();
-        let local_y = ();
-        let local_z = ();
-        try { local_x = get(rover, "Transform.translation.x"); }
-        catch (error) { }
-        try { local_y = get(rover, "Transform.translation.y"); }
-        catch (error) { }
-        try { local_z = get(rover, "Transform.translation.z"); }
-        catch (error) { }
         let state = query("QueryPhysicsState", #{ id: rover });
         let avian_contact = contact_debug(rover);
         if position == () || rotation == () || state == () || avian_contact == () {
@@ -240,8 +231,6 @@ fn deterministic_state_sample(rover_paths, rovers, capture_modelica_values,
         row += "|physicsHolds=" + hold_names;
         row += "|p=" + state_vector(position);
         row += "|q=" + state_vector(rotation);
-        row += "|localTf=" + state_scalar(local_x) + "," + state_scalar(local_y)
-            + "," + state_scalar(local_z);
         row += "|laneX=" + state_scalar(lane_x);
         row += "|v=" + state_vector(state.linear_velocity_mps);
         row += "|w=" + state_vector(state.angular_velocity_radps);
@@ -643,26 +632,15 @@ fn on_start(me, ctx) {
             } else {
                 authored.attrs.xformOpOrder
             };
-            let local_x = ();
-            let local_y = ();
-            let local_z = ();
-            try { local_x = get(rover, "Transform.translation.x"); }
-            catch (error) { }
-            try { local_y = get(rover, "Transform.translation.y"); }
-            catch (error) { }
-            try { local_z = get(rover, "Transform.translation.z"); }
-            catch (error) { }
-
             let expected_x = -2.5 * (this.rovers.len() - 1).to_float()
                 + 5.0 * i.to_float();
+            let simulation_position = world_pos(rover);
             this.authored_pose_valid = this.authored_pose_valid
                 && authored != () && authored.ok != false
                 && order != () && order.len() == 1
                 && order[0] == "xformOp:translate"
                 && vector_close(translation, [expected_x, 1.6, 0.0], 0.0001)
-                && close_scalar(local_x, expected_x, 0.0001)
-                && close_scalar(local_y, 1.6, 0.0001)
-                && close_scalar(local_z, 0.0, 0.0001);
+                && vector_close(simulation_position, [expected_x, 1.6, 0.0], 0.0001);
         }
     }
     for rover in this.rovers {
