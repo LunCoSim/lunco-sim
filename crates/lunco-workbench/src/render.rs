@@ -3445,7 +3445,7 @@ mod tests {
         plan.center = PerspectiveSlotPlan::new().single(Some(PanelId("viewport")));
         plan.right_inspector =
             PerspectiveSlotPlan::new().stacked([PanelId("inspector")], [PanelId("spawn")]);
-        layout.apply_perspective_plan(plan);
+        layout.apply_perspective_plan(PerspectiveId("test"), plan);
 
         let leaves: Vec<Vec<TabId>> = layout
             .dock
@@ -3476,7 +3476,7 @@ mod tests {
         plan.center = PerspectiveSlotPlan::new().single(Some(PanelId("viewport")));
         plan.right_inspector =
             PerspectiveSlotPlan::new().stacked([PanelId("inspector")], [PanelId("spawn")]);
-        layout.apply_perspective_plan(plan);
+        layout.apply_perspective_plan(PerspectiveId("test"), plan);
 
         layout.register(DockPanel(PanelId("entities")));
         layout.register(DockPanel(PanelId("telemetry")));
@@ -3857,7 +3857,7 @@ mod tests {
         let mut layout = WorkbenchLayout::default();
         let mut plan = PerspectiveLayoutPlan::new();
         plan.center = PerspectiveSlotPlan::new().tabs([PanelId("a"), PanelId("b")]);
-        layout.apply_perspective_plan(plan);
+        layout.apply_perspective_plan(PerspectiveId("test"), plan);
         assert_eq!(layout.center, vec![PanelId("a"), PanelId("b")]);
     }
 
@@ -3867,7 +3867,7 @@ mod tests {
         let mut plan = PerspectiveLayoutPlan::new();
         plan.center = PerspectiveSlotPlan::new().tabs([PanelId("code"), PanelId("diagram")]);
         plan.active_center_tab = Some(1);
-        layout.apply_perspective_plan(plan);
+        layout.apply_perspective_plan(PerspectiveId("test"), plan);
         assert_eq!(layout.active_center_tab, 1);
     }
 
@@ -3877,7 +3877,7 @@ mod tests {
         let mut plan = PerspectiveLayoutPlan::new();
         plan.center = PerspectiveSlotPlan::new().tabs([PanelId("x")]);
         plan.active_center_tab = Some(2);
-        layout.apply_perspective_plan(plan);
+        layout.apply_perspective_plan(PerspectiveId("test"), plan);
         assert_eq!(layout.active_center_tab, 0);
     }
 }

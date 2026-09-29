@@ -117,6 +117,16 @@ outcomes, and pass/fail/incomplete/cancelled counts. **Show failures** filters
 the list to failed requirements, and **Rerun failed** launches only failed
 cases. The suite can be stopped while it is active.
 
+The Requirements overview shows separate usage, definition, and source-file
+counts plus quick filters for missing criteria, missing `verify` links,
+unmapped Twin tests, and tests without a current result. Its sortable table
+uses the full center pane and keeps evidence, Twin test execution, model
+coverage, and overall status in separate columns. A docked Requirement details
+panel stays in the lower-right Editor pane, follows the selected row, and
+summarizes formal criteria, subjects, explicit `satisfy` links, verification
+mappings, and evidence. It links to the full Traceability view and can open the
+active Twin's `twin.toml` when a test mapping is missing.
+
 The runner returns report schema 2 over the child-process boundary. It separates
 the four-state verification verdict from runner completion status and includes
 the source revisions observed at start and completion. The UI rejects results

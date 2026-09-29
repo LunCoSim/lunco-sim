@@ -14,15 +14,17 @@ use lunco_workbench_core::WorkbenchPanelAppExt;
 pub use panel::SysmlRequirementsPanel;
 pub use view_model::SysmlRequirementsViewModel;
 
-/// Installs the focused SysML requirements panel and its typed read model.
+/// Installs the SysML requirements browser, docked detail pane, and typed read model.
 pub struct SysmlUiPlugin;
 
 impl Plugin for SysmlUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<view_model::SysmlRequirementsViewModel>()
             .init_resource::<view_model::SysmlVerificationEvidence>()
+            .init_resource::<panel::SysmlRequirementPanelState>()
             .init_resource::<verification::SysmlVerificationRuns>()
             .register_panel(panel::SysmlRequirementsPanel::default())
+            .register_panel(panel::SysmlRequirementDetailsPanel)
             .add_systems(Update, view_model::produce_sysml_requirements_view_model)
             .add_systems(Update, verification::poll_sysml_verification_run)
             .add_observer(verification::start_sysml_verification)

@@ -742,6 +742,18 @@ link or Twin test mapping remain visible as coverage gaps and are skipped. Save
 or discard open SysML edits before running; the runner reads the saved Twin
 source.
 
+The overview separates requirement usages, definitions, and source-file counts.
+Its actionable counters filter missing formal `require` criteria, missing
+`verify` links, unmapped Twin tests, or mapped tests without a current result.
+The virtualized table sorts by identity, kind, source, evidence, Twin test,
+model coverage, or overall status, keeping those status dimensions in separate
+columns. The table uses the full center pane; the docked Requirement details
+panel follows the selected row in the lower-right Editor pane. It summarizes
+the formal criterion, declared subjects, explicit `satisfy` links, verification
+mappings, and evidence. Use **Open full traceability** to move to the complete
+map; when a verification case has no Twin test mapping, **Open Twin test
+mapping** opens the active Twin's `twin.toml` in the source viewer.
+
 The overall status is `VERIFIED` only when the analyzed model has no source
 diagnostics, a formal `require` criterion exists, all `verify` links map to Twin
 tests, current structured requirement evidence passes, and every linked mapped

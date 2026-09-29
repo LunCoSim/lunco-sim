@@ -88,6 +88,21 @@ at run start and completion. The UI rejects mismatched source revisions and
 parses this process-boundary payload into the same evidence model used for live
 Twin telemetry; it does not infer verdicts or check details from output text.
 
+The Requirements view separates the inventory of requirement usages,
+definitions, and source files from its status breakdown. Actionable counters
+filter to missing formal `require` criteria, missing `verify` links, unmapped
+Twin tests, or mapped tests without a current result. The virtualized table can
+be sorted by identity, kind, source, evidence, Twin test, model coverage, or
+overall status; the evidence, execution, and coverage columns remain distinct.
+The table uses the full center pane; a docked Requirement details panel follows
+the selected row in the lower-right Editor pane. It summarizes the criterion,
+declared subjects, explicit `satisfy` links, resolved verification cases, Twin
+mappings, and evidence, with direct source navigation and a shortcut to the
+full Traceability view. When a `verify` link has no Twin test mapping, the
+detail can open the active Twin's `twin.toml` in the source viewer. Test
+execution remains available only for cases present in the Twin verification
+registry.
+
 **Run selected requirement tests** executes the unique mapped cases linked from
 the selected requirement. **Run all mapped tests** executes each unique
 Twin-mapped case linked from any requirement once, sequentially, and reports
