@@ -141,7 +141,9 @@ Mounted-scene USD queries without `doc_id` use the committed Twin generation.
 For broad providers such as `EntitiesInRadius`, `Raycast`, or `CosimStatus`,
 list the public provider name in `query_reads`. This declares the provider's
 whole snapshot as a coarse dependency. Broad queries cannot run while the plan
-is being resolved. Undeclared simulation-clock access through direct `get`,
+is being resolved; after commit, the same declaration authorizes the
+scenario-owned top-level initialization and lifecycle hooks. Undeclared
+simulation-clock access through direct `get`,
 `port`, or `ReadPorts` requires the matching direction. Targeted Modelica commands and
 Modelica event delivery require the target or producer in this scenario's own
 plan; aggregate barrier membership is not authorization.

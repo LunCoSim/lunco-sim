@@ -1721,23 +1721,47 @@ pub fn is_unattended() -> bool {
 // wall-clock / OS source would diverge across host and clients and break replay,
 // so the bridge gives them a stream that is a pure function of stable inputs:
 // the entity's networked `GlobalEntityId`, the producer/owner sequence (or a
-// discrete lifecycle seed), and the call order within the hook. Same inputs
-// produce the same number on every peer and every re-run. The runtime calls
-// `rng_begin` before each hook;
-// each `rng_next_*` advances the per-thread stream. Execution is single-threaded
-// (FixedUpdate / wasm), so the thread-local is sound and order is deterministic.
+// discrete lifecycle seed), and the call order within the evaluation. Same
+// inputs produce the same number on every peer and every re-run. The runtime
+// calls `rng_begin` before each scenario evaluation. Script identity is scoped
+// separately from the random stream. Each `rng_next_*` advances the per-thread
+// stream. Execution is single-threaded (FixedUpdate / wasm), so the thread-local
+// is sound and order is deterministic.
 
 thread_local! {
     static RNG_STATE: Cell<u64> = const { Cell::new(0) };
-    /// The gid of the entity whose hook is currently running — set by
-    /// `rng_begin` (called before every hook) so `emit` can stamp the EMITTER
-    /// onto its `TelemetryEvent.source` without the script passing `me`.
+    /// The gid of the entity whose script evaluation is currently running.
+    /// ScriptEntityScope binds it so access checks and `emit` use that actor.
     static CURRENT_SELF: Cell<u64> = const { Cell::new(0) };
 }
 
-/// The gid of the script entity whose hook is currently executing (`0` if none).
+/// The gid of the script entity whose evaluation is currently executing (`0`
+/// if none).
 pub fn current_self() -> u64 {
     CURRENT_SELF.with(|c| c.get())
+}
+
+/// Temporarily bind bridge operations to one executing script entity.
+///
+/// The scenario owner enters this around each backend evaluation so access
+/// checks can resolve the actor during initialization and lifecycle hooks. A
+/// nested evaluation restores its caller's identity on every exit path.
+pub struct ScriptEntityScope {
+    previous: u64,
+}
+
+impl ScriptEntityScope {
+    /// Set the script entity identity for the scope's lifetime.
+    pub fn enter(gid: u64) -> Self {
+        let previous = CURRENT_SELF.with(|current| current.replace(gid));
+        Self { previous }
+    }
+}
+
+impl Drop for ScriptEntityScope {
+    fn drop(&mut self) {
+        CURRENT_SELF.with(|current| current.set(self.previous));
+    }
 }
 
 /// SplitMix64 — advance `state`, return a well-diffused 64-bit value. Tiny,
@@ -1750,10 +1774,10 @@ fn splitmix64(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Seed the per-hook RNG stream from `(gid, optional sequence, salt)`. Event
-/// hooks use their producer sequence; discrete lifecycle hooks have no sequence
-/// and receive a separately tagged deterministic stream. `salt` decorrelates
-/// distinct hooks/events on the same entity.
+/// Seed the per-evaluation RNG stream from `(gid, optional sequence, salt)`.
+/// Event evaluations use their producer sequence; initialization and other
+/// discrete lifecycle evaluations use a separately tagged deterministic
+/// stream. `salt` decorrelates phases and events on the same entity.
 pub fn rng_begin(gid: u64, sequence: Option<u64>, salt: u64) {
     let sequence_seed = sequence
         .map(|sequence| sequence.wrapping_mul(0xD1B5_4A32_D192_ED03) ^ 1)
@@ -1762,7 +1786,6 @@ pub fn rng_begin(gid: u64, sequence: Option<u64>, salt: u64) {
         ^ sequence_seed
         ^ salt.wrapping_mul(0xA076_1D64_78BD_642F);
     RNG_STATE.with(|c| c.set(seed));
-    CURRENT_SELF.with(|c| c.set(gid));
 }
 
 /// Next uniform `f64` in `[0, 1)` from the seeded stream (53-bit mantissa).
@@ -1797,7 +1820,7 @@ pub fn emit(name: &str, value: TelemetryValue) -> bool {
         }
         world.trigger(TelemetryEvent {
             name: name.to_string(),
-            // The emitter = the script whose hook is running (set by rng_begin).
+            // The emitter is the script bound by `ScriptEntityScope`.
             source: current_self(),
             severity: Severity::Info,
             data: value,
@@ -1853,6 +1876,25 @@ pub fn telemetry_value<B: ValueBuilder>(b: &B, v: &TelemetryValue) -> B::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn script_entity_scope_restores_nested_identity_independently_of_rng() {
+        assert_eq!(current_self(), 0);
+        rng_begin(99, None, 0);
+        assert_eq!(current_self(), 0);
+        let outer = ScriptEntityScope::enter(41);
+        rng_begin(99, None, 0);
+        assert_eq!(current_self(), 41);
+        {
+            let inner = ScriptEntityScope::enter(73);
+            rng_begin(99, None, 0);
+            assert_eq!(current_self(), 73);
+            drop(inner);
+        }
+        assert_eq!(current_self(), 41);
+        drop(outer);
+        assert_eq!(current_self(), 0);
+    }
 
     #[test]
     fn query_errors_have_machine_readable_status_and_api_code() {
@@ -1987,6 +2029,7 @@ mod tests {
             &mut world,
             lunco_core::RuntimeExecutionContext::unclassified(),
         );
+        let _actor = ScriptEntityScope::enter(77);
         rng_begin(77, None, 0);
 
         // (1) Local/host launch → ungated. No observer is registered for the
