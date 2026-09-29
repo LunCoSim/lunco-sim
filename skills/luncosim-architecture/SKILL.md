@@ -142,13 +142,15 @@ consuming fixed tick through the same per-tick allocator. Missing facts or
 duplicate target/session order keys hold input with a structured runtime
 error; ordering does not fall back to Bevy `Entity` bits. An active
 `SessionInputStream` captures sorted canonical intent ids, admitted controls,
-lifecycle input-hold releases, and raw-file spawn records. Session authority
-changes do not rewrite endpoint simulation inputs. `ReleaseControlInputs`
-joins the queue for the next fixed tick and clears only local input holds after
-earlier admitted inputs. It does not write endpoint values; Twin policy owns
-any safe setpoint and must issue explicit named `SetPorts` writes. Capture
-retains the ordered lifecycle record when active. Missing target, generation,
-tick, or order facts produce a runtime error and leave existing holds intact. Spawn records retain producer,
+lifecycle input-hold releases, and raw-file spawn records.
+`ControlAuthorityChanged` queues `ReleaseControlInputs` for the next fixed
+tick. At its ordered commit, the co-simulation owner clears controller-owned
+port holds and the controller clears held semantic intents; authored program
+setpoints, endpoint values, and physics state remain intact. The release writes
+no stop value. Twin policy owns any stop setpoint and issues explicit named
+`SetPorts` writes. Capture retains the ordered lifecycle record when active.
+Missing target, generation, tick, or order facts produce a runtime error and
+leave existing holds intact. Spawn records retain producer,
 correlation, stable scene-root and active-frame identities, original f64 pose,
 admission stamp, and reserved root id; acknowledgements expose that stamp.
 Document-backed `SpawnEntity` still authors only `ApplyUsdOps` into the Twin

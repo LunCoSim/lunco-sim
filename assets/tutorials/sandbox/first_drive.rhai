@@ -35,7 +35,7 @@ fn on_start(me, ctx) {
     }
     for entrant in occupants.entrants {
         if first_drive_entity_within(entrant, this.rover) {
-            emit("first_drive_waypoint_reached", entrant);
+            emit("first_drive_waypoint_reached", this.rover);
             break;
         }
     }
@@ -69,27 +69,35 @@ fn first_drive_possessed(me) {
     hint("Drive with " + input_hint("forward") + " / " + input_hint("backward") + ". Steer with " + input_hint("left") + " / " + input_hint("right") + ".\n\nStop at the glowing flag.");
 }
 
-fn first_drive_finished(me) {
+fn first_drive_finished(me, rover) {
+    let stopped = modelica_waypoint_stop(rover);
+    if stopped == () || stopped.ok != true {
+        let detail = if stopped == () { "no command result" } else { stopped.error };
+        notify_kind(
+            "First Drive waypoint stop command was rejected: " + detail,
+            "error");
+        return;
+    }
     notify_kind("You reached the flag — nice driving!", "success");
 }
 
-fn first_drive_controlled(me) {
+fn first_drive_controlled(me, rover) {
     // Headless acceptance runs have no local input controller. Their authored
     // task takes the rover through the same target and arrival objectives.
     if is_unattended() { return true; }
-    let rover = find_path("/FirstDrive/Rover");
     rover >= 0 && controller(rover) != ()
 }
 
 fn mission(me, ctx) {
-    // Named functions are used for the live possession check. Arrival is an
-    // event objective so no callback needs to read scenario state indirectly.
+    // Keep one resolved target in the objectives; sensor arrival is validated
+    // against this same scene entity before the event advances the mission.
+    let rover = find_path("/FirstDrive/Rover");
     [
         // Step 1 — take control. A request is not success; live controller state
         // must show that this rover is actually owned.
         objective("possess", #{
             text: "Select the rover and click Possess in Inspector or Command Deck",
-            done: Fn("first_drive_controlled"),
+            done: |m| first_drive_controlled(m, rover),
             on_complete: Fn("first_drive_possessed"),
         }),
         // Step 2 — the exact flag sensor must report entry by this rover (or
@@ -98,7 +106,7 @@ fn mission(me, ctx) {
             text: "Drive to the glowing flag and stop there",
             requires: ["possess"],
             requires_event: "first_drive_waypoint_reached",
-            on_complete: Fn("first_drive_finished"),
+            on_complete: |m| first_drive_finished(m, rover),
         }),
     ]
 }
@@ -106,30 +114,20 @@ fn mission(me, ctx) {
 fn on_event(me, evt, ctx) {
     if sensor_entered(evt, this.flag_sensor)
         && first_drive_entity_within(evt.value, this.rover) {
-        emit("first_drive_waypoint_reached", evt.value);
+        emit("first_drive_waypoint_reached", this.rover);
     }
 
     // The engine emits MISSION_COMPLETE once every objective is done.
     if evt.name == "MISSION_COMPLETE" {
         hint("You took control and reached the flag.\n\nClick Continue to start Moon Driving Basics, or choose another lesson from Tutorials.");
         notify_kind("First Drive complete", "success");
-    } else if evt.name == "cmd:ReleaseControlSource" {
-        // Releasing the avatar only relinquishes authority. Stop this lesson's
-        // rover endpoint explicitly so it cannot coast away from the waypoint.
-        let rover = find_path("/FirstDrive/Rover");
-        if rover >= 0 {
-            let stopped = cmd("ReleaseControl", #{ target: rover });
-            if stopped == () || stopped.ok != true {
-                notify_kind("First Drive could not safely stop the rover after control was released.", "error");
-            }
-        }
     }
 }
 
 // UNATTENDED guidance runs alongside the mission for headless acceptance.
 // Windowed sessions leave control to the student. Modelica owns continuous
-// driving; entry into the Avian sensor, not a script distance threshold, ends
-// the approach and tells this task when to brake.
+// driving; the Avian sensor defines arrival, and the objective completion
+// callback applies the authored brake setpoint in either mode.
 
 fn first_drive_publish_waypoint(me) {
     let rover = find_path("/FirstDrive/Rover");
@@ -148,17 +146,12 @@ fn first_drive_publish_waypoint(me) {
     }
 }
 
-fn first_drive_brake(me) {
-    modelica_waypoint_stop(find_path("/FirstDrive/Rover"))
-}
-
 fn task(me, ctx) {
     if !is_unattended() { return; }   // a human is watching: they drive
     seq([
         wait(1.0),
         once(|m| first_drive_publish_waypoint(m)),
         wait_for("first_drive_waypoint_reached"),
-        once(|m| first_drive_brake(m)),
         wait(2.0),
     ])
 }

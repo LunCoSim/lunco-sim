@@ -1,4 +1,5 @@
-// Production API acceptance for authority release preserving endpoint inputs.
+// Production API acceptance for authority release clearing controller holds
+// without writing replacement endpoint values.
 // @timing simulation
 
 fn simulation_dependencies(me, params) {
@@ -46,7 +47,7 @@ fn on_tick(me, params) {
             lifecycle_release = record;
         }
     }
-    if port_write == () { return; }
+    if port_write == () || lifecycle_release == () { return; }
 
     let ports = query("ReadPorts", #{ api_id: this.target_gid });
     if ports == () || ports["ports"] == () { return; }
@@ -64,6 +65,12 @@ fn on_tick(me, params) {
             == this.admission["effective_tick"].to_string()
         && port_write["sequence"].to_string()
             == this.admission["sequence"].to_string();
+    let lifecycle_release_ordered = lifecycle_release["target"].to_string()
+            == this.target_gid.to_string()
+        && lifecycle_release["producer"]["kind"] == "runtime_lifecycle"
+        && (lifecycle_release["effective_tick"] > port_write["effective_tick"]
+            || (lifecycle_release["effective_tick"] == port_write["effective_tick"]
+                && lifecycle_release["sequence"] > port_write["sequence"]));
     let producer_matches = port_write["producer"]["kind"] == "api_transport"
         && port_write["producer"]["value"]["producer_id"].to_string()
             == this.producer_id.to_string()
@@ -82,8 +89,8 @@ fn on_tick(me, params) {
             "the endpoint input write retained its admitted fixed-tick identity"),
         t_true(producer_matches && captured_writes == this.expected_writes,
             "the captured endpoint input write differs from the API request"),
-        t_true(lifecycle_release == (),
-            "ClaimControl/ReleaseControlClaim must not enqueue a lifecycle input release"),
+        t_true(lifecycle_release_ordered,
+            "authority release must enqueue an ordered controller-input release"),
         t_true(ports_preserved,
             "authority release changed endpoint inputs: " + values.to_string()),
         t_true(stopped["ok"] == true && complete["state"] == "complete",

@@ -29,7 +29,10 @@ and those slots. A write-only input is a valid target but not a readable source.
 `PortMap<T>` provides dynamic named surfaces with layout-checked process-local
 handles. Structural edits publish a topology revision and recompile the fabric;
 stale handles are rejected rather than retried through a name path. Sparse
-`PortHolds` are iterated by borrowed names and matched once to compiled target
+`PortHolds` retains controller input and authored-program setpoints in separate
+layers; controller values take precedence over program values, which take
+precedence over the wiring fabric. The authored layer survives authority
+release so autopilot guidance resumes naturally. Holds are iterated by borrowed names and matched once to compiled target
 indices, so the tick does not hash every target against the hold table.
 
 `PortRegistry::entity_port_infos` is the inspection projection used by the native
@@ -49,17 +52,18 @@ the admitted write. Simulation-clock Rhai and
 fixed-step controller writes keep their owning execution path. Explicit
 external `ReleasePort`/`ReleaseControl` commands share the admission queue and
 remove local input holds at their ordered commit without writing replacement
-values. The internal `ReleaseControlInputs` lifecycle event handles
-disconnection at the next fixed tick using the same ordered queue. It only
-clears local holds; authored wiring determines subsequent input values.
+values. A `ControlAuthorityChanged` event queues `ReleaseControlInputs` for each
+released endpoint at the next fixed tick. This clears controller-owned holds
+and held semantic intents while preserving authored program setpoints and
+physics state. Connection loss uses the same lifecycle release.
 Twin-owned safety behavior writes declared setpoints explicitly with
 `SetPorts`. `PortRegistry` uses the same declared owner resolution for named
 writes and fast-path input locators, so a lower owner cannot receive a write
 after the selected owner refuses it. Session capture retains the lifecycle
 hold-release record at its commit when active. A missing stable target, scene
 generation, tick, or shared order stamp reports a runtime error and keeps the
-existing holds. Session authority changes alone do not issue this event or
-alter endpoint inputs.
+existing holds. The release never writes replacement endpoint values or
+changes velocity.
 
 `PortRegistry::port_entities` is the corresponding discovery projection. Each
 backend enumerates the component or authored surface it owns, and the registry
