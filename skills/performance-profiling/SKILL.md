@@ -104,7 +104,9 @@ geometry does not traverse every retained history sample each repaint,
 preserving narrow peaks. Cache each buffer's full-data bounds so egui auto-fit
 does not scan all samples on every repaint. Keep experiment variable groups
 and positivity summaries in the change-gated view model instead of regrouping
-names or scanning all sample values during graph painting.
+names or scanning all sample values during graph painting. Time-series hover
+may use monotone-X interval pruning; keep the dependency's general segment
+search for phase-space curves where X can reverse.
 For the entity tree, derive parent and grid facts through indexed lookups along
 named candidates' deduplicated ancestor closure instead of copying every scene
 entity's `ChildOf` and `Grid` membership into the snapshot.

@@ -347,7 +347,9 @@ The same ownership rule applies to the measured presentation paths:
   about one sample per logical display point while preserving extrema and
   endpoints. It computes full-data axis bounds with the same buffer. Plot items
   borrow the cached `PlotPoint` slice; they do not clone samples or rescan the
-  history to auto-fit axes on each paint.
+  history to auto-fit axes on each paint. Time-series hover uses the known
+  monotone X order to prune line-segment distance checks; phase-space curves
+  use the general search.
 - **Status sparklines** use the same retained `SignalRegistry` history as every
   other telemetry visualization. `lunco-viz` derives and caches decimated points
   and summary statistics from a `(SignalRef, history fingerprint, width)` key;

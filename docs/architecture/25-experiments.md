@@ -263,7 +263,10 @@ full-data bounds keep egui's auto-fit pass from rescanning every sample on
 every repaint. While a replacement buffer builds for the same stable series
 and log-Y mode, the plot keeps drawing its last completed buffer. Plot items
 borrow those buffers; they do not clone the full sample vectors per frame.
-Screen-space line geometry is still rebuilt for display.
+For time-sorted series, pointer hover searches only segments whose X interval
+can beat the nearest segment found so far; phase-space plots retain the general
+search because their X values may reverse. Screen-space line geometry is still
+rebuilt for display.
 
 ## Future enhancements
 

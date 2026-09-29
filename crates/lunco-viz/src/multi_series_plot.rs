@@ -7,7 +7,8 @@
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use egui;
 use egui_plot::{
-    Legend, Line, LineStyle, Plot, PlotBounds, PlotItem, PlotPoint, PlotPoints, PlotUi, VLine,
+    ClosestElem, Legend, Line, LineStyle, Plot, PlotBounds, PlotGeometry, PlotItem, PlotPoint,
+    PlotPoints, PlotTransform, PlotUi, VLine,
 };
 use std::sync::{Arc, Mutex};
 
@@ -47,6 +48,7 @@ struct MultiSeriesPlotCache {
 struct CachedBoundsLine<'a> {
     line: Line<'a>,
     bounds: PlotBounds,
+    monotonic_x: bool,
 }
 
 impl egui_plot::PlotItem for CachedBoundsLine<'_> {
@@ -71,6 +73,15 @@ impl egui_plot::PlotItem for CachedBoundsLine<'_> {
         self.line.geometry()
     }
 
+    fn find_closest(&self, pointer: egui::Pos2, transform: &PlotTransform) -> Option<ClosestElem> {
+        if self.monotonic_x {
+            if let PlotGeometry::Points(points) = self.line.geometry() {
+                return closest_monotonic_line_point(points, pointer, transform);
+            }
+        }
+        self.line.find_closest(pointer, transform)
+    }
+
     fn bounds(&self) -> PlotBounds {
         self.bounds
     }
@@ -84,8 +95,110 @@ impl egui_plot::PlotItem for CachedBoundsLine<'_> {
     }
 }
 
-pub(crate) fn add_cached_line<'a>(plot_ui: &mut PlotUi<'a>, line: Line<'a>, bounds: PlotBounds) {
-    plot_ui.add(CachedBoundsLine { line, bounds });
+pub(crate) fn add_cached_line<'a>(
+    plot_ui: &mut PlotUi<'a>,
+    line: Line<'a>,
+    bounds: PlotBounds,
+    monotonic_x: bool,
+) {
+    plot_ui.add(CachedBoundsLine {
+        line,
+        bounds,
+        monotonic_x,
+    });
+}
+
+/// Find the nearest line segment while pruning segments whose X interval is
+/// already farther from the pointer than the best candidate. Time-series X
+/// values are ordered, so the search is logarithmic plus the nearby segments
+/// that could beat the current distance. Non-monotonic phase-space lines use
+/// egui_plot's general search.
+fn closest_monotonic_line_point(
+    points: &[PlotPoint],
+    pointer: egui::Pos2,
+    transform: &PlotTransform,
+) -> Option<ClosestElem> {
+    match points.len() {
+        0 => return None,
+        1 => {
+            return Some(ClosestElem {
+                index: 0,
+                dist_sq: pointer.distance_sq(transform.position_from_point(&points[0])),
+            });
+        }
+        _ => {}
+    }
+
+    let pointer_x = transform.value_from_position(pointer).x;
+    let insertion = points.partition_point(|sample| sample.x < pointer_x);
+    let last_segment = points.len() - 2;
+    let center = insertion.saturating_sub(1).min(last_segment);
+    let mut best_segment = center;
+    let mut best = closest_line_segment(points, center, pointer, transform);
+
+    let mut left = center;
+    while left > 0 {
+        let candidate = left - 1;
+        let nearest_x = transform.position_from_point_x(points[candidate + 1].x);
+        let min_dist_sq = (pointer.x - nearest_x).powi(2);
+        if min_dist_sq > best.dist_sq {
+            break;
+        }
+        let closest = closest_line_segment(points, candidate, pointer, transform);
+        if closest.dist_sq.total_cmp(&best.dist_sq).is_lt()
+            || (closest.dist_sq == best.dist_sq && candidate < best_segment)
+        {
+            best = closest;
+            best_segment = candidate;
+        }
+        left = candidate;
+    }
+
+    let mut right = center + 1;
+    while right <= last_segment {
+        let nearest_x = transform.position_from_point_x(points[right].x);
+        let min_dist_sq = (pointer.x - nearest_x).powi(2);
+        if min_dist_sq > best.dist_sq {
+            break;
+        }
+        let closest = closest_line_segment(points, right, pointer, transform);
+        if closest.dist_sq.total_cmp(&best.dist_sq).is_lt()
+            || (closest.dist_sq == best.dist_sq && right < best_segment)
+        {
+            best = closest;
+            best_segment = right;
+        }
+        right += 1;
+    }
+
+    Some(best)
+}
+
+fn closest_line_segment(
+    points: &[PlotPoint],
+    segment: usize,
+    pointer: egui::Pos2,
+    transform: &PlotTransform,
+) -> ClosestElem {
+    let first = transform.position_from_point(&points[segment]);
+    let second = transform.position_from_point(&points[segment + 1]);
+    let delta = second - first;
+    let delta_len_sq = delta.length_sq();
+    let closest = if delta_len_sq == 0.0 {
+        first
+    } else {
+        let along = (pointer - first).dot(delta) / delta_len_sq;
+        first + along.clamp(0.0, 1.0) * delta
+    };
+    let first_index = if pointer.distance_sq(first) <= pointer.distance_sq(second) {
+        segment
+    } else {
+        segment + 1
+    };
+    ClosestElem {
+        index: first_index,
+        dist_sq: pointer.distance_sq(closest),
+    }
 }
 
 fn cached_plot_points(
@@ -363,6 +476,7 @@ pub fn render_multi_series_plot(
                     .color(*color)
                     .style(*style),
                 points.bounds,
+                true,
             );
         }
         for (label, color, points) in &plotted_overlays {
@@ -370,6 +484,7 @@ pub fn render_multi_series_plot(
                 plot_ui,
                 Line::new(label.clone(), PlotPoints::from(points.points.as_slice())).color(*color),
                 points.bounds,
+                true,
             );
         }
         if let Some(time) = options.scrub_time {

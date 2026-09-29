@@ -773,6 +773,7 @@ impl LinePlot {
                     plot_ui,
                     Line::new(label.clone(), PlotPoints::from(series.1.as_slice())).color(*color),
                     series.2,
+                    style.x_signal.is_none(),
                 );
             }
         });
