@@ -610,6 +610,10 @@ state during paint and retain an owned selection snapshot only when the
 selection changes. Settings groups and other non-hierarchical detail accordions
 remain local to their owning panel.
 
+Selectable tree rows use `tree::selectable_label`, including when they are
+drag sources or reserve trailing value columns. The drag wrapper composes
+around the shared label; it does not introduce another button layout.
+
 The Editor Prims panel uses the same full-width selectable row as Entities. Its
 right edge carries three transient preview controls per prim: Visible,
 Invisible, and Contour. A click emits the typed `SetUsdPrimDisplayMode` event
