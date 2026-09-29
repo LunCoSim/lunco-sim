@@ -88,7 +88,7 @@ impl Default for SimConnection {
     }
 }
 
-/// Manual setpoints that OUTRANK the wiring fabric, until explicitly released.
+/// Persistent input setpoints that outrank the wiring fabric until released.
 ///
 /// # Why a hold, and not just a write
 ///
@@ -99,40 +99,65 @@ impl Default for SimConnection {
 /// a port that does not exist. Every "I set the throttle and nothing happened"
 /// report has this shape.
 ///
-/// So a manual write is a HOLD: latest-wins, addressed by `(entity, port)`, and
-/// applied by the propagation master in place of the accumulated value while it
-/// is live. The accumulator itself is untouched — a hold suppresses a wire, it
-/// does not corrupt the sum feeding other targets.
+/// Control and authored-program writes are held separately. A live control hold
+/// takes precedence over a program hold, which takes precedence over wiring. The
+/// propagation master applies the selected value in place of the accumulated
+/// value; the accumulator itself is untouched.
 ///
 /// A control intent is a level, not a pulse. It remains the latest value until
-/// the owner explicitly releases that port or the lifecycle boundary clears the
-/// vehicle. Re-setting the same port is latest-wins. This makes a single command
-/// deterministic across fixed ticks and lets a controller release all of its
-/// related ports atomically through `ReleaseControl`.
+/// the owner explicitly releases it or possession is released. Authored program
+/// holds survive possession changes so a running autopilot keeps its setpoints.
 #[derive(Resource, Debug, Default)]
 pub struct PortHolds {
-    /// `(entity, port) → latest commanded value`.
+    /// `(entity, port) → control and authored-program setpoints`.
     /// Names are indexed inside their entity so fixed-step readers can look up
     /// a borrowed `&str` without constructing an owned tuple key.
-    holds: std::collections::HashMap<Entity, std::collections::HashMap<String, f64>>,
+    holds: std::collections::HashMap<Entity, std::collections::HashMap<String, PortHold>>,
     /// Changes only when a live intent is added, changed, or removed. The
     /// propagation cache uses this to rebuild held target indices off the
     /// steady fixed-tick path.
     revision: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct PortHold {
+    control: Option<f64>,
+    program: Option<f64>,
+}
+
+impl PortHold {
+    fn resolved(self) -> Option<f64> {
+        self.control.or(self.program)
+    }
+
+    fn is_empty(self) -> bool {
+        self.control.is_none() && self.program.is_none()
+    }
+}
+
 impl PortHolds {
-    /// Set the persistent intent for `port` on `entity`.
+    /// Set a persistent control intent for `port` on `entity`.
     pub fn hold(&mut self, entity: Entity, port: impl Into<String>, value: f64) {
-        let port = port.into();
+        self.set(entity, port.into(), value, false);
+    }
+
+    /// Set an authored program setpoint for `port` on `entity`.
+    pub fn hold_program(&mut self, entity: Entity, port: impl Into<String>, value: f64) {
+        self.set(entity, port.into(), value, true);
+    }
+
+    fn set(&mut self, entity: Entity, port: String, value: f64, program: bool) {
         let ports = self.holds.entry(entity).or_default();
-        if ports
-            .get(port.as_str())
-            .is_some_and(|current| current.to_bits() == value.to_bits())
-        {
+        let hold = ports.entry(port).or_default();
+        let current = if program {
+            &mut hold.program
+        } else {
+            &mut hold.control
+        };
+        if current.is_some_and(|current| current.to_bits() == value.to_bits()) {
             return;
         }
-        ports.insert(port, value);
+        *current = Some(value);
         self.bump_revision();
     }
 
@@ -142,7 +167,7 @@ impl PortHolds {
         self.holds
             .get(&entity)
             .and_then(|ports| ports.get(port))
-            .copied()
+            .and_then(|hold| hold.resolved())
     }
 
     /// Iterate active intents without cloning names. The propagation engine
@@ -150,9 +175,9 @@ impl PortHolds {
     /// hashing every target against the hold table on every physics tick.
     pub fn iter(&self) -> impl Iterator<Item = (Entity, &str, f64)> + '_ {
         self.holds.iter().flat_map(|(&entity, ports)| {
-            ports
-                .iter()
-                .map(move |(name, &value)| (entity, name.as_str(), value))
+            ports.iter().filter_map(move |(name, hold)| {
+                hold.resolved().map(|value| (entity, name.as_str(), value))
+            })
         })
     }
 
@@ -176,6 +201,28 @@ impl PortHolds {
         if self.holds.remove(&entity).is_some() {
             self.bump_revision();
         }
+    }
+
+    /// Clear only operator/controller inputs for an endpoint. Authored program
+    /// setpoints remain active through an authority handoff.
+    pub fn clear_control_entity(&mut self, entity: Entity) {
+        let Some(ports) = self.holds.get_mut(&entity) else {
+            return;
+        };
+        let mut released = false;
+        for hold in ports.values_mut() {
+            if hold.control.take().is_some() {
+                released = true;
+            }
+        }
+        if !released {
+            return;
+        }
+        ports.retain(|_, hold| !hold.is_empty());
+        if ports.is_empty() {
+            self.holds.remove(&entity);
+        }
+        self.bump_revision();
     }
 
     /// Clear every intent at a scene boundary while preserving the revision
@@ -219,9 +266,10 @@ impl PortHolds {
         self.holds
             .iter()
             .flat_map(|(entity, ports)| {
-                ports
-                    .iter()
-                    .map(move |(name, value)| ((*entity, name.clone()), *value))
+                ports.iter().filter_map(move |(name, hold)| {
+                    hold.resolved()
+                        .map(|value| ((*entity, name.clone()), value))
+                })
             })
             .collect()
     }
@@ -263,6 +311,26 @@ mod port_hold_tests {
         holds.clear_all();
         assert!(holds.is_empty());
         assert!(holds.revision() > released);
+    }
+
+    #[test]
+    fn control_release_reveals_authored_program_setpoint() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let mut holds = PortHolds::default();
+
+        holds.hold_program(entity, "throttle", 0.4);
+        holds.hold(entity, "throttle", 0.9);
+        assert_eq!(holds.get(entity, "throttle"), Some(0.9));
+
+        holds.clear_control_entity(entity);
+
+        assert_eq!(holds.get(entity, "throttle"), Some(0.4));
+        assert_eq!(
+            holds.iter().collect::<Vec<_>>(),
+            vec![(entity, "throttle", 0.4)]
+        );
+        assert!(!holds.is_empty());
     }
 }
 

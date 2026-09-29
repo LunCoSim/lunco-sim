@@ -92,14 +92,16 @@ lifecycle/checkpoint states, the first behavior state at tick 1, an explicit
 final-stage state, and articulated-body samples at ticks 1, 11, 80, and final;
 it does not emit per-tick traces. The comparator requires exact final physics,
 Modelica, and articulated equality before checking earlier selected states.
-Use `--record-reference PATH` to save the selected states for the 4/8/20-rover,
-Compute and jitter/seed profiles at the default 60 Hz fixed step, then
-`--compare-reference PATH` on another machine. The matrix leaves `--tick-hz`
-unset and runs its manual clock without wall-time pacing, so it advances as
-quickly as scene updates and required asynchronous work allow. The reference
-records source, input, binary, and machine metadata and requires exact equality
-(`numeric_tolerance=0`). This remains fixture-specific evidence. Do not claim
-whole-simulation replay determinism while the remaining reviewed gaps are open.
+The matrix leaves `--tick-hz` unset and runs its manual clock without wall-time
+pacing at the default 60 Hz fixed step. By default it compares against
+`scripts/tests/fixtures/deterministic-physics-reference.json`; use
+`--compare-reference PATH` to select another baseline or
+`--record-reference PATH` to intentionally replace one. The reference records
+source, input, binary, and machine metadata and requires exact equality
+(`numeric_tolerance=0`). Its tracked-source fingerprint excludes only the
+reference file, so the committed fixture remains valid. This remains
+fixture-specific evidence. Do not claim whole-simulation replay determinism
+while the remaining reviewed gaps are open.
 
 Reflected commands sent through `ApiCommandEvent` retain whether they came from
 an API transport or a Rhai evaluation; generated `CommandOccurred` facts carry
@@ -142,13 +144,15 @@ consuming fixed tick through the same per-tick allocator. Missing facts or
 duplicate target/session order keys hold input with a structured runtime
 error; ordering does not fall back to Bevy `Entity` bits. An active
 `SessionInputStream` captures sorted canonical intent ids, admitted controls,
-lifecycle input-hold releases, and raw-file spawn records. Session authority
-changes do not rewrite endpoint simulation inputs. `ReleaseControlInputs`
-joins the queue for the next fixed tick and clears only local input holds after
-earlier admitted inputs. It does not write endpoint values; Twin policy owns
-any safe setpoint and must issue explicit named `SetPorts` writes. Capture
-retains the ordered lifecycle record when active. Missing target, generation,
-tick, or order facts produce a runtime error and leave existing holds intact. Spawn records retain producer,
+lifecycle input-hold releases, and raw-file spawn records.
+`ControlAuthorityChanged` queues `ReleaseControlInputs` for the next fixed
+tick. At its ordered commit, the co-simulation owner clears controller-owned
+port holds and the controller clears held semantic intents; authored program
+setpoints, endpoint values, and physics state remain intact. The release writes
+no stop value. Twin policy owns any stop setpoint and issues explicit named
+`SetPorts` writes. Capture retains the ordered lifecycle record when active.
+Missing target, generation, tick, or order facts produce a runtime error and
+leave existing holds intact. Spawn records retain producer,
 correlation, stable scene-root and active-frame identities, original f64 pose,
 admission stamp, and reserved root id; acknowledgements expose that stamp.
 Document-backed `SpawnEntity` still authors only `ApplyUsdOps` into the Twin

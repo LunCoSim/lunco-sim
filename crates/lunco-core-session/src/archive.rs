@@ -79,6 +79,7 @@ enum ArchivePayload {
     ControlInputRelease {
         correlation_id: u64,
     },
+    /// Lifecycle release of controller input holds only.
     ControlInputsReleased,
 }
 
@@ -447,14 +448,12 @@ impl SessionInputCaptureArchive {
         }
         if version < 5
             && wire_records.iter().any(|record| {
-                matches!(
-                    &record.producer,
-                    ArchiveProducer::RuntimeLifecycle
-                ) || matches!(
-                    &record.payload,
-                    ArchivePayload::ControlInputRelease { .. }
-                        | ArchivePayload::ControlInputsReleased
-                )
+                matches!(&record.producer, ArchiveProducer::RuntimeLifecycle)
+                    || matches!(
+                        &record.payload,
+                        ArchivePayload::ControlInputRelease { .. }
+                            | ArchivePayload::ControlInputsReleased
+                    )
             })
         {
             return Err(format!(
@@ -1010,9 +1009,11 @@ mod tests {
         for version in [3_u16, 4] {
             let mut bytes = encode_wire_records(std::slice::from_ref(&record));
             bytes[8..10].copy_from_slice(&version.to_le_bytes());
-            assert!(SessionInputCaptureArchive::from_bytes(&bytes)
-                .expect_err("earlier release records apply retired value-writing semantics")
-                .contains("require session input archive version 5"));
+            assert!(
+                SessionInputCaptureArchive::from_bytes(&bytes)
+                    .expect_err("earlier release records apply retired value-writing semantics")
+                    .contains("require session input archive version 5")
+            );
         }
     }
 
@@ -1049,9 +1050,11 @@ mod tests {
         let mut version_four = encode_wire_records(&[record]);
         version_four[8..10].copy_from_slice(&4_u16.to_le_bytes());
 
-        assert!(SessionInputCaptureArchive::from_bytes(&version_four)
-            .expect_err("version four lifecycle records imply value-writing behavior")
-            .contains("require session input archive version 5"));
+        assert!(
+            SessionInputCaptureArchive::from_bytes(&version_four)
+                .expect_err("version four lifecycle records imply value-writing behavior")
+                .contains("require session input archive version 5")
+        );
     }
 
     #[test]

@@ -147,6 +147,8 @@ producer must not rebuild a projection in the background.
 `WorkbenchSnapshot::is_panel_visible` is the shared visibility boundary for
 that decision; selecting the panel makes its normal producer cadence eligible
 again. `is_panel_docked` remains the layout-presence query for shell operations.
+The dock adapter borrows registered panel objects in place during a paint pass;
+it does not remove and reinsert each visible tab through the panel registry.
 The snapshot also publishes exact visible `TabId`s for instance panels, and
 `WorkbenchSnapshotPublishSet` orders consumers after that publication. USD
 preview cameras remain active only while their Visual singleton/instance tab is
@@ -212,6 +214,9 @@ the physics solver empties. Never block that queue:
 - **No per-frame allocations in the common path.** `String` clones
   and `Vec` rebuilds that happen on a no-op path are the most
   common offenders — pre-allocate, reuse, or skip entirely.
+- Workbench visualization configs are immutable `Arc` snapshots while a panel
+  paints. Registry edits use copy-on-write, so plot panels do not deep-clone
+  signal bindings and style data on every frame.
 - The Workbench keeps its immutable theme snapshot and derived egui visuals
   behind the theme revision. A stable frame reuses that snapshot and does not
   reapply context-wide visuals. The runtime-UI render acknowledgement follows
@@ -351,6 +356,11 @@ The same ownership rule applies to the measured presentation paths:
 - **Dock anchors** publish all authored slot unions from one dock-tree walk.
   Adding another anchor group must extend that pass rather than add another
   full layout traversal.
+- **Workbench layout snapshots** compare borrowed tab, visible-tab, and
+  perspective iterators against the published snapshot before building owned
+  vectors. The stable `Update` check must not allocate a replacement merely
+  because egui mutably borrows the dock each frame; panel and docked-panel
+  lists are derived from those canonical inputs when they actually change.
 - **Universal port inspection** uses `PortRegistry::port_entities`: each
   registered backend enumerates its own authoritative component/surface
   candidates, and the registry deduplicates them. The Builder Ports panel must

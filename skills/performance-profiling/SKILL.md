@@ -36,6 +36,9 @@ should be gated by a revision/change event. Structural edits should invalidate
 structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
+The shell's steady `WorkbenchSnapshot` check compares borrowed dock and
+perspective iterators before materializing owned vectors; preserve that
+allocation-free stable path when changing layout publication.
 
 When a measured UI snapshot builds several indexes from the same entity
 population, combine compatible marker reads into the existing query and avoid

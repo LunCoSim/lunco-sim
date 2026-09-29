@@ -380,10 +380,10 @@ remote-control adapter, or another specialized controller. `ClaimControl` and
 `ReleaseControlClaim` expose the session transition directly for those
 headless/authored producers; each accepted transition emits
 `ControlAuthorityChanged`. Authority updates change who may provide manual
-input, while the co-simulation endpoint keeps its current simulation inputs.
-An endpoint lifecycle event such as disconnection releases local input holds
-at the next fixed tick without writing a replacement value. Twin control
-policy owns any stop setpoint and writes it explicitly through `SetPorts`.
+input. The co-simulation owner releases controller-owned port holds and the
+controller clears held semantic intents at the next fixed tick; authored
+program setpoints and physics state remain intact. Twin control policy owns any
+stop setpoint and writes it explicitly through `SetPorts`.
 
 `AcquireControl` is the avatar-level composition of those primitives: its command
 validates the target's writable input surface, asks the session authority to
@@ -399,9 +399,11 @@ transaction rather than maintaining a parallel ownership path.
 
 A possession handoff releases prior claims for the session except the selected
 target, then commits the new link. Releasing possession removes the local
-control and camera bindings and updates the authority presentation; it does not
-write rover ports or stop an authored autopilot. Wire-applied commands update
-authority without binding a remote avatar to the local camera.
+control and camera bindings and updates the authority presentation. The ordered
+release clears controller holds and held semantic intents; it does not write a
+brake/zero setpoint, clear authored autopilot inputs, or change velocity.
+Wire-applied commands update authority without binding a remote avatar to the
+local camera.
 
 Free-flight and surface movement are kinematic camera motion and use the shared
 BigSpace/Avian collision contract described in

@@ -825,13 +825,14 @@ pub enum SessionInputPayload {
         /// Correlation id from the admitted command.
         correlation_id: u64,
     },
-    /// Release every local input hold for an endpoint at a fixed simulation
+    /// Release every local setpoint hold for an endpoint at a fixed simulation
     /// tick in response to a command.
     ControlInputRelease {
         /// Correlation id from the admitted command.
         correlation_id: u64,
     },
-    /// Release every local input hold at a lifecycle boundary.
+    /// Release controller holds at a lifecycle boundary while preserving
+    /// authored program setpoints.
     ControlInputsReleased,
 }
 
@@ -1071,10 +1072,7 @@ fn validate_session_input(
             SessionInputPayload::PortInputRelease { .. }
             | SessionInputPayload::ControlInputRelease { .. },
         )
-        | (
-            SessionInputProducer::RuntimeLifecycle,
-            SessionInputPayload::ControlInputsReleased,
-        ) => {}
+        | (SessionInputProducer::RuntimeLifecycle, SessionInputPayload::ControlInputsReleased) => {}
         (SessionInputProducer::PhysicalController { .. }, _) => {
             return Err("physical controller producer requires a physical intent frame".to_owned());
         }
