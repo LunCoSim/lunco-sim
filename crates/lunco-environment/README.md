@@ -85,9 +85,12 @@ environment resolves its target bearing in that probe's own BigSpace frame.
 
 ### `LocalGravity(DVec3)`
 
-Gravity vector at an entity's world-space position, in m/s². Computed each
-`FixedUpdate` from the global [`Gravity`](https://docs.rs/lunco-celestial)
-resource:
+Gravity vector at an entity's world-space position, in m/s². Computed in
+`FixedUpdate` when gravity, frame, provider, transform, or body-link inputs
+change. Stable ticks return before entity iteration; a global invalidation
+checks all entities. Changed valid values are applied as one deferred batch,
+while unresolved surface links remove stale values. The source is the global
+[`Gravity`](https://docs.rs/lunco-celestial) resource:
 
 - **`Gravity::Flat`** — same vector for all entities (sandbox / single-body)
 - **`Gravity::Surface`** — per-entity vector via `GravityBody` link to a body

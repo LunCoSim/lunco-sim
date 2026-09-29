@@ -36,6 +36,11 @@ should be gated by a revision/change event. Structural edits should invalidate
 structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
+For a system that queues many compatible ECS component changes, inspect its
+`system_commands` flush separately from the system body. Collect changed values
+and use the owning crate's existing batch command path where it preserves the
+same commit boundary; retain change filtering so a quiet fixed cycle queues
+nothing.
 In panel paint code, use `PanelCtx::resource` for reads. Its `resource_scope`
 temporarily removes and reinserts the resource, which marks it changed even
 when the closure only reads it. Scope a mutable borrow only around a real

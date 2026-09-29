@@ -117,9 +117,9 @@ pub enum EnvironmentSet {
 /// Gravity vector at this entity's position, in the entity's Avian physics
 /// frame (m/s²).
 ///
-/// Computed each [`FixedUpdate`] from the [`Gravity`] resource and (for
-/// surface gravity) the [`GravityProvider`] on the entity's gravitational
-/// parent body (linked via [`GravityBody`]).
+/// Computed in [`FixedUpdate`] when gravity, frame, provider, transform, or
+/// body-link inputs change. Surface gravity uses the [`GravityProvider`] on
+/// the entity's gravitational parent body (linked via [`GravityBody`]).
 ///
 /// - **Magnitude:** `length()` gives `g` in m/s²
 /// - **Direction:** `normalize()` gives the gravity unit vector
@@ -160,6 +160,7 @@ fn clear_unresolved_local_gravity(
 
 fn update_local_gravity_for_entity(
     commands: &mut Commands,
+    updates: &mut Vec<(Entity, LocalGravity)>,
     gravity: &Gravity,
     frame_rotation: Option<DQuat>,
     entity: Entity,
@@ -227,7 +228,7 @@ fn update_local_gravity_for_entity(
     if existing.is_some_and(|LocalGravity(previous)| *previous == g) {
         return;
     }
-    commands.entity(entity).try_insert(LocalGravity(g));
+    updates.push((entity, LocalGravity(g)));
 }
 
 /// Computes [`LocalGravity`] for every entity that has a [`Transform`].
@@ -280,6 +281,7 @@ pub fn compute_local_gravity(
     if !has_work {
         return;
     }
+    let mut updates = Vec::new();
     // Several moving consumers can share one gravity body. Its world pose is
     // stable for this read-only system pass, so resolve it once per provider.
     body_pose_cache.clear();
@@ -296,6 +298,7 @@ pub fn compute_local_gravity(
         for (entity, gravity_body, existing) in q_entities.p1().iter() {
             update_local_gravity_for_entity(
                 &mut commands,
+                &mut updates,
                 gravity.as_ref(),
                 frame_rotation,
                 entity,
@@ -312,6 +315,7 @@ pub fn compute_local_gravity(
         for (entity, gravity_body, existing) in q_entities.p0().iter() {
             update_local_gravity_for_entity(
                 &mut commands,
+                &mut updates,
                 gravity.as_ref(),
                 frame_rotation,
                 entity,
@@ -324,6 +328,9 @@ pub fn compute_local_gravity(
                 &q_spatial,
             );
         }
+    }
+    if !updates.is_empty() {
+        commands.try_insert_batch(updates);
     }
 }
 
