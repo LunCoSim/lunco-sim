@@ -31,7 +31,7 @@ use lunco_modelica_runtime::ModelicaModel;
 use lunco_readiness::{ReadinessRegistry, ReadinessTicket, Subject, kinds};
 
 use lunco_cosim_core::{SimComponent, UsdSourcedCosim};
-use lunco_physics::PhysicsInitializationPending;
+use lunco_physics::{PhysicsHolds, PhysicsInitializationPending, PhysicsObjectPaused};
 use lunco_usd_avian_contracts::ShouldBeDynamic;
 use lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneAwaitingStage};
@@ -175,31 +175,54 @@ fn track_model_compiles(
 /// startup program must see one coherent initial condition across its
 /// articulated participants.
 fn track_physics_admission(
-    still_kinematic: Query<&UsdPrimPath, With<ShouldBeDynamic>>,
+    awaiting_dynamic_admission: Query<
+        &UsdPrimPath,
+        (With<ShouldBeDynamic>, Without<PhysicsObjectPaused>),
+    >,
     still_pending: Query<
         &UsdPrimPath,
-        Or<(
-            With<lunco_core::PhysicsStatePending>,
-            With<PhysicsInitializationPending>,
-        )>,
+        (
+            Or<(
+                With<lunco_core::PhysicsStatePending>,
+                With<PhysicsInitializationPending>,
+            )>,
+            Without<PhysicsObjectPaused>,
+        ),
     >,
-    physics_state_pending: Query<&UsdPrimPath, With<lunco_core::PhysicsStatePending>>,
-    initialization_pending: Query<&UsdPrimPath, With<PhysicsInitializationPending>>,
+    physics_state_pending: Query<
+        &UsdPrimPath,
+        (
+            With<lunco_core::PhysicsStatePending>,
+            Without<PhysicsObjectPaused>,
+        ),
+    >,
+    initialization_pending: Query<
+        &UsdPrimPath,
+        (
+            With<PhysicsInitializationPending>,
+            Without<PhysicsObjectPaused>,
+        ),
+    >,
+    body_admission_hold: Option<Res<PhysicsHolds>>,
     wait: Option<Res<PhysicsAdmissionWait>>,
     mut registry: ResMut<ReadinessRegistry>,
     mut commands: Commands,
 ) {
-    let waiting = !still_kinematic.is_empty() || !still_pending.is_empty();
+    let waiting = !awaiting_dynamic_admission.is_empty()
+        || !still_pending.is_empty()
+        || body_admission_hold
+            .as_deref()
+            .is_some_and(|holds| holds.holds(PhysicsHolds::BODY_ADMISSION));
     match (waiting, wait) {
         (true, None) => {
-            let kinematic = still_kinematic
+            let awaiting = awaiting_dynamic_admission
                 .iter()
                 .map(|path| path.path.as_str())
                 .take(16)
                 .collect::<Vec<_>>();
             info!(
-                "[readiness] physics admission held: kinematic={:?}, state_pending={:?}, initialization_pending={:?}",
-                kinematic,
+                "[readiness] physics admission held: body_admission_pending={:?}, state_pending={:?}, initialization_pending={:?}, constraint_admission_hold={}",
+                awaiting,
                 physics_state_pending
                     .iter()
                     .take(16)
@@ -210,6 +233,9 @@ fn track_physics_admission(
                     .take(16)
                     .map(|path| path.path.as_str())
                     .collect::<Vec<_>>(),
+                body_admission_hold
+                    .as_deref()
+                    .is_some_and(|holds| holds.holds(PhysicsHolds::BODY_ADMISSION)),
             );
             let ticket = registry.begin(
                 Subject::World,
@@ -443,9 +469,10 @@ mod tests {
     }
 
     #[test]
-    fn physics_admission_wait_covers_the_authored_velocity_boundary() {
+    fn physics_admission_wait_covers_body_and_constraint_boundaries() {
         let mut app = App::new();
         app.init_resource::<ReadinessRegistry>()
+            .init_resource::<PhysicsHolds>()
             .add_systems(Update, track_physics_admission);
 
         let body = app
@@ -463,6 +490,22 @@ mod tests {
         assert_eq!(item.kind, kinds::PARTICIPANT_INIT);
 
         app.world_mut().entity_mut(body).remove::<ShouldBeDynamic>();
+        app.world_mut()
+            .resource_mut::<PhysicsHolds>()
+            .set(PhysicsHolds::BODY_ADMISSION, true);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<ReadinessRegistry>()
+                .pending()
+                .next()
+                .is_some(),
+            "pending joint admission must keep readiness open after body promotion"
+        );
+
+        app.world_mut()
+            .resource_mut::<PhysicsHolds>()
+            .set(PhysicsHolds::BODY_ADMISSION, false);
         app.update();
         assert!(
             app.world()

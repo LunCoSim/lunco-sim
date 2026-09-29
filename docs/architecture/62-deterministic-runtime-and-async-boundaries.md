@@ -146,8 +146,16 @@ USD physics projection follows the same lifecycle boundary: the BigSpace bridge
 seeds body poses in `PreUpdate`, then the joint owner's `JointPreparation` set
 resolves authored joints in `Update` after USD simulation projection and before
 `JointAdmission`.
-Joint topology therefore completes without waiting for a fixed physics cycle;
-the first cycle runs only after all startup owners release their holds.
+If a dynamic endpoint needs an Avian `BodyIslandNode` before its joint can be
+admitted, the USD owner stages that body as dynamic only after
+`PhysicsHolds::BODY_ADMISSION` is active. An unfrozen body keeps its
+`ShouldBeDynamic` admission marker until authored joint and differential
+markers clear, so the fixed clock cannot run between endpoint staging and
+constraint admission. Joints in a policy-paused assembly leave the shared
+admission batch, allowing unrelated valid joints to commit. A body already
+frozen for a scoped readiness wait may complete its local state transition
+while the shared hold waits on the pending constraints. Scene readiness and the
+first cycle release only after the complete body and constraint boundary closes.
 Rhai compilation, dependency planning, initialization, and `on_start` run in an
 ordered pre-tick lifecycle pass; the scenario's preparation hold remains active
 until `on_start` completes. A fresh process therefore starts `on_start` at

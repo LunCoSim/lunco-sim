@@ -1078,16 +1078,19 @@ fn physics_admission_ready(world: &mut World) -> bool {
         return false;
     }
 
-    let mut q_pending = world.query_filtered::<(), Or<(
-        With<lunco_usd_avian_contracts::ShouldBeDynamic>,
-        With<lunco_core::PhysicsStatePending>,
-        With<lunco_usd_avian_contracts::PendingUsdJoint>,
-        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::RevoluteJoint>>,
-        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::PrismaticJoint>>,
-        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::FixedJoint>>,
-        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::SphericalJoint>>,
-        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::DistanceJoint>>,
-    )>>();
+    let mut q_pending = world.query_filtered::<(), (
+        Or<(
+            With<lunco_usd_avian_contracts::ShouldBeDynamic>,
+            With<lunco_core::PhysicsStatePending>,
+            With<lunco_usd_avian_contracts::PendingUsdJoint>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::RevoluteJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::PrismaticJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::FixedJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::SphericalJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::DistanceJoint>>,
+        )>,
+        Without<lunco_physics::PhysicsObjectPaused>,
+    )>();
     q_pending.iter(world).next().is_none()
 }
 

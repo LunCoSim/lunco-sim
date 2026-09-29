@@ -112,12 +112,30 @@ pub const PHYSICS_INITIALIZATION_POLICY_HOOK: &str = "physics.initialization";
 lunco_hooks::declare_hook! {
     id: PHYSICS_INITIALIZATION_POLICY_HOOK,
     owner: "lunco-physics",
-    description: "Decide whether an authored rigid-body pose is admissible.",
+    description: "Choose how to admit, pause, or reject an authored rigid-body pose.",
     signature: [facts: Map],
     output: String,
     deterministic: true,
-    required: false,
+    required: true,
     installable: true,
+}
+
+/// The engine observation supplied to an initialization policy.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PhysicsInitializationCheck {
+    /// The finite authored pose is being offered for an explicit policy choice.
+    AuthoredPose,
+    /// The authored pose penetrates its live support surface.
+    TerrainPenetration { penetration_m: f64 },
+}
+
+/// A policy decision after the owner validates the available initial-pose facts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhysicsInitializationDecision {
+    /// Admit the authored pose unchanged.
+    Accept,
+    /// Keep the articulated object disabled and remove it from scene admission.
+    Pause,
 }
 
 /// Authored policy selected before a dynamic body crosses the physics admission
@@ -169,6 +187,17 @@ pub struct PhysicsInitializationPending;
 #[reflect(Component)]
 pub struct PhysicsInitializationInvalid;
 
+/// An invalid initial pose handled by the authored pause policy.
+///
+/// The rigid body, its colliders, and its articulated joints remain disabled;
+/// `penetration_m` preserves the measured support violation for live queries.
+#[derive(Component, Debug, Clone, Copy, Reflect, PartialEq)]
+#[reflect(Component)]
+pub struct PhysicsInitializationPaused {
+    /// Maximum penetration measured against the live support surface.
+    pub penetration_m: f64,
+}
+
 /// Stable authored subject attached to a runtime body for diagnostics and hook
 /// facts. Keeping this on the body avoids reconstructing a USD path in a
 /// terrain or policy consumer.
@@ -219,10 +248,20 @@ pub fn physics_initialization_facts(
     subject: &str,
     position: DVec3,
     assembly_member_count: usize,
+    check: PhysicsInitializationCheck,
 ) -> lunco_hooks::HookValue {
+    let (status, penetration_m) = match check {
+        PhysicsInitializationCheck::AuthoredPose => ("authored_pose", lunco_hooks::HookValue::Unit),
+        PhysicsInitializationCheck::TerrainPenetration { penetration_m } => (
+            "terrain_penetration",
+            lunco_hooks::HookValue::Float(penetration_m),
+        ),
+    };
     lunco_hooks::HookValue::map([
         ("subject", lunco_hooks::HookValue::str(subject)),
         ("policy", lunco_hooks::HookValue::str(policy.0.clone())),
+        ("status", lunco_hooks::HookValue::str(status)),
+        ("penetration_m", penetration_m),
         (
             "position",
             lunco_hooks::HookValue::Array(
@@ -240,17 +279,13 @@ pub fn physics_initialization_facts(
 }
 
 /// Evaluate a named initialization policy without giving it a pose mutation
-/// capability. Built-in strict-authored is handled by the engine; custom
-/// policies are deterministic hook decisions and must return exactly
-/// `"accept"` or `"reject"`.
+/// capability. Policies return `"accept"`, `"pause"`, or `"reject"`;
+/// rejection and malformed or unavailable policy results remain held errors.
 pub fn evaluate_initialization_policy(
     policy: &PhysicsInitializationPolicy,
     facts: lunco_hooks::HookValue,
     context: Result<lunco_core::RuntimeExecutionContext, String>,
-) -> Result<(), String> {
-    if policy.is_strict_authored() {
-        return Ok(());
-    }
+) -> Result<PhysicsInitializationDecision, String> {
     let context = context?;
     let hook_id = PHYSICS_INITIALIZATION_POLICY_HOOK;
     let Some(route) = context.route else {
@@ -302,13 +337,14 @@ pub fn evaluate_initialization_policy(
         Some(Ok(value)) => value,
     };
     match decision.as_str() {
-        Some("accept") => Ok(()),
+        Some("accept") => Ok(PhysicsInitializationDecision::Accept),
+        Some("pause") => Ok(PhysicsInitializationDecision::Pause),
         Some("reject") => Err(format!(
             "initialization policy `{}` rejected the authored pose",
             policy.0
         )),
         _ => Err(format!(
-            "initialization policy `{}` must return the string `accept` or `reject`",
+            "initialization policy `{}` must return the string `accept`, `pause`, or `reject`",
             policy.0
         )),
     }

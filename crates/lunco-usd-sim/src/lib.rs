@@ -200,6 +200,12 @@ struct UsdStageIdentityParams<'w> {
     asset_server: Option<Res<'w, AssetServer>>,
 }
 
+#[derive(SystemParam)]
+struct DynamicBodyAdmissionParams<'w> {
+    ground_pending: Res<'w, GroundColliderPending>,
+    physics_holds: Option<Res<'w, lunco_physics::PhysicsHolds>>,
+}
+
 struct FailedJointTopologyPreparation {
     generation: u64,
     error: String,
@@ -1062,8 +1068,7 @@ impl Plugin for UsdSimPlugin {
             (
                 UsdSimSet::ProjectionPrepare.before(UsdSimSet::Projection),
                 UsdSimSet::Projection.before(lunco_spatial::SceneSpatialHandoffSet),
-                UsdSimSet::Projection
-                    .before(lunco_usd_avian_joints::JointPreparation),
+                UsdSimSet::Projection.before(lunco_usd_avian_joints::JointPreparation),
                 lunco_usd_avian_joints::JointAdmission.after(UsdSimSet::Projection),
                 UsdSimSet::ActivateDynamicBodies,
             ),
@@ -4750,21 +4755,25 @@ fn resolve_differential_coupling(
 
 fn activate_dynamic_bodies(
     mut commands: Commands,
-    ground_pending: Res<GroundColliderPending>,
+    admission: DynamicBodyAdmissionParams,
     stage_identity: UsdStageIdentityParams,
     mut runtime_faults: ResMut<lunco_core::RuntimeFaults>,
-    q_kinematic: Query<
+    q_pending_bodies: Query<
         (
             Entity,
+            &RigidBody,
             &UsdPrimPath,
             Option<&UsdInstanceProjection>,
             Option<&AuthoredInitialVelocity>,
             Option<&avian3d::prelude::RigidBodyDisabled>,
+            Has<lunco_core::PhysicsStateReady>,
+            Has<lunco_core::PhysicsStatePending>,
         ),
         (
             With<ShouldBeDynamic>,
             Without<lunco_physics::PhysicsInitializationPending>,
             Without<lunco_physics::PhysicsInitializationInvalid>,
+            Without<lunco_physics::PhysicsObjectPaused>,
         ),
     >,
     all_prims: Query<(
@@ -4797,27 +4806,25 @@ fn activate_dynamic_bodies(
     topology_index: Res<JointTopologyIndex>,
     mut binding_epoch: ResMut<lunco_cosim_core::BindingEpochDirty>,
 ) {
+    let DynamicBodyAdmissionParams {
+        ground_pending,
+        physics_holds,
+    } = admission;
     let UsdStageIdentityParams {
         stages,
         asset_server,
     } = stage_identity;
-    // USD/Avian topology is built in the fixed schedule, while this admission
-    // pass runs in Update. A body may not become dynamic until every authored
-    // joint touching it has crossed both native boundaries:
-    //
-    //   USD schema -> typed PendingJoint -> Avian joint component
-    //
-    // The readiness hold pauses integration, not topology construction. The
-    // joint builder and the outer Update admission system continue to run while
-    // that hold is active, so waiting here cannot deadlock the scene. Promoting
-    // first and hoping the parked constraint appears before the next solver tick
-    // is precisely how an articulated pad escaped during warm-cache startup.
+    // A joint cannot join Avian's solver graph until its dynamic endpoint has a
+    // BodyIslandNode. Stage that body as dynamic only after the shared body
+    // admission hold is active, and retain ShouldBeDynamic until every authored
+    // joint and differential is installed. The hold prevents a solver tick
+    // between those two commits.
     let mut promoted = false;
     // Promotion is the final admission boundary before the first solver tick.
     // Keep it independent of ECS allocation order for the same reason as the
     // projection pass: async layer completion must not choose which rigid body
     // enters the native solver island first.
-    let mut kinematic = Vec::new();
+    let mut pending_bodies = Vec::new();
     let mut unidentified_bodies = Vec::new();
     let mut stage_ids_by_source = HashMap::new();
     let mut duplicate_stage_sources = Vec::new();
@@ -4862,7 +4869,16 @@ fn activate_dynamic_bodies(
             .or_default()
             .push(entity);
     }
-    for (entity, path, instance_projection, authored_velocity, body_disabled) in q_kinematic
+    for (
+        entity,
+        body,
+        path,
+        instance_projection,
+        authored_velocity,
+        body_disabled,
+        physics_state_ready,
+        physics_state_pending,
+    ) in q_pending_bodies
         .iter()
         .filter(|(entity, ..)| !is_preview_only(*entity, &q_child_of, &q_preview_only))
     {
@@ -4899,16 +4915,19 @@ fn activate_dynamic_bodies(
         {
             duplicate_stage_sources.push(stage_source.clone());
         }
-        kinematic.push(StableUsdSimWork {
+        pending_bodies.push(StableUsdSimWork {
             stage_source,
             instance_root_path,
             prim_path: path.path.clone(),
             item: (
                 entity,
+                body,
                 path,
                 instance_projection,
                 authored_velocity,
                 body_disabled,
+                physics_state_ready,
+                physics_state_pending,
             ),
         });
     }
@@ -4939,7 +4958,7 @@ fn activate_dynamic_bodies(
         return;
     }
     let mut duplicate_paths = duplicate_nonpreview_usd_sim_work_keys(
-        &kinematic,
+        &pending_bodies,
         |candidate| candidate.0,
         |_| false,
         &mut HashMap::new(),
@@ -4949,7 +4968,7 @@ fn activate_dynamic_bodies(
             .iter()
             .filter_map(|(identity, bodies)| (bodies.len() > 1).then_some(identity.clone())),
     );
-    for candidate in &kinematic {
+    for candidate in &pending_bodies {
         let identity = (
             candidate.stage_source.clone(),
             candidate.instance_root_path.clone(),
@@ -4979,9 +4998,21 @@ fn activate_dynamic_bodies(
         );
         return;
     }
-    kinematic.sort_by(compare_stable_usd_sim_work);
-    for candidate in kinematic {
-        let (entity, path, _instance_projection, authored_velocity, body_disabled) = candidate.item;
+    pending_bodies.sort_by(compare_stable_usd_sim_work);
+    let body_admission_held = physics_holds
+        .as_deref()
+        .is_some_and(|holds| holds.holds(lunco_physics::PhysicsHolds::BODY_ADMISSION));
+    for candidate in pending_bodies {
+        let (
+            entity,
+            body,
+            path,
+            _instance_projection,
+            authored_velocity,
+            body_disabled,
+            physics_state_ready,
+            physics_state_pending,
+        ) = candidate.item;
         let has_pending_joint =
             q_pending_joints
                 .iter()
@@ -5049,20 +5080,16 @@ fn activate_dynamic_bodies(
             !is_preview_only(entity, &q_child_of, &q_preview_only)
                 && diff_path.stage_handle == path.stage_handle
         });
-        // Readiness deliberately disables the body before the fixed physics
-        // schedule can admit its island node. A native joint may therefore be
-        // parked while this marker is present, but it must not keep the
-        // authored body in `ShouldBeDynamic`: promotion while disabled is
-        // inert, and release of the readiness marker then creates the island
-        // node that `JointAdmission` needs. Outside that explicit freeze,
-        // pending admission still blocks promotion so a live body can never
-        // integrate before its constraint is installed.
-        let blocked = ground_pending.0
-            || has_pending_joint
-            || (has_pending_admission && body_disabled.is_none())
+        let constraints_pending = has_pending_joint
+            || has_pending_admission
             || has_unready_authored_joint
             || has_pending_diff;
-        if !blocked {
+        let admission_boundary_pending = ground_pending.0 || constraints_pending;
+        if admission_boundary_pending && body_disabled.is_none() && !body_admission_held {
+            continue;
+        }
+
+        if *body != RigidBody::Dynamic {
             // Despawn-safe: scene-load churn / doc-backed reload can despawn a
             // ShouldBeDynamic entity between this queue and `apply_deferred`; a plain
             // `insert` then panics on the invalid entity. `try_insert`/`try_remove`
@@ -5081,19 +5108,36 @@ fn activate_dynamic_bodies(
                 .unwrap_or(DVec3::ZERO);
             commands.entity(entity).try_insert((
                 RigidBody::Dynamic,
-                lunco_core::PhysicsStateReady,
                 LinearVelocity(linear),
                 AngularVelocity(angular),
             ));
-            commands
-                .entity(entity)
-                .try_remove::<lunco_core::PhysicsStatePending>();
-            commands
-                .entity(entity)
-                .try_remove::<AuthoredInitialVelocity>();
-            commands.entity(entity).try_remove::<ShouldBeDynamic>();
-            promoted = true;
         }
+
+        // A staged dynamic body supplies the island node required by joint
+        // admission. An active scoped-readiness freeze may finish the body's
+        // own state transition; its frozen components and pending joint markers
+        // keep simulation safely held until the dependent owners can proceed.
+        let mut entity_commands = commands.entity(entity);
+        if !physics_state_ready {
+            entity_commands.try_insert(lunco_core::PhysicsStateReady);
+        }
+        if physics_state_pending {
+            entity_commands.try_remove::<lunco_core::PhysicsStatePending>();
+        }
+        if constraints_pending && body_disabled.is_none() {
+            continue;
+        }
+        // An entity already frozen by a scoped readiness owner may finish its
+        // local body-state transition. The subtree stays disabled and the
+        // shared body-admission hold still waits for pending constraints.
+        if ground_pending.0 {
+            continue;
+        }
+
+        entity_commands
+            .try_remove::<AuthoredInitialVelocity>()
+            .try_remove::<ShouldBeDynamic>();
+        promoted = true;
     }
     if promoted {
         // Promotion publishes the authored physical initial condition through
@@ -5107,19 +5151,22 @@ fn activate_dynamic_bodies(
 fn sync_physics_body_admission_hold(
     pending: Query<
         (Entity, Option<&UsdPrimPath>),
-        Or<(
-            With<ShouldBeDynamic>,
-            With<lunco_core::PhysicsStatePending>,
-            With<lunco_physics::PhysicsInitializationPending>,
-            With<PendingJointAdmission>,
-            With<PendingUsdJoint>,
-            With<PendingDifferential>,
-            With<lunco_usd_avian_joints::PendingJoint<RevoluteJoint>>,
-            With<lunco_usd_avian_joints::PendingJoint<PrismaticJoint>>,
-            With<lunco_usd_avian_joints::PendingJoint<FixedJoint>>,
-            With<lunco_usd_avian_joints::PendingJoint<SphericalJoint>>,
-            With<lunco_usd_avian_joints::PendingJoint<DistanceJoint>>,
-        )>,
+        (
+            Or<(
+                With<ShouldBeDynamic>,
+                With<lunco_core::PhysicsStatePending>,
+                With<lunco_physics::PhysicsInitializationPending>,
+                With<PendingJointAdmission>,
+                With<PendingUsdJoint>,
+                With<PendingDifferential>,
+                With<lunco_usd_avian_joints::PendingJoint<RevoluteJoint>>,
+                With<lunco_usd_avian_joints::PendingJoint<PrismaticJoint>>,
+                With<lunco_usd_avian_joints::PendingJoint<FixedJoint>>,
+                With<lunco_usd_avian_joints::PendingJoint<SphericalJoint>>,
+                With<lunco_usd_avian_joints::PendingJoint<DistanceJoint>>,
+            )>,
+            Without<lunco_physics::PhysicsObjectPaused>,
+        ),
     >,
     parents: Query<&ChildOf>,
     preview_roots: Query<(), With<UsdPreviewOnly>>,
@@ -5347,6 +5394,7 @@ mod dynamic_activation_tests {
         app.insert_resource(Assets::<UsdStageAsset>::default())
             .init_resource::<GroundColliderPending>()
             .init_resource::<JointTopologyIndex>()
+            .init_resource::<lunco_physics::PhysicsHolds>()
             .init_resource::<lunco_cosim_core::BindingEpochDirty>()
             .init_resource::<lunco_core::RuntimeFaults>()
             .add_systems(Update, activate_dynamic_bodies);
@@ -5361,7 +5409,7 @@ mod dynamic_activation_tests {
     }
 
     #[test]
-    fn pending_typed_joint_keeps_only_its_bodies_kinematic_until_admission() {
+    fn pending_typed_joint_stages_dynamic_body_inside_admission_hold() {
         let (mut app, stage) = activation_app();
         let body = app
             .world_mut()
@@ -5372,6 +5420,7 @@ mod dynamic_activation_tests {
                 },
                 RigidBody::Kinematic,
                 ShouldBeDynamic,
+                lunco_core::PhysicsStatePending,
             ))
             .id();
         let unrelated = app
@@ -5397,13 +5446,38 @@ mod dynamic_activation_tests {
         assert_eq!(
             app.world().get::<RigidBody>(body),
             Some(&RigidBody::Kinematic),
-            "a body must not integrate while its typed joint is parked"
+            "do not stage a joint endpoint before the world admission hold is active"
         );
         assert!(app.world().get::<ShouldBeDynamic>(body).is_some());
+        assert!(
+            app.world()
+                .get::<lunco_core::PhysicsStatePending>(body)
+                .is_some()
+        );
         assert_eq!(
             app.world().get::<RigidBody>(unrelated),
             Some(&RigidBody::Dynamic),
             "an unrelated articulated part must not wait on this joint"
+        );
+
+        app.world_mut()
+            .resource_mut::<lunco_physics::PhysicsHolds>()
+            .set(lunco_physics::PhysicsHolds::BODY_ADMISSION, true);
+        app.update();
+        assert_eq!(
+            app.world().get::<RigidBody>(body),
+            Some(&RigidBody::Dynamic)
+        );
+        assert!(app.world().get::<ShouldBeDynamic>(body).is_some());
+        assert!(
+            app.world()
+                .get::<lunco_core::PhysicsStateReady>(body)
+                .is_some()
+        );
+        assert!(
+            app.world()
+                .get::<lunco_core::PhysicsStatePending>(body)
+                .is_none()
         );
 
         app.world_mut()
@@ -5417,11 +5491,19 @@ mod dynamic_activation_tests {
             "dynamic promotion resumes after joint admission"
         );
         assert!(app.world().get::<ShouldBeDynamic>(body).is_none());
+        assert!(
+            app.world()
+                .get::<lunco_core::PhysicsStateReady>(body)
+                .is_some()
+        );
     }
 
     #[test]
-    fn authored_joint_topology_holds_bodies_before_joint_observer_state_lands() {
+    fn authored_joint_topology_keeps_admission_pending_until_joint_observer_state_lands() {
         let (mut app, stage) = activation_app();
+        app.world_mut()
+            .resource_mut::<lunco_physics::PhysicsHolds>()
+            .set(lunco_physics::PhysicsHolds::BODY_ADMISSION, true);
         let chassis = app
             .world_mut()
             .spawn((
@@ -5463,16 +5545,29 @@ mod dynamic_activation_tests {
             .insert(stage.id(), topology);
 
         // The canonical stage already names the joint, but its observer command
-        // has not yet added PendingUsdJoint to the joint entity. Neither body may
-        // receive a dynamic physics step in that gap.
+        // has not yet added PendingUsdJoint to the joint entity. Both bodies can
+        // stage their solver nodes under the admission hold, while
+        // ShouldBeDynamic keeps readiness closed until the constraint is ready.
         app.update();
         assert_eq!(
             app.world().get::<RigidBody>(chassis),
-            Some(&RigidBody::Kinematic)
+            Some(&RigidBody::Dynamic)
         );
         assert_eq!(
             app.world().get::<RigidBody>(link),
-            Some(&RigidBody::Kinematic)
+            Some(&RigidBody::Dynamic)
+        );
+        assert!(app.world().get::<ShouldBeDynamic>(chassis).is_some());
+        assert!(app.world().get::<ShouldBeDynamic>(link).is_some());
+        assert!(
+            app.world()
+                .get::<lunco_core::PhysicsStateReady>(chassis)
+                .is_some()
+        );
+        assert!(
+            app.world()
+                .get::<lunco_core::PhysicsStateReady>(link)
+                .is_some()
         );
 
         // A live detach invalidates only this authored topology edge. The

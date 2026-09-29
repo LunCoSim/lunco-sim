@@ -1065,16 +1065,24 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
     // observed the frame, which violates the scene lifecycle ordering. Fail at
     // this owner instead of trying to infer and repair an old coordinate frame.
     let first_read = frame_state.frame.is_none();
-    if policy == PoseToPositionPolicy::Admission
-        && !first_read
-        && frame_state.frame.is_some_and(|frame| frame != active_frame)
-    {
-        // Established bodies and frame handoffs are consumed at the fixed
-        // physics boundary. PreUpdate may seed newly admitted bodies only
-        // while the already-observed physics frame remains active.
-        return;
-    }
-    let previous_frame = frame_state.take_transition(active_frame);
+    let defer_frame_handoff = policy == PoseToPositionPolicy::Admission
+        && requires_fixed_frame_handoff(
+            frame_state.frame,
+            active_frame,
+            body_queries
+                .p1()
+                .iter()
+                .map(|(_, _, _, _, _, _, _, shadow, override_pose)| (shadow, override_pose)),
+        );
+    // Established bodies are transported at the fixed physics boundary. A
+    // fresh scene body can still be seeded in its already-selected frame here;
+    // leave the old frame recorded so the later fixed pass can transport only
+    // bodies whose shadows still identify that old frame.
+    let previous_frame = if defer_frame_handoff {
+        None
+    } else {
+        frame_state.take_transition(active_frame)
+    };
     // A frame handoff normally transports Avian's existing state into a new
     // set of axes. A site mount is different: the selected frame itself has
     // just moved in the hierarchy, so every body below it now has a new
@@ -1094,14 +1102,15 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
             &q_grids,
             &q_spatial,
         );
-        if transform.is_none()
-            && body_queries
-                .p1()
-                .iter()
-                .any(|(_, _, _, _, _, _, _, shadow, pose_override)| {
-                    pose_override.is_none() && shadow.is_seeded()
-                })
-        {
+        let has_untransportable_old_body = body_queries
+            .p1()
+            .iter()
+            .any(|(_, _, _, _, _, _, _, shadow, pose_override)| {
+                pose_override.is_none()
+                    && shadow.is_seeded()
+                    && shadow.physics_frame == previous
+            });
+        if transform.is_none() && has_untransportable_old_body {
             panic!(
                 "active Avian frame changed from {previous:?} to {active_frame:?}, but the two BigSpace frames have no connected typed transform"
             );
@@ -1143,6 +1152,9 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
     // re-split the same pose into a new `(CellCoord, Transform)` pair; the
     // exact resplit check below handles that representation-only case.
     for (entity, cell, tf, shadow) in body_queries.p0().iter() {
+        if defer_frame_handoff && shadow.is_seeded() && shadow.physics_frame != active_frame {
+            continue;
+        }
         if policy == PoseToPositionPolicy::Admission
             && !first_read
             && shadow.is_seeded()
@@ -1174,9 +1186,16 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
     if process_all_bodies {
         body_entities.extend(body_queries.p1().iter().map(|(entity, ..)| entity));
     } else {
-        body_entities.extend(body_queries.p1().iter().filter_map(|(entity, ..)| {
-            body_needs_pose_refresh(entity, &moved, active_frame, &q_parents).then_some(entity)
-        }));
+        body_entities.extend(body_queries.p1().iter().filter_map(
+            |(entity, _, _, _, _, _, _, shadow, _)| {
+                (!(defer_frame_handoff
+                    && shadow.is_seeded()
+                    && shadow.physics_frame != active_frame)
+                    && (!shadow.is_seeded()
+                        || body_needs_pose_refresh(entity, &moved, active_frame, &q_parents)))
+                .then_some(entity)
+            },
+        ));
     }
     let mut q_bodies = body_queries.p1();
     for e in body_entities.iter().copied() {
@@ -1212,10 +1231,13 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
         // and do not manufacture a velocity from the frame's astronomical
         // translation. Motion above the selected frame belongs to the
         // celestial hierarchy; it is not a local Avian displacement.
-        let hierarchy_reanchored = handoff.is_some()
+        let body_handoff = previous_frame
+            .filter(|previous| shadow.is_seeded() && shadow.physics_frame == *previous)
+            .and(handoff);
+        let hierarchy_reanchored = body_handoff.is_some()
             && frame_reanchored
             && is_below_active_frame(e, active_frame, &q_parents);
-        if let Some(frame_transform) = handoff {
+        if let Some(frame_transform) = body_handoff {
             if shadow.is_seeded() {
                 let old_linear = linear.0;
                 let old_angular = angular.0;
@@ -1287,6 +1309,26 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
             commands.entity(e).remove::<Sleeping>();
         }
     }
+}
+
+/// Whether admission must defer the active-frame handoff because an ordinary
+/// bridge-owned body still carries the previously observed frame.
+fn requires_fixed_frame_handoff<'a>(
+    previous_frame: Option<Entity>,
+    active_frame: Entity,
+    bodies: impl Iterator<
+        Item = (
+            &'a BridgeShadow,
+            Option<&'a lunco_core::PhysicsPoseAuthoritative>,
+        ),
+    >,
+) -> bool {
+    let Some(previous_frame) = previous_frame.filter(|previous| *previous != active_frame) else {
+        return false;
+    };
+    bodies.into_iter().any(|(shadow, override_pose)| {
+        override_pose.is_none() && shadow.is_seeded() && shadow.physics_frame == previous_frame
+    })
 }
 
 /// Return whether `body` has a changed local pose or a changed ancestor whose
@@ -1787,6 +1829,37 @@ mod tests {
         let moved = Transform::from_xyz(1.0, 2.01, 3.0).with_rotation(Quat::from_rotation_y(0.25));
         assert!(!shadow.matches_current_pose(None, &moved, frame));
         assert!(!shadow.matches_current_pose(None, &transform, Entity::from_bits(8)));
+    }
+
+    #[test]
+    fn admission_waits_only_for_seeded_bodies_that_still_need_the_old_frame() {
+        let old_frame = Entity::from_bits(7);
+        let active_frame = Entity::from_bits(8);
+        let fresh_transform = Transform::default();
+        let fresh = BridgeShadow::default();
+        assert!(!requires_fixed_frame_handoff(
+            Some(old_frame),
+            active_frame,
+            [(&fresh, None)].into_iter(),
+        ));
+
+        let mut established = BridgeShadow::default();
+        established.capture(None, &fresh_transform, old_frame);
+        assert!(requires_fixed_frame_handoff(
+            Some(old_frame),
+            active_frame,
+            [(&established, None)].into_iter(),
+        ));
+        assert!(!requires_fixed_frame_handoff(
+            Some(old_frame),
+            active_frame,
+            [(&established, Some(&lunco_core::PhysicsPoseAuthoritative))].into_iter(),
+        ));
+        assert!(!requires_fixed_frame_handoff(
+            Some(active_frame),
+            active_frame,
+            [(&established, None)].into_iter(),
+        ));
     }
 
     #[test]

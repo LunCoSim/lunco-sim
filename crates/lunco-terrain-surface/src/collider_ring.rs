@@ -1681,14 +1681,12 @@ fn cast_initial_support_ray(
             match distance.total_cmp(&hit.distance) {
                 std::cmp::Ordering::Less => true,
                 std::cmp::Ordering::Greater => false,
-                std::cmp::Ordering::Equal => {
-                    normal
-                        .x
-                        .total_cmp(&hit.normal.x)
-                        .then_with(|| normal.y.total_cmp(&hit.normal.y))
-                        .then_with(|| normal.z.total_cmp(&hit.normal.z))
-                        .is_lt()
-                }
+                std::cmp::Ordering::Equal => normal
+                    .x
+                    .total_cmp(&hit.normal.x)
+                    .then_with(|| normal.y.total_cmp(&hit.normal.y))
+                    .then_with(|| normal.z.total_cmp(&hit.normal.z))
+                    .is_lt(),
             }
         });
         if !replace_closest {
@@ -1769,6 +1767,134 @@ pub(crate) struct InitialPhysicsLifecycle<'w, 's> {
     active_frame: Res<'w, lunco_spatial::ActivePhysicsFrame>,
     coordinator: Option<Res<'w, lunco_core::SceneTransitionCoordinator>>,
     topology_wait_logged: Local<'s, bool>,
+    paused: Query<
+        'w,
+        's,
+        (
+            &'static lunco_physics::PhysicsInitializationSubject,
+            &'static lunco_physics::PhysicsInitializationPaused,
+        ),
+    >,
+    joint_links: Query<'w, 's, (Entity, &'static lunco_physics::PhysicsJointLink)>,
+    colliders: Query<'w, 's, (Entity, &'static ColliderOf)>,
+}
+
+/// Retire readiness markers and disable a complete articulated body set after
+/// Rhai chooses to pause its validated penetrating pose.
+fn pause_initialization_assembly(
+    seed: Entity,
+    members: &[Entity],
+    penetration_m: f64,
+    joint_links: &Query<(Entity, &lunco_physics::PhysicsJointLink)>,
+    colliders: &Query<(Entity, &ColliderOf)>,
+    commands: &mut Commands,
+) {
+    lunco_physics::pause_physics_members(members, joint_links, colliders, commands);
+    for &member in members {
+        commands
+            .entity(member)
+            .try_remove::<lunco_physics::PhysicsInitializationPending>()
+            .try_remove::<lunco_core::PhysicsStatePending>();
+    }
+    commands.entity(seed).try_insert((
+        lunco_physics::PhysicsInitializationInvalid,
+        lunco_physics::PhysicsInitializationPaused { penetration_m },
+    ));
+}
+
+/// Apply one policy decision to a measured terrain penetration. Both the live
+/// terrain oracle and static-collider validation use this same owner path.
+fn resolve_initialization_penetration(
+    policy: &lunco_physics::PhysicsInitializationPolicy,
+    subject: Option<&str>,
+    subject_label: &str,
+    seed: Entity,
+    members: &[Entity],
+    position: Option<DVec3>,
+    penetration_m: f64,
+    coordinator: Option<&lunco_core::SceneTransitionCoordinator>,
+    joint_links: &Query<(Entity, &lunco_physics::PhysicsJointLink)>,
+    colliders: &Query<(Entity, &ColliderOf)>,
+    commands: &mut Commands,
+    findings: &mut Vec<lunco_core::RuntimeDiagnostic>,
+) {
+    let Some(subject) = subject else {
+        findings.push(lunco_core::RuntimeDiagnostic {
+            code: "physics-initialization-subject-missing".to_string(),
+            severity: lunco_core::DiagnosticSeverity::Error,
+            producer: "physics-initialization".to_string(),
+            subject: subject_label.to_string(),
+            message: "terrain penetration policy requires a stable USD prim subject path; dynamic admission remains held".to_string(),
+        });
+        return;
+    };
+    let Some(position) = position else {
+        findings.push(lunco_core::RuntimeDiagnostic {
+            code: "physics-initialization-pose-unavailable".to_string(),
+            severity: lunco_core::DiagnosticSeverity::Error,
+            producer: "physics-initialization".to_string(),
+            subject: subject_label.to_string(),
+            message: "authored initial position is unavailable for the support policy; dynamic admission remains held".to_string(),
+        });
+        return;
+    };
+    let facts = lunco_physics::physics_initialization_facts(
+        policy,
+        subject,
+        position,
+        members.len(),
+        lunco_physics::PhysicsInitializationCheck::TerrainPenetration { penetration_m },
+    );
+    match lunco_physics::evaluate_initialization_policy(
+        policy,
+        facts,
+        lunco_physics::physics_initialization_context(coordinator),
+    ) {
+        Ok(lunco_physics::PhysicsInitializationDecision::Accept) => {
+            for &member in members {
+                commands
+                    .entity(member)
+                    .try_remove::<lunco_physics::PhysicsInitializationPending>();
+            }
+            findings.push(lunco_core::RuntimeDiagnostic {
+                code: "physics-initialization-terrain-penetration".to_string(),
+                severity: lunco_core::DiagnosticSeverity::Warning,
+                producer: "physics-initialization".to_string(),
+                subject: subject_label.to_string(),
+                message: format!(
+                    "authored initial pose penetrates the support surface by {penetration_m:.6} m; the physics initialization policy accepted it unchanged"
+                ),
+            });
+        }
+        Ok(lunco_physics::PhysicsInitializationDecision::Pause) => {
+            pause_initialization_assembly(
+                seed,
+                members,
+                penetration_m,
+                joint_links,
+                colliders,
+                commands,
+            );
+            findings.push(lunco_core::RuntimeDiagnostic {
+                code: "physics-initialization-paused".to_string(),
+                severity: lunco_core::DiagnosticSeverity::Warning,
+                producer: "physics-initialization".to_string(),
+                subject: subject_label.to_string(),
+                message: format!(
+                    "authored initial pose penetrates the support surface by {penetration_m:.6} m; the physics initialization policy paused the assembly without changing its pose"
+                ),
+            });
+        }
+        Err(message) => findings.push(lunco_core::RuntimeDiagnostic {
+            code: "physics-initialization-policy".to_string(),
+            severity: lunco_core::DiagnosticSeverity::Error,
+            producer: "physics-initialization".to_string(),
+            subject: subject_label.to_string(),
+            message: format!(
+                "authored initial pose penetrates the support surface by {penetration_m:.6} m; {message}; dynamic admission remains held"
+            ),
+        }),
+    }
 }
 
 pub(crate) fn validate_initial_physics_poses(
@@ -1818,8 +1944,27 @@ pub(crate) fn validate_initial_physics_poses(
     mut diagnostics: ResMut<lunco_core::RuntimeDiagnostics>,
 ) {
     let mut findings = Vec::new();
+    for (subject, paused) in &lifecycle.paused {
+        findings.push(lunco_core::RuntimeDiagnostic {
+            code: "physics-initialization-paused".to_string(),
+            severity: lunco_core::DiagnosticSeverity::Warning,
+            producer: "physics-initialization".to_string(),
+            subject: subject.0.clone(),
+            message: format!(
+                "authored initial pose penetrates the support surface by {:.6} m; the physics initialization policy paused the assembly without changing its pose",
+                paused.penetration_m
+            ),
+        });
+    }
     if q_needs.is_empty() {
         *lifecycle.topology_wait_logged = false;
+        findings.sort_by(|left, right| {
+            (&left.subject, &left.code, &left.message).cmp(&(
+                &right.subject,
+                &right.code,
+                &right.message,
+            ))
+        });
         diagnostics.replace_producer("physics-initialization", findings);
         return;
     }
@@ -2056,6 +2201,7 @@ pub(crate) fn validate_initial_physics_poses(
                 subject,
                 position,
                 members.len(),
+                lunco_physics::PhysicsInitializationCheck::AuthoredPose,
             );
             let decision = lunco_physics::evaluate_initialization_policy(
                 &policy,
@@ -2063,12 +2209,24 @@ pub(crate) fn validate_initial_physics_poses(
                 lunco_physics::physics_initialization_context(lifecycle.coordinator.as_deref()),
             );
             match decision {
-                Ok(()) => {
+                Ok(lunco_physics::PhysicsInitializationDecision::Accept) => {
                     for &member in &members {
                         commands
                             .entity(member)
                             .try_remove::<lunco_physics::PhysicsInitializationPending>();
                     }
+                }
+                Ok(lunco_physics::PhysicsInitializationDecision::Pause) => {
+                    findings.push(lunco_core::RuntimeDiagnostic {
+                        code: "physics-initialization-policy".to_string(),
+                        severity: lunco_core::DiagnosticSeverity::Error,
+                        producer: "physics-initialization".to_string(),
+                        subject: subject_label.to_string(),
+                        message: format!(
+                            "initialization policy `{}` requested a pause before support validation; authored pose remains held",
+                            policy.0
+                        ),
+                    });
                 }
                 Err(message) => findings.push(lunco_core::RuntimeDiagnostic {
                     code: "physics-initialization-policy".to_string(),
@@ -2259,15 +2417,20 @@ pub(crate) fn validate_initial_physics_poses(
                     &collision_filtered_pairs,
                 ) {
                     Ok(Some(penetration)) => {
-                        findings.push(lunco_core::RuntimeDiagnostic {
-                            code: "physics-initialization-terrain-penetration".to_string(),
-                            severity: lunco_core::DiagnosticSeverity::Error,
-                            producer: "physics-initialization".to_string(),
-                            subject: subject_label.to_string(),
-                            message: format!(
-                                "authored initial pose penetrates the support surface by {penetration:.6} m; author the body above terrain or provide an explicit initialization policy"
-                            ),
-                        });
+                        resolve_initialization_penetration(
+                            &policy,
+                            subject,
+                            subject_label,
+                            seed,
+                            &members,
+                            pos_of.get(&seed).map(|position| position.0),
+                            penetration,
+                            lifecycle.coordinator.as_deref(),
+                            &lifecycle.joint_links,
+                            &lifecycle.colliders,
+                            &mut commands,
+                            &mut findings,
+                        );
                     }
                     Ok(None) => {
                         for &member in &members {
@@ -2368,16 +2531,28 @@ pub(crate) fn validate_initial_physics_poses(
             }
             continue;
         }
-        findings.push(lunco_core::RuntimeDiagnostic {
-            code: "physics-initialization-terrain-penetration".to_string(),
-            severity: lunco_core::DiagnosticSeverity::Error,
-            producer: "physics-initialization".to_string(),
-            subject: subject_label.to_string(),
-            message: format!(
-                "authored initial pose penetrates the support surface by {penetration:.6} m; author the body above terrain or provide an explicit initialization policy"
-            ),
-        });
+        resolve_initialization_penetration(
+            &policy,
+            subject,
+            subject_label,
+            seed,
+            &members,
+            pos_of.get(&seed).map(|position| position.0),
+            penetration,
+            lifecycle.coordinator.as_deref(),
+            &lifecycle.joint_links,
+            &lifecycle.colliders,
+            &mut commands,
+            &mut findings,
+        );
     }
+    findings.sort_by(|left, right| {
+        (&left.subject, &left.code, &left.message).cmp(&(
+            &right.subject,
+            &right.code,
+            &right.message,
+        ))
+    });
     diagnostics.replace_producer("physics-initialization", findings);
 }
 

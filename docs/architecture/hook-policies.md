@@ -214,11 +214,25 @@ contribution; a fault or malformed action map is warned and queues no asset
 reads. This is the startup-to-menu path used by the authored tutorial catalog
 policy, so no Rust tutorial menu or catalog parser is needed.
 
-Physics owns the optional deterministic
-`physics.initialization(facts: Map) -> String` seam for explicit pre-admission
-decisions and the required deterministic `physics.body_escape(ctx: Map) ->
-String` seam, installed by the application policy bootstrap during `PreStartup`
-and replaceable by an active Twin. The escape map contains `kind` (`finite_world_exit`
+Physics owns the required deterministic
+`physics.initialization(facts: Map) -> String` seam for pre-admission decisions
+and the required deterministic `physics.body_escape(ctx: Map) -> String` seam.
+The application initialization policy is installed at startup and remains
+active across Twin reloads; a mounted Twin may replace it with its own policy.
+The initialization facts contain the selector, stable USD subject path, finite
+pose, assembly member count, and validation status. A measured
+`terrain_penetration` also supplies `penetration_m`. The policy returns
+`accept` to admit the authored pose unchanged, `pause` to disable the complete
+validated articulated object and remove it from readiness, or `reject` to keep
+the object held. Paused joints leave the shared native admission batch so
+independent valid assemblies can finish. The shipped Application policy pauses
+measured terrain penetrations; it never raises, reseats, or edits authored poses.
+Missing, faulting, rejected, or malformed decisions remain visible and fail
+closed.
+
+The `physics.body_escape(ctx: Map) -> String` policy is installed by the
+application bootstrap during `PreStartup` and replaceable by an active Twin.
+The escape map contains `kind` (`finite_world_exit`
 or `non_finite_state`), `path` and `global_id` (each a string or `Unit` when
 unavailable), `position_m`, `velocity_mps`, `world_min_m`, and `world_max_m`
 (three-float arrays for a bounded world, otherwise `Unit`). The application
@@ -230,13 +244,14 @@ intentionally needs that response. Missing, faulting, or malformed policies
 fail closed with a visible runtime fault and physics hold.
 
 The initialization selector is authored through
-`LunCoPhysicsInitializationAPI`; Rust dispatches every selected body through
-the one declared seam and supplies a `Twin/Lifecycle/Preparation` context
-with no elapsed clock. Facts contain the stable USD subject path, selector,
-finite pose, and assembly member count, never ECS entity ids. Missing schema or
-selector, a missing or non-deterministic policy, wrong context, or a malformed
-or rejected result leaves the body held and publishes a runtime diagnostic.
-The built-in `strict-authored` path does not invoke Rhai.
+`LunCoPhysicsInitializationAPI`; Rust dispatches selected decisions and
+measured terrain failures through the one declared seam with a
+`Twin/Lifecycle/Preparation` context and no elapsed clock. Facts contain stable
+USD identity and measured support status, never ECS entity ids. Missing schema
+or selector, a missing or non-deterministic policy, wrong context, or a
+malformed or rejected result leaves the body held and publishes a runtime
+diagnostic. The built-in `strict-authored` path admits a supported finite pose
+without invoking Rhai; a measured penetration invokes the Application policy.
 `assets/scripting/tests/test_hook_policies.rhai` covers the required contract
 and rejects an off-cycle invocation. The physics owner stamps each real call
 with its core simulation route, `Behavior` phase, fixed clock sample, and

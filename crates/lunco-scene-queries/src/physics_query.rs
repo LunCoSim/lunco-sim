@@ -20,8 +20,9 @@ use lunco_core::{
     GlobalEntityId, PhysicsPoseAuthoritative, PhysicsStatePending, PhysicsStateReady,
 };
 use lunco_physics::{
-    PhysicsInitializationInvalid, PhysicsInitializationPending, PhysicsPoseSeeded,
-    PhysicsSupportFootprint, PhysicsSupportState, PhysicsWheelContact, PhysicsWheelRaycastFilter,
+    PhysicsInitializationInvalid, PhysicsInitializationPaused, PhysicsInitializationPending,
+    PhysicsObjectPaused, PhysicsPoseSeeded, PhysicsSupportFootprint, PhysicsSupportState,
+    PhysicsWheelContact, PhysicsWheelRaycastFilter,
 };
 use lunco_usd_avian_contracts::ShouldBeDynamic;
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -215,9 +216,11 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
         let sleeping = world.get::<Sleeping>(entity).is_some();
         let ready = world.get::<PhysicsStateReady>(entity).is_some();
         let pending = world.get::<PhysicsStatePending>(entity).is_some();
-        let admission_requested = world.get::<ShouldBeDynamic>(entity).is_some();
+        let object_paused = world.get::<PhysicsObjectPaused>(entity).is_some();
+        let admission_requested = world.get::<ShouldBeDynamic>(entity).is_some() && !object_paused;
         let initialization_pending = world.get::<PhysicsInitializationPending>(entity).is_some();
         let initialization_invalid = world.get::<PhysicsInitializationInvalid>(entity).is_some();
+        let initialization_paused = world.get::<PhysicsInitializationPaused>(entity);
         let pose_seeded = world.get::<PhysicsPoseSeeded>(entity).is_some();
         let pose_authoritative = world.get::<PhysicsPoseAuthoritative>(entity).is_some();
         let disabled = world
@@ -383,6 +386,9 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             "physics_admission_requested": admission_requested,
             "physics_initialization_pending": initialization_pending,
             "physics_initialization_invalid": initialization_invalid,
+            "physics_initialization_paused": initialization_paused.is_some(),
+            "physics_initialization_penetration_m": initialization_paused.map(|paused| paused.penetration_m),
+            "physics_object_paused": object_paused,
             "physics_pose_seeded": pose_seeded,
             "physics_pose_authoritative": pose_authoritative,
             "rigid_body_disabled": disabled,
@@ -433,6 +439,8 @@ pub fn register(app: &mut App) {
     world.register_component::<PhysicsStatePending>();
     world.register_component::<PhysicsInitializationPending>();
     world.register_component::<PhysicsInitializationInvalid>();
+    world.register_component::<PhysicsInitializationPaused>();
+    world.register_component::<PhysicsObjectPaused>();
     world.register_component::<PhysicsPoseSeeded>();
     world.register_component::<PhysicsPoseAuthoritative>();
     world.register_component::<ShouldBeDynamic>();

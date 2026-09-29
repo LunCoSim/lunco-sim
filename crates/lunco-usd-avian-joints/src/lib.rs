@@ -150,7 +150,25 @@ struct JointAdmissionBatch {
 /// no candidate to admit, so per-update scene-projection and endpoint checks
 /// can sleep until a candidate arrives.
 fn joint_admission_work_pending(
-    pending: Query<(), Or<(With<PendingUsdJoint>, With<PendingJointAdmission>)>>,
+    pending: Query<
+        (),
+        (
+            Or<(With<PendingUsdJoint>, With<PendingJointAdmission>)>,
+            Without<lunco_physics::PhysicsObjectPaused>,
+        ),
+    >,
+) -> bool {
+    !pending.is_empty()
+}
+
+fn active_pending_joint_work<J: Component + Clone>(
+    pending: Query<
+        (),
+        (
+            With<PendingJoint<J>>,
+            Without<lunco_physics::PhysicsObjectPaused>,
+        ),
+    >,
 ) -> bool {
     !pending.is_empty()
 }
@@ -181,15 +199,14 @@ impl Plugin for JointAttachPlugin {
             Update,
             (
                 admit_pending_joints::<RevoluteJoint>
-                    .run_if(any_with_component::<PendingJoint<RevoluteJoint>>),
+                    .run_if(active_pending_joint_work::<RevoluteJoint>),
                 admit_pending_joints::<PrismaticJoint>
-                    .run_if(any_with_component::<PendingJoint<PrismaticJoint>>),
-                admit_pending_joints::<FixedJoint>
-                    .run_if(any_with_component::<PendingJoint<FixedJoint>>),
+                    .run_if(active_pending_joint_work::<PrismaticJoint>),
+                admit_pending_joints::<FixedJoint>.run_if(active_pending_joint_work::<FixedJoint>),
                 admit_pending_joints::<SphericalJoint>
-                    .run_if(any_with_component::<PendingJoint<SphericalJoint>>),
+                    .run_if(active_pending_joint_work::<SphericalJoint>),
                 admit_pending_joints::<DistanceJoint>
-                    .run_if(any_with_component::<PendingJoint<DistanceJoint>>),
+                    .run_if(active_pending_joint_work::<DistanceJoint>),
             )
                 .in_set(JointAdmissionCommit)
                 .in_set(JointAdmission),
@@ -227,7 +244,7 @@ pub fn attach_joint<J: Component + Clone>(
 /// solver graph. Static bodies are admitted by construction; a pair of two
 /// static bodies is retained pending because it cannot constrain simulation.
 fn admit_pending_joints<J: Component + Clone>(
-    pending: Query<(Entity, &PendingJoint<J>)>,
+    pending: Query<(Entity, &PendingJoint<J>), Without<lunco_physics::PhysicsObjectPaused>>,
     admitted: Query<(), With<avian3d::dynamics::solver::islands::BodyIslandNode>>,
     bodies: Query<&RigidBody>,
     batch: Res<JointAdmissionBatch>,
@@ -298,24 +315,43 @@ fn synchronize_joint_admission_batch(
         (
             With<PendingUsdJoint>,
             Without<lunco_physics::PhysicsJointDetachRequested>,
+            Without<lunco_physics::PhysicsObjectPaused>,
         ),
     >,
-    fixed: Query<&PendingJoint<FixedJoint>, Without<lunco_physics::PhysicsJointDetachRequested>>,
+    fixed: Query<
+        &PendingJoint<FixedJoint>,
+        (
+            Without<lunco_physics::PhysicsJointDetachRequested>,
+            Without<lunco_physics::PhysicsObjectPaused>,
+        ),
+    >,
     revolute: Query<
         &PendingJoint<RevoluteJoint>,
-        Without<lunco_physics::PhysicsJointDetachRequested>,
+        (
+            Without<lunco_physics::PhysicsJointDetachRequested>,
+            Without<lunco_physics::PhysicsObjectPaused>,
+        ),
     >,
     spherical: Query<
         &PendingJoint<SphericalJoint>,
-        Without<lunco_physics::PhysicsJointDetachRequested>,
+        (
+            Without<lunco_physics::PhysicsJointDetachRequested>,
+            Without<lunco_physics::PhysicsObjectPaused>,
+        ),
     >,
     prismatic: Query<
         &PendingJoint<PrismaticJoint>,
-        Without<lunco_physics::PhysicsJointDetachRequested>,
+        (
+            Without<lunco_physics::PhysicsJointDetachRequested>,
+            Without<lunco_physics::PhysicsObjectPaused>,
+        ),
     >,
     distance: Query<
         &PendingJoint<DistanceJoint>,
-        Without<lunco_physics::PhysicsJointDetachRequested>,
+        (
+            Without<lunco_physics::PhysicsJointDetachRequested>,
+            Without<lunco_physics::PhysicsObjectPaused>,
+        ),
     >,
     admitted: Query<(), With<avian3d::dynamics::solver::islands::BodyIslandNode>>,
     bodies: Query<&RigidBody>,

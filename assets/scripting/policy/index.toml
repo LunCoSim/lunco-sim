@@ -47,6 +47,13 @@ deterministic = true
 required = true
 
 [[policies]]
+hook = "physics.initialization"
+source = "physics_initialization.rhai"
+entry = "physics_initialization_policy"
+deterministic = true
+required = true
+
+[[policies]]
 hook = "assets.provision"
 source = "dataset_provisioning.rhai"
 entry = "dataset_provisioning"
