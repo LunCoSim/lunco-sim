@@ -94,16 +94,18 @@ until a browser worker transport is available; see
 [`hook-policies.md`](hook-policies.md).
 
 Native application policy discovery, manifest/source reads, and Rhai hook
-compilation and installer-order selection are prepared as one fixed startup
-job on `AsyncComputeTaskPool` while the runtime finishes installing its
-plugins. This keeps the lifecycle commit deterministic while removing source
-I/O, Rhai compilation/evaluation, and source-text round trips through the
-startup script from the app thread. The authored function receives ordered
-hook identities while Rust retains the prepared definitions and callables.
-`PreStartup` validates the typed selection and commits hooks in that authored
-order before any `Startup` consumer. The one-shot job is bounded to one bundle;
-a missing pool or worker failure becomes an application policy diagnostic
-instead of a synchronous fallback.
+compilation, optional-owner filtering, owner-contract/entry-arity validation,
+and installer-order selection are prepared as one fixed startup job on
+`AsyncComputeTaskPool` while the runtime finishes installing its plugins. This
+keeps the lifecycle commit deterministic while removing source I/O, Rhai
+compilation/evaluation, owner/entry validation, and source-text round trips
+through the startup script from the app thread. The authored function receives
+ordered hook identities while Rust retains the prepared definitions and
+validated callables. `PreStartup` validates the typed selection and its
+manifest records, then commits hooks in that authored order before any
+`Startup` consumer. The one-shot job is bounded to one bundle; a missing pool
+or worker failure becomes an application policy diagnostic instead of a
+synchronous fallback.
 
 Modelica runtime telemetry is event-gated after worker responses and on document
 metadata or telemetry-settings changes. Unchanged render frames do not rescan its

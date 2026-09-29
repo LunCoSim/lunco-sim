@@ -171,6 +171,10 @@ sizing and alignment at call sites. Do not move domain selection or loading
 policy into the shared renderer. Search may force matching branches open for
 the current frame; ordinary expansion remains persistent UI state.
 
+Selectable tree rows use `tree::selectable_label`, even when they support drag
+and drop or reserve trailing value columns. Wrap the shared label as the drag
+source instead of replacing it with a direct `Button::selectable` call.
+
 Project-owned settings are not user-global settings: read the active Twin's
 manifest through the workspace resource and emit a typed event for changes.
 Workbench hot-exit documents, tabs, and dock windows are scoped to the active

@@ -36,6 +36,11 @@ should be gated by a revision/change event. Structural edits should invalidate
 structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
+In panel paint code, use `PanelCtx::resource` for reads. Its `resource_scope`
+temporarily removes and reinserts the resource, which marks it changed even
+when the closure only reads it. Scope a mutable borrow only around a real
+state transition; otherwise a steady Builder repaint can wake change-detection
+systems and full-scene reconciliation on the next Update.
 The shell's steady `WorkbenchSnapshot` check compares borrowed dock and
 perspective iterators before materializing owned vectors; preserve that
 allocation-free stable path when changing layout publication.
@@ -116,6 +121,10 @@ search for phase-space curves where X can reverse.
 For the entity tree, derive parent and grid facts through indexed lookups along
 named candidates' deduplicated ancestor closure instead of copying every scene
 entity's `ChildOf` and `Grid` membership into the snapshot.
+Keep topology invalidation separate from the query-heavy snapshot producer:
+mark the revision dirty when scene facts change, then gate snapshot work until
+no prior worker is active. This lets a revision change reject an in-flight tree
+result without re-entering the full ECS query system just to discard it.
 For Builder telemetry, inspect `telemetry_catalog_snapshot_start`,
 `telemetry_catalog_snapshot`, and `telemetry_catalog_build_worker` separately.
 The start span captures channel identities and owner ancestry once;
@@ -158,13 +167,22 @@ Application policy startup has separate Tracy spans for
 `application_policy_source_prepare_offthread`,
 `application_policy_compile_offthread`,
 `application_policy_prestartup_wait`, and
-`application_policy_activation`. Preparation starts during runtime plugin
-construction; the compile span includes authored installer-order selection.
-`PreStartup` validates that typed order and publishes the prepared hooks before
-Startup consumers. Keep source text and callables in the Rust preparation
-bundle; the application selector receives hook identities only. Attribute
-worker time and residual PreStartup wait separately before changing policy
-lifecycle ordering.
+`application_policy_activation`. The activation span separates
+`application_policy_clear_registry`,
+`application_policy_validate_order`,
+`application_policy_validate_prepared_hooks`,
+`application_policy_install_prepared_hooks`, and
+`application_policy_publish_registry`. Preparation starts during runtime
+plugin construction; the compile span includes authored installer-order
+selection. Owner filtering and per-hook contract/arity validation run in
+`application_policy_filter_manifest_offthread` and
+`application_policy_validate_prepared_hook_offthread`. `PreStartup`
+validates the selected order and its manifest records, then registers the
+prepared callables before Startup consumers. Keep source text and callables in
+the Rust preparation bundle; the application selector receives hook
+identities only. Compare the activation children before moving additional
+registry work across the lifecycle boundary; preserve authored install order
+and visible failure reporting.
 
 Read-only USD projectors use `CanonicalStages::reader_for` or
 `reader_for_entity`: generation-zero reads consume the worker-prepared plan, and

@@ -116,33 +116,44 @@ fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     // pointer's panel is the "active" one, not whichever rendered
     // last. Falls back to render-order when there's no pointer
     // (boot, headless, key-only navigation) so a fresh tab gets
-    // promoted on first frame. The write is pure global-state intent
-    // (this panel never reads ActivePlot back this frame), so it is
+    // promoted on first frame. Avoid a scoped write when the active
+    // plot is unchanged: resource_scope removes and reinserts the
+    // resource, which marks it changed for downstream readers.
     let panel_rect = ui.max_rect();
     let hovered_here = ui.rect_contains_pointer(panel_rect);
-    let _ = ctx.resource_scope::<lunco_experiments_ui::ActivePlot, _>(|_, active| {
-        if active.0.is_none() || hovered_here {
+    let active_plot = ctx
+        .resource::<lunco_experiments_ui::ActivePlot>()
+        .copied()
+        .unwrap_or_default();
+    if active_plot.0.is_none() || (hovered_here && active_plot.0 != Some(viz_id)) {
+        let _ = ctx.resource_scope::<lunco_experiments_ui::ActivePlot, _>(|_, active| {
             active.0 = Some(viz_id);
-        }
-    });
-    // Bootstrap the registry entry for the default graph the first
-    // time the panel renders. Other VizIds were created by
-    // `NewPlotPanel` and already exist; this branch is a no-op for
-    // them. The bootstrap mutates the registry and we need the
-    // resulting binding count *this* frame to pick the body, so this
-    // is a mutate-then-read — use `resource_scope`.
-    let bound_count = match ctx.resource_scope::<VisualizationRegistry, _>(|_ctx, registry| {
-        if viz_id == DEFAULT_MODELICA_GRAPH {
-            Some(ensure_default_modelica_graph(registry).inputs.len())
-        } else {
-            registry.get(viz_id).map(|cfg| cfg.inputs.len())
-        }
-    }) {
+        });
+    }
+    // Read the registry immutably on steady paints. Bootstrap the
+    // default graph only when its entry is missing; other VizIds were
+    // created by `NewPlotPanel` and already exist. The bootstrap
+    // mutates the registry and needs its resulting binding count this
+    // frame, so only that branch uses `resource_scope`.
+    let configured_count = match ctx.resource::<VisualizationRegistry>() {
         None => {
             ui.label("lunco-viz not installed.");
             return;
         }
-        Some(None) => {
+        Some(registry) => registry.get(viz_id).map(|cfg| cfg.inputs.len()),
+    };
+    let bound_count = match configured_count {
+        Some(count) => Some(count),
+        None if viz_id == DEFAULT_MODELICA_GRAPH => ctx
+            .resource_scope::<VisualizationRegistry, _>(|_, registry| {
+                Some(ensure_default_modelica_graph(registry).inputs.len())
+            })
+            .flatten(),
+        None => None,
+    };
+    let bound_count = match bound_count {
+        Some(count) => count,
+        None => {
             // A persisted dock can outlive a runtime-created plot. The
             // VisualizationRegistry is authoritative for plot instances, so
             // retire the stale tab after this paint instead of presenting a
@@ -154,7 +165,6 @@ fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
             });
             return;
         }
-        Some(Some(n)) => n,
     };
     // Per-plot experiment overlay: each tab has its own picked-vars
     // and scrub cursor, so every plot can render the experiments

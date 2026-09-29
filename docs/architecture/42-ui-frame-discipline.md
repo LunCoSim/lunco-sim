@@ -257,9 +257,11 @@ package — none of these belong on the UI thread every frame. Patterns:
 - **Derived entity tree**: the UI thread snapshots the typed ECS facts needed
   for names, hierarchy, visibility, and camera labels once per invalidation;
   hierarchy construction and sorting run on one bounded worker task. Repeated
-  topology changes coalesce behind a revision fence, stale results are dropped,
-  and Twin close clears the published view. Panels continue reading the last
-  completed view while a current build is pending. Keep each snapshot fact in
+  topology changes mark the resource dirty through a small invalidation system;
+  the query-heavy snapshot producer runs only when no worker is active. A
+  revision fence rejects stale results, and Twin close clears the published
+  view. Panels continue reading the last completed view while a current build
+  is pending. Keep each snapshot fact in
   the query that already visits its population: marker membership for named
   tree candidates comes from `Has<T>` fields on that named query, rather than
   separate whole-population scans whose results are only read for named nodes.

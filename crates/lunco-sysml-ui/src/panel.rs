@@ -1095,46 +1095,62 @@ impl SysmlRequirementsPanel {
         let selected = self.selected_structure_element == Some(handle);
         let id = ui.make_persistent_id(("sysml_structure_node", handle));
         let default_open = !query.is_empty() || depth == 0;
-        egui::collapsing_header::CollapsingState::load_with_default_open(
-            ui.ctx(),
+        let mut select_from_header = false;
+        let mut open_source_from_header = None;
+        let mut open_source_clicked = false;
+        lunco_workbench_widgets::tree::branch(
+            ui,
             id,
             default_open,
-        )
-        .show_header(ui, |ui| {
-            let title = format!(
-                "{} · {}",
-                structure_kind_label(&node.element.kind),
-                node.element.display_name
-            );
-            if ui
-                .selectable_label(
-                    selected,
-                    egui::RichText::new(title)
-                        .color(structure_kind_color(&node.element.kind, theme)),
-                )
-                .clicked()
-            {
-                self.selected_structure_element = Some(handle);
-            }
-            if ui.small_button("Open").clicked() {
-                self.selected_structure_element = Some(handle);
-                *open_source = source_location(view_model, &node.element);
-            }
-        })
-        .body(|ui| {
-            for child in &node.children {
-                self.render_structure_node(
-                    ui,
-                    view_model,
-                    child,
-                    depth + 1,
-                    query,
-                    matching,
-                    theme,
-                    open_source,
-                );
-            }
-        });
+            None,
+            |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("Open").clicked() {
+                        select_from_header = true;
+                        open_source_clicked = true;
+                        open_source_from_header = source_location(view_model, &node.element);
+                    }
+
+                    let title = format!(
+                        "{} · {}",
+                        structure_kind_label(&node.element.kind),
+                        node.element.display_name
+                    );
+                    let response = lunco_workbench_widgets::tree::selectable_label(
+                        ui,
+                        selected,
+                        egui::RichText::new(title)
+                            .color(structure_kind_color(&node.element.kind, theme)),
+                        ui.available_width(),
+                    );
+                    if response.clicked() {
+                        select_from_header = true;
+                    }
+                    response.clicked()
+                })
+                .inner
+            },
+            |ui| {
+                for child in &node.children {
+                    self.render_structure_node(
+                        ui,
+                        view_model,
+                        child,
+                        depth + 1,
+                        query,
+                        matching,
+                        theme,
+                        open_source,
+                    );
+                }
+            },
+        );
+        if select_from_header {
+            self.selected_structure_element = Some(handle);
+        }
+        if open_source_clicked {
+            *open_source = open_source_from_header;
+        }
     }
 
     fn has_unsaved_source_edits(
