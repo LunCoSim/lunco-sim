@@ -576,8 +576,9 @@ fn on_tick(me, ctx) {
     }
 
     if this.t >= this.next_determinism_sample_s {
+        let capture_final_modelica = this.t >= SETTLE_SECONDS + DRIVE_SECONDS;
         let sample = deterministic_state_sample(this.rover_paths, this.rovers,
-            scenario_tick, false);
+            scenario_tick, capture_final_modelica);
         this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
         this.deterministic_trace_ticks.push(scenario_tick);
         this.last_deterministic_state_row = sample.row;
@@ -589,7 +590,7 @@ fn on_tick(me, ctx) {
     if this.deterministic_trace_ticks.len() == 0
         || this.deterministic_trace_ticks[this.deterministic_trace_ticks.len() - 1] != scenario_tick {
         let sample = deterministic_state_sample(this.rover_paths, this.rovers,
-            scenario_tick, false);
+            scenario_tick, true);
         this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
         this.deterministic_trace_ticks.push(scenario_tick);
         this.last_deterministic_state_row = sample.row;

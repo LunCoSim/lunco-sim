@@ -34,6 +34,17 @@ first behavior sample at tick 1. Four startup-comparator runs at Compute widths
 1 and 24 matched the first-tick snapshot, digest
 `92753352336a37dd97ed30837833bba97c64db68ef0649b8f1e29727583999da`.
 
+The next full matrix run exposed a test-coverage defect: the stress fixture
+recorded full Modelica variables at ticks 0, 1, and 180, while its actual final
+stage was tick 780. The comparator tried to compare the candidate at 780 with
+the reference's last full-value sample at 180, so it reported a final-state
+mismatch even though both captured runs matched exactly at all three shared
+Modelica samples. No portable reference was written. The Rhai fixture now adds
+full Modelica variables at the final stage alongside its existing selected
+samples, and the comparator requires those final-stage values for every shared
+rover before it compares or records a run. This keeps the trace sparse while
+making the required final Modelica comparison real.
+
 The bridge regression found that `PreUpdate` read the render-interpolated
 `Transform` of an already-seeded body before `FixedFirst` restored the solved
 endpoint. That presentation sample was written back to Avian `Position` and

@@ -166,6 +166,18 @@ class DeterministicPhysicsProfileTests(unittest.TestCase):
                 mismatched, "mismatched profile"
             )
 
+    def test_full_modelica_state_must_include_the_actual_final_stage(self) -> None:
+        model_trace = {("180", "-47.5", "/system"): "x=1.0"}
+        with self.assertRaisesRegex(RuntimeError, "final-stage variables at SimTick=780"):
+            deterministic_physics_profiles.require_final_modelica_stage(
+                model_trace, "780", {"-47.5"}
+            )
+
+        model_trace[("780", "-47.5", "/system")] = "x=2.0"
+        deterministic_physics_profiles.require_final_modelica_stage(
+            model_trace, "780", {"-47.5"}
+        )
+
     def test_portable_reference_requires_exact_final_stage_equality(self) -> None:
         reference = {
             "scene-4-serial": {

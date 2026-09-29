@@ -626,6 +626,12 @@ def canonical_modelica_trace(
         tick = scenario_trace_tick(trace)
         if tick in physics_ticks:
             fine_ticks.add(tick)
+    final_tick = final_stage_tick(output)
+    if final_tick not in fine_ticks:
+        raise RuntimeError(
+            f"Rhai state trace omitted authored full state at final SimTick={final_tick}"
+        )
+    require_final_modelica_stage(canonical, final_tick, shared_positions)
     expected = {
         (tick, position)
         for tick in fine_ticks | {"0"}
@@ -638,6 +644,24 @@ def canonical_modelica_trace(
             "selected physics checkpoints and first behavior sample"
         )
     return canonical
+
+
+def require_final_modelica_stage(
+    model_trace: dict[tuple[str, str, str], str],
+    final_tick: str,
+    shared_positions: set[str],
+) -> None:
+    sampled_positions = {
+        position
+        for tick, position, _ in model_trace
+        if tick == final_tick
+    }
+    missing = sorted(shared_positions - sampled_positions, key=float)
+    if missing:
+        raise RuntimeError(
+            f"Rhai Modelica trace omitted final-stage variables at "
+            f"SimTick={final_tick} for rover lanes {missing}"
+        )
 
 
 def first_modelica_trace_difference(
