@@ -42,6 +42,11 @@ population, combine compatible marker reads into the existing query and avoid
 another full-population traversal for each marker set. Keep queries over
 different populations separate unless measurements show that a broader scan
 costs less.
+For large Builder hierarchies, derive a lightweight row index from the cached
+tree and current expansion state, then use `ScrollArea::show_rows` to create
+widgets only for rows in the viewport. Keep foldout state keyed by stable
+entity/group identity and preserve selection, drag, and tooltip behavior on
+painted rows.
 For the entity tree, derive parent and grid facts through indexed lookups along
 named candidates' deduplicated ancestor closure instead of copying every scene
 entity's `ChildOf` and `Grid` membership into the snapshot.

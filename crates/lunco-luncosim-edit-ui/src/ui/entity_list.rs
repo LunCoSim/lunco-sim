@@ -864,7 +864,16 @@ pub(crate) fn on_twin_closed(
 }
 
 /// Entity list panel — hierarchy tree of scene entities.
-pub struct EntityList;
+#[derive(Default)]
+pub struct EntityList {
+    visible_rows: Vec<VisibleEntityRow>,
+}
+
+struct VisibleEntityRow {
+    entity: Entity,
+    depth: usize,
+    branch_id: Option<egui::Id>,
+}
 
 impl Panel for EntityList {
     fn id(&self) -> PanelId {
@@ -884,92 +893,111 @@ impl Panel for EntityList {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        ctx.panel_content_frame()
-            .show(ui, |ui| entity_list_content(ui, ctx));
+        ctx.panel_content_frame().show(ui, |ui| {
+            entity_list_content(ui, ctx, &mut self.visible_rows)
+        });
     }
 }
 
-/// Render one tree node and its descendants. Children in the view are already
-/// visibility-pruned and sorted, so this is pure paint — leaf nodes are a
-/// selectable label; branch nodes use the shared workbench tree renderer whose
-/// header is itself selectable, so a click on the rover selects the rover and
-/// the triangle drills into its wheels.
-fn render_node(
-    ui: &mut egui::Ui,
+/// Rebuild the open portion of the cached hierarchy with stable entity-keyed
+/// branch IDs. The resulting rows are painted through `ScrollArea::show_rows`,
+/// so offscreen descendants do not allocate widgets or text layouts.
+fn collect_visible_rows(
+    ctx: &egui::Context,
     entity: Entity,
     depth: usize,
+    view: &EntityTreeView,
+    rows: &mut Vec<VisibleEntityRow>,
+) {
+    let branch_id = view
+        .kids
+        .contains_key(&entity)
+        .then(|| egui::Id::new(("entity_tree", entity)));
+    rows.push(VisibleEntityRow {
+        entity,
+        depth,
+        branch_id,
+    });
+
+    let (Some(branch_id), Some(children)) = (branch_id, view.kids.get(&entity)) else {
+        return;
+    };
+    let default_open = lunco_workbench_widgets::tree::default_open_at_depth(depth);
+    let state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ctx,
+        branch_id,
+        default_open,
+    );
+    if !state.is_open() {
+        return;
+    }
+
+    for &child in children {
+        collect_visible_rows(ctx, child, depth + 1, view, rows);
+    }
+}
+
+/// Render one flattened hierarchy row. The branch body is painted separately
+/// by the virtualized list, while its persistent disclosure state remains the
+/// same as the ordinary shared tree branch.
+fn render_node_row(
+    ui: &mut egui::Ui,
+    row: &VisibleEntityRow,
     view: &EntityTreeView,
     selected: &lunco_scene_selection::SelectedEntities,
     shift_held: bool,
     to_select: &mut Option<(Entity, bool)>,
     to_focus: &mut Option<Entity>,
 ) {
+    let entity = row.entity;
     let label = view
         .labels
         .get(&entity)
         .map(String::as_str)
         .unwrap_or("Unnamed entity");
 
-    match view.kids.get(&entity) {
-        None => {
-            let _ = lunco_workbench_widgets::tree::leaf(ui, |ui| {
-                select_label(
-                    ui,
-                    entity,
-                    label,
-                    view.camera_identities.get(&entity).map(String::as_str),
-                    selected,
-                    shift_held,
-                    to_select,
-                    to_focus,
-                )
-            });
-        }
-        Some(children) => {
-            let id = ui.make_persistent_id(("entity_tree", entity));
-            let mut header_select = None;
-            let mut header_focus = None;
-            // Match Telemetry's initial presentation: reveal two levels while
-            // leaving deeper sub-part detail collapsed.
-            lunco_workbench_widgets::tree::branch(
+    let Some(id) = row.branch_id else {
+        let _ = lunco_workbench_widgets::tree::leaf(ui, |ui| {
+            select_label(
                 ui,
-                id,
-                lunco_workbench_widgets::tree::default_open_at_depth(depth),
-                None,
-                |ui| {
-                    select_label(
-                        ui,
-                        entity,
-                        label,
-                        view.camera_identities.get(&entity).map(String::as_str),
-                        selected,
-                        shift_held,
-                        &mut header_select,
-                        &mut header_focus,
-                    )
-                },
-                |ui| {
-                    for &child in children {
-                        render_node(
-                            ui,
-                            child,
-                            depth + 1,
-                            view,
-                            selected,
-                            shift_held,
-                            to_select,
-                            to_focus,
-                        );
-                    }
-                },
-            );
-            if header_select.is_some() {
-                *to_select = header_select;
-            }
-            if header_focus.is_some() {
-                *to_focus = header_focus;
-            }
-        }
+                entity,
+                label,
+                view.camera_identities.get(&entity).map(String::as_str),
+                selected,
+                shift_held,
+                to_select,
+                to_focus,
+            )
+        });
+        return;
+    };
+
+    let mut header_select = None;
+    let mut header_focus = None;
+    lunco_workbench_widgets::tree::branch(
+        ui,
+        id,
+        lunco_workbench_widgets::tree::default_open_at_depth(row.depth),
+        None,
+        |ui| {
+            select_label(
+                ui,
+                entity,
+                label,
+                view.camera_identities.get(&entity).map(String::as_str),
+                selected,
+                shift_held,
+                &mut header_select,
+                &mut header_focus,
+            )
+        },
+        |_| {},
+    );
+    if header_select.is_some() {
+        *to_select = header_select;
+    }
+    if header_focus.is_some() {
+        *to_focus = header_focus;
     }
 }
 
@@ -1016,7 +1044,11 @@ fn select_label(
     resp.clicked()
 }
 
-fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+fn entity_list_content(
+    ui: &mut egui::Ui,
+    ctx: &mut PanelCtx,
+    visible_rows: &mut Vec<VisibleEntityRow>,
+) {
     ui.label("Click to select. Expand > to reach sub-parts (wheels, body).");
     if let Some((active_scene_root, error)) = ctx
         .resource::<EntityTreeView>()
@@ -1047,25 +1079,37 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             return;
         };
 
-        // ONE panel-level ScrollArea owning every row. `auto_shrink([false; 2])`
-        // makes the area claim the panel's full height instead of shrinking to
-        // content — a shrunk area never scrolls, which is why a long tree ran off
-        // the bottom of the panel with no way to reach it.
+        // One panel-level scroll area owns the open hierarchy. `show_rows`
+        // reserves its full extent while constructing widgets only for rows
+        // that intersect the viewport.
+        visible_rows.clear();
+        for &root in &view.roots {
+            collect_visible_rows(ui.ctx(), root, 0, view, visible_rows);
+        }
+        let row_height = ui.spacing().interact_size.y;
         egui::ScrollArea::vertical()
             .id_salt("entity_list_scroll")
             .auto_shrink([false; 2])
-            .show(ui, |ui| {
-                for &root in &view.roots {
-                    render_node(
-                        ui,
-                        root,
-                        0,
-                        view,
-                        &selected,
-                        shift_held,
-                        &mut to_select,
-                        &mut to_focus,
-                    );
+            .show_rows(ui, row_height, visible_rows.len(), |ui, range| {
+                for row_index in range {
+                    let row = &visible_rows[row_index];
+                    ui.push_id(("entity_tree_row", row.entity), |ui| {
+                        let indent = ui.spacing().indent * row.depth as f32;
+                        ui.horizontal(|ui| {
+                            ui.add_space(indent);
+                            ui.vertical(|ui| {
+                                render_node_row(
+                                    ui,
+                                    row,
+                                    view,
+                                    &selected,
+                                    shift_held,
+                                    &mut to_select,
+                                    &mut to_focus,
+                                );
+                            });
+                        });
+                    });
                 }
             });
         if selected

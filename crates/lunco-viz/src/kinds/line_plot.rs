@@ -316,11 +316,13 @@ pub fn cached_scalar_history_points(
 
 /// Everything a cached tessellation depends on. Stored next to the
 /// points; a mismatch on any component forces a rebuild.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct SeriesKey {
     y: HistFingerprint,
     /// Fingerprint of the X signal's history in phase-space mode.
     x: Option<HistFingerprint>,
+    /// X identity matters even when two histories currently share a fingerprint.
+    x_signal: Option<SignalRef>,
     log_y: bool,
     /// Plot pixel width bucket — decimation depth depends on it.
     px_w: u32,
@@ -469,11 +471,8 @@ impl LinePlot {
         // Snapshot point buffers and their current labels/colors before the
         // plot takes a long-lived borrow on `ctx.ui`.
         //
-        // Tessellation is dirty-checked: the (history fingerprint,
-        // x fingerprint, log_y, pixel width) key is compared against a
-        // per-binding cache in egui context data; only a moved key
-        // re-copies the history, re-logs, and re-decimates. Steady frames
-        // clone only the cache Arc; egui_plot borrows its point slice.
+        // History changes rebuild the point buffer; plot width, X source, and
+        // style changes also invalidate the per-binding cache.
         let series_to_plot: Vec<(
             std::sync::Arc<(SeriesKey, Vec<egui_plot::PlotPoint>)>,
             String,
@@ -488,6 +487,7 @@ impl LinePlot {
                 let key = SeriesKey {
                     y: hist_fingerprint(hist),
                     x: x_fp,
+                    x_signal: style.x_signal.clone(),
                     log_y: style.log_y,
                     px_w: remaining.x.max(1.0) as u32,
                 };

@@ -47,10 +47,16 @@ Rows read their latest values from the shared registry when painted. Lowercased
 filter fields are prepared with the catalog, and descendant visibility counts
 are cached until the catalog, focus, filter, scope, or archived-row setting
 changes; repainting an unchanged tree does not rescan its descendants.
+The panel rebuilds a lightweight index for the expanded groups and paints only
+the group/channel rows inside the scroll viewport; values and interaction
+handlers are not created for offscreen rows.
 Visible row labels, unit labels, and formatted numeric text are retained by
 channel catalog revision; formatted values refresh only when the sample value
-or display settings change. The panel copies only its four used theme tokens,
-not the full theme, and empty-unit help is registered only on hover.
+or display settings change. The panel copies only its three used theme tokens,
+not the full theme, and empty-unit help is registered only on hover. Persistent
+requested signal selections are resolved when the request or catalog revision
+changes and reused across repaints; focus roots are inspected without copying
+the selection list.
 The line-plot signal pickers enumerate scalar channels only while a picker is
 open and reuse signal references and metadata until the signal catalog changes;
 owner labels are resolved live while the menu is visible. Decimated plot points

@@ -495,7 +495,7 @@ impl Plugin for SceneEditUiPlugin {
         // `every_frame` shape.
         app.add_view_model_every_frame(refresh_view_help_controls);
         app.register_panel(spawn_palette::SpawnPalette)
-            .register_panel(entity_list::EntityList)
+            .register_panel(entity_list::EntityList::default())
             .register_panel(ports::PortPanel::default())
             .register_panel(terrain_tools::ToolsPanel)
             .register_panel(cinematic::CinematicPanel)
