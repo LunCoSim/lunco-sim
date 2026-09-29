@@ -1360,15 +1360,18 @@ struct PendingShotStart {
 /// cannot name onto the bus: terrain by `report_terrain_stream_status` (from
 /// `lunco_terrain_surface::TerrainStreamStatus`) and scene by
 /// `report_scene_spawn_status` (from `lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight` +
-/// `UsdSceneAwaitingStage`), plus Modelica participant state. The entries are the SAME
+/// `UsdSceneAwaitingStage`), scene geometry under `SCENE_VISUAL_SOURCE`, plus
+/// Modelica participant state. The entries are the SAME
 /// consts the publishers push under, not copies of their spelling — see
 /// [`TERRAIN_SOURCE`](lunco_status_core::status_bus::TERRAIN_SOURCE),
 /// [`SCENE_SOURCE`](lunco_status_core::status_bus::SCENE_SOURCE), and
+/// [`SCENE_VISUAL_SOURCE`](lunco_status_core::status_bus::SCENE_VISUAL_SOURCE),
 /// [`MODELICA_SOURCE`](lunco_status_core::status_bus::MODELICA_SOURCE).
 const VISUAL_BUSY_SOURCES: &[&str] = &[
     lunco_status_core::status_bus::TERRAIN_SOURCE,
     lunco_status_core::status_bus::TERRAIN_BUILD_SOURCE,
     lunco_status_core::status_bus::SCENE_SOURCE,
+    lunco_status_core::status_bus::SCENE_VISUAL_SOURCE,
     lunco_status_core::status_bus::DOME_SOURCE,
     lunco_status_core::status_bus::MODELICA_SOURCE,
     lunco_status_core::status_bus::RUNTIME_UI_SOURCE,
@@ -1393,11 +1396,13 @@ const VISUAL_BUSY_SOURCES: &[&str] = &[
 ///    [`VISUAL_BUSY_SOURCES`]). This carries the weight of the condition, and is how
 ///    the gate shares — rather than re-implements — the existing definitions of
 ///    ready. `"scene"` is `SceneLoadInFlight`: prims are still spawning, the state
-///    that produced the original half-loaded opening frame. `"terrain"` is
-///    `TerrainStreamStatus`, the same read the status bar shows and the same one
-///    `start_camera_paths_when_terrain_ready` gates camera paths on. Optional
+///    that produced the original half-loaded opening frame. `"scene-visuals"`
+///    tracks generated geometry that remains after structural projection.
+///    `"terrain"` is `TerrainStreamStatus`, the same read that gates camera paths
+///    and offline recording during camera-driven terrain changes. Optional
 ///    derived terrain products use a separate source and do not block
-///    presentability.
+///    presentability. The workbench applies its own lifecycle-aware visibility
+///    policy without removing these entries from the bus.
 ///
 ///    Going through the bus rather than the resources keeps `lunco-workbench` a
 ///    UI-shell crate: it cannot name `TerrainStreamStatus` or `SceneLoadInFlight`

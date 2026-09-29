@@ -180,11 +180,11 @@ private dock layout.
 8. **Status bar (bottom strip)** — sim time, speed, selected entity,
    celestial body, FPS, and the latest status event. Warnings and errors
    identify their level and source in the strip; the history popup keeps
-   distinct state transitions in one responsive level/source/message/
-   progress row inside a compact popup sized to roughly half the parent
+   discrete state transitions in one responsive level/source/message/action
+   row inside a compact popup sized to roughly half the parent
    window (clamped to 420–960 logical px); the popup owns a fixed width while
    its vertical history viewport fills that width, and each message column
-   uses the remaining inner width after present progress and action controls.
+   uses the remaining inner width after action controls.
    The popup opens automatically for a new terminal RuntimeFault. Its
    explanation is the ordinary Modelica error event in the shared history;
    selecting that row expands the complete message. Compile failures explain
@@ -204,21 +204,26 @@ private dock layout.
    `EngineHealthSnapshot`, so the graph remains live before a Twin is active.
    The loaded-scene chip appears only while a Twin is active, and the metric
    line uses one formatter in both states. The complete metric line remains
-   available through its tooltip. Active progress entries are included from the
-   same StatusBus reader. Consecutive identical discrete snapshots are coalesced by StatusBus
-   before the renderers read them. Warning and error rows copy the unmodified
-   message without depending on the window width;
-   attention rows emit the owning typed action. While active progress exists,
-   the same anchored popup presents a compact progress notice automatically.
-   It shows the status source and a truncated first-line summary of the
-   owner-provided message; the full message remains available from its tooltip
-   and in history. The renderer does not infer a phase from free-form text.
-   Determinate work may show its reported percentage, while indeterminate work
-   uses an animated bar without inventing a percentage. “Recent status details”
-   and the status strip open the recent-history view in place, with the
-   longest-running active progress row pinned above the event list. Completion
-   closes the compact notice automatically; an expanded history view remains
-   open until the user closes it. The two views share one popup and never stack.
+   available through its tooltip. Active progress entries use the same StatusBus reader
+   while they belong on the visible surface. Consecutive identical discrete snapshots
+   are coalesced by StatusBus before the renderers read them. Warning and error rows
+   copy the unmodified message without depending on the window width; attention rows
+   emit the owning typed action. While active progress exists, the same anchored popup
+   presents a compact progress notice automatically. It shows the status source and a
+   truncated first-line summary of the owner-provided message; the full message remains
+   available from its tooltip. The renderer does not infer a phase from free-form text.
+   Determinate work may show its reported percentage, while indeterminate work uses an
+   animated bar without inventing a percentage. “Recent status details” and the status
+   strip open the recent-history view in place. History renders discrete events only; it
+   never inserts live progress rows. While history is open, the strip hides its entire
+   event summary, including discrete-history fallback, so the event list stays stable;
+   the empty strip area remains clickable to close the popup. Terrain streaming, derived
+   terrain, and post-projection scene-visual progress remain on StatusBus for
+   visual-readiness consumers, but drive the loading notice only while a scene
+   transition is admitted or active. This prevents camera-driven terrain streaming from
+   reopening the scene-loading notice after the scene has loaded. Completion closes the
+   compact notice automatically; an expanded history view remains open until the user
+   closes it. The two views share one popup and never stack.
 
 ### 3.1 Rendering contract — how chrome and 3D share the window
 
