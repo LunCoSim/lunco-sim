@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**242 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**243 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -59,7 +59,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Time & clock**
 
-- [`lunco-time`](#lunco-time) (6 commands)
+- [`lunco-time`](#lunco-time) (5 commands)
 
 **Celestial, environment & comms**
 
@@ -90,7 +90,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-control-core`](#lunco-control-core) (2 commands)
 - [`lunco-core-runtime`](#lunco-core-runtime) (1 command)
 - [`lunco-core-session`](#lunco-core-session) (6 commands)
-- [`lunco-cosim-core`](#lunco-cosim-core) (3 commands)
+- [`lunco-cosim-core`](#lunco-cosim-core) (4 commands)
 - [`lunco-input-ui`](#lunco-input-ui) (1 command)
 - [`lunco-luncosim-runtime`](#lunco-luncosim-runtime) (1 command)
 - [`lunco-luncosim-services`](#lunco-luncosim-services) (1 command)
@@ -115,7 +115,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-viz`](#lunco-viz) (1 command)
 - [`lunco-workbench-core`](#lunco-workbench-core) (9 commands)
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (5 commands)
-- [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (10 commands)
+- [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (11 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
 - [`lunco-workbench-window`](#lunco-workbench-window) (3 commands)
 - [`lunco-workspace`](#lunco-workspace) (8 commands)
@@ -1888,18 +1888,19 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `ReleaseControl`
 
- Release all local input holds for an endpoint. This does not write replacement values; use `SetPorts` for explicit setpoints.
+ Release all local input holds for an endpoint and return its inputs to the
+ authored wiring. This command does not write a replacement value.
 
 - *defined in:* `crates/lunco-cosim-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
 | `target` | `Entity` |  The endpoint whose local input holds are released. |
-| `producer_id` | `Option < u64 >` |  Stable producer identity for external API, actorless Rhai, and direct  typed releases admitted to the session's next fixed tick. Twin Rhai uses its  stable actor identity and omits this field. |
+| `producer_id` | `Option < u64 >` |  Stable producer identity for external API, actorless Rhai, and direct  typed releases admitted to the session's next fixed tick. Twin Rhai uses  its stable actor identity and omits this field. |
 
 #### `ReleasePort`
 
- Release one manual input-port intent and hand that port back to its wiring.
+ Release the named input-port holds and hand that port back to its wiring.
 
 - *defined in:* `crates/lunco-cosim-core/src/commands.rs`
 
@@ -1927,6 +1928,17 @@ actually call, with the fields the deserializer actually accepts. See the
 | `seq` | `u32` |  Client prediction sequence number, when the command came from a client. |
 | `tick` | `u64` |  Simulation tick associated with this command. |
 | `producer_id` | `Option < u64 >` |  Stable producer identity for API, actorless Rhai, and direct typed  inputs that are admitted to the session's next fixed tick. Twin Rhai  uses its stable actor identity and omits this field. Internal  fixed-step producers also omit it because their source inputs are  captured at their owning boundary. |
+
+#### `SetPortsBatch`
+
+ Apply named input writes to several entities as one validated fixed-tick transaction.
+
+- *defined in:* `crates/lunco-cosim-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `batches` | `Vec < PortInputBatch >` |  Every target whose ownership is required by the host authority gate. |
+| `producer_id` | `Option < u64 >` |  Stable producer identity for external producers admitted to session inputs. |
 
 ### `lunco-input-ui` <a id="lunco-input-ui"></a>
 
@@ -2624,6 +2636,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `tool` | `String` |  Registered tool namespace, for example `waypoint_editor`. |
 | `hook` | `String` |  One-argument function in that namespace, without `/1`. |
 | `args` | `TelemetryValue` |  Structured argument passed to the hook. |
+| `owner_twin_id` | `Option < u64 >` |  Twin owning a menu-originated flow. The UI host captures this identity  when the user selects the item; queued work is rejected if it is stale. |
 
 #### `RunScenario`
 
@@ -2663,6 +2676,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `params` | `ScenarioParameters` |  Optional typed scenario parameters. Rhai receives them as the explicit  `ctx` argument of lifecycle/program hooks. Omitted → `{}`. |
 | `scene_asset` | `String` |  Optional scene asset to request before the scenario starts. The scene  transition remains owned by the USD scene command layer; this field  only composes the generic scenario-launch request with that lifecycle. |
 | `reload_policy` | `ScenarioReloadPolicy` |  Lifecycle behavior when the active scene is replaced. |
+| `owner_twin_id` | `Option < u64 >` |  Twin identity that owns the running scenario. Application assets can be  launched for a Twin by passing the identity from their Twin-scoped menu  entry; omitted values inherit a Twin route or a `twin://` source. |
 
 #### `RunStoredTimeline`
 
@@ -3483,6 +3497,14 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ### `lunco-workbench-guided-ui` <a id="lunco-workbench-guided-ui"></a>
 
+#### `ClearGuidedOverlay`
+
+ Clear every field of the current guided presentation while retaining its
+ execution owner. Rhai tutorial launchers use this before replacing a lesson.
+
+- *defined in:* `crates/lunco-workbench-guided-ui/src/lib.rs`
+- *fields:* none — call with `ClearGuidedOverlay` (no params)
+
 #### `ClearSpotlight`
 
  Clear any active spotlight. Rhai: `clear_spotlight()`.
@@ -3740,7 +3762,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 242 commands from the runtime schema; scanned 961 .rs files for docs (0 parse failure(s) skipped).
+<!-- 243 commands from the runtime schema; scanned 964 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

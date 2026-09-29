@@ -591,8 +591,9 @@ fn invoke_twin_lifecycle_context(
         };
     }
     let runtime_context = lunco_core::RuntimeExecutionContext {
-        route: Some(lunco_core::RuntimeRoute::twin(
+        route: Some(lunco_core::RuntimeRoute::twin_owned(
             lunco_core::RuntimeCycle::Lifecycle,
+            0,
             twin_id.raw(),
         )),
         phase,

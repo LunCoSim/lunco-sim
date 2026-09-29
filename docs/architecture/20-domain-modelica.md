@@ -192,6 +192,18 @@ admission order, then uses a compile entry point that rejects any dependency
 not already admitted. A failed root is recorded in the compiler session, so
 dependent compiles return the root error instead of repeating synchronous file
 discovery.
+The source-root registry records an explicit Application or Twin owner. Twin
+root IDs include the stable `TwinId`, so equal asset names in two mounted Twins
+cannot alias one compiler source set. `TwinClosed` removes only that Twin's
+registry entries and queues ordered unloads to the Rumoca owner; application
+roots and roots owned by other Twins stay installed. Monotonic per-root
+operation IDs fence source reads that finish after close, while the compiler
+actor removes the admitted source set and recomputes its roots, defaults,
+revision, and content closure. If the worker channel has not been created yet,
+the pending unload stays queued and is sent before a later Twin load. A closed
+channel makes unload dispatch terminal: the registry reports a runtime fault,
+retains the queued operation, and rejects later Twin source-root admission
+instead of retrying every update or assuming the old compiler state was cleared.
 Synchronous compiler convenience methods remain for CLI and batch callers. Root
 reads, bound-input extraction, and parsing run on the bounded preparation
 pool. Session installation and ordinary Rumoca DAE compilation remain

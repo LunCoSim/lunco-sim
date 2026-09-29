@@ -37,6 +37,8 @@ pub struct ScriptRegistry {
 
 /// Marks a script document and runtime whose ownership belongs to a loaded USD
 /// scene. This covers authored Rhai scenarios and USD Python cosim documents.
+/// A scene-owned script may also carry [`TwinOwnedScript`] when its authored
+/// source belongs to a mounted Twin; both lifecycle edges must be honored.
 ///
 /// Interactive/API scenarios deliberately have an independent document
 /// lifetime. USD-embedded scenarios do not: keeping their document or compiled
@@ -45,6 +47,19 @@ pub struct ScriptRegistry {
 /// program when applicable and close the scene-owned document.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct SceneOwnedScript;
+
+/// Marks a persistent scenario host whose runtime and optional script document
+/// belong to one mounted Twin. Twin-scoped work can use the application-owned
+/// `WorldRoot` without becoming application-owned itself.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TwinOwnedScript {
+    /// Workspace identity that admitted this scenario.
+    pub twin: lunco_workspace::TwinId,
+    /// Whether teardown also closes the source document. Asset-backed
+    /// tutorials and generated timelines are owned; inline user/API documents
+    /// remain open as loose documents.
+    pub close_document: bool,
+}
 
 /// Fixed-step execution boundary for every stateful scripting backend.
 ///
@@ -228,6 +243,12 @@ impl Plugin for LunCoScriptingPlugin {
 
         #[cfg(feature = "python")]
         app.init_resource::<python::PythonStatus>();
+        #[cfg(feature = "python")]
+        {
+            app.init_resource::<PythonScriptPrograms>();
+            app.add_systems(Update, retire_removed_python_programs);
+            app.add_systems(lunco_core::SceneTeardown, retire_scene_owned_python_scripts);
+        }
 
         // Per-tick Python `ScriptedModel` executor (the inputs/outputs dict
         // model used by USD Python-cosim port mapping in `lunco-usd-sim`:
@@ -338,12 +359,56 @@ mod schedule_tests {
 /// every FixedUpdate tick.
 #[cfg(feature = "python")]
 struct PyCompiledDoc {
+    /// Document currently attached to this scenario entity.
+    document_id: u64,
     /// `ScriptDocument::generation` this outcome was compiled at. A source
     /// edit bumps the generation → recompile on next tick.
     generation: u64,
     /// The cached code object (`builtins.compile(source, ..., 'exec')`), or
     /// `Err` for a source that failed to compile (already diagnosed).
     code: Result<pyo3::Py<pyo3::PyAny>, ()>,
+}
+
+#[cfg(feature = "python")]
+#[derive(Resource, Default)]
+struct PythonScriptPrograms(std::collections::HashMap<Entity, PyCompiledDoc>);
+
+#[cfg(feature = "python")]
+fn retire_removed_python_programs(
+    mut removed: RemovedComponents<ScriptedModel>,
+    mut programs: ResMut<PythonScriptPrograms>,
+) {
+    for entity in removed.read() {
+        programs.0.remove(&entity);
+    }
+}
+
+#[cfg(feature = "python")]
+fn retire_scene_owned_python_scripts(world: &mut World) {
+    let targets: Vec<_> = {
+        let mut query = world.query_filtered::<(Entity, &ScriptedModel), With<SceneOwnedScript>>();
+        query
+            .iter(world)
+            .filter(|(_, model)| model.language == Some(doc::ScriptLanguage::Python))
+            .map(|(entity, model)| (entity, model.document_id))
+            .collect()
+    };
+    for (entity, document_id) in targets {
+        if let Some(mut programs) = world.get_resource_mut::<PythonScriptPrograms>() {
+            programs.0.remove(&entity);
+        }
+        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+            entity_mut
+                .remove::<ScriptedModel>()
+                .remove::<SceneOwnedScript>()
+                .remove::<scenario::ScriptAuthority>();
+        }
+        if let Some(document_id) = document_id
+            && let Some(mut registry) = world.get_resource_mut::<ScriptRegistry>()
+        {
+            registry.documents.remove(&DocumentId::new(document_id));
+        }
+    }
 }
 
 /// Per-tick executor for Python `ScriptedModel`s (the port-mapped
@@ -359,27 +424,35 @@ struct PyCompiledDoc {
 /// the same lifecycle the rhai scenario driver gives its documents.
 #[cfg(feature = "python")]
 fn run_scripted_models(
-    mut q_models: Query<&mut ScriptedModel>,
+    mut q_models: Query<(Entity, &mut ScriptedModel)>,
     registry: Res<ScriptRegistry>,
     mut python_status: ResMut<python::PythonStatus>,
     mut diagnostics: ResMut<lunco_doc_bevy::DocumentDiagnostics>,
-    mut compiled: Local<std::collections::HashMap<u64, PyCompiledDoc>>,
+    mut compiled: ResMut<PythonScriptPrograms>,
 ) {
-    for mut model in q_models.iter_mut() {
-        if model.paused {
+    let mut active_entities = std::collections::HashSet::new();
+    for (entity, mut model) in q_models.iter_mut() {
+        if model.language != Some(doc::ScriptLanguage::Python) {
             continue;
         }
 
         let Some(doc_id_raw) = model.document_id else {
+            compiled.0.remove(&entity);
             continue;
         };
         let doc_id = DocumentId::new(doc_id_raw);
         let Some(host) = registry.documents.get(&doc_id) else {
+            compiled.0.remove(&entity);
             continue;
         };
         let doc = host.document();
 
         if doc.language != doc::ScriptLanguage::Python {
+            compiled.0.remove(&entity);
+            continue;
+        }
+        active_entities.insert(entity);
+        if model.paused {
             continue;
         }
 
@@ -393,8 +466,9 @@ fn run_scripted_models(
             // caches failures, so a broken source costs one diagnostic per
             // edit, not one parse attempt per tick.
             let stale = compiled
-                .get(&doc_id_raw)
-                .map(|c| c.generation != doc.generation)
+                .0
+                .get(&entity)
+                .map(|c| c.document_id != doc_id_raw || c.generation != doc.generation)
                 .unwrap_or(true);
             if stale {
                 let outcome = py
@@ -416,15 +490,16 @@ fn run_scripted_models(
                         Err(())
                     }
                 };
-                compiled.insert(
-                    doc_id_raw,
+                compiled.0.insert(
+                    entity,
                     PyCompiledDoc {
+                        document_id: doc_id_raw,
                         generation: doc.generation,
                         code,
                     },
                 );
             }
-            let Some(Ok(code)) = compiled.get(&doc_id_raw).map(|c| &c.code) else {
+            let Some(Ok(code)) = compiled.0.get(&entity).map(|c| &c.code) else {
                 // Already diagnosed at compile time — nothing to run.
                 return;
             };
@@ -474,6 +549,9 @@ fn run_scripted_models(
             }
         });
     }
+    compiled
+        .0
+        .retain(|entity, _| active_entities.contains(entity));
 }
 
 #[cfg(all(test, any(feature = "rhai", feature = "python")))]
@@ -524,5 +602,82 @@ mod journal_tests {
             .expect("script redo applies");
         assert_eq!(reg.documents.get(&id).unwrap().document().source, "v2");
         assert_eq!(journal.len(), 3, "apply, undo, and redo are all journaled");
+    }
+}
+
+#[cfg(all(test, feature = "python"))]
+mod python_lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn scene_teardown_releases_only_the_scene_python_program() {
+        let mut world = World::new();
+        world.insert_resource(ScriptRegistry::default());
+        world.insert_resource(PythonScriptPrograms::default());
+        let scene_doc = 41;
+        let app_doc = 42;
+        let scene_entity = world
+            .spawn((
+                ScriptedModel {
+                    document_id: Some(scene_doc),
+                    language: Some(doc::ScriptLanguage::Python),
+                    ..Default::default()
+                },
+                SceneOwnedScript,
+            ))
+            .id();
+        let app_entity = world
+            .spawn(ScriptedModel {
+                document_id: Some(app_doc),
+                language: Some(doc::ScriptLanguage::Python),
+                ..Default::default()
+            })
+            .id();
+        for document_id in [scene_doc, app_doc] {
+            world.resource_mut::<ScriptRegistry>().insert_document(
+                DocumentId::new(document_id),
+                ScriptDocument::new(document_id, doc::ScriptLanguage::Python, "pass"),
+            );
+        }
+        for (entity, document_id) in [(scene_entity, scene_doc), (app_entity, app_doc)] {
+            world.resource_mut::<PythonScriptPrograms>().0.insert(
+                entity,
+                PyCompiledDoc {
+                    document_id,
+                    generation: 0,
+                    code: Err(()),
+                },
+            );
+        }
+
+        retire_scene_owned_python_scripts(&mut world);
+
+        assert!(world.get::<ScriptedModel>(scene_entity).is_none());
+        assert!(world.get::<ScriptedModel>(app_entity).is_some());
+        assert!(
+            world
+                .resource::<PythonScriptPrograms>()
+                .0
+                .get(&scene_entity)
+                .is_none()
+        );
+        assert!(
+            world
+                .resource::<PythonScriptPrograms>()
+                .0
+                .contains_key(&app_entity)
+        );
+        assert!(
+            !world
+                .resource::<ScriptRegistry>()
+                .documents
+                .contains_key(&DocumentId::new(scene_doc))
+        );
+        assert!(
+            world
+                .resource::<ScriptRegistry>()
+                .documents
+                .contains_key(&DocumentId::new(app_doc))
+        );
     }
 }

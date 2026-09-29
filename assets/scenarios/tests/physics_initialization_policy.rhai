@@ -1,7 +1,7 @@
 // Production acceptance for the scheduled physics initialization hook.
 // The USD fixture selects a policy that accepts one finite body. The verdict
-// proves that the owner supplied the expected generation-qualified lifecycle
-// context and consumed the authored decision before physics admission.
+// proves that the owner supplied the stable Twin identity in a discrete
+// lifecycle context and consumed the authored decision before physics admission.
 
 const BODY_PATH = "/SandboxScene/Box";
 
@@ -16,6 +16,9 @@ fn on_start(me, ctx) {
     this.done = false;
     let lifecycle = policy_status().lifecycle;
     let lifecycle_context = lifecycle.runtime_context;
+    this.twin_lifecycle_generation_valid = lifecycle_context.generation.to_int() == 0;
+    this.twin_lifecycle_owner_present = lifecycle_context.owner_id != ();
+    this.twin_lifecycle_owner_matches = lifecycle_context.owner_id == execution_context().owner_id;
     let lifecycle_phase_matches = (lifecycle.event == "startup"
             || lifecycle.event == "reload")
         && lifecycle_context.phase == "start"
@@ -26,7 +29,6 @@ fn on_start(me, ctx) {
     this.twin_lifecycle_context_valid = lifecycle.status == "ok"
         && lifecycle_context.scope == "twin"
         && lifecycle_context.cycle == "lifecycle"
-        && lifecycle_context.generation.to_string() != "0"
         && lifecycle_context.clock == "none"
         && lifecycle_context.time_seconds == ()
         && lifecycle_context.delta_seconds == ()
@@ -79,8 +81,14 @@ fn on_tick(me, ctx) {
     this.done = true;
     report_verdict([
         t_true(this.body >= 0, "the authored physics body resolves to its live API id"),
+        t_true(this.twin_lifecycle_generation_valid,
+            "Twin lifecycle hooks receive generation zero for their scene owner route"),
+        t_true(this.twin_lifecycle_owner_present,
+            "Twin lifecycle hooks receive their stable Twin owner identity"),
+        t_true(this.twin_lifecycle_owner_matches,
+            "Twin lifecycle and scenario routes carry the same stable owner identity"),
         t_true(this.twin_lifecycle_context_valid,
-            "Twin lifecycle hooks receive a generation-qualified discrete lifecycle context"),
+            "Twin lifecycle hooks run in the discrete lifecycle context"),
         t_true(state != () && state.ok != false, "the admitted body remains queryable"),
         t_true(state.physics_initialization_pending == false,
             "the authored initialization decision was consumed"),

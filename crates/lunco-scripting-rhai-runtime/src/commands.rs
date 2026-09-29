@@ -87,6 +87,11 @@ pub struct RunRhaiToolHook {
     pub hook: String,
     /// Structured argument passed to the hook.
     pub args: TelemetryValue,
+    /// Twin owning a menu-originated flow. The UI host captures this identity
+    /// when the user selects the item; queued work is rejected if it is stale.
+    #[serde(default)]
+    #[reflect(default)]
+    pub owner_twin_id: Option<u64>,
 }
 
 /// One source-level edit for a script document. The document host performs
@@ -263,6 +268,7 @@ fn on_run_rhai_tool(
             args: cmd.args.clone(),
             authority,
             correlation_id,
+            owner_twin_id: None,
         },
         *limits,
     )?;
@@ -280,6 +286,7 @@ fn on_run_rhai_tool_hook(
     pending_request: Res<PendingApiRequest>,
     mut pending: ResMut<PendingWorldScripts>,
     limits: Res<WorldScriptExecutionLimits>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
 ) -> Result<Ack, String> {
     let cmd = trigger.event();
@@ -301,6 +308,16 @@ fn on_run_rhai_tool_hook(
             cmd.tool, signature
         ));
     }
+    if let Some(raw) = cmd.owner_twin_id {
+        let owner = lunco_workspace::TwinId::new(raw);
+        if workspace.as_deref().is_none_or(|workspace| {
+            workspace.active_twin != Some(owner) || workspace.twin(owner).is_none()
+        }) {
+            return Err(format!(
+                "Rhai tool hook Twin owner {raw} is no longer active"
+            ));
+        }
+    }
     let id = active.get().unwrap_or(0);
     let authority = guard.and_then(|g| g.0);
     let correlation_id =
@@ -313,6 +330,7 @@ fn on_run_rhai_tool_hook(
             args: cmd.args.clone(),
             authority,
             correlation_id,
+            owner_twin_id: cmd.owner_twin_id,
         },
         *limits,
     )?;
@@ -385,6 +403,12 @@ pub struct RunScenarioAsset {
     #[serde(default)]
     #[reflect(default)]
     pub reload_policy: ScenarioReloadPolicy,
+    /// Twin identity that owns the running scenario. Application assets can be
+    /// launched for a Twin by passing the identity from their Twin-scoped menu
+    /// entry; omitted values inherit a Twin route or a `twin://` source.
+    #[serde(default)]
+    #[reflect(default)]
+    pub owner_twin_id: Option<u64>,
 }
 
 #[cfg(feature = "rhai")]
@@ -396,6 +420,7 @@ impl Default for RunScenarioAsset {
             params: ScenarioParameters::default(),
             scene_asset: String::new(),
             reload_policy: ScenarioReloadPolicy::Retain,
+            owner_twin_id: None,
         }
     }
 }
@@ -448,6 +473,7 @@ fn on_run_scenario(
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     gate: Res<ScenarioExecutionGate>,
     coordinator: Res<lunco_core::SceneTransitionCoordinator>,
     mut admissions: ResMut<ScenarioPreparationAdmissions>,
@@ -455,6 +481,7 @@ fn on_run_scenario(
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let target = resolve_scenario_target(Some(cmd.target), &entities, &world_root)?;
+    let twin_owner = resolve_scenario_twin_owner(workspace.as_deref(), None, None, false)?;
     let parameters_revision = q_existing
         .get(target)
         .map(|model| model.parameters_revision.wrapping_add(1))
@@ -468,6 +495,7 @@ fn on_run_scenario(
         None,
         ScenarioSourceMode::UserEdit,
         false,
+        twin_owner,
         cmd.reload_policy,
         guard.and_then(|g| g.0),
         &mut registry,
@@ -496,7 +524,9 @@ fn on_run_scenario_asset(
     trigger: On<RunScenarioAsset>,
     entities: Query<Entity>,
     world_root: Query<Entity, With<lunco_spatial::WorldRoot>>,
+    twin_hosts: Query<(Entity, &TwinScenarioHost)>,
     asset_server: Res<AssetServer>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
@@ -505,7 +535,12 @@ fn on_run_scenario_asset(
     if path.is_empty() {
         return Err("RunScenarioAsset: source_asset must not be empty".to_string());
     }
-    let target = resolve_scenario_target(cmd.target, &entities, &world_root)?;
+    let owner_twin = resolve_scenario_twin_owner(
+        workspace.as_deref(),
+        cmd.owner_twin_id,
+        Some(&cmd.source_asset),
+        true,
+    )?;
     let scene = if cmd.scene_asset.trim().is_empty() {
         None
     } else {
@@ -515,12 +550,22 @@ fn on_run_scenario_asset(
         }
         Some(scene)
     };
+    let target = match (cmd.target, owner_twin) {
+        (Some(requested), _) => resolve_scenario_target(Some(requested), &entities, &world_root)?,
+        (None, Some(owner)) => twin_hosts
+            .iter()
+            .find(|(_, host)| host.0 == owner.twin)
+            .map(|(entity, _)| entity)
+            .unwrap_or_else(|| commands.spawn((TwinScenarioHost(owner.twin), owner)).id()),
+        (None, None) => resolve_scenario_target(None, &entities, &world_root)?,
+    };
     let handle = asset_server.load::<lunco_scripting_rhai_world::source_asset::RhaiSource>(path);
     commands.entity(target).try_insert(PendingScenarioAsset {
         handle,
         params: cmd.params.clone(),
         reload_policy: cmd.reload_policy,
         authority: guard.and_then(|g| g.0),
+        owner_twin,
     });
     if let Some(scene) = scene {
         // This is an intent, not a direct USD load. The USD scene owner still
@@ -533,6 +578,112 @@ fn on_run_scenario_asset(
         lunco_api_core::api_value!({ "status": "queued" }),
     ))
 }
+
+#[cfg(feature = "rhai")]
+fn resolve_scenario_twin_owner(
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+    explicit_twin_id: Option<u64>,
+    source_asset: Option<&str>,
+    close_document: bool,
+) -> Result<Option<lunco_scripting::TwinOwnedScript>, String> {
+    let active_twin = workspace.and_then(|workspace| workspace.active_twin);
+    let route = bridge_core::execution_context()
+        .route
+        .filter(|route| route.scope == lunco_core::RuntimeScope::Twin);
+    let routed_twin = route.and_then(|route| route.owner_id.map(lunco_workspace::TwinId::new));
+    if route.is_some() && routed_twin.is_none() && explicit_twin_id.is_none() {
+        return Err("Twin-scoped scenario request has no Twin owner identity".to_string());
+    }
+    let asset_twin = if source_asset.is_some_and(|asset| asset.starts_with("twin://")) {
+        Some(active_twin.ok_or_else(|| {
+            "Twin-backed scenario asset was requested without an active Twin".to_string()
+        })?)
+    } else {
+        None
+    };
+    if let (Some(routed), Some(explicit)) = (routed_twin, explicit_twin_id) {
+        if routed.raw() != explicit {
+            return Err(format!(
+                "scenario owner Twin {explicit} does not match execution route Twin {}",
+                routed.raw()
+            ));
+        }
+    }
+    let owner = explicit_twin_id
+        .map(lunco_workspace::TwinId::new)
+        .or(routed_twin)
+        .or(asset_twin);
+    let Some(twin) = owner else {
+        return Ok(None);
+    };
+    let Some(workspace) = workspace else {
+        return Err(format!(
+            "scenario owner Twin {} cannot be validated without a workspace",
+            twin.raw()
+        ));
+    };
+    if workspace.active_twin != Some(twin) || workspace.twin(twin).is_none() {
+        return Err(format!(
+            "scenario owner Twin {} is no longer the active Twin",
+            twin.raw()
+        ));
+    }
+    Ok(Some(lunco_scripting::TwinOwnedScript {
+        twin,
+        close_document,
+    }))
+}
+
+#[cfg(feature = "rhai")]
+fn resolve_embedded_scenario_twin_owner(
+    stage_source: Option<&str>,
+    source_asset: Option<&str>,
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+    twin_roots: Option<&lunco_assets_core::twin_source::TwinRoots>,
+) -> Result<Option<lunco_scripting::TwinOwnedScript>, String> {
+    let Some((stage_twin_name, _)) = stage_source.and_then(lunco_assets_core::parse_twin_uri)
+    else {
+        return resolve_scenario_twin_owner(workspace, None, source_asset, true);
+    };
+
+    if let Some((source_twin_name, _)) = source_asset.and_then(lunco_assets_core::parse_twin_uri)
+        && source_twin_name != stage_twin_name
+    {
+        return Err(format!(
+            "embedded scenario asset belongs to Twin `{source_twin_name}`, but its USD scene belongs to Twin `{stage_twin_name}`"
+        ));
+    }
+
+    let workspace = workspace.ok_or_else(|| {
+        format!("Twin-backed USD scene `{stage_twin_name}` has no workspace owner")
+    })?;
+    let twin_roots = twin_roots.ok_or_else(|| {
+        format!("Twin-backed USD scene `{stage_twin_name}` has no Twin asset registry")
+    })?;
+    let mut owner = None;
+    for (twin_id, twin) in workspace.twins() {
+        let authority = twin_roots.name_for_root(&twin.root).map_err(|error| {
+            format!("cannot resolve Twin `{stage_twin_name}` authority: {error}")
+        })?;
+        if authority.as_deref() == Some(stage_twin_name) {
+            if owner.replace(twin_id).is_some() {
+                return Err(format!(
+                    "Twin scene authority `{stage_twin_name}` resolves to more than one workspace Twin"
+                ));
+            }
+        }
+    }
+    let owner = owner.ok_or_else(|| {
+        format!("Twin scene authority `{stage_twin_name}` has no open workspace Twin")
+    })?;
+    resolve_scenario_twin_owner(workspace.into(), Some(owner.raw()), source_asset, true)
+}
+
+/// Marker for an isolated host created for one Twin-owned asset scenario.
+/// Removing the Twin releases this entity as well as its scenario document.
+#[cfg(feature = "rhai")]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TwinScenarioHost(pub lunco_workspace::TwinId);
 
 #[cfg(feature = "rhai")]
 fn resolve_scenario_target(
@@ -588,12 +739,14 @@ fn attach_rhai_scenario(
     // Whether the scenario document is owned by the authored scene and must
     // be wound down with that scene.
     scene_owned: bool,
+    twin_owner: Option<lunco_scripting::TwinOwnedScript>,
     reload_policy: ScenarioReloadPolicy,
     authority: Option<lunco_command_contracts::SessionId>,
     registry: &mut ScriptRegistry,
     q_existing: &Query<&ScriptedModel>,
     commands: &mut Commands,
 ) -> Result<(u64, u64), String> {
+    let source_is_file_backed = asset_id.is_some();
     // Reuse the doc id if a scenario is already attached (hot-reload), else mint.
     let existing = q_existing.get(target).ok().and_then(|m| m.document_id);
     let doc_id_raw = existing.unwrap_or_else(|| DocumentId::fresh().raw());
@@ -659,6 +812,20 @@ fn attach_rhai_scenario(
             .entity(target)
             .remove::<lunco_scripting::SceneOwnedScript>();
     }
+    if let Some(twin_owner) = twin_owner {
+        commands.entity(target).try_insert(twin_owner);
+    } else {
+        commands
+            .entity(target)
+            .remove::<lunco_scripting::TwinOwnedScript>();
+    }
+    if !source_is_file_backed {
+        commands
+            .entity(target)
+            .remove::<ScenarioAssetId>()
+            .remove::<ScenarioAssetHandle>();
+    }
+    commands.entity(target).remove::<PendingScenarioAsset>();
 
     let generation = registry
         .documents
@@ -679,13 +846,68 @@ pub struct PendingScenarioAsset {
     pub params: ScenarioParameters,
     pub reload_policy: ScenarioReloadPolicy,
     pub authority: Option<lunco_command_contracts::SessionId>,
+    /// Twin owner captured when the request was admitted.
+    pub owner_twin: Option<lunco_scripting::TwinOwnedScript>,
+}
+
+/// Retire the current program on a persistent host as soon as a replacement
+/// asset request is admitted. Waiting for the new import graph to finish would
+/// let the previous tutorial restart on a newly composed scene.
+#[cfg(feature = "rhai")]
+pub fn retire_replaced_scenario_assets(world: &mut World) {
+    let targets: Vec<_> = {
+        let mut query = world.query_filtered::<Entity, With<PendingScenarioAsset>>();
+        query.iter(world).collect()
+    };
+    for entity in targets {
+        let attached_scenario = world.get::<ScriptedModel>(entity).is_some()
+            || world.get::<ScenarioAssetHandle>(entity).is_some()
+            || world.get::<ScenarioAssetId>(entity).is_some();
+        if !attached_scenario {
+            continue;
+        }
+        let document_id = world
+            .get::<ScriptedModel>(entity)
+            .and_then(|model| model.document_id);
+        let twin_owner = world
+            .get::<lunco_scripting::TwinOwnedScript>(entity)
+            .copied();
+        let close_document = twin_owner.is_some_and(|owner| owner.close_document)
+            || world
+                .get::<lunco_scripting::SceneOwnedScript>(entity)
+                .is_some();
+        if let Some(owner) = twin_owner {
+            lunco_scripting::scenario::ScenarioDriver::<
+                lunco_scripting_rhai_world::world_bridge::RhaiScenarioRuntime,
+            >::stop_entity_for_twin(world, entity, owner.twin);
+        } else {
+            lunco_scripting::scenario::ScenarioDriver::<
+                lunco_scripting_rhai_world::world_bridge::RhaiScenarioRuntime,
+            >::stop_entity(world, entity);
+        }
+        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+            entity_mut
+                .remove::<ScriptedModel>()
+                .remove::<lunco_scripting::scenario::ScriptAuthority>()
+                .remove::<lunco_scripting::TwinOwnedScript>()
+                .remove::<lunco_scripting::SceneOwnedScript>()
+                .remove::<ScenarioAssetId>()
+                .remove::<ScenarioAssetHandle>();
+        }
+        if close_document
+            && let Some(document_id) = document_id
+            && let Some(mut registry) = world.get_resource_mut::<ScriptRegistry>()
+        {
+            registry.documents.remove(&DocumentId::new(document_id));
+        }
+    }
 }
 
 /// Resolve [`RunScenarioAsset`] requests once the root and all imported source
 /// assets are ready, then use the same attach funnel as inline/API scenarios.
 #[cfg(feature = "rhai")]
 pub fn attach_requested_scenarios(
-    q: Query<(Entity, &PendingScenarioAsset)>,
+    q: Query<(Entity, &PendingScenarioAsset, Option<&TwinScenarioHost>)>,
     assets: Res<Assets<lunco_scripting_rhai_world::source_asset::RhaiSource>>,
     asset_server: Res<AssetServer>,
     mut driver: ResMut<
@@ -695,9 +917,22 @@ pub fn attach_requested_scenarios(
     >,
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut commands: Commands,
 ) {
-    for (entity, request) in q.iter() {
+    for (entity, request, twin_host) in q.iter() {
+        let dedicated_host = twin_host.is_some();
+        if request.owner_twin.is_some_and(|owner| {
+            workspace.as_deref().is_none_or(|workspace| {
+                workspace.active_twin != Some(owner.twin) || workspace.twin(owner.twin).is_none()
+            })
+        }) {
+            info!(
+                "[rhai] dropped scenario asset completion for a Twin that is no longer active ({entity:?})"
+            );
+            discard_pending_scenario_asset(&mut commands, entity, dedicated_host);
+            continue;
+        }
         let root_failed = asset_server.load_state(&request.handle).is_failed();
         let dependencies_failed = asset_server
             .recursive_dependency_load_state(&request.handle)
@@ -707,13 +942,17 @@ pub fn attach_requested_scenarios(
                 "[rhai] failed to load requested scenario asset for {entity:?}; \
                  root_failed={root_failed}, dependencies_failed={dependencies_failed}"
             );
-            commands.entity(entity).remove::<PendingScenarioAsset>();
+            discard_pending_scenario_asset(&mut commands, entity, dedicated_host);
             continue;
         }
         if !asset_server.is_loaded_with_dependencies(&request.handle) {
             continue;
         }
         let Some(source) = assets.get(&request.handle) else {
+            error!(
+                "[rhai] requested scenario asset for {entity:?} is loaded without an asset value"
+            );
+            discard_pending_scenario_asset(&mut commands, entity, dedicated_host);
             continue;
         };
         let Some(asset_id) = asset_server
@@ -721,7 +960,7 @@ pub fn attach_requested_scenarios(
             .map(|path| lunco_scripting_rhai_world::source_asset::canonical_asset_id(&path))
         else {
             error!("[rhai] requested scenario asset for {entity:?} has no resolved identity");
-            commands.entity(entity).remove::<PendingScenarioAsset>();
+            discard_pending_scenario_asset(&mut commands, entity, dedicated_host);
             continue;
         };
         if let Err(error) =
@@ -732,7 +971,7 @@ pub fn attach_requested_scenarios(
             error!(
                 "[rhai] requested scenario asset for {entity:?} has an invalid import closure: {error}"
             );
-            commands.entity(entity).remove::<PendingScenarioAsset>();
+            discard_pending_scenario_asset(&mut commands, entity, dedicated_host);
             continue;
         }
         let request = request.clone();
@@ -743,19 +982,33 @@ pub fn attach_requested_scenarios(
             Some(asset_id),
             ScenarioSourceMode::External,
             false,
+            request.owner_twin,
             request.reload_policy,
             request.authority,
             &mut registry,
             &q_existing,
             &mut commands,
         ) {
-            Ok(_) => {}
-            Err(error) => error!("[rhai] scenario asset attach rejected for {entity:?}: {error}"),
+            Ok(_) => {
+                commands
+                    .entity(entity)
+                    .try_insert(ScenarioAssetHandle(request.handle))
+                    .remove::<PendingScenarioAsset>();
+            }
+            Err(error) => {
+                error!("[rhai] scenario asset attach rejected for {entity:?}: {error}");
+                discard_pending_scenario_asset(&mut commands, entity, dedicated_host);
+            }
         }
-        commands
-            .entity(entity)
-            .try_insert(ScenarioAssetHandle(request.handle))
-            .remove::<PendingScenarioAsset>();
+    }
+}
+
+#[cfg(feature = "rhai")]
+fn discard_pending_scenario_asset(commands: &mut Commands, entity: Entity, dedicated_host: bool) {
+    if dedicated_host {
+        commands.entity(entity).despawn();
+    } else {
+        commands.entity(entity).remove::<PendingScenarioAsset>();
     }
 }
 
@@ -772,6 +1025,7 @@ pub fn attach_embedded_scenarios(
             Entity,
             &lunco_core::EmbeddedScenarioSource,
             Option<&ScenarioAssetId>,
+            Option<&lunco_usd_bevy_scene::UsdPrimPath>,
         ),
         // The marker is removed after this system attaches the source, so an
         // existing model here means the authored program changed in place. The
@@ -782,9 +1036,46 @@ pub fn attach_embedded_scenarios(
     >,
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
+    asset_server: Option<Res<AssetServer>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    twin_roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     mut commands: Commands,
 ) {
-    for (entity, embedded, asset_id) in q.iter() {
+    for (entity, embedded, asset_id, prim_path) in q.iter() {
+        let source_asset = asset_id.map(|id| id.0.as_str());
+        let stage_source = match prim_path {
+            Some(prim_path) => match asset_server
+                .as_deref()
+                .and_then(|server| server.get_path(prim_path.stage_handle.id()))
+            {
+                Some(path) => Some(path.to_string()),
+                None => {
+                    error!(
+                        "[rhai] cannot resolve USD stage identity for embedded scenario {entity:?}"
+                    );
+                    commands
+                        .entity(entity)
+                        .remove::<lunco_core::EmbeddedScenarioSource>();
+                    continue;
+                }
+            },
+            None => None,
+        };
+        let twin_owner = match resolve_embedded_scenario_twin_owner(
+            stage_source.as_deref(),
+            source_asset,
+            workspace.as_deref(),
+            twin_roots.as_deref(),
+        ) {
+            Ok(owner) => owner,
+            Err(error) => {
+                error!("[rhai] embedded scenario ownership rejected for {entity:?}: {error}");
+                commands
+                    .entity(entity)
+                    .remove::<lunco_core::EmbeddedScenarioSource>();
+                continue;
+            }
+        };
         match attach_rhai_scenario(
             entity,
             embedded.0.clone(),
@@ -794,6 +1085,7 @@ pub fn attach_embedded_scenarios(
             asset_id.map(|id| id.0.clone()),
             ScenarioSourceMode::External,
             true,
+            twin_owner,
             ScenarioReloadPolicy::Retain,
             // Scene-authored (loaded by the host from USD) → host-trusted, ungated.
             None,
@@ -1244,6 +1536,7 @@ fn on_run_timeline(
     _t: On<RunTimeline>,
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
     gate: Res<ScenarioExecutionGate>,
     coordinator: Res<lunco_core::SceneTransitionCoordinator>,
@@ -1252,6 +1545,7 @@ fn on_run_timeline(
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let step_count = timeline_step_count(&cmd.timeline).map_err(|e| format!("RunTimeline: {e}"))?;
+    let twin_owner = resolve_scenario_twin_owner(workspace.as_deref(), None, None, true)?;
     let parameters_revision = q_existing
         .get(cmd.target)
         .map(|model| model.parameters_revision.wrapping_add(1))
@@ -1264,6 +1558,7 @@ fn on_run_timeline(
         None,
         ScenarioSourceMode::Runtime,
         false,
+        twin_owner,
         ScenarioReloadPolicy::Retain,
         guard.and_then(|g| g.0),
         &mut registry,
@@ -1388,6 +1683,13 @@ fn on_run_stored_timeline(
         .get(&cmd.name)
         .ok_or_else(|| format!("RunStoredTimeline: no timeline named '{}'", cmd.name))?
         .clone();
+    let twin_owner = match owner {
+        crate::timelines::TimelineOwner::Twin(twin) => Some(lunco_scripting::TwinOwnedScript {
+            twin,
+            close_document: true,
+        }),
+        crate::timelines::TimelineOwner::Session => None,
+    };
     let step_count =
         timeline_step_count(&timeline).map_err(|e| format!("RunStoredTimeline: {e}"))?;
     let parameters_revision = q_existing
@@ -1402,6 +1704,7 @@ fn on_run_stored_timeline(
         None,
         ScenarioSourceMode::Runtime,
         false,
+        twin_owner,
         ScenarioReloadPolicy::Retain,
         guard.and_then(|g| g.0),
         &mut registry,

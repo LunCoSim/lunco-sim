@@ -227,6 +227,23 @@ lane. A single script instance must not run mutable `this` state on multiple
 cycles; UI, Interaction, and Presentation work needs its own owner and state,
 with typed messages across cycles.
 
+Scenario ownership follows its explicit host marker. Twin-owned scenarios expose
+the stable Twin ID and scene generation in `execution_context()` and are stopped
+with their source document and asset handles on `TwinClosed`. Scene-owned
+programs are stopped when their USD scene is replaced; a USD script can carry
+both markers. Unmarked application scenarios keep generation zero across Twin
+reloads, and Core/Application policy engines remain in their own owner scope.
+Launching a Twin tutorial creates an isolated host, so it cannot replace an
+application-owned scenario on `WorldRoot`.
+The Tutorials menu binds each launch to the Twin active when the item is
+selected; its application tool module remains application-scoped. Tutorial
+launch clears the full guided overlay before a replacement starts.
+
+Static tool-module rebinding refreshes the shared Rhai engine without advancing
+the scenario compile revision. A Twin tool-scope change therefore does not
+restart Core or Application scenario state. A changed authored prelude still
+invalidates compiled scenarios because the prelude is part of their AST.
+
 Keep these lifecycle stages distinct instead of adding overlapping `init` or
 `ready` aliases: dependency planning declares what must be admitted, module-body
 evaluation constructs per-instance state once those inputs are ready, and
@@ -515,7 +532,7 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `emit(name, value?)` | bool | fire a `TelemetryEvent` (delivered to `on_event` on the next scenario pass) |
 | `intent_edge(target, intent, edge)` / `intent_pulse(target, intent)` | command result | emit one target-scoped semantic edge; the runtime publishes it as `intent.edge` with a correlation id usable by `CausalTrace` |
 | `sim_tick()` / `dt()` / `elapsed_seconds()` | i64 / f64 / f64 | fixed simulation clock; Rhai error outside the simulation cycle |
-| `execution_context()` | map | read-only owner scope, cycle, phase, selected clock sample, sequence, and event producer stamp; scope, cycle, and generation are unit when no owner route exists |
+| `execution_context()` | map | read-only owner scope, stable Twin ID when Twin-owned, cycle, phase, selected clock sample, sequence, and event producer stamp; scope, Twin ID, cycle, and generation are unit when no owner route exists |
 | `rand()` / `rand_range(lo,hi)` / `rand_int(lo,hi)` | f64 / f64 / i64 | **deterministic** RNG — seeded by entity, event producer or cycle sequence, and hook; discrete lifecycle hooks use a stable sequence-free seed |
 | `param(id, key, default)` | any | read a `lunco:param:<key>` attribute from a prim (`custom float lunco:param:wmax = 1.05`); returns `default` if it is absent |
 | `detach_joint(id)` | bool | detach an entity through the generic `DetachJoint` command; ordinary entities use normal removal, while joint entities release their rigid link through the solver lifecycle |

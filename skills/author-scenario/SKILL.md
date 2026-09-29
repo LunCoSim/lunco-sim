@@ -297,6 +297,22 @@ fn on_stop(me, ctx)        { brake(me); }                       // hot-reload / 
   instance between cycles or create per-cycle scenario callbacks for policy
   that an owner-invoked hook can express.
 
+### Owner scope and reload
+
+Rhai hooks inherit the owner scope chosen by their Rust host. A Twin-owned
+scenario carries that Twin's stable ID and scene generation in
+`execution_context()`; application and Core policy runtimes keep their own
+scope across Twin transitions. Do not infer ownership from the currently active
+Twin. A script projected from USD is scene-owned and is stopped when that scene
+is replaced; a file-backed tutorial launched for a Twin uses an isolated host
+and is stopped, with its source handles and document, at `TwinClosed`.
+
+The outgoing Twin ID remains available to `on_stop` even after workspace
+selection changes. Pending asset completions are accepted only while that
+specific Twin remains mounted. Application-owned scenarios on `WorldRoot` are
+not replaced by Twin tutorial launches and are not recompiled because another
+Twin's scene generation changed.
+
 ## 2. The verb surface (host bridge — everything else is prelude)
 
 | Verb | Purpose |

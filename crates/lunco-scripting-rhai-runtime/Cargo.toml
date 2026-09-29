@@ -34,6 +34,7 @@ lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 lunco-tools = { path = "../lunco-tools" }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
 lunco-workspace = { path = "../lunco-workspace" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-scripting-rhai-world = { path = "../lunco-scripting-rhai-world", default-features = false, features = ["rhai"] }
 
 [features]

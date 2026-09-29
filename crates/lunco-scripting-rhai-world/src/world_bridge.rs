@@ -3370,6 +3370,10 @@ impl RhaiScenarioRuntime {
             .insert_if_changed(id, &source.text, &source.ast);
     }
 
+    pub(crate) fn retire_source_asset(&mut self, id: &str) {
+        self.prepared_modules.remove(id);
+    }
+
     /// Commit one Bevy-loaded source and its complete literal import graph
     /// before a runtime owner validates or activates that source.
     pub fn commit_asset_dependency_closure(
@@ -4545,7 +4549,9 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // Rebuild the static tool-module set if any libraries were
         // (re)registered since the last pass. Rhai has no unregister operation
         // for static modules, so refreshing the existing Engine would leave a
-        // removed library callable indefinitely.
+        // removed library callable indefinitely. Tool bindings resolve when an
+        // AST runs; changing this module set does not invalidate compiled
+        // scenario programs or their per-entity state.
         let cur = crate::tool_libs::generation();
         if self.tool_gen == cur {
             return;
@@ -4592,7 +4598,6 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 };
                 *engine = rebuilt;
                 *one_shot_engine = one_shot_rebuilt;
-                self.preparation_revision = self.preparation_revision.wrapping_add(1);
                 self.prelude_ast = prelude_ast;
                 self.tool_gen = cur;
             }
@@ -4646,10 +4651,7 @@ pub fn prepare_rhai_scenario_compiles(world: &mut World) {
     let runtime_ready = world
         .get_resource::<RhaiRuntimeStatus>()
         .is_some_and(|status| status.ready);
-    let execution_enabled = world
-        .get_resource::<lunco_scripting::scenario::ScenarioExecutionGate>()
-        .is_none_or(|gate| gate.enabled);
-    if !runtime_ready || !execution_enabled {
+    if !runtime_ready {
         lunco_scripting::scenario::ScenarioDriver::<RhaiScenarioRuntime>::cancel_pending_compiles(
             world,
         );
@@ -5207,6 +5209,7 @@ pub enum PendingWorldScript {
         args: TelemetryValue,
         authority: Option<lunco_command_contracts::SessionId>,
         correlation_id: Option<u64>,
+        owner_twin_id: Option<u64>,
     },
 }
 
@@ -5354,6 +5357,7 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
                 args,
                 authority,
                 correlation_id,
+                owner_twin_id,
             } => (
                 id,
                 correlation_id,
@@ -5370,6 +5374,7 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
                         } else {
                             lunco_core::RuntimeCycle::Repl
                         },
+                        owner_twin_id,
                     ),
                     Err(error) => Err(error.clone()),
                 },
@@ -5473,6 +5478,7 @@ pub fn eval_tool_with_world_as(
         args,
         authority,
         lunco_core::RuntimeCycle::Repl,
+        None,
     )
 }
 
@@ -5485,6 +5491,7 @@ fn eval_tool_with_engine(
     args: &TelemetryValue,
     authority: Option<lunco_command_contracts::SessionId>,
     cycle: lunco_core::RuntimeCycle,
+    owner_twin_id: Option<u64>,
 ) -> Result<String, String> {
     if tool.is_empty()
         || !tool
@@ -5505,7 +5512,22 @@ fn eval_tool_with_engine(
     let out = Arc::new(Mutex::new(String::new()));
     let _print_capture = OneShotRhaiPrintCapture::enter(out.clone());
 
-    let context = application_execution_context(world, cycle, lunco_core::RuntimePhase::Evaluation);
+    let mut context =
+        application_execution_context(world, cycle, lunco_core::RuntimePhase::Evaluation);
+    if let Some(raw) = owner_twin_id {
+        let twin = lunco_workspace::TwinId::new(raw);
+        if world
+            .get_resource::<lunco_workspace::WorkspaceResource>()
+            .is_none_or(|workspace| {
+                workspace.active_twin != Some(twin) || workspace.twin(twin).is_none()
+            })
+        {
+            return Err(format!(
+                "Rhai tool hook Twin owner {raw} is no longer active"
+            ));
+        }
+        context.route = Some(lunco_core::RuntimeRoute::twin_owned(cycle, 0, raw));
+    }
     let _scope = bridge_core::WorldScope::enter(world, context);
     bridge_core::set_script_authority(authority);
     let mut scope = rhai::Scope::new();
@@ -5911,6 +5933,9 @@ mod tests {
                     required_inputs: [
                         #{ owner: "sysml.twin-analysis", identity: "school" },
                     ],
+                    entity_reads: [],
+                    entity_writes: [],
+                    query_reads: [],
                 }
             }
         "#
@@ -6296,6 +6321,7 @@ mod tests {
         let name = "h6_removed_tool_probe";
         crate::tool_libs::register_tool_library(name, "fn ping() { 42 }");
         let mut rt = super::RhaiScenarioRuntime::default();
+        let preparation_revision = rt.preparation_revision;
         let before: i64 = rt
             .engine
             .eval(&format!("{name}::ping()"))
@@ -6311,6 +6337,40 @@ mod tests {
             rt.engine.eval::<i64>(&format!("{name}::ping()")).is_err(),
             "removing a tool must remove its static module from the scenario engine"
         );
+        assert_eq!(
+            rt.preparation_revision, preparation_revision,
+            "changing tool bindings must preserve already-compiled scenario programs"
+        );
+    }
+
+    #[test]
+    fn retiring_a_source_asset_releases_only_its_prepared_module() {
+        let mut runtime = super::RhaiScenarioRuntime::default();
+        let twin_id = "twin://17/lesson/helper.rhai";
+        let app_id = "lunco://scripts/application_helper.rhai";
+        let twin_source = "fn value() { 17 }";
+        let app_source = "fn value() { 23 }";
+        runtime.prepared_modules.insert(
+            twin_id.to_owned(),
+            twin_source.to_owned(),
+            runtime
+                .engine
+                .compile(twin_source)
+                .expect("Twin module parses"),
+        );
+        runtime.prepared_modules.insert(
+            app_id.to_owned(),
+            app_source.to_owned(),
+            runtime
+                .engine
+                .compile(app_source)
+                .expect("application module parses"),
+        );
+
+        runtime.retire_source_asset(twin_id);
+
+        assert!(runtime.prepared_modules.get(twin_id, twin_source).is_none());
+        assert!(runtime.prepared_modules.get(app_id, app_source).is_some());
     }
 
     #[test]

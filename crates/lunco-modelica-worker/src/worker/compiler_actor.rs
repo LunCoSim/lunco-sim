@@ -21,7 +21,17 @@ pub(super) enum CompilerCompletion {
     },
     SourceRoot {
         id: u64,
+        source_root_operation_id: u64,
         commit: SourceRootCommit,
+    },
+    SourceRootUnload {
+        id: u64,
+        root_id: String,
+        source_root_operation_id: u64,
+        removed: bool,
+        error: Option<String>,
+        library_defaults: HashMap<String, f64>,
+        library_revision: u64,
     },
 }
 
@@ -44,7 +54,13 @@ enum Request {
     },
     InstallSourceRoot {
         id: u64,
+        source_root_operation_id: u64,
         prepared: PreparedSourceRoot,
+    },
+    UnloadSourceRoot {
+        id: u64,
+        root_id: String,
+        source_root_operation_id: u64,
     },
 }
 
@@ -104,15 +120,17 @@ impl CompilerActor {
     pub(super) fn submit_source_root(
         &mut self,
         prepared: PreparedSourceRoot,
+        source_root_operation_id: u64,
     ) -> Result<u64, (String, PreparedSourceRoot)> {
         let id = match self.allocate_id() {
             Ok(id) => id,
             Err(error) => return Err((error, prepared)),
         };
-        match self
-            .sender()
-            .send(Request::InstallSourceRoot { id, prepared })
-        {
+        match self.sender().send(Request::InstallSourceRoot {
+            id,
+            source_root_operation_id,
+            prepared,
+        }) {
             Ok(()) => Ok(id),
             Err(error) => match error.0 {
                 Request::InstallSourceRoot { prepared, .. } => {
@@ -121,6 +139,22 @@ impl CompilerActor {
                 _ => unreachable!("the failed request was a source-root install"),
             },
         }
+    }
+
+    pub(super) fn submit_source_root_unload(
+        &mut self,
+        root_id: String,
+        source_root_operation_id: u64,
+    ) -> Result<u64, String> {
+        let id = self.allocate_id()?;
+        self.sender()
+            .send(Request::UnloadSourceRoot {
+                id,
+                root_id,
+                source_root_operation_id,
+            })
+            .map_err(|_| "Rumoca compiler actor is unavailable".to_owned())?;
+        Ok(id)
     }
 
     fn sender(&self) -> &Sender<Request> {
@@ -182,7 +216,11 @@ fn compiler_actor_loop(rx: Receiver<Request>, results: Sender<WorkerPreparationR
                     return;
                 }
             }
-            Request::InstallSourceRoot { id, prepared } => {
+            Request::InstallSourceRoot {
+                id,
+                source_root_operation_id,
+                prepared,
+            } => {
                 let commit = install_source_root(
                     &mut compiler,
                     &mut compiled_artifacts,
@@ -191,12 +229,47 @@ fn compiler_actor_loop(rx: Receiver<Request>, results: Sender<WorkerPreparationR
                 );
                 if results
                     .send(WorkerPreparationResult::Compiler(
-                        CompilerCompletion::SourceRoot { id, commit },
+                        CompilerCompletion::SourceRoot {
+                            id,
+                            source_root_operation_id,
+                            commit,
+                        },
                     ))
                     .is_err()
                 {
                     bevy::log::error!(
                         "[modelica-runtime] Rumoca source-root result dropped id={id}"
+                    );
+                    return;
+                }
+            }
+            Request::UnloadSourceRoot {
+                id,
+                root_id,
+                source_root_operation_id,
+            } => {
+                let (removed, error, library_defaults, library_revision) = unload_source_root(
+                    &mut compiler,
+                    &mut compiled_artifacts,
+                    &mut terminal_error,
+                    &root_id,
+                );
+                if results
+                    .send(WorkerPreparationResult::Compiler(
+                        CompilerCompletion::SourceRootUnload {
+                            id,
+                            root_id,
+                            source_root_operation_id,
+                            removed,
+                            error,
+                            library_defaults,
+                            library_revision,
+                        },
+                    ))
+                    .is_err()
+                {
+                    bevy::log::error!(
+                        "[modelica-runtime] Rumoca source-root unload result dropped id={id}"
                     );
                     return;
                 }
@@ -340,6 +413,49 @@ fn install_source_root(
     commit
 }
 
+fn unload_source_root(
+    compiler: &mut Option<ModelicaCompiler>,
+    compiled_artifacts: &mut HashMap<u64, Box<rumoca_compile::compile::DaeCompilationResult>>,
+    terminal_error: &mut Option<String>,
+    root_id: &str,
+) -> (bool, Option<String>, HashMap<String, f64>, u64) {
+    if let Some(error) = terminal_error {
+        return (
+            false,
+            Some(format!("Rumoca compiler actor faulted: {error}")),
+            HashMap::new(),
+            0,
+        );
+    }
+    let Some(session) = compiler.as_mut() else {
+        return (false, None, HashMap::new(), 0);
+    };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        session.remove_source_root(root_id)
+    }));
+    match result {
+        Ok(removed) => {
+            if removed {
+                compiled_artifacts.clear();
+            }
+            (
+                removed,
+                None,
+                session.library_input_defaults().clone(),
+                session.library_revision(),
+            )
+        }
+        Err(payload) => {
+            let message = panic_message(payload.as_ref());
+            let fault = format!("source-root `{root_id}` removal panicked: {message}");
+            *terminal_error = Some(fault.clone());
+            *compiler = None;
+            compiled_artifacts.clear();
+            (false, Some(fault), HashMap::new(), 0)
+        }
+    }
+}
+
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     payload
         .downcast_ref::<&str>()
@@ -359,15 +475,18 @@ mod tests {
         let (results_tx, results_rx) = crossbeam_channel::unbounded();
         let mut actor = CompilerActor::new(results_tx);
         let root_id = actor
-            .submit_source_root(PreparedSourceRoot::prepare(
-                "actor-test-root",
-                "inline actor test",
-                vec![(
-                    "ActorLibrary/Rate.mo".into(),
-                    "within ActorLibrary;\nmodel Rate\n  output Real y;\nequation\n  y = 1;\nend Rate;\n".into(),
-                )],
-                Vec::new(),
-            ))
+            .submit_source_root(
+                PreparedSourceRoot::prepare(
+                    "actor-test-root",
+                    "inline actor test",
+                    vec![(
+                        "ActorLibrary/Rate.mo".into(),
+                        "within ActorLibrary;\nmodel Rate\n  output Real y;\nequation\n  y = 1;\nend Rate;\n".into(),
+                    )],
+                    Vec::new(),
+                ),
+                1,
+            )
             .unwrap_or_else(|_| panic!("source-root operation should be admitted"));
         let compile_id = actor
             .submit_compile(
@@ -387,8 +506,13 @@ mod tests {
             .recv_timeout(Duration::from_secs(30))
             .expect("source-root result should arrive")
         {
-            WorkerPreparationResult::Compiler(CompilerCompletion::SourceRoot { id, commit }) => {
+            WorkerPreparationResult::Compiler(CompilerCompletion::SourceRoot {
+                id,
+                source_root_operation_id,
+                commit,
+            }) => {
                 assert_eq!(id, root_id);
+                assert_eq!(source_root_operation_id, 1);
                 assert_eq!(commit.root_id, "actor-test-root");
                 assert_eq!(commit.inserted_file_count, 1);
                 assert_eq!(commit.error, None);
@@ -407,6 +531,29 @@ mod tests {
                 assert!(artifact.unit.source.contains("ActorCompileProbe"));
             }
             _ => panic!("compile result must follow source-root installation"),
+        }
+        let unload_id = actor
+            .submit_source_root_unload("actor-test-root".into(), 2)
+            .expect("source-root unload should be admitted");
+        match results_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("source-root unload result should arrive")
+        {
+            WorkerPreparationResult::Compiler(CompilerCompletion::SourceRootUnload {
+                id,
+                root_id,
+                source_root_operation_id,
+                removed,
+                error,
+                ..
+            }) => {
+                assert_eq!(id, unload_id);
+                assert_eq!(root_id, "actor-test-root");
+                assert_eq!(source_root_operation_id, 2);
+                assert!(removed);
+                assert_eq!(error, None);
+            }
+            _ => panic!("unload result must follow the earlier compile result"),
         }
     }
 }

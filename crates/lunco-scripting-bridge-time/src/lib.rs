@@ -114,7 +114,8 @@ pub fn logical_sequence() -> Option<u64> {
         .or(context.sequence)
 }
 
-/// Project the active typed execution context into a backend-native map.
+/// Project the active typed execution context, including its stable owner
+/// identity, into a backend-native map.
 pub fn execution_context_value<B: ValueBuilder>(b: &B) -> B::Value {
     let context = execution_context();
     let route = context.route;
@@ -140,6 +141,10 @@ pub fn execution_context_value<B: ValueBuilder>(b: &B) -> B::Value {
         (
             "generation".to_owned(),
             optional_u64(b, route.map(|route| route.generation)),
+        ),
+        (
+            "owner_id".to_owned(),
+            optional_u64(b, route.and_then(|route| route.owner_id)),
         ),
         (
             "clock".to_owned(),
@@ -560,6 +565,7 @@ mod tests {
                 scope: RuntimeScope::Application,
                 cycle: RuntimeCycle::Repl,
                 generation: 0,
+                owner_id: None,
             }),
             phase: RuntimePhase::Evaluation,
             clock: RuntimeClock::Application,

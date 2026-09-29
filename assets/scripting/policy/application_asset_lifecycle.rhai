@@ -84,10 +84,13 @@ fn lesson_scene_asset(lesson, entry) {
     scene
 }
 
-fn lesson_menu_item(lesson, source_asset, scene_asset) {
+fn lesson_menu_item(lesson, source_asset, scene_asset, twin_id) {
     let args = #{};
     args.source_asset = source_asset;
     args.scene_asset = scene_asset;
+    if twin_id != () {
+        args.owner_twin_id = twin_id.parse_int();
+    }
     // Rhai command reflection uses the typed enum variant spelling.
     args.reload_policy = "Restart";
     let item = #{};
@@ -215,7 +218,7 @@ fn application_asset_lifecycle(event, ctx) {
         }
         let source_asset = qualify_catalog_asset(root, lesson["source_asset"]);
         let scene_asset = qualify_catalog_asset(root, scene_asset);
-        track_items[group].push(lesson_menu_item(lesson, source_asset, scene_asset));
+        track_items[group].push(lesson_menu_item(lesson, source_asset, scene_asset, ctx.twin_id));
     }
 
     let tracks = [];

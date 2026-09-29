@@ -173,6 +173,16 @@ Bundled and workspace source roots are parsed to completion before admission and
 installed as one parsed source set. A failed member therefore keeps the root out
 of the Rumoca session; do not treat a nonzero parsed count as readiness.
 
+The registry marks each root as Application- or Twin-owned. Twin root IDs include
+the stable Twin ID. `TwinClosed` removes only that Twin's source sets and queues
+ordered unloads to the Rumoca actor; other Twin and application roots remain.
+Operation IDs fence an in-flight file read from installing a source set after
+its owner closes. If the worker has not created its channel yet, pending unloads
+stay queued and are sent before a later Twin load. A disconnected channel is a
+terminal unload failure: it reports a runtime fault, retains the queued
+operation, and blocks later Twin root admission instead of retrying on every
+update.
+
 For policy-owned generated models, keep contract assertions in authored
 `assets/scenarios/tests/*.rhai` scenes; standalone live probes may use
 `assets/scripting/tests/*.rhai`. Rust should provide the composed facts and

@@ -306,7 +306,7 @@ fn twin_modelica_local_actions(ctx, roots, source_index) {
         let params = #{};
         params.twin_id = ctx.twin_id;
         params.name = ctx.name;
-        params.id = "twin:" + ctx.name + ":modelica:" + source_index.to_string();
+        params.id = "twin:" + ctx.twin_id.to_string() + ":" + ctx.name + ":modelica:" + source_index.to_string();
         params.path = path;
         actions.push(twin_command("LoadTwinModelicaSourceRoot", params));
         source_index += 1;
@@ -327,7 +327,7 @@ fn twin_modelica_external_actions(ctx, modelica, source_index) {
             let params = #{};
             params.twin_id = ctx.twin_id;
             params.name = ctx.name;
-            params.id = "twin:" + ctx.name + ":modelica:" + source_index.to_string();
+            params.id = "twin:" + ctx.twin_id.to_string() + ":" + ctx.name + ":modelica:" + source_index.to_string();
             params.path = path;
             actions.push(twin_command("LoadTwinModelicaSourceRoot", params));
             source_index += 1;

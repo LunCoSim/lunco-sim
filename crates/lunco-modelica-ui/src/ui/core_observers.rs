@@ -276,7 +276,16 @@ pub fn mirror_source_roots_to_status_bus(
     let (Some(registry), Some(mut bus)) = (registry, bus) else {
         return;
     };
-    for (id, root) in &registry.roots {
+    let present = registry
+        .roots
+        .keys()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+    last.retain(|id, _| present.contains(id));
+    let mut roots = registry.roots.iter().collect::<Vec<_>>();
+    roots.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    let mut loading = Vec::new();
+    for (id, root) in roots {
         let disc = match &root.state {
             LoadState::NotLoaded => 0u8,
             LoadState::Loading { .. } => 1,
@@ -289,7 +298,7 @@ pub fn mirror_source_roots_to_status_bus(
         match &root.state {
             LoadState::NotLoaded => {}
             LoadState::Loading { .. } => {
-                bus.set_progress(STATUS_BUS_SOURCE, format!("Loading library `{id}`…"), 0, 0);
+                loading.push(id.as_str());
                 bus.push(
                     STATUS_BUS_SOURCE,
                     StatusLevel::Info,
@@ -297,7 +306,6 @@ pub fn mirror_source_roots_to_status_bus(
                 );
             }
             LoadState::Ready => {
-                bus.remove_progress(STATUS_BUS_SOURCE);
                 bus.push(
                     STATUS_BUS_SOURCE,
                     StatusLevel::Info,
@@ -305,7 +313,6 @@ pub fn mirror_source_roots_to_status_bus(
                 );
             }
             LoadState::Failed(msg) => {
-                bus.remove_progress(STATUS_BUS_SOURCE);
                 bus.push(
                     STATUS_BUS_SOURCE,
                     StatusLevel::Warn,
@@ -314,6 +321,16 @@ pub fn mirror_source_roots_to_status_bus(
             }
         }
         last.insert(id.clone(), disc);
+    }
+    if loading.is_empty() {
+        bus.remove_progress(STATUS_BUS_SOURCE);
+    } else {
+        bus.set_progress(
+            STATUS_BUS_SOURCE,
+            format!("Loading Modelica source roots: {}", loading.join(", ")),
+            0,
+            loading.len() as u64,
+        );
     }
 }
 

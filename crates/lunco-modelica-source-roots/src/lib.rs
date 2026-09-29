@@ -25,7 +25,7 @@ use bevy::prelude::*;
 use lunco_modelica_runtime::source_asset::read_text_sync;
 use lunco_modelica_runtime::{LoadSourceRootPayload, ModelicaChannels, ModelicaCommand};
 use rumoca_compile::parsing::ast::StoredDefinition;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use web_time::Instant;
 
@@ -101,10 +101,22 @@ pub struct SourceRoot {
     pub id: String,
     /// How to actually load this root when the gate decides to.
     pub kind: SourceRootKind,
+    /// Scope that owns this registration. Shared application roots survive
+    /// Twin close; Twin roots are removed at that ownership boundary.
+    pub owner: SourceRootOwner,
+    /// Latest operation issued for this root id.
+    pub operation_id: u64,
     /// Current load state. Transitions:
     /// `NotLoaded` → `Loading` (gate kicks off bg task)
     /// `Loading` → `Ready` / `Failed` (loader completes).
     pub state: LoadState,
+}
+
+/// Lifetime owner for one compiler source set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceRootOwner {
+    Application,
+    Twin(lunco_workspace::TwinId),
 }
 
 /// Process-wide registry of every named source root. Owned by the
@@ -114,11 +126,21 @@ pub struct SourceRoot {
 ///
 /// Loading remains demand-driven: inventory is cheap, and a root is installed
 /// only when a compile or class lookup actually references it.
-#[derive(Resource, Debug, Default)]
+#[derive(Resource, Debug)]
 pub struct SourceRootRegistry {
     /// Map of root id → entry. The dep-scanner looks up qualified-
     /// path roots here; the gate transitions state on each entry.
     pub roots: HashMap<String, SourceRoot>,
+    next_operation_id: u64,
+}
+
+impl Default for SourceRootRegistry {
+    fn default() -> Self {
+        Self {
+            roots: HashMap::new(),
+            next_operation_id: 1,
+        }
+    }
 }
 
 impl SourceRootRegistry {
@@ -153,6 +175,8 @@ impl SourceRootRegistry {
                 SourceRoot {
                     id: id.to_string(),
                     kind: SourceRootKind::Bundled { filename },
+                    owner: SourceRootOwner::Application,
+                    operation_id: 0,
                     state: LoadState::NotLoaded,
                 },
             );
@@ -184,6 +208,8 @@ impl SourceRootRegistry {
                 SourceRoot {
                     id: root_name,
                     kind,
+                    owner: SourceRootOwner::Application,
+                    operation_id: 0,
                     state: LoadState::NotLoaded,
                 },
             );
@@ -209,7 +235,10 @@ impl SourceRootRegistry {
             bundled_count,
         );
 
-        Self { roots }
+        Self {
+            roots,
+            next_operation_id: 1,
+        }
     }
 
     /// Query: does the dep-scanner's root segment refer to a known
@@ -228,6 +257,28 @@ impl SourceRootRegistry {
             SourceRoot {
                 id,
                 kind: SourceRootKind::Disk { root_dir },
+                owner: SourceRootOwner::Application,
+                operation_id: 0,
+                state: LoadState::NotLoaded,
+            },
+        );
+    }
+
+    /// Register a source root selected by a Twin's authored lifecycle policy.
+    pub fn register_twin_disk_root(
+        &mut self,
+        id: impl Into<String>,
+        root_dir: PathBuf,
+        twin: lunco_workspace::TwinId,
+    ) {
+        let id = id.into();
+        self.roots.insert(
+            id.clone(),
+            SourceRoot {
+                id,
+                kind: SourceRootKind::Disk { root_dir },
+                owner: SourceRootOwner::Twin(twin),
+                operation_id: 0,
                 state: LoadState::NotLoaded,
             },
         );
@@ -261,6 +312,8 @@ impl SourceRootRegistry {
             SourceRoot {
                 id,
                 kind,
+                owner: SourceRootOwner::Application,
+                operation_id: 0,
                 state: LoadState::Ready,
             },
         );
@@ -270,6 +323,42 @@ impl SourceRootRegistry {
     pub fn state(&self, id: &str) -> Option<&LoadState> {
         self.roots.get(id).map(|r| &r.state)
     }
+
+    fn allocate_operation_id(&mut self) -> Result<u64, String> {
+        let id = self.next_operation_id;
+        self.next_operation_id = id
+            .checked_add(1)
+            .ok_or_else(|| "Modelica source-root operation identity exhausted".to_owned())?;
+        Ok(id)
+    }
+
+    /// Remove the registry entries owned by `twin` and allocate their ordered
+    /// unload operations. Application roots and other Twin entries are retained.
+    pub fn take_twin_roots(
+        &mut self,
+        twin: lunco_workspace::TwinId,
+    ) -> Result<Vec<(String, u64)>, String> {
+        let mut ids = self
+            .roots
+            .iter()
+            .filter(|(_, root)| root.owner == SourceRootOwner::Twin(twin))
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        let operation_ids = (0..ids.len())
+            .map(|_| self.allocate_operation_id())
+            .collect::<Result<Vec<_>, _>>()?;
+        for id in &ids {
+            self.roots.remove(id);
+        }
+        Ok(ids.into_iter().zip(operation_ids).collect())
+    }
+}
+
+#[derive(Resource, Default)]
+struct PendingSourceRootUnloads {
+    queued: VecDeque<(String, u64)>,
+    terminal_error: Option<String>,
 }
 
 /// Installs source-root inventory and document discovery for every Modelica
@@ -282,7 +371,10 @@ impl Plugin for ModelicaSourceRootsPlugin {
         if !app.world().contains_resource::<SourceRootRegistry>() {
             app.insert_resource(SourceRootRegistry::build());
         }
+        app.init_resource::<PendingSourceRootUnloads>();
         app.add_observer(register_open_document_source_root);
+        app.add_observer(unload_twin_modelica_source_roots);
+        app.add_systems(PreUpdate, flush_pending_source_root_unloads);
         register_twin_modelica_commands(app);
     }
 }
@@ -392,6 +484,7 @@ fn on_load_twin_modelica_source_root(
     roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     channels: Option<Res<ModelicaChannels>>,
     registry: Option<ResMut<SourceRootRegistry>>,
+    mut pending_unloads: ResMut<PendingSourceRootUnloads>,
 ) -> Result<lunco_command_contracts::Ack, String> {
     let request = trigger.event();
     let twin_id = lunco_workspace::TwinId::new(request.twin_id);
@@ -405,11 +498,11 @@ fn on_load_twin_modelica_source_root(
     {
         return Err(format!("Twin {} is not active", request.twin_id));
     }
-    let id_prefix = format!("twin:{}:", request.name);
+    let id_prefix = format!("twin:{}:{}:modelica:", request.twin_id, request.name);
     if !request.id.starts_with(&id_prefix) || request.id.trim() == id_prefix {
         return Err(format!(
-            "Modelica source-root id `{}` must be scoped to Twin authority `{}`",
-            request.id, request.name
+            "Modelica source-root id `{}` must be scoped to Twin {} authority `{}`",
+            request.id, request.twin_id, request.name
         ));
     }
     let authority_root = roots
@@ -469,9 +562,19 @@ fn on_load_twin_modelica_source_root(
     };
 
     let channels = channels.ok_or_else(|| "Modelica worker is not installed".to_owned())?;
+    flush_source_root_unloads(&mut pending_unloads, |command| {
+        channels.tx.send(command).is_ok()
+    })
+    .map_err(|error| format!("cannot retire previous Twin Modelica roots: {error}"))?;
     let mut registry =
         registry.ok_or_else(|| "Modelica source-root registry is not installed".to_owned())?;
     if let Some(existing) = registry.roots.get(&request.id) {
+        if existing.owner != SourceRootOwner::Twin(twin_id) {
+            return Err(format!(
+                "Modelica source-root id `{}` is owned by another runtime scope",
+                request.id
+            ));
+        }
         match &existing.kind {
             SourceRootKind::Disk {
                 root_dir: existing_path,
@@ -497,7 +600,7 @@ fn on_load_twin_modelica_source_root(
             }
         }
     } else {
-        registry.register_disk_root(request.id.clone(), root_dir);
+        registry.register_twin_disk_root(request.id.clone(), root_dir, twin_id);
     }
 
     if !ensure_loaded(&mut registry, &request.id, &channels) {
@@ -527,15 +630,28 @@ pub fn ensure_loaded(
     id: &str,
     channels: &ModelicaChannels,
 ) -> bool {
-    let Some(entry) = registry.roots.get_mut(id) else {
+    let Some(state) = registry.roots.get(id).map(|entry| entry.state.clone()) else {
         return false;
     };
-    match &entry.state {
+    match &state {
         LoadState::Ready => return true,
         LoadState::Loading { .. } => return false,
         LoadState::Failed(_) => return false,
         LoadState::NotLoaded => {}
     }
+    let operation_id = match registry.allocate_operation_id() {
+        Ok(id) => id,
+        Err(error) => {
+            if let Some(entry) = registry.roots.get_mut(id) {
+                entry.state = LoadState::Failed(error.clone());
+            }
+            bevy::log::error!("[source-roots] {error}");
+            return false;
+        }
+    };
+    let Some(entry) = registry.roots.get_mut(id) else {
+        return false;
+    };
     // Native workers resolve/read source files during immutable preparation.
     // The browser keeps its storage reads on the host that owns WebStorage and
     // sends the resulting text to the Modelica Web Worker.
@@ -670,6 +786,7 @@ pub fn ensure_loaded(
     // and session-install path after receiving the in-memory payload.
     let cmd = ModelicaCommand::LoadSourceRoot {
         id: id.to_string(),
+        operation_id,
         payload,
     };
     if channels.tx.send(cmd).is_err() {
@@ -690,10 +807,101 @@ pub fn ensure_loaded(
         progress: 0.0,
         started: Instant::now(),
     };
+    entry.operation_id = operation_id;
     // Status-bar feedback is projected from this `Loading` state by the reactive
     // UI observer `ui::core_observers::mirror_source_roots_to_status_bus`. Core
     // sets the state; it no longer touches the status bus.
     true
+}
+
+/// Retire every source root owned by the closed Twin. The worker receives the
+/// unload in the same FIFO command stream as loads, and operation identities
+/// reject any older source preparation that completes afterward.
+fn unload_twin_modelica_source_roots(
+    trigger: On<lunco_workspace::TwinClosed>,
+    channels: Option<Res<ModelicaChannels>>,
+    mut registry: Option<ResMut<SourceRootRegistry>>,
+    mut pending_unloads: ResMut<PendingSourceRootUnloads>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+) {
+    let Some(mut registry) = registry.take() else {
+        return;
+    };
+    let twin = trigger.event().twin;
+    let roots = match registry.take_twin_roots(twin) {
+        Ok(roots) => roots,
+        Err(error) => {
+            bevy::log::error!(
+                "[source-roots] cannot allocate Twin {} unloads: {error}",
+                twin.raw()
+            );
+            return;
+        }
+    };
+    for (id, operation_id) in roots {
+        pending_unloads.queued.push_back((id, operation_id));
+    }
+    if let Some(channels) = channels {
+        if let Err(error) = flush_source_root_unloads(&mut pending_unloads, |command| {
+            channels.tx.send(command).is_ok()
+        }) {
+            report_source_root_unload_dispatch_failure(faults.as_deref_mut(), error);
+        }
+    }
+}
+
+fn flush_pending_source_root_unloads(
+    channels: Option<Res<ModelicaChannels>>,
+    mut pending_unloads: ResMut<PendingSourceRootUnloads>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+) {
+    if pending_unloads.terminal_error.is_some() {
+        return;
+    }
+    if let Some(channels) = channels {
+        if let Err(error) = flush_source_root_unloads(&mut pending_unloads, |command| {
+            channels.tx.send(command).is_ok()
+        }) {
+            report_source_root_unload_dispatch_failure(faults.as_deref_mut(), error);
+        }
+    }
+}
+
+fn flush_source_root_unloads(
+    pending_unloads: &mut PendingSourceRootUnloads,
+    mut send: impl FnMut(ModelicaCommand) -> bool,
+) -> Result<(), String> {
+    if let Some(error) = &pending_unloads.terminal_error {
+        return Err(error.clone());
+    }
+    while let Some((id, operation_id)) = pending_unloads.queued.front().cloned() {
+        if !send(ModelicaCommand::UnloadSourceRoot {
+            id: id.clone(),
+            operation_id,
+        }) {
+            let error = format!("cannot unload `{id}`: Modelica worker channel is closed");
+            pending_unloads.terminal_error = Some(error.clone());
+            bevy::log::error!("[source-roots] {error}");
+            return Err(error);
+        }
+        pending_unloads.queued.pop_front();
+        bevy::log::info!("[source-roots] queued unload for `{id}` operation={operation_id}");
+    }
+    Ok(())
+}
+
+fn report_source_root_unload_dispatch_failure(
+    faults: Option<&mut lunco_core::RuntimeFaults>,
+    error: String,
+) {
+    if let Some(faults) = faults {
+        faults.raise(
+            "modelica-source-root-unload-dispatch-failed",
+            None,
+            "Modelica source-root registry",
+            error,
+        );
+    }
 }
 
 /// Admit the known source roots required by a compile before that compile is
@@ -773,4 +981,117 @@ pub fn log_compile_deps(registry: &SourceRootRegistry, model_name: &str, ast: &S
         failed,
         unknown,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn twin_root(id: &str, twin: lunco_workspace::TwinId, operation_id: u64) -> SourceRoot {
+        SourceRoot {
+            id: id.to_owned(),
+            kind: SourceRootKind::Disk {
+                root_dir: PathBuf::from("/inline/test/root"),
+            },
+            owner: SourceRootOwner::Twin(twin),
+            operation_id,
+            state: LoadState::Loading {
+                progress: 0.0,
+                started: Instant::now(),
+            },
+        }
+    }
+
+    #[test]
+    fn twin_retirement_removes_only_owned_roots_and_advances_operations() {
+        let first = lunco_workspace::TwinId::new(17);
+        let second = lunco_workspace::TwinId::new(23);
+        let mut registry = SourceRootRegistry::default();
+        registry.next_operation_id = 3;
+        registry.roots.insert(
+            "application:control".into(),
+            SourceRoot {
+                id: "application:control".into(),
+                kind: SourceRootKind::Disk {
+                    root_dir: PathBuf::from("/inline/application"),
+                },
+                owner: SourceRootOwner::Application,
+                operation_id: 2,
+                state: LoadState::Ready,
+            },
+        );
+        registry.roots.insert(
+            "twin:17:lesson:modelica:0".into(),
+            twin_root("twin:17:lesson:modelica:0", first, 1),
+        );
+        registry.roots.insert(
+            "twin:23:lesson:modelica:0".into(),
+            twin_root("twin:23:lesson:modelica:0", second, 2),
+        );
+
+        let retired = registry
+            .take_twin_roots(first)
+            .expect("Twin root unload operations should be allocated");
+
+        assert_eq!(retired.len(), 1);
+        assert_eq!(retired[0].0, "twin:17:lesson:modelica:0");
+        assert!(retired[0].1 > 1);
+        assert!(registry.roots.contains_key("application:control"));
+        assert!(registry.roots.contains_key("twin:23:lesson:modelica:0"));
+        assert!(!registry.roots.contains_key("twin:17:lesson:modelica:0"));
+    }
+
+    #[test]
+    fn pending_unloads_preserve_order_until_the_worker_accepts_them() {
+        let mut pending = PendingSourceRootUnloads::default();
+        pending
+            .queued
+            .push_back(("twin:17:lesson:modelica:0".into(), 8));
+        pending
+            .queued
+            .push_back(("twin:17:lesson:modelica:1".into(), 9));
+
+        let mut sent = Vec::new();
+        flush_source_root_unloads(&mut pending, |command| {
+            let ModelicaCommand::UnloadSourceRoot { id, operation_id } = command else {
+                panic!("pending source-root operation must be an unload");
+            };
+            sent.push((id, operation_id));
+            true
+        })
+        .expect("the worker accepts both unloads");
+        assert!(pending.queued.is_empty());
+        assert_eq!(
+            sent,
+            vec![
+                ("twin:17:lesson:modelica:0".into(), 8),
+                ("twin:17:lesson:modelica:1".into(), 9),
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_unload_dispatch_is_terminal_without_retrying_each_update() {
+        let mut pending = PendingSourceRootUnloads::default();
+        pending
+            .queued
+            .push_back(("twin:17:lesson:modelica:0".into(), 8));
+        let attempts = std::cell::Cell::new(0);
+
+        let first = flush_source_root_unloads(&mut pending, |_| {
+            attempts.set(attempts.get() + 1);
+            false
+        })
+        .expect_err("a closed worker channel rejects the unload");
+        assert!(first.contains("worker channel is closed"));
+        assert_eq!(pending.queued.len(), 1);
+
+        let second = flush_source_root_unloads(&mut pending, |_| {
+            attempts.set(attempts.get() + 1);
+            true
+        })
+        .expect_err("terminal dispatch failure remains visible");
+        assert_eq!(second, first);
+        assert_eq!(attempts.get(), 1, "a terminal failure is not retried");
+    }
 }

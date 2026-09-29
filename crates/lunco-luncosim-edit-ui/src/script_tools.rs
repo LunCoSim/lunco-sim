@@ -819,6 +819,7 @@ pub(crate) fn on_scene_pointer_event(
         tool: "scene_interaction".to_string(),
         hook: "on_pointer".to_string(),
         args: context.clone(),
+        owner_twin_id: None,
     });
     commands.trigger(TelemetryEvent {
         name: "scene.pointer".to_string(),
@@ -1058,6 +1059,7 @@ pub(crate) fn flush_scene_pointer_moves(
             tool: "scene_interaction".to_string(),
             hook: "on_pointer_move".to_string(),
             args,
+            owner_twin_id: None,
         });
     }
 }

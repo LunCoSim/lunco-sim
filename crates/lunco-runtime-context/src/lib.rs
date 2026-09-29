@@ -81,6 +81,10 @@ pub struct RuntimeRoute {
     pub cycle: RuntimeCycle,
     /// Owner generation; application routes use zero.
     pub generation: u64,
+    /// Stable identity of the Twin that owns this route, when the caller knows
+    /// it. Scene generations remain in `generation`; they are not Twin IDs.
+    #[serde(default)]
+    pub owner_id: Option<u64>,
 }
 
 impl RuntimeRoute {
@@ -90,6 +94,7 @@ impl RuntimeRoute {
             scope: RuntimeScope::Core,
             cycle,
             generation: 0,
+            owner_id: None,
         }
     }
 
@@ -99,6 +104,7 @@ impl RuntimeRoute {
             scope: RuntimeScope::Application,
             cycle,
             generation: 0,
+            owner_id: None,
         }
     }
 
@@ -108,6 +114,19 @@ impl RuntimeRoute {
             scope: RuntimeScope::Twin,
             cycle,
             generation,
+            owner_id: None,
+        }
+    }
+
+    /// Construct a Twin route with both its scene generation and stable Twin
+    /// identity. The identity scopes retained work; the generation fences work
+    /// produced by an older scene composition.
+    pub const fn twin_owned(cycle: RuntimeCycle, generation: u64, twin_id: u64) -> Self {
+        Self {
+            scope: RuntimeScope::Twin,
+            cycle,
+            generation,
+            owner_id: Some(twin_id),
         }
     }
 }

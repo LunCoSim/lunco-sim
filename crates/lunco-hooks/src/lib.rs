@@ -546,16 +546,26 @@ pub fn runtime_context_hook_value(context: RuntimeExecutionContext) -> HookValue
             ("scope".into(), label(route.scope)),
             ("cycle".into(), label(route.cycle)),
             ("generation".into(), HookValue::UInt(route.generation)),
+            (
+                "owner_id".into(),
+                route.owner_id.map_or(HookValue::Unit, HookValue::UInt),
+            ),
         ]
     }
 
-    let (scope, cycle, generation) = context.route.map_or(
-        (HookValue::Unit, HookValue::Unit, HookValue::Unit),
+    let (scope, cycle, generation, owner_id) = context.route.map_or(
+        (
+            HookValue::Unit,
+            HookValue::Unit,
+            HookValue::Unit,
+            HookValue::Unit,
+        ),
         |route| {
             (
                 label(route.scope),
                 label(route.cycle),
                 HookValue::UInt(route.generation),
+                route.owner_id.map_or(HookValue::Unit, HookValue::UInt),
             )
         },
     );
@@ -570,6 +580,7 @@ pub fn runtime_context_hook_value(context: RuntimeExecutionContext) -> HookValue
         ("cycle", cycle),
         ("phase", label(context.phase)),
         ("generation", generation),
+        ("owner_id", owner_id),
         ("clock", label(context.clock)),
         (
             "sequence",

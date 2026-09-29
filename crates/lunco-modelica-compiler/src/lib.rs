@@ -410,6 +410,14 @@ pub struct ModelicaCompiler {
     /// namespace is what lets later package-member compiles use the already
     /// seated root instead of registering a second URI.
     installed_roots: std::collections::HashSet<String>,
+    /// Root names owned by the resident application bundle.
+    resident_source_roots: std::collections::HashSet<String>,
+    /// Admitted source-set contributions retained so unloading one set can
+    /// recompute roots, defaults, revisions, and content closures accurately.
+    source_set_contributions: std::collections::HashMap<String, SourceSetContribution>,
+    /// Successful source-set admission order defines first-wins input-default
+    /// precedence deterministically when roots share a leaf input name.
+    source_set_order: Vec<String>,
     /// Root segments referenced by the active source document. This is the
     /// compiler's parsed view of the current Modelica search path and keeps
     /// an unresolved reference from loading unrelated external packages.
@@ -460,6 +468,14 @@ pub struct ModelicaCompiler {
     failed_source_roots: std::collections::HashMap<String, String>,
 }
 
+#[derive(Clone)]
+struct SourceSetContribution {
+    roots: std::collections::HashSet<String>,
+    input_defaults: Vec<(String, f64, String)>,
+    revision: u64,
+    content_closure: Result<ModelicaSourceRootContent, ModelicaSourceRootContentError>,
+}
+
 impl Default for ModelicaCompiler {
     fn default() -> Self {
         Self::new()
@@ -479,6 +495,9 @@ impl ModelicaCompiler {
         Self {
             session: Session::new(SessionConfig::default()),
             installed_roots: std::collections::HashSet::new(),
+            resident_source_roots: std::collections::HashSet::new(),
+            source_set_contributions: std::collections::HashMap::new(),
+            source_set_order: Vec::new(),
             requested_source_roots: std::collections::HashSet::new(),
             seated_user_uris: std::collections::HashSet::new(),
             library_input_defaults: std::collections::HashMap::new(),
@@ -512,7 +531,8 @@ impl ModelicaCompiler {
             docs,
             None,
         );
-        self.installed_roots.extend(roots);
+        self.resident_source_roots = roots;
+        self.rebuild_source_set_indexes();
         self.library_revisions
             .insert("source-bundle".to_string(), bundle_revision);
         self.source_root_content_closures.insert(
@@ -1222,24 +1242,21 @@ impl ModelicaCompiler {
                 None,
             );
             if inserted > 0 {
-                self.installed_roots.extend(parsed_roots);
-            }
-            for (name, value, uri) in input_defaults {
-                match self.library_input_defaults.entry(name) {
-                    std::collections::hash_map::Entry::Vacant(slot) => {
-                        slot.insert(value);
-                    }
-                    std::collections::hash_map::Entry::Occupied(slot) if *slot.get() != value => {
-                        log::warn!(
-                            "[ModelicaCompiler] source root `{id}`: input default `{}` = {value} \
-                             in {uri} conflicts with {} already captured from another member — \
-                             keeping the first. Rename one if they are different signals.",
-                            slot.key(),
-                            slot.get(),
-                        );
-                    }
-                    std::collections::hash_map::Entry::Occupied(_) => {}
+                if !self.source_set_contributions.contains_key(&id) {
+                    self.source_set_order.push(id.clone());
                 }
+                let revision = source_set_revision(&id, &files);
+                self.source_set_contributions.insert(
+                    id.clone(),
+                    SourceSetContribution {
+                        roots: parsed_roots,
+                        input_defaults,
+                        revision,
+                        content_closure: content_closure.clone(),
+                    },
+                );
+                self.failed_source_roots.remove(&id);
+                self.rebuild_source_set_indexes();
             }
             inserted
         } else {
@@ -1261,11 +1278,8 @@ impl ModelicaCompiler {
             diagnostics,
         };
         if report.diagnostics.is_empty() && report.inserted_file_count > 0 {
-            self.library_revisions
-                .insert(id, source_set_revision(&report.source_set_id, &files));
             self.source_root_content_closures
                 .insert(report.source_set_id.clone(), content_closure);
-            self.failed_source_roots.remove(&report.source_set_id);
         } else {
             self.source_root_content_closures.insert(
                 report.source_set_id.clone(),
@@ -1278,6 +1292,60 @@ impl ModelicaCompiler {
                 .insert(report.source_set_id.clone(), report.diagnostics.join("; "));
         }
         report
+    }
+
+    /// Remove one previously installed source set and recompute all derived
+    /// source-root metadata without disturbing the resident application bundle
+    /// or other loaded sets.
+    pub fn remove_source_root(&mut self, source_set_id: &str) -> bool {
+        self.session.remove_source_set(source_set_id);
+        self.source_root_content_closures.remove(source_set_id);
+        self.failed_source_roots.remove(source_set_id);
+        let was_installed = self
+            .source_set_contributions
+            .remove(source_set_id)
+            .is_some();
+        self.source_set_order
+            .retain(|candidate| candidate != source_set_id);
+        self.rebuild_source_set_indexes();
+        was_installed
+    }
+
+    fn rebuild_source_set_indexes(&mut self) {
+        self.installed_roots = self.resident_source_roots.clone();
+        self.library_input_defaults.clear();
+        self.library_revisions
+            .retain(|source_set_id, _| source_set_id == "source-bundle");
+        self.source_root_content_closures
+            .retain(|source_set_id, _| source_set_id == "source-bundle");
+
+        for source_set_id in &self.source_set_order {
+            let Some(contribution) = self.source_set_contributions.get(source_set_id) else {
+                continue;
+            };
+            self.installed_roots
+                .extend(contribution.roots.iter().cloned());
+            self.library_revisions
+                .insert(source_set_id.clone(), contribution.revision);
+            self.source_root_content_closures
+                .insert(source_set_id.clone(), contribution.content_closure.clone());
+            for (name, value, uri) in &contribution.input_defaults {
+                match self.library_input_defaults.entry(name.clone()) {
+                    std::collections::hash_map::Entry::Vacant(slot) => {
+                        slot.insert(*value);
+                    }
+                    std::collections::hash_map::Entry::Occupied(slot) if *slot.get() != *value => {
+                        log::warn!(
+                            "[ModelicaCompiler] source root `{source_set_id}`: input default `{name}` = {value} \
+                             in {uri} conflicts with {} already captured from another member — \
+                             keeping the first. Rename one if they are different signals.",
+                            slot.get(),
+                        );
+                    }
+                    std::collections::hash_map::Entry::Occupied(_) => {}
+                }
+            }
+        }
     }
 
     /// The `input` defaults captured from every seated library member — the
@@ -1604,6 +1672,61 @@ mod source_root_smoke {
             latest_state,
             Err(&ModelicaSourceRootContentError::SourceRootAdmissionFailed { .. })
         ));
+    }
+
+    #[test]
+    fn unloading_one_source_set_rebuilds_only_its_compiler_contribution() {
+        let mut compiler = ModelicaCompiler::new();
+        let application = PreparedSourceRoot::prepare(
+            "application-controls",
+            "inline application source",
+            vec![(
+                "ApplicationControls/Rate.mo".into(),
+                "within ApplicationControls;\nmodel Rate\n  input Real retained = 2.0;\n  output Real y;\nequation\n  y = retained;\nend Rate;\n".into(),
+            )],
+            Vec::new(),
+        );
+        let twin = PreparedSourceRoot::prepare(
+            "twin:17:lesson:modelica:0",
+            "inline Twin source",
+            vec![(
+                "LessonModelica/Rate.mo".into(),
+                "within LessonModelica;\nmodel Rate\n  input Real retired = 7.0;\n  output Real y;\nequation\n  y = retired;\nend Rate;\n".into(),
+            )],
+            Vec::new(),
+        );
+
+        assert!(
+            compiler
+                .install_source_root(application)
+                .diagnostics
+                .is_empty()
+        );
+        assert!(compiler.install_source_root(twin).diagnostics.is_empty());
+        assert!(compiler.installed_roots.contains("ApplicationControls"));
+        assert!(compiler.installed_roots.contains("LessonModelica"));
+        assert_eq!(
+            compiler.library_input_defaults().get("retained"),
+            Some(&2.0)
+        );
+        assert_eq!(compiler.library_input_defaults().get("retired"), Some(&7.0));
+        let revision_before = compiler.library_revision();
+
+        assert!(compiler.remove_source_root("twin:17:lesson:modelica:0"));
+
+        assert!(!compiler.installed_roots.contains("LessonModelica"));
+        assert!(compiler.installed_roots.contains("ApplicationControls"));
+        assert!(!compiler.library_input_defaults().contains_key("retired"));
+        assert_eq!(
+            compiler.library_input_defaults().get("retained"),
+            Some(&2.0)
+        );
+        assert!(
+            compiler
+                .source_root_content_closure("twin:17:lesson:modelica:0")
+                .is_none()
+        );
+        assert_ne!(compiler.library_revision(), revision_before);
     }
 
     #[test]

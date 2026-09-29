@@ -22,6 +22,8 @@ use std::collections::{HashMap, VecDeque};
 ///   preparation is in flight.
 /// * **compile lane** — everything else (`Compile`, `UpdateParameters`,
 ///   `Reset`, `Despawn`, `LoadSourceRoot`), strictly FIFO, one per round.
+///   Source-root unloads are admitted directly to the compiler actor so they
+///   can fence queued or in-flight preparations at Twin close.
 ///   Compile, parameter, and reset commands wait while an admitted source root
 ///   is being prepared or committed.
 ///
@@ -150,6 +152,7 @@ pub(super) fn take_runnable_compile_command(
         ModelicaCommand::LoadSourceRoot { .. } => {
             !preparation_pending && preparation_capacity_available
         }
+        ModelicaCommand::UnloadSourceRoot { .. } => true,
         ModelicaCommand::Step { entity, .. } => !pending_entities.contains(entity),
     };
     runnable.then(|| compile_lane.pop_front().expect("front command exists"))
@@ -208,6 +211,7 @@ mod tests {
     fn load_root() -> ModelicaCommand {
         ModelicaCommand::LoadSourceRoot {
             id: "Modelica".into(),
+            operation_id: 1,
             payload: LoadSourceRootPayload::InMemory {
                 label: "t".into(),
                 files: Vec::new(),

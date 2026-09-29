@@ -130,6 +130,7 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
             .add_systems(
                 PreUpdate,
                 (
+                    commands::retire_replaced_scenario_assets,
                     commands::resolve_embedded_scenario_paths,
                     commands::attach_requested_scenarios,
                     commands::attach_embedded_scenarios,
@@ -181,6 +182,7 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
 
         commands::register_all_commands(app);
         commands::register_command_policies(app);
+        app.add_observer(wind_down_twin_scenarios);
     }
 }
 
@@ -193,6 +195,7 @@ fn dispatch_workbench_menu_action(
         tool,
         hook,
         args,
+        owner_twin_id,
     } = trigger.event()
     else {
         return;
@@ -201,6 +204,7 @@ fn dispatch_workbench_menu_action(
         tool: tool.clone(),
         hook: hook.clone(),
         args: args.clone(),
+        owner_twin_id: *owner_twin_id,
     });
 }
 
@@ -233,6 +237,53 @@ pub fn stop_scene_owned_scripts(world: &mut World) {
                     .remove(&lunco_doc::DocumentId::new(document_id));
             }
         }
+    }
+}
+
+/// Stop and release Rhai programs and pending source handles admitted by the
+/// outgoing Twin. Application/core runtime modules are process scoped and are
+/// not part of this owner set.
+#[cfg(feature = "rhai")]
+fn wind_down_twin_scenarios(trigger: On<lunco_workspace::TwinClosed>, mut commands: Commands) {
+    let twin = trigger.event().twin;
+    commands.queue(move |world: &mut World| wind_down_twin_scenarios_now(world, twin));
+}
+
+fn wind_down_twin_scenarios_now(world: &mut World, twin: lunco_workspace::TwinId) {
+    let hosts: Vec<_> = {
+        let mut query = world.query::<(Entity, &commands::TwinScenarioHost)>();
+        query
+            .iter(world)
+            .filter(|(_, host)| host.0 == twin)
+            .map(|(entity, _)| entity)
+            .collect()
+    };
+    let stopped = lunco_scripting::scenario::ScenarioDriver::<
+        lunco_scripting_rhai_world::world_bridge::RhaiScenarioRuntime,
+    >::stop_twin_owned_scripts(world, twin);
+    for entity in stopped {
+        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+            entity_mut
+                .remove::<commands::ScenarioAssetHandle>()
+                .remove::<commands::ScenarioAssetId>()
+                .remove::<commands::PendingScenarioAsset>();
+        }
+    }
+    let pending: Vec<_> = {
+        let mut query = world.query::<(Entity, &commands::PendingScenarioAsset)>();
+        query
+            .iter(world)
+            .filter(|(_, request)| request.owner_twin.is_some_and(|owner| owner.twin == twin))
+            .map(|(entity, _)| entity)
+            .collect()
+    };
+    for entity in pending {
+        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+            entity_mut.remove::<commands::PendingScenarioAsset>();
+        }
+    }
+    for entity in hosts {
+        let _ = world.despawn(entity);
     }
 }
 

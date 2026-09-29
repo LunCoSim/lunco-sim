@@ -133,8 +133,13 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   fixed simulation, and admits a bounded batch per application frame (one by
   default). Its capacity is independent of the REPL queue, so general `RunRhai`
   work cannot delay or consume admission for pointer and menu hooks. These calls
-  receive an `Application/Ui/Evaluation` context; general `RunRhai` remains in the bounded
-  FIFO `Repl` cycle in `Update`. Tool arguments use `TelemetryValue` and are
+  receive an `Application/Ui/Evaluation` context by default. A workbench menu
+  action captures its provider Twin or the currently active Twin at selection
+  time and carries that stable owner into the queued hook; the owner must still
+  be active when the hook runs. The route uses generation zero until the
+  tutorial scenario is admitted against the committed scene. General
+  `RunRhai` remains in the bounded FIFO `Repl` cycle in `Update`. Tool
+  arguments use `TelemetryValue` and are
   converted directly to native Rhai values at the backend boundary. Scene click
   contexts include `button` (`primary`, `secondary`, or `middle`) so the Rhai
   tool owns button-specific policy; adapters never build source snippets or

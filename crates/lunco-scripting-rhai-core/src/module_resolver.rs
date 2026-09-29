@@ -346,6 +346,16 @@ impl PreparedModuleAsts {
         modules.insert(id.to_owned(), (source.to_owned(), ast.clone()));
     }
 
+    /// Retire the prepared module for one asset identity after its owner drops
+    /// the complete Bevy dependency graph.
+    pub fn remove(&self, id: &str) -> bool {
+        self.modules
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id)
+            .is_some()
+    }
+
     /// Clone an AST only when it was prepared for these exact source bytes.
     /// Callers that run on a worker may prepare a miss there; evaluation paths
     /// use `require_prepared` to reject a missing owner-thread commit.
@@ -734,6 +744,35 @@ mod tests {
                 .contains("was not prepared for this scenario revision"),
             "expected the missing-preparation diagnostic, got {error:?}"
         );
+    }
+
+    #[test]
+    fn removing_a_prepared_module_releases_only_its_canonical_entry() {
+        let modules = PreparedModuleAsts::required();
+        let engine = Engine::new();
+        let twin_source = "fn value() { 17 }";
+        let app_source = "fn value() { 23 }";
+        modules.insert(
+            "twin://17/lesson.rhai".into(),
+            twin_source.into(),
+            engine.compile(twin_source).expect("Twin module parses"),
+        );
+        modules.insert(
+            "lunco://scripts/app.rhai".into(),
+            app_source.into(),
+            engine
+                .compile(app_source)
+                .expect("application module parses"),
+        );
+
+        assert!(modules.remove("twin://17/lesson.rhai"));
+        assert!(modules.get("twin://17/lesson.rhai", twin_source).is_none());
+        assert!(
+            modules
+                .get("lunco://scripts/app.rhai", app_source)
+                .is_some()
+        );
+        assert!(!modules.remove("twin://17/lesson.rhai"));
     }
 
     /// The reason this resolver exists: rhai's default `FileModuleResolver` would

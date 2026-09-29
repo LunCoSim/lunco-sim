@@ -185,8 +185,9 @@ registry. Rhai source identity promotes the default Bevy asset path to its
 shared import and prepared-AST identity rule.
 The publisher retains each loaded `AssetId`'s canonical URI because Bevy may no
 longer resolve its path after the last handle is released. It retires the
-source on `AssetEvent::Removed` and ignores the preceding `Unused` edge; a stale
-removal cannot retire a newer asset currently registered under the same URI.
+source and its prepared AST on `AssetEvent::Removed` and ignores the preceding
+`Unused` edge; a stale removal cannot retire a newer asset currently registered
+under the same URI.
 
 ## Allow-list
 
@@ -274,7 +275,7 @@ no manual hunt.
 | `lunco-usd-sim-cosim/src/lib.rs` modelica/python source reads | ✅ migrated to AssetServer (see `ModelicaSource` / feature-gated `PythonSource`) |
 | `lunco-usd-ui/src/ui/browser_dispatch.rs` twin browser open | ✅ routed through the shared `OpenFile` USD document command |
 | `lunco-usd-commands/src/lib.rs` usd document load | ✅ reads through the storage abstraction |
-| Modelica source-root admission | ✅ `lunco-modelica-source-roots` owns registry/lifecycle state and manifest-aware Twin resolution; filesystem enumeration is delegated to `lunco-assets-runtime`, and the compiler host parses and seats the returned source files |
+| Modelica source-root admission | ✅ `lunco-modelica-source-roots` owns Application/Twin registration, manifest-aware Twin resolution, ordered `TwinClosed` unloads, and stale-preparation fences; filesystem enumeration is delegated to `lunco-assets-runtime`, and the compiler host installs/removes the returned source sets |
 | `lunco-modelica-library/source_library.rs` source-library fetch | ✅ owns source-library admission and browser fetch state; the wasm worker handoff is a typed bridge implemented by `lunco-modelica-execution`, so compiler-only consumers do not own the fetch implementation |
 | `lunco-assets-runtime::models` runtime inventory | ✅ reads the authored `assets/models/` tree through `lunco-storage`; no compiled snapshot or embedded fallback |
 

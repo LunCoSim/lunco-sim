@@ -10,7 +10,9 @@ lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true }
 bevy_egui = { workspace = true, features = ["render"] }
 lunco-core = { path = "../lunco-core" }
+lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-theme = { path = "../lunco-theme" }
+lunco-workspace = { path = "../lunco-workspace" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
 lunco-viewport-core = { path = "../lunco-viewport-core" }
