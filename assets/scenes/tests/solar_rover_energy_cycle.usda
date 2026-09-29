@@ -42,7 +42,7 @@ def Xform "SolarRoverTest" (
         {
             over "SolarPanel"
             {
-                float inputs:area = 0.10
+                double parameters:area = 0.10
             }
         }
     }
