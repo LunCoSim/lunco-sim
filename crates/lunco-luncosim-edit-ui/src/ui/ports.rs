@@ -813,7 +813,7 @@ fn format_value(value: Option<f64>) -> String {
     }
 }
 
-fn display_value(held: Option<f64>, value: f64) -> String {
+fn display_value(held: Option<f64>, value: Option<f64>) -> String {
     match held {
         Some(held) => format!("{held:.6}  (held)"),
         None => format_value(value),
