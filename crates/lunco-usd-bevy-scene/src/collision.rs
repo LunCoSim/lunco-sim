@@ -150,9 +150,7 @@ pub fn collision_aabb(
     let mut acc: Option<(bevy::math::DVec3, bevy::math::DVec3)> = None;
     let mut fidelity = CollisionBoundsFidelity::Exact;
     for (path, world_tf) in candidates {
-        if UsdReadObject::text(reader, &path, "lunco:triggerZone")
-            .is_some_and(|zone| !zone.trim().is_empty())
-        {
+        if UsdReadObject::has_api_schema(reader, &path, "LunCoTriggerZoneAPI") {
             continue;
         }
         let purpose = effective_purpose(reader, &path);

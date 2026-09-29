@@ -1527,11 +1527,27 @@ fn extract_avian_prim(
         return;
     }
 
-    // ── TRIGGER ZONE ── `lunco:triggerZone` → overlap-only static Sensor.
-    if let Some(zone) = reader
-        .text(sdf_path, "lunco:triggerZone")
-        .filter(|z| !z.trim().is_empty())
-    {
+    // ── TRIGGER SENSOR ── applying the API opts into an overlap-only static
+    // Sensor; `lunco:triggerZone` is an optional label for named geofence events.
+    if reader.has_api_schema(sdf_path, "LunCoTriggerZoneAPI") {
+        let zone = match reader.text(sdf_path, "lunco:triggerZone") {
+            Some(zone) => zone,
+            None if !reader.has_authored_attribute(sdf_path, "lunco:triggerZone") => String::new(),
+            None => {
+                reject_collider_projection(
+                    commands,
+                    entity,
+                    sdf_path,
+                    faults.as_deref_mut(),
+                    holds.as_deref_mut(),
+                    ColliderProjectionError::Backend {
+                        prim: sdf_path.to_string(),
+                        detail: "malformed lunco:triggerZone; expected a token".to_owned(),
+                    },
+                );
+                return;
+            }
+        };
         commands
             .entity(entity)
             .try_insert((RigidBody::Static, lunco_core::Mobility::Static));

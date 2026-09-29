@@ -60,9 +60,9 @@ def Xform "RoutePoint" (
         bool primvars:doNotCastShadows = true
     }
 
-    # Ground-anchored overlap-only sensor. The generic Avian sensor bridge
-    # emits enter:<zone> and exit:<zone>; the route program authors the zone
-    # token per instance, so no waypoint-specific runtime state is required.
+    # Ground-anchored overlap-only sensor. Avian emits generic SENSOR_ENTER /
+    # SENSOR_EXIT events keyed by sensor identity. A non-empty TriggerZone label
+    # also emits named geofence events for route policy.
     def Sphere "Trigger" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTriggerZoneAPI"]
     )
