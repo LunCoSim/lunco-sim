@@ -4074,8 +4074,13 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         revision.finish()
     }
 
-    fn initialize(&mut self, entity: Entity) -> Option<Diagnostic> {
+    fn initialize(&mut self, entity: Entity, self_gid: i64) -> Option<Diagnostic> {
         let st = self.states.get_mut(&entity)?;
+        bridge_core::rng_begin(
+            self_gid as u64,
+            None,
+            bridge_core::hash_str("initialization"),
+        );
         match self
             .engine
             .run_ast_with_scope(&mut st.scope, &st.program.ast)
@@ -5894,7 +5899,7 @@ mod tests {
             "worker preparation and owner commit must not run authored top-level code"
         );
 
-        assert!(runtime.initialize(entity).is_none());
+        assert!(runtime.initialize(entity, 42).is_none());
         assert_eq!(
             runtime.states[&entity].scope.get_value::<i64>("seeded"),
             Some(123),
@@ -5997,7 +6002,7 @@ mod tests {
             runtime.commit_compile(entity, prepared, &Default::default()),
             CompileOutcome::Ready
         ));
-        assert!(runtime.initialize(entity).is_none());
+        assert!(runtime.initialize(entity, 42).is_none());
         assert_eq!(
             runtime.states[&entity].scope.get_value::<i64>("initial"),
             Some(42),
@@ -6130,7 +6135,7 @@ mod tests {
             runtime.commit_compile(entity, prepared, &Default::default()),
             CompileOutcome::Ready
         ));
-        assert!(runtime.initialize(entity).is_none());
+        assert!(runtime.initialize(entity, 42).is_none());
         assert_eq!(
             runtime.states[&entity].scope.get_value::<i64>("initial"),
             Some(42)

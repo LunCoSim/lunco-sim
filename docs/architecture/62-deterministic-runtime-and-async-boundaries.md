@@ -808,7 +808,10 @@ This hook runs before mutable top-level initialization, so derive its result
 from `me`, scenario parameters, identity metadata, and permitted scene-generation
 queries rather than top-level initialization effects. Once all declared inputs are Ready, the owner
 commits the Modelica participant set, runs top-level initialization in the
-`Initialization` phase, and dispatches `on_start` in stable actor order.
+`Initialization` phase, and dispatches `on_start` in stable actor order. The
+top-level body runs with the scenario's stable entity identity and deterministic
+initialization random stream, so its `query_reads` declarations authorize the
+same broad providers used by later scenario hooks.
 After an ordered simulation command materializes a new entity, the caller can
 extend its committed directional plan with `track_entity_read` or
 `track_entity_write` before accessing that live id. A tracked id that is or

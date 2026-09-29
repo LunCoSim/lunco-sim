@@ -634,11 +634,12 @@ pub trait ScenarioRuntime: Send + Sync + 'static {
     }
 
     /// Run mutable top-level initialization after the program's dependency plan
-    /// has been resolved and committed. This is the first executable world
-    /// phase for a newly compiled program. Runtime errors are non-fatal
-    /// diagnostics; lifecycle hooks still run, matching the scenario's authored
-    /// contract.
-    fn initialize(&mut self, _entity: Entity) -> Option<Diagnostic> {
+    /// has been resolved and committed. The stable script identity is supplied
+    /// so the backend can seed deterministic initialization state. This is the
+    /// first executable world phase for a newly compiled program. Runtime errors
+    /// are non-fatal diagnostics; lifecycle hooks still run, matching the
+    /// scenario's authored contract.
+    fn initialize(&mut self, _entity: Entity, _self_gid: i64) -> Option<Diagnostic> {
         None
     }
 
@@ -1385,6 +1386,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     let _phase = bridge_core::ExecutionContextScope::enter(
                         context.with_phase(lunco_core::RuntimePhase::Stop),
                     );
+                    let _script_entity = bridge_core::ScriptEntityScope::enter(gid as u64);
                     stop_error = driver.runtime.call_hook(*entity, ScenarioHook::Stop, gid);
                 }
                 driver.runtime.forget_program(*entity);
@@ -1799,6 +1801,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             bridge_core::set_script_client_local(false);
             if state.started && state.compiled {
                 let _phase = bridge_core::ExecutionContextScope::enter(context);
+                let _script_entity = bridge_core::ScriptEntityScope::enter(state.gid as u64);
                 stop_error = driver
                     .runtime
                     .call_hook(entity, ScenarioHook::Stop, state.gid);
@@ -2023,6 +2026,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     entity = ?entity,
                 )
                 .entered();
+                let _script_entity = bridge_core::ScriptEntityScope::enter(gid as u64);
                 if let Some(diagnostic) = driver.runtime.call_visualization(*entity, gid) {
                     if let Some(mut diagnostics) = world.get_resource_mut::<DocumentDiagnostics>() {
                         let document = DocumentId::new(raw);
@@ -2416,6 +2420,8 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         let _phase = bridge_core::ExecutionContextScope::enter(
                             pass_context.with_phase(lunco_core::RuntimePhase::Stop),
                         );
+                        let _script_entity =
+                            bridge_core::ScriptEntityScope::enter(gid as u64);
                         runtime.call_hook(entity, ScenarioHook::Stop, gid)
                     } else {
                         None
@@ -2482,6 +2488,8 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                                 activation_context
                                     .with_phase(lunco_core::RuntimePhase::DependencyPlan),
                             );
+                            let _script_entity =
+                                bridge_core::ScriptEntityScope::enter(gid as u64);
                             runtime.simulation_dependencies(entity, gid).and_then(|plan| {
                                 let modelica_entities =
                                     resolve_simulation_dependencies(world, plan.modelica_entities)?;
@@ -2570,7 +2578,9 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                                 activation_context
                                     .with_phase(lunco_core::RuntimePhase::Initialization),
                             );
-                            initialization_diag = runtime.initialize(entity);
+                            let _script_entity =
+                                bridge_core::ScriptEntityScope::enter(gid as u64);
+                            initialization_diag = runtime.initialize(entity, gid);
                             st.initialized = true;
                         }
                         Ok(RequiredInputReadiness::Waiting { revision, reason }) => {
@@ -2617,6 +2627,8 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     let _phase = bridge_core::ExecutionContextScope::enter(
                         activation_context.with_phase(lunco_core::RuntimePhase::Start),
                     );
+                    let _script_entity =
+                        bridge_core::ScriptEntityScope::enter(gid as u64);
                     if let Some(d) = runtime.call_hook(entity, ScenarioHook::Start, gid) {
                         runtime_errors.push(d);
                     }
@@ -2665,6 +2677,8 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                                     ev.event.sim_tick,
                                 )),
                         );
+                        let _script_entity =
+                            bridge_core::ScriptEntityScope::enter(gid as u64);
                         if let Some(d) = runtime.deliver_event(entity, gid, &ev.event) {
                             runtime_errors.push(d);
                         }
@@ -2674,6 +2688,8 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     let _phase = bridge_core::ExecutionContextScope::enter(
                         pass_context.with_phase(lunco_core::RuntimePhase::Behavior),
                     );
+                    let _script_entity =
+                        bridge_core::ScriptEntityScope::enter(gid as u64);
                     if let Some(d) = runtime.call_hook(entity, ScenarioHook::Tick, gid) {
                         runtime_errors.push(d);
                     }
@@ -2738,6 +2754,8 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         let _phase = bridge_core::ExecutionContextScope::enter(
                             dead_context.with_phase(lunco_core::RuntimePhase::Stop),
                         );
+                        let _script_entity =
+                            bridge_core::ScriptEntityScope::enter(st.gid as u64);
                         if let Some(diagnostic) = runtime.call_hook(entity, ScenarioHook::Stop, st.gid) {
                             if let Some(raw) = st.document_id {
                                 diag_updates.push((raw, Some(vec![diagnostic])));
