@@ -119,8 +119,11 @@ checkpoints; do not emit a per-tick state log. Include an explicit final-stage
 record and require exact final physics, Modelica, and articulated-state equality
 before comparing earlier checkpoints. The multi-rover harness can write a
 portable reference with `--record-reference PATH` and compare it with
-`--compare-reference PATH`; both use exact numeric equality. A fresh-scene startup test asserts that
-`on_start` observes tick 0 and the first `on_tick` observes tick 1; startup
+`--compare-reference PATH`; both use exact numeric equality. Require the
+terminal `luncosim test PASS` summary to match the expected scene and authored
+verdict channel; Rhai print/log lines are diagnostic and may be filtered by the
+host. A fresh-scene startup test asserts that `on_start` observes tick 0 and
+the first `on_tick` observes tick 1; startup
 readiness must hold the shared clock until those callbacks can begin in order.
 For USD Modelica networks, the startup gate also covers member-source resolution,
 network synthesis, and generated port-surface publication; the binding epoch

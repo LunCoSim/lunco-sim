@@ -9,6 +9,9 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).parents[1] / "compare_deterministic_physics_profiles.py"
+sys.path.insert(0, str(SCRIPT.parent))
+import scene_test_output
+
 SPEC = importlib.util.spec_from_file_location("deterministic_physics_profiles", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 deterministic_physics_profiles = importlib.util.module_from_spec(SPEC)
@@ -17,6 +20,70 @@ SPEC.loader.exec_module(deterministic_physics_profiles)
 
 
 class DeterministicPhysicsProfileTests(unittest.TestCase):
+    def test_runner_pass_summary_is_authoritative_without_rhai_log_markers(self) -> None:
+        output = "\n".join(
+            [
+                "[test] startup readiness admitted after 11021 updates at SimTick=0",
+                "luncosim test PASS  scene=assets/scenes/tests/multi_rover_stress_20.usda  "
+                "channel=MULTI_ROVER_STRESS  ticks=780  updates=1680  sim=13.00s  "
+                "threads=1  jitter=0.000  seed=6840157149251759617  tick_hz=60.0000",
+                "WARN lunco_modelica_telemetry: max_channels reached",
+            ]
+        )
+
+        summary = scene_test_output.require_scene_test_pass(
+            output,
+            expected_scene="assets/scenes/tests/multi_rover_stress_20.usda",
+            expected_channel="MULTI_ROVER_STRESS",
+        )
+
+        self.assertEqual(summary.verdict, "PASS")
+        self.assertEqual(summary.ticks, 780)
+        self.assertNotIn("TESTS_OK", output)
+        self.assertNotIn("MULTI-ROVER STRESS: PASS", output)
+
+    def test_runner_failure_cannot_be_overridden_by_rhai_pass_log_text(self) -> None:
+        output = "\n".join(
+            [
+                "TESTS_OK 20",
+                "MULTI-ROVER STRESS: PASS",
+                "luncosim test FAIL  scene=assets/scenes/tests/multi_rover_stress_20.usda  "
+                "channel=MULTI_ROVER_STRESS  ticks=780  updates=1680  sim=13.00s  "
+                "threads=1  jitter=0.000  seed=6840157149251759617  tick_hz=60.0000",
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "verdict was FAIL"):
+            scene_test_output.require_scene_test_pass(
+                output,
+                expected_scene="assets/scenes/tests/multi_rover_stress_20.usda",
+                expected_channel="MULTI_ROVER_STRESS",
+            )
+
+    def test_runner_pass_summary_must_match_scene_and_verdict_channel(self) -> None:
+        output = (
+            "luncosim test PASS  scene=assets/scenes/tests/sensor.usda  "
+            "channel=SENSORS  ticks=8  updates=24  sim=0.13s  "
+            "threads=1  jitter=0.000  seed=42  tick_hz=60.0000"
+        )
+
+        with self.assertRaisesRegex(ValueError, "expected 'MULTI_ROVER_STRESS'"):
+            scene_test_output.require_scene_test_pass(
+                output,
+                expected_scene="assets/scenes/tests/sensor.usda",
+                expected_channel="MULTI_ROVER_STRESS",
+            )
+
+    def test_rhai_prints_without_terminal_runner_summary_are_not_a_pass(self) -> None:
+        output = "TESTS_OK 20\nMULTI-ROVER STRESS: PASS"
+
+        with self.assertRaisesRegex(ValueError, "exactly one terminal"):
+            scene_test_output.require_scene_test_pass(
+                output,
+                expected_scene="assets/scenes/tests/multi_rover_stress_20.usda",
+                expected_channel="MULTI_ROVER_STRESS",
+            )
+
     def test_default_run_compares_the_checked_in_portable_reference(self) -> None:
         args = deterministic_physics_profiles.parse_arguments([])
         self.assertEqual(

@@ -17,6 +17,8 @@ import sys
 import time
 from datetime import datetime, timezone
 
+from scene_test_output import require_scene_test_pass
+
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_FIXTURE_PATH = Path(
@@ -209,16 +211,27 @@ def run_profile(
         f"{os.getpid()}-{time.monotonic_ns()}.log"
     )
     log_path.write_text(output, encoding="utf-8")
-    if (
-        result.returncode != 0
-        or "TESTS_OK" not in output
-        or "MULTI-ROVER STRESS: PASS" not in output
-    ):
+    summary_error = None
+    try:
+        summary = require_scene_test_pass(
+            output,
+            expected_scene=scene,
+            expected_channel="MULTI_ROVER_STRESS",
+        )
+        final_tick = int(final_stage_tick(output))
+        if summary.ticks != final_tick:
+            raise ValueError(
+                f"scene-test summary reported {summary.ticks} ticks, "
+                f"but the authored final-stage trace is tick {final_tick}"
+            )
+    except (RuntimeError, ValueError) as error:
+        summary_error = str(error)
+    if result.returncode != 0 or summary_error is not None:
         relevant = [
             line
             for line in output.splitlines()
             if re.search(
-                r"(ERROR|NO-VERDICT|TESTS_|MULTI-ROVER|D4_CLOCK_SYNC_FAIL|D4_ON_TICK_GAP|FAIL:|Failed to load asset|"
+                r"(luncosim test|ERROR|NO-VERDICT|TESTS_|MULTI-ROVER|D4_CLOCK_SYNC_FAIL|D4_ON_TICK_GAP|FAIL:|Failed to load asset|"
                 r"on_start\(\) failed|on_tick\(\) failed)",
                 line,
                 re.IGNORECASE,
@@ -234,9 +247,11 @@ def run_profile(
             )
         ]
         tail = "\n".join((relevant or output.splitlines()[-12:])[-24:])
+        reason = f"exit {result.returncode}"
+        if summary_error is not None:
+            reason += f", {summary_error}"
         raise RuntimeError(
-            f"Compute profile --threads {threads} failed with exit "
-            f"{result.returncode}:\n{tail}"
+            f"Compute profile --threads {threads} failed ({reason}):\n{tail}"
         )
 
     validate_physics_trace_ticks(output, f"{Path(scene).stem} --threads {threads}")

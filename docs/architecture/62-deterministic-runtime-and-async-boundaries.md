@@ -1190,9 +1190,16 @@ The whole-simulation guarantee remains open because:
    the fixture does not invalidate its source identity. The reference records
    source and machine metadata for the 4/8/20-rover, serial/default Compute,
    and seeded jitter profiles. Comparison requires exact final-stage and
-   checkpoint equality (`numeric_tolerance=0`);
-   no cross-machine run has been observed yet. This remains fixture-specific
-   evidence, not whole-simulation replay determinism. The current profile
+   checkpoint equality (`numeric_tolerance=0`). A Windows attempt at commit
+   `889b7e908` completed the first 20-rover scene with the runner's PASS summary
+   at tick 780, but the comparator stopped before trace/reference comparison
+   because it required Rhai `TESTS_OK` and `MULTI-ROVER STRESS: PASS` log text
+   that was absent from captured output. The production runner's terminal PASS
+   summary carries the typed verdict; both determinism comparators now validate
+   that summary against the expected scene and channel, and the physics profile
+   also matches its tick count to the authored final-stage trace. Repeat the
+   Windows run before claiming cross-machine state equality. This remains
+   fixture-specific evidence, not whole-simulation replay determinism. The current profile
    records effective pool width but does not select a deterministic Avian
    solver profile; that guarantee still needs a measured production choice or
    deterministic reductions. In the same ordered

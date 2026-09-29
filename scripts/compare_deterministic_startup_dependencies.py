@@ -11,6 +11,8 @@ import subprocess
 import sys
 import time
 
+from scene_test_output import require_scene_test_pass
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCENE = "assets/scenes/tests/sensor.usda"
@@ -56,10 +58,18 @@ def run_profile(binary: str, requested_threads: int) -> tuple[int, str, float]:
     output = result.stdout + result.stderr
     traces = TRACE_PATTERN.findall(output)
     actor_order = ACTOR_ORDER_PATTERN.findall(output)
+    summary_error = None
+    try:
+        require_scene_test_pass(
+            output,
+            expected_scene=SCENE,
+            expected_channel="SENSORS",
+        )
+    except ValueError as error:
+        summary_error = str(error)
     if (
         result.returncode != 0
-        or "TESTS_OK" not in output
-        or "SENSORS: PASS" not in output
+        or summary_error is not None
         or actor_order != ["PASS"]
         or len(traces) != 1
     ):
@@ -67,7 +77,7 @@ def run_profile(binary: str, requested_threads: int) -> tuple[int, str, float]:
             line
             for line in output.splitlines()
             if re.search(
-                r"(ERROR|NO-VERDICT|TESTS_|FAIL:|SENSORS|SCENARIO_ACTOR_ORDER|"
+                r"(luncosim test|ERROR|NO-VERDICT|TESTS_|FAIL:|SENSORS|SCENARIO_ACTOR_ORDER|"
                 r"SENSOR_FIRST_TICK|"
                 r"Failed to load asset|on_start\(\) failed|on_tick\(\) failed)",
                 line,
@@ -75,9 +85,12 @@ def run_profile(binary: str, requested_threads: int) -> tuple[int, str, float]:
             )
         ]
         tail = "\n".join((relevant or output.splitlines()[-12:])[-24:])
+        reason = f"exit {result.returncode}, traces {len(traces)}"
+        if summary_error is not None:
+            reason += f", {summary_error}"
         raise RuntimeError(
             f"sensor startup with --threads {requested_threads} failed "
-            f"(exit {result.returncode}, traces {len(traces)}):\n{tail}"
+            f"({reason}):\n{tail}"
         )
 
     fields = traces[0].split("|")

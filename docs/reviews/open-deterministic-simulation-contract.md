@@ -39,6 +39,17 @@ its repeat and the fixed-step baseline. The comparator unit cases include an
 omitted 8-rover lane, fixture contact-count normalization, and a `1e-15` state
 change that must fail.
 
+A Windows attempt at commit `889b7e908` completed the first 20-rover scene with
+the production runner's PASS summary (`channel=MULTI_ROVER_STRESS`, 780 ticks),
+but the Python comparator stopped before trace/reference comparison because
+captured output omitted the Rhai `TESTS_OK` and `MULTI-ROVER STRESS: PASS` log
+lines. The scene runner emits its terminal PASS only after receiving the
+authored typed verdict and checking scene connection faults. Both determinism
+comparators now validate that terminal summary against the expected scene and
+channel; the physics comparator also checks its tick count against the authored
+final-stage trace. The Windows run must be repeated before cross-machine state
+equality is considered verified.
+
 These runs establish same-build determinism for the covered fixtures, timing
 profiles, and Compute widths. Whole-session replay, controlled asynchronous
 completion-order coverage outside the production join helper, cross-machine
