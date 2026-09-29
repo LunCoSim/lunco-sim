@@ -928,3 +928,27 @@ enough to promise same-state continuation from an arbitrary capture tick.
 - This is same-host fixture comparison evidence. Cross-machine execution,
   whole-session replay, browser workers, and broader scene coverage remain
   open. The unrelated untracked `scripts/perf/` work remains untouched.
+
+## D4 comparator diagnostics and refreshed production matrix (2026-09-29)
+
+- Commit `3a016371d` enables scoped Rhai INFO output in both determinism profile
+  launchers. Commit `671c0969a` adds first-field expected/actual details for
+  physics and articulated rows and exact variable/value details for Modelica.
+  Its Rhai negative control starts from a known-good reference row, alters it,
+  and checks the field-level diagnostic.
+- The task branch and local `main` are both at `671c0969a`, six commits ahead
+  of `origin/main`; no push was made. The open deterministic-simulation review
+  records the current acceptance evidence. The unrelated untracked
+  `scripts/perf/` work remains preserved.
+- The default-feature build from Rust source `abc365ea6` was reused because
+  these two commits only change Rhai, scripts, and documentation. The updated
+  Rhai scenario passed the complete shell profile matrix and printed
+  `DETERMINISTIC_PHYSICS_PROFILES_OK`: 4/8/20-rover serial/default-Compute
+  profiles plus four jitter/seed profiles, each with 780 ticks and exact
+  reference/final-stage comparisons. This is same-host determinism acceptance,
+  not sustained performance evidence.
+- The other computer's scene-4-serial run returned a terminal failure after
+  780 ticks, but its default logging omitted the Rhai assertion. The wrapper
+  now enables that output. Root-cause diagnosis still needs the failing field,
+  exact `HEAD`, and reference-file hash from that computer. No cross-machine
+  numerical mismatch is claimed without those facts.

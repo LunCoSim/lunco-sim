@@ -65,15 +65,19 @@ whole-session replay, controlled asynchronous completion-order coverage outside
 the production join helper, broader scene types, and physics throughput remain
 open.
 
-Reference mismatches now report the first differing labeled state field with
-its expected and actual values; Modelica mismatches report the variable and
-both serialized values. The production negative control alters a known-good
-reference row and checks that diagnostic. On 2026-09-29, the default-feature
-production build at `abc365ea6` passed `scene-4-serial` with 24 Rhai assertions
-in 780 ticks. A run on another machine returned a terminal scene-test failure
-after 780 ticks, but its log did not include the Rhai INFO assertion. The
-profile launchers now enable scoped Rhai INFO output. Cross-machine state
-comparison remains open until the failed field is known and reproduced.
+Reference mismatches report the first differing labeled state field with its
+expected and actual values; Modelica mismatches report the variable and both
+serialized values. The production negative control alters a known-good
+reference row and checks that diagnostic. On 2026-09-29, the regular production
+build at `abc365ea6` ran the updated Rhai gate at `671c0969a`. The complete
+`scripts/test-deterministic-physics-profiles.sh` matrix reached
+`DETERMINISTIC_PHYSICS_PROFILES_OK`: all ten 4/8/20-rover serial/default-Compute
+and jitter/seed profiles compared exact state and final stages at 780 ticks.
+The other-machine scene-4-serial run reached 780 ticks but failed the scene
+verdict; its output omitted the Rhai INFO failure detail. Both profile launchers
+now enable scoped Rhai INFO output. Cross-machine state comparison remains open
+until the remote failed field, build revision, and reference identity are
+available.
 
 ## Findings
 
