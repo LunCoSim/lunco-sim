@@ -1175,11 +1175,16 @@ The whole-simulation guarantee remains open because:
    exact final physics, Modelica, and articulated states first, then compares
    earlier checkpoints exactly. The production scene-test matrix leaves
    `--tick-hz` unset, verifies its default fixed step is 60 Hz, and advances
-   through manual clock updates without wall-time pacing. `--record-reference PATH`
-   saves those points for 4/8/20 rovers, serial/default Compute settings,
-   and seeded jitter profiles, with source and machine metadata.
-   `--compare-reference PATH`
-   requires exact final-stage and checkpoint equality (`numeric_tolerance=0`);
+   through manual clock updates without wall-time pacing. By default the
+   comparator checks the committed portable fixture at
+   `scripts/tests/fixtures/deterministic-physics-reference.json`;
+   `--compare-reference PATH` selects a different baseline and
+   `--record-reference PATH` writes a new one. The source fingerprint covers
+   every tracked tree entry except the reference fixture itself, so committing
+   the fixture does not invalidate its source identity. The reference records
+   source and machine metadata for the 4/8/20-rover, serial/default Compute,
+   and seeded jitter profiles. Comparison requires exact final-stage and
+   checkpoint equality (`numeric_tolerance=0`);
    no cross-machine run has been observed yet. This remains fixture-specific
    evidence, not whole-simulation replay determinism. The current profile
    records effective pool width but does not select a deterministic Avian

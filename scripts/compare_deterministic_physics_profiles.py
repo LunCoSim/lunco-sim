@@ -19,6 +19,10 @@ from datetime import datetime, timezone
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REFERENCE_FIXTURE_PATH = Path(
+    "scripts/tests/fixtures/deterministic-physics-reference.json"
+)
+DEFAULT_REFERENCE_PATH = ROOT / REFERENCE_FIXTURE_PATH
 SCENE = "assets/scenes/tests/multi_rover_stress_20.usda"
 SCENES_BY_ROVER_COUNT = {
     4: "assets/scenes/tests/multi_rover_stress_4.usda",
@@ -45,7 +49,7 @@ ARTICULATED_BODY_TRACE_PATTERN = re.compile(
 )
 PROFILE_PATTERN = re.compile(r"D4_PROFILE_V1\|(\d+)")
 TICK_HZ_PATTERN = re.compile(r"\btick_hz=([0-9]+(?:\.[0-9]+)?)\b")
-REFERENCE_SCHEMA = "luncosim-deterministic-physics-reference-v2"
+REFERENCE_SCHEMA = "luncosim-deterministic-physics-reference-v3"
 ARTICULATED_CHECKPOINT_TICKS = ("1", "11", "80")
 PORTABLE_ARTICULATED_CHECKPOINT_TICKS = ("11", "80")
 
@@ -1222,6 +1226,7 @@ def source_metadata(binary: str) -> dict[str, object]:
     return {
         "git_commit": git_value("rev-parse", "HEAD"),
         "git_tree": git_value("rev-parse", "HEAD^{tree}"),
+        "tracked_source_sha256": tracked_source_fingerprint(),
         "tracked_worktree_clean": tracked_worktree_clean,
         "input_sha256": inputs,
         "host": {
@@ -1233,10 +1238,31 @@ def source_metadata(binary: str) -> dict[str, object]:
             "rustc": command_version("rustc"),
         },
         "binary": {
-            "path": str(binary_path),
+            "name": binary_path.name,
             "sha256": sha256_file(binary_path),
         },
     }
+
+
+def tracked_source_fingerprint(root: Path = ROOT) -> str:
+    result = subprocess.run(
+        ["git", "ls-tree", "-rz", "--full-tree", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    excluded_path = REFERENCE_FIXTURE_PATH.as_posix().encode()
+    fingerprint = hashlib.sha256()
+    for entry in result.stdout.split(b"\0"):
+        if not entry:
+            continue
+        _, separator, path = entry.partition(b"\t")
+        if not separator:
+            raise RuntimeError("git returned a malformed tracked-source entry")
+        if path != excluded_path:
+            fingerprint.update(entry)
+            fingerprint.update(b"\0")
+    return fingerprint.hexdigest()
 
 
 def canonical_modelica_point(
@@ -1412,8 +1438,14 @@ def compare_reference(
         raise RuntimeError("portable reference uses an unsupported schema")
     recorded_source = document.get("source")
     current_source = source_metadata(binary)
-    if recorded_source.get("git_tree") != current_source.get("git_tree"):
-        raise RuntimeError("portable reference was recorded from a different source tree")
+    if current_source.get("tracked_worktree_clean") is not True:
+        raise RuntimeError("portable comparison requires a clean tracked worktree")
+    if recorded_source.get("tracked_source_sha256") != current_source.get(
+        "tracked_source_sha256"
+    ):
+        raise RuntimeError(
+            "portable reference was recorded from a different tracked source tree"
+        )
     if recorded_source.get("input_sha256") != current_source.get("input_sha256"):
         raise RuntimeError("portable reference inputs differ from the current checkout")
     if document.get("comparison", {}).get("numeric_tolerance") != 0.0:
@@ -1479,9 +1511,15 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         "--compare-reference",
         type=Path,
         metavar="PATH",
-        help="require exact final-stage and selected-checkpoint equality to a saved reference",
+        help=(
+            "require exact final-stage and selected-checkpoint equality to a saved "
+            "reference (default: committed fixture)"
+        ),
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.record_reference is None and args.compare_reference is None:
+        args.compare_reference = DEFAULT_REFERENCE_PATH
+    return args
 
 
 def main() -> int:
