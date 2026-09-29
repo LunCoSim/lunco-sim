@@ -268,6 +268,9 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
                     time.is_paused(),
                 )
             });
+        let physics_hold_reasons = world
+            .get_resource::<lunco_physics::PhysicsHolds>()
+            .map(|holds| holds.reasons().collect::<Vec<_>>());
         let physics_profile = world
             .get_resource::<lunco_physics::PhysicsComputeProfile>()
             .copied();
@@ -332,6 +335,10 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
             ),
             ("fixed_dt_s".to_owned(), b.float(fixed_dt)),
             (
+                "fixed_delta_s".to_owned(),
+                b.float(fixed_snapshot.map_or(f64::NAN, |(delta, _, _)| delta)),
+            ),
+            (
                 "fixed_elapsed_s".to_owned(),
                 b.float(fixed_snapshot.map_or(f64::NAN, |(_, elapsed, _)| elapsed)),
             ),
@@ -371,6 +378,17 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
             (
                 "physics_paused".to_owned(),
                 b.bool(physics_snapshot.is_some_and(|(_, _, paused)| paused)),
+            ),
+            (
+                "physics_holds_available".to_owned(),
+                b.bool(physics_hold_reasons.is_some()),
+            ),
+            (
+                "physics_hold_reasons".to_owned(),
+                physics_hold_reasons.as_ref().map_or_else(
+                    || b.unit(),
+                    |reasons| b.array(reasons.iter().map(|reason| b.string(reason)).collect()),
+                ),
             ),
             (
                 "physics_compute_threads".to_owned(),

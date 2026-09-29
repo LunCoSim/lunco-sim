@@ -1142,10 +1142,16 @@ The whole-simulation guarantee remains open because:
    runs on the browser main thread, so the web loader still needs a Modelica Web
    Worker handoff for a fully non-blocking parse and compile path.
 5. The simulation composition records the observed Compute pool width in
-   `PhysicsComputeProfile`; `clock_snapshot()` returns `physics_profile_known`
-   and the optional `physics_compute_threads` value, which the production
-   scripting task scene checks. The scene-test `--threads 0` profile uses
-   Bevy's default `TaskPoolOptions`, matching GUI `DefaultPlugins`; the normal
+   `PhysicsComputeProfile`; `clock_snapshot()` returns `physics_profile_known`,
+   the optional `physics_compute_threads` value, fixed and physics clock deltas
+   and elapsed time, pause state, and active `PhysicsHolds` reasons. During
+   `FixedUpdate`, `physics_elapsed_s` covers the previous completed Avian step
+   and equals `(sim_tick - 1) * fixed_dt_s`; a hold may clear `physics_dt_s`, so
+   elapsed time is the cycle-count check. The production Rhai replay gate checks
+   clock arithmetic within `1e-9` seconds and compares serialized physics and
+   Modelica state traces exactly (`numeric_tolerance=0`). The scene-test
+   `--threads 0` profile uses Bevy's default `TaskPoolOptions`, matching GUI
+   `DefaultPlugins`; the normal
    headless server entry point currently pins one Compute thread. Bevy's default
    assigns 25% of available threads to IO and AsyncCompute each, clamped to one
    through four, and gives Compute the remaining cores. Avian uses Compute for
