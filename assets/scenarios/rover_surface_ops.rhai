@@ -27,6 +27,19 @@
 const LANDER = "/LanderTest/Lander";
 const DOCK = "/LanderTest/LanderRoverJoint";
 
+fn simulation_dependencies(me, ctx) {
+    let entity_reads = [];
+    let lander = find_path(LANDER);
+    if lander >= 0 { entity_reads.push(lander); }
+    #{
+        modelica_entities: [],
+        entity_reads: entity_reads,
+        entity_writes: [],
+        query_reads: [],
+        required_inputs: [],
+    }
+}
+
 fn on_start(me, ctx) {
     this.lander_settled = false;
     this.release_latched = false;
