@@ -161,10 +161,13 @@ fn on_tick(me, ctx) {
         || !this.rcs_length_fraction.is_finite() || this.rcs_length_fraction <= 0.01 {
         failures.push("RCS command did not reach a derived plume length");
     }
+    // Zero command is followed by the physical spool tail, whose exponential
+    // state remains positive. Check decay here; rocket_engine_plume_defaults
+    // independently tests exact darkness at zero delivered fuel flow.
     if this.zero_activity == () || !this.zero_activity.is_finite() || this.zero_activity > 0.01
-        || this.zero_intensity == () || !this.zero_intensity.is_finite() || this.zero_intensity > 0.0
-        || this.zero_length == () || !this.zero_length.is_finite() || this.zero_length > 0.0 {
-        failures.push("zero throttle did not remove activity, light, and plume length");
+        || this.zero_intensity == () || !this.zero_intensity.is_finite() || this.zero_intensity > this.intensity * 0.01
+        || this.zero_length == () || !this.zero_length.is_finite() || this.zero_length > this.length * 0.15 {
+        failures.push("zero command did not decay the physical spool tail and its plume");
     }
     report_verdict(failures, "LANDER PLUME ACTIVITY", "LANDER_PLUME_ACTIVITY");
 }
