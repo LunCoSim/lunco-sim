@@ -180,10 +180,14 @@ fn on_start(me, ctx) {
     this.failure = "";
     this.doc_id = ();
     this.original_source = ();
+    this.source_captured = false;
+    this.document_ready_check_added = false;
     this.baseline_revision = ();
     this.saved_revision = ();
     this.restore_save_ok = false;
     this.restore_complete = false;
+    this.refresh_pending_seen = false;
+    this.stale_ready_after_pending = false;
 }
 
 fn on_tick(me, ctx) {
@@ -191,40 +195,95 @@ fn on_tick(me, ctx) {
     this.wait_ticks += 1;
 
     if this.phase == 0 {
-        let analyzed = analyze_twin();
-        if analyzed == () || analyzed.ok != true || analyzed.analysis == () {
+        let inspection = ();
+        if this.baseline_revision == () {
+            let analyzed = analyze_twin();
+            if analyzed == () || analyzed.ok != true || analyzed.analysis == () {
+                if this.wait_ticks > REFRESH_TIMEOUT_TICKS {
+                    this.failure = "initial Twin SysML analysis did not become ready";
+                    finish(this.checks, this.failure);
+                    this.done = true;
+                }
+                return;
+            }
+
+            this.checks = initial_analysis_checks(analyzed);
+            this.baseline_revision = analyzed.analysis.source_revision;
+            let document = inspect_source_document();
+            if document.ok != true {
+                this.failure = document.error;
+                finish(this.checks, this.failure);
+                this.done = true;
+                return;
+            }
+            this.doc_id = document.doc_id;
+            inspection = query("InspectSysmlDocument", #{ doc_id: this.doc_id });
+            if inspection == () || inspection.generation == () || inspection.source == ()
+                || inspection.dirty != false
+                || !document.path.ends_with("analysis.sysml") {
+                this.failure = "the indexed Twin source document was not open and clean";
+                finish(this.checks, this.failure);
+                this.done = true;
+                return;
+            }
+            this.original_source = inspection.source;
+            this.source_captured = true;
+            if this.original_source.contains(REFRESH_MARKER) {
+                this.failure = "the source fixture contains a leftover refresh probe marker";
+                finish(this.checks, this.failure);
+                this.done = true;
+                return;
+            }
+        } else {
+            inspection = query("InspectSysmlDocument", #{ doc_id: this.doc_id });
+        }
+
+        if inspection == () || inspection.generation == () || inspection.source == () {
+            this.failure = "the indexed Twin source document could not be inspected";
+            finish(this.checks, this.failure);
+            this.done = true;
+            return;
+        }
+        if !this.source_captured || inspection.source != this.original_source
+            || inspection.dirty != false {
+            this.failure = "the indexed Twin source changed while its document analysis was preparing";
+            finish(this.checks, this.failure);
+            this.done = true;
+            return;
+        }
+        if inspection.analysis_state == "failed" {
+            this.failure = "the indexed Twin document analysis failed before the refresh probe";
+            finish(this.checks, this.failure);
+            this.done = true;
+            return;
+        }
+        if inspection.analysis_state != "ready"
+            || inspection.analysis_generation != inspection.generation {
             if this.wait_ticks > REFRESH_TIMEOUT_TICKS {
-                this.failure = "initial Twin SysML analysis did not become ready";
+                this.failure = "the indexed Twin document analysis did not become ready";
                 finish(this.checks, this.failure);
                 this.done = true;
             }
             return;
         }
+        if !this.document_ready_check_added {
+            this.checks.push(t_true(inspection.analysis_generation == inspection.generation,
+                "the writable Twin source document is backed by its current document analysis"));
+            this.document_ready_check_added = true;
+        }
 
-        this.checks = initial_analysis_checks(analyzed);
-        this.baseline_revision = analyzed.analysis.source_revision;
-        let document = inspect_source_document();
-        if document.ok != true {
-            this.failure = document.error;
-            finish(this.checks, this.failure);
-            this.done = true;
+        let current_analysis = analyze_twin();
+        if current_analysis == () || current_analysis.ok != true
+            || current_analysis.analysis == () {
+            if this.wait_ticks > REFRESH_TIMEOUT_TICKS {
+                this.failure = "the mounted Twin analysis stopped being Ready before the source edit";
+                finish(this.checks, this.failure);
+                this.done = true;
+            }
             return;
         }
-        this.doc_id = document.doc_id;
-        let inspection = query("InspectSysmlDocument", #{ doc_id: this.doc_id });
-        if inspection == () || inspection.generation == () || inspection.source == ()
-            || inspection.analysis_state != "ready" || inspection.dirty != false
-            || !document.path.ends_with("analysis.sysml") {
-            this.failure = "the indexed Twin source document was not open, clean, and analyzed";
-            finish(this.checks, this.failure);
-            this.done = true;
-            return;
-        }
-        this.original_source = inspection.source;
-        this.checks.push(t_true(inspection.analysis_generation == inspection.generation,
-            "the writable Twin source document is backed by its current document analysis"));
-        if this.original_source.contains(REFRESH_MARKER) {
-            this.failure = "the source fixture contains a leftover refresh probe marker";
+        if current_analysis.analysis.source_revision != this.baseline_revision {
+            this.failure = "the mounted Twin source revision changed before the source edit";
             finish(this.checks, this.failure);
             this.done = true;
             return;
@@ -321,9 +380,22 @@ fn on_tick(me, ctx) {
 
     if this.phase == 1 {
         let analyzed = analyze_twin();
+        let refresh_pending = analyzed != () && analyzed.ok == false
+            && analyzed.errors != () && analyzed.errors.len() > 0
+            && analyzed.errors[0].contains("preparing asynchronously");
+        if refresh_pending {
+            this.refresh_pending_seen = true;
+        }
+        if this.refresh_pending_seen && analyzed != () && analyzed.ok == true
+            && analyzed.analysis != ()
+            && analyzed.analysis.source_revision == this.baseline_revision {
+            this.stale_ready_after_pending = true;
+        }
         if analyzed != () && analyzed.ok == true && analyzed.analysis != () {
             let revision = analyzed.analysis.source_revision;
             if revision != this.baseline_revision {
+                this.checks.push(t_true(!this.stale_ready_after_pending,
+                    "the previous Twin revision is not published again after refresh reports Pending"));
                 this.saved_revision = revision;
                 this.checks.push(t_true(analyzed.analysis.source_files.len() == 1
                     && analyzed.analysis.source_files[0] == SOURCE_PATH,
