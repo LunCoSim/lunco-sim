@@ -130,6 +130,7 @@ pub fn create_rectangular_handoff_collar_mesh(
                 outer_resolution,
                 ring,
                 radial_segments,
+                handoff,
             )
         })
         .collect::<Vec<_>>();
@@ -190,7 +191,7 @@ pub fn create_rectangular_handoff_collar_mesh(
         ring_starts.push(positions.len());
         for (x, z_south) in perimeter {
             let z_north = -z_south;
-            let position = position_at(x, z_south);
+            let position = position_at(x, z_south)?;
             let body_position = handoff.dir * (handoff.radius_m + position.y)
                 + handoff.east * x
                 + handoff.north * z_north;
@@ -269,8 +270,25 @@ fn collar_ring_resolution(
     outer_resolution: usize,
     ring: usize,
     radial_segments: usize,
+    handoff: GlobeHandoff,
 ) -> usize {
-    let t = collar_radial_fraction(ring, radial_segments);
+    let radial = collar_radial_fraction(ring, radial_segments);
+    let posting = square_boundary_posting_spacing(handoff.half_extent, inner_resolution)
+        .expect("validated boundary lattice");
+    let min_width = handoff
+        .collar_widths
+        .into_iter()
+        .fold(f64::INFINITY, f64::min);
+    // Keep native connectivity through the edge-slope continuation. Decimating
+    // a thinner strip makes nonlinear perimeter relief form steep sliver faces.
+    let native_fraction = (posting / min_width).min(1.0);
+    let t = if radial >= 1.0 {
+        1.0
+    } else if native_fraction >= 1.0 {
+        0.0
+    } else {
+        ((radial - native_fraction) / (1.0 - native_fraction)).max(0.0)
+    };
     if inner_resolution >= outer_resolution {
         // Preserve the measured perimeter once. Exterior detail falls with
         // distance and converges to the independently sampled sphere boundary.
@@ -517,9 +535,9 @@ fn collar_position(
     x: f64,
     z_south: f64,
     boundary_grid_resolution: usize,
-) -> DVec3 {
-    let height = collar_height(handoff, source, x, -z_south, boundary_grid_resolution);
-    DVec3::new(x, height, z_south)
+) -> Result<DVec3, &'static str> {
+    let height = collar_height(handoff, source, x, -z_south, boundary_grid_resolution)?;
+    Ok(DVec3::new(x, height, z_south))
 }
 
 fn collar_height(
@@ -528,7 +546,7 @@ fn collar_height(
     x: f64,
     z_north: f64,
     boundary_grid_resolution: usize,
-) -> f64 {
+) -> Result<f64, &'static str> {
     if boundary_grid_resolution >= 2
         && x.abs() <= handoff.half_extent
         && z_north.abs() <= handoff.half_extent
@@ -540,9 +558,9 @@ fn collar_height(
             handoff.half_extent,
             boundary_grid_resolution,
         )
-        .unwrap_or_else(|| source.height_at(x, -z_north))
+        .ok_or("collar inner vertex is outside the DEM posting perimeter")
     } else {
-        source.height_at(x, -z_north)
+        Ok(source.height_at(x, -z_north))
     }
 }
 
@@ -1003,7 +1021,13 @@ mod tests {
         let radial_segments = 4;
         let ring_resolutions = (0..=radial_segments)
             .map(|ring| {
-                collar_ring_resolution(resolution, handoff.edge_segments + 1, ring, radial_segments)
+                collar_ring_resolution(
+                    resolution,
+                    handoff.edge_segments + 1,
+                    ring,
+                    radial_segments,
+                    handoff,
+                )
             })
             .collect::<Vec<_>>();
         let mesh = create_rectangular_handoff_collar_mesh(
@@ -1148,12 +1172,9 @@ mod tests {
     fn collar_rings_concentrate_samples_at_the_measured_edge() {
         assert!((collar_radial_fraction(1, 16) - 1.0 / 256.0).abs() < f64::EPSILON);
         assert_eq!(collar_radial_fraction(16, 16), 1.0);
-        let near_edge = collar_ring_resolution(512, 33, 1, 16);
-        let outer = collar_ring_resolution(512, 33, 16, 16);
-        assert!(
-            near_edge > 450 && near_edge < 512,
-            "near-edge resolution was {near_edge}"
-        );
+        let near_edge = collar_ring_resolution(512, 33, 1, 128, handoff());
+        let outer = collar_ring_resolution(512, 33, 16, 16, handoff());
+        assert!(near_edge == 512, "near-edge resolution was {near_edge}");
         assert_eq!(outer, 33);
     }
 
@@ -1375,7 +1396,7 @@ mod tests {
         // Extensions of a finite DEM edge must evaluate the exterior sphere,
         // rather than clamping to the measured corner height.
         let z = HALF_EXTENT + geometry.collar_widths[2];
-        let height = collar_height(&geometry, &source, HALF_EXTENT, -z, 129);
+        let height = collar_height(&geometry, &source, HALF_EXTENT, -z, 129).unwrap();
         assert_eq!(height, source.height_at(HALF_EXTENT, z));
         let radial_segments = 32;
         let inner_resolution = 2049;
@@ -1387,6 +1408,7 @@ mod tests {
                     outer_resolution,
                     ring,
                     radial_segments,
+                    geometry,
                 ) - 1)
             })
             .collect::<Vec<_>>();

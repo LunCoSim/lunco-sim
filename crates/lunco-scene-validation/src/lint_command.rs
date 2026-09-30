@@ -419,7 +419,7 @@ fn live_shader_interface_facts(
         .filter_map(|entity| {
             entity
                 .get::<lunco_terrain_surface::TerrainVisualContinuation>()
-                .map(|continuation| continuation.surface_source)
+                .and_then(|continuation| continuation.authored_look_source)
         })
         .collect();
 

@@ -25,6 +25,7 @@ use lunco_render::SceneCamera;
 use lunco_terrain_core::{
     HeightSource, Square, normal_at_bounded, square_boundary_height_at,
     square_boundary_posting_spacing, square_boundary_sample_coordinate,
+    square_boundary_sample_interval,
 };
 use lunco_terrain_globe::quad_sphere::{
     balance_cube_sphere_lod, cube_to_sphere, subdivide_face, tile_center_uv,
@@ -53,12 +54,23 @@ pub struct GlobeLod {
     /// onto each tile; the binder's content-keyed cache shares one
     /// `ShaderMaterial` per body.
     pub look: ShaderLook,
+    /// Authored declaration supplying the composed material, when present.
+    pub authored_look_source: Option<Entity>,
     /// Vertices per tile side.
     pub res: u32,
     /// Deepest subdivision level near the camera.
     pub max_lod: u32,
     /// `refine when dist < tile_arc · factor` — larger = refine from farther.
     pub lod_distance_factor: f64,
+}
+
+impl GlobeLod {
+    /// Render shell intent. The material binder owns the corresponding Bevy markers.
+    pub(crate) fn render_look(&self) -> ShaderLook {
+        let mut look = self.look.clone();
+        look.no_shadow_cast = true;
+        look
+    }
 }
 
 /// The site's surface values relative to its render datum.
@@ -93,8 +105,8 @@ struct BoundarySignalProfile {
 }
 
 #[derive(Clone)]
-struct BoundaryCollarProfiles {
-    widths: [f64; 4],
+struct BoundaryCollarProfile {
+    width_m: f64,
     signal: BoundarySignalProfile,
 }
 
@@ -105,14 +117,20 @@ struct BoundarySignalValue {
 }
 
 impl SiteSurfaceSource {
-    fn boundary_height(&self, x: f64, z: f64, half_extent: f64, resolution: usize) -> f64 {
+    fn boundary_height(
+        &self,
+        x: f64,
+        z: f64,
+        half_extent: f64,
+        resolution: usize,
+    ) -> Result<f64, &'static str> {
         match self {
             Self::Dem { oracle, datum_m } => {
                 square_boundary_height_at(oracle.as_ref(), x, z, half_extent, resolution)
-                    .unwrap_or_else(|| oracle.height_at(x, z))
-                    - datum_m
+                    .map(|height| height - datum_m)
+                    .ok_or("DEM boundary sample is outside the posting perimeter")
             }
-            Self::Flat { height_m, datum_m } => height_m - datum_m,
+            Self::Flat { height_m, datum_m } => Ok(height_m - datum_m),
         }
     }
 
@@ -127,14 +145,14 @@ impl SiteSurfaceSource {
         }
     }
 
-    fn boundary_collar_width_profiles(
+    fn boundary_collar_profile(
         &self,
         globe: &MeanSphereSource,
         half_extent: f64,
         resolution: usize,
         posting_m: f64,
-    ) -> Result<BoundaryCollarProfiles, &'static str> {
-        let mut widths = [posting_m; 4];
+    ) -> Result<BoundaryCollarProfile, &'static str> {
+        let mut width_m = posting_m;
         let perimeter_len = resolution
             .checked_sub(1)
             .and_then(|side_postings| side_postings.checked_mul(4))
@@ -152,16 +170,14 @@ impl SiteSurfaceSource {
                 (2, along, half_extent),
             ] {
                 let relief =
-                    self.boundary_height(x, z, half_extent, resolution) - globe.height_at(x, z);
+                    self.boundary_height(x, z, half_extent, resolution)? - globe.height_at(x, z);
                 let site_gradient = self.boundary_gradient(x, z, half_extent);
                 let globe_gradient = globe.gradient_at(x, z);
                 let relative_gradient = [
                     site_gradient[0] - globe_gradient[0],
                     site_gradient[1] - globe_gradient[1],
                 ];
-                // A side width follows its outward normal only. At corners the
-                // adjacent side widths form the diagonal collar, so a slope
-                // along the neighbouring edge must not widen this whole side.
+                // Bound the outward slope continuation on either incident edge.
                 let normal_slope = if side < 2 {
                     (site_gradient[0] - globe_gradient[0]).abs()
                 } else {
@@ -173,7 +189,7 @@ impl SiteSurfaceSource {
                 {
                     return Err("DEM boundary continuation contains non-finite relief");
                 }
-                widths[side] = widths[side].max(relief_fade_width(posting_m, continued_relief)?);
+                width_m = width_m.max(relief_fade_width(posting_m, continued_relief)?);
                 let perimeter_index = boundary_perimeter_index(side, index, resolution)
                     .ok_or("DEM boundary perimeter index is invalid")?;
                 perimeter_relief[perimeter_index] = relief;
@@ -181,8 +197,8 @@ impl SiteSurfaceSource {
                 perimeter_gradient_z[perimeter_index] = relative_gradient[1];
             }
         }
-        Ok(BoundaryCollarProfiles {
-            widths,
+        Ok(BoundaryCollarProfile {
+            width_m,
             signal: BoundarySignalProfile {
                 resolution,
                 relief_m: perimeter_relief,
@@ -253,13 +269,8 @@ fn boundary_signal_at(
     along: f64,
 ) -> BoundarySignalValue {
     let n = profile.resolution;
-    // Match the stored raster posting lattice; values retain f64 precision.
-    let half = half_extent as f32;
-    let spacing = (2.0_f32 * half) / (n as f32 - 1.0);
-    let posting = ((along as f32 + half) / spacing).clamp(0.0, n as f32 - 1.0);
-    let lower = (posting.floor() as usize).min(n - 1);
-    let upper = (lower + 1).min(n - 1);
-    let fraction = f64::from(posting - lower as f32);
+    let (lower, upper, fraction) = square_boundary_sample_interval(along, half_extent, n)
+        .expect("validated perimeter signal lattice");
     let sample = |values: &[f64]| {
         let low = values[boundary_perimeter_index(side, lower, n).expect("valid perimeter side")];
         let high = values[boundary_perimeter_index(side, upper, n).expect("valid perimeter side")];
@@ -345,14 +356,25 @@ fn relief_fade_width(posting_m: f64, boundary_relief_m: f64) -> Result<f64, &'st
         .ok_or("DEM collar width exceeds the supported range")
 }
 
-fn collar_radial_segments(collar_m: f64, posting_m: f64) -> usize {
-    // The outer rings use a quadratic radial schedule, so their final spacing
-    // is about twice the collar width divided by the ring count. Keep that
-    // spacing tied to the active crop's resolution: a fraction of the crop
-    // extent made wide, steep shoulders collapse into a handful of visibly
-    // long strips, especially where the rectangular cutout turns a corner.
-    let max_radial_step = (posting_m * 4.0).max(1.0);
-    ((2.0 * collar_m / max_radial_step).ceil() as usize).clamp(16, 128)
+fn collar_radial_segments(collar_m: f64, posting_m: f64) -> Result<usize, &'static str> {
+    if !collar_m.is_finite() || !posting_m.is_finite() || posting_m <= 0.0 || collar_m < posting_m {
+        return Err("DEM exterior dimensions must be finite with at least one posting of width");
+    }
+    // Resolve the one-posting slope continuation and bound radial cubic-fade
+    // interpolation error by a quarter posting under the quadratic ring schedule.
+    let near_edge = (4.0 * collar_m / posting_m).sqrt();
+    let fade_width = collar_m - posting_m;
+    let relief = fade_width * MAX_GLOBE_HANDOFF_RELIEF_GRADE / 1.5;
+    let fade = if fade_width > 0.0 {
+        (12.0 * relief / posting_m).sqrt() * collar_m / fade_width
+    } else {
+        0.0
+    };
+    let required = near_edge.max(fade).ceil().max(16.0);
+    if !required.is_finite() || required > 128.0 {
+        return Err("DEM exterior radial resolution exceeds the 128-ring mesh budget");
+    }
+    Ok(required as usize)
 }
 
 fn integrated_inverse_smootherstep(t: f64) -> f64 {
@@ -472,9 +494,9 @@ impl GlobeHandoff {
             datum_m: border_datum,
         };
         let boundary_profiles =
-            site.boundary_collar_width_profiles(&globe, half_extent, oracle.grid().res, posting_m)?;
-        let collar_widths = boundary_profiles.widths;
-        let collar_m = collar_widths.into_iter().fold(0.0_f64, f64::max);
+            site.boundary_collar_profile(&globe, half_extent, oracle.grid().res, posting_m)?;
+        let collar_m = boundary_profiles.width_m;
+        let collar_widths = [collar_m; 4];
         let max_east = half_extent + collar_widths[0].max(collar_widths[1]);
         let max_north = half_extent + collar_widths[2].max(collar_widths[3]);
         if max_east.hypot(max_north) >= render_radius_m {
@@ -511,7 +533,7 @@ impl GlobeHandoff {
             &source,
             oracle.grid().res,
             edge_segments,
-            collar_radial_segments(collar_m, posting_m),
+            collar_radial_segments(collar_m, posting_m)?,
         )?);
         Ok(Self {
             dir,
@@ -572,7 +594,7 @@ impl GlobeHandoff {
             globe,
             region,
             boundary_signal: site
-                .boundary_collar_width_profiles(&globe, half_extent, 33, half_extent / 16.0)?
+                .boundary_collar_profile(&globe, half_extent, 33, half_extent / 16.0)?
                 .signal,
             collar_widths,
             boundary_posting_m: 0.0,
@@ -1209,6 +1231,7 @@ pub(crate) fn update_globe_lod(
     };
 
     for (body_ent, lod, mut tiles, handoff) in &mut bodies {
+        let render_look = lod.render_look();
         // Camera relative to the body centre in the rotating frame the tiles
         // live in. This is an f64 cross-grid conversion through BigSpace's
         // authoritative cells. LOD identity must never be inferred from the
@@ -1293,20 +1316,19 @@ pub(crate) fn update_globe_lod(
                     Visibility::Hidden,
                     InheritedVisibility::default(),
                     Stationary,
-                    bevy::light::NotShadowCaster,
                     Name::new("Globe DEM handoff collar"),
                     // The body look seeds the material. Cutout admission
                     // waits for the collar's bound, drawable appearance;
                     // the continuation policy composes local maps here.
-                    lod.look.clone(),
+                    render_look.clone(),
                     lunco_core::SystemManaged,
                     ChildOf(lod.surface_grid),
                 ));
                 if let Some(source) = handoff.terrain_source() {
                     collar.insert(lunco_terrain_surface::TerrainVisualContinuation {
                         source,
-                        surface_source: body_ent,
-                        surface_look: lod.look.clone(),
+                        authored_look_source: lod.authored_look_source,
+                        surface_look: render_look.clone(),
                         half_extent_m: handoff.half_extent,
                         collar_widths_m: handoff.collar_widths,
                     });
@@ -1314,7 +1336,7 @@ pub(crate) fn update_globe_lod(
                 let entity = collar.id();
                 tiles.collar_entity = Some(entity);
                 tiles.last_collar_source = handoff.terrain_source();
-                tiles.last_collar_surface_key = Some(lod.look.key());
+                tiles.last_collar_surface_key = Some(render_look.key());
             }
         }
 
@@ -1324,7 +1346,7 @@ pub(crate) fn update_globe_lod(
         // cache for no visual or physical reason.
         if let (Some(entity), Some(handoff)) = (tiles.collar_entity, handoff) {
             let source = handoff.terrain_source();
-            let surface_key = lod.look.key();
+            let surface_key = render_look.key();
             if tiles.last_collar_source != source
                 || tiles.last_collar_surface_key != Some(surface_key)
             {
@@ -1332,8 +1354,8 @@ pub(crate) fn update_globe_lod(
                     commands.entity(entity).insert(
                         lunco_terrain_surface::TerrainVisualContinuation {
                             source,
-                            surface_source: body_ent,
-                            surface_look: lod.look.clone(),
+                            authored_look_source: lod.authored_look_source,
+                            surface_look: render_look.clone(),
                             half_extent_m: handoff.half_extent,
                             collar_widths_m: handoff.collar_widths,
                         },
@@ -1342,7 +1364,7 @@ pub(crate) fn update_globe_lod(
                     commands
                         .entity(entity)
                         .remove::<lunco_terrain_surface::TerrainVisualContinuation>()
-                        .insert(lod.look.clone());
+                        .insert(render_look.clone());
                 }
                 tiles.last_collar_source = source;
                 tiles.last_collar_surface_key = Some(surface_key);
@@ -1632,7 +1654,7 @@ pub(crate) fn update_globe_lod(
             let ent = commands
                 .spawn((
                     Mesh3d(mesh_handle),
-                    lod.look.clone(),
+                    render_look.clone(),
                     coord,
                     TerrainTile,
                     tile_cell,
@@ -1650,28 +1672,8 @@ pub(crate) fn update_globe_lod(
                     // built-in stationary path skip this high-precision leaf
                     // while still allowing floating-origin updates.
                     Stationary,
-                    // NO `NoFrustumCulling`. It was here from the era when tile
-                    // meshes were built at full body-local magnitude (vertices
-                    // ~radius from the entity origin) — an AABB that big and that
-                    // badly centred culls wrongly, and switching it off hid the
-                    // symptom. Meshes are CENTRE-RELATIVE now (see the note at
-                    // `create_quadsphere_tile_mesh` below), so each tile's AABB is
-                    // a tight box about its own origin and ordinary culling is
-                    // correct — which is how `lunco-terrain-surface`'s CDLOD tiles,
-                    // grid-direct children with their own `CellCoord` and the same
-                    // cell-local mesh convention, have always rendered. With ~600
-                    // resident tiles per body and most of them on the far side of
-                    // the sphere or off-screen, submitting the whole set every
-                    // frame was pure draw-call overhead.
-                    //
-                    // The globe is a FEATURELESS sphere of planetary size; as a
-                    // shadow caster it contributes nothing (its night side is
-                    // dark by shading) but at grazing sun elevations (+2.6° at
-                    // Malapert) a site merged onto the sphere sits exactly in
-                    // the shadow map's terminator/acne zone — the whole scene
-                    // flipped lit↔dark frame to frame ("still blinking"). Same
-                    // treatment as the Sun body mesh.
-                    bevy::light::NotShadowCaster,
+                    // Centre-relative meshes use ordinary frustum culling.
+                    // Shadow intent is carried by the generated ShaderLook.
                     Name::new(format!(
                         "Globe tile f{} L{} {},{}",
                         coord.face, coord.level, coord.i, coord.j
@@ -1709,7 +1711,11 @@ pub(crate) fn update_globe_lod(
             }
             commands.entity(*entity).try_insert(target);
         }
-        if let Some(entity) = tiles.collar_entity {
+        // DEM continuation appearance owns its visibility and cutout admission.
+        // Flat handoffs bind the body look directly here.
+        if let Some(entity) = tiles.collar_entity
+            && handoff.is_some_and(|handoff| handoff.terrain_source().is_none())
+        {
             let target = if material_ready.contains(entity) {
                 Visibility::Inherited
             } else {
@@ -1913,7 +1919,7 @@ mod tests {
     }
 
     #[test]
-    fn dem_collar_width_is_derived_per_side_without_resizing_the_crop() {
+    fn dem_collar_has_one_measured_width_without_resizing_the_crop() {
         let mut grid = lunco_terrain_surface::HeightGrid::new_flat(9, 100.0);
         grid.heights.fill(0.0);
         for row in 0..grid.res {
@@ -1935,26 +1941,10 @@ mod tests {
             datum_m,
         };
         let boundary_profiles = site
-            .boundary_collar_width_profiles(&globe, half_extent, oracle.grid().res, posting_m)
+            .boundary_collar_profile(&globe, half_extent, oracle.grid().res, posting_m)
             .unwrap();
-        let boundary_widths = boundary_profiles.widths;
-        let collar_widths = boundary_widths;
-        assert!(
-            collar_widths[1] > 600.0,
-            "the high-relief east edge needs a wider visual shoulder"
-        );
-        assert!(
-            collar_widths[0] < 50.0,
-            "a low-relief west edge stays local"
-        );
-        assert!(
-            collar_widths[2] < 50.0,
-            "a low-relief south edge stays local"
-        );
-        assert!(
-            collar_widths[3] > collar_widths[2],
-            "the north edge width differs from the south edge"
-        );
+        let collar_widths = [boundary_profiles.width_m; 4];
+        assert!(boundary_profiles.width_m > 600.0);
         assert!(
             1.5 * 80.0 / (collar_widths[1] - posting_m)
                 <= MAX_GLOBE_HANDOFF_RELIEF_GRADE + f64::EPSILON
@@ -2008,7 +1998,7 @@ mod tests {
             datum_m,
         };
         let profiles = site
-            .boundary_collar_width_profiles(&globe, half_extent, oracle.grid().res, posting_m)
+            .boundary_collar_profile(&globe, half_extent, oracle.grid().res, posting_m)
             .unwrap();
         let west = boundary_signal_at(&profiles.signal, 0, half_extent, -half_extent);
         let north = boundary_signal_at(&profiles.signal, 3, half_extent, -half_extent);
@@ -2022,7 +2012,7 @@ mod tests {
                 half: half_extent,
             },
             boundary_signal: profiles.signal,
-            collar_widths: profiles.widths,
+            collar_widths: [profiles.width_m; 4],
             boundary_posting_m: posting_m,
         };
         let corner = collar.height_at(-half_extent, -half_extent);
@@ -2051,22 +2041,14 @@ mod tests {
     fn wide_visual_collar_uses_dem_resolution_for_radial_tessellation() {
         let collar_m = 594.0;
         let posting_m = 3.92;
-        let radial_segments = collar_radial_segments(collar_m, posting_m);
-        let largest_step = (0..radial_segments)
-            .map(|ring| {
-                let radial = |index: usize| {
-                    let linear = index as f64 / radial_segments as f64;
-                    linear * linear
-                };
-                (radial(ring + 1) - radial(ring)) * collar_m
-            })
-            .fold(0.0_f64, f64::max);
-
-        assert!(
-            radial_segments > 64,
-            "the measured shoulder got only {radial_segments} radial rings"
-        );
-        assert!(largest_step <= posting_m * 4.0 + f64::EPSILON);
+        let radial_segments = collar_radial_segments(collar_m, posting_m).unwrap();
+        let first_step = collar_m / (radial_segments * radial_segments) as f64;
+        let relief = (collar_m - posting_m) * MAX_GLOBE_HANDOFF_RELIEF_GRADE / 1.5;
+        let fade_error_bound = 3.0 * relief * (collar_m / (collar_m - posting_m)).powi(2)
+            / (radial_segments * radial_segments) as f64;
+        assert!(first_step <= posting_m * 0.25);
+        assert!(fade_error_bound <= posting_m * 0.25);
+        assert!(collar_radial_segments(1e8, posting_m).is_err());
     }
 
     #[test]
@@ -2093,7 +2075,7 @@ mod tests {
             datum_m: datum,
         };
         let profiles = site
-            .boundary_collar_width_profiles(&globe, 100.0, oracle.grid().res, 25.0)
+            .boundary_collar_profile(&globe, 100.0, oracle.grid().res, 25.0)
             .unwrap();
         let collar = BoundaryBlendSource {
             site,

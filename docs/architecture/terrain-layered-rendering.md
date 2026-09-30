@@ -77,15 +77,16 @@ changed while the scene is running.
 
 The required Rhai hook `terrain.lunar_surface_continuation` receives the USD
 declaration and the reflected WGSL interface after the source loads. It returns
-`compose` only for a valid match. The authored policy defaults to `hold`: the
-collar keeps the ready USD body look so the already-clipped globe stays closed,
-while `RuntimeFaults` holds simulation. Setting
-`LUNAR_SURFACE_CONTINUATION_FAILURE_ACTION` to `fallback` in Rhai keeps that same
-body look without binding DEM maps or holding simulation. An invalid/unloaded
-body shader cannot be used as a fallback, so the collar remains hidden until a
-valid body material is ready. `RunLint` reports an error for a declared/actual
-mismatch and for a missing required continuation interface. The linter and
-runtime action consume the same reflected facts.
+`compose` only for a valid match, `wait` while source reflection is pending,
+and `hold` for an invalid interface. The compositor owns DEM collar visibility:
+it admits only the composed look after material binding is ready. Invalid
+interfaces raise `RuntimeFaults` and leave the collar hidden. Globe cutout
+admission consumes that visibility and material readiness, so a cutout cannot
+precede its admitted continuation. `RunLint` reports a declared/actual mismatch
+and a missing required continuation interface from the same reflected facts.
+The composed body look is carried by `GlobeLod`; its authored declaration entity
+is retained only as provenance for validation. Generated body entities are not
+USD material sources.
 
 This composition is visualization-only. It never resamples, blends, edits, or
 replaces DEM heights, terrain queries, or colliders. The separate collar mesh
@@ -93,8 +94,8 @@ continues the measured edge profile outside the crop and reaches the render
 sphere; local DEM appearance maps fade across that same visual shoulder. The
 shoulder width comes from the active crop's measured boundary relief and
 one-sided slope with a 0.20 relief-grade sizing target. One measured perimeter
-signal continues over a posting and fades to the sphere; the same four widths
-control exterior geometry and material fade. A unique corner sample closes
+signal continues over a posting and fades to the sphere. Its maximum relief
+sizes one shared width for exterior geometry and material fade. A unique corner sample closes
 the transition around corners. The rectangular outer boundary keeps the
 collar mesh and globe cutout watertight; this changes neither the DEM nor its
 physics surface.
@@ -177,8 +178,9 @@ static terrain shaders use `csm_far` as that handoff boundary, so the two
 systems do not multiply the same terrain self-shadow in their overlap. Streamed
 tiles always remain directional-shadow receivers, so dynamic-object shadows
 land on the surface. Their terrain self-shadow caster state follows the active
-producer: an active horizon cache marks them `NotShadowCaster` because the
-resident tile set is too large to add to every cascade, while an inactive or
+producer: an active horizon cache sets `ShaderLook.no_shadow_cast`; the canonical
+material binder applies `NotShadowCaster`. The
+resident tile set is too large to add to every cascade. An inactive or
 absent cache leaves them as directional-cascade casters. Thus a scene that
 disables horizon shadows uses CSM terrain shadows instead of silently losing
 terrain shadow casting.
@@ -594,3 +596,33 @@ Remaining work, in dependency order:
   model for "integrate coverage over an orbit / lunar day" (many time samples).
 - **Dynamic-map cadence** — fixed sim-time step vs adaptive driver-motion threshold
   (satellite angular rate); likely the latter.
+
+### Mesh inspection
+
+`TerrainLodStatus` exposes admitted continuation sources, material values, native
+corners, and corner spokes in the active physics frame. `include_geometry: true`
+returns a bounded mesh page: `vertex_offset` and `vertex_limit` (1..4096), plus
+`index_offset` and `index_limit` (1..12288). Positions are available in local and
+active physics coordinates; index values address the complete mesh. This
+explicit query reads retained CPU collar geometry and performs no per-frame
+readback. Finite DEM boundary tiles retain CPU mesh data within the mesh-cache
+budget; interior tiles remain GPU-only. `tiles` lists current visible tiles and
+whether their boundary geometry is inspectable. Supply `mesh_entity` with the
+same paging parameters to read a selected tile's positions and morph positions
+in the active physics frame. `boundary_only: true` selects the finite crop's UV
+perimeter before paging; `vertex_indices` retains original mesh indices. Index
+pages continue to reference the full mesh. Collar and DEM pages use one reader.
+Persistent visual tiles include the current sampling/layout revision in their
+content key; changing shared boundary math requires updating that revision.
+`include_shadow_meshes: true` lists locally visible shadow-casting meshes.
+
+Generated globe/collar appearance derives render-shell shadow intent once from
+`GlobeLod`; image updates and mesh creation consume that same look. The canonical
+material binder is the sole writer of `NotShadowCaster`, including streamed DEM
+cache transitions. Geometry owners do not write competing shadow markers.
+
+Run `lunco://scenarios/tests/terrain_surface_continuation.rhai` on the admitted
+DEM prim with `RunScenarioAsset.target` set to that prim's entity. A scene-owned
+host supplies simulation query authorization. The scenario pages the complete
+native perimeter and compares it to the existing `TerrainHeights` mission
+query; visualization data does not become a second elevation oracle.

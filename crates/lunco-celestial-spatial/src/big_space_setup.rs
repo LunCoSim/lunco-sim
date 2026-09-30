@@ -114,6 +114,7 @@ const CELESTIAL_PICKING_LAYERS: CollisionLayers =
 pub(crate) fn adopt_authored_body_look(
     q_decl: Query<
         (
+            Entity,
             &crate::CelestialBodyDecl,
             &ShaderLook,
             Option<&crate::AuthoredBodyAlbedo>,
@@ -129,11 +130,12 @@ pub(crate) fn adopt_authored_body_look(
     )>,
     mut commands: Commands,
 ) {
-    for (decl, look, authored_albedo) in &q_decl {
+    for (source, decl, look, authored_albedo) in &q_decl {
         for (globe, body, mut lod, tiles) in &mut q_globes {
             if body.ephemeris_id != decl.naif {
                 continue;
             }
+            lod.authored_look_source = Some(source);
             lod.look = if authored_albedo.is_none()
                 && !look
                     .textures
@@ -146,7 +148,7 @@ pub(crate) fn adopt_authored_body_look(
             } else {
                 look.clone()
             };
-            crate::imagery::apply_look_to_tiles(tiles, &lod.look, &mut commands);
+            crate::imagery::apply_look_to_tiles(tiles, &lod, &mut commands);
             info!(
                 "[celestial] body {} adopted the look authored on its prim",
                 decl.naif
@@ -219,14 +221,14 @@ pub fn setup_big_space_hierarchy(
     // (No `AssetServer`: this hierarchy loads no textures — see the imagery note below.)
     // The single world-shell grid (WorldShellPlugin) to nest under.
     q_world_grid: Query<Entity, (With<lunco_spatial::WorldGrid>, With<Grid>)>,
-    body_looks: Query<(&crate::CelestialBodyDecl, &ShaderLook)>,
+    body_looks: Query<(Entity, &crate::CelestialBodyDecl, &ShaderLook)>,
     subsystems: Option<ResMut<lunco_core_runtime::subsystems::SubsystemToggles>>,
     mut missing_look_reported: Local<bool>,
 ) {
-    let Some(earth_look) = body_looks
+    let Some((earth_source, earth_look)) = body_looks
         .iter()
-        .find(|(decl, _)| decl.naif == lunco_celestial::ephemeris_id::EARTH)
-        .map(|(_, look)| look.clone())
+        .find(|(_, decl, _)| decl.naif == lunco_celestial::ephemeris_id::EARTH)
+        .map(|(entity, _, look)| (entity, look.clone()))
     else {
         if !*missing_look_reported {
             error!(
@@ -236,10 +238,10 @@ pub fn setup_big_space_hierarchy(
         }
         return;
     };
-    let Some(moon_look) = body_looks
+    let Some((moon_source, moon_look)) = body_looks
         .iter()
-        .find(|(decl, _)| decl.naif == lunco_celestial::ephemeris_id::MOON)
-        .map(|(_, look)| look.clone())
+        .find(|(_, decl, _)| decl.naif == lunco_celestial::ephemeris_id::MOON)
+        .map(|(entity, _, look)| (entity, look.clone()))
     else {
         if !*missing_look_reported {
             error!(
@@ -570,6 +572,7 @@ pub fn setup_big_space_hierarchy(
             radius_m: earth.radius_m,
             surface_grid: earth_surface_grid,
             look: earth_look,
+            authored_look_source: Some(earth_source),
             res: 32,
             max_lod: 8,
             lod_distance_factor: 2.0,
@@ -666,6 +669,7 @@ pub fn setup_big_space_hierarchy(
             radius_m: moon.radius_m,
             surface_grid: moon_surface_grid,
             look: moon_look,
+            authored_look_source: Some(moon_source),
             res: 32,
             max_lod: 8,
             lod_distance_factor: 2.0,

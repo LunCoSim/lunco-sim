@@ -88,7 +88,6 @@ fn continuation_facts(expected, declared, actual, reflected, valid, shader) {
     facts.source_reflected = reflected;
     facts.source_valid = valid;
     facts.shader_path = shader;
-    facts.fallback_available = true;
     facts
 }
 

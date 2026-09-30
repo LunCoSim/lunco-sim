@@ -3,67 +3,94 @@
 Date: 2026-09-30
 Fixture: Summer Space School Twin, `sim/scenes/traverse_apollo15.usda`
 
-## Current result
+## Result and measured cause
 
-The measured DEM, its mission queries, and physics colliders are unchanged.
-Only the exterior visual continuation and its material composition change.
-The dark corner notch is absent in the new overhead capture. A straight edge
-band remains visible, so this is not complete visual or mission acceptance.
+The four crop corners join the exterior without the vertical wall in close
+oblique production captures. Measured DEM values, mission queries, celestial
+physics radii, and collider construction are unchanged.
 
-## Current contract
+The shared square boundary sampler must vary X on north/south edges and Z on
+west/east edges. Using the edge's fixed Z coordinate as its interpolation
+coordinate produced an approximately 82 m erroneous jump near `(499, -499)`.
+Persisted visual tiles also carried that bad boundary into subsequent launches.
+Visual tile sampling/layout revision 13 is part of the content key, so those
+incompatible bakes cannot be consumed. No cache deletion or alternate loader
+is required.
 
-- `lunco-celestial-spatial` prepares one immutable measured perimeter signal
-  asynchronously and admits it only for the matching input revision. Each
-  exterior sample reads one nearest boundary point; the corner does not sum
-  overlapping side relief. Four side widths define a rectangular fade.
-- `lunco-terrain-globe` keeps native samples on the inner ring, reduces
-  exterior ring density, and clips front-hemisphere globe tiles in their
-  affine orthographic chart. The exterior meets the analytic render sphere.
-- `lunco-terrain-surface` composes the DEM base colour, authored raster weight,
-  surface maps, and lunar photometry into the USD-selected body appearance.
-  `ShaderLookSourceInterface` publishes typed shader defaults for omitted
-  parameters. The shared lighting helpers apply the direct-sun response;
-  the collar performs no heightfield shadow march. Invalid source material
-  parameters report a structured continuation fault.
-- Interior DEM rendering is preserved. Rust geometry and GPU material
-  composition remain generic; Rhai chooses interface admission.
-- Terrain uniforms remain 256 bytes; blueprint uses 240 bytes. Geometry
-  preparation does not run on the physics cadence.
+## Current architecture
 
-## Evidence
+- `lunco-terrain-core` owns the posting interval and piecewise-linear perimeter
+  sampler. Both immutable collar signals and visual DEM boundary bakes consume
+  that lattice; authoritative in-crop mission height queries retain their oracle.
+- `lunco-celestial-spatial` prepares one immutable perimeter signal asynchronously
+  for the admitted crop revision. Each corner has one value and gradient. One
+  width, sized from maximum measured relief, applies to all four sides.
+- `lunco-terrain-globe` preserves the native inner lattice through the first
+  outward posting, then reduces exterior ring density. Radial tessellation
+  resolves the edge continuation and cubic fade; unsupported budgets return a
+  structured preparation error. The outer boundary joins the analytic sphere.
+- `lunco-terrain-surface` owns material composition and collar visibility.
+  `GlobeLod` supplies the current composed body appearance; the authored
+  declaration entity supplies lint provenance. Rhai admits matching declared
+  and reflected interfaces, waits for reflection, and holds on a mismatch.
+  Unadmitted collars remain hidden; globe cutout admission reads readiness and
+  visibility. There is no substitute material path.
+- `ShaderLook` owns shadow intent. Generated globe/collar looks derive their
+  render-shell intent through one owner; the DEM cache binder composes its
+  active self-shadow producer into the same typed intent. The material binder
+  alone writes `NotShadowCaster`. Dynamic objects can still shadow the DEM.
+- `TerrainLodStatus` provides bounded collar and CPU-retained DEM boundary mesh
+  pages through one reader, including active-physics positions and morph
+  targets. Interior tile meshes stay GPU-only; boundary CPU retention is
+  included in the bounded mesh-cache estimate. These reads are explicit
+  diagnostics, not frame or physics work.
 
-- Terrain geometry tests: 14 passed.
-- Celestial handoff tests: 9 passed before the final outer-ring density sizing
-  adjustment; the production build includes that adjustment.
-- Integrated production build passed with `cargo build -p lunco-luncosim
-  --bin luncosim -j 4`.
-- Production `shader_asset_contracts.usda` gate passed at six ticks, including
-  negative shader/interface checks and the 256-byte uniform bound.
-- Skill catalogue validation passed (43 skills); `git diff --check` passed.
-- Owned Apollo session: port 49401, PID 234429, checkout `tutorials`, executable
-  `target/debug/luncosim`. API readiness was healthy, no pending work or
-  runtime fault. The session was shut down through `Exit` after capture.
-- Camera eye `(-450, -1700, -450)`, target `(-450, -1918, -450)`.
-- Capture: `target/apollo-surface-photometry-corner.png`.
-- The earlier integrated run reported a rover leaving finite physics bounds.
-  No mission-level acceptance is established by these visual checks.
-- The scene uses computer time because it omits a root epoch; captures are
-  therefore not a controlled comparison of celestial illumination.
+## Production evidence
 
-## Integration and recovery
+Owned session: PID 363774, API port 49401, `tutorials/target/debug/luncosim`.
+The PID, executable, and working directory were verified before control.
+`/api/ready` reported ready, no hold/fault, and zero pending work. That session
+was stopped with `Exit` after capture.
 
-Terrain geometry commit: `8026b1fca`. Existing main merge resolved in
-`b7d4ea5e1`, preserving stricter failed-load cleanup and deterministic prim
-selection. Terrain integrated in `ca02fc8ab`, then tutorials fast-forwarded.
-The subsequent material correction is committed with this handoff.
+`assets/scenarios/tests/terrain_surface_continuation.rhai` runs on the admitted
+DEM prim through `RunScenarioAsset`. Its production verdict was PASS (14 checks),
+including rejection of an 80 m displaced boundary sample:
 
-The original tracked/staged/untracked state remains recoverable from stash
-`21b2280d88b05f0c95aa4fc59875644511a8a712`. No branch was pushed.
+- Native collar postings checked: 2,036; maximum error 0.0000165915 m.
+- Native rendered DEM postings checked: 2,036; maximum error 0.0000190327 m.
+- Rendered DEM boundary morph displacement: 0 m.
+- All four exterior widths: 594.531803748 m.
+- Collar: 24,044 vertices, approximately 71% fewer than the 82,832-vertex baseline.
 
-## Remaining bounded investigation
+Evidence log: `target/apollo-current-bake-contract.log`.
 
-Trace the visible straight edge band through the actual collar material and
-inner-ring shading in the production scene. Establish the consumed material
-values before further shader changes. Keep the measured DEM and colliders
-unchanged. A close oblique view and a controlled scene epoch are still needed
-for visual acceptance; performance screenshots alone are not profiling.
+| Corner in east/south physics coordinates | Eye | Target | Capture |
+|---|---|---|---|
+| (+X, -Z), reported corner | (540, -1940, -570) | (490, -1998, -490) | `target/apollo-current-bake-low-se.png` |
+| (-X, -Z) | (-560, -1835, -580) | (-490, -1916, -490) | `target/apollo-current-bake-low-sw.png` |
+| (+X, +Z) | (560, -1848, 580) | (490, -1928, 490) | `target/apollo-current-bake-low-ne.png` |
+| (-X, +Z) | (-560, -1830, 580) | (-490, -1910, 490) | `target/apollo-current-bake-low-nw.png` |
+
+Shadows stayed enabled. The fixture selects computer time because it has no
+root epoch; these captures establish geometric joining, not a controlled
+photometric comparison or complete mission acceptance. No FPS claim is made.
+
+## Focused checks
+
+- Square boundary regression: demonstrated failure before correction, PASS
+  after correction and after centralizing the posting interval.
+- `cargo test -p lunco-celestial-spatial -p lunco-terrain-globe collar_ -j 4`:
+  3 celestial and 6 globe math/geometry tests passed.
+- `cargo test -p lunco-terrain-surface shadow_cache_ -j 4`: 2 lifecycle tests passed.
+- Production shader asset gate: PASS, 67 checks, six ticks, exit 0; includes
+  negative interface cases. Log: `target/terrain-final-shader-contracts.log`.
+- Production build: `cargo build -p lunco-luncosim -j 4`.
+- Skill catalogue: 43 skills validated. Final diff whitespace and touched Rust
+  formatting are checked before commit.
+
+## Recovery and integration scope
+
+Original work remains recoverable from stash
+`21b2280d88b05f0c95aa4fc59875644511a8a712`.
+Integrate only these reviewed changes into local main and tutorials. No push
+is authorized. Other sessions and worktrees remain under their current owners.

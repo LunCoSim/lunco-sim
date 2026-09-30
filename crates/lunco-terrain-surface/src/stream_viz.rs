@@ -95,8 +95,8 @@ pub struct TerrainVisualFocus {
 pub struct TerrainVisualContinuation {
     /// Authored finite terrain that supplies the cropped DEM maps.
     pub source: Entity,
-    /// USD-selected celestial body whose appearance is continued over the DEM.
-    pub surface_source: Entity,
+    /// Authored declaration retained for source diagnostics. Runtime reads the composed look.
+    pub authored_look_source: Option<Entity>,
     /// Current composed body look copied from its `GlobeLod` presentation state.
     pub surface_look: ShaderLook,
     pub half_extent_m: f64,
@@ -1404,7 +1404,9 @@ impl LodMeshCache {
 
     fn insert(&mut self, key: MeshCacheKey, mesh: Handle<Mesh>, origin_y: f64) {
         let now = self.tick();
-        let bytes = tile_mesh_bytes(key.2);
+        let last = (1u32 << key.1.depth) - 1;
+        let boundary = key.1.x == 0 || key.1.z == 0 || key.1.x == last || key.1.z == last;
+        let bytes = tile_mesh_bytes(key.2) * if boundary { 2 } else { 1 };
         self.bytes += bytes;
         if let Some(old) = self.map.insert(
             key,
@@ -1531,14 +1533,25 @@ fn assemble_baked_tile(
     resolution: usize,
     morph_end: f32,
 ) -> BakedTile {
-    // RENDER_WORLD only: tile CPU vertex data is never read after upload (physics
-    // uses the collider ring and picking uses the oracle).
+    // Retain only the finite crop boundary meshes for bounded vertex inspection.
+    // Interior tiles remain GPU-only; mission queries and colliders use the oracle.
+    let half = f64::from(oracle.grid().half_extent);
+    let boundary_mesh = tile_mesh.positions.iter().any(|p| {
+        let x = center[0] + f64::from(p[0]);
+        let z = center[1] + f64::from(p[2]);
+        (x.abs() - half).abs() < 1e-4 || (z.abs() - half).abs() < 1e-4
+    });
+    let usage = if boundary_mesh {
+        bevy::asset::RenderAssetUsages::default()
+    } else {
+        bevy::asset::RenderAssetUsages::RENDER_WORLD
+    };
     let mut mesh = grid_mesh(
         tile_mesh.positions,
         tile_mesh.normals,
         tile_mesh.uvs,
         tile_mesh.indices,
-        bevy::asset::RenderAssetUsages::RENDER_WORLD,
+        usage,
     );
     mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, tile_mesh.morph_targets);
     mesh.insert_attribute(ATTRIBUTE_MORPH_NORMAL, tile_mesh.morph_normals);
@@ -1823,6 +1836,8 @@ pub(crate) fn set_param(look: &mut ShaderLook, name: &str, v: ParamValue) {
 pub(crate) fn apply_shadow_cache_to_look(look: &mut ShaderLook, cache: &TileShadowCache) {
     set_texture(look, TextureLayer::ShadowCache, Some(&cache.image));
     set_param(look, "shadow_cache_on", ParamValue::F32(cache.on));
+    // The horizon cache owns terrain self-shadow; the binder applies cast intent.
+    look.no_shadow_cast = cache.on > 0.5;
 }
 
 fn set_texture(look: &mut ShaderLook, layer: TextureLayer, handle: Option<&Handle<Image>>) {
@@ -1985,8 +2000,10 @@ fn lunar_surface_continuation_look(
         .values()
         .get("albedo")
         .or_else(|| dem_source.defaults.get("albedo"));
-    let Some(ParamValue::Vec3(color)) = color else {
-        return Err("DEM material must provide a reflected albedo colour");
+    // USD colours are carried as RGB or opaque RGBA; the shader consumes RGB.
+    let color = match color {
+        Some(ParamValue::Vec3([r, g, b]) | ParamValue::Vec4([r, g, b, _])) => [*r, *g, *b],
+        _ => return Err("DEM material must provide a reflected albedo colour"),
     };
     if color.iter().any(|value| !value.is_finite() || *value < 0.0) {
         return Err("DEM material albedo must be finite and nonnegative");
@@ -2055,7 +2072,6 @@ fn lunar_surface_continuation_look(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LunarSurfaceContinuationAction {
     Compose,
-    Fallback,
     Hold,
     Wait,
 }
@@ -2064,7 +2080,6 @@ impl LunarSurfaceContinuationAction {
     fn parse(value: &str) -> Option<Self> {
         match value {
             "compose" => Some(Self::Compose),
-            "fallback" => Some(Self::Fallback),
             "hold" => Some(Self::Hold),
             "wait" => Some(Self::Wait),
             _ => None,
@@ -2106,13 +2121,6 @@ fn continuation_policy_action(
         (
             "shader_path",
             lunco_hooks::HookValue::str(surface.shader.clone()),
-        ),
-        (
-            "fallback_available",
-            lunco_hooks::HookValue::Bool(
-                source.is_some_and(|source| source.shader == surface.shader && source.source_valid)
-                    && !surface.shader.is_empty(),
-            ),
         ),
     ]);
     let value =
@@ -2174,12 +2182,13 @@ fn bind_continuation_look(
     current: Option<&ShaderLook>,
     visibility: &mut Visibility,
     shader_ready: bool,
+    admitted: bool,
     look: &ShaderLook,
 ) {
     if current != Some(look) {
         commands.entity(target).insert(look.clone());
     }
-    *visibility = if shader_ready {
+    *visibility = if admitted && shader_ready && current == Some(look) {
         Visibility::Inherited
     } else {
         Visibility::Hidden
@@ -2194,8 +2203,8 @@ pub(crate) fn sync_terrain_visual_continuations(
     mut commands: Commands,
     mut removed_derived: RemovedComponents<TerrainDerivedMaps>,
     mut removed_authored: RemovedComponents<TerrainAuthoredMaps>,
-    mut removed_surface_looks: RemovedComponents<ShaderLook>,
-    mut removed_surface_interfaces: RemovedComponents<lunco_materials::ShaderLookSourceInterface>,
+    mut removed_looks: RemovedComponents<ShaderLook>,
+    mut removed_interfaces: RemovedComponents<lunco_materials::ShaderLookSourceInterface>,
     mut removed_shader_ready: RemovedComponents<ShaderLookReady>,
     terrain_sources: Query<
         (
@@ -2218,31 +2227,18 @@ pub(crate) fn sync_terrain_visual_continuations(
             )>,
         ),
     >,
-    surface_sources: Query<(
-        &ShaderLook,
-        Option<&lunco_materials::ShaderLookSourceInterface>,
-    )>,
-    surface_entities: Query<()>,
-    changed_surface_sources: Query<
-        Entity,
-        (
-            With<ShaderLook>,
-            Or<(
-                Changed<ShaderLook>,
-                Changed<lunco_materials::ShaderLookSourceInterface>,
-            )>,
-        ),
-    >,
     mut targets: Query<
         (
             Entity,
             &TerrainVisualContinuation,
             Option<&ShaderLook>,
+            Option<&lunco_materials::ShaderLookSourceInterface>,
             &mut Visibility,
             Has<ShaderLookReady>,
         ),
         With<Mesh3d>,
     >,
+    changed_interfaces: Query<Entity, Changed<lunco_materials::ShaderLookSourceInterface>>,
     changed_targets: Query<Entity, Changed<TerrainVisualContinuation>>,
     changed_shader_ready: Query<Entity, Changed<ShaderLookReady>>,
     scene_transition: Option<Res<lunco_core::SceneTransitionCoordinator>>,
@@ -2251,18 +2247,15 @@ pub(crate) fn sync_terrain_visual_continuations(
     let mut changed_terrain_entities: HashSet<Entity> = changed_terrain_sources.iter().collect();
     changed_terrain_entities.extend(removed_derived.read());
     changed_terrain_entities.extend(removed_authored.read());
-    let mut changed_surface_entities: HashSet<Entity> = changed_surface_sources.iter().collect();
-    let removed_looks: Vec<_> = removed_surface_looks.read().collect();
-    let removed_interfaces: Vec<_> = removed_surface_interfaces.read().collect();
-    changed_terrain_entities.extend(removed_looks.iter().copied());
-    changed_terrain_entities.extend(removed_interfaces.iter().copied());
-    changed_surface_entities.extend(removed_looks);
-    changed_surface_entities.extend(removed_interfaces);
+    changed_terrain_entities.extend(removed_looks.read());
+    let mut changed_interface_entities: HashSet<Entity> = changed_interfaces.iter().collect();
+    changed_interface_entities.extend(removed_interfaces.read());
+    changed_terrain_entities.extend(changed_interface_entities.iter().copied());
     let changed_target_entities: HashSet<Entity> = changed_targets.iter().collect();
     let mut changed_readiness_entities: HashSet<Entity> = changed_shader_ready.iter().collect();
     changed_readiness_entities.extend(removed_shader_ready.read());
     if changed_terrain_entities.is_empty()
-        && changed_surface_entities.is_empty()
+        && changed_interface_entities.is_empty()
         && changed_target_entities.is_empty()
         && changed_readiness_entities.is_empty()
     {
@@ -2271,55 +2264,33 @@ pub(crate) fn sync_terrain_visual_continuations(
 
     let mut changed = targets
         .iter_mut()
-        .filter(|(target, continuation, _, _, _)| {
+        .filter(|(target, continuation, _, _, _, _)| {
             changed_target_entities.contains(target)
                 || changed_readiness_entities.contains(target)
                 || changed_terrain_entities.contains(&continuation.source)
-                || changed_surface_entities.contains(&continuation.surface_source)
+                || changed_interface_entities.contains(target)
         })
         .map(
-            |(target, continuation, current, visibility, shader_ready)| {
+            |(target, continuation, current, reflected, visibility, shader_ready)| {
                 (
                     target,
                     continuation.clone(),
                     current.cloned(),
+                    reflected.cloned(),
                     visibility,
                     shader_ready,
                 )
             },
         )
         .collect::<Vec<_>>();
-    changed.sort_by_key(|(entity, _, _, _, _)| entity.to_bits());
+    changed.sort_by_key(|(entity, _, _, _, _, _)| entity.to_bits());
     let runtime_context = continuation_runtime_context(scene_transition.as_deref());
 
-    for (target, continuation, current, mut visibility, shader_ready) in changed {
-        let (surface_look, reflected_interface) =
-            match surface_sources.get(continuation.surface_source) {
-                Ok((look, reflected)) => (look, reflected),
-                Err(_) => {
-                    // USD may have admitted the body prim before its composed
-                    // ShaderLook is projected. Keep the collar's seeded body look
-                    // until the owner publishes that component; a live entity is
-                    // an unresolved projection, not a terminal shader failure.
-                    bind_continuation_look(
-                        &mut commands,
-                        target,
-                        current.as_ref(),
-                        &mut visibility,
-                        shader_ready,
-                        &continuation.surface_look,
-                    );
-                    if surface_entities.get(continuation.surface_source).is_err() {
-                        raise_continuation_fault(
-                            &mut faults,
-                            target,
-                            &continuation.surface_look,
-                            "USD-selected body entity is no longer present",
-                        );
-                    }
-                    continue;
-                }
-            };
+    for (target, continuation, current, reflected_interface, mut visibility, shader_ready) in
+        changed
+    {
+        let surface_look = &continuation.surface_look;
+        let reflected_interface = reflected_interface.as_ref();
         let policy_action =
             match continuation_policy_action(surface_look, reflected_interface, runtime_context) {
                 Ok(action) => action,
@@ -2330,6 +2301,7 @@ pub(crate) fn sync_terrain_visual_continuations(
                         current.as_ref(),
                         &mut visibility,
                         shader_ready,
+                        false,
                         &continuation.surface_look,
                     );
                     raise_continuation_fault(&mut faults, target, surface_look, reason);
@@ -2352,6 +2324,7 @@ pub(crate) fn sync_terrain_visual_continuations(
                     current.as_ref(),
                     &mut visibility,
                     shader_ready,
+                    false,
                     &continuation.surface_look,
                 );
                 raise_continuation_fault(
@@ -2377,6 +2350,7 @@ pub(crate) fn sync_terrain_visual_continuations(
                         current.as_ref(),
                         &mut visibility,
                         shader_ready,
+                        false,
                         &continuation.surface_look,
                     );
                     raise_continuation_fault(
@@ -2414,6 +2388,7 @@ pub(crate) fn sync_terrain_visual_continuations(
                             current.as_ref(),
                             &mut visibility,
                             shader_ready,
+                            false,
                             &continuation.surface_look,
                         );
                         raise_continuation_fault(&mut faults, target, surface_look, reason);
@@ -2428,6 +2403,7 @@ pub(crate) fn sync_terrain_visual_continuations(
                     current.as_ref(),
                     &mut visibility,
                     shader_ready,
+                    false,
                     &continuation.surface_look,
                 );
                 raise_continuation_fault(
@@ -2437,30 +2413,6 @@ pub(crate) fn sync_terrain_visual_continuations(
                     "the Rhai policy selected compose for an incompatible USD/WGSL interface",
                 );
                 continue;
-            }
-            LunarSurfaceContinuationAction::Fallback
-                if reflected
-                    && reflected_interface.is_some_and(|source| source.source_valid)
-                    && !surface_look.shader.is_empty() =>
-            {
-                surface_look.clone()
-            }
-            LunarSurfaceContinuationAction::Fallback => {
-                bind_continuation_look(
-                    &mut commands,
-                    target,
-                    current.as_ref(),
-                    &mut visibility,
-                    shader_ready,
-                    &continuation.surface_look,
-                );
-                raise_continuation_fault(
-                    &mut faults,
-                    target,
-                    surface_look,
-                    "the Rhai policy selected fallback but the USD body shader is not a valid loaded source",
-                );
-                surface_look.clone()
             }
             LunarSurfaceContinuationAction::Hold => {
                 raise_continuation_fault(
@@ -2482,6 +2434,7 @@ pub(crate) fn sync_terrain_visual_continuations(
             current.as_ref(),
             &mut visibility,
             shader_ready,
+            policy_action == LunarSurfaceContinuationAction::Compose,
             &selected_look,
         );
     }
@@ -2658,7 +2611,7 @@ fn spawn_tile(
     if overlay.mode > 0.5 {
         tile.try_insert(TerrainDiagnosticTile);
     }
-    enforce_streamed_shadow_ownership(&mut tile, shadow.is_some_and(|cache| cache.on > 0.5));
+    tile.try_remove::<bevy::light::NotShadowReceiver>();
     tile.id()
 }
 
@@ -2666,26 +2619,6 @@ fn spawn_tile(
 /// tool. Production map and shadow binders must not mutate that look.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub(crate) struct TerrainDiagnosticTile;
-
-/// Establish the shadow ownership split for a streamed terrain tile.
-///
-/// The active terrain self-shadow producer is authoritative:
-/// - an active horizon cache owns terrain-on-terrain visibility, so the tile
-///   must not cast a duplicate into the directional cascade;
-/// - without an active cache, the directional cascade owns terrain shadows and
-///   the tile must remain a caster.
-///
-/// In both modes the tile remains a shadow receiver, so dynamic objects (the
-/// rover, rocks, and equipment) can cast onto the surface. Applying this at
-/// spawn and cache rebind keeps the two lifecycle paths on one contract.
-fn enforce_streamed_shadow_ownership(tile: &mut EntityCommands<'_>, cache_on: bool) {
-    if cache_on {
-        tile.try_insert(bevy::light::NotShadowCaster);
-    } else {
-        tile.try_remove::<bevy::light::NotShadowCaster>();
-    }
-    tile.try_remove::<bevy::light::NotShadowReceiver>();
-}
 
 /// Cross-terrain tile-streaming progress, derived fresh each frame by
 /// [`update_lod_tiles`]: how much of the WANTED tile set is actually on
@@ -4626,7 +4559,7 @@ pub(crate) fn bind_shadow_cache_to_tiles(
             // Keep already-resident tiles on the same terrain self-shadow
             // ownership contract as newly spawned tiles. They remain ordinary
             // CSM receivers for dynamic-object shadows.
-            enforce_streamed_shadow_ownership(&mut tile, cache.on > 0.5);
+            tile.try_remove::<bevy::light::NotShadowReceiver>();
             if let Ok((mut look, diagnostic)) = looks.get_mut(entity) {
                 if diagnostic.is_none() {
                     apply_shadow_cache_to_look(&mut look, cache);
@@ -5344,7 +5277,6 @@ mod draw_partition_tests {
                 // A resident tile may carry stale shadow flags when its cache
                 // is rebound. The shared helper must restore the current
                 // terrain caster/receiver contract.
-                bevy::light::NotShadowCaster,
                 bevy::light::NotShadowReceiver,
             ))
             .id();
@@ -5373,7 +5305,7 @@ mod draw_partition_tests {
         app.update();
 
         let tile_ref = app.world().entity(tile);
-        assert!(tile_ref.contains::<bevy::light::NotShadowCaster>());
+        assert!(tile_ref.get::<ShaderLook>().unwrap().no_shadow_cast);
         assert!(!tile_ref.contains::<bevy::light::NotShadowReceiver>());
         let look = tile_ref.get::<ShaderLook>().expect("tile look retained");
         assert_eq!(
@@ -5395,7 +5327,6 @@ mod draw_partition_tests {
             .world_mut()
             .spawn((
                 ShaderLook::new("shaders/terrain_layered.wgsl"),
-                bevy::light::NotShadowCaster,
                 bevy::light::NotShadowReceiver,
             ))
             .id();
@@ -5423,7 +5354,7 @@ mod draw_partition_tests {
         app.update();
 
         let tile_ref = app.world().entity(tile);
-        assert!(!tile_ref.contains::<bevy::light::NotShadowCaster>());
+        assert!(!tile_ref.get::<ShaderLook>().unwrap().no_shadow_cast);
         assert!(!tile_ref.contains::<bevy::light::NotShadowReceiver>());
     }
 

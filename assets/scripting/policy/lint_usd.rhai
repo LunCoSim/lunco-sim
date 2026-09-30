@@ -320,12 +320,8 @@ fn control_binding_contract(facts) {
     out
 }
 
-// The runtime continuation action is an authored choice. The safe default
-// faults/holds the simulation; changing this constant to "fallback" makes the
-// visual collar use the existing USD-selected body look without site-local DEM
-// maps until its interface is corrected.
+// A continuation is admitted only after its declared and reflected interfaces match.
 const LUNAR_SURFACE_CONTINUATION_INTERFACE = "lunco.lunar-surface-continuation.v1";
-const LUNAR_SURFACE_CONTINUATION_FAILURE_ACTION = "hold";
 
 fn lunar_surface_continuation_action(facts) {
     if !facts.source_reflected { return #{ action: "wait" }; }
@@ -334,11 +330,7 @@ fn lunar_surface_continuation_action(facts) {
         && facts.actual_interface == facts.expected_interface
         && facts.expected_interface == LUNAR_SURFACE_CONTINUATION_INTERFACE;
     if compatible { return #{ action: "compose" }; }
-    if LUNAR_SURFACE_CONTINUATION_FAILURE_ACTION == "fallback"
-        && facts.fallback_available {
-        return #{ action: "fallback" };
-    }
-    #{ action: LUNAR_SURFACE_CONTINUATION_FAILURE_ACTION }
+    #{ action: "hold" }
 }
 
 fn shader_interface_contract(facts) {

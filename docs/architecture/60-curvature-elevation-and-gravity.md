@@ -33,20 +33,19 @@ the body's USD-selected `UsdShade` material. A shader that accepts the local
 maps declares the same `info:wgsl:interface` and WGSL `//!@interface`
 `lunco.lunar-surface-continuation.v1` contract. The runtime adds only local DEM
 map roles and visual crop parameters to a clone of the body's `ShaderLook`; USD
-continues to own both shader asset paths. The required Rhai action policy holds
-simulation on a bad interface by default while keeping the ready body look on
-the collar, so the globe cutout remains closed. A Rhai-authored `fallback`
-option shows that same body look without holding simulation. `RunLint` checks
-the live USD declaration against the reflected WGSL source.
+continues to own both shader asset paths. The required Rhai action policy admits
+only compatible reflected interfaces; invalid interfaces hold simulation and
+keep the collar hidden. The compositor owns DEM collar visibility, and globe
+cutout admission consumes its material-ready visibility. `RunLint` checks the
+live USD declaration against the reflected WGSL source.
 
 The render shell closes the finite crop; it does not describe measured terrain
-outside it. Each collar side derives its width from that side's measured edge
-relief, outward slope, and posting spacing. A steep edge cannot expand the
-other sides of the square crop. The exterior shoulder continues the measured
-edge slope over one posting,
-then uses a cubic fade to the sphere. Side widths use a 0.20 relief-grade target;
-this is a visual sizing rule, not a measured terrain slope limit. The crop
-interior and its samples are never feathered or altered.
+outside it. One collar width is sized from the largest measured edge relief and
+outward slope continuation over the crop's posting spacing. Every side uses
+that width. The exterior shoulder continues the measured slope over one
+posting, then uses a cubic fade to the sphere. Width uses a 0.20 relief-grade
+sizing target; it is not a measured terrain slope limit. Interior DEM samples,
+mission queries, and colliders are never feathered or altered.
 Each Twin derives its shell datum, posting spacing, measured relief envelope,
 and collar geometry from its own crop. No body-wide raster, download, or
 Apollo-specific identity is part of this contract.
@@ -74,14 +73,15 @@ derived surface or simulation state.
 
 The globe cutout and local terrain use the same orthographic tangent chart.
 One rectangular collar mesh is prepared asynchronously: its inner ring matches
-the measured square crop boundary and each outer side reaches its own extent on
+the measured square crop boundary and each outer side reaches the shared extent on
 the analytic sphere. Globe triangles are clipped against that same rectangle.
-The inner ring retains the crop's exact posting lattice. Exterior rings
-reduce sampling density toward a sphere boundary with at least 32 segments per side. Additional outer samples
+The inner ring retains the crop's exact posting lattice through the one-posting
+slope continuation. Exterior rings then reduce sampling density toward a
+sphere boundary with at least 32 segments per side. Additional outer samples
 bound sphere-chord error to one quarter of the measured posting spacing.
 The cutout and collar share the same orthographic rectangle; clipped boundary
-samples retain both chart coordinates. Material fade uses those same four
-side widths and reaches zero at every outer edge. The boundary signal is
+samples retain both chart coordinates. Material fade uses the same shared
+width and reaches zero at every outer edge. The boundary signal is
 read once from the immutable perimeter, with one sample per corner.
 A local, camera-independent LOD floor refines only the
 band between the crop and the outer cutout, with tile size derived from the

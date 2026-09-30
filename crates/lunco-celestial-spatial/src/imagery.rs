@@ -316,7 +316,7 @@ pub(crate) fn adopt_authored_body_albedo(
             continue;
         };
         lod.look = bind_albedo(&lod.look, request.image.clone());
-        apply_look_to_tiles(&tiles, &lod.look, &mut commands);
+        apply_look_to_tiles(&tiles, &lod, &mut commands);
         bound.0.insert(globe, BoundBodyImagerySource::Authored);
         info!(
             "[celestial] body {} took the ready imagery authored on its prim ({})",
@@ -331,11 +331,8 @@ pub(crate) fn adopt_authored_body_albedo(
 /// therefore changes only future tiles. Updating the component in place lets
 /// the render binder replace its material as soon as the image is ready, with
 /// no deferred despawn/respawn window and no dependence on LOD activity.
-pub(crate) fn apply_look_to_tiles(
-    tiles: &GlobeTiles,
-    look: &lunco_materials::ShaderLook,
-    commands: &mut Commands,
-) {
+pub(crate) fn apply_look_to_tiles(tiles: &GlobeTiles, lod: &GlobeLod, commands: &mut Commands) {
+    let look = lod.render_look();
     for entity in tiles.resident.values() {
         commands.entity(*entity).try_insert(look.clone());
     }
@@ -510,7 +507,7 @@ pub(crate) fn bind_dataset_body_imagery(
 
         let naif_id = request.naif_id;
         lod.look = bind_albedo(&lod.look, request.image.clone());
-        apply_look_to_tiles(&tiles, &lod.look, &mut commands);
+        apply_look_to_tiles(&tiles, &lod, &mut commands);
         bound.0.insert(
             globe,
             BoundBodyImagerySource::Dataset(request.image.clone()),

@@ -106,7 +106,7 @@ collar starts on the measured crop boundary and blends its edge profile to the
 matching sphere outside the crop. Derive its width from measured crop-edge
 relief and one-sided slope, using a 0.20 relief-grade sizing target.
 Continue the slope over one posting and fade the single nearest boundary
-signal toward the sphere. Geometry and material fade share four side widths;
+signal toward the sphere. Geometry and material fade share one width sized from maximum edge relief;
 each corner contributes once. Preserve the native inner posting lattice, then
 reduce exterior ring density to the outer boundary with at least 32 segments per side. Queries and colliders remain bounded to the DEM, whose samples
 stay unchanged. Globe tiles clip against the collar's outer boundary with
@@ -118,9 +118,9 @@ collar reads local maps from the DEM prim and appearance from the body's
 USD-selected `material:binding`. Its shader asset path remains in USD. A
 continuation shader declares matching WGSL and USD
 `lunco.lunar-surface-continuation.v1` interfaces; `RunLint` compares the authored
-declaration with loaded WGSL. Rhai owns failure behavior: `hold` stops
-simulation by default, and an authored `fallback` can show the existing body
-look without local DEM maps.
+declaration with loaded WGSL. Rhai holds simulation for incompatible sources.
+Only the compositor admits a DEM collar's visibility after its composed look
+is bound; globe cutout admission consumes that readiness and visibility.
 
 Keep body curvature publication before the authoritative DEM build. Run the
 DEM-to-globe handoff and globe LOD in
@@ -167,3 +167,9 @@ raster weight with the exterior composition. Source reflection owns omitted
 parameter defaults; the exterior must compose that site colour and lunar
 photometry before fading to the body appearance. Preserve the DEM material
 inside the crop.
+
+For finite DEM joins, compare the collar native perimeter and the rendered DEM
+boundary/morph vertices using bounded `TerrainLodStatus` pages. Inspect each
+corner obliquely with shadows enabled. `ShaderLook` owns shadow intent and the
+material binder owns Bevy cast markers; geometry systems must not compete with
+that reader. Removing a shadow artifact is not proof of geometric continuity.

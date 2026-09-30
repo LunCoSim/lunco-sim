@@ -64,19 +64,26 @@ global LOD follow DEM posting density. No body-wide raster asset is required.
 Derive the visual collar width from this crop's measured edge relief and
 one-sided edge slope with a 0.20 relief-grade sizing target. Continue the
 measured slope over one posting, then fade one nearest-perimeter signal to
-the sphere. Geometry and appearance share four side widths; the native
-inner posting lattice tapers to a outer boundary with at least 32 segments per side. Keep
+the sphere. Geometry and appearance share one width sized from maximum edge relief; the native
+inner posting lattice tapers to an outer boundary with at least 32 segments per side. Keep
 the DEM and all in-crop heights unchanged. Refine the globe only in the band
 between the exact crop and the collar's outer cutout; set the local minimum tile
 size from that handoff footprint, independent of DEM posting density.
 The collar reads map roles from the cropped DEM prim and appearance from the
 body's USD-selected `UsdShade` material. A continuation-capable WGSL shader and
 its USD Shader prim must declare the matching
-`lunco.lunar-surface-continuation.v1` interface. Rhai owns mismatch handling:
-the default holds simulation while retaining the ready body look over the
-cutout; an authored `fallback` option shows that body look without local DEM
-maps and keeps simulation running. `RunLint` checks the composed declaration
-against reflected WGSL. The shader asset path is never selected in Rust.
+`lunco.lunar-surface-continuation.v1` interface. Rhai admits compatible sources,
+waits for reflection, and holds simulation on a mismatch. The compositor keeps
+unadmitted collars hidden; the globe cutout waits for the composed material and
+visibility. `RunLint` checks the composed declaration against reflected WGSL.
+Read the body's composed look from `GlobeLod`, with its authored declaration
+entity as validation provenance. The shader asset path is never selected in Rust. Inspect the actual boundary
+vertices through bounded `TerrainLodStatus` geometry pages; `mesh_entity` selects
+a CPU-retained DEM boundary tile, including its morph positions. Use
+`boundary_only: true` to page only the finite perimeter. When bake sampling math
+changes, update the persistent visual tile cache revision in the same change.
+Check both
+rendered edges against mission queries before accepting a corner join.
 
 The active crop supplies its own georeference, posting spacing, border datum,
 and measured edge profile, so this works with Twin-local crops at different

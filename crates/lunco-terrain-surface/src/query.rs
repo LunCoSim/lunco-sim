@@ -568,7 +568,38 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
         "TerrainLodStatus"
     }
 
-    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let include_geometry =
+            params.get("include_geometry").and_then(ApiValue::as_bool) == Some(true);
+        let range = |offset_name: &str,
+                     limit_name: &str,
+                     maximum: usize|
+         -> Result<(usize, usize), ApiQueryError> {
+            let read = |name: &str, default: usize| -> Result<usize, ApiQueryError> {
+                if params.get(name).is_none() {
+                    return Ok(default);
+                }
+                api_param_u64(params, name)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .ok_or_else(|| {
+                        ApiQueryError::new(
+                            ApiErrorCode::DeserializationError,
+                            format!("TerrainLodStatus: {name} must be an unsigned integer"),
+                        )
+                    })
+            };
+            let offset = read(offset_name, 0)?;
+            let limit = read(limit_name, maximum)?;
+            if limit == 0 || limit > maximum {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    format!("TerrainLodStatus: {limit_name} must be in 1..={maximum}"),
+                ));
+            }
+            Ok((offset, limit))
+        };
+        let (vertex_offset, vertex_limit) = range("vertex_offset", "vertex_limit", 4096)?;
+        let (index_offset, index_limit) = range("index_offset", "index_limit", 12288)?;
         let Some(status) = world.get_resource::<TerrainStreamStatus>() else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
@@ -609,6 +640,176 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 })
             })
             .collect::<Vec<_>>();
+        let Some(mut continuation_query) = QueryState::<(
+            Entity,
+            &crate::stream_viz::TerrainVisualContinuation,
+            Option<&lunco_materials::ShaderLook>,
+            Option<&Visibility>,
+            Has<lunco_materials::ShaderLookReady>,
+            Option<&Mesh3d>,
+        )>::try_new(world) else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "TerrainLodStatus: continuation diagnostics are unavailable",
+            ));
+        };
+        let mut poses =
+            lunco_physics::SimulationPoseReadState::try_new(world).ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::InternalError,
+                    "TerrainLodStatus: active physics frame is unavailable",
+                )
+            })?;
+        let shadow_meshes = if params
+            .get("include_shadow_meshes")
+            .and_then(ApiValue::as_bool)
+            == Some(true)
+        {
+            let Some(mut query) = QueryState::<(
+                Entity,
+                &Mesh3d,
+                Option<&Name>,
+                &Visibility,
+                Has<bevy::light::NotShadowCaster>,
+                Option<&crate::stream_viz::LodTileOf>,
+            )>::try_new(world) else {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::InternalError,
+                    "TerrainLodStatus: shadow mesh diagnostics are unavailable",
+                ));
+            };
+            Some(query.iter(world).filter(|(_, _, _, visibility, disabled, _)| **visibility != Visibility::Hidden && !disabled)
+                .map(|(entity, _, name, _, _, tile)| {
+                    let pose = poses.pose(world, entity);
+                    api_value!({"entity": entity.to_bits(), "name": name.map(Name::as_str), "terrain_source": tile.map(|tile| tile.0.to_bits()), "position": pose.map(|(position, _)| position.0.to_array())})
+                }).collect::<Vec<_>>())
+        } else {
+            None
+        };
+        let boundary_only = params.get("boundary_only").and_then(ApiValue::as_bool) == Some(true);
+        let geometry_page = |mesh: &Mesh3d, pose: Option<(DVec3, bevy::math::DQuat)>| {
+            world.get_resource::<Assets<Mesh>>()?.get(&mesh.0).map(|mesh| {
+                let positions = mesh.try_attribute(Mesh::ATTRIBUTE_POSITION).ok().and_then(|p| p.as_float3());
+                let indices = mesh.try_indices().ok();
+                let uvs = mesh.try_attribute(Mesh::ATTRIBUTE_UV_0).ok().and_then(|p| match p {
+                    bevy::mesh::VertexAttributeValues::Float32x2(values) => Some(values.as_slice()),
+                    _ => None,
+                });
+                let selected = positions.map(|positions| (0..positions.len()).filter(|&i| {
+                    if !boundary_only { return true; }
+                    uvs.and_then(|uvs| uvs.get(i)).is_some_and(|uv| {
+                        let on_edge = |v: f32| v.abs() < 1e-6 || (v - 1.0).abs() < 1e-6;
+                        (on_edge(uv[0]) && (0.0..=1.0).contains(&uv[1]))
+                        || (on_edge(uv[1]) && (0.0..=1.0).contains(&uv[0]))
+                    })
+                }).collect::<Vec<_>>());
+                let page = selected.as_ref().map(|indices| indices.iter().skip(vertex_offset).take(vertex_limit).copied().collect::<Vec<_>>());
+                let physical = |p: [f32; 3]| pose.map(|(position, rotation)|
+                    (position + rotation * DVec3::from_array(p.map(f64::from))).to_array());
+                let morph = mesh.try_attribute(lunco_materials::ATTRIBUTE_MORPH_TARGET).ok().and_then(|p| p.as_float3());
+                api_value!({
+                    "vertex_count": selected.as_ref().map(|p| p.len()),
+                    "vertex_indices": page.clone(),
+                    "vertex_offset": vertex_offset,
+                    "positions": positions.zip(page.as_ref()).map(|(p, indices)| indices.iter().map(|&i| p[i]).collect::<Vec<_>>()),
+                    "physical_positions": positions.zip(page.as_ref()).map(|(p, indices)| indices.iter().map(|&i| physical(p[i])).collect::<Vec<_>>()),
+                    "physical_morph_positions": morph.zip(page.as_ref()).map(|(p, indices)| indices.iter().map(|&i| p.get(i).copied().and_then(physical)).collect::<Vec<_>>()),
+                    "index_offset": index_offset,
+                    "index_count": indices.map(|i| i.len()),
+                    "indices": indices.map(|i| i.iter().skip(index_offset).take(index_limit).collect::<Vec<_>>()),
+                })
+            })
+        };
+        let mesh_entity = if params.get("mesh_entity").is_some() {
+            Some(api_param_u64(params, "mesh_entity").ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "TerrainLodStatus: mesh_entity must be an unsigned integer",
+                )
+            })?)
+        } else {
+            None
+        };
+        let tiles = if include_geometry {
+            QueryState::<(Entity, &crate::stream_viz::LodTileOf, &Mesh3d, Option<&Visibility>)>::try_new(world).map(|mut query| {
+                query.iter(world).filter(|(entity, _, _, visibility)|
+                    mesh_entity.is_none_or(|wanted| wanted == entity.to_bits())
+                    && !visibility.is_some_and(|v| *v == Visibility::Hidden))
+                    .map(|(entity, owner, mesh, _)| {
+                        let pose = poses.pose(world, entity).map(|(p,r)| (p.0,r.0));
+                        let vertex_count = world.get_resource::<Assets<Mesh>>().and_then(|assets| assets.get(&mesh.0))
+                            .and_then(|mesh| mesh.try_attribute(Mesh::ATTRIBUTE_POSITION).ok())
+                            .and_then(|p| p.as_float3()).map(|p| p.len());
+                        api_value!({"entity": entity.to_bits(), "source": owner.0.to_bits(),
+                            "vertex_count": vertex_count, "boundary_inspectable": vertex_count.is_some(),
+                            "geometry": mesh_entity.and_then(|_| geometry_page(mesh, pose))})
+                    }).collect::<Vec<_>>()
+            })
+        } else {
+            None
+        };
+        let mut continuations: Vec<_> = continuation_query.iter(world).map(|(entity, continuation, look, visibility, ready, mesh)| {
+            let source = world.get::<lunco_materials::ShaderLook>(continuation.source);
+            let source_reflection = world.get::<lunco_materials::ShaderLookSourceInterface>(continuation.source);
+            let parameters = look.map(|look| look.values().iter().map(|(name, value)| {
+                api_value!({"name": name, "values": value.as_floats()})
+            }).collect::<Vec<_>>());
+            let vertex_count = mesh.and_then(|mesh| world.get_resource::<Assets<Mesh>>()?.get(&mesh.0)).map(|mesh| mesh.count_vertices());
+            let oracle = world.get::<DemHeightField>(continuation.source).map(|field| field.0.as_ref());
+            let pose = poses.pose(world, entity);
+            let inner_corners = mesh.and_then(|mesh| world.get_resource::<Assets<Mesh>>()?.get(&mesh.0))
+                .and_then(|mesh| mesh.try_attribute(Mesh::ATTRIBUTE_POSITION).ok())
+                .and_then(|positions| positions.as_float3())
+                .map(|positions| positions.iter().filter(|p| {
+                    let half = continuation.half_extent_m;
+                    ((p[0] as f64).abs() - half).abs() < half * 1e-6
+                    && ((p[2] as f64).abs() - half).abs() < half * 1e-6
+                }).map(|p| {
+                    let local = DVec3::from_array(p.map(f64::from));
+                    let physical = pose.map(|(position, rotation)| (position.0 + rotation.0 * local).to_array());
+                    api_value!({"local": *p, "physical": physical})
+                }).collect::<Vec<_>>());
+            let geometry = if include_geometry {
+                mesh.and_then(|mesh| geometry_page(mesh, pose.map(|(p,r)| (p.0,r.0))))
+            } else { None };
+            let corner_spokes = mesh.and_then(|mesh| world.get_resource::<Assets<Mesh>>()?.get(&mesh.0))
+                .and_then(|mesh| mesh.try_attribute(Mesh::ATTRIBUTE_POSITION).ok())
+                .and_then(|positions| positions.as_float3())
+                .map(|positions| positions.iter().filter(|p| {
+                    let half = continuation.half_extent_m;
+                    let widths = continuation.collar_widths_m;
+                    let tx = ((p[0] as f64).abs() - half) / widths[if p[0] < 0.0 { 0 } else { 1 }];
+                    let tz = ((p[2] as f64).abs() - half) / widths[if p[2] < 0.0 { 3 } else { 2 }];
+                    tx >= -1e-6 && tz >= -1e-6 && (tx - tz).abs() < 1e-6
+                }).map(|p| {
+                    let local = DVec3::from_array(p.map(f64::from));
+                    let physical = pose.map(|(position, rotation)| (position.0 + rotation.0 * local).to_array());
+                    api_value!({"local": *p, "physical": physical})
+                }).collect::<Vec<_>>());
+            api_value!({
+                "entity": entity.to_bits(),
+                "source": continuation.source.to_bits(),
+                "surface_shader": continuation.surface_look.shader.as_str(),
+                "authored_look_source": continuation.authored_look_source.map(|source| source.to_bits()),
+                "half_extent_m": continuation.half_extent_m,
+                "widths_m": continuation.collar_widths_m,
+                "shader": look.map(|look| look.shader.as_str()),
+                "source_shader": source.map(|look| look.shader.as_str()),
+                "source_reflected": source_reflection.is_some(),
+                "source_valid": source_reflection.map(|source| source.source_valid),
+                "ready": ready,
+                "hidden": visibility.is_some_and(|visibility| *visibility == Visibility::Hidden),
+                "vertex_count": vertex_count,
+                "source_resolution": oracle.map(|oracle| oracle.grid().res),
+                "source_datum_m": oracle.map(|oracle| oracle.grid().border_datum()),
+                "position_frame": "active_physics",
+                "inner_corners": inner_corners,
+                "corner_spokes": corner_spokes,
+                "geometry": geometry,
+                "parameters": parameters,
+            })
+        }).collect();
+        continuations.sort_by_key(|row| row.get("entity").and_then(ApiValue::as_u64));
         Ok(Some(api_value!({
             "config": {
                 "pixel_error": profile.terrain_lod_pixel_error,
@@ -637,6 +838,9 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 .and_then(|viewport| viewport.active_camera)
                 .map(|entity| entity.to_bits()),
             "visual_foci": visual_foci,
+            "continuations": continuations,
+            "shadow_meshes": shadow_meshes,
+            "tiles": tiles,
         })))
     }
 }

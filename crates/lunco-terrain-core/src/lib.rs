@@ -63,7 +63,7 @@ pub use quantize::{QuantizedHeightSource, quantize};
 pub use source::{
     AnalyticHeightSource, BoundedHeightSource, CompositeHeightSource, HeightSource,
     normal_at_bounded, square_boundary_height_at, square_boundary_posting_spacing,
-    square_boundary_sample_coordinate,
+    square_boundary_sample_coordinate, square_boundary_sample_interval,
 };
 pub use tile::{TileCoord, TileGrid};
 pub use transfer::{HAZARD_CLIFF, HAZARD_SAFE, HAZARD_WARN, Rgba, TransferFn, hazard_color};

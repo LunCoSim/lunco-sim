@@ -21,36 +21,10 @@ use crate::band::SurfaceBand;
 use crate::oracle::SurfaceOracle;
 use crate::tile_mesh::{TileMesh, bake_tile_mesh_with_boundary};
 
-/// Bump when `bake_tile_mesh` math (heights, normals eps, morph snap, edge masks,
-/// detail gating) or the blob layout changes.
-/// v2: crater profile is band-limited per tile step and continuous at its reach
-/// (the layer's parameter `content_key` is unchanged, so only a version bump
-/// retires tiles baked with the old aliasing profile).
-/// v3: shading-normal `eps` is a fixed world scale across LOD depths (was
-/// per-depth → per-depth brightness steps under the normal-driven lunar BRDF).
-/// v4: vertex heights gated at 2·step (true Nyquist — 1·step kept rim-scale
-/// features right at the sampling limit → mid-field sawtooth craters); morph
-/// targets sample a 4·step parent-gated surface (were this tile's finer heights
-/// on the 2×-spaced even lattice → aliased morph band + pop at the tile swap).
-/// v5: vertex Y is now rebased by the tile-centre surface height (`origin_y`), so
-/// a tile's mesh is LOCAL to its own big_space `CellCoord` in Y as well as X/Z
-/// (DEM scenes anchored at absolute lunar elevation put geometry ~2 km from the
-/// tile origin — one cell off the content — breaking LOD/culling/colliders).
-/// v7: over-zoom craterlet rims sampling-width-widened + reach-tail subtracted
-/// (`crater_profile_rim_limited`) — tile heights changed.
-// 8: fine normals moved from fixed 0.5 m probes to the padded-lattice central
-// difference (T14) — identical keys would otherwise ship old-stencil normals.
-/// v9: morph normals are the parent lattice's own central difference (sampled
-/// once as a padded `(even+2)²` lattice) instead of a 4-tap 0.5 m analytic probe
-/// per even vertex — same contract, computed the way the parent computes it, and
-/// ~44 % fewer oracle samples per tile.
-/// v10: seam walls were removed; edge membership is serialized for deterministic
-/// topology-driven vertex stitching, and morph targets preserve parent edge X/Z.
-/// v11: DEM perimeter tiles include the shared posting-linear globe boundary and
-/// a triangulated async-baked strip into the band-limited tile interior.
-/// v12: perimeter normals use the native posting spacing shared with globe
-/// boundary shading, rather than the much coarser tile-vertex spacing.
-const CACHE_FORMAT_VERSION: u64 = 12;
+/// Current geometry/layout contract for persisted visual tile bakes. Bump on
+/// changes to sampling math, boundary topology, normals, morphs, or blob layout.
+/// The revision is part of the content key; incompatible bakes cannot be read.
+const CACHE_FORMAT_VERSION: u64 = 13;
 
 /// One tile bake as a [`lunco_precompute::Bake`] entry.
 struct TileBake<'a> {

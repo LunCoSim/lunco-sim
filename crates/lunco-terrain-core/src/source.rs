@@ -80,10 +80,9 @@ pub fn normal_at_bounded(
 
 /// Piecewise-linear height on the measured posting line of a square raster.
 ///
-/// Both the globe cutout and the local terrain boundary evaluate this same
-/// function. Globe triangles can intersect the square edge between raster
-/// postings; returning the linear posting segment there keeps those additional
-/// vertices on the exact same rendered boundary as the surface tile mesh.
+/// The collar inner ring and local terrain boundary evaluate this same function.
+/// Tile edges may intersect between raster postings; linear interpolation keeps
+/// those additional vertices on the same rendered boundary as the native ring.
 /// `half_extent` and posting positions follow the raster's `f32` geometry
 /// contract, while sampled heights remain `f64`.
 pub fn square_boundary_height_at(
@@ -93,9 +92,6 @@ pub fn square_boundary_height_at(
     half_extent: f64,
     resolution: usize,
 ) -> Option<f64> {
-    let spacing = square_boundary_posting_spacing(half_extent, resolution)? as f32;
-    let half_f32 = half_extent as f32;
-
     let half = half_extent.abs();
     let tolerance = (half * 1.0e-9).max(1.0e-6);
     let x_edge = (x.abs() - half).abs() <= tolerance;
@@ -106,25 +102,39 @@ pub fn square_boundary_height_at(
 
     // At a corner either edge gives the same authored endpoint. Prefer X so
     // all consumers resolve corners in one deterministic direction.
-    let (edge_x, along, along_is_z) = if x_edge {
-        (x.signum() * half_extent, z, true)
-    } else {
-        (x, z.signum() * half_extent, false)
-    };
-    let q = ((along as f32 + half_f32) / spacing).clamp(0.0, resolution as f32 - 1.0);
-    let lower = (q.floor() as usize).min(resolution - 1);
-    let upper = (lower + 1).min(resolution - 1);
-    let t = (q - lower as f32) as f64;
+    let (along, along_is_z) = if x_edge { (z, true) } else { (x, false) };
+    let (lower, upper, t) = square_boundary_sample_interval(along, half_extent, resolution)?;
     let sample = |index: usize| {
         let coordinate = square_boundary_sample_coordinate(index, resolution, half_extent)?;
         if along_is_z {
-            Some(source.height_at(edge_x, coordinate))
+            Some(source.height_at(x.signum() * half_extent, coordinate))
         } else {
             Some(source.height_at(coordinate, z.signum() * half_extent))
         }
     };
     let low = sample(lower)?;
     Some(low + (sample(upper)? - low) * t)
+}
+
+/// Posting indices and interpolation weight on the raster's render lattice.
+/// Shared by measured boundary heights and immutable perimeter signal sampling.
+pub fn square_boundary_sample_interval(
+    along: f64,
+    half_extent: f64,
+    resolution: usize,
+) -> Option<(usize, usize, f64)> {
+    if !along.is_finite() {
+        return None;
+    }
+    let spacing = square_boundary_posting_spacing(half_extent, resolution)? as f32;
+    let half = half_extent as f32;
+    let posting = ((along as f32 + half) / spacing).clamp(0.0, resolution as f32 - 1.0);
+    let lower = (posting.floor() as usize).min(resolution - 1);
+    Some((
+        lower,
+        (lower + 1).min(resolution - 1),
+        f64::from(posting - lower as f32),
+    ))
 }
 
 /// Physical spacing between the authored postings of a square raster edge.
@@ -345,6 +355,25 @@ mod tests {
     impl HeightSource for Ramp {
         fn height_at(&self, x: f64, _z: f64) -> f64 {
             2.0 * x
+        }
+    }
+
+    #[test]
+    fn square_boundary_preserves_both_axes_on_every_edge() {
+        struct Plane;
+        impl HeightSource for Plane {
+            fn height_at(&self, x: f64, z: f64) -> f64 {
+                2.0 * x + 3.0 * z
+            }
+        }
+        for along in [-10.0, -7.5, -5.0, -2.5, 0.0, 2.5, 5.0, 7.5, 10.0] {
+            for (x, z) in [(-10.0, along), (10.0, along), (along, -10.0), (along, 10.0)] {
+                let sampled = square_boundary_height_at(&Plane, x, z, 10.0, 5).unwrap();
+                assert!(
+                    (sampled - Plane.height_at(x, z)).abs() < 1e-12,
+                    "boundary ({x}, {z}) sampled {sampled}"
+                );
+            }
         }
     }
 
