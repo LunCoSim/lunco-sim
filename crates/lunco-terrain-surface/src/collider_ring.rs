@@ -1574,9 +1574,7 @@ fn joint_component(seed: Entity, adj: &HashMap<Entity, Vec<Entity>>) -> Vec<Enti
     members
 }
 
-/// Numerical tolerance for the authored initial-pose contract. This is not a
-/// placement clearance: a body at the surface is valid, while any measurable
-/// penetration remains an authoring error.
+/// Numerical tolerance for contact-query round-off during initial-pose checks.
 const INITIAL_POSE_TOLERANCE: f64 = 1.0e-6;
 
 #[derive(Clone)]
@@ -1767,7 +1765,28 @@ fn exact_static_support_penetration(
 pub(crate) struct InitialPhysicsLifecycle<'w, 's> {
     active_frame: Res<'w, lunco_spatial::ActivePhysicsFrame>,
     coordinator: Option<Res<'w, lunco_core::SceneTransitionCoordinator>>,
+    scene_mount: Option<Res<'w, lunco_core::SceneMountState>>,
+    scene_projection: Query<
+        'w,
+        's,
+        Entity,
+        (
+            With<lunco_usd_bevy_scene::UsdPrimPath>,
+            Or<(
+                With<lunco_usd_bevy_scene::UsdSceneProjectionQueued>,
+                With<lunco_usd_bevy_scene::UsdSceneAwaitingStage>,
+                (
+                    With<lunco_usd_bevy_scene::UsdSceneProjected>,
+                    Without<lunco_usd_sim_core::UsdSimProcessed>,
+                ),
+            )>,
+        ),
+    >,
+    scene_roots: Query<'w, 's, (), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
+    scene_entities: Query<'w, 's, Entity>,
+    parents: Query<'w, 's, &'static ChildOf>,
     topology_wait_logged: Local<'s, bool>,
+    scene_projection_wait_logged: Local<'s, bool>,
     paused: Query<
         'w,
         's,
@@ -1859,7 +1878,7 @@ fn resolve_initialization_penetration(
             }
             findings.push(lunco_core::RuntimeDiagnostic {
                 code: "physics-initialization-terrain-penetration".to_string(),
-                severity: lunco_core::DiagnosticSeverity::Warning,
+                severity: lunco_core::DiagnosticSeverity::Info,
                 producer: "physics-initialization".to_string(),
                 subject: subject_label.to_string(),
                 message: format!(
@@ -1947,7 +1966,6 @@ pub(crate) fn validate_initial_physics_poses(
     )>,
     dynamics: Query<(&RigidBody, Option<&lunco_core::PhysicsStatePending>)>,
     joints: JointGraph,
-    parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial_transforms: Query<(Option<&CellCoord>, &Transform)>,
     holds: Option<Res<lunco_physics::PhysicsHolds>>,
@@ -1970,6 +1988,7 @@ pub(crate) fn validate_initial_physics_poses(
     }
     if q_needs.is_empty() {
         *lifecycle.topology_wait_logged = false;
+        *lifecycle.scene_projection_wait_logged = false;
         findings.sort_by(|left, right| {
             (&left.subject, &left.code, &left.message).cmp(&(
                 &right.subject,
@@ -1979,6 +1998,53 @@ pub(crate) fn validate_initial_physics_poses(
         });
         diagnostics.replace_producer("physics-initialization", findings);
         return;
+    }
+    // Support checks must see the complete active scene's physics projection.
+    // A dynamic body can otherwise validate before a later bounded USD batch
+    // publishes the static ramp or ground collider it overlaps.
+    if let Some(active_root) = lifecycle
+        .scene_mount
+        .as_deref()
+        .and_then(lunco_core::SceneMountState::active_root)
+    {
+        if !lifecycle.scene_roots.contains(active_root) {
+            if !*lifecycle.scene_projection_wait_logged {
+                info!("[terrain] initial pose validation waiting for the active USD scene root");
+                *lifecycle.scene_projection_wait_logged = true;
+            }
+            return;
+        }
+        let incomplete_projection_count = lifecycle
+            .scene_projection
+            .iter()
+            .filter(|&entity| {
+                match lunco_usd_bevy_scene::scene_root_ancestor(
+                    entity,
+                    &lifecycle.scene_roots,
+                    &lifecycle.parents,
+                    &lifecycle.scene_entities,
+                ) {
+                    Ok(Some(root)) => root == active_root,
+                    Ok(None) => false,
+                    Err(_) => true,
+                }
+            })
+            .count();
+        if incomplete_projection_count > 0 {
+            if !*lifecycle.scene_projection_wait_logged {
+                info!(
+                    "[terrain] initial pose validation waiting for {incomplete_projection_count} active-scene USD prim projection(s)"
+                );
+                *lifecycle.scene_projection_wait_logged = true;
+            }
+            return;
+        }
+    }
+    if *lifecycle.scene_projection_wait_logged {
+        info!(
+            "[terrain] initial pose validation resumed after active-scene physics projection settled"
+        );
+        *lifecycle.scene_projection_wait_logged = false;
     }
     // Joint entities are projected asynchronously from USD. Do not validate an
     // incomplete assembly: the authored topology is part of the initial-state
@@ -2013,7 +2079,7 @@ pub(crate) fn validate_initial_physics_poses(
         let (terrain_world, terrain_rotation) = lunco_spatial::coords::grid_relative_pose(
             terrain,
             lifecycle.active_frame.0,
-            &parents,
+            &lifecycle.parents,
             &grids,
             &spatial_transforms,
         )

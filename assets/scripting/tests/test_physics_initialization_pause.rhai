@@ -1,6 +1,5 @@
-// A measured terrain penetration must pause only its articulated object.
-// Every paused subject stays at its authored pose while independent bodies
-// remain admitted and scene readiness continues.
+// Deep terrain penetration pauses only its articulated object. Small
+// wheel-rest overlap remains admitted; both decisions preserve scene readiness.
 
 const RED_BALLOON_PATH = "/SandboxScene/RedBalloon";
 const SKID_BATTERY_PATH = "/SandboxScene/Skid_Battery_Thermal_1";
@@ -77,30 +76,34 @@ fails.push(t_true(red_balloon_pause_diagnostic,
 fails.push(t_true(skid_battery != () && skid_battery.ok != false,
     "the authored Skid battery body is queryable"));
 fails.push(t_eq(skid_battery.physics_initialization_pending, false,
-    "the Skid battery no longer blocks physics admission"));
+    "the Skid battery initialization decision is complete"));
 fails.push(t_eq(skid_battery.physics_admission_requested, false,
-    "the Skid battery no longer requests dynamic admission while paused"));
-fails.push(t_eq(skid_battery.physics_initialization_paused, true,
-    "the Skid battery is paused by the initialization policy"));
-fails.push(t_eq(skid_battery.physics_object_paused, true,
-    "the reusable physics object pause covers the Skid battery"));
+    "the admitted Skid battery no longer requests dynamic admission"));
+fails.push(t_eq(skid_battery.physics_initialization_paused, false,
+    "the normal Skid battery rover is not paused"));
+fails.push(t_eq(skid_battery.physics_initialization_invalid, false,
+    "the normal Skid battery rover is not marked as an invalid pose"));
+fails.push(t_eq(skid_battery.physics_object_paused, false,
+    "the reusable physics pause leaves the Skid battery active"));
 fails.push(t_eq(skid_battery.physics_state_pending, false,
     "the Skid battery has left the world readiness gate"));
-fails.push(t_eq(skid_battery.rigid_body_disabled, true,
-    "the Skid battery remains disabled while paused"));
-fails.push(t_eq(skid_battery.collider_disabled, true,
-    "the Skid battery body collider is disabled while paused"));
-fails.push(t_true(skid_battery_pause_diagnostic,
-    "the paused Skid battery remains visible in runtime diagnostics"));
+fails.push(t_eq(skid_battery.body_mode, "dynamic",
+    "the normal Skid battery rover enters dynamic physics"));
+fails.push(t_eq(skid_battery.rigid_body_disabled, false,
+    "the normal Skid battery rover remains enabled"));
+fails.push(t_eq(skid_battery.collider_disabled, false,
+    "the normal Skid battery rover collider remains enabled"));
+fails.push(t_true(!skid_battery_pause_diagnostic,
+    "the normal Skid battery rover has no initialization pause warning"));
 fails.push(t_true(skid_battery_prim != () && skid_battery_prim.ok != false
         && skid_battery_prim.position_frame == "active_physics",
-    "the paused Skid battery keeps a queryable pose in the active physics frame"));
-fails.push(t_near(skid_battery_prim.world_position[0], -15.0, 0.001,
-    "pause preserves the authored Skid battery X position"));
-fails.push(t_near(skid_battery_prim.world_position[1], 1.0, 0.001,
-    "pause preserves the authored Skid battery height instead of moving it up"));
-fails.push(t_near(skid_battery_prim.world_position[2], 0.0, 0.001,
-    "pause preserves the authored Skid battery Z position"));
+    "the active Skid battery keeps a queryable pose in the active physics frame"));
+fails.push(t_near(skid_battery_prim.world_position[0], -15.0, 0.1,
+    "the active Skid battery remains near its authored X position"));
+fails.push(t_near(skid_battery_prim.world_position[1], 1.0, 0.1,
+    "the active Skid battery remains on the authored ground site"));
+fails.push(t_near(skid_battery_prim.world_position[2], 0.0, 0.1,
+    "the active Skid battery remains near its authored Z position"));
 fails.push(t_true(paused_subjects.len() > 0,
     "the measured penetration is visible as a paused subject"));
 for subject in paused_subjects {

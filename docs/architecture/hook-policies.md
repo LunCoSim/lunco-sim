@@ -229,10 +229,11 @@ validated articulated object and remove it from readiness, or `reject` to keep
 the object held. A pause publishes `PHYSICS_INITIALIZATION_PAUSED` warning
 telemetry for Recent status and a runtime diagnostic for the physics panel.
 Paused joints leave the shared native admission batch so
-independent valid assemblies can finish. The shipped Application policy pauses
-measured terrain penetrations; it never raises, reseats, or edits authored poses.
-Missing, faulting, rejected, or malformed decisions remain visible and fail
-closed.
+independent valid assemblies can finish. The shipped Application policy
+accepts support overlap up to 0.05 m for small wheel-rest contact and pauses
+deeper measured penetrations; it never raises, reseats, or edits authored
+poses. Missing, faulting, rejected, or malformed decisions remain visible and
+fail closed.
 
 The `physics.body_escape(ctx: Map) -> String` policy is installed by the
 application bootstrap during `PreStartup` and replaceable by an active Twin.

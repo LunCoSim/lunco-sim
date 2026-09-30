@@ -2,59 +2,122 @@
 (
     defaultPrim = "SandboxRampPlacement"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Focused regression for the interactive sandbox ramp.  Compose the real arena
-# so this test exercises the shipped ramp and ground, then retain one raycast
-# rover and remove unrelated demo participants from the fixture.
 def Xform "SandboxRampPlacement" (
     prepend references = @lunco://scenes/luncosim/sandbox_scene.usda@</SandboxScene>
     kind = "assembly"
-    doc = "Focused sandbox ramp contact regression: a rover starts on the flat approach and climbs the authored ramp."
+    documentation = "Regression fixture: two rover spawns overlap an inclined late-projected static support collider and pause in place; the magenta rover starts at nominal flat-ground rest where its wheel probes reach 5 cm below the plane, remains admitted, and climbs the authored ramp."
 )
 {
     over "Skid_Raycast_1"
     {
-        double3 xformOp:translate = (-15.0, 1.0, 0.0)
-        double3 xformOp:rotateXYZ = (0.0, -90.0, 0.0)
+        custom double3 xformOp:translate = (1000.0, 5.0, -10.0)
+        custom double3 xformOp:rotateXYZ = (0.0, 0.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        def "System" (
+            active = false
+        )
+        {
+        }
     }
-
     over "Skid_Raycast_2" (
         active = true
     )
     {
+        custom double3 xformOp:translate = (1000.0, 5.0, 10.0)
         over "System" (
             active = false
         )
         {
         }
     }
-    over "Skid_Physical_1" (active = false) { }
-    over "Ackermann_Raycast_1" (active = false) { }
-    over "Ackermann_Physical_1" (active = false) { }
-    over "Skid_Battery_Thermal_1" (active = false) { }
-    over "RedBalloon" (active = false) { }
-    over "GreenBalloon" (active = false) { }
-    over "Oscillator" (active = false) { }
-    over "Amplifier" (active = false) { }
-    over "CosimTarget" (active = false) { }
-    over "JointTestA" (active = false) { }
-    over "JointTestB" (active = false) { }
-    over "JointTestLink" (active = false) { }
-    over "Base" (active = false) { }
-
+    over "Skid_Physical_1" (
+        active = false
+    )
+    {
+    }
+    over "Ackermann_Raycast_1" (
+        active = false
+    )
+    {
+    }
+    over "Ackermann_Physical_1" (
+        active = false
+    )
+    {
+    }
+    def "Skid_Battery_Thermal_1" (
+        active = true
+    )
+    {
+        custom double3 xformOp:translate = (-15.0, 1.0, 0.0)
+    }
+    over "RedBalloon" (
+        active = false
+    )
+    {
+    }
+    over "GreenBalloon" (
+        active = false
+    )
+    {
+    }
+    over "Oscillator" (
+        active = false
+    )
+    {
+    }
+    over "Amplifier" (
+        active = false
+    )
+    {
+    }
+    over "CosimTarget" (
+        active = false
+    )
+    {
+    }
+    over "JointTestA" (
+        active = false
+    )
+    {
+    }
+    over "JointTestB" (
+        active = false
+    )
+    {
+    }
+    over "JointTestLink" (
+        active = false
+    )
+    {
+    }
+    over "Base" (
+        active = false
+    )
+    {
+    }
     def Scope "Scenario"
     {
         custom string lunco:scenario = "sandbox-ramp-placement"
-
         def Scope "Test" (
-            prepend apiSchemas = ["LunCoProgramAPI"]
+            prepend apiSchemas = "LunCoProgramAPI"
         )
         {
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/sandbox_ramp_placement.rhai@
         }
+    }
+    def Cube "ZSupport" (
+        prepend apiSchemas = "PhysicsCollisionAPI"
+    )
+    {
+        custom double3 xformOp:translate = (1000.0, 4.0, 0.0)
+        custom token[] xformOpOrder = ["xformOp:translate", "xformOp:scale", "xformOp:rotateXYZ"]
+        custom double3 xformOp:scale = (8.0, 0.5, 30.0)
+        bool physics:collisionEnabled = true
+        custom double3 xformOp:rotateXYZ = (0.0, 0.0, 17.1887)
     }
 }

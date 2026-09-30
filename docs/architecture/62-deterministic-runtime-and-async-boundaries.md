@@ -156,6 +156,10 @@ admission batch, allowing unrelated valid joints to commit. A body already
 frozen for a scoped readiness wait may complete its local state transition
 while the shared hold waits on the pending constraints. Scene readiness and the
 first cycle release only after the complete body and constraint boundary closes.
+Terrain initial-pose support validation also waits for the active root's
+structural and USD simulation projection to settle before checking colliders;
+bounded projection order cannot admit a body while its authored support
+collider is still absent.
 Rhai compilation, dependency planning, initialization, and `on_start` run in an
 ordered pre-tick lifecycle pass; the scenario's preparation hold remains active
 until `on_start` completes. A fresh process therefore starts `on_start` at

@@ -1,6 +1,8 @@
-// A validated terrain penetration pauses only its authored articulated object.
-// The engine retains the authored pose, removes the object from admission, and
-// lets independent scene physics and readiness continue.
+// Small wheel contact overlap at authored rest height is accepted by policy;
+// deeper support overlap pauses only that authored articulated object. The
+// engine retains the paused pose and lets independent scene physics continue.
+const MAX_ACCEPTED_INITIAL_SUPPORT_OVERLAP_M = 0.05;
+
 fn physics_initialization_policy(facts) {
     let context = runtime_context;
     if context.scope != "twin" || context.cycle != "lifecycle"
@@ -18,5 +20,8 @@ fn physics_initialization_policy(facts) {
         || facts.assembly_member_count == () {
         throw "the application initialization policy requires measured terrain penetration facts";
     }
-    "pause"
+    if facts.penetration_m > MAX_ACCEPTED_INITIAL_SUPPORT_OVERLAP_M {
+        return "pause";
+    }
+    "accept"
 }

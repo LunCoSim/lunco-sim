@@ -9778,6 +9778,8 @@ dependencies = [
  "lunco-telemetry-core",
  "lunco-terrain-bake",
  "lunco-terrain-core",
+ "lunco-usd-bevy-scene",
+ "lunco-usd-sim-core",
  "lunco-viewport-core",
  "serde",
  "serde_json",
