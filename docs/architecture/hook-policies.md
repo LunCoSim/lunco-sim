@@ -154,21 +154,26 @@ owner rejects an installed policy call when a mounted Twin has no lifecycle
 generation. Its Rust owner test checks both routes, and the production
 hook-policy test verifies that the authored policy rejects an off-cycle call.
 
-The primary scene lifecycle owns required deterministic
-`usd.scene_composition(facts: Map) -> Map`. Only incomplete fetched closures
-reach it, after structural projection drains and before scene admission releases
-the simulation hold. `facts` contains `scene_path` and authored-order
+The USD scene lifecycle owns required deterministic
+`usd.scene_composition(facts: Map) -> Map`. Incomplete fetched closures for an
+initial scene stage reach it after structural projection drains and before the
+scene transition releases its simulation hold. Incomplete closures for a
+newly mounted reference reach it before the prepared instance plan is consumed,
+before layer bytes are installed in the live stage, and before ECS projection.
+`facts` contains the mounted root `scene_path` and authored-order
 `missing_dependencies: [{referring_layer, dependency}]`. Calls use
-`Application/Lifecycle/Preparation` for engine assets and the active
-`Twin/Lifecycle/Preparation` generation for Twin assets, with no elapsed
-clock. The shipped `usd_scene_composition.rhai` returns
-`#{action: "allow_partial"}`, preserving the current partial-stage behavior
-and unresolved-arc warning. A Twin policy can replace the hook and return
-`reject_scene`; Rust tears down the partial primary scene and fails the
-transition before simulation resumes. An unavailable, faulting, malformed, or
-unknown action fails admission visibly. Complete closures skip the hook. The
-production hook-policy test verifies the reflected contract and shipped
-default result.
+`Application/Lifecycle/Preparation` for engine assets and the active or
+committed `Twin/Lifecycle/Preparation` generation for Twin assets, with no
+elapsed clock. The shipped `usd_scene_composition.rhai` returns
+`#{action: "allow_partial"}`, preserving partial-stage projection and the
+unresolved-arc warning. A Twin policy can replace the hook and return
+`reject_scene`. Rejection of an initial stage tears down that stage and fails
+the transition; rejection of a mounted reference prevents that reference from
+being projected. A primary-scene reference also retains its progress hold and
+raises a runtime fault, while preview and additive references remain local
+diagnostics. An unavailable, faulting, malformed, or unknown action fails
+admission visibly. Complete closures skip the hook. The production
+hook-policy test verifies the reflected contract and shipped default result.
 
 The application startup policy is run once when the simulation starts. It may
 install a generic lifecycle hook such as `twin.lifecycle`. The active Twin

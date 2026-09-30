@@ -1,0 +1,13 @@
+kind = "lunco.policy.v1"
+scope = "twin"
+
+[startup]
+source = "startup.rhai"
+entry = "install_policies"
+
+[[policies]]
+hook = "usd.scene_composition"
+source = "scene_composition.rhai"
+entry = "scene_composition_admission"
+deterministic = true
+required = true

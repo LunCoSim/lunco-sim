@@ -950,10 +950,80 @@ enough to promise same-state continuation from an arbitrary capture tick.
   profiles plus four jitter/seed profiles, each with 780 ticks and exact
   reference/final-stage comparisons. This is same-host determinism acceptance,
   not sustained performance evidence.
-- The other computer's scene-4-serial run returned a terminal failure after
-  780 ticks but provided no assertion detail, build revision, or reference
-  hash. Cross-machine comparison has not identified a numerical mismatch yet.
-  Rerun the single profile from the current branch to obtain the state field,
-  expected and actual values, exact `HEAD`, and reference SHA-256.
+- The supplied other-computer `scene-4-serial` output is timestamped
+  2026-09-29 17:51. It reached 780 ticks and returned a terminal scene failure,
+  but gave no assertion detail, build revision, or reference hash. This predates
+  `bb00f9bb4` (22:44), which added typed authored failure details, and
+  `f095634e8` (2026-09-30), which removed rendered `Transform` values from the
+  physics comparison. The old result does not identify a physics-state
+  mismatch. Cross-machine comparison remains open; rerun the single profile
+  from the current branch and capture its first expected/actual field, exact
+  `HEAD`, and reference SHA-256.
 - This work is for local `main` integration only; no push is authorized. The
   unrelated untracked `scripts/perf/` work remains preserved.
+
+## Dynamic reference composition admission (2026-09-30)
+
+- `drain_ref_spawns` now sends any nonempty prepared-reference dependency
+  diagnostics through the same required `usd.scene_composition` evaluator as
+  the initial scene path, before consuming the instance plan, installing layer
+  bytes, or projecting entities. Rejection or hook failure uses the existing
+  terminal reference-admission path; primary-scene progress stays held and
+  later authored references remain blocked. The diagnostic includes the first
+  unresolved dependency. Preview and additive failures remain operation-local.
+- The focused owner test
+  `incomplete_dynamic_reference_policy_rejection_holds_primary_and_blocks_successors`
+  is present. It checks the mounted-scene facts and lifecycle context, the
+  authored order of two missing dependencies, the first-dependency diagnostic,
+  primary hold/fault, no instance plan, and ready-successor blocking. The
+  focused test passed (`1 passed`, 50 filtered).
+- The production `dynamic_reference_composition` Rhai gate passed both
+  `allow.usda` and `reject.usda`. The allow case projected the valid root of a
+  stage with a missing nested dependency and did not fabricate the unresolved
+  child. The reject case observed the expected terminal
+  `usd-reference-admission` fault for `/World/Partial`.
+- The first allow run failed before admission because the fixture treated an
+  absent `QueryUsdPrim.ok` field as false. It now accepts the direct prim-record
+  response and checks the required generation; the allow and reject production
+  runs then passed.
+- `python3 scripts/validate_skills.py` passed all 43 skills, and
+  `git diff --check` passed before the current documentation update.
+
+## Current cross-machine failure investigation (2026-09-30)
+
+- Rebuilt the default-feature production binary with the regular command
+  `cargo build --bin luncosim -j 4` at
+  `f095634e825fa487b1893d2239a094fbe420963d`. The focused production
+  `scene-4-serial` run passed all 24 authored assertions and matched the
+  reference at 780 ticks.
+- Ran `RUST_LOG=off scripts/test-deterministic-physics-profiles.sh`. All ten
+  4/8/20-rover serial/default-Compute and seeded-jitter profiles passed at 780
+  ticks, including exact final-stage comparison. The run printed
+  `DETERMINISTIC_PHYSICS_PROFILES_OK`. The checked-in reference SHA-256 is
+  `4f1785e86deb5e05083561007ec8e08891ca5a0d19c82e9edcdb8f70c92e3496`.
+- Both shell and PowerShell launchers now print the source revision and
+  reference SHA-256 before the profile matrix. `bash -n
+  scripts/test-deterministic-physics-profiles.sh`, the focused production run,
+  the full matrix, and `git diff --check` passed. Neither `pwsh` nor
+  `powershell` is installed here, so the PowerShell wrapper was not executed.
+- The earlier remote `scene-4-serial` failure still has no assertion detail or
+  reference identity. Its output predates typed Rhai failure details and the
+  removal of render-interpolated `Transform` from physics comparison, so it
+  cannot establish whether either caused the failure. Do not change tolerance
+  or infer a physics mismatch from that output. Cross-machine acceptance stays
+  open until the other computer reruns the profile from the same committed
+  source revision and reference and reports the source revision, reference
+  SHA-256, full output, and any `luncosim test detail:` field difference. On
+  Windows PowerShell, run from the repository root:
+
+  ```powershell
+  git rev-parse HEAD
+  Get-FileHash .\scripts\tests\fixtures\deterministic-physics-reference.json -Algorithm SHA256
+  cargo build --bin luncosim -j 4
+  $env:LUNCO_ASSET_ROOT = Join-Path (Get-Location) 'assets'
+  .\target\debug\luncosim.exe test --scene assets/scenes/tests/multi_rover_stress_4.usda --threads 1 --jitter 0.0 --seed 6840157149251759617 --determinism-reference scripts/tests/fixtures/deterministic-physics-reference.json
+  ```
+
+  Send the complete output and the two identity values; the Rhai gate prints
+  either the first failed scene assertion or the first expected/actual state
+  field directly, without Python or log parsing.

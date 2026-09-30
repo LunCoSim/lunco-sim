@@ -31,7 +31,10 @@ For cross-domain execution, read
 Keep parsing, source resolution, and immutable preparation off the UI/fixed
 schedule when inputs can be captured by revision. Admit results only at an
 owner boundary in stable identity order. Keep live-world hooks and physics
-inside their deterministic schedule. A Rhai scenario that depends on Modelica
+inside their deterministic schedule. The required Rhai USD composition policy
+decides incomplete initial stage and newly mounted reference closures before
+their respective admission and projection boundaries. A Rhai scenario that
+depends on Modelica
 ports or events declares the participating entity ids in
 `simulation_dependencies(me, ctx)`, where `ctx` is the validated scenario
 parameter map. The hook returns a map with `modelica_entities: [ids]`,

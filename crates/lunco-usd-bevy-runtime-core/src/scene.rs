@@ -23,7 +23,7 @@ use lunco_usd_bevy_stage::{
     UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
 };
 
-const INCOMPLETE_COMPOSITION_POLICY_HOOK: &str = "usd.scene_composition";
+pub(crate) const INCOMPLETE_COMPOSITION_POLICY_HOOK: &str = "usd.scene_composition";
 
 lunco_hooks::declare_hook! {
     id: INCOMPLETE_COMPOSITION_POLICY_HOOK,
@@ -37,7 +37,7 @@ lunco_hooks::declare_hook! {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum IncompleteCompositionDecision {
+pub(crate) enum IncompleteCompositionDecision {
     AllowPartial,
     RejectScene,
 }
@@ -78,7 +78,7 @@ fn incomplete_composition_runtime_context(
     })
 }
 
-fn evaluate_incomplete_composition_policy(
+pub(crate) fn evaluate_incomplete_composition_policy(
     path: &str,
     diagnostics: &[lunco_usd_compose::recipe::StageDependencyDiagnostic],
     coordinator: &SceneTransitionCoordinator,

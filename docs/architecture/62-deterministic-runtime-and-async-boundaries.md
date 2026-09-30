@@ -1152,11 +1152,14 @@ The whole-simulation guarantee remains open because:
 
 1. Scene start composes owner-specific deterministic boundaries rather than one
    global readiness bit. The root USD loader fetches and composes its available
-   dependency closure before publishing the stage asset; incomplete closures
-   are admitted through the required deterministic `usd.scene_composition`
-   Rhai policy after structural projection and before the lifecycle progress
-   key releases its hold; active primary references and
-   causal Modelica compilation hold exact `SimulationProgress` keys; the USD
+   dependency closure before publishing the stage asset; incomplete initial
+   closures are admitted through the required deterministic
+   `usd.scene_composition` Rhai policy after structural projection and before
+   the lifecycle progress key releases its hold. An incomplete closure on a
+   newly mounted reference reaches the same policy before its plan or layer
+   bytes are committed; rejection leaves a primary reference unprojected,
+   faulted, and progress-held. Active primary references and causal Modelica
+   compilation hold exact `SimulationProgress` keys; the USD
    terrain bridge and progress scan run in `PreUpdate` before `SimulationAdmissionSet`,
    including a pending Twin manifest scan, so authored terrain data and
    collider work hold entity-keyed `SimulationProgress` before the first
@@ -1176,7 +1179,10 @@ The whole-simulation guarantee remains open because:
    arrive. The production `sensor` gate checks this zero/one boundary, actor
    ordering, first-sample validity, and the initial altimeter miss.
 2. Dynamic references on the mounted primary scene hold admission through
-   closure preparation and live projection; preview and additive mounts remain
+   closure preparation and live projection. Their incomplete closures use the
+   same Rhai composition decision as initial scene closures before live-stage
+   mutation; rejection or policy failure keeps the exact reference hold and
+   faults the primary simulation. Preview and additive mounts remain
    independent. Initial USD composition dependencies are fetched and composed
    by the root asset loader before the stage asset reaches structural
    projection.

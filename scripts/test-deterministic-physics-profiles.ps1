@@ -39,6 +39,15 @@ if (-not (Test-Path -LiteralPath $reference -PathType Leaf)) {
     exit 2
 }
 
+$sourceRevision = (& git -C $root rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0) {
+    [Console]::Error.WriteLine('could not identify the source revision')
+    exit 2
+}
+$referenceSha256 = (Get-FileHash -LiteralPath $reference -Algorithm SHA256).Hash.ToLowerInvariant()
+Write-Host "Source revision: $sourceRevision"
+Write-Host "Reference SHA-256: $referenceSha256"
+
 $profiles = @(
     [pscustomobject]@{
         Name = 'scene-4-serial'

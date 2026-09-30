@@ -1,0 +1,16 @@
+#usda 1.0
+(
+    defaultPrim = "Partial"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World"
+{
+}
+
+def Xform "Partial" (
+    prepend references = @twin://dynamic_reference_composition/missing.usda@
+)
+{
+}

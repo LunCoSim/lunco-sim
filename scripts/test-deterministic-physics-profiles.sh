@@ -14,6 +14,18 @@ fi
 
 cd "$root"
 
+source_revision="$(git -C "$root" rev-parse HEAD)"
+if command -v sha256sum >/dev/null 2>&1; then
+    reference_sha256="$(sha256sum "$reference" | cut -d' ' -f1)"
+elif command -v shasum >/dev/null 2>&1; then
+    reference_sha256="$(shasum -a 256 "$reference" | cut -d' ' -f1)"
+else
+    printf 'no SHA-256 utility is available to identify the determinism reference\n' >&2
+    exit 2
+fi
+printf 'Source revision: %s\n' "$source_revision"
+printf 'Reference SHA-256: %s\n' "$reference_sha256"
+
 run_profile() {
     local name="$1" scene="$2" threads="$3" jitter="$4" seed="$5"
     printf '\nDeterminism profile: %s\n' "$name"

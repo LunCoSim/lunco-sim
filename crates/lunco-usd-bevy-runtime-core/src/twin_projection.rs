@@ -58,7 +58,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use crate::scene::LoadScene;
+use crate::scene::{
+    INCOMPLETE_COMPOSITION_POLICY_HOOK, IncompleteCompositionDecision, LoadScene,
+    evaluate_incomplete_composition_policy,
+};
 use bevy::asset::AssetId;
 use bevy::prelude::*;
 use lunco_assets_core::twin_source::TwinRoots;
@@ -1006,6 +1009,24 @@ fn fail_reference_spawn(world: &mut World, item: &mut RefSpawn, detail: String) 
     } else if !item.failure_reported {
         item.failure_reported = true;
     }
+}
+
+fn evaluate_reference_composition_policy(
+    world: &World,
+    scene_id: AssetId<UsdStageAsset>,
+    diagnostics: &[lunco_usd_compose::recipe::StageDependencyDiagnostic],
+) -> Result<IncompleteCompositionDecision, String> {
+    let scene_path = world
+        .get_resource::<AssetServer>()
+        .and_then(|asset_server| asset_server.get_path(scene_id))
+        .map(|path| path.to_string())
+        .ok_or_else(|| {
+            format!("the mounted scene asset {scene_id:?} has no registered source address")
+        })?;
+    let coordinator = world
+        .get_resource::<lunco_core::SceneTransitionCoordinator>()
+        .ok_or_else(|| "the scene transition coordinator is unavailable".to_owned())?;
+    evaluate_incomplete_composition_policy(&scene_path, diagnostics, coordinator)
 }
 
 fn deferred_op_is_represented_by_instance_plan(op: &UsdOp, root_path: &str) -> bool {
@@ -5025,6 +5046,39 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             still.push(item);
             continue;
         };
+        if !recipe.dependency_diagnostics.is_empty() {
+            let decision = evaluate_reference_composition_policy(
+                world,
+                item.scene_id,
+                &recipe.dependency_diagnostics,
+            );
+            let rejection = match decision {
+                Ok(IncompleteCompositionDecision::AllowPartial) => None,
+                Ok(IncompleteCompositionDecision::RejectScene) => {
+                    let first_missing = recipe
+                        .dependency_diagnostics
+                        .first()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "no dependency details were supplied".to_owned());
+                    Some(format!(
+                        "the `{}` policy rejected referenced asset `{}` with {} unresolved USD composition dependencies; first: {first_missing}",
+                        INCOMPLETE_COMPOSITION_POLICY_HOOK,
+                        item.asset_path,
+                        recipe.dependency_diagnostics.len()
+                    ))
+                }
+                Err(error) => Some(format!(
+                    "the `{}` policy could not admit referenced asset `{}`: {error}",
+                    INCOMPLETE_COMPOSITION_POLICY_HOOK, item.asset_path
+                )),
+            };
+            if let Some(detail) = rejection {
+                fail_reference_spawn(world, &mut item, detail);
+                commit_order.block_successors(item.scene_id, authoritative);
+                still.push(item);
+                continue;
+            }
+        }
         let Some(asset) = world
             .resource::<Assets<UsdStageAsset>>()
             .get(item.ref_handle.id())
@@ -5341,6 +5395,44 @@ mod tests {
     use lunco_usd_document::document::{LayerId, UsdOp};
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
+
+    struct RejectCompositionPolicyHook(
+        std::sync::Arc<
+            std::sync::Mutex<
+                Option<(
+                    Vec<lunco_hooks::HookValue>,
+                    lunco_core::RuntimeExecutionContext,
+                )>,
+            >,
+        >,
+    );
+
+    impl lunco_hooks::ScriptHook for RejectCompositionPolicyHook {
+        fn invoke(&self, invocation: &lunco_hooks::HookInvocation<'_>) -> lunco_hooks::HookResult {
+            *self.0.lock().expect("composition hook observation lock") =
+                Some((invocation.args.to_vec(), invocation.context));
+            Ok(lunco_hooks::HookValue::map([(
+                "action",
+                lunco_hooks::HookValue::str("reject_scene"),
+            )]))
+        }
+    }
+
+    struct RestoreCompositionPolicyHook(Option<std::sync::Arc<lunco_hooks::RegisteredHook>>);
+
+    impl Drop for RestoreCompositionPolicyHook {
+        fn drop(&mut self) {
+            lunco_hooks::unregister(INCOMPLETE_COMPOSITION_POLICY_HOOK);
+            if let Some(previous) = self.0.take() {
+                lunco_hooks::register(lunco_hooks::RegisteredHook {
+                    id: previous.id.clone(),
+                    backend: previous.backend.clone(),
+                    deterministic: previous.deterministic,
+                    hook: std::sync::Arc::clone(&previous.hook),
+                });
+            }
+        }
+    }
 
     #[test]
     fn changed_root_recipe_is_not_scheduled_as_its_own_dependent_stage() {
@@ -6109,6 +6201,218 @@ mod tests {
 
         world.run_system_once(reset_scene_projection_state).unwrap();
         assert!(!world.resource::<SimulationProgress>().is_held());
+    }
+
+    #[test]
+    fn incomplete_dynamic_reference_policy_rejection_holds_primary_and_blocks_successors() {
+        use bevy::asset::{AssetApp, AssetPath, AssetServer};
+        use lunco_usd_bevy_stage::UsdStageAsset;
+        use lunco_usd_compose::recipe::{StageDependencyDiagnostic, StageRecipe};
+
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let previous = lunco_hooks::get(INCOMPLETE_COMPOSITION_POLICY_HOOK);
+        lunco_hooks::register(lunco_hooks::RegisteredHook {
+            id: INCOMPLETE_COMPOSITION_POLICY_HOOK.to_owned(),
+            backend: "test".to_owned(),
+            deterministic: true,
+            hook: std::sync::Arc::new(RejectCompositionPolicyHook(std::sync::Arc::clone(
+                &observed,
+            ))),
+        });
+        let _restore_hook = RestoreCompositionPolicyHook(previous);
+
+        let mut app = App::new();
+        app.add_plugins(bevy::prelude::MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<UsdStageAsset>();
+
+        let scene_handle = app
+            .world()
+            .resource::<AssetServer>()
+            .load::<UsdStageAsset>(AssetPath::parse("composition-test/scene.usda").into_owned());
+        let rejected_handle = app
+            .world()
+            .resource::<AssetServer>()
+            .load::<UsdStageAsset>(AssetPath::parse("composition-test/partial.usda").into_owned());
+        let successor_handle = app
+            .world()
+            .resource::<AssetServer>()
+            .load::<UsdStageAsset>(AssetPath::parse("composition-test/complete.usda").into_owned());
+
+        let scene_recipe = StageRecipe::from_source("composition-test/scene.usda", TINY);
+        let mut rejected_recipe = StageRecipe::from_source("composition-test/partial.usda", TINY);
+        rejected_recipe
+            .dependency_diagnostics
+            .push(StageDependencyDiagnostic::missing(
+                "composition-test/partial.usda",
+                "composition-test/missing-first.usda",
+            ));
+        rejected_recipe
+            .dependency_diagnostics
+            .push(StageDependencyDiagnostic::missing(
+                "composition-test/partial.usda",
+                "composition-test/missing-second.usda",
+            ));
+        let successor_recipe = StageRecipe::from_source("composition-test/complete.usda", TINY);
+        {
+            let mut assets = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
+            assets
+                .insert(
+                    scene_handle.id(),
+                    UsdStageAsset::from_recipe(scene_recipe).expect("prepare scene asset"),
+                )
+                .expect("insert scene under its AssetServer identity");
+            assets
+                .insert(
+                    rejected_handle.id(),
+                    UsdStageAsset::from_recipe(rejected_recipe)
+                        .expect("prepare incomplete referenced asset"),
+                )
+                .expect("insert incomplete asset under its AssetServer identity");
+            assets
+                .insert(
+                    successor_handle.id(),
+                    UsdStageAsset::from_recipe(successor_recipe)
+                        .expect("prepare complete successor asset"),
+                )
+                .expect("insert successor under its AssetServer identity");
+        }
+
+        app.init_resource::<PendingRefSpawns>()
+            .init_resource::<PendingDependentStageRefreshes>()
+            .init_resource::<PendingInstanceProjections>()
+            .init_resource::<SimulationProgress>()
+            .init_resource::<lunco_core::SceneTransitionCoordinator>();
+        let root = app
+            .world_mut()
+            .spawn((
+                UsdSceneRoot,
+                UsdPrimPath {
+                    stage_handle: scene_handle.clone(),
+                    path: "/World".to_owned(),
+                },
+            ))
+            .id();
+        let mut mounts = lunco_core::SceneMountState::default();
+        mounts.register_root(root, true);
+        app.world_mut().insert_resource(mounts);
+
+        let scene_id = scene_handle.id();
+        let first_key = app
+            .world_mut()
+            .resource_mut::<PendingRefSpawns>()
+            .allocate_progress_key()
+            .expect("first reference operation identity");
+        let second_key = app
+            .world_mut()
+            .resource_mut::<PendingRefSpawns>()
+            .allocate_progress_key()
+            .expect("successor reference operation identity");
+        let make_spawn = |progress_key, prim_path: &str, asset_path: &str, ref_handle| RefSpawn {
+            progress_key,
+            scene_id,
+            prim_path: prim_path.to_owned(),
+            type_name: Some("Xform".to_owned()),
+            asset_path: asset_path.to_owned(),
+            reference_prim_path: None,
+            ref_handle,
+            translate: None,
+            deferred_ops: Vec::new(),
+            active: true,
+            held: false,
+            asset_ready: false,
+            failure: None,
+            failure_reported: false,
+            removed: false,
+        };
+        {
+            let mut pending = app.world_mut().resource_mut::<PendingRefSpawns>();
+            pending.push(
+                make_spawn(
+                    first_key,
+                    "/World/Partial",
+                    "twin://composition-test/partial.usda",
+                    rejected_handle,
+                ),
+                true,
+            );
+            pending.push(
+                make_spawn(
+                    second_key,
+                    "/World/Complete",
+                    "twin://composition-test/complete.usda",
+                    successor_handle,
+                ),
+                true,
+            );
+        }
+
+        drain_ref_spawns(app.world_mut());
+
+        let (args, context) = observed
+            .lock()
+            .expect("composition hook observation lock")
+            .clone()
+            .expect("incomplete dynamic reference reaches the required Rhai policy");
+        assert_eq!(args.len(), 1);
+        let facts = &args[0];
+        assert_eq!(
+            facts
+                .get("scene_path")
+                .and_then(lunco_hooks::HookValue::as_str),
+            Some("composition-test/scene.usda")
+        );
+        let missing = match facts.get("missing_dependencies") {
+            Some(lunco_hooks::HookValue::Array(missing)) => missing,
+            _ => panic!("policy receives ordered unresolved dependency facts"),
+        };
+        assert_eq!(missing.len(), 2);
+        assert_eq!(
+            missing[0]
+                .get("dependency")
+                .and_then(lunco_hooks::HookValue::as_str),
+            Some("composition-test/missing-first.usda")
+        );
+        assert_eq!(
+            missing[1]
+                .get("dependency")
+                .and_then(lunco_hooks::HookValue::as_str),
+            Some("composition-test/missing-second.usda")
+        );
+        assert_eq!(
+            context.route.map(|route| route.scope),
+            Some(lunco_core::RuntimeScope::Application)
+        );
+        assert_eq!(
+            context.route.expect("policy route is classified").cycle,
+            lunco_core::RuntimeCycle::Lifecycle
+        );
+        assert_eq!(context.phase, lunco_core::RuntimePhase::Preparation);
+
+        let pending = app.world().resource::<PendingRefSpawns>();
+        assert_eq!(pending.items.len(), 2);
+        assert!(pending.items[0].failure_reported);
+        assert!(pending.items[0].failure.as_deref().is_some_and(|detail| {
+            detail.contains("rejected referenced asset")
+                && detail.contains("composition-test/missing-first.usda")
+        }));
+        assert!(pending.items[0].held && pending.items[1].held);
+        assert!(pending.items[1].asset_ready);
+        assert!(app.world().resource::<SimulationProgress>().is_held());
+        assert!(app.world().resource::<lunco_core::RuntimeFaults>().active());
+        assert!(
+            app.world()
+                .resource::<PendingInstanceProjections>()
+                .plans
+                .is_empty()
+        );
+        assert!(
+            app.world()
+                .resource::<lunco_core::RuntimeDiagnostics>()
+                .findings
+                .iter()
+                .any(|finding| finding.code == "usd-reference-admission")
+        );
     }
 
     #[test]
