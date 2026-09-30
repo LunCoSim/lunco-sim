@@ -487,9 +487,10 @@ pub struct SignalRegistry {
     inactive: std::collections::HashSet<SignalRef>,
     default_capacity: usize,
     /// Monotonic revision of the channel catalog. Sample values deliberately do
-    /// not change it: UI surfaces use this to rebuild their hierarchy only when
-    /// a channel's identity, metadata, or live/archive state changes.
+    /// not change it. Catalog readers can retain identity lookups across samples;
+    /// incremental descriptor readers consume `SignalDescriptorsChanged`.
     catalog_revision: u64,
+    descriptor_changes: std::collections::HashSet<SignalRef>,
 }
 
 impl SignalRegistry {
@@ -523,6 +524,7 @@ impl SignalRegistry {
             }
             history.push(sample);
             if was_inactive {
+                self.descriptor_changes.insert(key.clone());
                 self.catalog_revision = self.catalog_revision.wrapping_add(1);
             }
             return;
@@ -533,8 +535,9 @@ impl SignalRegistry {
         history.push(sample);
         let sig = sig.into_owned();
         self.scalar_history.insert(sig.clone(), history);
-        self.types.entry(sig).or_insert(SignalType::Scalar);
+        self.types.entry(sig.clone()).or_insert(SignalType::Scalar);
         if !was_known || was_inactive {
+            self.descriptor_changes.insert(sig);
             self.catalog_revision = self.catalog_revision.wrapping_add(1);
         }
     }
@@ -668,6 +671,7 @@ impl SignalRegistry {
 
     pub fn update_meta(&mut self, sig: SignalRef, meta: SignalMeta) {
         if self.meta.get(&sig) != Some(&meta) {
+            self.descriptor_changes.insert(sig.clone());
             self.meta.insert(sig, meta);
             self.catalog_revision = self.catalog_revision.wrapping_add(1);
         }
@@ -729,6 +733,7 @@ impl SignalRegistry {
     /// Keep all samples and metadata but mark one channel's live publisher gone.
     pub fn deactivate_signal(&mut self, sig: &SignalRef) {
         if self.types.contains_key(sig) && self.inactive.insert(sig.clone()) {
+            self.descriptor_changes.insert(sig.clone());
             self.catalog_revision = self.catalog_revision.wrapping_add(1);
         }
     }
@@ -737,7 +742,10 @@ impl SignalRegistry {
     pub fn deactivate_entity(&mut self, entity: Entity) {
         let mut changed = false;
         for sig in self.types.keys().filter(|sig| sig.entity == entity) {
-            changed |= self.inactive.insert(sig.clone());
+            if self.inactive.insert(sig.clone()) {
+                self.descriptor_changes.insert(sig.clone());
+                changed = true;
+            }
         }
         if changed {
             self.catalog_revision = self.catalog_revision.wrapping_add(1);
@@ -752,6 +760,8 @@ impl SignalRegistry {
     /// references don't linger.
     pub fn drop_entity(&mut self, entity: Entity) {
         let changed = self.types.keys().any(|r| r.entity == entity);
+        self.descriptor_changes
+            .extend(self.types.keys().filter(|r| r.entity == entity).cloned());
         self.scalar_history.retain(|r, _| r.entity != entity);
         self.types.retain(|r, _| r.entity != entity);
         self.meta.retain(|r, _| r.entity != entity);
@@ -773,6 +783,7 @@ impl SignalRegistry {
         self.global_owners.remove(sig);
         self.inactive.remove(sig);
         if changed {
+            self.descriptor_changes.insert(sig.clone());
             self.catalog_revision = self.catalog_revision.wrapping_add(1);
         }
     }
@@ -783,6 +794,50 @@ impl SignalRegistry {
             h.clear();
         }
     }
+}
+
+/// Coalesced channel descriptor changes. Consumers read the current descriptor
+/// from the registry; repeated writes within one app update occupy one entry.
+/// Samples and API wire-owner association do not change browser descriptors.
+#[derive(Message, Debug)]
+pub struct SignalDescriptorsChanged {
+    pub signals: Vec<SignalRef>,
+}
+
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SignalDescriptorPublish;
+
+/// Owns descriptor notification fan-out in both rendered and headless hosts.
+/// Message readers must consume each Update, retaining their own pending work
+/// when their presentation is hidden.
+pub struct SignalRegistryPlugin;
+
+impl Plugin for SignalRegistryPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<SignalRegistry>()
+            .add_message::<SignalDescriptorsChanged>()
+            .add_systems(
+                Update,
+                publish_descriptor_changes.in_set(SignalDescriptorPublish),
+            );
+    }
+}
+
+fn publish_descriptor_changes(
+    mut registry: ResMut<SignalRegistry>,
+    mut messages: MessageWriter<SignalDescriptorsChanged>,
+) {
+    if registry.descriptor_changes.is_empty() {
+        return;
+    }
+    let mut signals: Vec<_> = registry.descriptor_changes.drain().collect();
+    signals.sort_by(|left, right| {
+        left.entity
+            .to_bits()
+            .cmp(&right.entity.to_bits())
+            .then(left.path.cmp(&right.path))
+    });
+    messages.write(SignalDescriptorsChanged { signals });
 }
 
 /// What the user is currently looking at — the entity roots a telemetry surface
@@ -845,6 +900,84 @@ pub fn drop_signals_of_removed_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incremental_catalog_notifications_coalesce_and_fan_out() {
+        let mut app = App::new();
+        app.add_plugins(SignalRegistryPlugin);
+        let signal = SignalRef::new(Entity::from_raw_u32(1).unwrap(), "speed");
+        {
+            let mut registry = app.world_mut().resource_mut::<SignalRegistry>();
+            registry.push_scalar(signal.clone(), 0.0, 1.0);
+            registry.update_meta(
+                signal.clone(),
+                SignalMeta {
+                    unit: Some("m/s".into()),
+                    ..Default::default()
+                },
+            );
+            registry.update_meta(
+                signal.clone(),
+                SignalMeta {
+                    unit: Some("m/s".into()),
+                    ..Default::default()
+                },
+            );
+        }
+        app.update();
+        let messages = app.world().resource::<Messages<SignalDescriptorsChanged>>();
+        let mut first = bevy::ecs::message::MessageCursor::<SignalDescriptorsChanged>::default();
+        let mut second = bevy::ecs::message::MessageCursor::<SignalDescriptorsChanged>::default();
+        assert_eq!(
+            first
+                .read(messages)
+                .flat_map(|event| event.signals.iter())
+                .collect::<Vec<_>>(),
+            vec![&signal]
+        );
+        assert_eq!(
+            second
+                .read(messages)
+                .flat_map(|event| event.signals.iter())
+                .collect::<Vec<_>>(),
+            vec![&signal]
+        );
+        {
+            let mut registry = app.world_mut().resource_mut::<SignalRegistry>();
+            registry.push_scalar(signal.clone(), 1.0, 2.0);
+            registry.associate_global_owner(&signal, GlobalEntityId::from_raw(42));
+            assert!(registry.descriptor_changes.is_empty());
+            registry.deactivate_signal(&signal);
+            assert_eq!(registry.descriptor_changes.len(), 1);
+        }
+        app.update();
+        assert_eq!(
+            first
+                .read(app.world().resource::<Messages<SignalDescriptorsChanged>>())
+                .count(),
+            1
+        );
+        app.world_mut()
+            .resource_mut::<SignalRegistry>()
+            .remove_signal(&signal);
+        app.update();
+        assert_eq!(
+            first
+                .read(app.world().resource::<Messages<SignalDescriptorsChanged>>())
+                .flat_map(|event| event.signals.iter())
+                .collect::<Vec<_>>(),
+            vec![&signal]
+        );
+        app.world_mut()
+            .resource_mut::<SignalRegistry>()
+            .remove_signal(&signal);
+        assert!(
+            app.world()
+                .resource::<SignalRegistry>()
+                .descriptor_changes
+                .is_empty()
+        );
+    }
 
     #[test]
     fn telemetry_deadband_combines_absolute_and_relative_tolerance() {

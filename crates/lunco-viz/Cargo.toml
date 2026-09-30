@@ -22,6 +22,8 @@ ui = [
     "dep:lunco-canvas",
     "dep:lunco-core",
     "dep:lunco-telemetry",
+    "dep:lunco-api",
+    "dep:lunco-api-core",
     "dep:lunco-usd-bevy-scene",
     "dep:lunco-settings",
     "dep:serde",
@@ -30,6 +32,8 @@ ui = [
 ]
 
 [dependencies]
+lunco-api = { path = "../lunco-api", optional = true }
+lunco-api-core = { path = "../lunco-api-core", optional = true }
 lunco-viz-core = { path = "../lunco-viz-core" }
 bevy = { workspace = true, optional = true }
 egui = { workspace = true, optional = true }

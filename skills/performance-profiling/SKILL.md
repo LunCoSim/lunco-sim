@@ -130,17 +130,16 @@ Keep topology invalidation separate from the query-heavy snapshot producer:
 mark the revision dirty when scene facts change, then gate snapshot work until
 no prior worker is active. This lets a revision change reject an in-flight tree
 result without re-entering the full ECS query system just to discard it.
-For Builder telemetry, inspect `telemetry_catalog_snapshot_start`,
-`telemetry_catalog_snapshot`, and `telemetry_catalog_build_worker` separately.
-The start span captures channel identities and owner ancestry once;
-`telemetry_catalog_snapshot` copies at most 64 channel descriptors per
-`Update`. A newer registry or focus key discards a partial batch. Grouping and
-sorting belong on the worker. Compare the first Builder frames with settled
-`render_workbench` and
-`EguiPrimaryContextPass` samples so catalog admission is not reported as a
-steady per-frame cost. Use the `workbench_panel_render` child zones to separate
-the active panel costs inside `render_workbench` before optimizing a specific
-Builder surface.
+For Builder telemetry, inspect `telemetry_catalog_patch_capture`,
+`telemetry_catalog_patch_worker`, and `telemetry_catalog_patch_commit` separately.
+Each patch handles at most 64 changed descriptors and relevant ancestor facts. There is one
+initial identity enumeration; later notifications update the persistent index, affected alias
+groups, and tree paths. Selection, samples, and unchanged hierarchy writes must cause zero descriptor preparation. Use
+`InspectTelemetryCatalog` counters and owner timings to verify this in an owned production
+session, and `scripts/api/test_telemetry_catalog.py` for repeated metadata edits with authored
+Rhai verdicts. Separate initialization from settled frame costs and worker time from app-thread
+capture/commit time. Use `workbench_panel_render` child zones inside `render_workbench` to
+attribute painting and visible-row index costs independently of descriptor work.
 
 For startup asset graphs, separate asynchronous source reads from discovery,
 composition, and UI/physics admission. Read all known dependencies in each

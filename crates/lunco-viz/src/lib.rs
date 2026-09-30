@@ -105,6 +105,9 @@ pub struct LuncoVizPlugin;
 #[cfg(feature = "ui")]
 impl Plugin for LuncoVizPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_signal::SignalRegistryPlugin>() {
+            app.add_plugins(lunco_signal::SignalRegistryPlugin);
+        }
         app.insert_resource(SignalRegistry::with_default_capacity(
             DEFAULT_SIGNAL_HISTORY,
         ))
@@ -127,12 +130,21 @@ impl Plugin for LuncoVizPlugin {
                 telemetry_browser::prepare_telemetry_catalog,
                 telemetry_browser::poll_telemetry_catalog,
             )
-                .chain(),
+                .chain()
+                .after(lunco_signal::SignalDescriptorPublish),
+        )
+        .add_systems(
+            lunco_core::SceneTeardown,
+            telemetry_browser::clear_telemetry_catalog,
         )
         // A plot config survives scene replacement; its Bevy entity does not.
         // Reconcile only when the config or a stable entity identity changes,
         // before the next UI frame reads the config.
         .add_systems(Update, reconcile_persisted_plot_bindings);
+        app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
+        app.world_mut()
+            .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
+            .register(telemetry_browser::InspectTelemetryCatalogProvider);
         telemetry_browser::register_all_commands(app);
     }
 }

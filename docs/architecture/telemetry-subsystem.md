@@ -83,14 +83,35 @@ Modelica runtime telemetry caches each session's `SignalRef` by solver variable 
 not rebuild or clone an owned signal path. The registry clones the key only when it first
 creates the channel; a new solver session clears the prior histories and cached identities.
 
-The telemetry browser's grouped catalog is presentation state. When the registry catalog
-revision or selected focus changes, it snapshots the signal owners' label/path/parent facts
-once and copies at most 64 channel descriptors per `Update` into an immutable batch. A newer
-registry or focus key discards the partial batch. The complete snapshot is deduplicated,
-grouped, and sorted on the async-compute pool, and a catalog result is published only for the
-matching registry and focus keys. The panel does not build the tree or wait for a worker during
-`Panel::render`; live sample values remain read from `SignalRegistry` when visible rows are
-painted.
+The telemetry browser owns a persistent presentation index. `SignalRegistryPlugin` publishes
+coalesced `SignalDescriptorsChanged` notifications for channel admission, metadata changes,
+activation/archive transitions, and removal. Samples and API owner association do not dirty
+browser descriptors. Readers consume notifications independently, including while their panels
+are hidden. On first visibility the browser enumerates scalar identities once; subsequent work
+comes from changed identities and a reverse index of affected owner ancestors. Changes to owner
+labels, hierarchy, or USD paths enqueue only dependent channels after comparing consumed
+facts against committed and in-flight snapshots; rewriting unchanged facts does no work.
+
+Each worker batch captures at most 64 descriptors and their ancestor facts, then prepares row
+lineage and search text on the async-compute pool. The app commits those rows into the existing
+tree, updates only affected alias groups and paths, and prunes empty branches. Cached ancestor facts are released when their last dependent
+channel leaves the index. A superseded row
+is skipped individually; unrelated results still commit. Incoming changes queue another patch
+rather than restarting a full catalog build. Unaffected row descriptors and label/value caches
+remain retained. View caches compare selected entity identities and their current USD paths.
+Selection changes only the view's focus membership and visible-row index;
+they do not prepare descriptors or replace the domain tree. Live sample values are read from
+`SignalRegistry` when visible rows paint.
+
+“Preparing telemetry channels” appears only before the first rows are available. Existing rows
+remain available throughout descriptor updates. `SceneTeardown` cancels workers, clears the
+index and dependency maps, and advances the presentation key so panel caches cannot display
+an outgoing scene. `InspectTelemetryCatalog` exposes read-only queue state, indexed/displayed
+counts, preparation counters, and capture/worker/commit timings. Its optional `signal` parameter
+returns matching descriptors with explicit entity identities, including multiple owners of the
+same path. `scripts/api/test_telemetry_catalog.py` drives an owned production session and uses
+`assets/scripting/tests/test_telemetry_catalog.rhai` for verdicts on admission, repeated metadata
+changes, selection, steady samples, and a missing-channel negative case.
 
 `ScalarHistory` stores completed retention blocks as immutable shared chunks and keeps only a
 bounded tail mutable. `snapshot()` shares completed chunks and copies that tail; plot workers

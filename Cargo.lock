@@ -10814,6 +10814,8 @@ dependencies = [
  "bevy",
  "egui",
  "egui_plot",
+ "lunco-api",
+ "lunco-api-core",
  "lunco-canvas",
  "lunco-core",
  "lunco-settings",

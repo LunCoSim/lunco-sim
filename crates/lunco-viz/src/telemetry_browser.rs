@@ -1,5 +1,4 @@
-//! Telemetry channel browser — the real replacement for the deleted
-//! `lunco-ui/src/telemetry.rs` tombstone panel.
+//! Telemetry channel browser with a persistent incremental presentation index.
 //!
 //! Lists every scalar channel in the [`SignalRegistry`], grouped by the
 //! subsystem it serves, with unit (from [`crate::signal::SignalMeta`]) and
@@ -11,11 +10,10 @@
 //! ## Change-driven list
 //!
 //! The grouped/sorted catalog is **not** rebuilt every frame. The
-//! registry has no revision counter, so we derive a cheap
-//! order-independent fingerprint of the channel *set* (xor of per-ref
-//! hashes + count — same spirit as the history fingerprints the
-//! canvas-plot snapshot producer uses). Sample pushes don't move it;
-//! only channels appearing/disappearing do. Latest-value cells are
+//! registry publishes coalesced descriptor changes. Bounded worker batches
+//! prepare those descriptors, then patch the affected tree paths and alias groups.
+//! Selection filters the persistent index; samples do not enqueue patches.
+//! Latest-value cells are
 //! O(1) `samples.back()` reads per visible row.
 //!
 //! ## Scoping to the selection
@@ -292,7 +290,7 @@ pub fn bind_dropped_channel(
 
 // ── Cached catalog ───────────────────────────────────────────────────
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Row {
     sig: SignalRef,
     /// Reused by visible rows so each repaint only clones a shared path handle.
@@ -307,10 +305,9 @@ struct Row {
     canonical_name: Option<String>,
     presentation: SignalPresentation,
     exposure: SignalExposure,
-    in_focus: bool,
     active: bool,
     /// Lowercased values keep runtime filter matching allocation-free during
-    /// repaint; the catalog worker rebuilds them with each catalog revision.
+    /// repaint; a descriptor patch refreshes them only for its changed row.
     search_fields: [String; 5],
 }
 
@@ -390,7 +387,7 @@ fn snapshot_rows(reg: &SignalRegistry) -> Vec<Row> {
                 canonical_name: meta.and_then(|m| m.canonical_name.clone()),
                 presentation: meta.map(|m| m.presentation.clone()).unwrap_or_default(),
                 exposure: meta.map_or(SignalExposure::Public, |m| m.exposure),
-                in_focus: sig.entity != Entity::PLACEHOLDER,
+
                 active: reg.is_active(sig),
                 search_fields: Default::default(),
             }
@@ -398,63 +395,257 @@ fn snapshot_rows(reg: &SignalRegistry) -> Vec<Row> {
         .collect()
 }
 
-fn deduplicated_rows_from_snapshot(rows: Vec<Row>) -> Vec<Row> {
-    let mut selected = HashMap::<ModelStateIdentity, Row>::new();
-    let mut standalone = Vec::new();
-
-    for row in rows {
-        let Some(identity) = model_state_identity(&row) else {
-            standalone.push(row);
-            continue;
-        };
-        match selected.get(&identity) {
-            Some(current)
-                if model_state_priority(&row) <= model_state_priority(current)
-                    && row.sig.path >= current.sig.path => {}
-            _ => {
-                selected.insert(identity, row);
-            }
-        }
-    }
-
-    standalone.extend(selected.into_values());
-    standalone.sort_by(|left, right| {
-        left.sig
-            .entity
-            .to_bits()
-            .cmp(&right.sig.entity.to_bits())
-            .then(left.sig.path.cmp(&right.sig.path))
-    });
-    standalone
-}
-
 #[cfg(test)]
 fn deduplicated_rows(reg: &SignalRegistry) -> Vec<Row> {
-    deduplicated_rows_from_snapshot(snapshot_rows(reg))
+    let mut catalog = Catalog::default();
+    for row in snapshot_rows(reg) {
+        let prepared = prepare_telemetry_row(row, |_| None, |_| None, |_| None, |_| false);
+        catalog.apply(prepared.row.sig.clone(), Some(prepared));
+    }
+    let mut rows: Vec<_> = catalog
+        .displayed
+        .keys()
+        .map(|signal| catalog.entries[signal].row.as_ref().clone())
+        .collect();
+    rows.sort_by(|a, b| {
+        a.sig
+            .entity
+            .to_bits()
+            .cmp(&b.sig.entity.to_bits())
+            .then(a.sig.path.cmp(&b.sig.path))
+    });
+    rows
 }
 
 struct Catalog {
     key: u64,
-    /// [`TelemetryFocus::fingerprint`] the tree's `in_focus` flags were built
-    /// against. Selecting a different rover changes no channel, so the channel-set
-    /// key alone would leave every flag stale.
-    focus_key: u64,
     root: TreeNode,
+    entries: HashMap<SignalRef, PreparedTelemetryRow>,
+    aliases: HashMap<ModelStateIdentity, HashSet<SignalRef>>,
+    winners: HashMap<ModelStateIdentity, SignalRef>,
+    displayed: HashMap<SignalRef, Vec<String>>,
+    ancestor_signals: HashMap<Entity, HashSet<SignalRef>>,
+    owner_signals: HashMap<Entity, HashSet<SignalRef>>,
+    facts: HashMap<Entity, EntityCatalogFacts>,
 }
 
 impl Default for Catalog {
     fn default() -> Self {
         Self {
             key: 0,
-            focus_key: 0,
             root: TreeNode::new("root".to_string(), "Telemetry".to_string()),
+            entries: Default::default(),
+            aliases: Default::default(),
+            winners: Default::default(),
+            displayed: Default::default(),
+            ancestor_signals: Default::default(),
+            owner_signals: Default::default(),
+            facts: Default::default(),
         }
     }
 }
 
-/// Monotonic revision of the channel catalog. The signal registry owns this
-/// change detection because it is the sole owner of the channel set and its
-/// metadata; sampling must not make the UI scan and hash every channel.
+fn insert_prepared_row(root: &mut TreeNode, prepared: &PreparedTelemetryRow) {
+    let mut node = root;
+    for (id, label) in &prepared.lineage {
+        node = node
+            .children
+            .entry(id.clone())
+            .or_insert_with(|| TreeNode::new(id.clone(), label.clone()));
+        if node.label.as_ref() != label {
+            node.label = Arc::from(label.as_str());
+            node.filter_label = label.to_lowercase();
+        }
+    }
+    match node.rows.binary_search_by(|row| {
+        row.sig.path.cmp(&prepared.row.sig.path).then(
+            row.sig
+                .entity
+                .to_bits()
+                .cmp(&prepared.row.sig.entity.to_bits()),
+        )
+    }) {
+        Ok(index) => node.rows[index] = Arc::clone(&prepared.row),
+        Err(index) => node.rows.insert(index, Arc::clone(&prepared.row)),
+    }
+}
+
+fn remove_tree_row(node: &mut TreeNode, path: &[String], signal: &SignalRef) {
+    if let Some((first, rest)) = path.split_first() {
+        if let Some(child) = node.children.get_mut(first) {
+            remove_tree_row(child, rest, signal);
+            if child.children.is_empty() && child.rows.is_empty() {
+                node.children.remove(first);
+            }
+        }
+    } else {
+        if let Ok(index) = node.rows.binary_search_by(|row| {
+            row.sig
+                .path
+                .cmp(&signal.path)
+                .then(row.sig.entity.to_bits().cmp(&signal.entity.to_bits()))
+        }) {
+            node.rows.remove(index);
+        }
+    }
+}
+
+impl Catalog {
+    fn focused_owners(
+        &self,
+        roots: &[Entity],
+        root_path: impl Fn(Entity) -> Option<String>,
+    ) -> HashSet<Entity> {
+        let paths: Vec<_> = roots.iter().filter_map(|root| root_path(*root)).collect();
+        self.owner_signals
+            .keys()
+            .copied()
+            .filter(|owner| {
+                if *owner == Entity::PLACEHOLDER {
+                    return false;
+                }
+                if let Some(path) = self
+                    .facts
+                    .get(owner)
+                    .and_then(|fact| fact.usd_path.as_deref())
+                {
+                    paths.iter().any(|root| {
+                        path == root
+                            || path
+                                .strip_prefix(root)
+                                .is_some_and(|suffix| suffix.starts_with('/'))
+                    })
+                } else {
+                    entity_in_focus(*owner, roots, |entity| {
+                        self.facts.get(&entity).and_then(|fact| fact.parent)
+                    })
+                }
+            })
+            .collect()
+    }
+
+    fn remove_displayed(&mut self, signal: &SignalRef) {
+        if let Some(path) = self.displayed.remove(signal) {
+            remove_tree_row(&mut self.root, &path, signal);
+        }
+    }
+
+    fn display(&mut self, signal: &SignalRef) {
+        let prepared = self
+            .entries
+            .get(signal)
+            .expect("displayed channel has a prepared descriptor");
+        let path: Vec<_> = prepared.lineage.iter().map(|(id, _)| id.clone()).collect();
+        if self.displayed.get(signal).is_some_and(|old| old != &path) {
+            self.remove_displayed(signal);
+        }
+        let prepared = &self.entries[signal];
+        insert_prepared_row(&mut self.root, prepared);
+        self.displayed.insert(signal.clone(), path);
+    }
+
+    /// Only changed channels and their old/new alias groups are reconciled.
+    fn apply(&mut self, signal: SignalRef, prepared: Option<PreparedTelemetryRow>) {
+        let mut affected = HashSet::new();
+        let mut previous_ancestors = Vec::new();
+        if let Some(previous) = self.entries.remove(&signal) {
+            if let Some(identity) = model_state_identity(&previous.row) {
+                if let Some(members) = self.aliases.get_mut(&identity) {
+                    members.remove(&signal);
+                }
+                affected.insert(identity);
+            }
+            previous_ancestors = previous.ancestors;
+            for ancestor in &previous_ancestors {
+                if let Some(channels) = self.ancestor_signals.get_mut(ancestor) {
+                    channels.remove(&signal);
+                    if channels.is_empty() {
+                        self.ancestor_signals.remove(ancestor);
+                    }
+                }
+            }
+            if let Some(channels) = self.owner_signals.get_mut(&signal.entity) {
+                channels.remove(&signal);
+                if channels.is_empty() {
+                    self.owner_signals.remove(&signal.entity);
+                }
+            }
+        }
+        let mut standalone = false;
+        if let Some(prepared) = prepared {
+            for ancestor in &prepared.ancestors {
+                self.ancestor_signals
+                    .entry(*ancestor)
+                    .or_default()
+                    .insert(signal.clone());
+            }
+            self.owner_signals
+                .entry(signal.entity)
+                .or_default()
+                .insert(signal.clone());
+            if let Some(identity) = model_state_identity(&prepared.row) {
+                self.aliases
+                    .entry(identity.clone())
+                    .or_default()
+                    .insert(signal.clone());
+                affected.insert(identity);
+            } else {
+                standalone = true;
+            }
+            self.entries.insert(signal.clone(), prepared);
+        }
+        // Deterministic tie-breaking uses exact signal path after producer priority.
+        let mut affected: Vec<_> = affected.into_iter().collect();
+        affected.sort_by(|a, b| {
+            a.entity
+                .to_bits()
+                .cmp(&b.entity.to_bits())
+                .then(a.group_path.cmp(&b.group_path))
+                .then(a.model_class.cmp(&b.model_class))
+                .then(a.model_variable.cmp(&b.model_variable))
+        });
+        let mut selected = standalone;
+        for identity in affected {
+            let chosen = self
+                .aliases
+                .get(&identity)
+                .into_iter()
+                .flatten()
+                .filter_map(|sig| self.entries.get(sig))
+                .max_by(|a, b| {
+                    model_state_priority(&a.row)
+                        .cmp(&model_state_priority(&b.row))
+                        .then_with(|| b.row.sig.path.cmp(&a.row.sig.path))
+                })
+                .map(|prepared| prepared.row.sig.clone());
+            let previous = self.winners.remove(&identity);
+            if let Some(previous) = previous.filter(|previous| Some(previous) != chosen.as_ref()) {
+                self.remove_displayed(&previous);
+            }
+            if let Some(chosen) = chosen {
+                selected |= chosen == signal;
+                self.display(&chosen);
+                self.winners.insert(identity, chosen);
+            } else {
+                self.aliases.remove(&identity);
+            }
+        }
+        if standalone {
+            self.display(&signal);
+        } else if !selected {
+            self.remove_displayed(&signal);
+        }
+        for ancestor in previous_ancestors {
+            if !self.ancestor_signals.contains_key(&ancestor) {
+                self.facts.remove(&ancestor);
+            }
+        }
+        self.key = self.key.wrapping_add(1);
+    }
+}
+
+/// Registry revision for resolving an explicit channel-selection request.
+/// Samples leave this lookup cache valid; presentation caches use `Catalog::key`.
 fn catalog_key(reg: &SignalRegistry) -> u64 {
     reg.catalog_revision()
 }
@@ -492,128 +683,152 @@ fn authored_path_lineage(path: &str, leaf_label: Option<&str>) -> Vec<(String, S
         .collect()
 }
 
-/// Rebuild the catalog from the live ownership hierarchy. This deliberately
+/// Prepare one descriptor from the live ownership hierarchy. This deliberately
 /// has no `wheel`, `motor`, `beam`, or other name-based classifier: the USD
 /// parent graph supplies the assembly, subsystem, and component grouping for
 /// every scene, including ones the editor has never seen before.
+struct PreparedTelemetryRow {
+    row: Arc<Row>,
+    lineage: Vec<(String, String)>,
+    ancestors: Vec<Entity>,
+}
+
+fn prepare_telemetry_row(
+    mut row: Row,
+    label_of: impl Fn(Entity) -> Option<String>,
+    parent_of: impl Fn(Entity) -> Option<Entity>,
+    usd_path_of: impl Fn(Entity) -> Option<String>,
+    is_navigation_root: impl Fn(Entity) -> bool,
+) -> PreparedTelemetryRow {
+    let sig = row.sig.clone();
+    row.search_fields = normalized_search_fields(
+        &row.sig.path,
+        row.description.as_deref(),
+        row.model_class.as_deref(),
+        row.model_variable.as_deref(),
+        row.source_asset.as_deref(),
+    );
+
+    let group_path = row.group_path.as_deref().filter(|path| !path.is_empty());
+    let mut lineage: Vec<(String, String)> =
+        if let Some(path) = group_path.filter(|path| path.trim_start().starts_with('/')) {
+            // Authored ownership is the canonical hierarchy for all
+            // producers. This merges physical readback and Modelica channels
+            // without coupling either producer to the other.
+            authored_path_lineage(path, None)
+        } else if let Some(path) = usd_path_of(sig.entity) {
+            let label = label_of(sig.entity);
+            authored_path_lineage(&path, label.as_deref())
+        } else {
+            let mut entities = Vec::new();
+            let mut cursor = Some(sig.entity);
+            for _ in 0..MAX_ANCESTOR_DEPTH {
+                let Some(entity) = cursor else { break };
+                if entities.contains(&entity) {
+                    break;
+                }
+                entities.push(entity);
+                if is_navigation_root(entity) {
+                    break;
+                }
+                cursor = (entity != Entity::PLACEHOLDER)
+                    .then(|| parent_of(entity))
+                    .flatten();
+            }
+            entities.reverse();
+            entities
+                .into_iter()
+                .map(|entity| {
+                    let label = if entity == Entity::PLACEHOLDER {
+                        "Global".to_string()
+                    } else {
+                        label_of(entity).unwrap_or_else(|| "Unnamed entity".to_string())
+                    };
+                    (format!("entity:{}", entity.to_bits()), label)
+                })
+                .collect()
+        };
+    // A producer-owned semantic presentation group is a value namespace,
+    // not another entity in the ownership hierarchy. It therefore gets one
+    // explicit child below the owner and its rows retain their exact signal
+    // identities. Scalar channels keep the authored Modelica namespace or
+    // ordinary producer path structure.
+    let mut structure = if let Some(group) = presentation_group(&row.presentation) {
+        vec![(format!("signal-group:{group}"), humanize_identifier(group))]
+    } else {
+        let structure_path = group_path
+            .and(row.model_variable.as_deref())
+            .unwrap_or(&sig.path);
+        signal_structure(structure_path)
+    };
+    // Canonical authored paths may repeat the USD ancestry already
+    // represented by the entity lineage. Remove the complete shared
+    // prefix, then make the remaining nodes relative to their owner.
+    let shared_prefix_len = structure
+        .iter()
+        .zip(&lineage)
+        .take_while(|((structure_id, _), (lineage_id, _))| structure_id == lineage_id)
+        .count();
+    if shared_prefix_len > 0 {
+        structure.drain(..shared_prefix_len);
+        for (id, _) in &mut structure {
+            if id.starts_with('/') {
+                if let Some(segment) = id.rsplit('/').find(|segment| !segment.is_empty()) {
+                    *id = format!("signal-structure:{segment}");
+                }
+            }
+        }
+    }
+    if group_path.is_some_and(|path| path.trim_start().starts_with('/')) {
+        // `signal_structure` returns relative IDs for Modelica variables;
+        // keep that distinction explicit even if a future producer emits
+        // an absolute variable spelling.
+        for (id, _) in &mut structure {
+            if id.starts_with('/') {
+                if let Some(segment) = id.rsplit('/').find(|s| !s.is_empty()) {
+                    *id = format!("signal-structure:{segment}");
+                }
+            }
+        }
+    }
+    lineage.extend(structure);
+    let mut ancestors = Vec::new();
+    let mut cursor = Some(sig.entity);
+    for _ in 0..MAX_ANCESTOR_DEPTH {
+        let Some(entity) = cursor else { break };
+        if ancestors.contains(&entity) {
+            break;
+        }
+        ancestors.push(entity);
+        cursor = parent_of(entity);
+    }
+    PreparedTelemetryRow {
+        row: Arc::new(row),
+        lineage,
+        ancestors,
+    }
+}
+
+#[cfg(test)]
 fn build_tree_rows(
     rows: Vec<Row>,
     label_of: impl Fn(Entity) -> Option<String>,
     parent_of: impl Fn(Entity) -> Option<Entity>,
     usd_path_of: impl Fn(Entity) -> Option<String>,
     is_navigation_root: impl Fn(Entity) -> bool,
-    in_focus: impl Fn(Entity) -> bool,
 ) -> TreeNode {
-    let mut root = TreeNode::new("root".to_string(), "Telemetry".to_string());
-    for row in deduplicated_rows_from_snapshot(rows) {
-        // Keep the signal identity independent from the row move below.
-        let sig = row.sig.clone();
-        let mut row = Row {
-            in_focus: sig.entity != Entity::PLACEHOLDER && in_focus(sig.entity),
-            ..row
-        };
-        row.search_fields = normalized_search_fields(
-            &row.sig.path,
-            row.description.as_deref(),
-            row.model_class.as_deref(),
-            row.model_variable.as_deref(),
-            row.source_asset.as_deref(),
+    let mut catalog = Catalog::default();
+    for row in rows {
+        let prepared = prepare_telemetry_row(
+            row,
+            &label_of,
+            &parent_of,
+            &usd_path_of,
+            &is_navigation_root,
         );
-
-        let group_path = row.group_path.as_deref().filter(|path| !path.is_empty());
-        let mut lineage: Vec<(String, String)> =
-            if let Some(path) = group_path.filter(|path| path.trim_start().starts_with('/')) {
-                // Authored ownership is the canonical hierarchy for all
-                // producers. This merges physical readback and Modelica channels
-                // without coupling either producer to the other.
-                authored_path_lineage(path, None)
-            } else if let Some(path) = usd_path_of(sig.entity) {
-                let label = label_of(sig.entity);
-                authored_path_lineage(&path, label.as_deref())
-            } else {
-                let mut entities = Vec::new();
-                let mut cursor = Some(sig.entity);
-                for _ in 0..MAX_ANCESTOR_DEPTH {
-                    let Some(entity) = cursor else { break };
-                    if entities.contains(&entity) {
-                        break;
-                    }
-                    entities.push(entity);
-                    if is_navigation_root(entity) {
-                        break;
-                    }
-                    cursor = (entity != Entity::PLACEHOLDER)
-                        .then(|| parent_of(entity))
-                        .flatten();
-                }
-                entities.reverse();
-                entities
-                    .into_iter()
-                    .map(|entity| {
-                        let label = if entity == Entity::PLACEHOLDER {
-                            "Global".to_string()
-                        } else {
-                            label_of(entity).unwrap_or_else(|| "Unnamed entity".to_string())
-                        };
-                        (format!("entity:{}", entity.to_bits()), label)
-                    })
-                    .collect()
-            };
-        // A producer-owned semantic presentation group is a value namespace,
-        // not another entity in the ownership hierarchy. It therefore gets one
-        // explicit child below the owner and its rows retain their exact signal
-        // identities. Scalar channels keep the authored Modelica namespace or
-        // ordinary producer path structure.
-        let mut structure = if let Some(group) = presentation_group(&row.presentation) {
-            vec![(format!("signal-group:{group}"), humanize_identifier(group))]
-        } else {
-            let structure_path = group_path
-                .and(row.model_variable.as_deref())
-                .unwrap_or(&sig.path);
-            signal_structure(structure_path)
-        };
-        // Canonical authored paths may repeat the USD ancestry already
-        // represented by the entity lineage. Remove the complete shared
-        // prefix, then make the remaining nodes relative to their owner.
-        let shared_prefix_len = structure
-            .iter()
-            .zip(&lineage)
-            .take_while(|((structure_id, _), (lineage_id, _))| structure_id == lineage_id)
-            .count();
-        if shared_prefix_len > 0 {
-            structure.drain(..shared_prefix_len);
-            for (id, _) in &mut structure {
-                if id.starts_with('/') {
-                    if let Some(segment) = id.rsplit('/').find(|segment| !segment.is_empty()) {
-                        *id = format!("signal-structure:{segment}");
-                    }
-                }
-            }
-        }
-        if group_path.is_some_and(|path| path.trim_start().starts_with('/')) {
-            // `signal_structure` returns relative IDs for Modelica variables;
-            // keep that distinction explicit even if a future producer emits
-            // an absolute variable spelling.
-            for (id, _) in &mut structure {
-                if id.starts_with('/') {
-                    if let Some(segment) = id.rsplit('/').find(|s| !s.is_empty()) {
-                        *id = format!("signal-structure:{segment}");
-                    }
-                }
-            }
-        }
-        lineage.extend(structure);
-        let mut node = &mut root;
-        for (id, label) in lineage {
-            node = node
-                .children
-                .entry(id.clone())
-                .or_insert_with(|| TreeNode::new(id, label));
-        }
-        node.rows.push(Arc::new(row));
+        catalog.apply(prepared.row.sig.clone(), Some(prepared));
     }
-    sort_tree(&mut root);
-    root
+    catalog.root
 }
 
 #[cfg(test)]
@@ -623,7 +838,6 @@ fn build_tree(
     parent_of: impl Fn(Entity) -> Option<Entity>,
     usd_path_of: impl Fn(Entity) -> Option<String>,
     is_navigation_root: impl Fn(Entity) -> bool,
-    in_focus: impl Fn(Entity) -> bool,
 ) -> TreeNode {
     build_tree_rows(
         snapshot_rows(reg),
@@ -631,60 +845,89 @@ fn build_tree(
         parent_of,
         usd_path_of,
         is_navigation_root,
-        in_focus,
     )
 }
 
-fn sort_tree(node: &mut TreeNode) {
-    node.rows.sort_by(|a, b| a.sig.path.cmp(&b.sig.path));
-    for child in node.children.values_mut() {
-        sort_tree(child);
-    }
-}
-
-/// Depth cap for the ancestor walk that decides focus membership. A vessel is a
-/// handful of levels deep (rover → rocker → motor); the cap exists so a cyclic or
-/// corrupt hierarchy can't spin the UI thread, not because 32 is a real limit.
 const MAX_ANCESTOR_DEPTH: usize = 32;
-
-/// Bound the channel metadata copied on one Update when a large telemetry
-/// catalog is admitted or its presentation focus changes.
 const TELEMETRY_CATALOG_ROWS_PER_UPDATE: usize = 64;
 
-#[derive(Default)]
+#[derive(Default, Clone, PartialEq, Eq)]
 struct EntityCatalogFacts {
     label: Option<String>,
     parent: Option<Entity>,
     usd_path: Option<String>,
 }
 
-/// The telemetry catalog is derived from an immutable registry and hierarchy
-/// snapshot so sorting and tree construction stay off the panel render pass.
-#[derive(Resource)]
-pub(crate) struct TelemetryCatalogBuildState {
-    desired_key: Option<(u64, u64)>,
-    catalog: Arc<Catalog>,
-    snapshot: Option<PendingTelemetryCatalogSnapshot>,
-    task: Option<Task<((u64, u64), Catalog)>>,
-}
-
-struct PendingTelemetryCatalogSnapshot {
-    key: (u64, u64),
-    focus_roots: Vec<Entity>,
-    signals: VecDeque<SignalRef>,
-    rows: Vec<Row>,
+struct PreparedTelemetryBatch {
+    rows: Vec<(SignalRef, u64, Option<PreparedTelemetryRow>)>,
     facts: HashMap<Entity, EntityCatalogFacts>,
+    worker_ms: f64,
 }
 
-impl Default for TelemetryCatalogBuildState {
-    fn default() -> Self {
-        Self {
-            desired_key: None,
-            catalog: Arc::new(Catalog::default()),
-            snapshot: None,
-            task: None,
+#[derive(Default)]
+struct CatalogMetrics {
+    initial_scans: u64,
+    descriptor_notifications: u64,
+    hierarchy_invalidations: u64,
+    prepared_channels: u64,
+    committed_channels: u64,
+    superseded_channels: u64,
+    last_batch_channels: usize,
+    last_capture_ms: f64,
+    max_capture_ms: f64,
+    last_worker_ms: f64,
+    max_worker_ms: f64,
+    last_commit_ms: f64,
+    max_commit_ms: f64,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct TelemetryCatalogBuildState {
+    catalog: Catalog,
+    initialized: bool,
+    pending: VecDeque<SignalRef>,
+    queued: HashSet<SignalRef>,
+    versions: HashMap<SignalRef, u64>,
+    in_flight_ancestors: HashMap<Entity, HashSet<SignalRef>>,
+    in_flight_facts: HashMap<Entity, EntityCatalogFacts>,
+    sequence: u64,
+    task: Option<Task<PreparedTelemetryBatch>>,
+    metrics: CatalogMetrics,
+}
+
+impl TelemetryCatalogBuildState {
+    fn enqueue(&mut self, signal: SignalRef) {
+        self.sequence = self.sequence.wrapping_add(1);
+        self.versions.insert(signal.clone(), self.sequence);
+        if self.queued.insert(signal.clone()) {
+            self.pending.push_back(signal);
         }
     }
+}
+
+pub(crate) fn clear_telemetry_catalog(mut build: ResMut<TelemetryCatalogBuildState>) {
+    let next_key = build.catalog.key.wrapping_add(1);
+    *build = TelemetryCatalogBuildState::default();
+    build.catalog.key = next_key;
+}
+
+fn read_entity_catalog_facts(
+    entity: Entity,
+    entity_info: &Query<(
+        Option<&Name>,
+        Option<&lunco_core::markers::Callsign>,
+        Option<&lunco_core::CatalogEntryId>,
+        Option<&ChildOf>,
+        Option<&UsdPrimPath>,
+    )>,
+) -> Option<EntityCatalogFacts> {
+    let (name, callsign, catalog_id, parent, usd_path) = entity_info.get(entity).ok()?;
+    let label = lunco_core::entity_display_name(name, callsign, catalog_id);
+    Some(EntityCatalogFacts {
+        label: (!label.is_empty()).then_some(label),
+        parent: parent.map(ChildOf::parent),
+        usd_path: usd_path.map(|path| path.path.clone()),
+    })
 }
 
 fn capture_entity_catalog_facts(
@@ -696,6 +939,7 @@ fn capture_entity_catalog_facts(
         Option<&ChildOf>,
         Option<&UsdPrimPath>,
     )>,
+    previous: &HashMap<Entity, EntityCatalogFacts>,
     facts: &mut HashMap<Entity, EntityCatalogFacts>,
 ) {
     let mut cursor = Some(owner);
@@ -704,30 +948,24 @@ fn capture_entity_catalog_facts(
         if facts.contains_key(&entity) {
             break;
         }
-        let Ok((name, callsign, catalog_id, parent, usd_path)) = entity_info.get(entity) else {
+        let Some(fact) = read_entity_catalog_facts(entity, entity_info)
+            .or_else(|| previous.get(&entity).cloned())
+        else {
             break;
         };
-        let label = lunco_core::entity_display_name(name, callsign, catalog_id);
-        let parent = parent.map(ChildOf::parent);
-        facts.insert(
-            entity,
-            EntityCatalogFacts {
-                label: (!label.is_empty()).then_some(label),
-                parent,
-                usd_path: usd_path.map(|path| path.path.clone()),
-            },
-        );
-        cursor = parent;
+        cursor = fact.parent;
+        facts.insert(entity, fact);
     }
 }
 
-/// Capture channel metadata and owner hierarchy in bounded Update slices, then
-/// derive the grouped presentation tree on the compute pool. Sample updates do
-/// not change the catalog revision and therefore do not schedule this work.
+/// Notifications are consumed even for hidden tabs. Only changed descriptors
+/// and channels depending on changed hierarchy facts are queued for preparation.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn prepare_telemetry_catalog(
     mut build: ResMut<TelemetryCatalogBuildState>,
     registry: Option<Res<SignalRegistry>>,
-    focus: Option<Res<TelemetryFocus>>,
+    workbench: Option<Res<lunco_workbench_core::WorkbenchSnapshot>>,
+    mut changes: MessageReader<lunco_signal::SignalDescriptorsChanged>,
     entity_info: Query<(
         Option<&Name>,
         Option<&lunco_core::markers::Callsign>,
@@ -735,73 +973,118 @@ pub(crate) fn prepare_telemetry_catalog(
         Option<&ChildOf>,
         Option<&UsdPrimPath>,
     )>,
+    changed_owners: Query<
+        Entity,
+        Or<(
+            Changed<Name>,
+            Changed<lunco_core::markers::Callsign>,
+            Changed<lunco_core::CatalogEntryId>,
+            Changed<ChildOf>,
+            Changed<UsdPrimPath>,
+        )>,
+    >,
+    mut removed_names: RemovedComponents<Name>,
+    mut removed_callsigns: RemovedComponents<lunco_core::markers::Callsign>,
+    mut removed_catalog_ids: RemovedComponents<lunco_core::CatalogEntryId>,
+    mut removed_parents: RemovedComponents<ChildOf>,
+    mut removed_paths: RemovedComponents<UsdPrimPath>,
 ) {
     let Some(registry) = registry else {
         return;
     };
-    let key = (
-        catalog_key(&registry),
-        focus.as_deref().map_or(0, TelemetryFocus::fingerprint),
-    );
-    build.desired_key = Some(key);
-    if build.task.is_some() {
-        return;
+    for change in changes.read() {
+        build.metrics.descriptor_notifications += change.signals.len() as u64;
+        for signal in &change.signals {
+            build.enqueue(signal.clone());
+        }
     }
-    if (build.catalog.key, build.catalog.focus_key) == key {
-        build.snapshot = None;
-        return;
-    }
-
-    if !build
-        .snapshot
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.key == key)
+    let mut hierarchy_channels = HashSet::new();
+    for entity in changed_owners
+        .iter()
+        .chain(removed_names.read())
+        .chain(removed_callsigns.read())
+        .chain(removed_catalog_ids.read())
+        .chain(removed_parents.read())
+        .chain(removed_paths.read())
     {
-        let _snapshot_start =
-            bevy::log::info_span!("telemetry_catalog_snapshot_start", catalog_revision = key.0)
-                .entered();
-        let focus_roots = focus
-            .as_deref()
-            .map(|focus| focus.roots.clone())
-            .unwrap_or_default();
-        // Keep all hierarchy facts from one World snapshot; channel-owned
-        // descriptor copies are the part that is spread across Updates.
-        let mut signals = VecDeque::with_capacity(registry.scalar_count());
-        let mut owners = HashSet::new();
-        for (signal, _) in registry.iter_scalar() {
-            signals.push_back(signal.clone());
-            owners.insert(signal.entity);
+        let current = read_entity_catalog_facts(entity, &entity_info);
+        let captured = build
+            .in_flight_facts
+            .get(&entity)
+            .or_else(|| build.catalog.facts.get(&entity));
+        if current.as_ref() == captured {
+            continue;
         }
-        let mut facts = HashMap::new();
-        for owner in owners.into_iter().chain(focus_roots.iter().copied()) {
-            capture_entity_catalog_facts(owner, &entity_info, &mut facts);
+        for channels in [
+            build.catalog.ancestor_signals.get(&entity),
+            build.in_flight_ancestors.get(&entity),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            hierarchy_channels.extend(channels.iter().cloned());
         }
-        build.snapshot = Some(PendingTelemetryCatalogSnapshot {
-            key,
-            focus_roots,
-            rows: Vec::with_capacity(signals.len()),
-            signals,
-            facts,
-        });
     }
-
-    let snapshot = build
-        .snapshot
-        .as_mut()
-        .expect("the requested telemetry snapshot was initialized");
-    let processed = bevy::log::info_span!(
-        "telemetry_catalog_snapshot",
-        catalog_revision = key.0,
-        remaining = snapshot.signals.len()
+    let mut hierarchy_channels: Vec<_> = hierarchy_channels.into_iter().collect();
+    hierarchy_channels.sort_by(|a, b| {
+        a.entity
+            .to_bits()
+            .cmp(&b.entity.to_bits())
+            .then(a.path.cmp(&b.path))
+    });
+    build.metrics.hierarchy_invalidations += hierarchy_channels.len() as u64;
+    for signal in hierarchy_channels {
+        build.enqueue(signal);
+    }
+    if workbench
+        .as_deref()
+        .is_some_and(|snapshot| !snapshot.is_panel_visible(TELEMETRY_BROWSER_PANEL_ID))
+    {
+        return;
+    }
+    if !build.initialized {
+        let mut signals: Vec<_> = registry
+            .iter_scalar()
+            .map(|(signal, _)| signal.clone())
+            .collect();
+        signals.sort_by(|a, b| {
+            a.entity
+                .to_bits()
+                .cmp(&b.entity.to_bits())
+                .then(a.path.cmp(&b.path))
+        });
+        for signal in signals {
+            build.enqueue(signal);
+        }
+        build.initialized = true;
+        build.metrics.initial_scans += 1;
+    }
+    if build.task.is_some() || build.pending.is_empty() {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let _span = bevy::log::info_span!(
+        "telemetry_catalog_patch_capture",
+        pending = build.pending.len()
     )
-    .in_scope(|| {
-        for _ in 0..TELEMETRY_CATALOG_ROWS_PER_UPDATE {
-            let Some(signal) = snapshot.signals.pop_front() else {
-                break;
-            };
+    .entered();
+    let mut rows = Vec::new();
+    let mut facts = HashMap::new();
+    for _ in 0..TELEMETRY_CATALOG_ROWS_PER_UPDATE {
+        let Some(signal) = build.pending.pop_front() else {
+            break;
+        };
+        build.queued.remove(&signal);
+        let version = build.versions[&signal];
+        let row = registry.scalar_history(&signal).map(|_| {
+            capture_entity_catalog_facts(
+                signal.entity,
+                &entity_info,
+                &build.catalog.facts,
+                &mut facts,
+            );
             let meta = registry.meta(&signal);
-            snapshot.rows.push(Row {
-                in_focus: signal.entity != Entity::PLACEHOLDER,
+            Row {
                 active: registry.is_active(&signal),
                 drag_payload: ChannelDragPayload::from_signal(&signal),
                 unit: meta.and_then(|meta| meta.unit.clone()),
@@ -817,105 +1100,187 @@ pub(crate) fn prepare_telemetry_catalog(
                     .unwrap_or_default(),
                 exposure: meta.map_or(SignalExposure::Public, |meta| meta.exposure),
                 search_fields: Default::default(),
-                sig: signal,
-            });
-        }
-        snapshot.signals.is_empty()
-    });
-    if !processed {
-        return;
-    }
-
-    let snapshot = build
-        .snapshot
-        .take()
-        .expect("the completed telemetry snapshot is retained");
-    let PendingTelemetryCatalogSnapshot {
-        key,
-        focus_roots,
-        rows,
-        facts,
-        ..
-    } = snapshot;
-    if rows.is_empty() {
-        build.catalog = Arc::new(Catalog {
-            key: key.0,
-            focus_key: key.1,
-            root: TreeNode::new("root".to_string(), "Telemetry".to_string()),
+                sig: signal.clone(),
+            }
         });
-        return;
+        if row.is_some() {
+            let mut cursor = Some(signal.entity);
+            let mut visited = HashSet::new();
+            for _ in 0..MAX_ANCESTOR_DEPTH {
+                let Some(entity) = cursor else { break };
+                if !visited.insert(entity) {
+                    break;
+                }
+                build
+                    .in_flight_ancestors
+                    .entry(entity)
+                    .or_default()
+                    .insert(signal.clone());
+                cursor = facts.get(&entity).and_then(|fact| fact.parent);
+            }
+        }
+        rows.push((signal, version, row));
     }
-
-    let channel_count = rows.len();
-    let entity_fact_count = facts.len();
-    let span = bevy::log::info_span!(
-        "telemetry_catalog_build_worker",
-        catalog_revision = key.0,
-        channels = channel_count,
-        entity_facts = entity_fact_count
-    );
+    build.in_flight_facts.clone_from(&facts);
+    build.metrics.last_batch_channels = rows.len();
+    build.metrics.prepared_channels += rows.len() as u64;
+    build.metrics.last_capture_ms = started.elapsed().as_secs_f64() * 1000.0;
+    build.metrics.max_capture_ms = build
+        .metrics
+        .max_capture_ms
+        .max(build.metrics.last_capture_ms);
     build.task = Some(AsyncComputeTaskPool::get().spawn(async move {
-        let _span = span.enter();
-        let root = build_tree_rows(
+        let started = std::time::Instant::now();
+        let _span = bevy::log::info_span!("telemetry_catalog_patch_worker", channels = rows.len())
+            .entered();
+        let rows = rows
+            .into_iter()
+            .map(|(sig, version, row)| {
+                let row = row.map(|row| {
+                    prepare_telemetry_row(
+                        row,
+                        |entity| facts.get(&entity).and_then(|fact| fact.label.clone()),
+                        |entity| facts.get(&entity).and_then(|fact| fact.parent),
+                        |entity| facts.get(&entity).and_then(|fact| fact.usd_path.clone()),
+                        |_| false,
+                    )
+                });
+                (sig, version, row)
+            })
+            .collect();
+        PreparedTelemetryBatch {
             rows,
-            |entity| facts.get(&entity).and_then(|fact| fact.label.clone()),
-            |entity| facts.get(&entity).and_then(|fact| fact.parent),
-            |entity| facts.get(&entity).and_then(|fact| fact.usd_path.clone()),
-            |_| false,
-            |entity| {
-                let Some(path) = facts.get(&entity).and_then(|fact| fact.usd_path.as_deref())
-                else {
-                    return entity_in_focus(entity, &focus_roots, |child| {
-                        facts.get(&child).and_then(|fact| fact.parent)
-                    });
-                };
-                focus_roots.iter().any(|root| {
-                    facts
-                        .get(root)
-                        .and_then(|fact| fact.usd_path.as_deref())
-                        .is_some_and(|root_path| {
-                            path == root_path
-                                || path
-                                    .strip_prefix(root_path)
-                                    .is_some_and(|suffix| suffix.starts_with('/'))
-                        })
-                })
-            },
-        );
-        (
-            key,
-            Catalog {
-                key: key.0,
-                focus_key: key.1,
-                root,
-            },
-        )
+            facts,
+            worker_ms: started.elapsed().as_secs_f64() * 1000.0,
+        }
     }));
 }
 
-/// Publish only the snapshot that still matches the live catalog and focus.
-/// A superseded worker result is discarded before the next snapshot starts.
+/// Commit a bounded patch without replacing the tree. Only an individually
+/// superseded descriptor is skipped; unrelated rows from the batch still land.
 pub(crate) fn poll_telemetry_catalog(mut build: ResMut<TelemetryCatalogBuildState>) {
     let completed = build
         .task
         .as_mut()
         .and_then(|task| future::block_on(future::poll_once(task)));
-    let Some((key, catalog)) = completed else {
+    let Some(batch) = completed else {
         return;
     };
+    let started = std::time::Instant::now();
+    let _span = bevy::log::info_span!(
+        "telemetry_catalog_patch_commit",
+        channels = batch.rows.len()
+    )
+    .entered();
     build.task = None;
-    if build.desired_key == Some(key) {
-        build.catalog = Arc::new(catalog);
+    build.in_flight_ancestors.clear();
+    build.in_flight_facts.clear();
+    build.metrics.last_worker_ms = batch.worker_ms;
+    build.metrics.max_worker_ms = build.metrics.max_worker_ms.max(batch.worker_ms);
+    for (signal, version, prepared) in batch.rows {
+        if build.versions.get(&signal) == Some(&version) {
+            build.versions.remove(&signal);
+            if let Some(prepared) = &prepared {
+                for ancestor in &prepared.ancestors {
+                    if let Some(fact) = batch.facts.get(ancestor) {
+                        build.catalog.facts.insert(*ancestor, fact.clone());
+                    }
+                }
+            }
+            build.catalog.apply(signal, prepared);
+            build.metrics.committed_channels += 1;
+        } else {
+            build.metrics.superseded_channels += 1;
+        }
+    }
+    build.metrics.last_commit_ms = started.elapsed().as_secs_f64() * 1000.0;
+    build.metrics.max_commit_ms = build
+        .metrics
+        .max_commit_ms
+        .max(build.metrics.last_commit_ms);
+}
+
+/// Read-only diagnostics for the production browser's incremental index.
+/// Counters distinguish steady sampling/selection from descriptor preparation.
+pub(crate) struct InspectTelemetryCatalogProvider;
+
+impl lunco_api::queries::ApiQueryProvider for InspectTelemetryCatalogProvider {
+    fn name(&self) -> &'static str {
+        "InspectTelemetryCatalog"
+    }
+
+    fn schema(&self) -> lunco_api_core::ApiQuerySchema {
+        lunco_api_core::ApiQuerySchema {
+            name: "InspectTelemetryCatalog".to_owned(),
+            description: Some("Inspect the telemetry browser's incremental presentation index and preparation costs.".to_owned()),
+            parameters: Some(vec![lunco_api_core::ApiQueryParameterSchema {
+                name: "signal".to_owned(), type_name: "String".to_owned(), required: false,
+                description: "Exact signal path to inspect across all owning entities.".to_owned(), allowed_values: None,
+            }]),
+            exactly_one_of: Vec::new(),
+            response: Some("Catalog counters, queue state, capture/worker/commit milliseconds, and matching descriptors with explicit entity identities.".to_owned()),
+        }
+    }
+
+    fn execute(
+        &self,
+        world: &World,
+        params: &lunco_api_core::ApiValue,
+    ) -> lunco_api::ApiQueryResult {
+        use lunco_api_core::api_value;
+        let build = world.resource::<TelemetryCatalogBuildState>();
+        let metrics = &build.metrics;
+        let signal = params
+            .get("signal")
+            .map(|value| {
+                value.as_str().map(str::to_owned).ok_or_else(|| {
+                    lunco_api::queries::ApiQueryError::new(
+                        lunco_api_core::ApiErrorCode::DeserializationError,
+                        "InspectTelemetryCatalog: `signal` must be a string",
+                    )
+                })
+            })
+            .transpose()?;
+        let mut matching: Vec<_> = build
+            .catalog
+            .entries
+            .values()
+            .filter(|entry| {
+                signal
+                    .as_ref()
+                    .is_some_and(|name| &entry.row.sig.path == name)
+            })
+            .collect();
+        matching.sort_by_key(|entry| entry.row.sig.entity.to_bits());
+        let descriptors: Vec<_> = matching.into_iter().map(|entry| api_value!({
+            "signal": entry.row.sig.path.clone(), "entity_bits": entry.row.sig.entity.to_bits(),
+            "unit": entry.row.unit.clone(), "group_path": entry.row.group_path.clone(),
+            "active": entry.row.active, "displayed": build.catalog.displayed.contains_key(&entry.row.sig),
+            "lineage": entry.lineage.iter().map(|(id,_)| api_value!(id.clone())).collect::<Vec<_>>(),
+        })).collect();
+        let focus = world
+            .get_resource::<TelemetryFocus>()
+            .cloned()
+            .unwrap_or_default();
+        let focused_owners = build.catalog.focused_owners(&focus.roots, |root| {
+            world.get::<UsdPrimPath>(root).map(|path| path.path.clone())
+        });
+        Ok(Some(api_value!({
+            "indexed_channels": build.catalog.entries.len(), "displayed_channels": build.catalog.displayed.len(),
+            "catalog_revision": build.catalog.key, "initial_scans": metrics.initial_scans,
+            "descriptor_notifications": metrics.descriptor_notifications, "hierarchy_invalidations": metrics.hierarchy_invalidations,
+            "pending_channels": build.pending.len(), "worker_active": build.task.is_some(),
+            "preparing": build.catalog.root.children.is_empty() && (!build.pending.is_empty() || build.task.is_some()),
+            "prepared_channels": metrics.prepared_channels, "committed_channels": metrics.committed_channels,
+            "superseded_channels": metrics.superseded_channels, "last_batch_channels": metrics.last_batch_channels,
+            "last_capture_ms": metrics.last_capture_ms, "max_capture_ms": metrics.max_capture_ms,
+            "last_worker_ms": metrics.last_worker_ms, "max_worker_ms": metrics.max_worker_ms,
+            "last_commit_ms": metrics.last_commit_ms, "max_commit_ms": metrics.max_commit_ms,
+            "focused_owners": focused_owners.len(), "descriptors": descriptors,
+        })))
     }
 }
 
-/// Is `entity` one of `roots`, or a descendant of one?
-///
-/// This is why the focus resource carries ROOTS and not channel owners: the user
-/// selects a rover, but its channels sit on the motor / battery / wheel prims
-/// underneath it. `parent_of` is the caller's hierarchy accessor (the panel passes
-/// `PanelCtx::get::<ChildOf>`), so this stays a pure function and is testable
-/// without a `World`.
 fn entity_in_focus(
     entity: Entity,
     roots: &[Entity],
@@ -1011,10 +1376,11 @@ fn row_visible(
     show_archived: bool,
     filter: &str,
     label: &str,
+    focused_owners: &HashSet<Entity>,
 ) -> bool {
     (show_archived || row.active)
         && (show_model_variables || row.exposure == SignalExposure::Public)
-        && (!scoped || row.in_focus)
+        && (!scoped || focused_owners.contains(&row.sig.entity))
         && filter_match_prepared(filter, label, &row.search_fields)
 }
 
@@ -1094,31 +1460,41 @@ struct NodeVisibility {
     focused: usize,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct FocusInputs(Vec<(Entity, Option<String>)>);
+
+impl FocusInputs {
+    fn capture(roots: &[Entity], root_path: impl Fn(Entity) -> Option<String>) -> Self {
+        Self(roots.iter().map(|root| (*root, root_path(*root))).collect())
+    }
+}
+
 #[derive(Debug)]
 struct VisibilityCache {
     catalog_key: u64,
-    focus_key: u64,
+    focus_key: FocusInputs,
     filter: String,
     normalized_filter: String,
     scoped: bool,
     show_archived: bool,
-    // TreeNode IDs are local grouping identities and may repeat under different
-    // owners, so the current immutable catalog node address keys its count.
+    // TreeNode IDs may repeat under different owners. Node addresses key counts
+    // only until the next catalog patch invalidates this visibility cache.
     counts: HashMap<usize, NodeVisibility>,
     root: NodeVisibility,
+    focused_owners: HashSet<Entity>,
 }
 
 impl VisibilityCache {
     fn matches(
         &self,
         catalog_key: u64,
-        focus_key: u64,
+        focus_key: &FocusInputs,
         filter: &str,
         scoped: bool,
         show_archived: bool,
     ) -> bool {
         self.catalog_key == catalog_key
-            && self.focus_key == focus_key
+            && &self.focus_key == focus_key
             && self.filter == filter
             && self.scoped == scoped
             && self.show_archived == show_archived
@@ -1133,14 +1509,15 @@ fn collect_visibility(
     show_archived: bool,
     filter: &str,
     counts: &mut HashMap<usize, NodeVisibility>,
+    focused_owners: &HashSet<Entity>,
 ) -> NodeVisibility {
     let mut visibility = NodeVisibility::default();
     for row in &node.rows {
-        if row.in_focus && (row.active || show_archived) {
+        if focused_owners.contains(&row.sig.entity) && (row.active || show_archived) {
             visibility.focused += 1;
         }
         if (!show_archived && !row.active)
-            || (scoped && !row.in_focus)
+            || (scoped && !focused_owners.contains(&row.sig.entity))
             || !filter_match_prepared(filter, &node.filter_label, &row.search_fields)
         {
             continue;
@@ -1151,7 +1528,8 @@ fn collect_visibility(
         }
     }
     for child in node.children.values() {
-        let child_visibility = collect_visibility(child, scoped, show_archived, filter, counts);
+        let child_visibility =
+            collect_visibility(child, scoped, show_archived, filter, counts, focused_owners);
         visibility.public += child_visibility.public;
         visibility.complete += child_visibility.complete;
         visibility.focused += child_visibility.focused;
@@ -1186,7 +1564,7 @@ enum VisibleTelemetryRow {
 #[derive(Debug, PartialEq, Eq)]
 struct VisibleTelemetryRowsKey {
     catalog_key: u64,
-    focus_key: u64,
+    focus_key: FocusInputs,
     filter: String,
     scoped: bool,
     show_model_variables: bool,
@@ -1197,14 +1575,14 @@ impl VisibleTelemetryRowsKey {
     fn matches(
         &self,
         catalog_key: u64,
-        focus_key: u64,
+        focus_key: &FocusInputs,
         filter: &str,
         scoped: bool,
         show_model_variables: bool,
         show_archived: bool,
     ) -> bool {
         self.catalog_key == catalog_key
-            && self.focus_key == focus_key
+            && &self.focus_key == focus_key
             && self.filter == filter
             && self.scoped == scoped
             && self.show_model_variables == show_model_variables
@@ -1224,6 +1602,7 @@ fn collect_visible_telemetry_rows(
     filter: &str,
     counts: &HashMap<usize, NodeVisibility>,
     rows: &mut Vec<VisibleTelemetryRow>,
+    focused_owners: &HashSet<Entity>,
 ) {
     let visible_count = counts
         .get(&(node as *const TreeNode as usize))
@@ -1268,6 +1647,7 @@ fn collect_visible_telemetry_rows(
             filter,
             counts,
             rows,
+            focused_owners,
         );
     }
     for (stripe, row) in node
@@ -1281,6 +1661,7 @@ fn collect_visible_telemetry_rows(
                 show_archived,
                 filter,
                 &node.filter_label,
+                focused_owners,
             )
         })
         .enumerate()
@@ -1515,6 +1896,7 @@ struct CachedFormattedValue {
 }
 
 struct CachedRowLabels {
+    descriptor: std::sync::Weak<Row>,
     label_color: egui::Color32,
     unit_color: egui::Color32,
     compact: Arc<egui::RichText>,
@@ -1534,21 +1916,24 @@ struct TelemetryRowTextCache {
 }
 
 impl TelemetryRowTextCache {
-    fn use_catalog(&mut self, catalog_key: u64) {
-        if self.catalog_key == Some(catalog_key) {
+    fn use_catalog(&mut self, catalog: &Catalog) {
+        if self.catalog_key == Some(catalog.key) {
             return;
         }
-        self.catalog_key = Some(catalog_key);
-        self.labels.clear();
-        self.values.clear();
-        self.no_sample = None;
+        self.catalog_key = Some(catalog.key);
+        self.labels
+            .retain(|signal, _| catalog.entries.contains_key(signal));
+        self.values
+            .retain(|signal, _| catalog.entries.contains_key(signal));
     }
 
-    fn refresh_labels(&mut self, row: &Row, theme: &TelemetryTheme) {
+    fn refresh_labels(&mut self, row: &Arc<Row>, theme: &TelemetryTheme) {
         let label_color = telemetry_row_label_color(row, theme);
         let unit_color = theme.text_subdued;
         let rebuild = self.labels.get(&row.sig).is_none_or(|cached| {
-            cached.label_color != label_color || cached.unit_color != unit_color
+            !std::ptr::eq(cached.descriptor.as_ptr(), Arc::as_ptr(row))
+                || cached.label_color != label_color
+                || cached.unit_color != unit_color
         });
         if rebuild {
             let make_label = |show_generated_names| {
@@ -1559,6 +1944,7 @@ impl TelemetryRowTextCache {
                 Arc::new(egui::RichText::new(label).color(label_color))
             };
             let labels = CachedRowLabels {
+                descriptor: Arc::downgrade(row),
                 label_color,
                 unit_color,
                 compact: make_label(false),
@@ -1575,7 +1961,7 @@ impl TelemetryRowTextCache {
 
     fn label_text(
         &mut self,
-        row: &Row,
+        row: &Arc<Row>,
         theme: &TelemetryTheme,
         show_generated_names: bool,
     ) -> Arc<egui::RichText> {
@@ -1591,7 +1977,7 @@ impl TelemetryRowTextCache {
         })
     }
 
-    fn unit_text(&mut self, row: &Row, theme: &TelemetryTheme) -> Arc<egui::RichText> {
+    fn unit_text(&mut self, row: &Arc<Row>, theme: &TelemetryTheme) -> Arc<egui::RichText> {
         self.refresh_labels(row, theme);
         Arc::clone(
             &self
@@ -1916,10 +2302,12 @@ impl Panel for TelemetryBrowserPanel {
         let has_focus = ctx
             .resource::<TelemetryFocus>()
             .is_some_and(|focus| !focus.roots.is_empty());
-        let focus_key = ctx
-            .resource::<TelemetryFocus>()
-            .map(|f| f.fingerprint())
-            .unwrap_or(0);
+        let focus_key = FocusInputs::capture(
+            ctx.resource::<TelemetryFocus>()
+                .map(|focus| focus.roots.as_slice())
+                .unwrap_or_default(),
+            |root| ctx.get::<UsdPrimPath>(root).map(|path| path.path.clone()),
+        );
         ui.horizontal(|ui| {
             ui.add_enabled(
                 has_focus,
@@ -1989,8 +2377,8 @@ impl Panel for TelemetryBrowserPanel {
         };
 
         // ── Change-driven catalog read ───────────────────────────
-        // The catalog producer snapshots the registry revision and focus, then
-        // derives the grouped tree off the UI pass. Never wait for that worker here.
+        // Descriptor patches are prepared off-thread; samples and selection
+        // do not invalidate the persistent channel index.
         let key = catalog_key(registry);
         if let Some(view) = ctx.resource::<TelemetryBrowserView>() {
             if view.signal.is_empty() {
@@ -2023,20 +2411,21 @@ impl Panel for TelemetryBrowserPanel {
         } else {
             self.requested_selection = None;
         }
-        self.row_text_cache.use_catalog(key);
         let Some(build) = ctx.resource::<TelemetryCatalogBuildState>() else {
             ui.label("Telemetry catalog is unavailable.");
             return;
         };
-        let Some(catalog) = (build.catalog.key == key && build.catalog.focus_key == focus_key)
-            .then(|| Arc::clone(&build.catalog))
-        else {
-            ui.label("Preparing telemetry channels…");
-            return;
-        };
+        let scoped = self.focus_only && has_focus;
+        let catalog = &build.catalog;
+
+        // Cache rows by the published tree, not the pending registry revision.
+        let key = catalog.key;
+        self.row_text_cache.use_catalog(catalog);
 
         if catalog.root.children.is_empty() {
-            if telemetry_enabled != Some(false) {
+            if !build.pending.is_empty() || build.task.is_some() {
+                ui.label("Preparing telemetry channels…");
+            } else if telemetry_enabled != Some(false) {
                 ui.label(
                     egui::RichText::new(
                         "No telemetry channels yet — run a simulation to populate the registry.",
@@ -2051,11 +2440,10 @@ impl Panel for TelemetryBrowserPanel {
         // checkbox must not invalidate the catalog, and the "selection has no
         // channels" case below needs to know the difference between "no channels"
         // and "none in scope".
-        let scoped = self.focus_only && has_focus;
         if self.visibility_cache.as_ref().is_none_or(|cache| {
             !cache.matches(
                 key,
-                focus_key,
+                &focus_key,
                 &self.filter,
                 scoped,
                 display_settings.show_archived,
@@ -2063,22 +2451,35 @@ impl Panel for TelemetryBrowserPanel {
         }) {
             let mut counts = HashMap::new();
             let normalized_filter = self.filter.to_lowercase();
+            let focus_roots = ctx
+                .resource::<TelemetryFocus>()
+                .map(|focus| focus.roots.as_slice())
+                .unwrap_or_default();
+            let focused_owners = catalog.focused_owners(focus_roots, |root| {
+                focus_key
+                    .0
+                    .iter()
+                    .find(|(entity, _)| *entity == root)
+                    .and_then(|(_, path)| path.clone())
+            });
             let root = collect_visibility(
                 &catalog.root,
                 scoped,
                 display_settings.show_archived,
                 &normalized_filter,
                 &mut counts,
+                &focused_owners,
             );
             self.visibility_cache = Some(VisibilityCache {
                 catalog_key: key,
-                focus_key,
+                focus_key: focus_key.clone(),
                 filter: self.filter.clone(),
                 normalized_filter,
                 scoped,
                 show_archived: display_settings.show_archived,
                 counts,
                 root,
+                focused_owners,
             });
         }
         let visibility = self
@@ -2136,7 +2537,7 @@ impl Panel for TelemetryBrowserPanel {
             || !self.visible_rows_key.as_ref().is_some_and(|cache| {
                 cache.matches(
                     key,
-                    focus_key,
+                    &focus_key,
                     &visibility.normalized_filter,
                     scoped,
                     self.show_model_variables,
@@ -2158,6 +2559,7 @@ impl Panel for TelemetryBrowserPanel {
                     &visibility.normalized_filter,
                     &visibility.counts,
                     &mut self.visible_rows,
+                    &visibility.focused_owners,
                 );
             }
             self.visible_rows_key = Some(VisibleTelemetryRowsKey {
@@ -2354,6 +2756,274 @@ mod tests {
         Entity::from_raw_u32(n).unwrap()
     }
 
+    fn indexed_row(registry: &SignalRegistry, signal: &SignalRef) -> PreparedTelemetryRow {
+        let row = snapshot_rows(registry)
+            .into_iter()
+            .find(|row| &row.sig == signal)
+            .unwrap();
+        prepare_telemetry_row(
+            row,
+            |_| Some("Source".to_string()),
+            |_| None,
+            |_| None,
+            |_| false,
+        )
+    }
+
+    #[test]
+    fn incremental_catalog_preserves_unrelated_rows_and_promotes_aliases() {
+        let owner = ent(1);
+        let canonical = SignalRef::new(owner, "power");
+        let alias = SignalRef::new(owner, "wrapper.power");
+        let unrelated = SignalRef::new(ent(2), "speed");
+        let mut registry = SignalRegistry::default();
+        for signal in [&canonical, &alias, &unrelated] {
+            registry.push_scalar(signal.clone(), 0.0, 1.0);
+        }
+        for (signal, exposure) in [
+            (&canonical, SignalExposure::Public),
+            (&alias, SignalExposure::Internal),
+        ] {
+            registry.update_meta(
+                signal.clone(),
+                crate::signal::SignalMeta {
+                    group_path: Some("/Vehicle/Power".into()),
+                    model_class: Some("Plant".into()),
+                    model_variable: Some("power".into()),
+                    canonical_name: Some("power".into()),
+                    unit: Some("W".into()),
+                    exposure,
+                    ..Default::default()
+                },
+            );
+        }
+        let mut catalog = Catalog::default();
+        for signal in [&canonical, &alias, &unrelated] {
+            catalog.apply(signal.clone(), Some(indexed_row(&registry, signal)));
+        }
+        catalog.facts.insert(owner, EntityCatalogFacts::default());
+        let stable = Arc::clone(&catalog.entries[&unrelated].row);
+        assert!(catalog.displayed.contains_key(&canonical));
+        assert!(!catalog.displayed.contains_key(&alias));
+        registry.deactivate_signal(&canonical);
+        catalog.apply(canonical.clone(), Some(indexed_row(&registry, &canonical)));
+        assert!(!catalog.displayed.contains_key(&canonical));
+        assert!(catalog.displayed.contains_key(&alias));
+        let mut meta = registry.meta(&alias).unwrap().clone();
+        meta.group_path = Some("/Vehicle/Thermal".into());
+        registry.update_meta(alias.clone(), meta);
+        catalog.apply(alias.clone(), Some(indexed_row(&registry, &alias)));
+        assert!(
+            catalog.displayed[&alias]
+                .iter()
+                .any(|id| id == "/Vehicle/Thermal")
+        );
+        assert!(Arc::ptr_eq(&stable, &catalog.entries[&unrelated].row));
+        catalog.apply(canonical.clone(), None);
+        assert!(catalog.facts.contains_key(&owner));
+        catalog.apply(alias.clone(), None);
+        assert!(!catalog.facts.contains_key(&owner));
+        assert!(!catalog.root.children.contains_key("/Vehicle"));
+        assert!(catalog.displayed.contains_key(&unrelated));
+        assert!(registry.scalar_history(&canonical).is_some());
+    }
+
+    #[test]
+    fn incremental_catalog_focus_inputs_track_selected_usd_paths() {
+        let owner = ent(1);
+        let root = ent(2);
+        let signal = SignalRef::new(owner, "power");
+        let mut registry = SignalRegistry::default();
+        registry.push_scalar(signal.clone(), 0.0, 1.0);
+        let mut catalog = Catalog::default();
+        catalog.apply(signal.clone(), Some(indexed_row(&registry, &signal)));
+        catalog.facts.insert(
+            owner,
+            EntityCatalogFacts {
+                usd_path: Some("/Vehicle/Power".into()),
+                ..Default::default()
+            },
+        );
+        let before = FocusInputs::capture(&[root], |_| Some("/Vehicle".into()));
+        let after = FocusInputs::capture(&[root], |_| Some("/Elsewhere".into()));
+        assert_ne!(before, after);
+        assert_eq!(
+            before,
+            FocusInputs::capture(&[root], |_| Some("/Vehicle".into()))
+        );
+        let key = catalog.key;
+        assert!(
+            catalog
+                .focused_owners(&[root], |_| before.0[0].1.clone())
+                .contains(&owner)
+        );
+        assert!(
+            catalog
+                .focused_owners(&[root], |_| after.0[0].1.clone())
+                .is_empty()
+        );
+        assert_eq!(catalog.key, key);
+    }
+
+    #[test]
+    fn incremental_catalog_superseded_row_does_not_discard_unrelated_patch() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<TelemetryCatalogBuildState>()
+            .add_systems(Update, poll_telemetry_catalog);
+        let a = SignalRef::new(ent(1), "a");
+        let b = SignalRef::new(ent(2), "b");
+        let mut registry = SignalRegistry::default();
+        for signal in [&a, &b] {
+            registry.push_scalar(signal.clone(), 0.0, 1.0);
+        }
+        let stable;
+        {
+            let mut build = app.world_mut().resource_mut::<TelemetryCatalogBuildState>();
+            for signal in [&a, &b] {
+                build
+                    .catalog
+                    .apply(signal.clone(), Some(indexed_row(&registry, signal)));
+                registry.update_meta(
+                    signal.clone(),
+                    crate::signal::SignalMeta {
+                        unit: Some("V".into()),
+                        ..Default::default()
+                    },
+                );
+            }
+            stable = Arc::clone(&build.catalog.entries[&a].row);
+            build.versions.insert(a.clone(), 2);
+            build.versions.insert(b.clone(), 1);
+            build.pending.push_back(a.clone());
+            build.queued.insert(a.clone());
+            let batch = PreparedTelemetryBatch {
+                rows: vec![
+                    (a.clone(), 1, Some(indexed_row(&registry, &a))),
+                    (b.clone(), 1, Some(indexed_row(&registry, &b))),
+                ],
+                facts: Default::default(),
+                worker_ms: 0.0,
+            };
+            build.task = Some(AsyncComputeTaskPool::get().spawn(async move { batch }));
+        }
+        for _ in 0..3000 {
+            app.update();
+            if app
+                .world()
+                .resource::<TelemetryCatalogBuildState>()
+                .task
+                .is_none()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_micros(100));
+        }
+        let build = app.world().resource::<TelemetryCatalogBuildState>();
+        assert!(build.task.is_none());
+        assert!(Arc::ptr_eq(&stable, &build.catalog.entries[&a].row));
+        assert_eq!(build.catalog.entries[&b].row.unit.as_deref(), Some("V"));
+        assert_eq!(build.metrics.committed_channels, 1);
+        assert_eq!(build.metrics.superseded_channels, 1);
+        assert_eq!(build.pending.front(), Some(&a));
+        assert_eq!(build.versions.get(&a), Some(&2));
+    }
+
+    fn settle_catalog(app: &mut App) {
+        for _ in 0..3000 {
+            app.update();
+            let build = app.world().resource::<TelemetryCatalogBuildState>();
+            if build.initialized && build.pending.is_empty() && build.task.is_none() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_micros(100));
+        }
+        panic!("bounded catalog patches did not settle");
+    }
+
+    #[test]
+    fn incremental_catalog_async_batches_do_not_restart_for_selection_or_samples() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, lunco_signal::SignalRegistryPlugin))
+            .init_resource::<TelemetryCatalogBuildState>()
+            .init_resource::<TelemetryFocus>()
+            .add_systems(
+                Update,
+                (prepare_telemetry_catalog, poll_telemetry_catalog)
+                    .chain()
+                    .after(lunco_signal::SignalDescriptorPublish),
+            )
+            .add_systems(lunco_core::SceneTeardown, clear_telemetry_catalog);
+        let owner = app.world_mut().spawn(Name::new("Source")).id();
+        let signal = SignalRef::new(owner, "signal_0");
+        {
+            let mut registry = app.world_mut().resource_mut::<SignalRegistry>();
+            for index in 0..1024 {
+                registry.push_scalar(SignalRef::new(owner, format!("signal_{index}")), 0.0, 1.0);
+            }
+        }
+        settle_catalog(&mut app);
+        let prepared = app
+            .world()
+            .resource::<TelemetryCatalogBuildState>()
+            .metrics
+            .prepared_channels;
+        assert_eq!(prepared, 1024);
+        for step in 0..10 {
+            app.world_mut()
+                .entity_mut(owner)
+                .insert(Name::new("Source"));
+            app.world_mut().resource_mut::<TelemetryFocus>().roots =
+                if step % 2 == 0 { vec![owner] } else { vec![] };
+            app.world_mut()
+                .resource_mut::<SignalRegistry>()
+                .push_scalar(signal.clone(), step as f64 + 1.0, 2.0);
+            app.update();
+        }
+        assert_eq!(
+            app.world()
+                .resource::<TelemetryCatalogBuildState>()
+                .metrics
+                .prepared_channels,
+            prepared
+        );
+        app.world_mut()
+            .resource_mut::<SignalRegistry>()
+            .update_meta(
+                signal.clone(),
+                crate::signal::SignalMeta {
+                    unit: Some("V".into()),
+                    ..Default::default()
+                },
+            );
+        settle_catalog(&mut app);
+        let build = app.world().resource::<TelemetryCatalogBuildState>();
+        assert_eq!(build.metrics.prepared_channels, prepared + 1);
+        assert_eq!(build.metrics.last_batch_channels, 1);
+        assert_eq!(build.metrics.initial_scans, 1);
+        assert_eq!(
+            build.catalog.entries[&signal].row.unit.as_deref(),
+            Some("V")
+        );
+        app.world_mut()
+            .entity_mut(owner)
+            .insert(Name::new("Renamed source"));
+        settle_catalog(&mut app);
+        let build = app.world().resource::<TelemetryCatalogBuildState>();
+        assert_eq!(build.metrics.prepared_channels, prepared + 1 + 1024);
+        assert_eq!(
+            build.catalog.facts[&owner].label.as_deref(),
+            Some("Renamed Source")
+        );
+        let previous_key = build.catalog.key;
+        lunco_core::run_scene_teardown(app.world_mut());
+        let build = app.world().resource::<TelemetryCatalogBuildState>();
+        assert!(build.catalog.entries.is_empty());
+        assert!(build.pending.is_empty());
+        assert!(build.task.is_none());
+        assert!(build.catalog.key > previous_key);
+    }
+
     #[test]
     fn draggable_telemetry_rows_use_left_aligned_tree_labels() {
         let row = Arc::new(Row {
@@ -2372,7 +3042,7 @@ mod tests {
             canonical_name: None,
             presentation: SignalPresentation::Scalar,
             exposure: SignalExposure::Public,
-            in_focus: true,
+
             active: true,
             search_fields: Default::default(),
         });
@@ -2400,7 +3070,13 @@ mod tests {
             egui::vec2(600.0, 200.0),
         ));
 
-        let output = egui::Context::default().run_ui(input, |ui| {
+        let egui_context = egui::Context::default();
+        egui_context.all_styles_mut(|style| {
+            lunco_theme::Theme::default()
+                .typography
+                .apply_to_style(style)
+        });
+        let output = egui_context.run_ui(input, |ui| {
             let available = ui.available_rect_before_wrap();
             row_left = available.left();
             label_width = (available.width() * 0.55).max(72.0).min(available.width());
@@ -2449,7 +3125,7 @@ mod tests {
             canonical_name: None,
             presentation: SignalPresentation::Scalar,
             exposure: SignalExposure::Public,
-            in_focus: false,
+
             active: true,
             search_fields: Default::default(),
         };
@@ -2487,8 +3163,24 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert!(!rows[0].active);
         assert!(reg.scalar_history(&signal).is_some());
-        assert!(!row_visible(&rows[0], false, true, false, "", "Rover"));
-        assert!(row_visible(&rows[0], false, true, true, "", "Rover"));
+        assert!(!row_visible(
+            &rows[0],
+            false,
+            true,
+            false,
+            "",
+            "Rover",
+            &HashSet::new()
+        ));
+        assert!(row_visible(
+            &rows[0],
+            false,
+            true,
+            true,
+            "",
+            "Rover",
+            &HashSet::new()
+        ));
     }
 
     #[test]
@@ -2597,16 +3289,24 @@ mod tests {
 
         // More samples on an existing channel: same set, same key.
         reg.push_scalar(SignalRef::new(ent(1), "a"), 1.0, 2.0);
-        assert_eq!(k1, catalog_key(&reg), "a push must not invalidate the list");
+        assert_eq!(
+            k1,
+            catalog_key(&reg),
+            "samples keep the channel lookup valid"
+        );
 
         // New channel: key moves.
         reg.push_scalar(SignalRef::new(ent(2), "b"), 0.0, 3.0);
         let k2 = catalog_key(&reg);
-        assert_ne!(k1, k2, "a new channel must invalidate the list");
+        assert_ne!(k1, k2, "admission refreshes the channel lookup");
 
         // Channel removal changes the monotonic catalog revision too.
         reg.remove_signal(&SignalRef::new(ent(2), "b"));
-        assert_ne!(k2, catalog_key(&reg), "removal must invalidate the list");
+        assert_ne!(
+            k2,
+            catalog_key(&reg),
+            "removal refreshes the channel lookup"
+        );
     }
 
     #[test]
@@ -2628,7 +3328,6 @@ mod tests {
             |e| (e == ent(1)).then(|| "Alpha Rover".to_string()),
             |_| None,
             |_| None,
-            |_| false,
             |_| false,
         );
         assert_eq!(tree.children.len(), 2);
@@ -2709,23 +3408,6 @@ mod tests {
     }
 
     #[test]
-    fn tree_carries_focus_membership() {
-        let mut reg = SignalRegistry::default();
-        reg.push_scalar(SignalRef::new(ent(1), "a"), 0.0, 1.0);
-        reg.push_scalar(SignalRef::new(ent(2), "b"), 0.0, 1.0);
-        let tree = build_tree(
-            &reg,
-            |_| None,
-            |_| None,
-            |_| None,
-            |_| false,
-            |e| e == ent(1),
-        );
-        assert!(tree.children[&entity_key(ent(1))].rows[0].in_focus);
-        assert!(!tree.children[&entity_key(ent(2))].rows[0].in_focus);
-    }
-
-    #[test]
     fn tree_uses_parentage_for_subsystems_and_signal_structure_for_values() {
         let mut reg = SignalRegistry::default();
         let rover = ent(1);
@@ -2752,7 +3434,6 @@ mod tests {
             },
             parent,
             |_| None,
-            |_| false,
             |_| false,
         );
         let rover = tree.children.get(&entity_key(rover)).unwrap();
@@ -2787,7 +3468,6 @@ mod tests {
             parent,
             |e| (e == wheel).then(|| "/SandboxScene/Skid_Rover/Wheel_FL".to_string()),
             |_| false,
-            |_| false,
         );
         assert_eq!(tree.children.len(), 1);
         let scene = tree.children.get("/SandboxScene").unwrap();
@@ -2817,7 +3497,6 @@ mod tests {
             |_| None,
             |_| None,
             |entity| (entity == network_root).then(|| "/SandboxScene/Rover".to_string()),
-            |_| false,
             |_| false,
         );
 
@@ -2857,7 +3536,6 @@ mod tests {
                 e if e == ent(2) => Some("/Traverse/Rover".into()),
                 _ => None,
             },
-            |_| false,
             |_| false,
         );
         let rover = &tree.children["/Traverse"].children["/Traverse/Rover"];
@@ -2910,7 +3588,6 @@ mod tests {
             |_| Some("Rover".into()),
             |_| None,
             |_| None,
-            |_| false,
             |_| false,
         );
         let rover = tree
@@ -3050,7 +3727,7 @@ mod tests {
             canonical_name: None,
             presentation: SignalPresentation::Scalar,
             exposure: SignalExposure::Internal,
-            in_focus: false,
+
             active: true,
             search_fields: Default::default(),
         };

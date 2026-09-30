@@ -745,6 +745,9 @@ impl Plugin for LunCoTelemetryPlugin {
         if !app.is_plugin_added::<lunco_time::TimePlugin>() {
             app.add_plugins(lunco_time::TimePlugin);
         }
+        if !app.is_plugin_added::<lunco_signal::SignalRegistryPlugin>() {
+            app.add_plugins(lunco_signal::SignalRegistryPlugin);
+        }
         app.register_settings_section::<TelemetrySettings>();
         // The retention plane. `SignalRegistry` is the ring buffer every plot surface
         // already reads — routing samples into it is what makes telemetry both *retained*

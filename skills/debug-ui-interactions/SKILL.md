@@ -215,3 +215,24 @@ reuse a port owned by another agent. A screenshot, command acknowledgement, or
 open TCP socket alone is not a completed UI test; hand off the exact runtime,
 input sequence, queries, screenshots, verdict, and any remaining compositor
 limit.
+
+## Telemetry catalog updates
+
+Trace `SignalDescriptorsChanged` from `lunco-signal` to the persistent index in
+`lunco-viz/src/telemetry_browser.rs`. Samples, API owner association, and selection do not
+prepare descriptors. Channel admission, metadata, activity, removal, and changed owner
+label/path/parent facts enqueue affected identities. Rewriting unchanged facts must queue no
+work; comparison includes facts already captured by an in-flight worker. Each async batch captures and commits
+at most 64 descriptors; incoming changes must not restart unrelated work or hide the tree.
+Selection only updates focus membership and the visible-row index; cache inputs include
+selected entity identities and their current USD paths. Ancestor facts are retained only while
+indexed channels depend on them. Scene teardown cancels
+workers and clears the outgoing index with a newer presentation key.
+
+Use `InspectTelemetryCatalog` through `ExecuteCommand` to compare `initial_scans`,
+`prepared_channels`, pending work, and capture/worker/commit costs before and after changes.
+The optional exact `signal` path returns descriptors for all owners. Run
+`scripts/api/test_telemetry_catalog.py` with an existing scene, measured entity id, real numeric
+source port, and free API port. It owns its windowed production session and invokes the authored
+Rhai verdict, including the missing-channel negative case; inspect its admission and settled
+screenshots and confirm its session closes.

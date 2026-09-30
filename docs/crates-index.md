@@ -173,7 +173,7 @@ External communication, ECS replication, telemetry extraction, and distributed a
 | **`lunco-api-transport`** | Application-bound API transports: native Axum HTTP listener, asset endpoint, and wasm browser bridge. It adapts the pure wire contract through `lunco-api-codec` to the typed ECS API runtime. |
 | **`lunco-telemetry-core`** | Transport-neutral telemetry contracts, typed event/value bus, reflection registration, black-box logging, and projection of generic core lifecycle facts into telemetry. It does not own sampling or retained history. |
 | **`lunco-telemetry`** | Telemetry channels: per-channel rate + deadband, bound to a `TimeDomain` (so pause/warp come free), retained in `lunco-signal`'s ring buffer, plus the OpenMCT-shaped query surface (catalog / history / recording). |
-| **`lunco-signal`** | The signal DATA model — `SignalRegistry`, `SignalRef`, `ScalarHistory` with lazily growing retained sample storage, and the backend-neutral `SimRegistry`/`SimStream` snapshot publication path. **Render-free by construction**: split out of `lunco-viz` (which links bevy_egui → bevy_render) so a headless run can retain history without a GPU stack. `lunco-viz` re-exports the signal registry. |
+| **`lunco-signal`** | The signal DATA model — `SignalRegistry`, coalesced `SignalDescriptorsChanged` publication through `SignalRegistryPlugin`, `SignalRef`, `ScalarHistory` with lazily growing retained sample storage, and the backend-neutral `SimRegistry`/`SimStream` snapshot publication path. **Render-free by construction**: split out of `lunco-viz` (which links bevy_egui → bevy_render) so a headless run can retain history without a GPU stack. `lunco-viz` re-exports the signal registry. |
 
 ---
 
@@ -201,7 +201,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, and recording status. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
 | **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders, and the shared bounded log model/renderer. It uses workbench contracts and shell-independent widgets, not the concrete workbench shell. |
 | **`lunco-viz-core`** | Render-free visualization identity substrate: the shared `VizId` used by visualization registries, plot state, and headless consumers. It has no Bevy or rendering dependency. |
-| **`lunco-viz`** | Domain-agnostic visualization: `SignalRegistry`, LinePlots, reusable multi-series trajectory plots, and future 3D/Rerun bridges. |
+| **`lunco-viz`** | Domain-agnostic visualization: persistent incremental telemetry presentation index with `InspectTelemetryCatalog` diagnostics, `SignalRegistry`, LinePlots, reusable multi-series trajectory plots, and future 3D/Rerun bridges. |
 | **`lunco-canvas`** | Stateful 2D scene editor substrate for diagrams and annotation overlays. |
 | **`lunco-luncosim-edit-core`** | Headless-safe scene-editing mechanisms: spawn and terrain tools, scene picking, typed command registration, and ECS state. |
 | **`lunco-luncosim-edit-gizmo-ui`** | Focused rendered transform-gizmo capability: render-space proxies, live/preview pose transactions, camera binding, and kinematic-drive lifecycle. It owns the external `transform-gizmo-bevy` dependency independently of the editor panels. |

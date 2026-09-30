@@ -282,8 +282,8 @@ changed; the handover remains uncommitted.
 Builder tree rendering now retains the open-row index across repaints. The
 shared tree branch reports disclosure changes; Entities rebuilds its flattened
 rows only when the asynchronous scene-tree revision or expansion changes, and
-Telemetry rebuilds only when its catalog/focus/filter/display key or expansion
-changes. Telemetry row descriptors share immutable `Arc` data. Latest telemetry
+Telemetry rebuilds its visible-row index only when its catalog/focus/filter/display key or
+expansion changes; its structural tree receives descriptor patches. Telemetry row descriptors share immutable `Arc` data. Latest telemetry
 samples and selection remain live paint inputs. SpawnCatalog now owns a sorted
 category-to-entry-index projection and revision, so opening a Spawn category
 does not clone catalog rows or rescan every entry; formatted labels are kept in
@@ -3838,39 +3838,6 @@ After removing that hold, `cargo +nightly-2026-02-27 check --locked -j 4 -p
 lunco-luncosim --bin luncosim` passed. No terrain fixture was rerun after this
 final behavior change.
 
-### 2026-09-28 — move Builder telemetry catalog derivation off the paint pass
-
-The Telemetry browser previously grouped, deduplicated, and sorted its channel
-catalog synchronously when Build first painted or the channel/focus revision
-changed. It now snapshots channel metadata and owner facts at invalidation,
-derives the presentation tree on `AsyncComputeTaskPool`, and publishes only a
-result matching the current catalog and focus key. The panel never waits for the
-worker; it shows a preparing state until the catalog is current. Live sample
-values remain read from the signal registry when rows paint.
-
-The post-change Tracy run used the production binary, API port `4111`, High
-quality, and the authored First Drive scene launched through `RunScenarioAsset`.
-Build was active with Telemetry and Graphs open for the 80.3 s capture (15,745
-frames, 42,734,587 zones). `render_workbench` measured
-0.289/12.086 ms mean/max and `EguiPrimaryContextPass` 0.504/15.259 ms mean/max.
-The status overlay read about 99 FPS, 10.1 ms/frame, and p99 16.4 ms. These are
-Tracy diagnostics, not clean acceptance numbers. The trace was removed during
-subsequent disk-space recovery after its zone summary was inspected.
-
-A separate non-Tracy production run opened the same lesson and selected the
-rover assembly, matching the screenshot's 343-channel Selected-only tree. Clean
-status samples varied from 72.6 to 122.4 FPS (8.2–13.8 ms/frame), with p99
-10.8–13.6 ms and displayed physics time 0.2–0.4 ms. The unselected 419-channel
-tree read 129.9 FPS, p99 10.8 ms, and 0.2 ms physics time. A second
-`luncosim` process in the Summer Space School checkout on port `4710` overlapped
-the clean run; it was not controlled. The original screenshot's active
-Modelica curve was not reproduced because this lesson run had no Modelica
-samples, so the frame samples are a focused UI check, not a controlled
-reproduction or acceptance run. They did not reproduce a sustained 30 ms frame
-or the screenshot's 36.4 ms p99, but they also do not establish the 150 FPS
-target. The status-bar physics time is not
-`PhysicsTotalDiagnostics.step_time`. No renderer code was changed.
-
 ### 2026-09-28 — isolate first Twin view replay from persistent edit volume
 
 The first projection previously requested the global operation suffix from
@@ -4274,25 +4241,61 @@ read-only `ls-remote` now reports `origin/main` at the same commit, and the
 local reflog records an `update by push` at 14:40:37 during this integration.
 The handover report remains uncommitted.
 
-### 2026-09-29 — bound telemetry catalog snapshot work per Update
+### 2026-09-30 — incremental telemetry presentation index
 
-The owned First Drive Builder trace showed `telemetry_catalog_snapshot` copying
-528 channel descriptors and owner facts in one `Update` for 5.56 ms; the
-subsequent async tree build took 11.60 ms on a worker. Catalog preparation now
-captures channel identities and owner hierarchy once in
-`telemetry_catalog_snapshot_start`, then copies at most 64 channel descriptors
-per `Update` in `telemetry_catalog_snapshot`. A registry or focus revision
-change discards the partial snapshot; grouping, deduplication, and sorting still
-run on the async-compute pool, and
-publication still requires matching revisions. This keeps a large presentation
-catalog from monopolizing one app frame without changing live telemetry
-retention or the tree's left-aligned labels. No renderer code changed.
+The browser consumes coalesced descriptor notifications from `SignalRegistryPlugin` and
+maintains its tree, alias groups, and reverse owner-ancestor index across updates. It enumerates
+scalar identities once per scene, prepares at most 64 changed descriptors per async batch,
+and commits patches without replacing the tree. Selection and steady samples do not prepare
+descriptors. Individually superseded descriptors are requeued while unrelated results commit.
+Scene teardown cancels workers and clears the index with a newer presentation key.
 
-The focused `cargo +nightly-2026-02-27 check --locked -j 4 -p lunco-viz
---features ui` passed. The source and profiling guidance were committed as
-`011c42143` and fast-forwarded into local `main`; no push was performed. The
-later eight-signal capture and the entity-tree follow-up are recorded below.
-This handover remains uncommitted.
+The production query `InspectTelemetryCatalog` reports queue state, descriptor counters,
+and capture/worker/commit milliseconds. The parameterized API runner and authored Rhai
+verdict cover channel admission, repeated unit edits, selection, continued live samples,
+and absent-channel/invalid-parameter negative cases. The final non-Tracy High-quality
+Summer Space School run on owned API port `4187` passed 24 Rhai verdicts (312 checks),
+including 20 alternating unit edits. Each edit prepared exactly one descriptor; selection
+and steady samples prepared none, and the initial-scan counter stayed at one. The catalog
+contained 1,307 channels before the probe and 1,308 after it; the total prepared count grew
+from 1,307 to 1,328, accounting for only admission and the 20 edits. Hierarchy notifications
+compare consumed facts against both committed and in-flight facts, so rewriting unchanged
+label/path/parent data queues no work. A generic resource-seam test also verifies that a real
+owner rename updates its dependent channels.
+
+Median capture/worker/commit costs were 0.0420/0.0226/0.0762 ms, with maxima
+0.0897/0.0441/0.1521 ms across those edits. Observed command-to-visible-metadata latency
+was 41.3 ms median and 61.3 ms maximum, including API transport and frame scheduling.
+Initial admission's maximum commit was 2.00 ms with batches bounded to 64 descriptors.
+The test used simulation transport rate 0.1, unchanged High rendering quality, and no
+vsync/throttle. These are owner timings and update-latency evidence, not whole-app FPS
+acceptance. Other owned-by-others sessions in the optimization checkout overlapped the
+validation period; none were controlled. Admission and settled screenshots show the tree
+available. The runner verified API shutdown. Raw evidence is in
+`target/telemetry-review-evidence.json` and `target/telemetry-review-runtime-verdicts.log`.
+
+A separate current-source Tracy build/capture used the adjacent `../tracy` tools and the
+same owned API port. Its authored run passed 14 verdicts (182 checks) with ten unit edits.
+The bounded 40 s capture includes startup and nine one-row commits: those commits measured
+0.146 ms mean and 0.264 ms maximum, with worker preparation at 0.045/0.066 ms mean/max.
+After initial admission, 123 producer/poller invocations without an overlapping patch measured
+0.135/0.002 ms median and 0.418/0.024 ms maximum respectively. Concurrent optimization
+sessions were active, so these are contention-affected Tracy diagnostics. The trace is
+`target/telemetry-catalog-current.tracy`, with zone/event CSVs and an idle-window summary
+beside it. The normal non-Tracy production binary was restored afterward.
+
+The settled browser panel in that capture rendered in 0.708 ms median, 1.753 ms p95,
+and 5.078 ms maximum across 132 calls, including descriptor updates. These costs include
+view filtering and painting; patch-commit timings alone do not measure total panel cost.
+The export and summary are `target/telemetry-review-panel-events.csv` and
+`target/telemetry-review-panel-summary.json`.
+
+Review additionally verifies exact selected entity/USD-path cache dependencies, release of
+unused ancestor facts, and per-row supersession without discarding unrelated patches.
+Final validation reused the current UI test binary: all 46 tests passed, including alias
+promotion/removal, unchanged owner writes, actual renames, selection/sample stability,
+bounded batches, and teardown. The signal owner's coalescing/fan-out/no-op-removal test also
+passed. Skill catalogue validation and the final diff check passed.
 
 ## Acceptance
 
