@@ -333,6 +333,7 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
         document: doc,
         is_stepping: true,
         in_flight_step: None,
+        last_accepted_step: None,
         next_step_id: 1,
         is_compiling: true,
         is_compiled: false,

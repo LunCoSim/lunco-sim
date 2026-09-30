@@ -7063,6 +7063,7 @@ dependencies = [
  "lunco-exposure-core",
  "lunco-hooks",
  "lunco-lint",
+ "lunco-modelica-runtime",
  "lunco-port-core",
  "lunco-readiness",
  "lunco-telemetry-core",

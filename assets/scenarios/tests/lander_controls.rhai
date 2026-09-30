@@ -30,7 +30,7 @@ fn send(intent, held, target) {
 // overlapping names. The root command surface is the first matching inbound
 // port, which is also the endpoint that ControlBinding writes.
 fn input_port(target, name) {
-    let record = query("ReadPorts", #{ api_id: target });
+    let record = query("ReadPorts", #{ api_id: target, port_names: [name] });
     if record == () || record.ports == () { return (); }
     for port in record.ports {
         if port.name == name && port.direction == "in" {
@@ -41,7 +41,7 @@ fn input_port(target, name) {
 }
 
 fn output_port(target, name) {
-    let record = query("ReadPorts", #{ api_id: target });
+    let record = query("ReadPorts", #{ api_id: target, port_names: [name] });
     if record == () || record.ports == () { return (); }
     for port in record.ports {
         if port.name == name && port.direction == "out" {

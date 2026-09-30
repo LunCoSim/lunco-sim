@@ -49,7 +49,8 @@ fn on_tick(me, params) {
     }
     if port_write == () || lifecycle_release == () { return; }
 
-    let ports = query("ReadPorts", #{ api_id: this.target_gid });
+    let ports = query("ReadPorts", #{ api_id: this.target_gid,
+        port_names: ["forward", "side", "up", "speed_boost"] });
     if ports == () || ports["ports"] == () { return; }
     let values = #{};
     for port in ports["ports"] {

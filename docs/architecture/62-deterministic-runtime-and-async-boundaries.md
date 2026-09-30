@@ -913,7 +913,7 @@ plan is pending, all Modelica
 participants are synchronized. After admission, direct simulation-clock access
 to an undeclared Modelica participant or event fails at the scripting owner with a
 diagnostic that names the missing hook. This includes `get`, `port`, and
-`query("ReadPorts", #{ api_id })`; the query surface cannot bypass the plan.
+`query("ReadPorts", #{ api_id, port_names })`; the query surface cannot bypass the plan.
 Presentation reads continue to observe
 committed state without joining the authoritative barrier. Continuous
 calculations and physics remain in their domain owners.

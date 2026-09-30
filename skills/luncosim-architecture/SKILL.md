@@ -45,7 +45,8 @@ may identify any live entity; a Modelica entity in either set also joins the
 shared causal barrier. Unresolved ids fail that source revision with a visible
 diagnostic.
 Every simulation-clock Modelica port access must be covered by the calling
-scenario's own plan, including `get`, `port`, and `query("ReadPorts", #{ api_id })`;
+scenario's own plan, including `get`, `port`, and
+`query("ReadPorts", #{ api_id, port_names })`;
 aggregate barrier membership from USD wiring or another scenario does not
 authorize the read or write. The owner enforces this at the port, query,
 targeted-command, and event-delivery boundaries.

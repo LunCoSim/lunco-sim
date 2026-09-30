@@ -446,7 +446,7 @@ pub fn spawn_modelica_requests(
             continue;
         };
 
-        let inputs = ordered_modelica_inputs(&model.inputs);
+        let sampled_inputs = ordered_modelica_inputs(&model.inputs);
 
         let Some(next_step_id) = model.next_step_id.checked_add(1) else {
             let error = format!(
@@ -478,7 +478,7 @@ pub fn spawn_modelica_requests(
             start_time,
             stop_time,
             model_name: model.model_name.clone(),
-            inputs,
+            inputs: sampled_inputs.clone(),
             dt,
         });
         if sent.is_ok() {
@@ -487,6 +487,7 @@ pub fn spawn_modelica_requests(
                 step_id,
                 start_time,
                 stop_time,
+                sampled_inputs,
                 submitted_at: web_time::Instant::now(),
             });
             model.is_stepping = true;
@@ -842,7 +843,7 @@ pub fn handle_modelica_responses(
             // in-flight flag or touching the model clock. This is the local
             // equivalent of an FMI master's `doStep` transaction fence.
             if !lifecycle_result {
-                let Some(in_flight) = model.in_flight_step else {
+                let Some(in_flight) = model.in_flight_step.as_ref() else {
                     let detail = format!(
                         "Modelica worker returned step {} for `{}` without an in-flight request",
                         result
@@ -908,6 +909,18 @@ pub fn handle_modelica_responses(
                         result.worker_backlog_count,
                     );
                 }
+                if result.error.is_none() {
+                    model.last_accepted_step = Some(
+                        lunco_modelica_runtime::ModelicaStepSample {
+                            session_id: model.session_id,
+                            step_id: in_flight.step_id,
+                            input_time_s: in_flight.start_time,
+                            output_time_s: result.new_time,
+                            inputs: in_flight.sampled_inputs.clone(),
+                            outputs: result.outputs.clone(),
+                        },
+                    );
+                }
                 model.in_flight_step = None;
             } else {
                 // A lifecycle transition supersedes any older transaction only
@@ -916,6 +929,7 @@ pub fn handle_modelica_responses(
                     diagnostics.begin_session(result.entity, result.session_id);
                 }
                 model.in_flight_step = None;
+                model.last_accepted_step = None;
                 model.next_step_id = 1;
             }
 

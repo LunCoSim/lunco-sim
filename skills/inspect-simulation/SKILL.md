@@ -167,9 +167,9 @@ visual-sync and physics markers for the selected runtime entity.
 # what's spawned?
 curl -s -X POST http://127.0.0.1:4101/api/commands -H 'Content-Type: application/json' \
   -d '{"type":"ListEntities"}'
-# the lander's altitude + descent-rate ports (filtered)
+# read selected lander ports; use ListPorts to discover exact names
 curl -s -X POST http://127.0.0.1:4101/api/commands -H 'Content-Type: application/json' \
-  -d '{"type":"ExecuteCommand","command":"ReadPorts","params":{"name_filter":"Lander","ports":["altitude","descent_rate"]}}'
+  -d '{"type":"ExecuteCommand","command":"ReadPorts","params":{"api_id":<lander-api-id>,"port_names":["altitude","descent_rate"]}}'
 # confirm visually
 curl -s -X POST http://127.0.0.1:4101/api/commands -H 'Content-Type: application/json' \
   -d '{"type":"ExecuteCommand","command":"CaptureScreenshot","params":{}}' -o /tmp/x.png   # then Read /tmp/x.png

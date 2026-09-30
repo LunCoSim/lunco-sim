@@ -56,7 +56,8 @@ fn on_tick(me, params) {
                 }
             }
         }
-        let ports = query("ReadPorts", #{ api_id: this.target_gid });
+        let ports = query("ReadPorts", #{ api_id: this.target_gid,
+            port_names: ["throttle"] });
         let live_port_value = ();
         if ports != () && ports["ports"] != () {
             for port in ports["ports"] {

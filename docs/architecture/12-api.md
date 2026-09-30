@@ -58,10 +58,11 @@ curl -s http://127.0.0.1:4101/api/commands \
   -H 'content-type: application/json' \
   -d '{"type":"ListEntities"}' | jq .
 
-# Query a specific entity by its numeric api_id (from ListEntities)
+# Read selected ports from an entity by its numeric api_id.
+# Discover exact names with ListPorts first.
 curl -s http://127.0.0.1:4101/api/commands \
   -H 'content-type: application/json' \
-  -d '{"type":"ExecuteCommand","command":"ReadPorts","params":{"api_id":98466552102768}}' | jq .
+  -d '{"type":"ExecuteCommand","command":"ReadPorts","params":{"api_id":98466552102768,"port_names":["throttle","altitude"]}}' | jq .
 ```
 
 ## Endpoints
@@ -104,8 +105,9 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `FindModel` | `{"query": string, "limit": u64?}` | Fuzzy search across bundled, Twin, admitted source libraries, and open docs. Bundled results remain available in hosts without an active Workspace session; Twin/open-document matches are included when `WorkspacePlugin` is present. |
 | `GetShareLink` | `{"doc_id": u64?}` | Generate a sharing URL for the document source. |
 | `CosimStatus` | `{"include_values": bool?, "include_entities": bool?}` | List USD-driven cosim entities with live telemetry. Both options default to `true`; `include_values: false` omits input/output maps and verbose model/error details, while `include_entities: false` returns only counts, synchronization state, and an aggregate Modelica step profile. |
-| `ReadPorts` | `{"api_id": u64}` | Read every exposed scalar port and its owner-supplied type, unit, range, source, authority, and write contract. |
-| `ReadPortsBatch` | `{"api_ids": u64[]}` | Read declared ports for multiple stable entity identities with one shared simulation tick. |
+| `ReadPorts` | `{"api_id": u64, "port_names": string[]}` | Read selected exposed ports and their owner-supplied type, unit, range, source, authority, and write contract. `port_names` requires 1–128 distinct names discovered with `ListPorts`. |
+| `ReadPortsBatch` | `{"targets": [{"api_id": u64, "port_names": string[]}, ...]}` | Read selected ports for multiple stable entity identities with one shared simulation tick. The selected result is limited to 128 rows across the batch. |
+| `ReadModelicaStepSamples` | `{"targets": [{"api_id": u64, "input_names": string[], "output_names": string[]}, ...]}` | Read selected inputs and outputs from each Modelica participant's last accepted solver step, including session, step, and simulation-time interval. The selected result is limited to 128 rows across the batch. |
 | `ReadActuatorStatus` | `{"api_id": u64, "command_port": string, "measured_port": string, "rate_port": string, "tolerance": f64, "rate_tolerance": f64}` | Report target, measured value, error, rate, limits, and whether an actuator is within position and motion tolerances. |
 | `CausalTrace` | `{"target": u64, "correlation_id": u64?}` | Explain one semantic edge through its authored binding, selected port owner, USD connection/admission state, current measured channels, classified producer origin, and optional fixed-tick admission stamp. |
 | `ReadSessionInputStream` | `{}` | Read the bounded in-memory capture of physical frames and admitted held/edge semantic inputs, including producer, admission, and typed payload records. |
@@ -162,7 +164,8 @@ The document snapshot's top-level `revision` advances whenever its diagnostic
 content changes. `DiscoverSchema` lists this contract, including the exactly-
 one-of input rule.
 
-`ReadPorts` is the read-only projection of the shared `lunco-port-core::ports::PortRegistry`.
+`ReadPorts` and `ReadPortsBatch` are read-only projections of the shared `lunco-port-core::ports::PortRegistry`. Both require exact `port_names` discovered with `ListPorts`; names are never treated as filters or inferred from a prefix. The registry samples only selected names while preserving every declared direction and owner row for each selected name.
+`ReadModelicaStepSamples` reads the exact input vector sent to a Modelica solver and the output vector returned by that same accepted step. Each participant's sample carries its session and step identities plus the input and output times; `sample: ()` means no step has been accepted in the current session. Its `sim_tick` records when the query read the participant snapshots, while the per-participant times identify the solver transaction itself.
 Each returned port has `value` (`f64` when sampled, `()` when the declared
 owner has no live sample), `metadata.type` (currently `scalar`), optional
 typed `unit`, optional `frame`, optional inclusive `range` bounds, the owning
