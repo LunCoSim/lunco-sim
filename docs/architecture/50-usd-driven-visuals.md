@@ -150,6 +150,14 @@ FIXED bounding volume and a WGSL shader draws inside it, taking the live value o
 `inputs:<name>.connect` wire like any other port sink. `assets/shaders/plume.wgsl` is the
 worked example: the cone never moves, and `throttle` shapes what is drawn in it.
 
+`LunCo.Propulsion.computePlumePhotometry` owns the stateless plume equations.
+Its fixed-size result follows the named `PlumePhotometry` output declaration
+order. The model exposes those ports for USD connections; `RCSJet` calls the
+same function directly with static nozzle parameters and delivered engine
+signals. Function-local intermediates do not become component algebraic
+variables in the assembled RCS network. The physical thruster equations and
+public RCS outputs retain their existing contract.
+
 For an engine cluster, `LunCo.Propulsion.PlumePhotometry.engine_count` is the
 number of identical nozzles represented by its aggregate thrust and propellant
 flow inputs. The model divides those extensive quantities by the count when it

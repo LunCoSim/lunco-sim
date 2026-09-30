@@ -695,9 +695,9 @@ impl Plugin for ModelicaUiPlugin {
             // Reactive UI observer: drain core live-sim samples → viz plots.
             // The core worker no longer references lunco_viz.
             .add_systems(Update, core_observers::drain_sim_samples_to_viz)
-            // Reactive UI observers: core notices → Console; source-root load
-            // state → status bar. Core emits events/state; these project them.
-            .add_systems(Update, core_observers::drain_notices_to_console)
+            // Project core notices into status history and source-root load
+            // state into the status bar.
+            .add_systems(Update, core_observers::drain_notices_to_status_bus)
             .add_systems(Update, core_observers::mirror_source_roots_to_status_bus)
             // Reactive UI: feed input/workspace pacing hints into the core
             // parse scheduler (before it reads them this frame).

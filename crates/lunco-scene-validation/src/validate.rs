@@ -843,7 +843,10 @@ fn validate_sysml_twin(
                 .error(format!("cannot resolve {reference}: {error}"));
         }
     };
-    let Some((_twin_id, twin)) = workspace.twins().find(|(_, twin)| twin.root == root) else {
+    let Some((_twin_id, twin)) = workspace
+        .twins()
+        .find(|(_, twin)| lunco_doc::same_file(&twin.root, &root))
+    else {
         return ValidationReport::new(reference, "sysml").error(format!(
             "Twin `{name}` is mounted in TwinRoots but has no matching Workspace entry; reopen it through the Workspace",
         ));

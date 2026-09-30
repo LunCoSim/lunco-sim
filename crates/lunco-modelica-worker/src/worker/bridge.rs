@@ -799,6 +799,43 @@ pub fn handle_modelica_responses(
                 }
             }
 
+            if let Some(phase) = result.preparation_phase.as_ref() {
+                if model.pending_generation != 0
+                    && !model.document.is_unassigned()
+                    && documents
+                        .as_ref()
+                        .and_then(|registry| registry.host(model.document))
+                        .map(|host| host.document().generation_owned())
+                        != Some(model.pending_generation)
+                {
+                    continue;
+                }
+                use lunco_modelica_runtime::ModelicaPreparationPhase;
+                let detail = match phase {
+                    ModelicaPreparationPhase::QueuedForCompilation => {
+                        "queued for compilation".to_owned()
+                    }
+                    ModelicaPreparationPhase::CheckingSolverCache => {
+                        "compiled; checking the prepared solver cache".to_owned()
+                    }
+                    ModelicaPreparationPhase::LoweringEquations => {
+                        "preparing simulation equations and telemetry (solver cache miss)"
+                            .to_owned()
+                    }
+                    ModelicaPreparationPhase::CachedSolverLoaded => {
+                        "loaded the prepared solver from cache".to_owned()
+                    }
+                    ModelicaPreparationPhase::SolverPrepared { elapsed_secs } => format!(
+                        "solver preparation finished in {elapsed_secs:.2} s; awaiting initialization"
+                    ),
+                };
+                notices.write(ModelicaNotice {
+                    level: NoticeLevel::Info,
+                    text: format!("[{}] {detail}", model.model_name),
+                });
+                continue;
+            }
+
             // Retain the worker's resolved plan only after session fencing.
             // Compile results also pass the source-generation check above;
             // step-transaction failures below clear the snapshot before this

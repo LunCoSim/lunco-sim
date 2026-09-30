@@ -34,6 +34,14 @@ public contract fit; add a new mission/vehicle model only when the equation or
 interface is genuinely absent. An isolated Modelica compile proves neither USD
 wiring nor runtime physics.
 
+For shared plume calculations, reuse
+`LunCo.Propulsion.computePlumePhotometry`. `PlumePhotometry` supplies named USD
+ports; `RCSJet` calls the function directly with static nozzle parameters.
+See [USD-driven visuals](../../docs/architecture/50-usd-driven-visuals.md) for
+the fixed-size result contract. Validate model refactors through the production
+`rcs_feed_starvation` and `rocket_engine_plume_defaults` scene gates, then
+measure cold solver preparation and running-step cost separately.
+
 For material-dependent equations, use the component's typed SysML material
 assignment and property source described in the
 [mission engineering material gate](../interactive-component-authoring/references/mission-engineering-quality.md#physical-materials-and-engineering-properties).

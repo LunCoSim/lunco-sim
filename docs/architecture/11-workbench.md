@@ -211,10 +211,11 @@ private dock layout.
    copy the unmodified message without depending on the window width; attention rows
    emit the owning typed action. While active progress exists, the same anchored popup
    presents a compact progress notice automatically. It shows the status source and a
-   truncated first-line summary of the owner-provided message; the full message remains
-   available from its tooltip. The renderer does not infer a phase from free-form text.
-   Determinate work may show its reported percentage, while indeterminate work uses an
-   animated bar without inventing a percentage. “Recent status details” and the status
+   wrapped full owner-provided message; scene progress is titled “Scene loading…” or
+   “Scene unloading…” during a clear transition and uses that concise label in the
+   status strip. The renderer does not infer a phase from free-form text. The popup
+   spinner marks ongoing work; determinate progress remains in the status strip without
+   adding a redundant progress track to the card. “Recent status details” and the status
    strip open the recent-history view in place. History renders discrete events only; it
    never inserts live progress rows. While history is open, the strip hides its entire
    event summary, including discrete-history fallback, so the event list stays stable;

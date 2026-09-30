@@ -1247,6 +1247,14 @@ pub(crate) fn render_status_bar_inner(
     let scene_transition_active = world
         .get_resource::<lunco_core::SceneTransitionCoordinator>()
         .is_some_and(|coordinator| coordinator.active().is_some() || coordinator.has_admitted());
+    let scene_transition_is_clearing = world
+        .get_resource::<lunco_core::SceneTransitionCoordinator>()
+        .is_some_and(|coordinator| {
+            matches!(
+                coordinator.active(),
+                Some(lunco_core::SceneTransition::Clear)
+            )
+        });
 
     // Snapshot the compact status strip before painting. The event history is
     // collected only after the popup is known to be open below.
@@ -1360,7 +1368,18 @@ pub(crate) fn render_status_bar_inner(
                         // complete event in the tooltip and history popup, but
                         // never let diagnostic/newline-heavy payloads define
                         // the button or label's intrinsic width.
-                        let display_message = status_message_summary(&l.message);
+                        let scene_progress = l.level == StatusLevel::Progress
+                            && l.source == lunco_status_core::status_bus::SCENE_SOURCE;
+                        let display_message = if scene_progress {
+                            ""
+                        } else {
+                            status_message_summary(&l.message)
+                        };
+                        let display_source = if scene_progress {
+                            status_progress_source_label(l.source, scene_transition_is_clearing)
+                        } else {
+                            l.source
+                        };
                         if attention {
                             attention_clicked = ui
                                 .add_sized(
@@ -1388,7 +1407,7 @@ pub(crate) fn render_status_bar_inner(
                             let notification = status_notification_layout_job(
                                 ui.style(),
                                 l.level,
-                                l.source,
+                                display_source,
                                 display_message,
                                 dot_color,
                             );
@@ -1599,6 +1618,7 @@ pub(crate) fn render_status_bar_inner(
             .id(popup_id)
             .width(popup_width)
             .align(egui::RectAlign::TOP_START)
+            .gap(5.0)
             .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
             .open_memory(None)
             .close_behavior(
@@ -1622,7 +1642,12 @@ pub(crate) fn render_status_bar_inner(
                 ui.set_max_width(popup_width);
                 if popup_view == StatusPopupView::Progress {
                     if let Some(progress) = primary_progress.as_ref() {
-                        expand_status_history = render_status_progress_notice(ui, progress, theme);
+                        expand_status_history = render_status_progress_notice(
+                            ui,
+                            progress,
+                            theme,
+                            scene_transition_is_clearing,
+                        );
                     }
                 } else {
                     ui.set_max_height(360.0);
@@ -1670,23 +1695,39 @@ fn render_status_progress_notice(
     ui: &mut egui::Ui,
     event: &lunco_status_core::status_bus::StatusEvent,
     theme: &lunco_theme::Theme,
+    scene_transition_is_clearing: bool,
 ) -> bool {
     ui.spacing_mut().item_spacing.y = theme.spacing.item_spacing;
     ui.horizontal(|ui| {
         ui.spinner();
         ui.vertical(|ui| {
-            ui.label(egui::RichText::new(event.source).strong());
-            ui.add(egui::Label::new(status_message_summary(&event.message)).truncate())
+            ui.label(
+                egui::RichText::new(status_progress_source_label(
+                    event.source,
+                    scene_transition_is_clearing,
+                ))
+                .strong(),
+            );
+            ui.add(egui::Label::new(&event.message).wrap())
                 .on_hover_text(&event.message);
         });
     });
-    let bar = if let Some(progress) = event.progress_pct() {
-        egui::ProgressBar::new((progress / 100.0) as f32).show_percentage()
-    } else {
-        egui::ProgressBar::new(0.0).animate(true)
-    };
-    ui.add(bar.desired_height(theme.spacing.item_spacing));
     ui.link("Recent status details").clicked()
+}
+
+fn status_progress_source_label(
+    source: &'static str,
+    scene_transition_is_clearing: bool,
+) -> &'static str {
+    if source == lunco_status_core::status_bus::SCENE_SOURCE {
+        if scene_transition_is_clearing {
+            "Scene unloading…"
+        } else {
+            "Scene loading…"
+        }
+    } else {
+        source
+    }
 }
 
 const STATUS_EVENT_LEVEL_WIDTH: f32 = 56.0;

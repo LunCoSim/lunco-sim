@@ -29,6 +29,7 @@ fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [],
        entity_reads: [
            find_path(ROUTE_POINT),
+           find_path(ROUTE_POINT + "/Dome"),
            find_path(LANDING_LOCATION),
            find_path(PREDICTED_LANDING),
        ],
@@ -158,6 +159,15 @@ fn landing_location_uses_annotation_material() {
         && annotation_shader_has_no_shader_opacity(LANDING_LOCATION + "/Looks/Dome_Mat/Surface")
 }
 
+fn landing_location_has_no_trigger_collider() {
+    let marker = query("QueryUsdPrim", #{ path: LANDING_LOCATION, children: true });
+    if marker == () || marker.ok == false || marker.children == () { return false; }
+    for child in marker.children {
+        if child == LANDING_LOCATION + "/Zone" { return false; }
+    }
+    true
+}
+
 fn predicted_landing_uses_annotation_material() {
     let parts = ["PX", "NX", "PZ", "NZ", "Center"];
     for part in parts {
@@ -207,6 +217,8 @@ fn on_tick(me, ctx) {
             "route point does not expose its green unvisited-state colour"));
         checks.push(t_true(landing_location_uses_annotation_material(),
             "landing location does not expose the emissive shadowless annotation material"));
+        checks.push(t_true(landing_location_has_no_trigger_collider(),
+            "landing location is not a visual-only ground mark"));
         checks.push(t_true(predicted_landing_uses_annotation_material(),
             "predicted landing does not expose the emissive shadowless annotation material"));
 

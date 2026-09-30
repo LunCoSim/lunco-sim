@@ -1,8 +1,6 @@
 within LunCo.Propulsion;
 model PlumePhotometry "What an exhaust plume is worth as a light source."
   extends LunCo.Icons.Propulsion;
-  constant Real pi = 3.141592653589793 "Circle constant";
-  constant Real minimum_positive = 1.0e-9 "Numerical floor for denominators";
 
   parameter Integer engine_count(min = 1) = 1
     "Equal nozzles represented by the aggregate propulsion outputs";
@@ -85,12 +83,6 @@ model PlumePhotometry "What an exhaust plume is worth as a light source."
   output Real color_r;
   output Real color_g;
   output Real color_b;
-  Real richness;
-  Real fuel_r;
-  Real fuel_g;
-  Real fuel_b;
-  Real color_luminance;
-  Real exit_area_m2;
 
   output Real width "Plume base radius at this throttle (m)";
   output Real length "Plume length at this throttle (m)";
@@ -110,115 +102,53 @@ model PlumePhotometry "What an exhaust plume is worth as a light source."
   output Real exit_dynamic_pressure_pa
     "Current exhaust dynamic pressure per nozzle exit (Pa)";
 
-  Real t "Delivered throttle, bounded by command activity and thrust";
-  Real visual_t "Shader-matched visible throttle response";
-  Real thrust_fraction "Conservative delivered jet momentum divided by nominal capability";
-  Real design_mass_flow_kgs "Nominal mass flow inferred from thrust capability";
-  Real design_exit_dynamic_pressure_pa "Nominal dynamic pressure at the exit";
-  Real pressure_margin_pa "Design exit pressure above ambient";
-  Real available_chamber_pressure_pa "Current/design chamber pressure envelope";
-  Real chamber_pressure_factor "Vacuum-to-ambient pressure availability factor";
-  Real plume_pressure_pa "Pressure scale used for the free-jet length basis";
-
+// USD binds these named model ports; the shared function owns their calculation.
 equation
-  // These RGB anchors and interpolation are explicit visualization defaults.
-  // Fuel-rich hydrocarbon exhaust is warmer; hydrogen is faint/blue; unknown
-  // and oxidizer-rich exhaust are pale. Pressure, species and exposure also
-  // affect observed color and are not spectrally modeled here.
-  richness = max(-1.0, min(1.0, mixture_mode
-    + (1.0 - min(1.0, abs(mixture_mode)))
-      * (mixture_ratio / max(minimum_positive, stoichiometric_mixture_ratio) - 1.0)));
-  fuel_r = 0.85 * max(0.0, 1.0 - abs(fuel_family))
-    + max(0.0, 1.0 - abs(fuel_family - 1.0))
-    + 0.35 * max(0.0, 1.0 - abs(fuel_family - 2.0))
-    + max(0.0, 1.0 - abs(fuel_family - 3.0));
-  fuel_g = 0.90 * max(0.0, 1.0 - abs(fuel_family))
-    + 0.65 * max(0.0, 1.0 - abs(fuel_family - 1.0))
-    + 0.60 * max(0.0, 1.0 - abs(fuel_family - 2.0))
-    + 0.75 * max(0.0, 1.0 - abs(fuel_family - 3.0));
-  fuel_b = max(0.0, 1.0 - abs(fuel_family))
-    + 0.30 * max(0.0, 1.0 - abs(fuel_family - 1.0))
-    + max(0.0, 1.0 - abs(fuel_family - 2.0))
-    + 0.50 * max(0.0, 1.0 - abs(fuel_family - 3.0));
-  color_r = max(0.0, min(1.0, fuel_r - 0.15 * richness));
-  color_g = max(0.0, min(1.0, fuel_g + 0.15 * richness));
-  color_b = max(0.0, min(1.0, fuel_b + 0.25 * richness));
-  color_luminance = max(0.0, luminance)
-    + (1.0 - min(1.0, max(0.0, luminance) / minimum_positive))
-      * 16.0 * (0.2126 * color_r + 0.7152 * color_g + 0.0722 * color_b);
-  exit_area_m2 = max(0.0, nozzle_exit_area_m2)
-    + (1.0 - min(1.0, max(0.0, nozzle_exit_area_m2) / minimum_positive))
-      * pi * max(minimum_positive, nozzle_exit_radius_m) ^ 2;
-  envelope_radius_m = max(0.0, nozzle_exit_radius_m) * max(1.0, radial_expansion);
-  core_envelope_radius_m = envelope_radius_m * max(0.01, min(1.0, core_radius_fraction));
-  envelope_length_m = max(0.0, geometry_capacity_m)
-    + (1.0 - min(1.0, max(0.0, geometry_capacity_m) / minimum_positive))
-      * max(2.0 * max(0.0, nozzle_exit_radius_m), full_throttle_length_m);
-  envelope_center_y_m = -0.5 * envelope_length_m;
-
-  // One delivered momentum observation drives every presentation result.
-  // min(thrust, mass-flow * exhaust velocity) is the conservative actual jet
-  // load already published below. Zero jet momentum gives zero activity by
-  // ordinary normalization, including fuel exhaustion or a stale thrust value.
-  thrust_fraction = min(1.0, max(0.0, momentum_flux_n) * max(1, engine_count)
-    / max(minimum_positive, maximum_thrust_n));
-  // A valve can have a short authored spool tail after a zero command. The
-  // rendered plume follows delivered thrust, so zero thrust removes the light
-  // and shader signal on this same equation path instead of leaving a ghost.
-  t = min(min(1.0, max(0.0, throttle)), thrust_fraction);
-  visual_t = max(0.0, t) ^ max(0.1, min(1.0, throttle_exponent));
-  render_throttle = t;
-
-  // A nominal mass flow is not copied from USD: it comes from the cluster's
-  // published thrust capability and design exhaust velocity, then is divided
-  // among equal nozzles. The resulting per-nozzle exit dynamic pressure is
-  // compared with the authored exit-plane pressure. In vacuum the stronger term
-  // wins; with ambient pressure the pressure margin and chamber factor reduce
-  // the visible free-jet basis.
-  design_mass_flow_kgs = max(0.0, maximum_thrust_n)
-    / (max(1, engine_count) * max(minimum_positive, design_exhaust_velocity_mps));
-  design_exit_dynamic_pressure_pa = 0.5 * design_mass_flow_kgs
-    * max(0.0, design_exhaust_velocity_mps)
-    / max(minimum_positive, exit_area_m2);
-  pressure_margin_pa = max(0.0, nozzle_exit_pressure_pa - ambient_pressure_pa);
-  available_chamber_pressure_pa = max(0.0,
-    max(chamber_pressure_pa, design_chamber_pressure_pa));
-  chamber_pressure_factor = max(0.0, min(1.0,
-    (available_chamber_pressure_pa - ambient_pressure_pa)
-      / max(minimum_positive, available_chamber_pressure_pa)));
-  plume_pressure_pa = max(pressure_margin_pa, design_exit_dynamic_pressure_pa)
-    * chamber_pressure_factor;
-  full_throttle_length_m = max(0.0, nozzle_exit_radius_m)
-    * sqrt(max(0.0, plume_pressure_pa)
-      / max(minimum_positive, pressure_threshold_pa));
-
-  // The shader receives the derived metric, not a second throttle-shaped length
-  // law. Its fixed cone is deliberately a capacity envelope; clamping here
-  // keeps an unexpected design point from addressing outside that envelope.
-  length = visual_t * full_throttle_length_m;
-  visual_length_fraction = min(1.0, max(0.0, length)
-    / max(minimum_positive, envelope_length_m));
-  width = (width_idle + (1.0 - width_idle) * visual_t) * (max(0.0, w_max)
-      + (1.0 - min(1.0, max(0.0, w_max) / minimum_positive)) * core_envelope_radius_m);
-
-  // Use both sides of the authored signal: thrust is the delivered force, while
-  // flow*velocity is the independently observable momentum estimate. The lower
-  // value is the conservative exit-load estimate when mixture efficiency is
-  // still settling during spool-up.
-  momentum_flux_n = min(max(0.0, thrust_n),
-    max(0.0, propellant_flow_kgs) * max(0.0, exhaust_velocity_mps))
-    / max(1, engine_count);
-  exit_dynamic_pressure_pa = 0.5 * momentum_flux_n
-    / max(minimum_positive, exit_area_m2);
-
-  // The plume radiates from its flank, so the emitting surface is the cone's
-  // lateral area — not its base, not its volume: A = pi*r*sqrt(r2+h2).
-  area = pi * width * sqrt(width ^ 2 + length ^ 2);
-
-  // The endpoint is exact: a dead engine emits no light even though the cone's
-  // idle width gives its bounded geometry a non-zero lateral area.
-  intensity = t * exitance * color_luminance * area;
-  visual_intensity = visual_t * exitance * color_luminance * area;
-  radius = r_idle + t * r_gain;
-  visual_radius = r_idle + visual_t * r_gain;
+  {envelope_radius_m,
+    core_envelope_radius_m,
+    envelope_length_m,
+    envelope_center_y_m,
+    color_r,
+    color_g,
+    color_b,
+    width,
+    length,
+    full_throttle_length_m,
+    visual_length_fraction,
+    render_throttle,
+    area,
+    intensity,
+    visual_intensity,
+    radius,
+    visual_radius,
+    momentum_flux_n,
+    exit_dynamic_pressure_pa} = computePlumePhotometry(
+    engine_count,
+    throttle,
+    thrust_n,
+    maximum_thrust_n,
+    propellant_flow_kgs,
+    exhaust_velocity_mps,
+    design_exhaust_velocity_mps,
+    nozzle_exit_radius_m,
+    nozzle_exit_area_m2,
+    nozzle_exit_pressure_pa,
+    chamber_pressure_pa,
+    design_chamber_pressure_pa,
+    ambient_pressure_pa,
+    pressure_threshold_pa,
+    geometry_capacity_m,
+    w_max,
+    width_idle,
+    throttle_exponent,
+    luminance,
+    exitance,
+    r_idle,
+    r_gain,
+    fuel_family,
+    mixture_mode,
+    mixture_ratio,
+    stoichiometric_mixture_ratio,
+    radial_expansion,
+    core_radius_fraction);
 end PlumePhotometry;

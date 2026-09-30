@@ -253,9 +253,13 @@ recipes and their acceptance scenes stay in the owning Twin.
 
 1. **Production-owned test discovery.**
 
-   `luncosim test --list` discovers every scene under `assets/scenes/tests/`
-   through composed USD, resolves its test Rhai source, and classifies the
-   execution domain from the source's top-level literal `TEST_KIND` constant.
+   `luncosim test --list` recursively examines `.usda` assets under
+   `assets/scenes/tests/`, then includes only scenes with a composed
+   `LunCoProgramAPI` bound to a Rhai source below an asset `tests/` directory.
+   USD layers with no such test observer remain available as referenced test
+   support assets and are omitted from the root test catalog. The runner
+   classifies each included test's execution domain from its source's top-level
+   literal `TEST_KIND` constant.
    The production discovery API lives in `lunco-scene-validation`, alongside
    the asset and stage validation it reuses; the scene mutation crate does not
    own test inventory.

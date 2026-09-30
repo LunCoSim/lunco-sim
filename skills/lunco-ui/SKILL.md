@@ -88,6 +88,12 @@ in another package's perspective, so the perspective does not need a dependency
 on the panel package or a copied panel id. Cached user layouts still restore as
 saved; contributions apply when a perspective builds its default layout.
 
+Modelica preparation emits discrete lifecycle notices for its compilation queue,
+solver-cache lookup, equation lowering, cache reuse, and elapsed preparation time.
+The shared Modelica notice observer projects Info, Warn, and Error into Recent
+status. Preparation notices are session/source-fenced and never solver results;
+they must not release the simulation hold or change the model's time or outputs.
+
 The workbench status history is one shared presentation surface: render Info,
 Warn, Error, and Attention through the same responsive
 level/source/message/action row. Its popup is compact, sized to roughly
@@ -112,9 +118,11 @@ event list. Hide the entire event summary from the strip while that history
 view is open, including its fallback to the latest discrete event; preserve
 the strip click target so it can close the popup. Active
 progress opens the compact state of this same popup when it belongs on the
-surface, showing the source and a truncated first-line summary of the
-owner-written message. Keep the complete message in the tooltip and do not
-infer phase from free-form text. Terrain tile streaming, optional terrain
+surface. Scene progress is titled “Scene loading…” or “Scene unloading…” for a
+clear transition; other progress keeps its source label. The complete
+owner-written message wraps inside the card, and the status strip uses the same
+concise scene label. Do not infer phase from free-form text. Terrain tile
+streaming, optional terrain
 refinement, and post-projection scene geometry stay published for readiness
 consumers but drive the workbench loading notice only during an admitted or
 active scene transition. This prevents camera movement after scene load from

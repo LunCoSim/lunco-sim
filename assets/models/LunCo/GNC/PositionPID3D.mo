@@ -406,24 +406,14 @@ equation
     * max(0.0, min(1.0,
       (landing_flare_range_m - altitude_above_target)
         / max(1.0e-9, landing_flare_range_m)));
-  // A lateral acceleration request is a thrust-vector request, not an
-  // independent force channel.  Allowing the vertical law to coast at zero
-  // while lateral demand is nonzero makes the later `thrust_authority`
-  // multiplier erase the entire thrust vector, so an initial cross-range
-  // velocity can never be braked.  Keep the vehicle's normal hover thrust
-  // component active while lateral demand exists; the tilt-envelope projection
-  // below then limits lateral acceleration to the amount that this hover thrust
-  // can realize.  Solving lateral/tan(tilt) here would add upward acceleration
-  // to a channel whose value is the gravity-compensating thrust component.
-  // Tiny numerical observer corrections must not turn a commanded descent
-  // into a permanent hover. Require a meaningful lateral demand before
-  // reserving the full gravity-supporting vertical component, then ramp the
-  // support over one deadband width so the transition stays bounded and
-  // reusable across vehicles.
-  lateral_support_vertical_command = g * max(0.0, min(1.0,
-    (lateral_accel_magnitude - lateral_support_threshold_mps2)
-      / max(minimum_vertical_accel_mps2,
-        lateral_support_threshold_mps2)));
+  // Lateral and vertical corrections share the same thrust vector. Retain
+  // only the vertical component required to realize the requested lateral
+  // acceleration inside the authored tilt envelope. Scale from the configured
+  // lateral deadband so small residuals can coexist with descent, and cap this
+  // support term at gravity so it cannot independently command a climb.
+  lateral_support_vertical_command = max(0.0, min(max(0.0, g),
+    max(0.0, lateral_accel_magnitude - lateral_support_threshold_mps2)
+      / max(1.0e-9, tan(max(1.0e-9, command_tilt_limit_rad)))));
   vertical_limiter.command = max(
     target_contact_engine_gate * (g + pid_y_command),
     landing_flare_gate

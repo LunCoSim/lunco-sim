@@ -411,7 +411,7 @@ impl SolvePreparationPool {
         pending_operations < self.pool.current_num_threads().saturating_add(2)
     }
 
-    fn submit(&mut self, work: &CompileWork) -> u64 {
+    fn submit(&mut self, work: &CompileWork, runtime_tx: &Sender<ModelicaResult>) -> u64 {
         let id = self.allocate_id();
         let key = work.plan.key.clone();
         if let Some(leader_id) = self.in_flight_solve_keys.get(&key).copied() {
@@ -426,6 +426,9 @@ impl SolvePreparationPool {
         let dae = work.comp_res.dae.clone();
         let options = work.plan.options.clone();
         let model_name = work.model_name.clone();
+        let entity = work.entity;
+        let session_id = work.session_id;
+        let runtime_tx = runtime_tx.clone();
         let disk_cache = work.plan.persistent_library_revision.map(|revision| {
             (
                 work.plan.source_key,
@@ -437,6 +440,9 @@ impl SolvePreparationPool {
         let tx = self.tx.clone();
         let queued_at = web_time::Instant::now();
         self.pool.spawn(move || {
+            let preparation_started = web_time::Instant::now();
+            send_preparation_phase(&runtime_tx, entity, session_id,
+                lunco_modelica_runtime::ModelicaPreparationPhase::CheckingSolverCache);
             let _job_span = bevy::log::info_span!(
                 "modelica_solve_preparation_job",
                 preparation_id = id,
@@ -460,8 +466,12 @@ impl SolvePreparationPool {
             };
             let disk_hit = cached.is_some();
             let result = if let Some(model) = cached {
+                send_preparation_phase(&runtime_tx, entity, session_id,
+                    lunco_modelica_runtime::ModelicaPreparationPhase::CachedSolverLoaded);
                 Ok(model)
             } else {
+                send_preparation_phase(&runtime_tx, entity, session_id,
+                    lunco_modelica_runtime::ModelicaPreparationPhase::LoweringEquations);
                 let lower_started = web_time::Instant::now();
                 let result = {
                     let _lower_span =
@@ -506,6 +516,12 @@ impl SolvePreparationPool {
                 log::debug!(
                     "[modelica-runtime] loaded prepared solver IR for `{model_name}`: cache=disk-hit"
                 );
+            }
+            if result.is_ok() {
+                send_preparation_phase(&runtime_tx, entity, session_id,
+                    lunco_modelica_runtime::ModelicaPreparationPhase::SolverPrepared {
+                        elapsed_secs: preparation_started.elapsed().as_secs_f64(),
+                    });
             }
             let _send_span =
                 bevy::log::info_span!("modelica_solve_preparation_publish_result").entered();
@@ -1336,7 +1352,7 @@ fn commit_ready_compiler_completions(
                         tx,
                     );
                 } else {
-                    let job_id = solve_preparation_pool.submit(&work);
+                    let job_id = solve_preparation_pool.submit(&work, tx);
                     pending_compile_works.insert(job_id, work);
                     solve_preparation_order.push_back(job_id);
                 }
@@ -1865,6 +1881,12 @@ fn submit_pending_compile(
     pending_compiles: &mut HashMap<u64, PendingCompile>,
     tx: &Sender<ModelicaResult>,
 ) {
+    send_preparation_phase(
+        tx,
+        pending.entity,
+        pending.session_id,
+        lunco_modelica_runtime::ModelicaPreparationPhase::QueuedForCompilation,
+    );
     match compiler.submit_compile(
         pending.model_name.clone(),
         unit,
@@ -1919,7 +1941,7 @@ fn submit_cached_solve_preparation(
             tx,
         );
     } else {
-        let job_id = solve_preparation_pool.submit(&work);
+        let job_id = solve_preparation_pool.submit(&work, tx);
         pending_compile_works.insert(job_id, work);
         solve_preparation_order.push_back(job_id);
     }
@@ -2108,6 +2130,21 @@ fn result_ok(entity: Entity, session_id: u64) -> ModelicaResult {
         session_id,
         ..Default::default()
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn send_preparation_phase(
+    tx: &Sender<ModelicaResult>,
+    entity: Entity,
+    session_id: u64,
+    phase: lunco_modelica_runtime::ModelicaPreparationPhase,
+) {
+    let _ = tx.send(ModelicaResult {
+        entity,
+        session_id,
+        preparation_phase: Some(phase),
+        ..Default::default()
+    });
 }
 
 fn add_experiment_defaults(

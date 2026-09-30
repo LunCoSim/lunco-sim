@@ -114,17 +114,21 @@ pub fn classify_rhai_source(source: &str) -> Result<SceneTestKind, String> {
 /// Discover every test scene recursively below `scenes_dir` through composed USD reads.
 ///
 /// Only `.rhai` programs below an asset `tests/` directory are test observers
-/// (`scenarios/tests/` in the shipped library). A scene may also carry a
-/// production/tutorial Rhai program; those are intentionally ignored here.
-/// Multiple test observers must agree on their domain so the runner never has
-/// to guess which half of a scene it should execute.
+/// (`scenarios/tests/` in the shipped library). USD assets without such an
+/// observer are not test roots; this permits referenced support layers under
+/// the same asset tree. A scene may also carry a production/tutorial Rhai
+/// program, which is intentionally ignored here. Multiple test observers must
+/// agree on their domain so the runner never has to guess which half of a scene
+/// it should execute.
 pub fn discover_scene_tests(scenes_dir: &Path) -> Result<Vec<SceneTest>, String> {
     let mut scenes = scene_paths(scenes_dir)?;
     scenes.sort();
 
     let mut discovered = Vec::with_capacity(scenes.len());
     for scene_path in scenes {
-        discovered.push(discover_scene_test(&scene_path)?);
+        if let Some(test) = discover_scene_test(&scene_path)? {
+            discovered.push(test);
+        }
     }
     Ok(discovered)
 }
@@ -158,7 +162,7 @@ fn scene_paths(_scenes_dir: &Path) -> Result<Vec<PathBuf>, String> {
     Err("scene-test discovery requires the native asset catalog".to_string())
 }
 
-fn discover_scene_test(scene_path: &Path) -> Result<SceneTest, String> {
+fn discover_scene_test(scene_path: &Path) -> Result<Option<SceneTest>, String> {
     let stage = lunco_usd_bevy_stage::compose::compose_file_to_stage(scene_path)
         .map_err(|error| format!("{}: cannot compose scene: {error}", scene_path.display()))?;
     let view = StageView::new(&stage);
@@ -225,12 +229,7 @@ fn discover_scene_test(scene_path: &Path) -> Result<SceneTest, String> {
     }
 
     let kind = match kinds.len() {
-        0 => {
-            return Err(format!(
-                "{}: no test Rhai program bound through LunCoProgramAPI; expected a source below an asset tests/ directory",
-                scene_path.display()
-            ));
-        }
+        0 => return Ok(None),
         1 => *kinds.first().expect("one kind exists"),
         _ => {
             return Err(format!(
@@ -240,10 +239,10 @@ fn discover_scene_test(scene_path: &Path) -> Result<SceneTest, String> {
         }
     };
 
-    Ok(SceneTest {
+    Ok(Some(SceneTest {
         scene_path: scene_path.to_path_buf(),
         kind,
-    })
+    }))
 }
 
 #[cfg(test)]

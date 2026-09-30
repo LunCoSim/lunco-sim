@@ -24,7 +24,19 @@ fn simulation_dependencies(me, ctx) {
             find_path("/LanderTest/Lander"),
             find_path("/LanderTest/Lander/GNC"),
         ],
-        entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
+        entity_reads: [
+            find_path("/LanderTest/Lander/LegPX"),
+            find_path("/LanderTest/Lander/LegNX"),
+            find_path("/LanderTest/Lander/LegPZ"),
+            find_path("/LanderTest/Lander/LegNZ"),
+            find_path("/LanderTest/Lander/LegPX/PadPX"),
+            find_path("/LanderTest/Lander/LegNX/PadNX"),
+            find_path("/LanderTest/Lander/LegPZ/PadPZ"),
+            find_path("/LanderTest/Lander/LegNZ/PadNZ"),
+            find_path("/LanderTest/LandingTarget"),
+            find_path("/LanderTest/Ground"),
+        ],
+        entity_writes: [], query_reads: [], required_inputs: [],
     }
 }
 
@@ -56,6 +68,14 @@ fn on_start(me, ctx) {
     this.leg_nx = find_path("/LanderTest/Lander/LegNX");
     this.leg_pz = find_path("/LanderTest/Lander/LegPZ");
     this.leg_nz = find_path("/LanderTest/Lander/LegNZ");
+    this.pads = [
+        find_path("/LanderTest/Lander/LegPX/PadPX"),
+        find_path("/LanderTest/Lander/LegNX/PadNX"),
+        find_path("/LanderTest/Lander/LegPZ/PadPZ"),
+        find_path("/LanderTest/Lander/LegNZ/PadNZ"),
+    ];
+    this.target = find_path("/LanderTest/LandingTarget");
+    this.ground = find_path("/LanderTest/Ground");
     this.rover = find_path("/LanderTest/SkidRover");
     this.goal = find_path("/LanderTest/Route/P2");
     this.event_sources_ok = true;
@@ -101,6 +121,44 @@ fn on_event(me, evt, ctx) {
     } else if evt.name == "lander_touchdown" {
         if evt.source != this.lander { this.event_sources_ok = false; }
         this.touchdown = true;
+        let lander_pos = world_pos(this.lander);
+        let target_pos = world_pos(this.target);
+        let ground_pos = world_pos(this.ground);
+        let horizontal_error = ();
+        if lander_pos != () && target_pos != () {
+            let dx = lander_pos[0] - target_pos[0];
+            let dz = lander_pos[2] - target_pos[2];
+            horizontal_error = sqrt(dx * dx + dz * dz);
+        }
+        let pads_valid = true;
+        let minimum_pad_clearance = 1000000.0;
+        for pad in this.pads {
+            let pad_pos = world_pos(pad);
+            if pad_pos == () || ground_pos == () {
+                pads_valid = false;
+            } else {
+                // PadPX..PadNZ are authored 0.10 m cylinders on flat ground.
+                let lower_face_clearance = pad_pos[1] - 0.05 - ground_pos[1];
+                if lower_face_clearance < minimum_pad_clearance {
+                    minimum_pad_clearance = lower_face_clearance;
+                }
+            }
+        }
+        let all_legs_contact = high(this.leg_px, "contact") &&
+            high(this.leg_nx, "contact") && high(this.leg_pz, "contact") &&
+            high(this.leg_nz, "contact");
+        let target_ok = scalar_ok(horizontal_error) && horizontal_error <= 2.5;
+        let pads_ok = pads_valid && minimum_pad_clearance >= -0.01;
+        let touchdown_ok = this.event_sources_ok && all_legs_contact &&
+            target_ok && pads_ok;
+        print("[descent-runtime] touchdown xy_error=" + horizontal_error +
+              " min_pad_clearance=" + minimum_pad_clearance +
+              " all_legs_contact=" + all_legs_contact);
+        if touchdown_ok {
+            emit("LANDER_TOUCHDOWN", "PASS");
+        } else {
+            emit("LANDER_TOUCHDOWN", "FAIL");
+        }
     } else if evt.name == "rover_deployed" {
         this.deployed = true;
         print("[descent-runtime] rover_deployed rover=" + world_pos(this.rover));
