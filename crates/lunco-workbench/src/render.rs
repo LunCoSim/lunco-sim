@@ -28,6 +28,37 @@ impl Default for WorkbenchVisualsCache {
     }
 }
 
+/// Apply the persisted opt-in before any egui pass can paint diagnostics.
+#[cfg(debug_assertions)]
+pub(crate) fn sync_egui_debug_overlays(
+    settings: Res<WorkbenchAppearanceSettings>,
+    mut contexts: Query<&mut bevy_egui::EguiContext>,
+) {
+    for mut context in &mut contexts {
+        apply_egui_debug_overlays(context.get_mut(), settings.egui_debug_overlays);
+    }
+}
+
+/// Both light and dark styles must agree, including after a theme switch.
+#[cfg(debug_assertions)]
+fn apply_egui_debug_overlays(ctx: &egui::Context, enabled: bool) {
+    if ctx.options(|options| options.warn_on_id_clash != enabled) {
+        ctx.options_mut(|options| options.warn_on_id_clash = enabled);
+    }
+    let debug = egui::style::DebugOptions {
+        debug_on_hover_with_all_modifiers: enabled
+            && egui::style::DebugOptions::default().debug_on_hover_with_all_modifiers,
+        warn_if_rect_changes_id: enabled,
+        show_unaligned: enabled,
+        ..Default::default()
+    };
+    if ctx
+        .options(|options| options.dark_style.debug != debug || options.light_style.debug != debug)
+    {
+        ctx.all_styles_mut(|style| style.debug = debug);
+    }
+}
+
 pub(crate) fn render_workbench(
     world: &mut World,
     state: &mut bevy::ecs::system::SystemState<(EguiContexts, Res<WorkbenchMenuRegistry>)>,
@@ -49,23 +80,6 @@ pub(crate) fn render_workbench(
         let snapshot = world.resource::<WorkbenchMenuRegistry>().clone();
         *direct_menu_labels = direct_menu_width_labels(&snapshot);
         *menu_snapshot = Some(snapshot);
-    }
-
-    // egui's expansion diagnostics are developer overlays, not workbench UI.
-    // Keep them disabled so debug builds cannot paint red layout markers over
-    // the application when the panel layout changes.
-    #[cfg(debug_assertions)]
-    {
-        let layout_debug_enabled = {
-            let style = ctx.global_style();
-            style.debug.show_expand_width || style.debug.show_expand_height
-        };
-        if layout_debug_enabled {
-            ctx.global_style_mut(|style| {
-                style.debug.show_expand_width = false;
-                style.debug.show_expand_height = false;
-            });
-        }
     }
 
     if !world.contains_resource::<WorkbenchLayout>()
@@ -2365,6 +2379,9 @@ pub(crate) fn register_workbench_appearance_settings_menu(world: &mut World) {
             .weak()
             .small(),
         );
+        #[cfg(debug_assertions)]
+        ui.checkbox(&mut settings.egui_debug_overlays, "Egui debug overlays")
+            .on_hover_text("Show developer diagnostics for widget alignment and changing widget IDs.");
         if settings != original {
             ctx.set_resource(settings);
         }
@@ -3097,6 +3114,46 @@ mod tests {
     use lunco_workbench_core::PerspectiveLayoutPlan;
     use lunco_workbench_core::PerspectiveSlotPlan;
     use lunco_workbench_layout::heal_non_finite_nulls;
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn egui_debug_overlays_require_explicit_opt_in() {
+        let settings: WorkbenchAppearanceSettings =
+            serde_json::from_str(r#"{"translucent_tab_content":true}"#).unwrap();
+        assert!(!settings.egui_debug_overlays);
+        let ctx = egui::Context::default();
+        let draw = |id: u64| {
+            ctx.run_ui(Default::default(), |ui| {
+                ui.interact(
+                    egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(40.0, 40.0)),
+                    ui.id().with(id),
+                    egui::Sense::hover(),
+                );
+            })
+        };
+        let red_outlines =
+            |output: &egui::FullOutput| {
+                output.shapes.iter().filter(|shape| matches!(
+                &shape.shape,
+                egui::epaint::Shape::Rect(rect) if rect.stroke.color == egui::Color32::RED
+            )).count()
+            };
+
+        // Replacing a widget at the same rect reproduces the egui ID warning.
+        apply_egui_debug_overlays(&ctx, true);
+        let _ = draw(1);
+        assert!(red_outlines(&draw(2)) > 0);
+
+        apply_egui_debug_overlays(&ctx, settings.egui_debug_overlays);
+        assert_eq!(red_outlines(&draw(3)), 0);
+        assert!(!ctx.options(|options| options.warn_on_id_clash));
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            let debug = ctx.style_of(theme).debug;
+            assert!(!debug.warn_if_rect_changes_id);
+            assert!(!debug.show_unaligned);
+            assert!(!debug.debug_on_hover_with_all_modifiers);
+        }
+    }
 
     #[test]
     fn tab_content_setting_uses_translucent_default_for_panel_chrome() {

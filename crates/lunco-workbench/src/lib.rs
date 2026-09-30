@@ -537,6 +537,9 @@ pub struct WorkbenchAppearanceSettings {
     /// remain visible behind it.
     #[serde(default = "default_translucent_tab_content")]
     pub translucent_tab_content: bool,
+    /// Opt into egui's developer layout overlays in debug builds.
+    #[serde(default)]
+    pub egui_debug_overlays: bool,
 }
 
 fn default_translucent_tab_content() -> bool {
@@ -547,6 +550,7 @@ impl Default for WorkbenchAppearanceSettings {
     fn default() -> Self {
         Self {
             translucent_tab_content: default_translucent_tab_content(),
+            egui_debug_overlays: false,
         }
     }
 }
@@ -655,6 +659,13 @@ impl Plugin for WorkbenchPlugin {
             app.add_plugins(lunco_theme::ThemePlugin);
         }
         app.register_settings_section::<WorkbenchAppearanceSettings>();
+        #[cfg(debug_assertions)]
+        app.add_systems(
+            PreUpdate,
+            render::sync_egui_debug_overlays
+                .after(bevy_egui::EguiPreUpdateSet::InitContexts)
+                .before(bevy_egui::EguiPreUpdateSet::BeginPass),
+        );
         app.register_settings_section::<lunco_render::CommunicationLineSettings>();
         // The mission-time spine (doc 19): `TimeTransport` is the single
         // play/pause + rate authority and `WorldTime` the derived view. Guarded so

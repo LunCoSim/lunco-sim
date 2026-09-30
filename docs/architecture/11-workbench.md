@@ -494,6 +494,12 @@ bodies use the theme's translucent `DesignTokens::overlay_backdrop` by default;
 `PanelCtx` content frames do not add a second backdrop, and the complete panel
 leaf remains chrome for pointer routing in both modes.
 
+`WorkbenchAppearanceSettings::egui_debug_overlays` is a persisted, default-off
+opt-in for egui developer diagnostics. Debug builds expose it under Settings →
+Appearance. The shell synchronizes both light and dark styles on every context
+after context initialization and before egui begins a pass; widget-ID and
+alignment warning outlines must not appear during ordinary panel interaction.
+
 A panel's default slot derives from its `default_slot()` (and `id` substring conventions — e.g. an `id` containing `"inspector"` auto-docks right):
 
 | Category | Default slot | Examples |

@@ -190,6 +190,12 @@ the opt-out to an opaque mantle body, while standard `PanelCtx` content frames
 stay transparent over the shared body. The full panel leaf remains workbench
 chrome for pointer routing in either mode.
 
+Egui developer overlays are off by default, including debug builds. The
+persisted `workbench_appearance.egui_debug_overlays` preference opts into widget
+alignment and changing-ID diagnostics through **Settings → Appearance → Egui
+debug overlays** in debug builds. The shell applies it to both egui theme styles
+before painting any context.
+
 ## Not yet built
 
 - **Standard perspective presets** (Build / Simulate / Analyze / Plan /

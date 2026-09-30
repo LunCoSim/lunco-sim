@@ -155,6 +155,12 @@ menu actions, go through `DeferredWorldTriggers` and are applied after the
 egui pass restores the layout; do not call observer events directly from a
 render callback when a typed context can queue the intent.
 
+Egui developer overlays are owned by the shell's persisted
+`WorkbenchAppearanceSettings::egui_debug_overlays`, off by default. Debug builds
+offer the opt-in under Settings → Appearance. Do not enable diagnostics in
+panel-local styles; the shell applies the preference to both theme styles on
+all contexts before each egui pass.
+
 Panel entries in the View menu use `PanelMenuGroup` for their primary workflow:
 Builder owns live-Twin construction panels, Editor owns authored document
 editing panels, and Lunica owns Modelica workbench panels. Put shared panels in
