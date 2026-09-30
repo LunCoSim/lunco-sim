@@ -219,7 +219,9 @@ the physics solver empties. Never block that queue:
   Package Browser's folder scan is the reference implementation.
 - **No per-frame allocations in the common path.** `String` clones
   and `Vec` rebuilds that happen on a no-op path are the most
-  common offenders — pre-allocate, reuse, or skip entirely.
+  common offenders — pre-allocate, reuse, or skip entirely. The status bar
+  copies event history only while its history popup is open, and collects the
+  frame-time samples for the performance HUD only while that HUD is enabled.
 - Workbench visualization configs are immutable `Arc` snapshots while a panel
   paints. Registry edits use copy-on-write, so plot panels do not deep-clone
   signal bindings and style data on every frame.

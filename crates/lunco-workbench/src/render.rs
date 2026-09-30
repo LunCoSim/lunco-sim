@@ -1225,30 +1225,12 @@ pub(crate) fn render_status_bar_inner(
         .get_resource::<lunco_core::SceneTransitionCoordinator>()
         .is_some_and(|coordinator| coordinator.active().is_some() || coordinator.has_admitted());
 
-    // Snapshot what we need from the bus into local owned values so
-    // we don't hold a borrow across the popup callback (it also wants
-    // to read the bus).
-    let (notification, history, primary_progress): (
-        StatusBarNotificationSnapshot,
-        Vec<(StatusEventKey, lunco_status_core::status_bus::StatusEvent)>,
-        Option<lunco_status_core::status_bus::StatusEvent>,
-    ) = {
+    // Snapshot the compact status strip before painting. The event history is
+    // collected only after the popup is known to be open below.
+    let (notification, primary_progress) = {
         let bus = world.resource::<StatusBus>();
         let notification =
             status_bar_notification_snapshot(bus, history_surface_open, scene_transition_active);
-        let discrete: Vec<_> = bus.history().cloned().collect();
-        let discrete_len = discrete.len();
-        let history_total = bus.history_total();
-        let history: Vec<_> = discrete
-            .into_iter()
-            .enumerate()
-            .map(|(offset, event)| {
-                (
-                    discrete_status_event_key(history_total, discrete_len, offset),
-                    event,
-                )
-            })
-            .collect();
         let primary_progress = bus
             .active_progress()
             .filter(|event| {
@@ -1256,28 +1238,34 @@ pub(crate) fn render_status_bar_inner(
             })
             .min_by_key(|event| event.at)
             .cloned();
-        (notification, history, primary_progress)
+        (notification, primary_progress)
     };
+    let mut history = Vec::new();
+    let mut history_loaded = false;
     let latest = match &notification {
         StatusBarNotificationSnapshot::Event(event) => Some(event),
         StatusBarNotificationSnapshot::Hidden | StatusBarNotificationSnapshot::Ready => None,
     };
     let perf_stats = world.resource::<PerfStats>().clone();
+    let perf_enabled = world.resource::<PerfHudSettings>().enabled;
     // Engine frame health advances with rendered frames, including before a
     // Twin is active. Its shared snapshot owns this history; simulation
     // telemetry remains sampled on its fixed simulation clock.
-    let frame_time_samples = world
-        .get_resource::<lunco_core_runtime::EngineHealthSnapshot>()
-        .map(|health| {
-            health
-                .frame_time_history
-                .iter()
-                .copied()
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let frame_time_samples = if perf_enabled {
+        world
+            .get_resource::<lunco_core_runtime::EngineHealthSnapshot>()
+            .map(|health| {
+                health
+                    .frame_time_history
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let frame_time_p99 = telemetry_values_stats(&frame_time_samples).map(|stats| stats.p99 as f32);
-    let perf_enabled = world.resource::<PerfHudSettings>().enabled;
     // The networking chip only paints when not standalone; reserve room
     // for it on the right so the clickable status region doesn't overlap.
     let net_active = world
@@ -1454,6 +1442,14 @@ pub(crate) fn render_status_bar_inner(
             popup_view = StatusPopupView::History;
             ignore_popup_outside_click = true;
             egui::Popup::open_id(ui.ctx(), popup_id);
+        }
+
+        if !history_loaded
+            && popup_view == StatusPopupView::History
+            && egui::Popup::is_id_open(ui.ctx(), popup_id)
+        {
+            history = status_history_snapshot(world.resource::<StatusBus>());
+            history_loaded = true;
         }
 
         let popup_width = if popup_view == StatusPopupView::Progress {
@@ -2021,6 +2017,23 @@ fn discrete_status_event_key(
             .saturating_sub(history_len as u64)
             .saturating_add(offset as u64),
     )
+}
+
+fn status_history_snapshot(
+    bus: &lunco_status_core::status_bus::StatusBus,
+) -> Vec<(StatusEventKey, lunco_status_core::status_bus::StatusEvent)> {
+    let history = bus.history();
+    let history_len = history.len();
+    let history_total = bus.history_total();
+    history
+        .enumerate()
+        .map(|(offset, event)| {
+            (
+                discrete_status_event_key(history_total, history_len, offset),
+                event.clone(),
+            )
+        })
+        .collect()
 }
 
 fn status_popup_width(content_width: f32) -> f32 {
