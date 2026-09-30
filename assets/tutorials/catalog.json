@@ -3,6 +3,13 @@
   "tutorials": [
     {
       "track": "LunCoSim",
+      "title": "SysML Requirements",
+      "blurb": "With a Twin scene open, learn requirement coverage, evidence, and mapped tests.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/luncosim/sysml_requirements.rhai"
+    },
+    {
+      "track": "LunCoSim",
       "title": "Read the Sim UI",
       "blurb": "Find the scene, live state, controls, and simulation time.",
       "difficulty": "beginner",

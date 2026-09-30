@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
@@ -41,9 +41,11 @@ pub(crate) struct SourceFileView {
 
 #[derive(Clone, Debug)]
 pub(crate) struct RequirementView {
+    pub handle: SysmlElementHandle,
     pub qualified_name: String,
     pub display_name: String,
     pub role: RequirementRole,
+    pub definition_handle: Option<SysmlElementHandle>,
     pub documentation: Vec<String>,
     pub logical_uri: String,
     pub relative_path: Option<PathBuf>,
@@ -511,6 +513,35 @@ fn build_requirement_views(
     }
     let satisfied_by = build_satisfaction_index(analysis, model_elements);
     let subject_types = build_subject_type_index(analysis, model_elements);
+    let requirement_definitions: HashSet<_> = analysis
+        .requirements()
+        .iter()
+        .filter(|requirement| requirement.element.kind == "RequirementDefinition")
+        .map(|requirement| requirement.element.handle)
+        .collect();
+    let requirement_usages: HashSet<_> = analysis
+        .requirements()
+        .iter()
+        .filter(|requirement| requirement.element.kind == "RequirementUsage")
+        .map(|requirement| requirement.element.handle)
+        .collect();
+    let mut definitions_by_usage =
+        HashMap::<SysmlElementHandle, HashSet<SysmlElementHandle>>::new();
+    for reference in analysis.references() {
+        if !requirement_definitions.contains(&reference.target) {
+            continue;
+        }
+        for usage in [Some(reference.from), reference.from_owner]
+            .into_iter()
+            .flatten()
+            .filter(|usage| requirement_usages.contains(usage))
+        {
+            definitions_by_usage
+                .entry(usage)
+                .or_default()
+                .insert(reference.target);
+        }
+    }
 
     let mut requirements = analysis
         .requirements()
@@ -523,6 +554,7 @@ fn build_requirement_views(
                 &verified_by,
                 &satisfied_by,
                 &subject_types,
+                &definitions_by_usage,
                 model_elements,
             )
         })
@@ -543,6 +575,7 @@ fn requirement_view(
     verified_by: &HashMap<SysmlElementHandle, Vec<String>>,
     satisfied_by: &HashMap<SysmlElementHandle, Vec<ModelElementView>>,
     subject_types: &HashMap<SysmlElementHandle, Vec<ModelElementView>>,
+    definitions_by_usage: &HashMap<SysmlElementHandle, HashSet<SysmlElementHandle>>,
     model_elements: &[ModelElementView],
 ) -> RequirementView {
     let element = &requirement.element;
@@ -575,7 +608,16 @@ fn requirement_view(
             }
         })
         .collect();
+    let definition_handle = if element.kind == "RequirementUsage" {
+        definitions_by_usage
+            .get(&element.handle)
+            .filter(|definitions| definitions.len() == 1)
+            .and_then(|definitions| definitions.iter().next().copied())
+    } else {
+        None
+    };
     RequirementView {
+        handle: element.handle,
         qualified_name: element.qualified_name.clone(),
         display_name: element.short_name.clone().unwrap_or_else(|| {
             element
@@ -589,6 +631,7 @@ fn requirement_view(
             "RequirementDefinition" => RequirementRole::Definition,
             _ => RequirementRole::Usage,
         },
+        definition_handle,
         documentation: requirement.documentation.clone(),
         logical_uri: element.file.clone(),
         relative_path: source_paths

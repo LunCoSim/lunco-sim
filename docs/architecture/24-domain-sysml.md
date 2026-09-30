@@ -109,7 +109,7 @@ unresolved-name, and package-collision diagnostics make the model visibly
 invalid, prevent a `VERIFIED` roll-up, and disable verification actions. The
 view keeps up to 64 detail records per requirement and retains separate
 pass/fail/inconclusive/error counts for larger result sets. A mapped case
-can run from its linked requirement. **Run selected requirement tests** runs the
+can run from its linked requirement. **Run selected tests** runs the
 distinct mapped cases for the selected requirement; **Run all mapped tests**
 runs each distinct mapped case once, sequentially, through the production
 headless scene-test runner. A completed suite keeps its source revision, case
@@ -125,7 +125,26 @@ coverage, and overall status in separate columns. A docked Requirement details
 panel stays in the lower-right Editor pane, follows the selected row, and
 summarizes formal criteria, subjects, explicit `satisfy` links, verification
 mappings, and evidence. It links to the full Traceability view and can open the
-active Twin's `twin.toml` when a test mapping is missing.
+active Twin's `twin.toml` when a test mapping is missing. The ID sort follows
+the visible ID, role cells spell out Definition or Usage, and source cells
+show the file name and line. Column headers support independent sorting, drag
+reordering, and divider resizing. The detail summary keeps the selected
+subject and verification-mapping state visible while Engineering trace stays
+collapsible. Missing-verify counts are scoped to usages;
+unmapped counts flag requirement elements with at least one unmapped case, and
+not-run counts flag elements whose mapped cases have no current result.
+Details show a usage statement or, when absent, text from an
+unambiguously resolved definition, with separate source links. Each case
+displays its scene path near **Run mapped test**.
+
+Status explanations live on column-heading and status-label hints. **Status
+details** opens aggregate counts on demand; the main workspace does not expand
+a status reference. Summary cards use stacked text and native button focus,
+disabled, and selected states. Their counts describe requirement entries;
+run-button counts describe unique mapped tests. The selected requirement's
+statement precedes source metadata. The application catalog exposes
+**Tutorials → LunCoSim → SysML Requirements**, an authored Rhai tour using the
+active Twin and existing guided-tour commands.
 
 The runner returns report schema 2 over the child-process boundary. It separates
 the four-state verification verdict from runner completion status and includes
@@ -149,7 +168,9 @@ verification declarations open at their analyzed source lines; mapped tests can
 run from the map. The structure view presents the analyzed package, part, item,
 interface, port, and connection hierarchy with text filtering and source
 navigation. Both views use the same prepared analysis snapshot as the
-requirements panel.
+requirements panel. **Open full traceability** focuses or opens the center
+SysML Requirements panel before switching to its Traceability tab, even when
+another center panel is active.
 
 The requirement roll-up is intentionally strict: `VERIFIED` requires a valid
 analyzed model, a formal `require` criterion, all `verify` links mapped to Twin
