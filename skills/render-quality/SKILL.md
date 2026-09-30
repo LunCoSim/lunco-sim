@@ -103,10 +103,24 @@ Its retained DEM data stays unchanged, and its border datum sets the render-only
 globe shell radius; celestial placement and physics keep the canonical radius.
 Keep the composed terrain exact throughout the crop. One worker-prepared visual
 collar starts on the measured crop boundary and blends its edge profile to the
-matching sphere outside the crop. Queries and colliders remain bounded to the
-DEM. Globe tiles clip against the collar's outer boundary with bounded edge
-sampling; keep camera-driven globe LOD independent of DEM posting density. The
-sphere beyond the crop is visual closure, not measured regional terrain.
+matching sphere outside the crop. Derive its width from measured crop-edge
+relief and one-sided slope, using a 0.20 relief-grade sizing target.
+Continue the slope over one posting and fade the single nearest boundary
+signal toward the sphere. Geometry and material fade share four side widths;
+each corner contributes once. Preserve the native inner posting lattice, then
+reduce exterior ring density to the outer boundary with at least 32 segments per side. Queries and colliders remain bounded to the DEM, whose samples
+stay unchanged. Globe tiles clip against the collar's outer boundary with
+bounded edge sampling. Add a camera-independent LOD floor only in the band
+between the crop and the outer cutout, sized from the handoff footprint; keep
+the rest of camera-driven globe LOD independent of DEM posting density. The
+sphere beyond the crop is visual closure, not measured regional terrain. The
+collar reads local maps from the DEM prim and appearance from the body's
+USD-selected `material:binding`. Its shader asset path remains in USD. A
+continuation shader declares matching WGSL and USD
+`lunco.lunar-surface-continuation.v1` interfaces; `RunLint` compares the authored
+declaration with loaded WGSL. Rhai owns failure behavior: `hold` stops
+simulation by default, and an authored `fallback` can show the existing body
+look without local DEM maps.
 
 Keep body curvature publication before the authoritative DEM build. Run the
 DEM-to-globe handoff and globe LOD in

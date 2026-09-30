@@ -133,6 +133,14 @@
 //   facts.invalid_wheel_attachments[]  paths of malformed attachment prims or
 //       wheels rejected by that canonical topology reader.
 //
+//   facts.shader_interfaces[] #{ subject, shader_path, declared_interface,
+//                                 actual_interface, source_reflected,
+//                                 source_valid, continuation_required,
+//                                 expected_interface }
+//       live WGSL reflection paired with the composed USD declaration. A
+//       continuation-required entry belongs to a generated visual handoff;
+//       measured DEM and collider geometry are outside this material contract.
+//
 // ── WHAT A RULE RETURNS ─────────────────────────────────────────────────────
 //
 //   #{ rule, severity, subject, message }
@@ -312,8 +320,63 @@ fn control_binding_contract(facts) {
     out
 }
 
+// The runtime continuation action is an authored choice. The safe default
+// faults/holds the simulation; changing this constant to "fallback" makes the
+// visual collar use the existing USD-selected body look without site-local DEM
+// maps until its interface is corrected.
+const LUNAR_SURFACE_CONTINUATION_INTERFACE = "lunco.lunar-surface-continuation.v1";
+const LUNAR_SURFACE_CONTINUATION_FAILURE_ACTION = "hold";
+
+fn lunar_surface_continuation_action(facts) {
+    if !facts.source_reflected { return #{ action: "wait" }; }
+    let compatible = facts.source_valid
+        && facts.declared_interface == facts.expected_interface
+        && facts.actual_interface == facts.expected_interface
+        && facts.expected_interface == LUNAR_SURFACE_CONTINUATION_INTERFACE;
+    if compatible { return #{ action: "compose" }; }
+    if LUNAR_SURFACE_CONTINUATION_FAILURE_ACTION == "fallback"
+        && facts.fallback_available {
+        return #{ action: "fallback" };
+    }
+    #{ action: LUNAR_SURFACE_CONTINUATION_FAILURE_ACTION }
+}
+
+fn shader_interface_contract(facts) {
+    let out = [];
+    if facts.shader_interfaces == () { return out; }
+    for shader in facts.shader_interfaces {
+        if !shader.source_reflected { continue; }
+        let declares_contract = shader.declared_interface != ""
+            || shader.continuation_required;
+        let failed = declares_contract && !shader.source_valid;
+        let mismatch = shader.declared_interface != ""
+            && shader.declared_interface != shader.actual_interface;
+        let missing_required = shader.continuation_required
+            && (shader.declared_interface != shader.expected_interface
+                || shader.actual_interface != shader.expected_interface);
+        if failed || mismatch || missing_required {
+            let message = "USD declares interface `" + shader.declared_interface
+                + "`, WGSL reflects `" + shader.actual_interface + "`; ";
+            let repair = "make the USD interface declaration match the selected WGSL source.";
+            if shader.continuation_required {
+                repair = "author the USD-selected body Shader with `info:wgsl:interface` equal to `";
+                repair += shader.expected_interface;
+                repair += "` and use a valid WGSL source that declares the same interface.";
+            }
+            out.push(finding(
+                "usd-shader-interface-contract",
+                "error",
+                shader.subject,
+                message + repair,
+            ));
+        }
+    }
+    out
+}
+
 fn lint_usd(facts) {
     let out = [];
+    for f in shader_interface_contract(facts) { out.push(f); }
     for f in control_binding_contract(facts) { out.push(f); }
     for f in stage_meters_per_unit_missing(facts) { out.push(f); }
     for f in epoch_api_requires_authored_time(facts) { out.push(f); }

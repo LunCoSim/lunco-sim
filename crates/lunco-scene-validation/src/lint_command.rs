@@ -41,7 +41,7 @@ use lunco_hooks::HookValue as H;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::{StageView, UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Build the complete USD lint fact map from every owner of a USD simulation
 /// projection. Standard `Physics*Joint` facts come from
@@ -126,6 +126,7 @@ pub(crate) fn usd_physics_facts_with_control_info(
         entries.push(("runtime_joints".to_string(), H::Array(Vec::new())));
         entries.push(("runtime_port_collisions".to_string(), H::Array(Vec::new())));
         entries.push(("control_bindings".to_string(), H::Array(bindings)));
+        entries.push(("shader_interfaces".to_string(), H::Array(Vec::new())));
     }
     (facts, info)
 }
@@ -406,6 +407,68 @@ fn live_runtime_joint_facts(
         .collect()
 }
 
+/// Project loaded shader ABI facts and identify the body looks consumed by a
+/// generated DEM continuation. The linter policy owns whether a mismatch is an
+/// error and how the authored USD should be repaired.
+fn live_shader_interface_facts(
+    world: &World,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+) -> Vec<H> {
+    let continuation_sources: BTreeSet<_> = world
+        .iter_entities()
+        .filter_map(|entity| {
+            entity
+                .get::<lunco_terrain_surface::TerrainVisualContinuation>()
+                .map(|continuation| continuation.surface_source)
+        })
+        .collect();
+
+    world
+        .iter_entities()
+        .filter_map(|entity| {
+            let prim = entity.get::<UsdPrimPath>()?;
+            if prim.stage_handle.id() != stage_id {
+                return None;
+            }
+            let look = entity.get::<lunco_materials::ShaderLook>()?;
+            let reflection = entity.get::<lunco_materials::ShaderLookSourceInterface>();
+            let reflected = reflection.is_some_and(|source| source.shader == look.shader);
+            let continuation_required = continuation_sources.contains(&entity.id());
+            Some(H::map([
+                ("subject", H::str(prim.path.clone())),
+                ("shader_path", H::str(look.shader.clone())),
+                (
+                    "declared_interface",
+                    H::str(look.interface.as_deref().unwrap_or("")),
+                ),
+                (
+                    "actual_interface",
+                    H::str(
+                        reflection
+                            .filter(|source| source.shader == look.shader)
+                            .and_then(|source| source.identifier.as_deref())
+                            .unwrap_or(""),
+                    ),
+                ),
+                ("source_reflected", H::Bool(reflected)),
+                (
+                    "source_valid",
+                    H::Bool(reflected && reflection.is_some_and(|source| source.source_valid)),
+                ),
+                ("continuation_required", H::Bool(continuation_required)),
+                (
+                    "expected_interface",
+                    H::str(if continuation_required {
+                        lunco_terrain_surface::stream_viz::LUNAR_SURFACE_CONTINUATION_INTERFACE
+                    } else {
+                        ""
+                    }),
+                ),
+            ]))
+        })
+        .collect()
+}
+
 /// Run the USD policy over authored facts plus the live runtime facts.
 ///
 /// Rust supplies evidence; Rhai owns finding policy and user-facing wording.
@@ -433,6 +496,15 @@ fn lint_stage_with_runtime(
             "runtime_port_collisions".to_string(),
             H::Array(live_runtime_port_collision_facts(world, stage_id)),
         ));
+        let shader_interfaces = H::Array(live_shader_interface_facts(world, stage_id));
+        if let Some((_, existing)) = entries
+            .iter_mut()
+            .find(|(key, _)| key == "shader_interfaces")
+        {
+            *existing = shader_interfaces;
+        } else {
+            entries.push(("shader_interfaces".to_string(), shader_interfaces));
+        }
     }
     lunco_lint::run_lint(lunco_usd_avian_lint::USD_LINT_DOMAIN, facts)
 }

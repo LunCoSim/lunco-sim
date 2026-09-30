@@ -22,7 +22,7 @@
 //!   reinterprets through its own `Material` struct**. That is what makes the set
 //!   of parameters a property of the *asset*, not of the engine.
 //!
-//! # Textures: named layers, and why there are exactly six
+//! # Textures: named layers, and why there are eight
 //!
 //! A "moon look" is several rasters merged by the shader — a colour mosaic, a
 //! DEM-derived normal map, a packed scalar layer, a mineral/class map. So texture
@@ -44,11 +44,11 @@
 //! Such a look must opt out with [`ShaderLook::unshared`], which gives it a private
 //! material the binder mutates in place instead of re-keying.
 //!
-//! There are six slots and not N because **WebGPU/WebGL2 caps bind-group entries**
-//! — arbitrary-N textures needs bindless, which WebGL2 does not have. That is a
-//! hardware ceiling, not a design preference. Within it the layers are general: a
-//! shader that does not declare a binding simply ignores it (`None` binds Bevy's
-//! neutral image binding), so one slot set serves every shader.
+//! The eight texture roles occupy sixteen bind-group entries including their
+//! samplers, the portable WebGPU/WebGL2 floor. Roles are fixed and optional:
+//! shaders that do not declare a binding ignore it (`None` binds Bevy's neutral
+//! image binding). The two continuation roles let a site shader retain the
+//! Moon-wide appearance maps while blending the cropped DEM's local maps.
 //!
 //! # Why this is render-free
 //!
@@ -88,6 +88,12 @@ pub enum TextureLayer {
     /// Pre-baked sun visibility (R8Unorm), so the fragment shader samples once
     /// instead of running the configured horizon march.
     ShadowCache,
+    /// Site-local albedo supplied to a lunar-surface continuation shader while
+    /// the ordinary `Albedo` layer remains the body-wide surface image.
+    ContinuationAlbedo,
+    /// Site-local packed roughness/AO supplied to a lunar-surface continuation
+    /// shader while the ordinary `Surface` layer remains body-wide.
+    ContinuationSurface,
 }
 
 /// A custom-shader surface, stated as data.
@@ -107,6 +113,11 @@ pub struct ShaderLook {
     pub shader: String,
     /// Optional vertex shader (e.g. the CDLOD geomorph). `None` = Bevy's default.
     pub vertex_shader: Option<String>,
+    /// USD-authored `info:wgsl:interface` contract declared by this shader.
+    /// This names a shader ABI, never a shader asset; the asset path remains
+    /// wholly selected by the composed `UsdShade` binding. It is validation
+    /// metadata and does not change the GPU material identity.
+    pub interface: Option<String>,
     /// **The open set.** Parameter name → value. Names come from the shader's own
     /// `struct Material`; Rust hardcodes none of them.
     values: BTreeMap<String, ParamValue>,
@@ -223,6 +234,21 @@ pub struct ShaderLookBound;
 /// and the material has its reflected layout.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ShaderLookReady;
+
+/// Reflection of the selected fragment shader's optional ABI annotation.
+///
+/// Presence means the USD-selected WGSL source has been loaded and its stage
+/// was inspected. The identifier comes from the WGSL source itself; a missing
+/// annotation is represented by `None`, not by an inferred interface.
+#[derive(Component, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ShaderLookSourceInterface {
+    /// Asset path of the source whose reflection is recorded here.
+    pub shader: String,
+    /// Shader interface declared by `//!@interface`, if present.
+    pub identifier: Option<String>,
+    /// Whether the loaded source passes the fragment-stage validator.
+    pub source_valid: bool,
+}
 
 impl ShaderLook {
     /// A look for `shader` (an asset path) with no parameters set — every value
@@ -409,6 +435,13 @@ impl ShaderLook {
     /// Use `vertex` as the vertex shader (asset path).
     pub fn with_vertex_shader(mut self, vertex: impl Into<String>) -> Self {
         self.vertex_shader = Some(vertex.into());
+        self
+    }
+
+    /// Declare the USD shader-interface identifier consumed by generic
+    /// runtime material composition.
+    pub fn with_interface(mut self, interface: impl Into<String>) -> Self {
+        self.interface = Some(interface.into());
         self
     }
 

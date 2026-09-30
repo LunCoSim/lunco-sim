@@ -147,6 +147,13 @@ entry = "lint_usd"
 deterministic = true
 
 [[policies]]
+hook = "terrain.lunar_surface_continuation"
+source = "lint_usd.rhai"
+entry = "lunar_surface_continuation_action"
+deterministic = true
+required = true
+
+[[policies]]
 hook = "lint.rhai"
 source = "lint_rhai.rhai"
 entry = "lint_rhai"

@@ -51,6 +51,47 @@ static mesh is effectively the non-morphing/root LOD of the same appearance
 contract; the streamed ECS quadtree may still manage residency, colliders, and
 LOD selection independently.
 
+### USD-authored DEM-to-globe continuation
+
+The generated collar has two independent scene inputs: the DEM prim supplies
+the crop dimensions and local map images, while the celestial body's composed
+`UsdShade` binding selects the surface appearance. The collar clones the body's
+current `ShaderLook` and adds the cropped albedo and packed surface images in
+the dedicated continuation texture roles. Rust carries the USD-selected asset
+paths and typed values; it contains no lunar fragment or vertex shader path.
+
+A body fragment shader that accepts these local roles declares
+`//!@interface lunco.lunar-surface-continuation.v1` in WGSL and authors the same
+identifier as `info:wgsl:interface` on its USD Shader prim. The optional vertex
+asset remains USD-owned. Omitting it uses Bevy's standard mesh vertex stage;
+the generated collar has its own final geometry and carries no CDLOD morph
+attributes. Shader assets remain hot-reloadable and the USD binding can be
+changed while the scene is running.
+
+The required Rhai hook `terrain.lunar_surface_continuation` receives the USD
+declaration and the reflected WGSL interface after the source loads. It returns
+`compose` only for a valid match. The authored policy defaults to `hold`: the
+collar keeps the ready USD body look so the already-clipped globe stays closed,
+while `RuntimeFaults` holds simulation. Setting
+`LUNAR_SURFACE_CONTINUATION_FAILURE_ACTION` to `fallback` in Rhai keeps that same
+body look without binding DEM maps or holding simulation. An invalid/unloaded
+body shader cannot be used as a fallback, so the collar remains hidden until a
+valid body material is ready. `RunLint` reports an error for a declared/actual
+mismatch and for a missing required continuation interface. The linter and
+runtime action consume the same reflected facts.
+
+This composition is visualization-only. It never resamples, blends, edits, or
+replaces DEM heights, terrain queries, or colliders. The separate collar mesh
+continues the measured edge profile outside the crop and reaches the render
+sphere; local DEM appearance maps fade across that same visual shoulder. The
+shoulder width comes from the active crop's measured boundary relief and
+one-sided slope with a 0.20 relief-grade sizing target. One measured perimeter
+signal continues over a posting and fades to the sphere; the same four widths
+control exterior geometry and material fade. A unique corner sample closes
+the transition around corners. The rectangular outer boundary keeps the
+collar mesh and globe cutout watertight; this changes neither the DEM nor its
+physics surface.
+
 ### Decision
 
 The production target is one authored DEM appearance contract with one

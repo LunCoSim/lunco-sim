@@ -18,6 +18,8 @@
 //! + the `//!@` annotations, so every knob is a free Inspector slider /
 //! `SetObjectProperty` target / bound USD Shader `inputs:<field>`, and it
 //! hot-reloads on edit.
+//!
+//!@interface lunco.lunar-surface-continuation.v1
 
 #import bevy_pbr::{
     mesh_functions,
@@ -25,12 +27,16 @@
     forward_io::VertexOutput,
 }
 #import lunco::pbr_lit::lit
+#import lunco::pbr_lit::lit_n_occluded
 
 #ifdef LUNCO_GLOBE_DIRECTION
 struct GlobeVertex {
     @builtin(instance_index) instance_index: u32,
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
+#ifdef VERTEX_UVS_A
+    @location(2) uv: vec2<f32>,
+#endif
     @location(11) globe_direction: vec3<f32>,
 };
 
@@ -38,6 +44,9 @@ struct GlobeVertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) world_position: vec4<f32>,
     @location(1) world_normal: vec3<f32>,
+#ifdef VERTEX_UVS_A
+    @location(2) uv: vec2<f32>,
+#endif
     @location(5) globe_direction: vec3<f32>,
 #ifdef VERTEX_OUTPUT_INSTANCE_INDEX
     @location(6) @interpolate(flat) instance_index: u32,
@@ -60,6 +69,9 @@ fn vertex(vertex: GlobeVertex) -> GlobeVertexOutput {
         vertex.normal,
         vertex.instance_index,
     );
+#ifdef VERTEX_UVS_A
+    out.uv = vertex.uv;
+#endif
     out.globe_direction = vertex.globe_direction;
 #ifdef VERTEX_OUTPUT_INSTANCE_INDEX
     out.instance_index = vertex.instance_index;
@@ -78,6 +90,9 @@ fn globe_pbr_input(in: GlobeVertexOutput) -> VertexOutput {
     out.position = in.position;
     out.world_position = in.world_position;
     out.world_normal = in.world_normal;
+#ifdef VERTEX_UVS_A
+    out.uv = in.uv;
+#endif
 #ifdef VERTEX_OUTPUT_INSTANCE_INDEX
     out.instance_index = in.instance_index;
 #endif
@@ -110,6 +125,16 @@ fn globe_pbr_input(in: GlobeVertexOutput) -> VertexOutput {
 //!@default blueprint_frame_origin 0,0,0
 //!@engine  blueprint_frame_rotation
 //!@default blueprint_frame_rotation 0,0,0,1
+//!@engine  terrain_half_extent
+//!@default terrain_half_extent 1.0
+//!@engine  site_blend_widths_m
+//!@default site_blend_widths_m 1.0,1.0,1.0,1.0
+//!@engine  site_weight_albedo
+//!@default site_weight_albedo 0.0
+//!@engine  site_weight_rough
+//!@default site_weight_rough 0.0
+//!@engine  site_weight_ao
+//!@default site_weight_ao 0.0
 //!@ui      major_grid_spacing 0.1 5000 "Major grid spacing (m)"
 //!@default major_grid_spacing 1.0
 //!@ui      minor_grid_spacing 0.1 5000 "Minor grid spacing (m)"
@@ -135,6 +160,11 @@ struct Material {
     minor_grid_spacing: f32,
     major_line_width:   f32,
     minor_line_width:   f32,
+    terrain_half_extent: f32,
+    site_blend_widths_m: vec4<f32>,
+    site_weight_albedo: f32,
+    site_weight_rough: f32,
+    site_weight_ao: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
@@ -146,6 +176,15 @@ var<uniform> mat: Material;
 var albedo_tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(3)
 var albedo_smp: sampler;
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(12)
+var continuation_albedo_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(13)
+var continuation_albedo_smp: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(14)
+var continuation_surface_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(15)
+var continuation_surface_smp: sampler;
 
 #ifdef LUNCO_GLOBE_DIRECTION
 fn equirectangular_uv(d: vec3<f32>) -> vec2<f32> {
@@ -252,8 +291,55 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f
     }
 
     let line_color = mix(mat.high_line_color, mat.low_line_color, mat.transition);
-    let albedo = mix(base, line_color, grid_mask);
-    return lit(in, is_front, albedo, mat.roughness, 0.0, vec3(0.0));
+    var albedo = mix(base, line_color, grid_mask);
+    var roughness = mat.roughness;
+    var ao = 1.0;
+#ifdef VERTEX_UVS_A
+    let outside_uv = vec2(
+        max(max(-in.uv.x, in.uv.x - 1.0), 0.0),
+        max(max(-in.uv.y, in.uv.y - 1.0), 0.0),
+    );
+    // Width order matches the geometry: west, east, south, north.
+    let outside_m = outside_uv * 2.0 * max(mat.terrain_half_extent, 1.0);
+    let width_x = select(mat.site_blend_widths_m.y, mat.site_blend_widths_m.x, in.uv.x < 0.0);
+    let width_z = select(mat.site_blend_widths_m.z, mat.site_blend_widths_m.w, in.uv.y < 0.0);
+    let transition = max(outside_m.x / max(width_x, 1e-6), outside_m.y / max(width_z, 1e-6));
+    let site_weight = 1.0 - smoothstep(0.0, 1.0, transition);
+    let site_uv = clamp(in.uv, vec2(0.0), vec2(1.0));
+    if (mat.site_weight_albedo > 0.0) {
+        let site_albedo = textureSample(
+            continuation_albedo_tex, continuation_albedo_smp, site_uv).rgb;
+        albedo = mix(
+            albedo,
+            site_albedo,
+            clamp(mat.site_weight_albedo, 0.0, 1.0) * site_weight,
+        );
+    }
+    if (mat.site_weight_rough > 0.0 || mat.site_weight_ao > 0.0) {
+        let site_surface = textureSample(
+            continuation_surface_tex, continuation_surface_smp, site_uv);
+        roughness = mix(
+            roughness,
+            site_surface.r,
+            clamp(mat.site_weight_rough, 0.0, 1.0) * site_weight,
+        );
+        ao = mix(
+            ao,
+            site_surface.g,
+            clamp(mat.site_weight_ao, 0.0, 1.0) * site_weight,
+        );
+    }
+#endif
+    return lit_n_occluded(
+        in,
+        is_front,
+        normalize(in.world_normal),
+        albedo,
+        roughness,
+        0.0,
+        vec3(0.0),
+        vec3(ao),
+    );
 }
 
 #ifdef LUNCO_GLOBE_DIRECTION

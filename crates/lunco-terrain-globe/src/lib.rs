@@ -19,7 +19,8 @@
 //! (`lunco-terrain-core` / `-surface` / `-bake`): that is the CDLOD heightfield you
 //! drive a rover across. Two different scales, two different systems, both live.
 //! The globe↔surface handover is supplied by `lunco-celestial`: authored local
-//! DEM footprints clip the globe mesh at the exact tangent-plane square.
+//! DEM footprints retain their exact tangent-plane square; the generated collar
+//! clips the globe mesh at its own rectangular outer boundary.
 //!
 //! [`lunco_celestial_spatial::globe_lod`]: https://docs.rs/lunco-celestial-spatial
 

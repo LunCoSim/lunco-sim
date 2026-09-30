@@ -86,6 +86,42 @@ pub struct TerrainVisualFocus {
     pub near_detail_hysteresis_m: Option<f64>,
 }
 
+/// A generated render mesh continuing a finite DEM surface beyond its crop.
+///
+/// `source` is the authored terrain prim whose composed `UsdShade` material
+/// supplies the appearance. The generated geometry owns no independent material
+/// choice; `half_extent_m` is render-space context for that existing material.
+#[derive(Component, Clone, Debug, PartialEq)]
+pub struct TerrainVisualContinuation {
+    /// Authored finite terrain that supplies the cropped DEM maps.
+    pub source: Entity,
+    /// USD-selected celestial body whose appearance is continued over the DEM.
+    pub surface_source: Entity,
+    /// Current composed body look copied from its `GlobeLod` presentation state.
+    pub surface_look: ShaderLook,
+    pub half_extent_m: f64,
+    pub collar_widths_m: [f64; 4],
+}
+
+/// Special material interface for a USD-selected body look that accepts local
+/// DEM maps on generated visual continuation geometry.
+pub const LUNAR_SURFACE_CONTINUATION_INTERFACE: &str = "lunco.lunar-surface-continuation.v1";
+
+/// Rhai owns the action taken when a body shader cannot satisfy the declared
+/// continuation interface. Rust validates the chosen action before applying it.
+pub const LUNAR_SURFACE_CONTINUATION_HOOK: &str = "terrain.lunar_surface_continuation";
+
+lunco_hooks::declare_hook! {
+    id: LUNAR_SURFACE_CONTINUATION_HOOK,
+    owner: "lunco-terrain-surface",
+    description: "Choose how visual DEM continuation responds to the USD-selected surface shader interface.",
+    signature: [facts: Map],
+    output: Map,
+    deterministic: true,
+    required: true,
+    installable: true,
+}
+
 #[derive(Clone, Copy)]
 struct VisualDemand {
     entity: Entity,
@@ -1907,6 +1943,498 @@ pub(crate) fn apply_terrain_maps_to_look(
             set_texture(look, TextureLayer::Albedo, None);
             set_param(look, "weight_albedo", ParamValue::F32(0.0));
         }
+    }
+}
+
+/// Compose only the site-local inputs into the USD-selected body shader.
+/// Mission DEM geometry and colliders do not pass through this render-only
+/// material operation.
+fn lunar_surface_continuation_look(
+    surface: &ShaderLook,
+    derived: Option<&TerrainDerivedMaps>,
+    authored: Option<&TerrainAuthoredMaps>,
+    half_extent_m: f64,
+    collar_widths_m: [f64; 4],
+) -> Result<ShaderLook, &'static str> {
+    if surface.interface.as_deref() != Some(LUNAR_SURFACE_CONTINUATION_INTERFACE) {
+        return Err("USD-selected body shader does not declare the continuation interface");
+    }
+    if !half_extent_m.is_finite()
+        || half_extent_m <= 0.0
+        || collar_widths_m
+            .iter()
+            .any(|width| !width.is_finite() || *width <= 0.0)
+    {
+        return Err("continuation extent and width must be finite and positive");
+    }
+    let terrain_half_extent = half_extent_m as f32;
+    let terrain_diameter = (2.0 * half_extent_m) as f32;
+    let collar_widths = collar_widths_m.map(|width| width as f32);
+    if !terrain_half_extent.is_finite()
+        || !terrain_diameter.is_finite()
+        || collar_widths
+            .iter()
+            .any(|width| !width.is_finite() || *width <= 0.0)
+    {
+        return Err("continuation dimensions exceed rendering precision");
+    }
+
+    let mut look = surface.clone();
+    look.set_value("terrain_half_extent", ParamValue::F32(terrain_half_extent));
+    look.set_value("site_blend_widths_m", ParamValue::Vec4(collar_widths));
+
+    let site_albedo = authored.and_then(|maps| maps.albedo.as_ref());
+    if let Some(image) = site_albedo {
+        look.textures
+            .insert(TextureLayer::ContinuationAlbedo, image.clone());
+    } else {
+        look.textures.remove(&TextureLayer::ContinuationAlbedo);
+    }
+    let albedo_weight = site_albedo
+        .filter(|_| authored.is_some_and(|maps| maps.weight_albedo > 0.0))
+        .map_or(0.0, |_| authored.map_or(0.0, |maps| maps.weight_albedo));
+    look.set_value("site_weight_albedo", ParamValue::F32(albedo_weight));
+
+    let authored_surface = authored.filter(|maps| maps.has_active_surface());
+    let derived_surface = derived.filter(|_| authored_surface.is_none());
+    let surface_texture = authored_surface
+        .and_then(|maps| maps.surface.as_ref())
+        .or_else(|| derived_surface.map(|maps| &maps.surface));
+    if let Some(image) = surface_texture {
+        look.textures
+            .insert(TextureLayer::ContinuationSurface, image.clone());
+    } else {
+        look.textures.remove(&TextureLayer::ContinuationSurface);
+    }
+    let (weight_rough, weight_ao) = if let Some(authored) = authored_surface {
+        (authored.weight_rough, authored.weight_ao)
+    } else if derived_surface.is_some() {
+        (1.0, 1.0)
+    } else {
+        (0.0, 0.0)
+    };
+    look.set_value("site_weight_rough", ParamValue::F32(weight_rough));
+    look.set_value("site_weight_ao", ParamValue::F32(weight_ao));
+    Ok(look)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LunarSurfaceContinuationAction {
+    Compose,
+    Fallback,
+    Hold,
+    Wait,
+}
+
+impl LunarSurfaceContinuationAction {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "compose" => Some(Self::Compose),
+            "fallback" => Some(Self::Fallback),
+            "hold" => Some(Self::Hold),
+            "wait" => Some(Self::Wait),
+            _ => None,
+        }
+    }
+}
+
+fn continuation_policy_action(
+    surface: &ShaderLook,
+    source: Option<&lunco_materials::ShaderLookSourceInterface>,
+    context: lunco_core::RuntimeExecutionContext,
+) -> Result<LunarSurfaceContinuationAction, String> {
+    let reflected = source.is_some_and(|source| source.shader == surface.shader);
+    let declared_interface = surface.interface.as_deref().unwrap_or("");
+    let actual_interface = source
+        .filter(|source| source.shader == surface.shader)
+        .and_then(|source| source.identifier.as_deref())
+        .unwrap_or("");
+    let facts = lunco_hooks::HookValue::map([
+        (
+            "expected_interface",
+            lunco_hooks::HookValue::str(LUNAR_SURFACE_CONTINUATION_INTERFACE),
+        ),
+        (
+            "declared_interface",
+            lunco_hooks::HookValue::str(declared_interface),
+        ),
+        (
+            "actual_interface",
+            lunco_hooks::HookValue::str(actual_interface),
+        ),
+        ("source_reflected", lunco_hooks::HookValue::Bool(reflected)),
+        (
+            "source_valid",
+            lunco_hooks::HookValue::Bool(
+                source.is_some_and(|source| source.shader == surface.shader && source.source_valid),
+            ),
+        ),
+        (
+            "shader_path",
+            lunco_hooks::HookValue::str(surface.shader.clone()),
+        ),
+        (
+            "fallback_available",
+            lunco_hooks::HookValue::Bool(
+                source.is_some_and(|source| source.shader == surface.shader && source.source_valid)
+                    && !surface.shader.is_empty(),
+            ),
+        ),
+    ]);
+    let value =
+        lunco_hooks::invoke_with_context(LUNAR_SURFACE_CONTINUATION_HOOK, &[facts], context)
+            .ok_or_else(|| "continuation decision policy is not installed".to_owned())?
+            .map_err(|error| format!("continuation decision policy failed: {error}"))?;
+    let action = value
+        .get("action")
+        .and_then(lunco_hooks::HookValue::as_str)
+        .and_then(LunarSurfaceContinuationAction::parse)
+        .ok_or_else(|| {
+            format!(
+                "continuation decision policy returned invalid action in {}",
+                value.type_name()
+            )
+        })?;
+    Ok(action)
+}
+
+fn continuation_runtime_context(
+    scene_transition: Option<&lunco_core::SceneTransitionCoordinator>,
+) -> lunco_core::RuntimeExecutionContext {
+    let route = scene_transition
+        .and_then(lunco_core::SceneTransitionCoordinator::lifecycle_generation)
+        .map(|generation| {
+            lunco_core::RuntimeRoute::twin(lunco_core::RuntimeCycle::Visualization, generation)
+        })
+        .unwrap_or_else(|| {
+            lunco_core::RuntimeRoute::application(lunco_core::RuntimeCycle::Visualization)
+        });
+    lunco_core::RuntimeExecutionContext {
+        route: Some(route),
+        phase: lunco_core::RuntimePhase::Visualization,
+        clock: lunco_core::RuntimeClock::None,
+        time_seconds: None,
+        delta_seconds: None,
+        sequence: None,
+        producer: None,
+    }
+}
+
+fn raise_continuation_fault(
+    faults: &mut lunco_core::RuntimeFaults,
+    target: Entity,
+    surface: &ShaderLook,
+    detail: impl Into<String>,
+) {
+    faults.raise(
+        "terrain-visual-continuation",
+        Some(target),
+        surface.shader.clone(),
+        detail,
+    );
+}
+
+fn bind_continuation_look(
+    commands: &mut Commands,
+    target: Entity,
+    current: Option<&ShaderLook>,
+    visibility: &mut Visibility,
+    shader_ready: bool,
+    look: &ShaderLook,
+) {
+    if current != Some(look) {
+        commands.entity(target).insert(look.clone());
+    }
+    *visibility = if shader_ready {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+}
+
+/// Keep generated terrain continuation meshes on the USD-selected body shader
+/// path. Source reflection, authored maps, and shader revisions are processed
+/// only when their owner publishes a change; no LOD work runs on the physics
+/// cadence, and no worker completion chooses the visual policy action.
+pub(crate) fn sync_terrain_visual_continuations(
+    mut commands: Commands,
+    mut removed_derived: RemovedComponents<TerrainDerivedMaps>,
+    mut removed_authored: RemovedComponents<TerrainAuthoredMaps>,
+    mut removed_surface_looks: RemovedComponents<ShaderLook>,
+    mut removed_surface_interfaces: RemovedComponents<lunco_materials::ShaderLookSourceInterface>,
+    mut removed_shader_ready: RemovedComponents<ShaderLookReady>,
+    terrain_sources: Query<
+        (
+            &ShaderLook,
+            Option<&TerrainDerivedMaps>,
+            Option<&TerrainAuthoredMaps>,
+        ),
+        With<DemTerrainSurface>,
+    >,
+    changed_terrain_sources: Query<
+        Entity,
+        (
+            With<DemTerrainSurface>,
+            Or<(
+                Changed<ShaderLook>,
+                Changed<TerrainDerivedMaps>,
+                Changed<TerrainAuthoredMaps>,
+            )>,
+        ),
+    >,
+    surface_sources: Query<(
+        &ShaderLook,
+        Option<&lunco_materials::ShaderLookSourceInterface>,
+    )>,
+    surface_entities: Query<()>,
+    changed_surface_sources: Query<
+        Entity,
+        (
+            With<ShaderLook>,
+            Or<(
+                Changed<ShaderLook>,
+                Changed<lunco_materials::ShaderLookSourceInterface>,
+            )>,
+        ),
+    >,
+    mut targets: Query<
+        (
+            Entity,
+            &TerrainVisualContinuation,
+            Option<&ShaderLook>,
+            &mut Visibility,
+            Has<ShaderLookReady>,
+        ),
+        With<Mesh3d>,
+    >,
+    changed_targets: Query<Entity, Changed<TerrainVisualContinuation>>,
+    changed_shader_ready: Query<Entity, Changed<ShaderLookReady>>,
+    scene_transition: Option<Res<lunco_core::SceneTransitionCoordinator>>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
+) {
+    let mut changed_terrain_entities: HashSet<Entity> = changed_terrain_sources.iter().collect();
+    changed_terrain_entities.extend(removed_derived.read());
+    changed_terrain_entities.extend(removed_authored.read());
+    let mut changed_surface_entities: HashSet<Entity> = changed_surface_sources.iter().collect();
+    changed_surface_entities.extend(removed_surface_looks.read());
+    changed_surface_entities.extend(removed_surface_interfaces.read());
+    let changed_target_entities: HashSet<Entity> = changed_targets.iter().collect();
+    let mut changed_readiness_entities: HashSet<Entity> = changed_shader_ready.iter().collect();
+    changed_readiness_entities.extend(removed_shader_ready.read());
+    if changed_terrain_entities.is_empty()
+        && changed_surface_entities.is_empty()
+        && changed_target_entities.is_empty()
+        && changed_readiness_entities.is_empty()
+    {
+        return;
+    }
+
+    let mut changed = targets
+        .iter_mut()
+        .filter(|(target, continuation, _, _, _)| {
+            changed_target_entities.contains(target)
+                || changed_readiness_entities.contains(target)
+                || changed_terrain_entities.contains(&continuation.source)
+                || changed_surface_entities.contains(&continuation.surface_source)
+        })
+        .map(
+            |(target, continuation, current, visibility, shader_ready)| {
+                (
+                    target,
+                    continuation.clone(),
+                    current.cloned(),
+                    visibility,
+                    shader_ready,
+                )
+            },
+        )
+        .collect::<Vec<_>>();
+    changed.sort_by_key(|(entity, _, _, _, _)| entity.to_bits());
+    let runtime_context = continuation_runtime_context(scene_transition.as_deref());
+
+    for (target, continuation, current, mut visibility, shader_ready) in changed {
+        let (surface_look, reflected_interface) =
+            match surface_sources.get(continuation.surface_source) {
+                Ok((look, reflected)) => (look, reflected),
+                Err(_) => {
+                    // USD may have admitted the body prim before its composed
+                    // ShaderLook is projected. Keep the collar's seeded body look
+                    // until the owner publishes that component; a live entity is
+                    // an unresolved projection, not a terminal shader failure.
+                    bind_continuation_look(
+                        &mut commands,
+                        target,
+                        current.as_ref(),
+                        &mut visibility,
+                        shader_ready,
+                        &continuation.surface_look,
+                    );
+                    if surface_entities.get(continuation.surface_source).is_err() {
+                        raise_continuation_fault(
+                            &mut faults,
+                            target,
+                            &continuation.surface_look,
+                            "USD-selected body entity is no longer present",
+                        );
+                    }
+                    continue;
+                }
+            };
+        let policy_action =
+            match continuation_policy_action(surface_look, reflected_interface, runtime_context) {
+                Ok(action) => action,
+                Err(reason) => {
+                    bind_continuation_look(
+                        &mut commands,
+                        target,
+                        current.as_ref(),
+                        &mut visibility,
+                        shader_ready,
+                        &continuation.surface_look,
+                    );
+                    raise_continuation_fault(&mut faults, target, surface_look, reason);
+                    continue;
+                }
+            };
+        let reflected =
+            reflected_interface.is_some_and(|source| source.shader == surface_look.shader);
+        let declared = surface_look.interface.as_deref();
+        let actual = reflected_interface
+            .filter(|source| source.shader == surface_look.shader)
+            .and_then(|source| source.identifier.as_deref());
+
+        let selected_look = match policy_action {
+            LunarSurfaceContinuationAction::Wait if !reflected => surface_look.clone(),
+            LunarSurfaceContinuationAction::Wait => {
+                bind_continuation_look(
+                    &mut commands,
+                    target,
+                    current.as_ref(),
+                    &mut visibility,
+                    shader_ready,
+                    &continuation.surface_look,
+                );
+                raise_continuation_fault(
+                    &mut faults,
+                    target,
+                    surface_look,
+                    "the Rhai policy returned wait after the shader source was already reflected",
+                );
+                continue;
+            }
+            LunarSurfaceContinuationAction::Compose
+                if reflected
+                    && reflected_interface.is_some_and(|source| source.source_valid)
+                    && declared == Some(LUNAR_SURFACE_CONTINUATION_INTERFACE)
+                    && actual == Some(LUNAR_SURFACE_CONTINUATION_INTERFACE) =>
+            {
+                let Ok((dem_look, maps, authored)) = terrain_sources.get(continuation.source)
+                else {
+                    bind_continuation_look(
+                        &mut commands,
+                        target,
+                        current.as_ref(),
+                        &mut visibility,
+                        shader_ready,
+                        &continuation.surface_look,
+                    );
+                    raise_continuation_fault(
+                        &mut faults,
+                        target,
+                        surface_look,
+                        "the authored DEM material or map source is no longer present",
+                    );
+                    continue;
+                };
+                let inferred_authored = authored
+                    .is_none()
+                    .then(|| TerrainAuthoredMaps::from_shader_look(dem_look, maps));
+                let authored = authored.or(inferred_authored.as_ref());
+                match lunar_surface_continuation_look(
+                    surface_look,
+                    maps,
+                    authored,
+                    continuation.half_extent_m,
+                    continuation.collar_widths_m,
+                ) {
+                    Ok(look) => look,
+                    Err(reason) => {
+                        bind_continuation_look(
+                            &mut commands,
+                            target,
+                            current.as_ref(),
+                            &mut visibility,
+                            shader_ready,
+                            &continuation.surface_look,
+                        );
+                        raise_continuation_fault(&mut faults, target, surface_look, reason);
+                        continue;
+                    }
+                }
+            }
+            LunarSurfaceContinuationAction::Compose => {
+                bind_continuation_look(
+                    &mut commands,
+                    target,
+                    current.as_ref(),
+                    &mut visibility,
+                    shader_ready,
+                    &continuation.surface_look,
+                );
+                raise_continuation_fault(
+                    &mut faults,
+                    target,
+                    surface_look,
+                    "the Rhai policy selected compose for an incompatible USD/WGSL interface",
+                );
+                continue;
+            }
+            LunarSurfaceContinuationAction::Fallback
+                if reflected
+                    && reflected_interface.is_some_and(|source| source.source_valid)
+                    && !surface_look.shader.is_empty() =>
+            {
+                surface_look.clone()
+            }
+            LunarSurfaceContinuationAction::Fallback => {
+                bind_continuation_look(
+                    &mut commands,
+                    target,
+                    current.as_ref(),
+                    &mut visibility,
+                    shader_ready,
+                    &continuation.surface_look,
+                );
+                raise_continuation_fault(
+                    &mut faults,
+                    target,
+                    surface_look,
+                    "the Rhai policy selected fallback but the USD body shader is not a valid loaded source",
+                );
+                surface_look.clone()
+            }
+            LunarSurfaceContinuationAction::Hold => {
+                raise_continuation_fault(
+                    &mut faults,
+                    target,
+                    surface_look,
+                    format!(
+                        "continuation interface mismatch: USD declares {:?}, WGSL reflects {:?}",
+                        declared, actual
+                    ),
+                );
+                surface_look.clone()
+            }
+        };
+
+        bind_continuation_look(
+            &mut commands,
+            target,
+            current.as_ref(),
+            &mut visibility,
+            shader_ready,
+            &selected_look,
+        );
     }
 }
 

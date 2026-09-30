@@ -9315,6 +9315,7 @@ dependencies = [
  "lunco-storage",
  "lunco-sysml",
  "lunco-sysml-ast",
+ "lunco-terrain-surface",
  "lunco-tools",
  "lunco-twin",
  "lunco-usd-authoring",

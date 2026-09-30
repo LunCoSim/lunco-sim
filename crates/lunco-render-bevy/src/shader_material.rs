@@ -137,6 +137,16 @@ pub struct ShaderMaterial {
     #[texture(10)]
     #[sampler(11)]
     pub shadow_cache: Option<Handle<Image>>,
+    /// Site-local continuation albedo. The lunar-surface continuation shader
+    /// uses this alongside the independent body-wide `albedo_map`.
+    #[texture(12)]
+    #[sampler(13)]
+    pub continuation_albedo_map: Option<Handle<Image>>,
+    /// Site-local packed roughness/AO data, independent of the body's ordinary
+    /// `surface_map`.
+    #[texture(14)]
+    #[sampler(15)]
+    pub continuation_surface_map: Option<Handle<Image>>,
     /// Per-instance fragment shader. **Not** a bind-group resource — it drives
     /// pipeline specialization (see [`ShaderMaterial::specialize`]) and is kept
     /// as a strong handle so the asset stays loaded.
@@ -196,6 +206,8 @@ impl Default for ShaderMaterial {
             surface_map: None,
             normal_map: None,
             shadow_cache: None,
+            continuation_albedo_map: None,
+            continuation_surface_map: None,
             shader: Handle::default(),
             vertex_shader: None,
             schema: empty_schema_arc(),
@@ -403,11 +415,19 @@ impl Material for ShaderMaterial {
                     ])?;
                     descriptor.vertex.buffers = vec![vertex_layout];
                 } else if layout.0.contains(ATTRIBUTE_GLOBE_DIRECTION) {
-                    let vertex_layout = layout.0.get_layout(&[
+                    let mut attributes = vec![
                         Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
                         Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
-                        ATTRIBUTE_GLOBE_DIRECTION.at_shader_location(11),
-                    ])?;
+                    ];
+                    if layout.0.contains(Mesh::ATTRIBUTE_UV_0) {
+                        attributes.push(Mesh::ATTRIBUTE_UV_0.at_shader_location(2));
+                        descriptor.vertex.shader_defs.push("VERTEX_UVS_A".into());
+                        if let Some(fragment) = descriptor.fragment.as_mut() {
+                            fragment.shader_defs.push("VERTEX_UVS_A".into());
+                        }
+                    }
+                    attributes.push(ATTRIBUTE_GLOBE_DIRECTION.at_shader_location(11));
+                    let vertex_layout = layout.0.get_layout(&attributes)?;
                     descriptor.vertex.buffers = vec![vertex_layout];
 
                     // The globe material owns a dedicated body-direction

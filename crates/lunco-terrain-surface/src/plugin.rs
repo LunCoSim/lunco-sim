@@ -186,6 +186,7 @@ impl Plugin for TerrainSurfaceVisualizationPlugin {
             app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
         }
         app.register_type::<crate::stream_viz::TerrainVisualFocus>();
+        app.init_resource::<lunco_core::RuntimeFaults>();
         app.init_resource::<lunco_render::RenderingQualitySettings>();
         crate::stream_viz::register_all_commands(app);
         app.add_observer(crate::stream_viz::invalidate_removed_shader_look_ready);
@@ -219,6 +220,7 @@ impl Plugin for TerrainSurfaceVisualizationPlugin {
                 )
                     .chain(),
                 crate::stream_viz::bind_terrain_maps_to_materials,
+                crate::stream_viz::sync_terrain_visual_continuations,
                 crate::stream_viz::sync_removed_terrain_maps_to_materials,
                 crate::stream_viz::despawn_orphaned_lod_tiles,
             )

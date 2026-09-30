@@ -78,6 +78,7 @@ def Xform "SolarSystem" (
                 float inputs:line_width = 2.0
                 float inputs:transition = 0.0
                 token outputs:surface
+                string info:wgsl:interface = "lunco.lunar-surface-continuation.v1"
             }
         }
     }
