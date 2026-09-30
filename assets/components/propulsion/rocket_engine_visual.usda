@@ -1,0 +1,157 @@
+#usda 1.0
+(
+    defaultPrim = "Engine"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "Engine"
+{
+    def Xform "Exhaust"
+    {
+        def Scope "Looks"
+        {
+            def Material "Flame_Mat"
+            {
+                custom token outputs:surface
+                token outputs:surface.connect = </Engine/Exhaust/Looks/Flame_Mat/Surface.outputs:surface>
+                def Shader "Surface"
+                {
+                    float inputs:throttle = 0.0
+                    float inputs:flicker_scale = 7.0
+                    asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
+                    color3f inputs:core_color = (6.0, 6.0, 6.0)
+                    uniform token info:implementationSource = "sourceAsset"
+                    float inputs:density = 8.0
+                    float inputs:width_idle = 0.2800000011920929
+                    float inputs:plume_length_fraction = 0.0
+                    float inputs:steps = 24.0
+                    float inputs:flicker = 1.0
+                    float inputs:throttle_exponent = 0.3499999940395355
+                    color3f inputs:edge_color = (6.0, 6.0, 6.0)
+                    float inputs:flicker_speed = 6.0
+                    token outputs:surface = ""
+                    float inputs:fuel_color_r = 1.0
+                    float inputs:fuel_color_g = 1.0
+                    float inputs:fuel_color_b = 1.0
+                }
+            }
+            def Material "FlameCore_Mat"
+            {
+                custom token outputs:surface
+                token outputs:surface.connect = </Engine/Exhaust/Looks/FlameCore_Mat/Surface.outputs:surface>
+                def Shader "Surface"
+                {
+                    color3f inputs:edge_color = (16.0, 16.0, 16.0)
+                    float inputs:throttle = 0.0
+                    float inputs:plume_length_fraction = 0.0
+                    asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
+                    float inputs:flicker = 0.5
+                    color3f inputs:core_color = (16.0, 16.0, 16.0)
+                    uniform token info:implementationSource = "sourceAsset"
+                    float inputs:flicker_speed = 4.0
+                    float inputs:flicker_scale = 6.0
+                    float inputs:density = 20.0
+                    float inputs:width_idle = 0.2199999988079071
+                    float inputs:steps = 24.0
+                    float inputs:throttle_exponent = 0.3499999940395355
+                    token outputs:surface = ""
+                    float inputs:fuel_color_r = 1.0
+                    float inputs:fuel_color_g = 1.0
+                    float inputs:fuel_color_b = 1.0
+                }
+            }
+        }
+        def Cone "Flame" (
+            prepend apiSchemas = "MaterialBindingAPI"
+        )
+        {
+            bool lunco:surface:additive = false
+            bool physics:collisionEnabled = false
+            float[] primvars:displayOpacity = [0.41999998688697815]
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            double height = 1.0
+            double radius = 1.0
+            uniform token axis = "Y"
+            double3 xformOp:scale = (0.55, 4.0, 0.55)
+            bool primvars:doNotCastShadows = true
+            uniform token purpose = "render"
+            double3 xformOp:rotateXYZ = (180.0, 0.0, 0.0)
+            uniform bool doubleSided = true
+            double3 xformOp:translate = (0.0, -2.0, 0.0)
+            custom rel material:binding = </Engine/Exhaust/Looks/Flame_Mat>
+            float inputs:throttle = 0.0
+            float inputs:plume_length_fraction = 0.0
+            float inputs:fuel_color_r = 1.0
+            float inputs:fuel_color_g = 1.0
+            float inputs:fuel_color_b = 1.0
+            float inputs:scale_x = 0.0
+            float inputs:scale_z = 0.0
+            float inputs:scale_y = 0.0
+            float inputs:translation_y = 0.0
+        }
+        def Cone "FlameCore" (
+            prepend apiSchemas = "MaterialBindingAPI"
+        )
+        {
+            bool primvars:doNotCastShadows = true
+            double height = 1.0
+            double radius = 1.0
+            uniform bool doubleSided = true
+            double3 xformOp:scale = (0.27, 4.0, 0.27)
+            uniform token purpose = "render"
+            float[] primvars:displayOpacity = [0.8999999761581421]
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            bool physics:collisionEnabled = false
+            uniform token axis = "Y"
+            bool lunco:surface:additive = true
+            double3 xformOp:rotateXYZ = (180.0, 0.0, 0.0)
+            double3 xformOp:translate = (0.0, -2.0, 0.0)
+            custom rel material:binding = </Engine/Exhaust/Looks/FlameCore_Mat>
+            float inputs:throttle = 0.0
+            float inputs:plume_length_fraction = 0.0
+            float inputs:fuel_color_r = 1.0
+            float inputs:fuel_color_g = 1.0
+            float inputs:fuel_color_b = 1.0
+            float inputs:scale_x = 0.0
+            float inputs:scale_z = 0.0
+            float inputs:scale_y = 0.0
+            float inputs:translation_y = 0.0
+            def SphereLight "PlumeLight" (
+                prepend apiSchemas = ["ShadowAPI", "LunCoLightAPI"]
+            )
+            {
+                color3f inputs:color = (1.0, 0.4000000059604645, 0.03999999910593033)
+                float lunco:light:range = 25.0
+                bool inputs:shadow:enable = false
+                float inputs:light_intensity = 0.0
+                float inputs:light_radius = 0.0
+                float inputs:light_color_r = 0.0
+                float inputs:light_color_g = 0.0
+                float inputs:light_color_b = 0.0
+            }
+        }
+    }
+    def Scope "Looks"
+    {
+        def Material "Nozzle_Mat"
+        {
+            custom token outputs:surface
+            token outputs:surface.connect = </Engine/Looks/Nozzle_Mat/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                token outputs:surface = ""
+                color3f inputs:diffuseColor = (0.1599999964237213, 0.17000000178813934, 0.18000000715255737)
+                float inputs:metallic = 0.8500000238418579
+                float inputs:roughness = 0.47999998927116394
+            }
+        }
+    }
+    def "Bell" (
+        prepend apiSchemas = "MaterialBindingAPI"
+    )
+    {
+        custom rel material:binding = </Engine/Looks/Nozzle_Mat>
+    }
+}

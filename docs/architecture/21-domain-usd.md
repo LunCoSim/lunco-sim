@@ -898,17 +898,20 @@ complete inactive Bevy `Camera3d` pipeline (see [`17-view-and-intent.md §6`](17
   `UsdSceneProjectionFailed` and hidden. The projector does not reinterpret it
   as an omitted camera or choose a previous/heuristic camera; only genuinely
   unauthored USD schema attributes use their standard defaults.
-- **Standalone presentation:** an interactive window host may ask the
-  `camera.default_presentation` Rhai policy to choose `avatar`, `generated`,
-  or `none` when no `CameraTrack` or unique `LocalEmbodiment` initial presentation
-  is authored. Rust passes only derived USD/ECS counts, validates the closed
-  result, and realizes `generated` as one render-free `SceneCamera` plus one
-  unscoped directional light under the active `UsdSceneRoot` when projected
-  bounds are finite. The pair is selected after deferred projection and is
-  removed on authored/operator takeover or `SceneTeardown`. A missing,
-  faulting, or invalid policy result is a diagnostic and no presentation;
-  headless hosts can leave the convenience policy disabled, and a scene
-  without finite bounds remains camera-less instead of receiving a fake camera.
+- **Initial presentation:** a `CameraTrack` or explicit operator/director
+  selection takes priority. Otherwise the active-root `camera.default_presentation`
+  Rhai policy prefers the unique `LocalEmbodiment` camera, then the first
+  authored camera in stable USD-path order. A standalone window host retains
+  generated framing when the active root has no authored camera. Rust validates
+  and realizes the policy result; generated framing is one render-free
+  `SceneCamera` plus one unscoped directional light under the active
+  `UsdSceneRoot`, created only after projected bounds are finite. The pair is
+  removed on authored/operator takeover or `SceneTeardown`. Missing, faulting,
+  or invalid policy results remain structured diagnostics; headless hosts can
+  leave convenience framing disabled. One camera-contract finding set owns
+  readiness and severity; `RuntimeDiagnostics` and Recent Events project that
+  set. An unresolved director key is a warning while a valid operator camera
+  owns the viewport, and becomes an error when director control resumes.
 
 The local avatar remains a runtime camera embodiment rather than a USD rigid
 body. Its movement controller consumes the standard `UsdPhysics` colliders

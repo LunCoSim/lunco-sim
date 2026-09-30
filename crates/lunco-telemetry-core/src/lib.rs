@@ -64,7 +64,12 @@ fn project_command_occurrence(trigger: On<lunco_core::CommandOccurred>, mut comm
 
 fn project_runtime_error(trigger: On<lunco_core::RuntimeError>, mut commands: Commands) {
     let event = trigger.event();
-    telemetry::trigger_error(&mut commands, event.name.clone(), event.message.clone());
+    telemetry::emit_status_telemetry_event(
+        &mut commands,
+        event.name.clone(),
+        telemetry::Severity::Error,
+        event.message.clone(),
+    );
 }
 
 fn project_subsystem_state(trigger: On<lunco_core::SubsystemStateChanged>, mut commands: Commands) {

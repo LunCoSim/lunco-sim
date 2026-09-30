@@ -268,8 +268,14 @@ collision gets a small ordinal. The full USD path remains the selection
 identity and is available through tooltips, diagnostics, and `active_name`,
 never replaced by the display projection.
 
-Failed camera actions are logged and published as shared runtime errors; the
-application presents them through its shared warning toast.
+Rejected camera actions are shared runtime errors, which the application
+presents through its warning toast. The camera owner keeps one canonical
+contract finding set and projects it to `RuntimeDiagnostics` and Recent Events.
+An unresolved director track is an error while director control is active, and
+a warning while a valid operator-selected camera owns the viewport. Recent
+Events presents camera findings as warnings and never routes them through the
+runtime-error toast path. Standalone-framing failures use this same contract
+projection instead of publishing a second camera diagnostic.
 
 Camera and exposure updates are reactive: camera status is rebuilt after its
 selection, viewport, camera-entity, or track inputs change; it emits a

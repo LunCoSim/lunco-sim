@@ -375,8 +375,17 @@ The camera runtime invokes `camera.default_presentation` as
 use this owner context. The Rhai policy rejects calls from another route or
 cycle; the `RuntimeCycleSet::Presentation` labels do not create a separate
 schedule or cadence. The production hook-policy test checks off-cycle
-rejection, and `test_camera_presentation_owner.rhai` reads the active camera
-through `ReadExposures` in the windowed application.
+rejection. `test_camera_presentation_owner.rhai` reads the active camera
+through `ReadExposures`; `test_camera_avatar_fallback.rhai`,
+`test_camera_first_fallback.rhai`, and `test_camera_explicit_selection.rhai`
+verify fallback and explicit-selection priority in the windowed application.
+
+With no CameraTrack or explicit operator/director selection, the shipped
+`camera.default_presentation` policy prefers the unique `LocalEmbodiment`
+camera, then the first authored camera under the active scene root in stable
+USD-path order. It requests generated framing only when the standalone host
+asks for it and no authored camera is available. Rust validates and realizes
+the closed result.
 
 The runtime UI recording-contract selector invokes `runtime.ui.recording` as
 `Application/Ui/Preparation` with the `Time<Real>` Application clock. It runs

@@ -199,13 +199,14 @@ or camera track changes the selection intent, while exactly **one** system write
 (`is_active = bound-camera && visible`) and relocates the persistent
 `OriginAnchor` to the active camera's f64 `WorldGrid` cell. A
 missing, stale, or projectionless explicit request produces no active camera
-and a visible status diagnostic; it never selects the first authored camera as
-a repair or silently substitutes a different authored camera.
+and a visible status diagnostic; that failed request never falls through to a
+different camera.
 
-The same rule applies during scene handoff: a local avatar receives interactive
-behavior only after a standard USD camera has been projected with its
-`SceneCamera` intent. Missing camera intent is an explicit no-camera state, not
-an invitation for the avatar runtime to create or guess a camera.
+During scene handoff, the initial-presentation policy runs after a standard USD
+camera has been projected with its `SceneCamera` intent. It may select the
+unique `LocalEmbodiment` camera or first active-root camera when no explicit
+selection or `CameraTrack` exists; the avatar runtime itself does not create or
+guess a camera.
 
 An authored camera that fails USD attribute/API validation is a terminal
 projection failure: the prim is hidden and carries `UsdSceneProjectionFailed`,
@@ -226,19 +227,20 @@ The viewport has explicit presentation ownership:
   the presence of an avatar never emits it implicitly. `ResumeCameraDirector`
   returns control to the authored track.
 
-Names match a full USD prim path or its leaf. A windowed scene normally authors
-its initial presentation through `CameraTrack` (including a single key for a
-static initial view) or exactly one `LocalEmbodiment` camera. When a window host
-opts into standalone presentation, the camera adapter passes authored
-USD/ECS counts to the `camera.default_presentation` policy. The shipped Rhai
-policy chooses `avatar`, `generated`, or `none`; Rust validates and realizes
-only that closed decision. `generated` frames finite projected bounds with one
-Twin-scoped camera and directional light. The pair is selected only after
-projection settles and is removed when authored presentation takes ownership
-or the scene tears down. A missing, faulting, or invalid policy is a visible
-diagnostic; `none`, invalid, or boundless scenes remain camera-less. The engine
-never selects the first authored camera or turns avatar presence into a hidden
-policy decision.
+Names match a full USD prim path or its leaf. An authored `CameraTrack` and an
+explicit operator/director selection keep priority. When neither exists, the
+camera adapter considers candidates under the active scene root and asks the
+`camera.default_presentation` Rhai policy to prefer the unique
+`LocalEmbodiment` camera, then the first authored camera in stable USD-path
+order. Rust validates and realizes that closed decision. A standalone window
+host retains generated framing when the active scene has no authored camera;
+the generated camera and directional light frame finite projected bounds and
+are removed when authored presentation takes ownership or the scene tears
+down. Missing, faulting, or invalid policy results remain structured camera
+diagnostics. Failed explicit requests never fall through to another camera.
+While a valid operator camera owns the viewport, unresolved director-track keys
+are dormant warnings; returning control with `ResumeCameraDirector` makes them
+active contract errors again.
 
 ### 6.4 Rover-mounted cameras
 

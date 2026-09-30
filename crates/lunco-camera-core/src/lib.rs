@@ -215,7 +215,7 @@ pub const DEFAULT_PRESENTATION_HOOK: &str = "camera.default_presentation";
 lunco_hooks::declare_hook! {
     id: DEFAULT_PRESENTATION_HOOK,
     owner: "lunco-camera-core",
-    description: "Choose which authored camera presentation action the host should realize.",
+    description: "Choose the initial camera fallback or standalone framing action from projected scene facts.",
     signature: [ctx: Map],
     output: String,
     deterministic: false,

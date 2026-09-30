@@ -174,3 +174,18 @@ It does not read `raw_command` or add a second lateral limiter. The authored
 `assets/scenarios/tests/descent_lander_runtime.rhai` scenario exercises the
 production lander composition, so this failure is guarded at the Modelica/USD
 boundary rather than hidden by a Rust-only solver fixture.
+
+## Library exhaust presentation
+
+Engine components reference `assets/components/propulsion/rocket_engine_visual.usda`.
+The `engine_exhaust` Rhai library authors connections once; Modelica
+`PlumePhotometry` drives nozzle-based envelope dimensions, fuel/richness colour,
+activity and light. Combustion activity includes mixture efficiency. Without a
+reactant, thrust and heat cease; zero delivered jet momentum gives zero visible
+plume and light. See the [component contract](../../assets/components/propulsion/README.md).
+
+The worker seeds omitted Modelica input defaults before compilation readback.
+The lifecycle bridge preserves explicit authored inputs and seeds other runtime
+inputs from that initialized solver observation. It must not substitute zero for
+omitted nested library inputs: sending that value back on the first step would
+erase the model's default.

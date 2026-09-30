@@ -144,20 +144,20 @@ impl Default for TelemetryEvent {
     }
 }
 
-/// Emit an error-severity event onto the shared script/status telemetry bus.
+/// Emit a warning- or error-severity event onto the shared script/status bus.
 ///
-/// Context-heavy callers still own their domain-specific logging and mnemonic;
-/// this helper owns the repeated event construction so UI adapters cannot drift
-/// in severity, source, or timestamp semantics.
-pub(crate) fn trigger_error(
+/// The producer owns the severity decision and mnemonic; this helper owns the
+/// event construction so producers share source and timestamp semantics.
+pub fn emit_status_telemetry_event(
     commands: &mut Commands,
     name: impl Into<String>,
+    severity: Severity,
     message: impl Into<String>,
 ) {
     commands.trigger(TelemetryEvent {
         name: name.into(),
         source: 0,
-        severity: Severity::Error,
+        severity,
         data: TelemetryValue::String(message.into()),
         timestamp: 0.0,
         sim_secs: 0.0,

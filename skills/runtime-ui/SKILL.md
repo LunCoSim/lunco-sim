@@ -167,8 +167,13 @@ camera/viewport lifecycle projection changes, and the exposure observer
 consumes that event. The UI is revision-gated. Do not add a Rhai `on_tick`
 loop, a timer poll, or a per-frame camera scan for this HUD.
 
-Failed camera actions are logged and published through the shared warning toast.
-Keep their messages out of the Camera menu.
+Rejected camera commands may use the shared warning toast. Camera admission
+findings come from one camera-contract state and project to structured runtime
+diagnostics and Recent Events. A valid operator camera keeps the viewport ready;
+unresolved director tracks are warnings until director control resumes. Recent
+Events presents camera findings as warnings, emitted directly as telemetry
+rather than runtime errors, so the generic warning observer never dispatches a
+toast. Keep camera messages out of the Camera menu.
 Register open egui dropdown bounds with `ScenePickGate` so option clicks do not
 fall through to the 3D scene.
 

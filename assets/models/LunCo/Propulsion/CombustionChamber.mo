@@ -58,12 +58,15 @@ equation
   mixture_efficiency = max(0.0, min(1.0,
     1.0 - abs(mixture_ratio_error)
       / max(minimum_mixture_ratio, oxidizer_to_fuel_ratio)));
-  activity = max(0.0, min(1.0, propellant_flow / max(minimum_flow_kgs, nominal_flow_kgs)));
+  // Activity is combustion, not merely propellant passing through a feed.
+  // A missing reactant makes mixture_efficiency and useful combustion zero.
+  activity = max(0.0, min(1.0, propellant_flow * mixture_efficiency
+    / max(minimum_flow_kgs, nominal_flow_kgs)));
   chamber_pressure_pa = 0.5 * (fuel_in.pressure_pa + oxidizer_in.pressure_pa);
   ideal_chamber_pressure_pa = propellant_flow * characteristic_velocity_mps
     / max(minimum_throat_area_m2, throat_area_m2);
   chamber_temperature_k = chamber_temperature_full_k * activity
-    * combustion_efficiency * mixture_efficiency;
+    * combustion_efficiency;
   thrust_n = propellant_flow * effective_exhaust_velocity_mps
     * combustion_efficiency * mixture_efficiency;
   exhaust_velocity_mps = effective_exhaust_velocity_mps
