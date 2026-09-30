@@ -1,0 +1,114 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World"
+{
+    def DistantLight "Sun"
+    {
+        float intensity = 1.0
+    }
+    def Xform "Engine" (
+        prepend references = @lunco://components/propulsion/rocket_engine_visual.usda@</Engine>
+    )
+    {
+        def Scope "Photometry" (
+            prepend apiSchemas = "LunCoProgramAPI"
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/PlumePhotometry.mo@
+            float outputs:color_b = 0.0
+            float outputs:color_g = 0.0
+            float outputs:color_r = 0.0
+            float outputs:core_envelope_radius_m = 0.0
+            float outputs:envelope_center_y_m = 0.0
+            float outputs:envelope_length_m = 0.0
+            float outputs:envelope_radius_m = 0.0
+            float outputs:full_throttle_length_m = 0.0
+            float outputs:intensity = 0.0
+            float outputs:radius = 0.0
+            float outputs:render_throttle = 0.0
+            float outputs:visual_length_fraction = 0.0
+            float inputs:throttle = 0.0
+            float inputs:thrust_n = 0.0
+            float inputs:propellant_flow_kgs = 0.0
+            float inputs:exhaust_velocity_mps = 0.0
+            float inputs:maximum_thrust_n = 1000.0
+            float inputs:nozzle_exit_radius_m = 0.10000000149011612
+            float inputs:fuel_family = 0.0
+            float inputs:mixture_mode = 0.0
+        }
+        def "Exhaust"
+        {
+            def "Flame"
+            {
+                custom float inputs:throttle
+                float inputs:throttle.connect = </World/Engine/Photometry.outputs:render_throttle>
+                custom float inputs:plume_length_fraction
+                float inputs:plume_length_fraction.connect = </World/Engine/Photometry.outputs:visual_length_fraction>
+                custom float inputs:fuel_color_r
+                float inputs:fuel_color_r.connect = </World/Engine/Photometry.outputs:color_r>
+                custom float inputs:fuel_color_g
+                float inputs:fuel_color_g.connect = </World/Engine/Photometry.outputs:color_g>
+                custom float inputs:fuel_color_b
+                float inputs:fuel_color_b.connect = </World/Engine/Photometry.outputs:color_b>
+                custom float inputs:scale_x
+                float inputs:scale_x.connect = </World/Engine/Photometry.outputs:envelope_radius_m>
+                custom float inputs:scale_z
+                float inputs:scale_z.connect = </World/Engine/Photometry.outputs:envelope_radius_m>
+                custom float inputs:scale_y
+                float inputs:scale_y.connect = </World/Engine/Photometry.outputs:envelope_length_m>
+                custom float inputs:translation_y
+                float inputs:translation_y.connect = </World/Engine/Photometry.outputs:envelope_center_y_m>
+            }
+            def "FlameCore"
+            {
+                custom float inputs:throttle
+                float inputs:throttle.connect = </World/Engine/Photometry.outputs:render_throttle>
+                custom float inputs:plume_length_fraction
+                float inputs:plume_length_fraction.connect = </World/Engine/Photometry.outputs:visual_length_fraction>
+                custom float inputs:fuel_color_r
+                float inputs:fuel_color_r.connect = </World/Engine/Photometry.outputs:color_r>
+                custom float inputs:fuel_color_g
+                float inputs:fuel_color_g.connect = </World/Engine/Photometry.outputs:color_g>
+                custom float inputs:fuel_color_b
+                float inputs:fuel_color_b.connect = </World/Engine/Photometry.outputs:color_b>
+                custom float inputs:scale_x
+                float inputs:scale_x.connect = </World/Engine/Photometry.outputs:core_envelope_radius_m>
+                custom float inputs:scale_z
+                float inputs:scale_z.connect = </World/Engine/Photometry.outputs:core_envelope_radius_m>
+                custom float inputs:scale_y
+                float inputs:scale_y.connect = </World/Engine/Photometry.outputs:envelope_length_m>
+                custom float inputs:translation_y
+                float inputs:translation_y.connect = </World/Engine/Photometry.outputs:envelope_center_y_m>
+                def "PlumeLight"
+                {
+                    custom float inputs:light_intensity
+                    float inputs:light_intensity.connect = </World/Engine/Photometry.outputs:intensity>
+                    custom float inputs:light_radius
+                    float inputs:light_radius.connect = </World/Engine/Photometry.outputs:radius>
+                    custom float inputs:light_color_r
+                    float inputs:light_color_r.connect = </World/Engine/Photometry.outputs:color_r>
+                    custom float inputs:light_color_g
+                    float inputs:light_color_g.connect = </World/Engine/Photometry.outputs:color_g>
+                    custom float inputs:light_color_b
+                    float inputs:light_color_b.connect = </World/Engine/Photometry.outputs:color_b>
+                }
+            }
+        }
+    }
+    def Scope "Scenario"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = "LunCoProgramAPI"
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/rocket_engine_plume_defaults.rhai@
+        }
+    }
+}

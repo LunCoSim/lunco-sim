@@ -565,3 +565,11 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   `open_uri`, `list_bundled`, `list_open_documents`). Batch experiment verbs
   (`RunExperiment`/`ListRuns`/`GetExperimentResult`) have **no dedicated MCP
   tool** — use curl (or the generic `mcp__lunco__execute_command`).
+
+### Omitted library inputs
+
+Omitted inputs retain the owning Modelica library's defaults, including nested
+components in generated USD networks. Explicit authored inputs take precedence.
+The worker's initialized solver observation supplies runtime readback; do not
+copy defaults into each Twin to compensate for a lifecycle bridge replacing
+unbound slots with zero. Verify after advancing physics, not only at compile time.

@@ -1154,16 +1154,22 @@ pub fn handle_modelica_responses(
                     model.is_compiled = false;
                 }
 
-                // Merge input names from the worker with values the UI already extracted from source.
-                // The UI extracts defaults from source code (e.g., `input Real g = 9.81` → g: 9.81),
-                // which is more reliable than the worker's DAE-discovered names (which may have 0.0).
+                // Preserve explicit authored values, then seed omitted inputs
+                // from the worker's initialized solver observation. Library
+                // member defaults are already applied there; inventing zeros
+                // here would overwrite them on the first simulation step.
                 let ui_inputs: HashMap<String, f64> = std::mem::take(&mut model.inputs);
                 model.compiled_input_names = result.detected_input_names.iter().cloned().collect();
                 for name in &result.detected_input_names {
-                    model
-                        .inputs
-                        .entry(name.clone())
-                        .or_insert_with(|| *ui_inputs.get(name).unwrap_or(&0.0));
+                    if let Some(value) = ui_inputs.get(name).copied().or_else(|| {
+                        result
+                            .detected_symbols
+                            .iter()
+                            .find(|(symbol, _)| symbol == name)
+                            .map(|(_, value)| *value)
+                    }) {
+                        model.inputs.insert(name.clone(), value);
+                    }
                 }
                 for (name, val) in ui_inputs {
                     model.inputs.entry(name).or_insert(val);

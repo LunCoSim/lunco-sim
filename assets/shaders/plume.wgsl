@@ -1,7 +1,7 @@
 //! Engine-exhaust plume for the general `ShaderMaterial`.
 //!
 //! The bound `Cone` is a FIXED BOUNDING VOLUME, authored at the plume's
-//! full-throttle extent and never transformed again. The propulsion model supplies
+//! full-throttle extent derived by Modelica. The propulsion model supplies
 //! the visible axial fraction; this shader owns width response, radiance, and
 //! shimmer inside that volume.
 //!
@@ -58,11 +58,9 @@
 //!
 //! Emissive geometry in a forward renderer illuminates nothing, so the plume's
 //! `PointLight` is a separate prim driven from `LunCo.Propulsion.PlumePhotometry`.
-//! Its colour is authored on that light (`inputs:color`) and must be kept as the
-//! chroma of `core_color` below; its luminance parameter must be kept as
-//! `core_color`'s Rec.709 luma. A shader parameter is deliberately not readable as
-//! a connection source — that is what stops a render value feeding back into the
-//! simulation — so this coupling is authored, not wired.
+//! The standard engine component connects light RGB and shader fuel RGB to the
+//! same Modelica colour outputs. Modelica also derives the colour luminance;
+//! render values do not feed back into simulation.
 //!
 //! Dynamic, self-describing parameters: the engine reflects the `Material`
 //! struct (field names → offsets) and the `//!@` annotations straight out of
@@ -98,7 +96,13 @@
 //!@default density       9.0
 //!@ui      steps         4 64  "Ray-march samples through the volume"
 //!@default steps         24
+//!@default fuel_color_r 1.0
+//!@default fuel_color_g 1.0
+//!@default fuel_color_b 1.0
 struct Material {
+    fuel_color_r: f32,
+    fuel_color_g: f32,
+    fuel_color_b: f32,
     core_color:    vec3<f32>,
     throttle:      f32,
     plume_length_fraction: f32,
@@ -118,7 +122,8 @@ var<uniform> mat: Material;
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let t = clamp(mat.throttle, 0.0, 1.0);
-    // A dead engine emits NOTHING — not a residual glow. The photometry model
+    // This early return only skips work: both radiance and alpha are also
+    // multiplied by the Modelica-driven activity below. A dead engine emits NOTHING — not a residual glow. The photometry model
     // gates its light to exactly zero at zero throttle for the same reason, and
     // the two must agree or a coasting shot picks up a plume with no light or a
     // light with no plume.
@@ -172,8 +177,9 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let tint = mix(mat.edge_color, mat.core_color, core_mix);
     let width_response = 0.35 + 0.65 * wid;
     let radiance = (0.8 + 1.5 * cutoff) * shimmer * width_response;
-    let alpha = clamp(cutoff * (0.55 + 0.35 * shimmer), 0.0, 1.0);
-    let emissive = tint * mat.density * radiance;
+    let alpha = clamp(cutoff * (0.55 + 0.35 * shimmer), 0.0, 1.0) * visual_throttle;
+    let fuel_color = max(vec3<f32>(mat.fuel_color_r, mat.fuel_color_g, mat.fuel_color_b), vec3<f32>(0.0));
+    let emissive = tint * fuel_color * mat.density * radiance * visual_throttle;
 
     // The gprim's authored sub-1 `displayOpacity` selects Bevy's translucent
     // pipeline, so return both radiance and coverage. Alpha is not an opaque
