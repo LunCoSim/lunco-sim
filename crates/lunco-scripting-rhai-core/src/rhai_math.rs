@@ -361,7 +361,7 @@ fn native_quat_from_euler_xyz_deg(v: DVec3) -> Result<DQuat, Box<EvalAltResult>>
     finite_vec3(v, "Euler rotation")?;
     finite_quat(
         DQuat::from_euler(
-            EulerRot::XYZ,
+            EulerRot::XYZEx,
             v.x.to_radians(),
             v.y.to_radians(),
             v.z.to_radians(),
@@ -372,7 +372,7 @@ fn native_quat_from_euler_xyz_deg(v: DVec3) -> Result<DQuat, Box<EvalAltResult>>
 
 fn native_quat_to_euler_xyz_deg(q: DQuat) -> Result<DVec3, Box<EvalAltResult>> {
     let q = finite_quat(q, "quaternion")?;
-    let (x, y, z) = q.to_euler(EulerRot::XYZ);
+    let (x, y, z) = q.to_euler(EulerRot::XYZEx);
     finite_vec3(
         DVec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees()),
         "Euler rotation",
@@ -1049,6 +1049,12 @@ mod tests {
         assert!((a[0].as_float().unwrap() - 10.0).abs() < 1e-9);
         assert!((a[1].as_float().unwrap() - 20.0).abs() < 1e-9);
         assert!((a[2].as_float().unwrap() - 30.0).abs() < 1e-9);
+        // USD rotateXYZ applies X, then Y, then Z about fixed axes.
+        // A round trip alone cannot distinguish intrinsic from extrinsic order.
+        let rotated =
+            eval("qrot(quat_from_euler_xyz_deg(vec3(90.0, 0.0, 90.0)), vec3(0.0, 1.0, 0.0))")
+                .cast::<DVec3>();
+        assert!((rotated - DVec3::Z).length() < 1e-9);
     }
 
     #[test]
