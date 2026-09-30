@@ -32,3 +32,19 @@ Production regressions: `rocket_engine_plume_defaults.usda` covers a generated M
 flow with stale thrust, scaling and palettes; `lander_plume_activity.usda`
 covers real feed/valve spool response. Griffin's external Twin additionally
 exercises actual tank depletion in its production assembly.
+
+`engine_exhaust::connection_ops(edit_target, engine_path, photometry_path,
+output_names)` accepts an explicit source-port map. Use an empty map for
+`PlumePhotometry`; for `RCSJet`, map `intensity` to `light_intensity`, `radius`
+to `light_radius`, and `render_throttle` to `activity`. Geometry remains owned
+by this shared component. The helper also authors the four local overrides
+needed to connect inherited exhaust prims.
+
+`RCSJet` composes the same photometry model. Connect its
+`available_fuel_mass_kg` and `available_oxidizer_mass_kg` inputs to the owning
+reservoir outputs. The feed availability multiplies valve demand before the
+thruster calculates force and flow; absent either reactant, activity and plume
+outputs fall to zero through the model equations. Standalone default feed
+inputs are available for component studies, so defaults are not evidence of
+vehicle tank wiring. `rcs_feed_starvation.usda` verifies both starvation paths
+while valve demand remains open, and restoration between them.

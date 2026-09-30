@@ -30,7 +30,7 @@ fn wires() {
     ]
 }
 
-fn connection_ops(edit_target, engine_path, photometry_path) {
+fn connection_ops(edit_target, engine_path, photometry_path, output_names) {
     let ops = [];
     for spec in [
         #{parent:engine_path,name:"Exhaust"},
@@ -42,10 +42,12 @@ fn connection_ops(edit_target, engine_path, photometry_path) {
             name:spec.name,type_name:(),reference:(),reference_prim_path:()}});
     }
     for wire in wires() {
+        let output = wire.output;
+        if output_names.contains(output) {output = output_names[output];}
         ops.push(#{SetConnection:#{edit_target:edit_target,
             path:engine_path+"/Exhaust/"+wire.child,
             name:"inputs:"+wire.input,type_name:"float",
-            sources:[photometry_path+".outputs:"+wire.output]}});
+            sources:[photometry_path+".outputs:"+output]}});
     }
     ops
 }
