@@ -75,7 +75,17 @@ BDD/IBD diagram authoring or a general-purpose SysML editor.
 
 ### Preserve declared collection shape
 
-Read model values through the typed `SysmlModel.value` projection. A structured
+Read model values through the typed `SysmlModel.value` projection. Finite,
+unitless numeric constant initializers support resolved feature references,
+unary signs, and `+`, `-`, `*`, `/`, and integer powers, including each member
+of numeric tuples. Cross-package and local references use the same source
+snapshot. Authored expression text and classification stay intact alongside
+the numeric projection. This bounded source fold reuses the semantic unit-factor
+evaluator; it does not execute domain state or general KerML programs. Cycles,
+missing references, zero division, non-finite results, and unsupported
+initializers have no fabricated value; `model.value` reports a named error.
+Integer operands beyond the exactly representable f64 range remain unsupported
+in arithmetic rather than being silently rounded. A structured
 `Position` literal may lower to one native `DVec3`, while a declared
 `Position[n]` collection must remain an array of native `DVec3` values. The
 generic Rust projection distinguishes vector components from declared
