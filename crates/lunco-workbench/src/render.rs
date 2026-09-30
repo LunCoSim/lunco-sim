@@ -1618,6 +1618,7 @@ pub(crate) fn render_status_bar_inner(
             .id(popup_id)
             .width(popup_width)
             .align(egui::RectAlign::TOP_START)
+            .gap(5.0)
             .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
             .open_memory(None)
             .close_behavior(
