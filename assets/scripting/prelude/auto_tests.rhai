@@ -1,10 +1,9 @@
 // ── Automated tests — how a scene test asserts and reports PASS / FAIL ─────
 //
 // A scenario is a tick hook on a live sim, not a process, so it has no exit
-// code. `scene_test` takes a typed verdict from TELEMETRY: the last thing a
-// test scenario does is emit its status, check count, and failed check messages.
-// The runner's exit code follows that event, and its output includes the same
-// authored failure details without requiring a log filter.
+// code. luncosim test takes its typed verdict from TELEMETRY after assertions
+// finish. For a declared negative scene-load check, the runner also waits for
+// that exact transition's terminal event after the scenario is removed.
 //
 // WHY THIS IS PRELUDE. Every test scenario needs the same six checks and the
 // same report format, and each copy of them drifts. Use these; do not paste a
@@ -134,6 +133,16 @@ fn expect_runtime_fault(kind) {
     emit("EXPECT_RUNTIME_FAULT", kind);
 }
 
+/// Assert that a later load_scene(path) request fails with the specified
+/// terminal scene-transition detail. The runner keeps this assertion alive
+/// after the load stops and removes the calling scenario.
+fn expect_scene_load_failure(path, detail_contains) {
+    emit("EXPECT_SCENE_LOAD_FAILURE", #{
+        path: path,
+        detail_contains: detail_contains,
+    });
+}
+
 /// Emit the typed verdict that `luncosim test` consumes.
 fn emit_test_verdict(channel, verdict, failures, check_count) {
     emit(channel, #{
@@ -144,7 +153,9 @@ fn emit_test_verdict(channel, verdict, failures, check_count) {
 }
 
 /// Print the failures, emit their typed verdict on `channel`, and raise a toast.
-/// Call ONCE, last. Returns true on pass.
+/// Call once after assertions. For an expected scene-load failure, declare it
+/// first, report the verdict, and call load_scene(path) afterward.
+/// Returns true on pass.
 ///
 /// `title` is the human label ("LANDING LEGS"); `channel` is the telemetry
 /// channel `scene_test --verdict-channel` reads ("LANDING_LEGS"). The final

@@ -346,7 +346,7 @@ list. Highlights:
 - **Sensing:** `distance`, `arrived`, `velocity3`/`velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
 - **Selection:** `all_of_type`, `nearest_where`, `count_where`, `min_by`/`max_by`.
 - **Task tree:** `seq`/`par_all`/`par_race`/`repeat`/`forever`, leaves `step`/`once`/`act_for`/`wait`/`wait_until`/`wait_for`/`wait_for_from`, and failure nodes `check`/`sel`/`retry`/`invert`/`force_ok`/`force_fail`/`reactive_seq`/`reactive_sel`. Return the tree from `task(me, ctx)`; the kernel owns event delivery and there is one task progression path.
-- **Testing** (`prelude/auto_tests.rhai`): `t_range` `t_max` `t_true` `t_rel` `t_present` `t_bounded` `t_moved` `report_verdict` `fail_fast` `seg` `find_or_none` `r2`/`r4`.
+- **Testing** (`prelude/auto_tests.rhai`): `t_range` `t_max` `t_true` `t_rel` `t_present` `t_bounded` `t_moved` `report_verdict` `fail_fast` `expect_fault` `expect_runtime_fault` `expect_scene_load_failure` `seg` `find_or_none` `r2`/`r4`.
 
 Add helpers freely — edit the prelude, no rebuild.
 
@@ -393,9 +393,14 @@ fn verdict(s) {
 
 `report_verdict(fails, title, channel)` prints the greppable `<title>: PASS|FAIL`
 line, emits the verdict on `channel` — which is what sets `luncosim test`'s exit
-code — and raises a toast. Call it once, last. Use `fail_fast` for setup
-failures (a `find` that returned -1, the wrong scene) so a broken run stops on
-tick one instead of ticking silently to the limit.
+code — and raises a toast. Call it once after assertions. For a test that
+intentionally loads a scene expected to fail, call
+`expect_scene_load_failure(path, detail_contains)` before the verdict and call
+`load_scene(path)` after it. The runner keeps the result open until it observes
+that exact typed transition outcome and verifies the failed mount released its
+load and admission state. Use `fail_fast` for setup failures (a `find` that returned -1, the
+wrong scene) so a broken run stops on tick one instead of ticking silently to
+the limit.
 
 For a tutorial, this scenario is an **observer**, not a second lesson. Attach it
 to the same production scene fixture as the tutorial and observe its public
