@@ -65,9 +65,9 @@ pub struct ApplyUsdTransientOps {
 /// Stable id for the USD document kind in the shared document registry.
 pub const USD_DOCUMENT_KIND: &str = "usd";
 
-/// A reason the mounted USD scene is empty, recorded by the runtime and read
-/// by UI or headless hosts. The field is public because scene admission owns
-/// the diagnostic text while presentation only displays it.
+/// An authored explanation for an intentionally empty USD viewport, read by
+/// UI or headless hosts. Failed scene transitions remain diagnostics and do
+/// not replace the ordinary empty-viewport presentation.
 #[derive(Resource, Default)]
 pub struct EmptyViewportReason(pub Option<String>);
 

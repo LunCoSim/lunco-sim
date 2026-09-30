@@ -674,7 +674,13 @@ pub(crate) fn on_scene_transition_failed(
     trigger: On<SceneTransitionFailed>,
     mut coordinator: ResMut<SceneTransitionCoordinator>,
 ) {
-    if !coordinator.fail(trigger.event().id) {
+    if coordinator.fail(trigger.event().id) {
+        warn!(
+            "[scene] transition {} failed: {}",
+            trigger.event().id.get(),
+            trigger.event().error
+        );
+    } else {
         warn!(
             "[scene] ignoring stale failed transition {}",
             trigger.event().id.get()
