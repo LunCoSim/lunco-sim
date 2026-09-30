@@ -56,3 +56,16 @@ unchanged throughout. Physics at the three slow movement samples was 0.29–0.35
 Another simulator was active, and polling did not observe every frame. Remaining
 movement spikes need attribution and uncontended acceptance before claiming the
 goal is met. Preserve simulation ticks, rendering quality, and terrain detail.
+
+The October 1 unprofiled repeat (`sss-native-unprofiled-oct01.samples.json`)
+kept the original starting pose and document generation 12. The avatar moved
+228.47 m and turned 360 degrees. Movement had 334 observed frames, p50 14.14 ms,
+p99 23.88 ms, maximum 63.15 ms, and three samples over 40 ms. The three slow
+samples occurred 3.97, 4.23, and 6.81 seconds after movement began, closely
+matching the previous run's 3.96, 4.20, and 6.75 seconds. Rotation remained below
+28.40 ms. Concurrent applications and compilation still preclude uncontended
+acceptance, but the repeated crossing times require owner attribution.
+
+The motion driver waits for observed native yaw after command admission, under
+its explicit deadline. A command receipt is not a controller-consumption
+barrier. Non-finite driver parameters fail before issuing input.

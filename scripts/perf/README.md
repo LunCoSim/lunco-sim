@@ -18,6 +18,8 @@ python3 scripts/perf/left_click_burst.py --port 4748 \
 The movement driver reports actual avatar displacement, drives semantic
 movement input, and rotates with raw mouse motion while the configured look
 button is held. It measures native yaw and releases the button on errors.
+Each injected turn waits for observed yaw within the rotation deadline;
+command admission alone does not mean the controller has consumed the input.
 The click driver resolves its first target using
 `viewport_position`; additional coordinates are logical window coordinates and
 must match the current viewport. Both drivers use production commands and
