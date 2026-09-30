@@ -108,6 +108,16 @@ AssetServer path. The separate `initial_allow.usda` gate covers a Twin policy
 override. Initial-stage `reject_scene` terminal-fault behavior remains
 unverified.
 
+### Four-rover rerun after main integration (2026-09-30)
+
+After fast-forwarding to `ab13d36cf`, `cargo build --bin luncosim -j 4`
+passed. The production `scene-4-serial` gate then passed all 780 ticks with
+the exact reference at 60 Hz, serial Compute, zero jitter, and seed
+`6840157149251759617`. This run used 941 application updates and reference
+SHA-256 `4f1785e86deb5e05083561007ec8e08891ca5a0d19c82e9edcdb8f70c92e3496`.
+It confirms the same-host gate remains green after the scenario event-inbox
+change; cross-machine numeric agreement remains unverified.
+
 ## Findings
 
 | ID | Severity | Finding and evidence | Status |
