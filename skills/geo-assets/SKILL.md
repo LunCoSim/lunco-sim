@@ -68,7 +68,7 @@ the DEM appearance visibly distinct. See [the geometry contract](../../docs/arch
 for ownership and sampling.
 
 Derive the visual collar width from this crop's measured edge relief and
-one-sided edge slope with a 0.20 relief-grade sizing target. Continue the
+one-sided edge slope with a 0.60 relief-grade sizing target. Continue the
 measured slope over one posting, then fade one nearest-perimeter signal to
 the sphere. Geometry and appearance share one width sized from maximum edge relief; the native
 inner posting lattice tapers to an outer boundary with at least 32 segments per side. Keep
@@ -96,6 +96,17 @@ and measured edge profile, so this works with Twin-local crops at different
 sites and resolutions. A body currently has one built crop handoff; multiple
 built crops for the same body are a visible input error, not a size-based
 selection.
+
+### Verify automatic lunar DEM registration
+
+For automatic lunar DEM registration, verify both repository fixtures
+`scenes/tests/lunar_dem_continuation.usda` (omitted coordinates) and
+`scenes/tests/lunar_dem_georeferenced.usda` (DEM-authored coordinates) in an
+owned headful production session. The shared continuation scenario waits for
+material admission and settled DEM streaming. Headless scene tests do not
+provide the GPU-retained boundary geometry required by this graphics verdict.
+The scene-site projection and zero defaults are specified in the geometry
+contract; no tutorial script installs the handoff.
 
 ## Where files live (cache resolution)
 

@@ -104,7 +104,7 @@ globe shell radius; celestial placement and physics keep the canonical radius.
 Keep the composed terrain exact throughout the crop. One worker-prepared visual
 collar starts on the measured crop boundary and blends its edge profile to the
 matching sphere outside the crop. Derive its width from measured crop-edge
-relief and one-sided slope, using a 0.20 relief-grade sizing target.
+relief and one-sided slope, using a 0.60 relief-grade sizing target.
 Continue the slope over one posting and fade the single nearest boundary
 signal toward the sphere. Geometry and material fade share one width sized from maximum edge relief;
 each corner contributes once. Preserve the native inner posting lattice, then
@@ -178,3 +178,6 @@ Exterior smoothing preserves the first native posting and filters only the
 continuation in its preparation worker, without increasing mesh density. Keep
 the DEM appearance visibly distinct. See [the geometry contract](../../docs/architecture/60-curvature-elevation-and-gravity.md)
 for ownership and sampling.
+
+Verify omitted and DEM-authored coordinates through the
+[automatic-registration fixture procedure](../geo-assets/SKILL.md#verify-automatic-lunar-dem-registration).

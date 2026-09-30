@@ -24,9 +24,11 @@
 //! token  lunco:libration:point = "L1"           #   L1..L5
 //! ```
 //!
-//! A root prim (path depth 1) authoring an anchor is the scene's **site
+//! A scene root authoring an anchor is the scene's **site
 //! anchor**: the local scene origin sits at that geodetic point (ENU axes) —
-//! it grounds every scene-local endpoint (rover masts) on the body.
+//! it grounds every scene-local endpoint (rover masts) on the body. A scene
+//! containing the Moon and one lunar DEM derives this same site frame from
+//! DEM coordinates when no root anchor is authored; omitted coordinates are zero.
 
 use bevy::prelude::*;
 use lunco_hooks::HookValue as H;
@@ -367,11 +369,20 @@ fn read_geodetic_anchor(
     reader: &ComposedReader<'_>,
     path: &SdfPath,
 ) -> Result<Option<GeodeticAnchor>, ()> {
-    let has_lat = reader.has_authored_attribute(path, "lunco:anchor:lat");
-    let has_lon = reader.has_authored_attribute(path, "lunco:anchor:lon");
-    if !has_lat && !has_lon {
+    let declared = ["lat", "lon", "height", "body"]
+        .iter()
+        .any(|field| reader.has_authored_attribute(path, &format!("lunco:anchor:{field}")));
+    if !declared {
         return Ok(None);
     }
+    decode_geodetic_anchor(reader, path).map(Some)
+}
+
+/// Decode the schema's zero coordinate defaults only for an admitted anchor.
+fn decode_geodetic_anchor(
+    reader: &ComposedReader<'_>,
+    path: &SdfPath,
+) -> Result<GeodeticAnchor, ()> {
     let lat = read_real_strict(reader, path, "lunco:anchor:lat")?.unwrap_or(0.0);
     let lon = read_real_strict(reader, path, "lunco:anchor:lon")?.unwrap_or(0.0);
     let height = read_real_strict(reader, path, "lunco:anchor:height")?.unwrap_or(0.0);
@@ -379,10 +390,49 @@ fn read_geodetic_anchor(
     if body == 0 || !(-90.0..=90.0).contains(&lat) || !height.is_finite() {
         return Err(());
     }
-    Ok(Some(GeodeticAnchor {
+    Ok(GeodeticAnchor {
         body,
         geodetic: Geodetic::new(lat, lon, height),
-    }))
+    })
+}
+
+/// A scene with one lunar DEM and a lunar body owns an ENU site frame even
+/// when coordinates are omitted. Explicit root coordinates own that frame;
+/// otherwise the DEM declaration supplies it, with zero coordinate defaults.
+fn read_scene_site_anchor(
+    reader: &ComposedReader<'_>,
+    root: &SdfPath,
+) -> Result<Option<GeodeticAnchor>, ()> {
+    if let Some(anchor) = read_geodetic_anchor(reader, root)? {
+        return Ok(Some(anchor));
+    }
+    let has_moon = reader
+        .prim_paths_matching(&[], &["LunCoCelestialBodyAPI"])
+        .iter()
+        .any(|path| read_i32_strict(reader, path, "lunco:body") == Ok(Some(DEFAULT_ANCHOR_BODY)));
+    if !has_moon {
+        return Ok(None);
+    }
+    let root_prefix = format!("{root}/");
+    let terrains: Vec<_> = reader
+        .prim_paths_matching(&[], &["LunCoTerrainAPI"])
+        .into_iter()
+        .filter(|path| {
+            (path == root || path.to_string().starts_with(&root_prefix))
+                && matches!(
+                    reader.text(path, "lunco:assetMode").as_deref(),
+                    Some("dem" | "layered")
+                )
+        })
+        .collect();
+    match terrains.as_slice() {
+        [] => Ok(None),
+        [terrain] => {
+            let anchor = decode_geodetic_anchor(reader, terrain)?;
+            Ok((anchor.body == DEFAULT_ANCHOR_BODY).then_some(anchor))
+        }
+        _ => Err(()),
+    }
 }
 
 /// Decode one authored Kepler orbit.  The semi-major axis is the schema's
@@ -541,8 +591,11 @@ pub fn insert_celestial_comms_components(
     // terrain bridge and the terrain remains in its site scene branch; giving
     // it `GeodeticAnchor` here would make the celestial placement pass detach
     // it from the scene and double-place the surface relative to the rover.
+    // The scene root owns placement even when that root is itself terrain.
     let is_terrain = reader.has_api_schema(sdf_path, "LunCoTerrainAPI");
-    let anchor = if is_terrain {
+    let anchor = if is_scene_root {
+        read_scene_site_anchor(reader, sdf_path)
+    } else if is_terrain {
         Ok(None)
     } else {
         read_geodetic_anchor(reader, sdf_path)
@@ -565,7 +618,7 @@ pub fn insert_celestial_comms_components(
         }
         Ok(None) => {}
         Err(()) => warn!(
-            "[usd-celestial] {} has malformed geodetic anchor attributes; anchor ignored",
+            "[usd-celestial] {} has invalid or ambiguous geodetic site declaration; anchor refused",
             prim_path_str
         ),
     }
@@ -1047,6 +1100,42 @@ mod tests {
             .expect("test stage must compose");
         let path = SdfPath::new("/World/Body").expect("test path");
         (stage, path)
+    }
+
+    #[test]
+    fn scene_site_anchor_uses_lunar_dem_coordinates_and_omission_defaults() {
+        for (attrs, expected) in [
+            ("", Some((0.0, 0.0))),
+            (
+                "double lunco:anchor:lat = 23\n double lunco:anchor:lon = -47",
+                Some((23.0, -47.0)),
+            ),
+            ("string lunco:anchor:lat = \"bad\"", None),
+        ] {
+            let source = format!(
+                r#"#usda 1.0
+ def Xform "World" {{
+    def Xform "Moon" (prepend apiSchemas = ["LunCoCelestialBodyAPI"]) {{ int lunco:body = 301 }}
+    def Xform "Terrain" (prepend apiSchemas = ["LunCoTerrainAPI"]) {{
+        token lunco:assetMode = "dem"
+        {attrs}
+    }}
+ }}"#
+            );
+            let (stage, _) = view(&source);
+            let root = SdfPath::new("/World").unwrap();
+            let anchor = read_scene_site_anchor(&stage.view(), &root);
+            if let Some((lat, lon)) = expected {
+                let anchor = anchor.unwrap().unwrap();
+                assert_eq!(anchor.body, 301);
+                assert_eq!(
+                    (anchor.geodetic.lat_deg, anchor.geodetic.lon_deg),
+                    (lat, lon)
+                );
+            } else {
+                assert!(anchor.is_err());
+            }
+        }
     }
 
     #[test]

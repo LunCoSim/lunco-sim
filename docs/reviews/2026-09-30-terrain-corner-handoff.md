@@ -47,69 +47,55 @@ is required.
 
 ## Production evidence
 
-Owned session: PID 363774, API port 49401, `tutorials/target/debug/luncosim`.
-The PID, executable, and working directory were verified before control.
-`/api/ready` reported ready, no hold/fault, and zero pending work. That session
-was stopped with `Exit` after capture.
+Current Apollo owned session: PID 485558, API port 49401, production debug
+binary in tutorials. PID, executable, and working directory were verified.
+The shorter exterior is 199.484508641 m on every side, down from approximately
+595 m. Its mesh has 12,020 vertices, approximately 50 percent fewer than the
+24,044-vertex smoothing baseline. The native boundary is never decimated.
 
-`assets/scenarios/tests/terrain_surface_continuation.rhai` runs on the admitted
-DEM prim through `RunScenarioAsset`. Its production verdict was PASS (14 checks),
-including rejection of an 80 m displaced boundary sample:
+`terrain_surface_continuation.rhai` waits for collar admission and settled DEM
+streaming, then compares the complete native collar and rendered DEM perimeter
+against mission heights. Apollo PASS: 14 checks, including displaced-boundary
+rejection. Both native boundary counts are 2,036; maximum errors are
+0.0000165915 m and 0.0000190327 m; boundary morph displacement is zero.
+Log: `target/apollo-short-final.log`. Captures inspected:
+`target/apollo-short-final-corner.png` and
+`target/apollo-short-final-overview.png`.
 
-- Native collar postings checked: 2,036; maximum error 0.0000165915 m.
-- Native rendered DEM postings checked: 2,036; maximum error 0.0000190327 m.
-- Rendered DEM boundary morph displacement: 0 m.
-- All four exterior widths: 594.531803748 m.
-- Collar: 24,044 vertices, approximately 71% fewer than the 82,832-vertex baseline.
+The repository-owned `lunar_dem_continuation.usda` composes the production DEM
+appearance fixture and solar system without root or terrain coordinates.
+Its site resolves automatically to Moon, latitude/longitude/height zero.
+`lunar_dem_georeferenced.usda` uses the same fixture and authors latitude 23,
+longitude -47 on the DEM; the scene site resolves to those coordinates.
+Both headful production runs PASS all 14 checks with 12,048 vertices and
+200.664625012 m exterior widths. Logs: `target/lunar-dem-auto.log` and
+`target/lunar-dem-georef.log`. The fixtures were authored and saved with the
+USD document commands, and saved source was read back.
 
-Evidence log: `target/apollo-current-bake-contract.log`.
+## Checks and limits
 
-| Corner in east/south physics coordinates | Eye | Target | Capture |
-|---|---|---|---|
-| (+X, -Z), reported corner | (540, -1940, -570) | (490, -1998, -490) | `target/apollo-current-bake-low-se.png` |
-| (-X, -Z) | (-560, -1835, -580) | (-490, -1916, -490) | `target/apollo-current-bake-low-sw.png` |
-| (+X, +Z) | (560, -1848, 580) | (490, -1928, 490) | `target/apollo-current-bake-low-ne.png` |
-| (-X, +Z) | (-560, -1830, 580) | (-490, -1910, 490) | `target/apollo-current-bake-low-nw.png` |
-
-Shadows stayed enabled. The fixture selects computer time because it has no
-root epoch; these captures establish geometric joining, not a controlled
-photometric comparison or complete mission acceptance. No FPS claim is made.
-
-## Focused checks
-
-- Square boundary regression: demonstrated failure before correction, PASS
-  after correction and after centralizing the posting interval.
-- `cargo test -p lunco-celestial-spatial -p lunco-terrain-globe collar_ -j 4`:
-  3 celestial and 6 globe math/geometry tests passed.
-- `cargo test -p lunco-terrain-surface shadow_cache_ -j 4`: 2 lifecycle tests passed.
-- Production shader asset gate: PASS, 67 checks, six ticks, exit 0; includes
-  negative interface cases. Log: `target/terrain-final-shader-contracts.log`.
-- Production build: `cargo build -p lunco-luncosim -j 4`.
-- Skill catalogue: 43 skills validated. Final diff whitespace and touched Rust
-  formatting are checked before commit.
-
-## Exterior smoothing acceptance
-
-The exterior uses worker-prepared periodic binomial scales of relative relief
-and gradients. Its filter footprint grows sublinearly from the first posting;
-the native boundary and material distinction remain intact. Sampling reads two
-scales with no per-vertex convolution. The mesh retains 24,044 vertices and
-137,772 indices; no per-frame smoothing or extra shader sampling is added.
-
-- `cargo test -p lunco-celestial-spatial collar_ -j 4`: four focused tests PASS,
-  including native-signal preservation, periodic ripple removal, corner limits,
-  and unchanged mesh tessellation.
-- Rebuilt production Apollo fixture: `DEM SURFACE CONTINUATION: PASS`, 14 checks;
-  native collar/DEM boundary counts 2,036 each; maximum errors
-  0.0000165915 m and 0.0000190327 m; morph error zero.
-- Close corner capture: `target/apollo-smoothing-final-corner.png`; overview:
-  `target/apollo-smoothing-final-overview.png`. Close capture retains visible
-  DEM detail and a smoother exterior without the wall.
-- Owned runtime: port 49401, PID 416831, production debug binary, High quality,
-  2560x1600, vsync and throttle disabled. Log:
-  `target/apollo-smoothing-final.log`. Observed rolling FPS averages roughly
-  104–126 during concurrent compilation in the terrain checkout and another
-  running simulator; these are runtime observations, not a comparative speedup.
+- `cargo test -p lunco-celestial-spatial collar_ -j 4`: four tests PASS.
+- `cargo test -p lunco-usd-sim-celestial scene_site_anchor_ -j 4`: PASS;
+  inline composed-schema cases cover omitted coordinates, nonzero coordinates,
+  and malformed coordinate rejection.
+- `cargo build -p lunco-luncosim -j 4`: PASS.
+- The headless `luncosim test` attempt for the graphics fixture failed with no
+  collar admission: that host has no GPU/image loader and cannot validate this
+  rendered-boundary contract. Its exit code was 1; it is not a passing gate.
+  The headful production verdicts above supply the graphics evidence.
+- Direct standalone fixture launches also reported an existing ambiguity in
+  automatic Twin policy discovery under assets/scenes/tests. Application
+  policies remained installed and the headful geometry verdicts passed.
+- Root Terrain prims use the same scene-site decoder. Explicit root anchor
+  fields own the scene frame; otherwise one lunar DEM and a composed Moon
+  declaration derive it. Multiple active crops remain rejected explicitly.
+- The exterior has a 0.60 relief-grade sizing target and half-posting radial
+  interpolation tolerance; sphere-edge chord tolerance stays quarter-posting.
+  It is visual closure, not measured mission terrain or a physical slope limit.
+- No per-frame smoothing, extra texture samples, or new mesh path is added.
+  No comparative FPS gain is claimed. Shadows remain enabled and DEM appearance
+  stays distinct. Current-time lighting does not establish photometric or
+  complete mission acceptance.
 
 ## Recovery and integration scope
 

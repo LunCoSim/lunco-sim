@@ -1,0 +1,25 @@
+#usda 1.0
+(
+    defaultPrim = "LunarDemContinuation"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+
+def Xform "LunarDemContinuation" (
+    prepend references = @lunco://scenes/tests/terrain_shader_appearance.usda@</TerrainShaderAppearance>
+)
+{
+    def Xform "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
+    }
+    over "Scenario"
+    {
+        def "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/terrain_surface_continuation.rhai@
+        }
+    }
+}

@@ -49,8 +49,8 @@ handoff worker. The filter footprint grows sublinearly with exterior distance
 and the native posting spacing, preserving broad edge shape. Mesh sampling
 interpolates two scales without per-vertex filtering, extra vertices, or
 per-frame smoothing. DEM appearance remains visibly distinct. Width uses a
-0.20 relief-grade sizing target; it is not a measured terrain slope limit. Interior DEM samples,
-mission queries, and colliders are never feathered or altered.
+0.60 relief-grade sizing target; it is not a measured terrain slope limit.
+Interior DEM samples, mission queries, and colliders are never feathered or altered.
 Each Twin derives its shell datum, posting spacing, measured relief envelope,
 and collar geometry from its own crop. No body-wide raster, download, or
 Apollo-specific identity is part of this contract.
@@ -80,8 +80,9 @@ The globe cutout and local terrain use the same orthographic tangent chart.
 One rectangular collar mesh is prepared asynchronously: its inner ring matches
 the measured square crop boundary and each outer side reaches the shared extent on
 the analytic sphere. Globe triangles are clipped against that same rectangle.
-The inner ring retains the crop's exact posting lattice through the one-posting
-slope continuation. Exterior rings then reduce sampling density toward a
+Radial interpolation resolves the one-posting continuation and bounds cubic
+fade error to half a posting. The inner ring retains the crop's exact posting
+lattice through the one-posting slope continuation. Exterior rings then reduce sampling density toward a
 sphere boundary with at least 32 segments per side. Additional outer samples
 bound sphere-chord error to one quarter of the measured posting spacing.
 The cutout and collar share the same orthographic rectangle; clipped boundary
@@ -165,3 +166,14 @@ heightfield collider, then derives the optional visual mesh from that oracle. An
 authored `targetRes` can reduce only the visual mesh; it cannot move the query or
 physics surface onto a lossy grid. The regression is covered by
 `terrain::visual_product_tests::target_resolution_changes_only_the_static_visual_product`.
+
+### Automatic lunar DEM site registration
+
+USD celestial projection admits a scene frame from explicit root anchor fields,
+otherwise from the single DEM terrain's anchor fields when the composed stage
+contains the Moon. Omitted latitude, longitude, and anchor height mean zero;
+omitted body means Moon (301). Invalid coordinates or ambiguous DEM ownership
+refuse the derived anchor. The terrain stays inside that ENU scene frame; it
+must not acquire a second geodetic placement. The existing revision-driven
+handoff worker and material compositor then admit the exterior automatically.
+Multiple active crops per body remain an explicit unsupported cardinality.
