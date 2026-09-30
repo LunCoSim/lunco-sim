@@ -196,14 +196,22 @@ still same-host evidence only.
 ### Four-rover cross-machine failure review (2026-09-30)
 
 The other-machine `scene-4-serial` run at 2026-09-29 17:51 reached 780 ticks
-and produced a terminal scene failure without authored assertion details, source
-revision, or reference hash. It predates the typed failure reporter
+and produced a terminal scene failure without authored assertion details. The
+supplied report identifies source `1df5d85e7a242ac4ee3544c38a141a91ee407ee3`
+and a clean worktree. The reference file committed at that revision hashes to
+`3297aa8682cf9f503ea7085a7b07bdccf31ebdd392173bc9ef0e06b9562eb87f`; the run
+did not print the hash itself. That source predates the typed failure reporter
 (`bb00f9bb4`) and the change that removed render `Transform` values from exact
-physics comparisons (`f095634e8`). The old output cannot identify whether a
-physics assertion or reference comparison failed. The old comparison did
-include cell-local `Transform.translation` in its exact physics row and startup
-pose check; that render projection is f32 and may be interpolated between fixed
-ticks, so it was not valid authoritative physics evidence.
+physics comparisons (`f095634e8`). Its physics row and startup pose check both
+included cell-local `Transform.translation`, a rendered f32 projection that
+may be interpolated between fixed ticks. This was invalid physics evidence and
+a plausible source of the failure, but the old output does not identify which
+assertion failed, so it does not prove a cross-machine physics mismatch.
+After removing only `|localTf=...` fields and canonicalizing both revisions'
+`.profiles` objects, their hashes are identical
+(`62604e5ed1274c2852f0b0005a657e27ded3821bba2ef69025a084d198c117fa`). Thus
+the committed physics, Modelica, articulated, and final-stage reference values
+did not change when the rendered transform field was removed.
 
 On 2026-09-30, the available production binary (built from `e901abe7`; the
 current `9f9a301c` source adds only telemetry-browser changes after it) passed
