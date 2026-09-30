@@ -151,6 +151,7 @@ and one typed conversion; it does not choose domain defaults or inject a global
 
 - **Run:** `RunScenario { target, source, params }` (attach/hot-reload), `RunRhai { code }` (one-shot), `RunRhaiTool { tool, args }` (typed tool invocation), `RunRhaiToolHook { tool, hook, args }` (typed authored UI/pointer hook), `RunTimeline` / `RunStoredTimeline` (declarative missions).
 - **Control:** `SetScenarioPaused`, `StopScenario`.
+- Rust lifecycle consumers can dispatch the typed stop command through `lunco_scripting::StopScenario`.
 - **Tools & timelines:** `RegisterToolLibrary`, `RegisterTimeline` (+ `List`/`Get` discovery queries; persisted under the Twin).
 - **Introspection:** `ScriptStatus` (health), `ScriptInspect` (live state), `ScriptingCatalog` (the full callable surface).
 

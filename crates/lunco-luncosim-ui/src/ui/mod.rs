@@ -323,6 +323,7 @@ impl Plugin for LunCoSimUiPlugin {
                 install_viewport_placeholder_actions(app.world_mut());
                 app.add_observer(on_runtime_ui_action)
                     .add_observer(on_guided_hud_action)
+                    .add_observer(on_guided_stop_requested)
                     .add_observer(on_runtime_error_warning)
                     .add_observer(on_dismiss_terrain_overlay)
                     .add_observer(scripted_menus::on_script_ui_request)
@@ -594,6 +595,46 @@ fn on_guided_hud_action(
         args: lunco_telemetry_core::TelemetryValue::String(action.action.clone()),
         owner_twin_id: None,
     });
+}
+
+/// Stop the scenario that owns the active coach tour. The guided overlay only
+/// emits this intent; the application host owns scenario lifecycle commands.
+fn on_guided_stop_requested(
+    _trigger: On<lunco_workbench_guided_ui::GuidedStopRequested>,
+    mut commands: Commands,
+    mut overlay: ResMut<lunco_workbench_guided_ui::GuidedOverlay>,
+    entities: Option<Res<lunco_api::registry::ApiEntityRegistry>>,
+    scenarios: Query<(), With<lunco_scripting::ScriptedModel>>,
+) {
+    let Some(owner) = overlay.owner_script else {
+        commands.trigger(lunco_notifications_core::ShowNotification {
+            text: "This guided lesson has no active scenario to stop.".into(),
+            kind: "warn".into(),
+            secs: 0.0,
+        });
+        return;
+    };
+    let Some(target) = entities.as_deref().and_then(|registry| registry.resolve(&owner)) else {
+        overlay.clear();
+        commands.trigger(lunco_notifications_core::ShowNotification {
+            text: "The guided lesson's scenario is no longer available.".into(),
+            kind: "warn".into(),
+            secs: 0.0,
+        });
+        return;
+    };
+    if scenarios.get(target).is_err() {
+        overlay.clear();
+        commands.trigger(lunco_notifications_core::ShowNotification {
+            text: "The guided lesson's scenario is no longer running.".into(),
+            kind: "warn".into(),
+            secs: 0.0,
+        });
+        return;
+    }
+
+    commands.trigger(lunco_scripting::StopScenario { target });
+    overlay.clear();
 }
 
 /// Present recoverable runtime faults through the shared notification surface.
@@ -1773,6 +1814,16 @@ mod tests {
     use lunco_exposure_core::{ExposureSurface, ExposureValue};
     use std::collections::HashMap;
 
+    #[derive(bevy::prelude::Resource, Default)]
+    struct GuidedStopTarget(Option<bevy::prelude::Entity>);
+
+    fn record_guided_stop_target(
+        trigger: bevy::prelude::On<lunco_scripting::StopScenario>,
+        mut target: bevy::prelude::ResMut<GuidedStopTarget>,
+    ) {
+        target.0 = Some(trigger.event().target);
+    }
+
     #[test]
     fn authored_dropdown_keeps_open_after_the_trigger_press() {
         let mut dropdowns = RuntimeUiDropdownState::default();
@@ -1823,5 +1874,40 @@ mod tests {
         assert!(fixture.unavailable);
         fixture.unavailable = false;
         assert!(!fixture.unavailable);
+    }
+
+    #[test]
+    fn guided_stop_targets_the_authored_scenario_and_clears_the_coach() {
+        let mut app = bevy::prelude::App::new();
+        let owner = lunco_core::GlobalEntityId::from_raw(120);
+        let target = app
+            .world_mut()
+            .spawn(lunco_scripting::ScriptedModel::default())
+            .id();
+        let mut entities = lunco_api::registry::ApiEntityRegistry::default();
+        entities.assign(target, owner);
+        app.insert_resource(entities)
+            .insert_resource(GuidedStopTarget::default())
+            .insert_resource(lunco_workbench_guided_ui::GuidedOverlay {
+                owner_script: Some(owner),
+                tour: Some(lunco_workbench_guided_ui::TourStep {
+                    title: "Lesson".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .add_observer(super::on_guided_stop_requested)
+            .add_observer(record_guided_stop_target);
+
+        app.world_mut()
+            .trigger(lunco_workbench_guided_ui::GuidedStopRequested);
+        app.world_mut().flush();
+
+        assert_eq!(app.world().resource::<GuidedStopTarget>().0, Some(target));
+        assert!(app
+            .world()
+            .resource::<lunco_workbench_guided_ui::GuidedOverlay>()
+            .tour
+            .is_none());
     }
 }
