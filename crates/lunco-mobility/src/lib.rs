@@ -1343,6 +1343,10 @@ pub struct WheelRaycast {
     pub wheel_width: f64,
     /// Entity for the visual mesh to be transformed.
     pub visual_entity: Option<Entity>,
+    /// Rest orientation of the canonical Y-axial mesh, projected from USD.
+    /// Includes the authored primitive axis and local rotation exactly once.
+    /// This is a render-boundary quaternion; physics state remains f64.
+    pub visual_base_rotation: Quat,
     /// Resultant normal force from the last physics tick, used for friction calculations.
     pub last_normal_force: f64,
     /// Drives the visible spin of the wheel mesh.
@@ -1406,6 +1410,7 @@ impl Default for WheelRaycast {
             wheel_radius: 0.0,
             wheel_width: 0.0,
             visual_entity: None,
+            visual_base_rotation: Quat::IDENTITY,
             last_normal_force: 0.0,
             spin_angle: 0.0,
             spin_velocity: 0.0,
@@ -1435,7 +1440,8 @@ impl WheelRaycast {
     /// continuous across the 2π wrap (a 2π quaternion is identity).
     #[inline]
     pub fn spin_quat(&self) -> Quat {
-        Quat::from_rotation_x(-(self.spin_angle as f32))
+        let axle = self.visual_base_rotation * Vec3::Y;
+        Quat::from_axis_angle(axle, -(self.spin_angle as f32))
     }
 
     /// The tire's angular velocity about its axle in rad/s (signed: positive is

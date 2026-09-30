@@ -4,9 +4,9 @@ use avian3d::prelude::{Collider, Friction, RevoluteJoint};
 use bevy::asset::AssetId;
 use bevy::log::{error, info};
 use bevy::math::DVec3;
-use bevy::prelude::{Entity, World};
+use bevy::prelude::{Entity, Quat, World};
 use lunco_mobility::{JointedWheelTire, RaycastSupportGeometryDirty, Suspension, WheelRaycast};
-use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_scene::{UsdPrimPath, read_primitive_axis, usd_axis_to_quat};
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_sim_authoring::WheelParams;
 use lunco_usd_sim_core::PhysicalWheel;
@@ -80,6 +80,7 @@ struct WheelUpdate {
     physical: bool,
     params: WheelParams,
     collider: Option<Collider>,
+    visual_base_rotation: Quat,
 }
 
 /// Re-derive every spawned wheel of `stage` from the live composed stage, in
@@ -144,6 +145,24 @@ pub(crate) fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAss
                 .and_then(|s| SdfPath::new(s).ok());
             match WheelParams::read(&view, &sp, susp.as_ref(), tire.as_ref()) {
                 Ok(params) => {
+                    // Use the same authored pose/axis readers as the mesh owner.
+                    // Keep this rest pose separate from the animated transform.
+                    let visual_base_rotation = (|| -> Result<Quat, String> {
+                        let pose = lunco_usd_bevy_stage::read_transform_from_usd(&view, &sp)
+                            .map_err(|error| error.to_string())?;
+                        let convention = lunco_usd_bevy_stage::stage_convention(&view)
+                            .map_err(|error| error.to_string())?;
+                        let axis = read_primitive_axis(&view, &sp, "Cylinder")
+                            .ok_or_else(|| "wheel cylinder axis is invalid".to_owned())?;
+                        Ok(pose.rotation * convention.orient(usd_axis_to_quat(axis)))
+                    })();
+                    let visual_base_rotation = match visual_base_rotation {
+                        Ok(rotation) => rotation,
+                        Err(detail) => {
+                            failures.push((Some(*entity), path.clone(), detail));
+                            continue;
+                        }
+                    };
                     let collider = if *physical {
                         if !view
                             .has_api_schema(&sp, openusd::schemas::physics::tokens::API_RIGID_BODY)
@@ -178,6 +197,7 @@ pub(crate) fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAss
                         physical: *physical,
                         params,
                         collider,
+                        visual_base_rotation,
                     });
                 }
                 Err(missing) => failures.push((
@@ -211,6 +231,7 @@ pub(crate) fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAss
         if !u.physical {
             if let Some(mut wheel) = world.get_mut::<WheelRaycast>(u.entity) {
                 u.params.apply_to_raycast(&mut wheel);
+                wheel.visual_base_rotation = u.visual_base_rotation;
             }
             if let Some(mut susp) = world.get_mut::<Suspension>(u.entity) {
                 u.params.apply_to_suspension(&mut susp);

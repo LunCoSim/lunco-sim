@@ -3395,6 +3395,7 @@ fn setup_raycast_wheel(
     // each frame — its `q_visual` query filters out `WheelRaycast`,
     // so it can only operate on a separate visual entity.
     let wheel_rotation = existing_tf.rotation;
+    wheel.visual_base_rotation = wheel_rotation;
     let visual_id = spawn_wheel_visual(
         commands,
         entity,
