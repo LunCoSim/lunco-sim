@@ -162,7 +162,13 @@ fn finish(source, checks, title, channel, root, package_name, verification) {
             let requirement = check.requirement;
             if requirement == () || requirement == "" || seen[requirement] == true { continue; }
             seen[requirement] = true;
-            let selected = sysml_requirements::provenance_for_requirement(source, requirement);
+            let handle=();
+            if array_is(source.requirement_records) {
+                for record in source.requirement_records {
+                    if record.element.qualified_name==requirement {handle=record.element.handle;break;}
+                }
+            }
+            let selected = sysml_requirements::provenance_for_requirement(source, handle);
             if selected.ok == true { evidence.push(selected.evidence); }
             else { evidence_failures.push(#{requirement: requirement, error: selected.error}); }
         }
