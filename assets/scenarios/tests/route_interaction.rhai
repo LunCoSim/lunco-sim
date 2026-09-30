@@ -209,15 +209,37 @@ fn report(me, passed, message) {
 
 fn simulation_dependencies(me, ctx) {
     let subject = find_path(ROOT + "/Subject");
-    #{ modelica_entities: [subject], entity_reads: [subject], entity_writes: [],
-       query_reads: ["InspectSelection", "InspectUsdCurveView", "InspectUsdSelection", "ListOpenDocuments", "QueryUsdPrim", "QueryUsdPrims", "ResolveUsdTarget"],
+    let reads = [subject];
+    for entity in list_entities() {
+        if entity.name == "Avatar" { reads.push(entity.id); }
+    }
+    #{ modelica_entities: [subject], entity_reads: reads, entity_writes: [],
+       query_reads: ["InspectSelection", "InspectUsdCurveView", "InspectUsdSelection", "ListOpenDocuments", "QueryUsdPrim", "QueryUsdPrims", "ResolveUsdTarget", "ReadExposures", "QueryEntity"],
        required_inputs: [] }
 }
 
 fn test_state_is_valid(me) { this.failure == "" }
 
-fn begin_input_frame_boundary(me) { this.input_frame_samples = 0; }
-fn advance_input_frame_boundary(me) { this.input_frame_samples += 1; }
+fn input_frame_revision() {
+    let result = query("ReadExposures", #{ surface: "engine-health" });
+    if result == () || result.surfaces == () { return (); }
+    let surface = result.surfaces["engine-health"];
+    if surface == () || surface.properties == () { return (); }
+    surface.properties.engine_revision
+}
+
+fn begin_input_frame_boundary(me) {
+    this.input_frame_samples = 0;
+    this.input_frame_revision = input_frame_revision();
+}
+
+fn advance_input_frame_boundary(me) {
+    let revision = input_frame_revision();
+    if revision != () && revision != this.input_frame_revision {
+        this.input_frame_revision = revision;
+        this.input_frame_samples += 1;
+    }
+}
 fn input_frame_boundary_reached(me) { this.input_frame_samples > 1 }
 
 fn next_input_frame() {
@@ -225,6 +247,70 @@ fn next_input_frame() {
         once(Fn("begin_input_frame_boundary")),
         step(Fn("advance_input_frame_boundary"), Fn("input_frame_boundary_reached")),
     ])
+}
+
+fn native_avatar_yaw() {
+    let avatar = ();
+    for entity in list_entities() {
+        if entity.name == "Avatar" {
+            if avatar != () { return (); }
+            avatar = entity.id;
+        }
+    }
+    if avatar == () { return (); }
+    let pose = query("QueryEntity", #{ id: avatar });
+    if pose == () || pose.ok == false || pose.euler == () { return (); }
+    pose.euler[0]
+}
+
+fn prepare_native_look_probe(me) {
+    this.waiting_for = "native avatar mouse look";
+    this.native_yaw_before = native_avatar_yaw();
+    let label = input_binding("look_button");
+    if this.native_yaw_before == () || type_of(label) != "string"
+        || !label.ends_with(" mouse button") {
+        this.failure = "native avatar look state or its input binding is unavailable: yaw="
+            + this.native_yaw_before.to_string() + ", binding=" + label.to_string();
+        return;
+    }
+    let button = label;
+    button.replace(" mouse button", "");
+    this.native_look_button = button;
+    let denied = cmd("InjectWindowInput", #{ event: #{
+        MouseMotion: #{ delta_x: 1e76, delta_y: 0.0 }
+    }});
+    this.checks.push(t_true(denied != () && denied.ok == false && denied.error != (),
+        "raw mouse input outside the native finite range is rejected without crashing"));
+    input_pointer_press(this.native_look_button, 500.0, 500.0);
+}
+
+fn inject_native_look_probe(me) { input_mouse_motion(10.0, 0.0); }
+
+fn native_look_changed(me) {
+    if this.failure != "" { return true; }
+    let yaw = native_avatar_yaw();
+    yaw != () && (yaw - this.native_yaw_before).abs() > 0.01
+}
+
+fn restore_native_look(me) {
+    let yaw = native_avatar_yaw();
+    this.checks.push(t_true(yaw != () && (yaw - this.native_yaw_before).abs() > 0.01,
+        "raw native mouse motion rotates the avatar through its configured camera input map"));
+    input_mouse_motion(-10.0, 0.0);
+}
+
+fn native_look_restored(me) {
+    let yaw = native_avatar_yaw();
+    yaw != () && (yaw - this.native_yaw_before).abs() < 1e-4
+}
+
+fn release_native_look(me) {
+    input_pointer_release(this.native_look_button, 500.0, 500.0);
+    this.native_look_button = ();
+}
+
+fn begin_route_pointer_observation(me) {
+    this.observe_route_pointer = true;
 }
 
 fn route_fixture_ready(me) {
@@ -257,6 +343,56 @@ fn prepare_route_and_add_unpossessed(me) {
         return;
     }
     this.doc = initial.doc_id;
+
+    let discovered = waypoint_editor::discover_subject_programs(
+        this.doc, ROOT, ROOT + "/Subject", 0,
+    );
+    let listed_programs = program_editor::list(this.doc, ROUTE);
+    let program_path = if listed_programs != () && listed_programs.ok
+        && listed_programs.programs.len() > 0 {
+        listed_programs.programs[0]["path"]
+    } else { () };
+    this.checks.push(t_true(program_path != () && discovered.contains(program_path),
+        "scene-scope route discovery finds the nested program through batched USD reads"));
+    let idle_click = waypoint_editor::route_pointer_action(#{
+        button: "primary", doc_id: this.doc + this.doc,
+        pointer_intents: ["selection.replace"],
+        controlled_path: ROOT + "/Subject", selected_path: ROUTE + "/P0",
+    });
+    this.checks.push(t_true(idle_click.ok == true && idle_click.handled == false,
+        "idle primary clicks need no USD document or route discovery"));
+    let passive_pointer = #{
+        doc_id: this.doc,
+        scene_root_path: ROOT,
+        controlled_path: ROOT + "/Subject",
+        target_path: (),
+        hit_path: (),
+        prim_paths: [],
+    };
+    let invalid_move = waypoint_editor::on_pointer_move(passive_pointer);
+    this.checks.push(t_true(invalid_move.ok == false
+        && invalid_move.error.contains("explicit route context"),
+        "a route pointer hook rejects missing interaction context"));
+    let unassigned = cmd("SetScenePointerMoveHook", #{
+        doc_id: 0, interaction_id: "route-test:unassigned",
+        tool: "scene_interaction", hook: "on_pointer_move", context: #{ route_path: ROUTE },
+    });
+    this.checks.push(t_true(unassigned.ok == false,
+        "pointer subscriptions reject an unassigned document"));
+    let missing_hook = cmd("SetScenePointerMoveHook", #{
+        doc_id: this.doc, interaction_id: "route-test:missing-hook",
+        tool: "scene_interaction", hook: "missing_pointer_handler", context: #{ route_path: ROUTE },
+    });
+    this.checks.push(t_true(missing_hook.ok == false,
+        "pointer subscriptions reject an unregistered handler"));
+    let selected_program_pointer = #{
+        doc_id: this.doc,
+        scene_root_path: ROOT,
+        selected_path: program_path,
+    };
+    this.checks.push(t_true(program_path != ()
+        && waypoint_editor::route_edit_path(selected_program_pointer) == ROUTE,
+        "explicit route editing resolves the selected program through its local prim hierarchy"));
 
     let route = query("QueryUsdPrim", #{
         doc_id: this.doc, path: ROUTE, children: true,
@@ -706,6 +842,17 @@ fn prepare_cursor_trace(me) {
         this.failure = "could not read P0 position before injected placement";
         return;
     }
+    let competing = cmd("SetScenePointerMoveHook", #{
+        doc_id: this.doc, interaction_id: "route-test:competing",
+        tool: "scene_interaction", hook: "on_pointer_move", context: #{ route_path: ROUTE },
+    });
+    this.checks.push(t_true(competing.ok == false,
+        "a second interaction cannot replace the active pointer owner"));
+    let stale_clear = cmd("ClearScenePointerMoveHook", #{
+        doc_id: this.doc, interaction_id: "route-test:stale",
+    });
+    this.checks.push(t_true(stale_clear.ok == false,
+        "stale cleanup cannot clear another interaction"));
     this.point_position_before_move = point.world_position;
     this.move_preview_entity = find_path_in_document(this.doc, ROUTE + "/MovePreview");
     if this.move_preview_entity < 0
@@ -722,10 +869,10 @@ fn prepare_cursor_trace(me) {
     this.move_preview_generation = usd_document_generation(this.doc);
     this.last_ghost_position = ghost_position;
     this.cursor_sample_seen = false;
-    this.move_x = this.screen[0] + 460.0;
+    this.move_x = this.screen[0] + 240.0;
     this.move_y = this.screen[1];
-    for offset in [20.0, 60.0, 100.0, 140.0, 180.0, 220.0,
-        260.0, 300.0, 340.0, 380.0, 420.0, 460.0] {
+    for offset in [20.0, 40.0, 60.0, 80.0, 100.0, 120.0,
+        140.0, 160.0, 180.0, 200.0, 220.0, 240.0] {
         input_pointer_move(this.screen[0] + offset, this.move_y);
     }
     this.waiting_for = "the coalesced move-preview cursor sample";
@@ -845,8 +992,6 @@ fn third_context_is_valid(me) {
 fn prepare_delete_menu_row(me) {
     // P0 is an endpoint in the three-point fixture, so its menu contains
     // Select, Move, Add before, Add after, and Delete in that order.
-    // Near the viewport edge, egui shifts the menu left to keep it visible.
-    // Keep the click close to the anchor so the short Delete button receives it.
     this.menu_x = this.screen[0] + 20.0;
     this.menu_y = this.screen[1] + 16.0 + 4.0 * 21.0;
     let expectation = begin_curve_view_expectation(
@@ -1157,11 +1302,29 @@ fn complete_route_curve_view_checks(me) {
         "unpossessed edit, possessed context selection, explicit Move, cursor-following preview, placement, ordered insertion, generic delete/undo, and applied ribbon states for zero, one, and multiple points passed");
 }
 
-fn task(me, ctx) {
+fn timeout(me) {
+    if !this.done {
+        report(this, false,
+            "route interaction timed out waiting for " + this.waiting_for);
+    }
+}
+
+fn route_interaction_tree() {
     seq([
         wait_until(Fn("route_fixture_ready")),
         wait_until(Fn("route_curve_view_is_ready_at_fixture")),
         check(Fn("test_state_is_valid")),
+        once(Fn("prepare_native_look_probe")),
+        check(Fn("test_state_is_valid")),
+        next_input_frame(),
+        once(Fn("inject_native_look_probe")),
+        wait_until(Fn("native_look_changed")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("restore_native_look")),
+        wait_until(Fn("native_look_restored")),
+        once(Fn("release_native_look")),
+        next_input_frame(),
+        once(Fn("begin_route_pointer_observation")),
         once(Fn("prepare_route_and_add_unpossessed")),
         check(Fn("test_state_is_valid")),
         wait_until(Fn("unpossessed_waypoint_ready")),
@@ -1326,6 +1489,16 @@ fn task(me, ctx) {
     ])
 }
 
+fn task(me, ctx) {
+    par_race([
+        route_interaction_tree(),
+        seq([
+            wait(45.0),
+            once(Fn("timeout")),
+        ]),
+    ])
+}
+
 fn on_start(me, ctx) {
     this.done = false;
     this.checks = [];
@@ -1360,6 +1533,7 @@ fn on_start(me, ctx) {
     this.curve_expected_mesh = false;
     this.curve_edit_label = "";
     this.input_frame_samples = 0;
+    this.observe_route_pointer = false;
     subscribe("scene.pointer");
     subscribe("TASK_FAILED");
 }
@@ -1367,6 +1541,7 @@ fn on_start(me, ctx) {
 fn on_event(me, evt, ctx) {
     if this.done { return; }
     if evt.name == "scene.pointer" && evt.value != () {
+        if !this.observe_route_pointer { return; }
         if evt.value["button"] == "secondary" {
             this.secondary_contexts.push(evt.value);
         } else if evt.value["button"] == "primary" {
@@ -1383,6 +1558,9 @@ fn on_event(me, evt, ctx) {
 }
 
 fn on_stop(me, ctx) {
+    if this.native_look_button != () {
+        input_pointer_release(this.native_look_button, 500.0, 500.0);
+    }
     if !this.done {
         report(this, false,
             "injected route interaction stopped before its behavior tree produced a verdict");

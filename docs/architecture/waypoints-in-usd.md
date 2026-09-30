@@ -285,17 +285,33 @@ write destination would move the wrong route opinion while the live command
 targets the correct entity.
 
 The `Move route point` context-menu action selects the point and arms placement
-for the next ordinary primary scene hit. The selected point path remains its
-identity; the editor writes a `SetTranslate` opinion to `@runtime@` and leaves
-the route program and live subject intact. Pointer movement is coalesced per
-pointer and picking frame, retaining the newest raw hit from scene Move or
-Enter events before resolving its document, coordinates, or terrain position.
-A fallback terrain raycast runs only after coalescing, at most once per pointer
-per picking frame; direct analytic surface hits avoid that fallback. The
-resolved sample then enters the bounded typed UI-hook queue. Enter
-supplies the first scene sample when a cursor leaves a menu and the chrome hit
-from the prior picking frame is being retired. Scene pointer consumers use the
-picked hit to distinguish scene input from chrome; they do not gate that hit
+for the next ordinary primary scene hit. While its transient preview exists,
+the route tool subscribes that document to the generic pointer-move hook with
+the route path as its identity and in a typed string context. Ordinary clicks
+receive this subscription in `active_pointer_move`; only that owner may resolve
+the preview target and commit placement. Idle primary clicks perform no route
+queries, while explicit add-point gestures may discover a subject's route and
+context gestures resolve the hit's route ancestry. It clears the
+subscription with that identity when placement or cancellation ends the
+preview; stale cleanup cannot remove a newer interaction. Document close, Twin
+close, and scene teardown also retire subscriptions. Only one tool/hook can
+own pointer movement in a document at a time, and conflicting registrations
+fail at the adapter. The selected point path remains its identity; the editor
+writes a `SetTranslate` opinion to `@runtime@` and leaves the route program and
+live subject intact. For active interactions, pointer movement is coalesced per
+pointer and picking frame, retaining the newest raw
+hit from scene Move or Enter events before resolving its document, coordinates,
+or terrain position. A fallback terrain raycast runs only after coalescing, at
+most once per pointer per picking frame; direct analytic surface hits avoid
+that fallback. When there are no subscriptions, the adapter discards movement
+samples before resolving scene identity. If another document is subscribed, a
+lightweight document lookup precedes the drop. Both cases discard unmatched
+samples before coordinate, terrain, or Rhai resolution, so camera rotation and
+avatar movement do not cause route-tool work. The resolved sample then enters
+the bounded typed UI-hook queue. Enter supplies the first scene sample when a
+cursor leaves a menu and retires the chrome hit from the prior picking frame.
+Scene pointer consumers use the picked hit to distinguish scene input from
+chrome; they do not gate that hit
 with the later-published `EguiFocus` snapshot. Rhai creates a translucent `Xform` and
 Dome in the disposable `@view@` layer, with a view-layer target child that
 identifies the armed point. The Dome copies the selected marker's authored

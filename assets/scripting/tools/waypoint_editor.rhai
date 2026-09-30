@@ -60,7 +60,7 @@ fn route_pointer_action(context) {
         else { "" };
     if pointer_intent(context, "route.context")
         && side != "" && policy != () && policy[side] == "context" {
-        let route = route_edit_path(context);
+        let route = route_edit_path_with_scene_discovery(context, false);
         let point = context_route_point(context, route);
         let ribbon = context_route_ribbon(context, route);
         if route == () || (point == () && !ribbon) {
@@ -70,38 +70,39 @@ fn route_pointer_action(context) {
         result.handled = true;
         return result;
     }
-    // An armed route-point move is committed by the next ordinary scene hit.
-    // A selected route point remains the target while the preview is armed.
-    // This stays ahead of generic selection and possession routing, while
-    // explicit Alt-click append keeps its existing meaning above.
+    // Only the registered interaction may intercept an ordinary primary hit.
+    // Its document-scoped context supplies the route without scene discovery.
     if context.button == "primary" {
-        let move = move_selected_from_pointer(context);
-        if move != () && move.handled == true { return move; }
-        let route = route_edit_path(context);
-        if route != () && context.doc_id != ()
-            && direct_route_point(context.doc_id, context.selected_path, route) {
-            clear_move_preview(context.doc_id, route);
+        let active = context.active_pointer_move;
+        if active != () && active.tool == "scene_interaction"
+            && active.hook == "on_pointer_move" && active.context != () {
+            let route = active.context.route_path;
+            if route != () && active.interaction_id == move_interaction_id(route) {
+                let move = move_selected_from_pointer(context, route);
+                if move != () && move.handled == true { return move; }
+                let cleared = clear_move_preview(context.doc_id, route);
+                if cleared.ok != true {
+                    let result = failure(cleared.error);
+                    result.handled = true;
+                    return result;
+                }
+            }
         }
     }
     #{ ok: true, changed: false, handled: false }
 }
 
-fn move_selected_from_pointer(context) {
-    if context == () || context.doc_id == () {
-        return ();
-    }
-    let route = route_edit_path(context);
-    if route == () { return (); }
+fn move_selected_from_pointer(context, route) {
+    if context == () || context.doc_id == () { return (); }
     let target = move_preview_target(context.doc_id, route);
-    if target.ok != true {
-        let result = failure(target.error);
+    if target.ok != true || target.armed != true {
+        let result = failure(if target.ok != true { target.error }
+            else { "active route movement has no preview target" });
         result.handled = true;
         return result;
     }
-    if target.armed != true { return (); }
     let point = target.point;
-    // Keep marker-to-marker clicks available for their own context/selection
-    // semantics. Placement is for a world surface or another scene surface.
+    // Marker hits retain their own context and selection semantics.
     if context_route_point(context, route) != () { return (); }
     let pointer = pointer_point(context);
     if pointer.ok != true {
@@ -239,6 +240,10 @@ fn sync_marker_states(doc, route, visited) {
 }
 
 fn route_edit_path(context) {
+    route_edit_path_with_scene_discovery(context, true)
+}
+
+fn route_edit_path_with_scene_discovery(context, allow_scene_discovery) {
     if context == () { return (); }
     let explicit = context["route_path"];
     if type_of(explicit) == "string" && explicit != "" {
@@ -303,7 +308,9 @@ fn route_edit_path(context) {
     // unattended/one-route workflow; more than one requires the generic
     // selected program entity so an edit cannot silently land in the wrong
     // route.
-    let linked = linked_routes(doc, subject, context["scene_root_path"]);
+    let linked = linked_routes(
+        doc, subject, context["scene_root_path"], allow_scene_discovery,
+    );
     if linked.len() == 1 { return linked[0]; }
     if linked.len() > 1 { return (); }
 
@@ -414,24 +421,46 @@ fn discover_subject_programs(doc, scope, subject, depth) {
     let result = query("QueryUsdPrim", #{
         doc_id: doc,
         path: scope,
+        attrs: [],
         children: true,
     });
     if result == () || result.ok == false || result.children == () {
         return programs;
     }
-    for child in result.children {
-        if is_route_program(doc, child, subject) {
-            programs.push(child);
+    // Read one hierarchy level from a composed-stage snapshot instead of
+    // resolving every prim through a separate QueryUsdPrim call.
+    let frontier = result.children;
+    for level in 0..(33 - depth) {
+        if frontier.len() == 0 { break; }
+        let batch = query("QueryUsdPrims", #{
+            doc_id: doc,
+            paths: frontier,
+            attrs: [],
+            rels: ["inputs:subject"],
+            schemas: true,
+            children: level < (32 - depth),
+        });
+        if batch == () || batch.ok == false || batch.records == ()
+            || batch.records.len() != frontier.len() {
+            return programs;
         }
-        let nested = discover_subject_programs(doc, child, subject, depth + 1);
-        for program in nested {
-            if !programs.contains(program) { programs.push(program); }
+        let nested = [];
+        for record in batch.records {
+            if record_is_route_program(record, subject) {
+                programs.push(record.path);
+            }
+            if level < (32 - depth) && record.children != () {
+                for child in record.children {
+                    if !nested.contains(child) { nested.push(child); }
+                }
+            }
         }
+        frontier = nested;
     }
     programs
 }
 
-fn linked_routes(doc, subject, scene_root) {
+fn linked_routes(doc, subject, scene_root, allow_scene_discovery) {
     let result = query("QueryUsdPrim", #{
         doc_id: doc,
         path: subject,
@@ -450,7 +479,7 @@ fn linked_routes(doc, subject, scene_root) {
     // relationship has projected; inspect the authored program bindings in the
     // supplied scene scope for that one pointer transaction instead of making
     // the user select a program or inventing a route path.
-    if programs.len() == 0 {
+    if programs.len() == 0 && allow_scene_discovery {
         programs = discover_subject_programs(doc, scene_root, subject, 0);
     }
     for program in programs {
@@ -1041,7 +1070,26 @@ fn move_preview_target(doc, route) {
     #{ ok: true, armed: true, point: point }
 }
 
+fn move_interaction_id(route) {
+    "scene_interaction:route-point-move:" + route
+}
+
 fn clear_move_preview(doc, route) {
+    let subscription = cmd("ClearScenePointerMoveHook", #{
+        doc_id: doc,
+        interaction_id: move_interaction_id(route),
+    });
+    if subscription == () || subscription.ok == false {
+        return #{ ok: false,
+            error: "scene pointer move subscription could not be cleared: "
+                + (if subscription == () { "no command result" }
+                    else if subscription.error != () { subscription.error }
+                    else { "status " + subscription.status }) };
+    }
+    remove_move_preview(doc, route)
+}
+
+fn remove_move_preview(doc, route) {
     let path = preview_path(route);
     let target = target_record(doc, path, "@view@");
     // A missing preview is the idle state; clearing it is idempotent.
@@ -1183,10 +1231,12 @@ fn move_preview_ops(doc, route, point, position) {
 
 fn on_pointer_move(context) {
     if context == () || context.doc_id == () {
-        return #{ ok: true, changed: false };
+        return failure("route pointer movement requires its owning document");
     }
-    let route = route_edit_path(context);
-    if route == () { return #{ ok: true, changed: false }; }
+    let route = context["route_path"];
+    if type_of(route) != "string" || route == "" {
+        return failure("route pointer movement requires its explicit route context");
+    }
     let target = move_preview_target(context.doc_id, route);
     if target.ok != true { return target; }
     if target.armed != true {
@@ -1387,6 +1437,23 @@ fn on_move_begin(context) {
         authored.attrs["xformOp:translate"]);
     if plan.ok != true { return failure(plan.error); }
     let result = apply_view_ops(context.doc_id, "Begin route-point move", plan.ops);
+    if result.ok == true && !is_unattended() {
+        let subscription = cmd("SetScenePointerMoveHook", #{
+            doc_id: context.doc_id,
+            interaction_id: move_interaction_id(route),
+            tool: "scene_interaction",
+            hook: "on_pointer_move",
+            context: #{ route_path: route },
+        });
+        if subscription == () || subscription.ok != true {
+            remove_move_preview(context.doc_id, route);
+            let detail = if subscription == () { "no command result" }
+                else if subscription.error != () { subscription.error }
+                else { "status " + subscription.status };
+            return failure("scene pointer move subscription could not be registered: "
+                + detail);
+        }
+    }
     if result.ok == true {
         result.path = point;
         result.armed = true;

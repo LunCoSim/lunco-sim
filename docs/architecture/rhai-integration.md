@@ -149,7 +149,27 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   its pointer bit can still describe the previous cursor location when the
   cursor first leaves a popup; it must not reject a valid scene hit. A consumer
   that needs the first position sample on scene entry handles `Pointer<Enter>`
-  as well as `Pointer<Move>`.
+  as well as `Pointer<Move>`. Continuous pointer-move hooks are opt-in through
+  `SetScenePointerMoveHook { doc_id, interaction_id, tool, hook, context }`:
+  one interaction owns a document at a time, `interaction_id` identifies that
+  owner during cleanup, and `context` is a typed string map merged with each
+  coalesced sample. Scene clicks include the same subscription as
+  `active_pointer_move { interaction_id, tool, hook, context }` when their
+  document has an active interaction. Policies use this owner context to
+  commit placement; idle clicks do not discover interactions by traversing USD.
+  `ClearScenePointerMoveHook { doc_id, interaction_id }`
+  cannot clear a different interaction. With no active subscriptions, the
+  viewport drops pending samples before resolving scene identity. When another
+  document is subscribed, unmatched hits are discarded after the lightweight
+  document lookup and before coordinate conversion, terrain raycasting, or
+  Rhai. This keeps passive camera and avatar input out of the tool-hook queue
+  in every model. The generic UI adapter owns this document-scoped mechanism; authored
+  tools choose when to subscribe and what the hook does. Registration rejects
+  unopened documents, invalid hook signatures, empty identity, and a competing
+  interaction identity or tool/hook. Subscriptions end on owner-matched clear,
+  document or Twin close, and scene teardown. The production `route_interaction`
+  gate exercises the subscribed preview and verifies that it changes only the
+  transient view transform.
 - **Direct (code/tests):** insert a `ScriptDocument` into `ScriptRegistry` +
   attach `ScriptedModel { language: Rhai, document_id }`.
 
@@ -514,6 +534,13 @@ if command != () { drive(subject, command.throttle, command.steer); }
 Route sequencing, enable/disable state, point edits, and route presentation are
 authored Rhai policy over USD queries and typed commands. There is no native
 `PathFollower` component and no second Rust autopilot path.
+
+Native window-input automation preserves the two mouse streams: absolute
+`PointerMove` positions drive picking and UI, while `MouseMotion` deltas drive
+the native camera input map with the configured look button held. The
+controller adapter fans each input out to its aggregate `WindowEvent` and
+typed Bevy message. Camera policy and angle application remain in the existing input
+map and avatar camera owner.
 
 ### Coordinate points in Rhai
 

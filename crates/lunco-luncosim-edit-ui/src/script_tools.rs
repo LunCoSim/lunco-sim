@@ -51,7 +51,7 @@ use lunco_terrain_surface::{GridSurfaceQuery, TerrainSurfaceSnapshot};
 use lunco_usd_bevy_mesh::{TransientUsdCurveView, UsdCurveMesh};
 use lunco_usd_document::document::{LayerId, UsdDocument};
 use lunco_usd_geometry::ribbon::{RibbonPoint, build_ribbon_mesh};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Build the language-neutral map passed to a script tool. The map is an
 /// interaction contract, not an API serialization format; the scripting
@@ -67,6 +67,16 @@ pub struct ScenePointerDispatch {
     seen: HashSet<ScenePointerKey>,
     seen_moves: HashSet<ScenePointerMoveKey>,
     pending_moves: Vec<(PointerId, ScenePointerMoveSample)>,
+    move_hooks: HashMap<DocumentId, ScenePointerMoveHook>,
+}
+
+#[derive(Clone)]
+struct ScenePointerMoveHook {
+    interaction_id: String,
+    tool: String,
+    hook: String,
+    context: BTreeMap<String, String>,
+    owner_twin_id: Option<u64>,
 }
 
 const MAX_PENDING_CURVE_VIEW_REQUESTS: usize = 64;
@@ -150,6 +160,161 @@ pub struct SetUsdViewPreviewTransform {
     pub entity_id: u64,
     /// Target translation in the active physics frame.
     pub translation: [f64; 3],
+}
+
+/// Subscribe one document to a typed Rhai pointer-move hook while an
+/// interaction is active. Only one interaction owns movement updates per
+/// document, and the scene-pointer adapter drops passive samples before scene
+/// or terrain resolution when no subscription matches.
+#[Command(default)]
+pub struct SetScenePointerMoveHook {
+    /// USD document whose pointer movement should reach the hook.
+    pub doc_id: u64,
+    /// Caller-owned identity used to prevent stale cleanup from ending a newer interaction.
+    pub interaction_id: String,
+    /// Registered Rhai tool namespace.
+    pub tool: String,
+    /// One-argument pointer-move hook name.
+    pub hook: String,
+    /// Stable context merged with each live pointer sample.
+    pub context: BTreeMap<String, String>,
+}
+
+/// End the active scene-pointer movement subscription for one document.
+#[Command(default)]
+pub struct ClearScenePointerMoveHook {
+    /// USD document whose pointer movement should stop reaching a hook.
+    pub doc_id: u64,
+    /// Identity supplied when the active interaction subscribed.
+    pub interaction_id: String,
+}
+
+#[on_command(SetScenePointerMoveHook)]
+fn on_set_scene_pointer_move_hook(
+    trigger: On<SetScenePointerMoveHook>,
+    mut dispatch: ResMut<ScenePointerDispatch>,
+    documents: Res<DocumentRegistry<UsdDocument>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+) -> Result<Ack, String> {
+    let command = trigger.event();
+    let doc = DocumentId::new(command.doc_id);
+    if doc.is_unassigned() {
+        return Err("pointer-move hook requires an assigned USD document".to_string());
+    }
+    if documents.host(doc).is_none() {
+        return Err(format!("USD document {doc} is not open"));
+    }
+    if command.interaction_id.is_empty()
+        || command.tool.is_empty()
+        || command.hook.is_empty()
+        || !command
+            .hook
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return Err("pointer-move hook requires a registered tool and hook identifier".to_string());
+    }
+    let signature = format!("{}/1", command.hook);
+    if !lunco_tools::has_function(&command.tool, &signature) {
+        return Err(format!(
+            "Rhai tool '{}' has no {} handler",
+            command.tool, signature
+        ));
+    }
+    if dispatch.move_hooks.get(&doc).is_some_and(|active| {
+        active.interaction_id != command.interaction_id
+            || active.tool != command.tool
+            || active.hook != command.hook
+    }) {
+        return Err(format!(
+            "USD document {doc} already has an active pointer-move interaction"
+        ));
+    }
+    let owner_twin_id = workspace.as_deref().and_then(|workspace| {
+        workspace
+            .0
+            .document(doc)
+            .and_then(|entry| workspace.0.twin_for(entry))
+            .map(|twin| twin.raw())
+    });
+    dispatch.move_hooks.insert(
+        doc,
+        ScenePointerMoveHook {
+            interaction_id: command.interaction_id.clone(),
+            tool: command.tool.clone(),
+            hook: command.hook.clone(),
+            context: command.context.clone(),
+            owner_twin_id,
+        },
+    );
+    Ok(Ack::with_data(
+        OpId::new(),
+        api_value!({ "status": "registered" }),
+    ))
+}
+
+#[on_command(ClearScenePointerMoveHook)]
+fn on_clear_scene_pointer_move_hook(
+    trigger: On<ClearScenePointerMoveHook>,
+    mut dispatch: ResMut<ScenePointerDispatch>,
+) -> Result<Ack, String> {
+    let doc = DocumentId::new(trigger.event().doc_id);
+    if doc.is_unassigned() {
+        return Err("pointer-move hook requires an assigned USD document".to_string());
+    }
+    let command = trigger.event();
+    if command.interaction_id.is_empty() {
+        return Err("pointer-move hook cleanup requires its interaction identity".to_string());
+    }
+    if dispatch
+        .move_hooks
+        .get(&doc)
+        .is_some_and(|active| active.interaction_id != command.interaction_id)
+    {
+        return Err(format!(
+            "USD document {doc} has a different active pointer-move interaction"
+        ));
+    }
+    dispatch.move_hooks.remove(&doc);
+    Ok(Ack::with_data(
+        OpId::new(),
+        api_value!({ "status": "cleared" }),
+    ))
+}
+
+pub(crate) fn clear_scene_pointer_move_hook_on_document_closed(
+    trigger: On<lunco_doc_bevy::DocumentClosed>,
+    mut dispatch: ResMut<ScenePointerDispatch>,
+) {
+    dispatch.move_hooks.remove(&trigger.event().doc);
+}
+
+pub(crate) fn clear_scene_pointer_move_hooks_on_twin_closed(
+    trigger: On<lunco_workspace::TwinClosed>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut dispatch: ResMut<ScenePointerDispatch>,
+) {
+    let Some(workspace) = workspace else {
+        return;
+    };
+    let event = trigger.event();
+    let closed_documents: HashSet<_> = workspace
+        .0
+        .documents()
+        .iter()
+        .filter(|entry| {
+            lunco_workspace::document_belongs_to_twin_root(entry, event.twin, &event.root)
+        })
+        .map(|entry| entry.id)
+        .collect();
+    dispatch
+        .move_hooks
+        .retain(|doc, _| !closed_documents.contains(doc));
+}
+
+pub(crate) fn reset_scene_pointer_move_hooks(mut dispatch: ResMut<ScenePointerDispatch>) {
+    dispatch.move_hooks.clear();
+    dispatch.pending_moves.clear();
 }
 
 #[on_command(SetUsdViewPreviewTransform)]
@@ -1571,7 +1736,7 @@ pub(crate) fn on_scene_pointer_event(
     if !dispatch.seen.insert(key) {
         return;
     }
-    let context = scene_tool_context(
+    let mut context = scene_tool_context(
         &click,
         &keys,
         &world.q_selectable,
@@ -1594,6 +1759,41 @@ pub(crate) fn on_scene_pointer_event(
         &world.viewport,
         &world.surface,
     );
+    if let TelemetryValue::Map(fields) = &mut context {
+        if let Some(TelemetryValue::U64(doc)) = fields.get("doc_id") {
+            if let Some(active) = dispatch.move_hooks.get(&DocumentId::new(*doc)) {
+                fields.insert(
+                    "active_pointer_move".to_string(),
+                    tool_map(vec![
+                        (
+                            "interaction_id".to_string(),
+                            TelemetryValue::String(active.interaction_id.clone()),
+                        ),
+                        (
+                            "tool".to_string(),
+                            TelemetryValue::String(active.tool.clone()),
+                        ),
+                        (
+                            "hook".to_string(),
+                            TelemetryValue::String(active.hook.clone()),
+                        ),
+                        (
+                            "context".to_string(),
+                            TelemetryValue::Map(
+                                active
+                                    .context
+                                    .iter()
+                                    .map(|(key, value)| {
+                                        (key.clone(), TelemetryValue::String(value.clone()))
+                                    })
+                                    .collect(),
+                            ),
+                        ),
+                    ]),
+                );
+            }
+        }
+    }
     let source = world
         .q_ids
         .get(click.entity)
@@ -1670,6 +1870,9 @@ pub(crate) fn on_scene_pointer_move_event(
     mut dispatch: ResMut<ScenePointerDispatch>,
     world: SceneToolWorld,
 ) {
+    if dispatch.move_hooks.is_empty() {
+        return;
+    }
     // Like clicks, movement is admitted from the picked scene hit below. The
     // EguiFocus snapshot is published after picking, so it can reject the only
     // movement sample when a cursor leaves a popup for the viewport.
@@ -1722,6 +1925,9 @@ pub(crate) fn on_scene_pointer_enter_event(
     mut dispatch: ResMut<ScenePointerDispatch>,
     world: SceneToolWorld,
 ) {
+    if dispatch.move_hooks.is_empty() {
+        return;
+    }
     // A cursor can cross from UI chrome into the viewport while the previous
     // frame's capture hit is still being retired. The refreshed scene hit emits
     // Enter even when the cursor did not move again; use that current hit as
@@ -1803,10 +2009,16 @@ fn coalesce_scene_pointer_move(
     }
 }
 
+struct ScenePointerMoveContext {
+    doc: DocumentId,
+    args: TelemetryValue,
+}
+
 fn scene_pointer_move_args(
     sample: ScenePointerMoveSample,
     world: &SceneToolWorld,
-) -> Option<TelemetryValue> {
+    move_hooks: &HashMap<DocumentId, ScenePointerMoveHook>,
+) -> Option<ScenePointerMoveContext> {
     let ScenePointerMoveSample {
         entity,
         position,
@@ -1824,6 +2036,9 @@ fn scene_pointer_move_args(
     ) else {
         return None;
     };
+    if !move_hooks.contains_key(&doc) {
+        return None;
+    }
     let hit_is_terrain = std::iter::successors(Some(entity), |entity| {
         world.q_parents.get(*entity).ok().map(|parent| parent.0)
     })
@@ -1913,7 +2128,10 @@ fn scene_pointer_move_args(
             TelemetryValue::String(scene_root.path.clone()),
         ));
     }
-    Some(tool_map(entries))
+    Some(ScenePointerMoveContext {
+        doc,
+        args: tool_map(entries),
+    })
 }
 
 fn nearest_scene_prim<'q, 'w, 's>(
@@ -1939,23 +2157,52 @@ pub(crate) fn flush_scene_pointer_moves(
     mut commands: Commands,
     world: SceneToolWorld,
 ) {
-    for (_, sample) in dispatch.pending_moves.drain(..) {
+    if dispatch.move_hooks.is_empty() {
+        dispatch.pending_moves.clear();
+        return;
+    }
+    let pending_moves = std::mem::take(&mut dispatch.pending_moves);
+    for (_, sample) in pending_moves {
         // Resolve the retained raw hit once, after the picking pass has
         // coalesced all samples for this pointer. Terrain fallback raycasts
         // therefore run at most once per pointer per picking frame.
-        let Some(args) = scene_pointer_move_args(sample, &world) else {
+        let Some(context) = scene_pointer_move_args(sample, &world, &dispatch.move_hooks) else {
             continue;
         };
+        let Some(subscription) = dispatch.move_hooks.get(&context.doc) else {
+            continue;
+        };
+        let args = merge_pointer_move_context(context.args, &subscription.context);
         commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
-            tool: "scene_interaction".to_string(),
-            hook: "on_pointer_move".to_string(),
+            tool: subscription.tool.clone(),
+            hook: subscription.hook.clone(),
             args,
-            owner_twin_id: None,
+            owner_twin_id: subscription.owner_twin_id,
         });
     }
 }
 
-register_commands!(on_set_usd_view_preview_transform, on_update_usd_curve_view);
+fn merge_pointer_move_context(
+    event: TelemetryValue,
+    stable: &BTreeMap<String, String>,
+) -> TelemetryValue {
+    let TelemetryValue::Map(mut event) = event else {
+        return event;
+    };
+    for (key, value) in stable {
+        event
+            .entry(key.clone())
+            .or_insert_with(|| TelemetryValue::String(value.clone()));
+    }
+    TelemetryValue::Map(event)
+}
+
+register_commands!(
+    on_set_usd_view_preview_transform,
+    on_set_scene_pointer_move_hook,
+    on_clear_scene_pointer_move_hook,
+    on_update_usd_curve_view
+);
 
 #[cfg(test)]
 mod usd_curve_view_tests {

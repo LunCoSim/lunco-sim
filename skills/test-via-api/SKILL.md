@@ -524,3 +524,12 @@ rather than asking the user:
 - Don't chain `sleep 30 && tail ...`. Use Monitor with an `until` loop.
 - Don't ask the user to take a screenshot or check anything visually
   unless API verification is genuinely impossible.
+
+### Native mouse look
+
+`InjectWindowInput` distinguishes absolute `PointerMove { x, y }` from raw
+relative `MouseMotion { delta_x, delta_y }`. Cursor coordinates drive picking
+and egui; raw motion drives the native camera input map. For mouse look, hold
+the configured `input_binding("look_button")`, emit raw motion, and release the
+button. Cursor positioning alone does not rotate a camera. The bridge emits
+both the native `WindowEvent::MouseMotion` and typed Bevy `MouseMotion` message.
