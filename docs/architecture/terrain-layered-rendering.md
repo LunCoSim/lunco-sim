@@ -53,6 +53,12 @@ LOD selection independently.
 
 ### USD-authored DEM-to-globe continuation
 
+Exterior smoothing preserves the first native posting and filters only the
+continuation in its preparation worker, without increasing mesh density. Keep
+the DEM appearance visibly distinct. See [the geometry contract](60-curvature-elevation-and-gravity.md)
+for ownership and sampling.
+
+
 The generated collar has two independent scene inputs: the DEM prim supplies
 the crop dimensions and local map images, while the celestial body's composed
 `UsdShade` binding selects the surface appearance. The collar clones the body's

@@ -173,3 +173,8 @@ boundary/morph vertices using bounded `TerrainLodStatus` pages. Inspect each
 corner obliquely with shadows enabled. `ShaderLook` owns shadow intent and the
 material binder owns Bevy cast markers; geometry systems must not compete with
 that reader. Removing a shadow artifact is not proof of geometric continuity.
+
+Exterior smoothing preserves the first native posting and filters only the
+continuation in its preparation worker, without increasing mesh density. Keep
+the DEM appearance visibly distinct. See [the geometry contract](../../docs/architecture/60-curvature-elevation-and-gravity.md)
+for ownership and sampling.

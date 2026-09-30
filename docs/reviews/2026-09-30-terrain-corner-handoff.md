@@ -88,6 +88,29 @@ photometric comparison or complete mission acceptance. No FPS claim is made.
 - Skill catalogue: 43 skills validated. Final diff whitespace and touched Rust
   formatting are checked before commit.
 
+## Exterior smoothing acceptance
+
+The exterior uses worker-prepared periodic binomial scales of relative relief
+and gradients. Its filter footprint grows sublinearly from the first posting;
+the native boundary and material distinction remain intact. Sampling reads two
+scales with no per-vertex convolution. The mesh retains 24,044 vertices and
+137,772 indices; no per-frame smoothing or extra shader sampling is added.
+
+- `cargo test -p lunco-celestial-spatial collar_ -j 4`: four focused tests PASS,
+  including native-signal preservation, periodic ripple removal, corner limits,
+  and unchanged mesh tessellation.
+- Rebuilt production Apollo fixture: `DEM SURFACE CONTINUATION: PASS`, 14 checks;
+  native collar/DEM boundary counts 2,036 each; maximum errors
+  0.0000165915 m and 0.0000190327 m; morph error zero.
+- Close corner capture: `target/apollo-smoothing-final-corner.png`; overview:
+  `target/apollo-smoothing-final-overview.png`. Close capture retains visible
+  DEM detail and a smoother exterior without the wall.
+- Owned runtime: port 49401, PID 416831, production debug binary, High quality,
+  2560x1600, vsync and throttle disabled. Log:
+  `target/apollo-smoothing-final.log`. Observed rolling FPS averages roughly
+  104–126 during concurrent compilation in the terrain checkout and another
+  running simulator; these are runtime observations, not a comparative speedup.
+
 ## Recovery and integration scope
 
 Original work remains recoverable from stash

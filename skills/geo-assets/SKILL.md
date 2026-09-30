@@ -61,6 +61,12 @@ is visual closure outside the crop; terrain queries and colliders remain on the
 local surface. Globe tiles cut out the collar footprint with bounded
 orthographic edge sampling. Do not copy the collar into each tile or make
 global LOD follow DEM posting density. No body-wide raster asset is required.
+
+Exterior smoothing preserves the first native posting and filters only the
+continuation in its preparation worker, without increasing mesh density. Keep
+the DEM appearance visibly distinct. See [the geometry contract](../../docs/architecture/60-curvature-elevation-and-gravity.md)
+for ownership and sampling.
+
 Derive the visual collar width from this crop's measured edge relief and
 one-sided edge slope with a 0.20 relief-grade sizing target. Continue the
 measured slope over one posting, then fade one nearest-perimeter signal to

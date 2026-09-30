@@ -43,8 +43,13 @@ The render shell closes the finite crop; it does not describe measured terrain
 outside it. One collar width is sized from the largest measured edge relief and
 outward slope continuation over the crop's posting spacing. Every side uses
 that width. The exterior shoulder continues the measured slope over one
-posting, then uses a cubic fade to the sphere. Width uses a 0.20 relief-grade
-sizing target; it is not a measured terrain slope limit. Interior DEM samples,
+posting, then uses a cubic fade to the sphere. Exterior relief and gradients use
+periodic binomial scales prepared once by `lunco-celestial-spatial` in the
+handoff worker. The filter footprint grows sublinearly with exterior distance
+and the native posting spacing, preserving broad edge shape. Mesh sampling
+interpolates two scales without per-vertex filtering, extra vertices, or
+per-frame smoothing. DEM appearance remains visibly distinct. Width uses a
+0.20 relief-grade sizing target; it is not a measured terrain slope limit. Interior DEM samples,
 mission queries, and colliders are never feathered or altered.
 Each Twin derives its shell datum, posting spacing, measured relief envelope,
 and collar geometry from its own crop. No body-wide raster, download, or

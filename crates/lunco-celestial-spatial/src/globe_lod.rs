@@ -99,9 +99,14 @@ impl HeightSource for SiteSurfaceSource {
 #[derive(Clone)]
 struct BoundarySignalProfile {
     resolution: usize,
-    relief_m: Vec<f64>,
-    gradient_x: Vec<f64>,
-    gradient_z: Vec<f64>,
+    levels: Vec<BoundarySignalLevel>,
+}
+
+#[derive(Clone)]
+struct BoundarySignalLevel {
+    sigma_m: f64,
+    /// Relative relief and east/south gradients on the same closed perimeter.
+    samples: Vec<[f64; 3]>,
 }
 
 #[derive(Clone)]
@@ -157,9 +162,7 @@ impl SiteSurfaceSource {
             .checked_sub(1)
             .and_then(|side_postings| side_postings.checked_mul(4))
             .ok_or("DEM boundary perimeter is invalid")?;
-        let mut perimeter_relief = vec![0.0; perimeter_len];
-        let mut perimeter_gradient_x = vec![0.0; perimeter_len];
-        let mut perimeter_gradient_z = vec![0.0; perimeter_len];
+        let mut samples = vec![[0.0; 3]; perimeter_len];
         for index in 0..resolution {
             let along = square_boundary_sample_coordinate(index, resolution, half_extent)
                 .ok_or("DEM boundary sample coordinate is invalid")?;
@@ -192,18 +195,18 @@ impl SiteSurfaceSource {
                 width_m = width_m.max(relief_fade_width(posting_m, continued_relief)?);
                 let perimeter_index = boundary_perimeter_index(side, index, resolution)
                     .ok_or("DEM boundary perimeter index is invalid")?;
-                perimeter_relief[perimeter_index] = relief;
-                perimeter_gradient_x[perimeter_index] = relative_gradient[0];
-                perimeter_gradient_z[perimeter_index] = relative_gradient[1];
+                samples[perimeter_index] = [relief, relative_gradient[0], relative_gradient[1]];
             }
         }
         Ok(BoundaryCollarProfile {
             width_m,
             signal: BoundarySignalProfile {
                 resolution,
-                relief_m: perimeter_relief,
-                gradient_x: perimeter_gradient_x,
-                gradient_z: perimeter_gradient_z,
+                levels: boundary_signal_levels(
+                    samples,
+                    posting_m,
+                    boundary_smoothing_sigma(width_m.hypot(width_m), posting_m),
+                )?,
             },
         })
     }
@@ -262,23 +265,109 @@ struct BoundaryBlendSource {
     boundary_posting_m: f64,
 }
 
+/// Grow the filter footprint sublinearly so broad edge relief stays local.
+fn boundary_smoothing_sigma(distance_m: f64, posting_m: f64) -> f64 {
+    let exterior_m = (distance_m - posting_m).max(0.0);
+    exterior_m / ((1.0 + exterior_m / posting_m).sqrt() + 1.0)
+}
+
+/// Build periodic binomial scales once in the handoff preparation worker.
+/// Positive weights preserve the native relief envelope and shared corners.
+fn boundary_signal_levels(
+    samples: Vec<[f64; 3]>,
+    posting_m: f64,
+    maximum_sigma_m: f64,
+) -> Result<Vec<BoundarySignalLevel>, &'static str> {
+    if samples.is_empty()
+        || !posting_m.is_finite()
+        || posting_m <= 0.0
+        || !maximum_sigma_m.is_finite()
+        || maximum_sigma_m < 0.0
+    {
+        return Err("boundary smoothing requires a finite closed perimeter");
+    }
+    let count = samples.len();
+    let mut levels = vec![BoundarySignalLevel {
+        sigma_m: 0.0,
+        samples,
+    }];
+    let mut stride = 1;
+    while levels.last().expect("native level").sigma_m < maximum_sigma_m {
+        let previous = levels.last().expect("native level");
+        if stride >= count {
+            let mean = std::array::from_fn(|axis| {
+                previous
+                    .samples
+                    .iter()
+                    .map(|value| value[axis] / count as f64)
+                    .sum()
+            });
+            levels.push(BoundarySignalLevel {
+                sigma_m: maximum_sigma_m,
+                samples: vec![mean; count],
+            });
+            break;
+        }
+        let sigma_m = previous.sigma_m.hypot(stride as f64 * posting_m);
+        let samples = (0..count)
+            .map(|index| {
+                let taps = [-2isize, -1, 0, 1, 2].map(|offset| {
+                    let sample = (index as isize + offset * stride as isize)
+                        .rem_euclid(count as isize) as usize;
+                    previous.samples[sample]
+                });
+                std::array::from_fn(|axis| {
+                    (taps[0][axis]
+                        + 4.0 * taps[1][axis]
+                        + 6.0 * taps[2][axis]
+                        + 4.0 * taps[3][axis]
+                        + taps[4][axis])
+                        / 16.0
+                })
+            })
+            .collect();
+        levels.push(BoundarySignalLevel { sigma_m, samples });
+        stride *= 2;
+    }
+    Ok(levels)
+}
+
 fn boundary_signal_at(
     profile: &BoundarySignalProfile,
     side: usize,
     half_extent: f64,
     along: f64,
+    sigma_m: f64,
 ) -> BoundarySignalValue {
     let n = profile.resolution;
     let (lower, upper, fraction) = square_boundary_sample_interval(along, half_extent, n)
         .expect("validated perimeter signal lattice");
-    let sample = |values: &[f64]| {
-        let low = values[boundary_perimeter_index(side, lower, n).expect("valid perimeter side")];
-        let high = values[boundary_perimeter_index(side, upper, n).expect("valid perimeter side")];
-        low + (high - low) * fraction
+    let lower = boundary_perimeter_index(side, lower, n).expect("valid perimeter side");
+    let upper = boundary_perimeter_index(side, upper, n).expect("valid perimeter side");
+    let mix = |a: [f64; 3], b: [f64; 3], t: f64| {
+        std::array::from_fn(|axis| a[axis] + (b[axis] - a[axis]) * t)
+    };
+    let sample =
+        |level: &BoundarySignalLevel| mix(level.samples[lower], level.samples[upper], fraction);
+    let high = profile
+        .levels
+        .partition_point(|level| level.sigma_m < sigma_m)
+        .min(profile.levels.len() - 1);
+    let low = high.saturating_sub(1);
+    let value = if high == low {
+        sample(&profile.levels[0])
+    } else {
+        let a = &profile.levels[low];
+        let b = &profile.levels[high];
+        mix(
+            sample(a),
+            sample(b),
+            smoothstep((sigma_m - a.sigma_m) / (b.sigma_m - a.sigma_m)),
+        )
     };
     BoundarySignalValue {
-        relief_m: sample(&profile.relief_m),
-        gradient: [sample(&profile.gradient_x), sample(&profile.gradient_z)],
+        relief_m: value[0],
+        gradient: [value[1], value[2]],
     }
 }
 
@@ -314,7 +403,16 @@ impl HeightSource for BoundaryBlendSource {
         } else {
             (z_side, edge_x)
         };
-        let signal = boundary_signal_at(&self.boundary_signal, side, self.region.half, along);
+        // Preserve the exact join and edge slope. Fine perimeter relief relaxes
+        // progressively outside the first posting instead of forming long ridges.
+        let sigma_m = boundary_smoothing_sigma(distance, self.boundary_posting_m);
+        let signal = boundary_signal_at(
+            &self.boundary_signal,
+            side,
+            self.region.half,
+            along,
+            sigma_m,
+        );
         let edge_relief = signal.relief_m;
         let relative_gradient = signal.gradient;
         // Continue the relative edge slope along the shortest outward path.
@@ -1784,6 +1882,37 @@ pub(crate) fn update_globe_lod(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn collar_smoothing_preserves_native_join_and_removes_periodic_ripples() {
+        let native: Vec<_> = (0..128)
+            .map(|i| [17.0 + if i % 2 == 0 { 3.0 } else { -3.0 }, 1.0, -2.0])
+            .collect();
+        let levels = boundary_signal_levels(native.clone(), 1.0, 20.0).unwrap();
+        assert_eq!(levels[0].samples, native);
+        assert!(levels.len() <= 7);
+        for pair in levels.windows(2) {
+            assert!(pair[1].sigma_m > pair[0].sigma_m);
+        }
+        for level in &levels[1..] {
+            for sample in &level.samples {
+                assert_eq!(*sample, [17.0, 1.0, -2.0]);
+            }
+        }
+        let profile = BoundarySignalProfile {
+            resolution: 33,
+            levels,
+        };
+        assert_eq!(
+            boundary_signal_at(&profile, 0, 16.0, -16.0, 0.0).relief_m,
+            20.0
+        );
+        assert_eq!(
+            boundary_signal_at(&profile, 0, 16.0, -16.0, 1.0).relief_m,
+            17.0
+        );
+        assert!(boundary_signal_levels(vec![[0.0; 3]], 0.0, 20.0).is_err());
+    }
+
     use super::*;
     use bevy::ecs::system::SystemState;
 
@@ -2000,8 +2129,8 @@ mod tests {
         let profiles = site
             .boundary_collar_profile(&globe, half_extent, oracle.grid().res, posting_m)
             .unwrap();
-        let west = boundary_signal_at(&profiles.signal, 0, half_extent, -half_extent);
-        let north = boundary_signal_at(&profiles.signal, 3, half_extent, -half_extent);
+        let west = boundary_signal_at(&profiles.signal, 0, half_extent, -half_extent, 0.0);
+        let north = boundary_signal_at(&profiles.signal, 3, half_extent, -half_extent, 0.0);
         assert_eq!(west.relief_m, north.relief_m);
         assert_eq!(west.gradient, north.gradient);
         let collar = BoundaryBlendSource {
