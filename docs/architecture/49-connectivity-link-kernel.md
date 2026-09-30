@@ -254,10 +254,12 @@ positionally by a reader that alone knows they exist. Core USD has no connectivi
 occlusion schema to reuse — this follows the `LunCoShadowAPI` precedent: name only what
 the standard does not, and namespace it.
 
-> A scene-local node needs a **site anchor** on the scene root (`lunco:anchor:*`).
-> Without one the pose system cannot resolve it and the kernel never sees it. This is
-> why `sandbox_scene.usda` carries no link nodes: it has no site anchor, and adding one
-> to the default scene to gain smoke coverage is not worth the behaviour change.
+> A scene-local node needs a projected **site anchor** on the scene root.
+> Explicit root `lunco:anchor:*` fields supply it. A scene containing the Moon
+> and one lunar DEM can derive the same frame from the DEM's coordinates,
+> with zero defaults for omitted coordinates. Without an admitted site frame,
+> the pose system cannot resolve local nodes. See
+> [the site-registration contract](60-curvature-elevation-and-gravity.md).
 
 Scenes: `link.usda` (orbital smoke), `comms_wall.usda` (occlusion — a rover, a
 mast, and a wall between them), `comms_demo.usda` (the full DSN demo).

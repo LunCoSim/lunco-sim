@@ -1,0 +1,17 @@
+#usda 1.0
+(
+    defaultPrim = "LunarDemGeoreferenced"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "LunarDemGeoreferenced" (
+    prepend references = @lunco://scenes/tests/lunar_dem_continuation.usda@</LunarDemContinuation>
+)
+{
+    def "Terrain"
+    {
+        double lunco:anchor:lat = 23.0
+        double lunco:anchor:lon = -47.0
+    }
+}

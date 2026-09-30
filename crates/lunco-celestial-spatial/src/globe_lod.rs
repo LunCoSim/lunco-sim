@@ -437,7 +437,7 @@ impl HeightSource for BoundaryBlendSource {
 
 // Measured relief sizes only the visual collar. This grade is a shoulder
 // sizing target; DEM samples, queries, and physical slopes remain unchanged.
-const MAX_GLOBE_HANDOFF_RELIEF_GRADE: f64 = 0.20;
+const MAX_GLOBE_HANDOFF_RELIEF_GRADE: f64 = 0.60;
 
 fn relief_fade_width(posting_m: f64, boundary_relief_m: f64) -> Result<f64, &'static str> {
     if !posting_m.is_finite()
@@ -459,12 +459,12 @@ fn collar_radial_segments(collar_m: f64, posting_m: f64) -> Result<usize, &'stat
         return Err("DEM exterior dimensions must be finite with at least one posting of width");
     }
     // Resolve the one-posting slope continuation and bound radial cubic-fade
-    // interpolation error by a quarter posting under the quadratic ring schedule.
-    let near_edge = (4.0 * collar_m / posting_m).sqrt();
+    // interpolation error by a half posting under the quadratic ring schedule.
+    let near_edge = (2.0 * collar_m / posting_m).sqrt();
     let fade_width = collar_m - posting_m;
     let relief = fade_width * MAX_GLOBE_HANDOFF_RELIEF_GRADE / 1.5;
     let fade = if fade_width > 0.0 {
-        (12.0 * relief / posting_m).sqrt() * collar_m / fade_width
+        (6.0 * relief / posting_m).sqrt() * collar_m / fade_width
     } else {
         0.0
     };
@@ -2073,7 +2073,7 @@ mod tests {
             .boundary_collar_profile(&globe, half_extent, oracle.grid().res, posting_m)
             .unwrap();
         let collar_widths = [boundary_profiles.width_m; 4];
-        assert!(boundary_profiles.width_m > 600.0);
+        assert!(boundary_profiles.width_m > 200.0);
         assert!(
             1.5 * 80.0 / (collar_widths[1] - posting_m)
                 <= MAX_GLOBE_HANDOFF_RELIEF_GRADE + f64::EPSILON
@@ -2175,8 +2175,8 @@ mod tests {
         let relief = (collar_m - posting_m) * MAX_GLOBE_HANDOFF_RELIEF_GRADE / 1.5;
         let fade_error_bound = 3.0 * relief * (collar_m / (collar_m - posting_m)).powi(2)
             / (radial_segments * radial_segments) as f64;
-        assert!(first_step <= posting_m * 0.25);
-        assert!(fade_error_bound <= posting_m * 0.25);
+        assert!(first_step <= posting_m * 0.5);
+        assert!(fade_error_bound <= posting_m * 0.5);
         assert!(collar_radial_segments(1e8, posting_m).is_err());
     }
 

@@ -99,7 +99,7 @@ replaces DEM heights, terrain queries, or colliders. The separate collar mesh
 continues the measured edge profile outside the crop and reaches the render
 sphere; local DEM appearance maps fade across that same visual shoulder. The
 shoulder width comes from the active crop's measured boundary relief and
-one-sided slope with a 0.20 relief-grade sizing target. One measured perimeter
+one-sided slope with a 0.60 relief-grade sizing target. One measured perimeter
 signal continues over a posting and fades to the sphere. Its maximum relief
 sizes one shared width for exterior geometry and material fade. A unique corner sample closes
 the transition around corners. The rectangular outer boundary keeps the

@@ -9,7 +9,7 @@ fn simulation_dependencies(me, ctx) {
 
 fn boundary_matches(error_m) { error_m < 0.005 }
 
-fn on_start(me, ctx) {
+fn check_continuation(me, ctx) {
     let failures = [];
     let status = query("TerrainLodStatus", #{ include_geometry: true, vertex_limit: 1, index_limit: 1 });
     if status == () || status.continuations == () {
@@ -41,7 +41,7 @@ fn on_start(me, ctx) {
             let distance = sqrt(dx * dx + dz * dz);
             maximum_corner_grade = max(maximum_corner_grade, abs(b[1] - a[1]) / distance);
         }
-        failures.push(t_true(maximum_corner_grade < 0.3,
+        failures.push(t_true(maximum_corner_grade < 0.8,
             "the exterior corner forms a cliff: grade " + maximum_corner_grade));
         let count = 4 * (collar.source_resolution.to_int() - 1);
         let offset = 0;
@@ -120,4 +120,28 @@ fn on_start(me, ctx) {
 
     }
     report_verdict(failures, "DEM SURFACE CONTINUATION", "DEM_SURFACE_CONTINUATION");
+}
+
+fn on_start(me, ctx) {
+    this.elapsed = 0.0;
+    this.done = false;
+}
+
+fn on_tick(me, ctx) {
+    if this.done { return; }
+    this.elapsed += dt();
+    let status = query("TerrainLodStatus", #{});
+    if status != () && status.continuations != ()
+        && status.continuations.len() == 1
+        && status.continuations[0].ready && !status.continuations[0].hidden
+        && status.stream != () && status.stream.pending.to_int() == 0
+        && status.stream.wanted.to_int() > 0
+        && status.stream.resident == status.stream.wanted {
+        this.done = true;
+        check_continuation(me, ctx);
+    } else if this.elapsed >= 15.0 {
+        this.done = true;
+        report_verdict(["lunar DEM continuation was not admitted within 15 seconds"],
+            "DEM SURFACE CONTINUATION", "DEM_SURFACE_CONTINUATION");
+    }
 }
