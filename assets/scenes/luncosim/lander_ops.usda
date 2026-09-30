@@ -201,7 +201,11 @@ def Xform "LanderTest" (
             # mass here silently overcommands a fueled lander (the authored
             # startup mass is 4000 kg) and lets the guidance/vehicle equations
             # disagree as propellant burns.
-            float inputs:vehicle_mass.connect = </LanderTest/Lander/MainPropulsion.outputs:vehicle_mass_kg>
+            double inputs:vehicle_mass.connect = </LanderTest/Lander.outputs:dynamic_joint_island_mass_kg>
+            double inputs:mass_properties_valid.connect = </LanderTest/Lander.outputs:dynamic_joint_island_mass_valid>
+            # This focused modelica scene exercises the guidance loop; Griffin
+            # mission scenes enable it only after their authored preflight.
+            float inputs:engage = 1.0
             float inputs:max_thrust.connect = </LanderTest/Lander/MainPropulsion.outputs:maximum_thrust_n>
 
             # Mission-owned sensor topology. The reusable guidance component

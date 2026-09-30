@@ -1604,6 +1604,7 @@ pub(crate) fn dispatch_loaded_modelica_sources(
         Option<&UsdInputDefaults>,
         Option<&UsdModelicaSchedule>,
         Option<&mut ModelicaModel>,
+        Option<&mut ModelicaSignalLayout>,
     )>,
     sources: Res<Assets<ModelicaSource>>,
     asset_server: Res<AssetServer>,
@@ -1629,10 +1630,19 @@ pub(crate) fn dispatch_loaded_modelica_sources(
     // Sorting by prim path makes the order a property of the SCENE rather than
     // of the ECS, which is what a deterministic runner needs.
     let mut pending: Vec<_> = q.iter_mut().collect();
-    pending.sort_unstable_by(|(_, _, a, _, _, _, _), (_, _, b, _, _, _, _)| a.path.cmp(&b.path));
+    pending
+        .sort_unstable_by(|(_, _, a, _, _, _, _, _), (_, _, b, _, _, _, _, _)| a.path.cmp(&b.path));
 
-    for (entity, pending, prim_path, mut component, usd_defaults, schedule, current_model) in
-        pending
+    for (
+        entity,
+        pending,
+        prim_path,
+        mut component,
+        usd_defaults,
+        schedule,
+        current_model,
+        current_layout,
+    ) in pending
     {
         // Bail loud if the asset failed to load — without this the
         // entity stays Pending forever and the user sees nothing.
@@ -1663,6 +1673,19 @@ pub(crate) fn dispatch_loaded_modelica_sources(
         let Some(src) = sources.get(&pending.handle) else {
             continue;
         };
+
+        // The co-simulation port backend reads authored variable contracts
+        // from the same source-derived layout as other Modelica consumers.
+        // Refresh the complete map on each source load so removed declarations
+        // cannot leave stale unit metadata on live ports.
+        let mut signal_layout = current_layout.as_deref().cloned().unwrap_or_default();
+        signal_layout.metadata = src
+            .interface
+            .variable_metadata
+            .iter()
+            .map(|(name, metadata)| (name.clone(), metadata.clone()))
+            .collect();
+        commands.entity(entity).try_insert(signal_layout);
 
         // The source asset loader prepares this interface on Bevy's async
         // compute pool. `ModelicaModel::inputs` is a write buffer seeded from

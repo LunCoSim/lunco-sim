@@ -259,39 +259,23 @@ fn escape_runtime_context(
 /// frame remain independent objects.
 fn dynamic_object_island(
     seed: Entity,
-    body_modes: &Query<&RigidBody>,
+    body_modes: &Query<(Entity, &RigidBody)>,
     joint_links: &Query<(Entity, &crate::PhysicsJointLink), Without<JointDisabled>>,
 ) -> EntityHashSet {
-    let mut island = EntityHashSet::default();
-    island.insert(seed);
-    loop {
-        let mut added = false;
-        for (_, link) in joint_links.iter() {
-            let body0_dynamic = body_modes
-                .get(link.body0)
-                .is_ok_and(|mode| matches!(mode, RigidBody::Dynamic));
-            let body1_dynamic = body_modes
-                .get(link.body1)
-                .is_ok_and(|mode| matches!(mode, RigidBody::Dynamic));
-            if !body0_dynamic || !body1_dynamic {
-                continue;
-            }
-            if island.contains(&link.body0) && island.insert(link.body1) {
-                added = true;
-            }
-            if island.contains(&link.body1) && island.insert(link.body0) {
-                added = true;
-            }
-        }
-        if !added {
-            return island;
-        }
-    }
+    let dynamic_bodies = body_modes
+        .iter()
+        .filter_map(|(entity, body)| matches!(body, RigidBody::Dynamic).then_some(entity));
+    let live_links = joint_links.iter().map(|(_, link)| (link.body0, link.body1));
+    let members = crate::dynamic_joint_islands(dynamic_bodies, live_links)
+        .into_iter()
+        .find(|island| island.contains(&seed))
+        .unwrap_or_else(|| vec![seed]);
+    members.into_iter().collect()
 }
 
 fn pause_dynamic_object(
     seed: Entity,
-    body_modes: &Query<&RigidBody>,
+    body_modes: &Query<(Entity, &RigidBody)>,
     joint_links: &Query<(Entity, &crate::PhysicsJointLink), Without<JointDisabled>>,
     colliders: &Query<(Entity, &ColliderOf)>,
     reported: &mut ReportedEscapes,
@@ -456,7 +440,7 @@ fn report_escaped_bodies(
     sim_tick: Option<Res<lunco_core_runtime::SimTick>>,
     fixed_time: Option<Res<Time<Fixed>>>,
     mut commands: Commands,
-    body_modes: Query<&RigidBody>,
+    body_modes: Query<(Entity, &RigidBody)>,
     joint_links: Query<(Entity, &crate::PhysicsJointLink), Without<JointDisabled>>,
     colliders: Query<(Entity, &ColliderOf)>,
     // Changed position or velocity is the query-level activity filter: avian

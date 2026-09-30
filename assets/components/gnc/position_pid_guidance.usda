@@ -53,7 +53,8 @@ def Xform "PositionPIDGuidance" (
         float inputs:imu_attitude_quat_x = 0.0
         float inputs:imu_attitude_quat_y = 0.0
         float inputs:imu_attitude_quat_z = 0.0
-        float inputs:vehicle_mass = 2000.0
+        double inputs:vehicle_mass
+        double inputs:mass_properties_valid = 0.0
         float inputs:piloted = 0.0
         float inputs:touchdown = 0.0
         float inputs:landing_contact = 0.0
@@ -154,16 +155,13 @@ def Xform "PositionPIDGuidance" (
         float inputs:max_thrust = 60000.0 (
             customData = { double min = 1.0 double max = 1000000.0 string unit = "N" }
         )
-        float inputs:minimum_positive_mass_kg = 0.000001 (
-            customData = { double min = 0.000001 double max = 100.0 string unit = "kg" }
-        )
         float inputs:minimum_vertical_accel_mps2 = 0.000001 (
             customData = { double min = 0.000001 double max = 1.0 string unit = "m/s2" }
         )
         float inputs:minimum_thrust_accel_mps2 = 0.000001 (
             customData = { double min = 0.000001 double max = 1.0 string unit = "m/s2" }
         )
-        float inputs:engage = 1.0 (
+        float inputs:engage = 0.0 (
             customData = { double min = 0.0 double max = 1.0 string unit = "bool" }
         )
         float inputs:landing_handoff_latched = 0.0 (

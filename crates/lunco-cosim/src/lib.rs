@@ -219,6 +219,7 @@ impl Plugin for CoSimPlugin {
         app.init_resource::<lunco_port_core::ports::PortRegistry>()
             .init_resource::<lunco_port_core::ports::PortTopologyRevision>()
             .init_resource::<lunco_port_core::ports::PortTopologyState>()
+            .init_resource::<lunco_physics::DynamicJointIslandMasses>()
             .init_resource::<BindingRevision>();
         // Machine-readable dangling-wire report, refreshed each propagation tick
         // and surfaced via the API's `GET /api/diagnostics` (`GetBrokenConnections`).
@@ -355,11 +356,24 @@ impl Plugin for CoSimPlugin {
         );
         app.add_systems(
             lunco_core_runtime::RollbackReplay,
+            lunco_physics::refresh_dynamic_joint_island_masses
+                .in_set(lunco_cosim_core::schedule::CosimSet::Propagate)
+                .before(systems::propagate::propagate_connections),
+        );
+        app.add_systems(
+            lunco_core_runtime::RollbackReplay,
             avian::apply_joint_torque_actuators
                 .after(lunco_core_runtime::ControlDacSet)
                 .run_if(resource_exists::<Time<avian3d::prelude::Physics>>),
         );
 
+        app.add_systems(
+            FixedUpdate,
+            lunco_physics::refresh_dynamic_joint_island_masses
+                .in_set(lunco_cosim_core::schedule::CosimSet::Propagate)
+                .before(systems::propagate::propagate_connections)
+                .run_if(lunco_time::simulation_is_running),
+        );
         app.add_systems(
             FixedUpdate,
             (

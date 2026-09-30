@@ -790,6 +790,44 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             read: Some(read_mass),
             write: Some(write_mass),
         },
+        // A controller that commands forces on one rigid-body member of an
+        // articulated vehicle must use the total translational mass of the
+        // active dynamic joint island. This is a derived read-only fact and
+        // never changes the owning body's own `mass` input/output above.
+        AvianPort {
+            name: "dynamic_joint_island_mass_kg",
+            contract: AvianPortContract::MASS,
+            dir: PortDirection::Out,
+            read: Some(|world, entity| {
+                world
+                    .get_resource::<lunco_physics::DynamicJointIslandMasses>()
+                    .and_then(|masses| masses.get(entity))
+                    .and_then(|sample| sample.mass_kg)
+            }),
+            write: None,
+        },
+        // Missing/nonfinite member mass invalidates the whole island. Consumers
+        // use this explicit status to inhibit control until the exact complete
+        // mass sample is available.
+        AvianPort {
+            name: "dynamic_joint_island_mass_valid",
+            contract: AvianPortContract::DIMENSIONLESS,
+            dir: PortDirection::Out,
+            read: Some(|world, entity| {
+                Some(
+                    if world
+                        .get_resource::<lunco_physics::DynamicJointIslandMasses>()
+                        .and_then(|masses| masses.get(entity))
+                        .is_some_and(lunco_physics::DynamicJointIslandMass::is_valid)
+                    {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                )
+            }),
+            write: None,
+        },
         AvianPort {
             name: "inertia_xx",
             contract: AvianPortContract::INERTIA_BODY,
@@ -1415,6 +1453,63 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn joint_island_mass_ports_expose_only_complete_solver_measurements() {
+        let mut app = App::new();
+        app.init_resource::<lunco_physics::DynamicJointIslandMasses>()
+            .add_systems(Update, lunco_physics::refresh_dynamic_joint_island_masses);
+        let root = app
+            .world_mut()
+            .spawn((RigidBody::Dynamic, ComputedMass::new(2_000.0)))
+            .id();
+        let leg = app
+            .world_mut()
+            .spawn((RigidBody::Dynamic, ComputedMass::new(180.0)))
+            .id();
+        let missing_member = app.world_mut().spawn(RigidBody::Dynamic).id();
+        let independent = app
+            .world_mut()
+            .spawn((RigidBody::Dynamic, ComputedMass::new(75.0)))
+            .id();
+        app.world_mut().spawn(lunco_physics::PhysicsJointLink {
+            body0: root,
+            body1: leg,
+        });
+        app.world_mut().spawn(lunco_physics::PhysicsJointLink {
+            body0: root,
+            body1: missing_member,
+        });
+
+        app.update();
+        let world = app.world();
+        let read = |name: &str, entity| {
+            RIGID_BODY_GROUP
+                .ports
+                .iter()
+                .find(|port| port.name == name)
+                .and_then(|port| port.read)
+                .expect("joint island output is part of the rigid-body port contract")(
+                world, entity,
+            )
+        };
+
+        assert_eq!(read("dynamic_joint_island_mass_kg", root), None);
+        assert_eq!(read("dynamic_joint_island_mass_valid", root), Some(0.0));
+        assert_eq!(read("dynamic_joint_island_mass_kg", leg), None);
+        assert_eq!(
+            read("dynamic_joint_island_mass_valid", missing_member),
+            Some(0.0)
+        );
+        assert_eq!(
+            read("dynamic_joint_island_mass_kg", independent),
+            Some(75.0)
+        );
+        assert_eq!(
+            read("dynamic_joint_island_mass_valid", independent),
+            Some(1.0)
+        );
     }
 
     #[test]
