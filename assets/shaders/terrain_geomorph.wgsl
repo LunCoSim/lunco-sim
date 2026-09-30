@@ -53,7 +53,9 @@ struct Material {
     photometry_gain:   f32,
     sun_tan_radius:    f32,
     sun_dir:           vec3<f32>,
+    morph_start:       f32,
     sun_dir_world:     vec3<f32>,
+    morph_end:         f32,
     hf_size:           vec2<f32>,
     hf_res:            f32,
     terrain_geometry_on: f32,
@@ -66,13 +68,13 @@ struct Material {
     authored_surface_on: f32,
     authored_normal_on:  f32,
     terrain_half_extent: f32,
-    site_blend_widths_m: vec4<f32>,
     site_weight_albedo: f32,
     site_weight_rough: f32,
     site_weight_ao: f32,
-    morph_start:       f32,
-    morph_end:         f32,
+    site_blend_widths_m: vec4<f32>,
     stitch_edges:      vec4<f32>,
+    site_base_color: vec4<f32>,
+    site_photometry: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)

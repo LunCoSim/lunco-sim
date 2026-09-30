@@ -161,3 +161,9 @@ For CPU-built RGBA8 mip chains, preserve the role-aware filtering above while
 using the GPU texture extent rule `max(1, floor(size / 2))` independently on
 each axis. Never use ceil-halving or silently clamp an oversized mip count:
 the level data would no longer match the texture's legal subresources.
+
+For DEM continuation colour seams, compare the site base colour and authored
+raster weight with the exterior composition. Source reflection owns omitted
+parameter defaults; the exterior must compose that site colour and lunar
+photometry before fading to the body appearance. Preserve the DEM material
+inside the crop.

@@ -240,7 +240,7 @@ pub struct ShaderLookReady;
 /// Presence means the USD-selected WGSL source has been loaded and its stage
 /// was inspected. The identifier comes from the WGSL source itself; a missing
 /// annotation is represented by `None`, not by an inferred interface.
-#[derive(Component, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Component, Clone, Debug, Default, PartialEq)]
 pub struct ShaderLookSourceInterface {
     /// Asset path of the source whose reflection is recorded here.
     pub shader: String,
@@ -248,6 +248,8 @@ pub struct ShaderLookSourceInterface {
     pub identifier: Option<String>,
     /// Whether the loaded source passes the fragment-stage validator.
     pub source_valid: bool,
+    /// Typed defaults reflected from the current source for composed material consumers.
+    pub defaults: BTreeMap<String, ParamValue>,
 }
 
 impl ShaderLook {

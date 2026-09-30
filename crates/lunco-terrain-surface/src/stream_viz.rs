@@ -1951,6 +1951,8 @@ pub(crate) fn apply_terrain_maps_to_look(
 /// material operation.
 fn lunar_surface_continuation_look(
     surface: &ShaderLook,
+    dem: &ShaderLook,
+    dem_source: &lunco_materials::ShaderLookSourceInterface,
     derived: Option<&TerrainDerivedMaps>,
     authored: Option<&TerrainAuthoredMaps>,
     half_extent_m: f64,
@@ -1979,7 +1981,39 @@ fn lunar_surface_continuation_look(
         return Err("continuation dimensions exceed rendering precision");
     }
 
+    let color = dem
+        .values()
+        .get("albedo")
+        .or_else(|| dem_source.defaults.get("albedo"));
+    let Some(ParamValue::Vec3(color)) = color else {
+        return Err("DEM material must provide a reflected albedo colour");
+    };
+    if color.iter().any(|value| !value.is_finite() || *value < 0.0) {
+        return Err("DEM material albedo must be finite and nonnegative");
+    }
+    let mut photometry = [0.0; 4];
+    for (index, name) in ["surge_amp", "surge_width", "photometry_gain"]
+        .into_iter()
+        .enumerate()
+    {
+        let Some(ParamValue::F32(value)) = dem
+            .values()
+            .get(name)
+            .or_else(|| dem_source.defaults.get(name))
+        else {
+            return Err("DEM material must provide reflected lunar photometry parameters");
+        };
+        if !value.is_finite() || *value < 0.0 || (index == 1 && *value <= 0.0) {
+            return Err("DEM material lunar photometry parameters are invalid");
+        }
+        photometry[index] = *value;
+    }
     let mut look = surface.clone();
+    look.set_value("site_photometry", ParamValue::Vec4(photometry));
+    look.set_value(
+        "site_base_color",
+        ParamValue::Vec4([color[0], color[1], color[2], 1.0]),
+    );
     look.set_value("terrain_half_extent", ParamValue::F32(terrain_half_extent));
     look.set_value("site_blend_widths_m", ParamValue::Vec4(collar_widths));
 
@@ -2168,6 +2202,7 @@ pub(crate) fn sync_terrain_visual_continuations(
             &ShaderLook,
             Option<&TerrainDerivedMaps>,
             Option<&TerrainAuthoredMaps>,
+            Option<&lunco_materials::ShaderLookSourceInterface>,
         ),
         With<DemTerrainSurface>,
     >,
@@ -2179,6 +2214,7 @@ pub(crate) fn sync_terrain_visual_continuations(
                 Changed<ShaderLook>,
                 Changed<TerrainDerivedMaps>,
                 Changed<TerrainAuthoredMaps>,
+                Changed<lunco_materials::ShaderLookSourceInterface>,
             )>,
         ),
     >,
@@ -2216,8 +2252,12 @@ pub(crate) fn sync_terrain_visual_continuations(
     changed_terrain_entities.extend(removed_derived.read());
     changed_terrain_entities.extend(removed_authored.read());
     let mut changed_surface_entities: HashSet<Entity> = changed_surface_sources.iter().collect();
-    changed_surface_entities.extend(removed_surface_looks.read());
-    changed_surface_entities.extend(removed_surface_interfaces.read());
+    let removed_looks: Vec<_> = removed_surface_looks.read().collect();
+    let removed_interfaces: Vec<_> = removed_surface_interfaces.read().collect();
+    changed_terrain_entities.extend(removed_looks.iter().copied());
+    changed_terrain_entities.extend(removed_interfaces.iter().copied());
+    changed_surface_entities.extend(removed_looks);
+    changed_surface_entities.extend(removed_interfaces);
     let changed_target_entities: HashSet<Entity> = changed_targets.iter().collect();
     let mut changed_readiness_entities: HashSet<Entity> = changed_shader_ready.iter().collect();
     changed_readiness_entities.extend(removed_shader_ready.read());
@@ -2328,7 +2368,8 @@ pub(crate) fn sync_terrain_visual_continuations(
                     && declared == Some(LUNAR_SURFACE_CONTINUATION_INTERFACE)
                     && actual == Some(LUNAR_SURFACE_CONTINUATION_INTERFACE) =>
             {
-                let Ok((dem_look, maps, authored)) = terrain_sources.get(continuation.source)
+                let Ok((dem_look, maps, authored, dem_source)) =
+                    terrain_sources.get(continuation.source)
                 else {
                     bind_continuation_look(
                         &mut commands,
@@ -2346,12 +2387,20 @@ pub(crate) fn sync_terrain_visual_continuations(
                     );
                     continue;
                 };
+                let Some(dem_source) = dem_source
+                    .filter(|source| source.shader == dem_look.shader && source.source_valid)
+                else {
+                    *visibility = Visibility::Hidden;
+                    continue;
+                };
                 let inferred_authored = authored
                     .is_none()
                     .then(|| TerrainAuthoredMaps::from_shader_look(dem_look, maps));
                 let authored = authored.or(inferred_authored.as_ref());
                 match lunar_surface_continuation_look(
                     surface_look,
+                    dem_look,
+                    dem_source,
                     maps,
                     authored,
                     continuation.half_extent_m,

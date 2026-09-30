@@ -27,7 +27,9 @@
     forward_io::VertexOutput,
 }
 #import lunco::pbr_lit::lit
-#import lunco::pbr_lit::lit_n_occluded
+#import lunco::pbr_lit::lit_n_occluded_sun_response
+#import lunco::lunar::regolith_factor
+#import bevy_pbr::{pbr_functions, mesh_view_bindings::view}
 
 #ifdef LUNCO_GLOBE_DIRECTION
 struct GlobeVertex {
@@ -129,6 +131,11 @@ fn globe_pbr_input(in: GlobeVertexOutput) -> VertexOutput {
 //!@default terrain_half_extent 1.0
 //!@engine  site_blend_widths_m
 //!@default site_blend_widths_m 1.0,1.0,1.0,1.0
+//!@engine sun_dir_world
+//!@engine site_photometry
+//!@default site_photometry 0,1,1,0
+//!@engine  site_base_color
+//!@default site_base_color 0,0,0,0
 //!@engine  site_weight_albedo
 //!@default site_weight_albedo 0.0
 //!@engine  site_weight_rough
@@ -165,6 +172,9 @@ struct Material {
     site_weight_albedo: f32,
     site_weight_rough: f32,
     site_weight_ao: f32,
+    site_base_color: vec4<f32>,
+    site_photometry: vec4<f32>,
+    sun_dir_world: vec3<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
@@ -292,6 +302,7 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f
 
     let line_color = mix(mat.high_line_color, mat.low_line_color, mat.transition);
     var albedo = mix(base, line_color, grid_mask);
+    var continuation_weight = 0.0;
     var roughness = mat.roughness;
     var ao = 1.0;
 #ifdef VERTEX_UVS_A
@@ -305,16 +316,15 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f
     let width_z = select(mat.site_blend_widths_m.z, mat.site_blend_widths_m.w, in.uv.y < 0.0);
     let transition = max(outside_m.x / max(width_x, 1e-6), outside_m.y / max(width_z, 1e-6));
     let site_weight = 1.0 - smoothstep(0.0, 1.0, transition);
+    continuation_weight = mat.site_base_color.a * site_weight;
     let site_uv = clamp(in.uv, vec2(0.0), vec2(1.0));
+    var continuation_color = mat.site_base_color.rgb;
     if (mat.site_weight_albedo > 0.0) {
         let site_albedo = textureSample(
             continuation_albedo_tex, continuation_albedo_smp, site_uv).rgb;
-        albedo = mix(
-            albedo,
-            site_albedo,
-            clamp(mat.site_weight_albedo, 0.0, 1.0) * site_weight,
-        );
+        continuation_color = mix(continuation_color, site_albedo, clamp(mat.site_weight_albedo, 0.0, 1.0));
     }
+    albedo = mix(albedo, continuation_color, mat.site_base_color.a * site_weight);
     if (mat.site_weight_rough > 0.0 || mat.site_weight_ao > 0.0) {
         let site_surface = textureSample(
             continuation_surface_tex, continuation_surface_smp, site_uv);
@@ -330,7 +340,14 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f
         );
     }
 #endif
-    return lit_n_occluded(
+    var sun_factor = 1.0;
+    if (dot(mat.sun_dir_world, mat.sun_dir_world) > 0.25 && continuation_weight > 0.0) {
+        let n = select(-normalize(in.world_normal), normalize(in.world_normal), is_front);
+        let v = pbr_functions::calculate_view(in.world_position, view.clip_from_view[3].w == 1.0);
+        sun_factor = mix(1.0, regolith_factor(n, normalize(mat.sun_dir_world), v,
+            mat.site_photometry.x, mat.site_photometry.y, mat.site_photometry.z), continuation_weight);
+    }
+    return lit_n_occluded_sun_response(
         in,
         is_front,
         normalize(in.world_normal),
@@ -339,6 +356,7 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f
         0.0,
         vec3(0.0),
         vec3(ao),
+        mat.sun_dir_world, sun_factor,
     );
 }
 

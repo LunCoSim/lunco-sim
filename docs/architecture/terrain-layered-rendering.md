@@ -56,9 +56,16 @@ LOD selection independently.
 The generated collar has two independent scene inputs: the DEM prim supplies
 the crop dimensions and local map images, while the celestial body's composed
 `UsdShade` binding selects the surface appearance. The collar clones the body's
-current `ShaderLook` and adds the cropped albedo and packed surface images in
+current `ShaderLook` and adds the DEM material base colour, cropped albedo, and packed surface images in
 the dedicated continuation texture roles. Rust carries the USD-selected asset
 paths and typed values; it contains no lunar fragment or vertex shader path.
+The source reflection publishes typed shader defaults, so an omitted DEM
+albedo uses its shader-owned default. The exterior composes the site base
+colour with its authored raster weight before fading to the body appearance.
+The exterior also carries the site lunar photometry parameters and fades
+its direct-sun response to the body response. Shared PBR and terrain lighting
+helpers own lighting; no heightfield shadow march runs for the collar. The
+packed terrain uniform remains within 256 bytes.
 
 A body fragment shader that accepts these local roles declares
 `//!@interface lunco.lunar-surface-continuation.v1` in WGSL and authors the same

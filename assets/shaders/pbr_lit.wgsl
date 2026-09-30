@@ -21,6 +21,8 @@
 
 #define_import_path lunco::pbr_lit
 
+#import lunco::terrain::terrain_apply_sun_response
+
 #import bevy_pbr::{
     forward_io::VertexOutput,
     pbr_types,
@@ -75,6 +77,17 @@ fn lit_n_occluded(
     emissive: vec3<f32>,
     diffuse_occlusion: vec3<f32>,
 ) -> vec4<f32> {
+    return lit_n_occluded_sun_response(in, is_front, n, base_color,
+        perceptual_roughness, metallic, emissive, diffuse_occlusion,
+        vec3(0.0), 1.0);
+}
+
+// Shared direct-sun response; indirect light remains under Bevy's PBR owner.
+fn lit_n_occluded_sun_response(
+    in: VertexOutput, is_front: bool, n: vec3<f32>, base_color: vec3<f32>,
+    perceptual_roughness: f32, metallic: f32, emissive: vec3<f32>,
+    diffuse_occlusion: vec3<f32>, sun_dir_world: vec3<f32>, sun_factor: f32,
+) -> vec4<f32> {
     var pbr_input = pbr_types::pbr_input_new();
     pbr_input.flags = mesh[in.instance_index].flags; // keep SHADOW_RECEIVER etc.
     pbr_input.frag_coord = in.position;
@@ -96,6 +109,9 @@ fn lit_n_occluded(
     pbr_input.material.reflectance = vec3(0.5);
     pbr_input.diffuse_occlusion = diffuse_occlusion;
     var color = pbr_functions::apply_pbr_lighting(pbr_input);
+    if (sun_factor != 1.0) {
+        color = terrain_apply_sun_response(pbr_input, color, sun_dir_world, sun_factor, 1.0, 0.0);
+    }
     return pbr_functions::main_pass_post_lighting_processing(pbr_input, color);
 }
 

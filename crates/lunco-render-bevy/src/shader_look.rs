@@ -1139,6 +1139,7 @@ fn reflect_shader_look_source_interfaces(
                         shader: pending.shader.clone(),
                         identifier: None,
                         source_valid: false,
+                        defaults: Default::default(),
                     },
                     ShaderLookSourceHandle {
                         handle: pending.handle.clone(),
@@ -1155,6 +1156,7 @@ fn shader_source_interface(path: &str, shader: &Shader) -> ShaderLookSourceInter
             shader: path.to_owned(),
             identifier: None,
             source_valid: false,
+            defaults: Default::default(),
         };
     };
     ShaderLookSourceInterface {
@@ -1162,6 +1164,15 @@ fn shader_source_interface(path: &str, shader: &Shader) -> ShaderLookSourceInter
         identifier: lunco_materials::dyn_params::shader_interface_identifier(source)
             .map(str::to_owned),
         source_valid: validate_shader_stage(source, ShaderStage::Fragment).is_ok(),
+        defaults: ParamSchema::parse(source)
+            .map(|schema| {
+                schema
+                    .fields
+                    .into_iter()
+                    .filter_map(|field| field.default.map(|value| (field.name, value)))
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 

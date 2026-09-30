@@ -164,6 +164,8 @@ fn on_tick(me, ctx) {
         #{ name: "site_weight_albedo", type: "F32" },
         #{ name: "site_weight_rough", type: "F32" },
         #{ name: "site_weight_ao", type: "F32" },
+        #{ name: "site_base_color", type: "Vec4" },
+        #{ name: "site_photometry", type: "Vec4" },
     ]) { failures.push(failure); }
     for failure in schema_checks("lunco://shaders/solar_panel.wgsl", [
         #{ name: "seamless_u", type: "F32" },

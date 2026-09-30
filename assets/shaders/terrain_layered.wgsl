@@ -114,6 +114,10 @@
 //!@default authored_normal_on  0
 //!@default terrain_half_extent 1.0
 //!@engine  site_blend_widths_m
+//!@engine site_photometry
+//!@default site_photometry 0,1,1,0
+//!@engine  site_base_color
+//!@default site_base_color 0,0,0,0
 //!@engine  site_weight_albedo
 //!@engine  site_weight_rough
 //!@engine  site_weight_ao
@@ -151,7 +155,9 @@ struct Material {
     photometry_gain:   f32,  // trim on the Lommel-Seeliger x surge multiplier
     sun_tan_radius:    f32,  // engine-filled: tan(sun angular radius)
     sun_dir:           vec3<f32>,  // engine-filled: terrain-local to-sun dir
+    morph_start:      f32,  // engine-filled: CDLOD morph start distance
     sun_dir_world:     vec3<f32>,  // engine-filled: world-space to-sun (lunar BRDF)
+    morph_end:        f32,  // engine-filled: CDLOD morph end distance
     hf_size:           vec2<f32>,  // engine-filled: heightfield extent (m)
     hf_res:            f32,  // engine-filled: heightfield resolution
     terrain_geometry_on: f32, // engine-filled: measured DEM owns relief
@@ -164,13 +170,13 @@ struct Material {
     authored_surface_on: f32, // engine-filled: authored surface is active
     authored_normal_on:  f32, // engine-filled: authored normal is active
     terrain_half_extent: f32, // engine-filled: streamed DEM half extent (m)
-    site_blend_widths_m: vec4<f32>, // engine-filled: visual-only site-to-globe material blend
     site_weight_albedo: f32, // engine-filled: site-local albedo contribution
     site_weight_rough: f32, // engine-filled: site-local roughness contribution
     site_weight_ao: f32, // engine-filled: site-local ambient-occlusion contribution
-    morph_start:      f32,  // engine-filled: CDLOD morph start distance
-    morph_end:        f32,  // engine-filled: CDLOD morph end distance
+    site_blend_widths_m: vec4<f32>, // engine-filled: visual-only site-to-globe material blend
     stitch_edges:     vec4<f32>, // engine-filled: coarser-neighbour edge mask
+    site_base_color: vec4<f32>,
+    site_photometry: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
@@ -232,6 +238,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let authored_albedo_weight = clamp(mat.weight_albedo, 0.0, 1.0);
     let procedural_albedo_weight = 1.0 - authored_albedo_weight;
     var albedo = mat.albedo;
+    var site_material_weight = 0.0;
 
     let world_p = in.world_position.xyz;
     let dist = distance(view.world_position, world_p);
@@ -308,7 +315,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let width_x = select(mat.site_blend_widths_m.y, mat.site_blend_widths_m.x, uv.x < 0.0);
     let width_z = select(mat.site_blend_widths_m.z, mat.site_blend_widths_m.w, uv.y < 0.0);
     let transition = max(outside_m.x / max(width_x, 1e-6), outside_m.y / max(width_z, 1e-6));
-    let site_material_weight = 1.0 - smoothstep(0.0, 1.0, transition);
+    site_material_weight = 1.0 - smoothstep(0.0, 1.0, transition);
     let map_weights = terrain_map_weights(
         map_footprint,
         mat.derived_surface_on,
@@ -332,16 +339,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         let a = textureSample(albedo_tex, albedo_smp, uv).rgb;
         albedo = mix(albedo, a, authored_albedo_weight);
     }
+    var continuation_color = mat.site_base_color.rgb;
     if (mat.site_weight_albedo > 0.0) {
         let site_uv = clamp(uv, vec2(0.0), vec2(1.0));
         let site_albedo = textureSample(
             continuation_albedo_tex, continuation_albedo_smp, site_uv).rgb;
-        albedo = mix(
-            albedo,
-            site_albedo,
-            clamp(mat.site_weight_albedo, 0.0, 1.0) * site_material_weight,
-        );
+        continuation_color = mix(continuation_color, site_albedo, clamp(mat.site_weight_albedo, 0.0, 1.0));
     }
+    albedo = mix(albedo, continuation_color, mat.site_base_color.a * site_material_weight);
     // (Mineral/classification is NOT applied here: it is an OVERLAY — data
     // visualization, not material — and composites after lighting below, so a
     // slope-class drape stays readable inside the crater's shadow. Tinting the
@@ -413,7 +418,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     if (dot(sw, sw) > 0.25) {
         lunar_k = regolith_factor(
             pbr_input.N, normalize(sw), pbr_input.V,
-            mat.surge_amp, mat.surge_width, mat.photometry_gain);
+            mix(mat.surge_amp, mat.site_photometry.x, mat.site_base_color.a * site_material_weight),
+            mix(mat.surge_width, mat.site_photometry.y, mat.site_base_color.a * site_material_weight),
+            mix(mat.photometry_gain, mat.site_photometry.z, mat.site_base_color.a * site_material_weight));
     }
     pbr_input.material.base_color = vec4(albedo, 1.0);
     pbr_input.material.perceptual_roughness = roughness;
