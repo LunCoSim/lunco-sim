@@ -61,22 +61,6 @@ impl Plugin for UsdSceneRuntimePlugin {
         );
         app.add_observer(scene_runtime::execute_admitted_load_scene);
         app.add_observer(scene_runtime::on_restart_scene_refresh_active_document);
-        app.add_observer(
-            |trigger: bevy::ecs::observer::On<lunco_core::SceneTransitionFailed>,
-             mut empty_reason: bevy::ecs::system::ResMut<
-                lunco_usd_core::commands::EmptyViewportReason,
-            >| {
-                let (lunco_core::SceneTransition::Load { path, .. }
-                | lunco_core::SceneTransition::Restart { path, .. }) = &trigger.event().transition
-                else {
-                    return;
-                };
-                empty_reason.0 = Some(format!(
-                    "`{path}` could not be loaded: {}",
-                    trigger.event().error
-                ));
-            },
-        );
         app.add_plugins(lunco_usd_bevy_runtime_persistence::UsdRuntimePersistencePlugin);
 
         app.init_resource::<twin_projection::PendingTwinDocs>();

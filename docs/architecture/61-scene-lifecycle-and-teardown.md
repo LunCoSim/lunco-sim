@@ -49,6 +49,10 @@ a late terminal edge cannot finish or unpause its successor. All three scene com
 `RestartScene`—use this boundary, so tutorial/runtime owners cannot miss a
 transition merely because it entered through a different command.
 
+Failed loads leave the viewport in its normal empty-scene presentation. The
+typed transition failure and runtime diagnostics retain the cause; the failure
+text does not replace the empty-state headline.
+
 The coordinator advances `completed_generation` only when the active matching
 transaction reaches `SceneTransitionCompleted`. It then emits
 `SceneTransitionCommitted`; stale completions and failures cannot advance the
