@@ -1,0 +1,26 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World"
+{
+    def Xform "Partial" (
+        references = @twin://initial_usd_composition_default/partial.usda@
+    )
+    {
+    }
+    def Scope "InitialCompositionTest" (
+        prepend apiSchemas = "LunCoProgramAPI"
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/initial_usd_composition.rhai@
+        uniform bool lunco:program:realtimeSafe = false
+    }
+    def DistantLight "KeyLight"
+    {
+    }
+}
