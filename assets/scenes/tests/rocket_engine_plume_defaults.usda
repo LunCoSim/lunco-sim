@@ -13,8 +13,43 @@ def Xform "World"
     }
     def Xform "Engine" (
         prepend references = @lunco://components/propulsion/rocket_engine_visual.usda@</Engine>
+        prepend apiSchemas = "CollectionAPI:components"
     )
     {
+        custom rel collection:components:includes = </World/Engine/Photometry>
+        token collection:components:expansionRule = "explicitOnly"
+        float inputs:throttle = 0.0
+        float inputs:thrust_n = 0.0
+        float inputs:propellant_flow_kgs = 0.0
+        float inputs:exhaust_velocity_mps = 0.0
+        float inputs:maximum_thrust_n = 1000.0
+        float inputs:nozzle_exit_radius_m = 0.10000000149011612
+        float inputs:fuel_family = 0.0
+        float inputs:mixture_mode = 0.0
+        custom float outputs:color_b
+        float outputs:color_b.connect = </World/Engine/Photometry.outputs:color_b>
+        custom float outputs:color_g
+        float outputs:color_g.connect = </World/Engine/Photometry.outputs:color_g>
+        custom float outputs:color_r
+        float outputs:color_r.connect = </World/Engine/Photometry.outputs:color_r>
+        custom float outputs:core_envelope_radius_m
+        float outputs:core_envelope_radius_m.connect = </World/Engine/Photometry.outputs:core_envelope_radius_m>
+        custom float outputs:envelope_center_y_m
+        float outputs:envelope_center_y_m.connect = </World/Engine/Photometry.outputs:envelope_center_y_m>
+        custom float outputs:envelope_length_m
+        float outputs:envelope_length_m.connect = </World/Engine/Photometry.outputs:envelope_length_m>
+        custom float outputs:envelope_radius_m
+        float outputs:envelope_radius_m.connect = </World/Engine/Photometry.outputs:envelope_radius_m>
+        custom float outputs:full_throttle_length_m
+        float outputs:full_throttle_length_m.connect = </World/Engine/Photometry.outputs:full_throttle_length_m>
+        custom float outputs:intensity
+        float outputs:intensity.connect = </World/Engine/Photometry.outputs:intensity>
+        custom float outputs:radius
+        float outputs:radius.connect = </World/Engine/Photometry.outputs:radius>
+        custom float outputs:render_throttle
+        float outputs:render_throttle.connect = </World/Engine/Photometry.outputs:render_throttle>
+        custom float outputs:visual_length_fraction
+        float outputs:visual_length_fraction.connect = </World/Engine/Photometry.outputs:visual_length_fraction>
         def Scope "Photometry" (
             prepend apiSchemas = "LunCoProgramAPI"
         )
@@ -33,14 +68,22 @@ def Xform "World"
             float outputs:radius = 0.0
             float outputs:render_throttle = 0.0
             float outputs:visual_length_fraction = 0.0
-            float inputs:throttle = 0.0
-            float inputs:thrust_n = 0.0
-            float inputs:propellant_flow_kgs = 0.0
-            float inputs:exhaust_velocity_mps = 0.0
-            float inputs:maximum_thrust_n = 1000.0
-            float inputs:nozzle_exit_radius_m = 0.10000000149011612
-            float inputs:fuel_family = 0.0
-            float inputs:mixture_mode = 0.0
+            custom float inputs:throttle
+            float inputs:throttle.connect = </World/Engine.inputs:throttle>
+            custom float inputs:thrust_n
+            float inputs:thrust_n.connect = </World/Engine.inputs:thrust_n>
+            custom float inputs:propellant_flow_kgs
+            float inputs:propellant_flow_kgs.connect = </World/Engine.inputs:propellant_flow_kgs>
+            custom float inputs:exhaust_velocity_mps
+            float inputs:exhaust_velocity_mps.connect = </World/Engine.inputs:exhaust_velocity_mps>
+            custom float inputs:maximum_thrust_n
+            float inputs:maximum_thrust_n.connect = </World/Engine.inputs:maximum_thrust_n>
+            custom float inputs:nozzle_exit_radius_m
+            float inputs:nozzle_exit_radius_m.connect = </World/Engine.inputs:nozzle_exit_radius_m>
+            custom float inputs:fuel_family
+            float inputs:fuel_family.connect = </World/Engine.inputs:fuel_family>
+            custom float inputs:mixture_mode
+            float inputs:mixture_mode.connect = </World/Engine.inputs:mixture_mode>
         }
         def "Exhaust"
         {

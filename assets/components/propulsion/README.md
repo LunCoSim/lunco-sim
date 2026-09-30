@@ -28,7 +28,7 @@ The shader multiplies opacity and emission by that activity. The chamber uses
 mixture efficiency for combustion activity, thrust and heat, so oxidizer flowing
 without fuel cannot sustain combustion. No script switches plume visibility.
 
-Production regressions: `rocket_engine_plume_defaults.usda` covers burn, zero
+Production regressions: `rocket_engine_plume_defaults.usda` covers a generated Modelica network with omitted library inputs, burn, zero
 flow with stale thrust, scaling and palettes; `lander_plume_activity.usda`
 covers real feed/valve spool response. Griffin's external Twin additionally
 exercises actual tank depletion in its production assembly.

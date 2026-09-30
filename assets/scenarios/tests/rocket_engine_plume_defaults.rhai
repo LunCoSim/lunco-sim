@@ -1,11 +1,13 @@
 // Exercise the production Modelica/library connection boundary. No visual state
 // is calculated here: only physical inputs, observations and independent ratios.
 fn simulation_dependencies(me, ctx) {
-    #{modelica_entities:[find_path("/World/Engine/Photometry")],
+    #{modelica_entities:[find_path("/World/Engine")],
       entity_reads:[],entity_writes:[],query_reads:["QueryUsdPrim"],required_inputs:[]}
 }
 fn on_start(me, ctx) {
-    this.engine=find_path("/World/Engine/Photometry");
+    // Observe the generated network boundary, not its fused member entity.
+    // This catches defaults that initialize correctly but reset on first step.
+    this.engine=find_path("/World/Engine");
     this.phase=0;this.elapsed=0.0;this.failures=[];this.done=false;
 }
 fn write(engine,writes) {
