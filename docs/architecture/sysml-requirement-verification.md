@@ -186,7 +186,14 @@ links, and keeps detailed records available through `source_with_selection()`.
 Rust changes are reserved for new generic SysML semantics, typed value
 lowering, or transport-selection capabilities. Numeric literals retain their
 authored source identity and provide a validated native finite `number_value`;
-consumers use that value instead of reparsing literal text in Rhai.
+consumers use that value instead of reparsing literal text in Rhai. The same
+projection now includes finite unitless numeric source constants, resolved
+across package/local references and numeric tuple members. The AST preserves
+the authored expression and uses its existing resolved-expression projection
+with the shared semantic unit-factor arithmetic. Runtime adapters all read
+that projection; no Twin-side arithmetic parser or second numeric table is
+needed. Invalid or unsupported initializers remain unresolved, and native
+`SysmlModel.value` reports the qualified datum in its error.
 
 For one native typed literal, `sysml_value(path, qualified_name)` and
 `sysml_value_from_report(report, qualified_name)` return a tagged map:

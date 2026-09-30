@@ -347,6 +347,7 @@ fn resolve_scales(
                     &scales,
                     &dimensions,
                     &mut HashSet::new(),
+                    0,
                 );
                 if let Some(value) = evaluated {
                     if value.dimension != declaration.dimension {
@@ -380,7 +381,11 @@ fn unit_expression_value(
     scales: &HashMap<ElementId, ResolvedScale>,
     dimensions: &HashMap<ElementId, [i8; 7]>,
     active_features: &mut HashSet<ElementId>,
+    depth: usize,
 ) -> Option<UnitExpressionValue> {
+    if depth >= 128 {
+        return None;
+    }
     match workspace.model().kind(expression) {
         ElementKind::LiteralInteger | ElementKind::LiteralRational => Some(UnitExpressionValue {
             dimension: [0; 7],
@@ -397,12 +402,19 @@ fn unit_expression_value(
                     is_exact: scale.is_exact,
                 });
             }
-            if !active_features.insert(target) {
+            if active_features.len() >= 128 || !active_features.insert(target) {
                 return None;
             }
             let expression = feature_value_expression(workspace.model(), target);
             let value = expression.and_then(|value| {
-                unit_expression_value(workspace, value, scales, dimensions, active_features)
+                unit_expression_value(
+                    workspace,
+                    value,
+                    scales,
+                    dimensions,
+                    active_features,
+                    depth + 1,
+                )
             });
             active_features.remove(&target);
             value
@@ -429,7 +441,14 @@ fn unit_expression_value(
             let values = inputs
                 .into_iter()
                 .map(|input| {
-                    unit_expression_value(workspace, input, scales, dimensions, active_features)
+                    unit_expression_value(
+                        workspace,
+                        input,
+                        scales,
+                        dimensions,
+                        active_features,
+                        depth + 1,
+                    )
                 })
                 .collect::<Option<Vec<_>>>()?;
             apply_unit_operator(&operator, &values)
@@ -745,7 +764,7 @@ fn reference_target(model: &sysml_model::Model, expression: ElementId) -> Option
 fn numeric_literal(model: &sysml_model::Model, expression: ElementId) -> Option<f64> {
     match model.kind(expression) {
         ElementKind::LiteralInteger => match model.maybe(expression, "value")? {
-            Value::Int(value) => Some(*value as f64),
+            Value::Int(value) if value.unsigned_abs() <= (1_u64 << 53) => Some(*value as f64),
             _ => None,
         },
         ElementKind::LiteralRational => match model.maybe(expression, "value")? {
@@ -763,13 +782,87 @@ fn boolean_literal(model: &sysml_model::Model, expression: ElementId) -> Option<
     }
 }
 
-fn numeric_expression_value(workspace: &mut Workspace, expression: ElementId) -> Option<f64> {
+pub(super) fn numeric_expression_value(
+    workspace: &mut Workspace,
+    expression: ElementId,
+) -> Option<f64> {
     let value = unit_expression_value(
         workspace,
         expression,
         &HashMap::new(),
         &HashMap::new(),
         &mut HashSet::new(),
+        0,
     )?;
     (value.dimension == [0; 7]).then_some(value.scale_to_si)
+}
+
+// Source initializer projection uses the same unitless arithmetic as unit
+// conversion factors. The upstream model resolves all tuple references but
+// does not instantiate every tuple operand as a semantic expression element.
+// Use the existing resolved AST projection rather than parsing expression text.
+pub(super) fn numeric_projected_expression(
+    workspace: &mut Workspace,
+    expression: &crate::SysmlExpression,
+    depth: usize,
+) -> Option<f64> {
+    use crate::SysmlExpressionData;
+    if depth >= 128 {
+        return None;
+    }
+    let value = match &expression.data {
+        SysmlExpressionData::RealLiteral(value) => value.as_f64(),
+        SysmlExpressionData::IntegerLiteral(value) if value.unsigned_abs() <= (1_u64 << 53) => {
+            *value as f64
+        }
+        SysmlExpressionData::FeatureReference(feature) => {
+            let target = workspace
+                .model()
+                .ids()
+                .find(|id| id.index() as u32 == feature.element.element_id)?;
+            let initializer = feature_value_expression(workspace.model(), target)?;
+            numeric_expression_value(workspace, initializer)?
+        }
+        SysmlExpressionData::Unary { operator, operand } => {
+            let value = numeric_projected_expression(workspace, operand, depth + 1)?;
+            apply_unit_operator(
+                operator.modelica_symbol()?,
+                &[UnitExpressionValue {
+                    dimension: [0; 7],
+                    scale_to_si: value,
+                    is_exact: true,
+                }],
+            )?
+            .scale_to_si
+        }
+        SysmlExpressionData::Binary {
+            operator,
+            left,
+            right,
+        } => {
+            let left = numeric_projected_expression(workspace, left, depth + 1)?;
+            let right = numeric_projected_expression(workspace, right, depth + 1)?;
+            apply_unit_operator(
+                operator.modelica_symbol()?,
+                &[
+                    UnitExpressionValue {
+                        dimension: [0; 7],
+                        scale_to_si: left,
+                        is_exact: true,
+                    },
+                    UnitExpressionValue {
+                        dimension: [0; 7],
+                        scale_to_si: right,
+                        is_exact: true,
+                    },
+                ],
+            )?
+            .scale_to_si
+        }
+        SysmlExpressionData::Group(value) => {
+            numeric_projected_expression(workspace, value, depth + 1)?
+        }
+        _ => return None,
+    };
+    value.is_finite().then_some(value)
 }

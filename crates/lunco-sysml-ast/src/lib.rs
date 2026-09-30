@@ -1341,9 +1341,10 @@ pub struct SysmlEnumValue {
 /// A literal value written on a SysML attribute.
 ///
 /// The semantic model keeps the authored expression text.  This projection
-/// preserves that text and classifies simple literals without evaluating user
-/// expressions.  Numeric text is retained so consumers can choose their own
-/// lossless numeric representation at the boundary.
+/// preserves that text and classifies simple literals. Resolved, finite unitless
+/// numeric constants also carry a native projection through the shared semantic
+/// unit-factor evaluator. Other expressions remain opaque; no domain program
+/// executes here.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SysmlLiteral {
     /// Authored expression, without the trailing semicolon.
@@ -1353,10 +1354,10 @@ pub struct SysmlLiteral {
     /// Structured literal classification for typed adapters.
     #[serde(default = "default_literal_kind")]
     pub literal_kind: SysmlLiteralKind,
-    /// Canonical numeric text when the literal is an integer or real.
+    /// Canonical numeric text for a literal or resolved numeric constant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub number: Option<String>,
-    /// Validated native numeric projection for integer or real literals.
+    /// Validated native numeric projection for literals or numeric constants.
     /// The authored text above remains the lossless source-of-truth value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub number_value: Option<SysmlNumber>,
@@ -1387,8 +1388,8 @@ pub struct SysmlLiteral {
 
 /// A typed SysML value suitable for crossing into Rhai or a Modelica adapter.
 ///
-/// Expressions remain opaque until an owning execution language evaluates
-/// them.  This is intentional: the AST owns source fidelity and type shape;
+/// Nonconstant expressions remain opaque until an owning execution language evaluates
+/// them. The AST owns source fidelity, type shape, and bounded numeric constants;
 /// Rhai/Modelica own domain-specific execution semantics.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SysmlValue {
@@ -1403,8 +1404,7 @@ pub enum SysmlValue {
 }
 
 impl SysmlLiteral {
-    /// Lower a simple literal to the typed value algebra without evaluating
-    /// authored expressions.
+    /// Lower literals and resolved numeric constants to the typed value algebra.
     pub fn typed_value(&self) -> Option<SysmlValue> {
         if let Some(elements) = &self.elements {
             return Some(SysmlValue::Collection(
@@ -3319,6 +3319,26 @@ fn project_attributes(
                     source_revision,
                     source_fingerprint,
                 );
+                if declared_type.as_ref().is_some_and(|ty| {
+                    matches!(
+                        ty.primitive,
+                        Some(
+                            SysmlPrimitiveType::Real
+                                | SysmlPrimitiveType::Rational
+                                | SysmlPrimitiveType::Integer
+                        )
+                    )
+                }) {
+                    bind_literal_numeric_constants(
+                        &mut parsed,
+                        source_start,
+                        file_index,
+                        declared_type
+                            .as_ref()
+                            .is_some_and(|ty| ty.primitive == Some(SysmlPrimitiveType::Integer)),
+                        workspace,
+                    );
+                }
                 Some(parsed)
             });
             let owner = element
@@ -3420,6 +3440,80 @@ fn parse_literal(literal: &str) -> SysmlLiteral {
         measurement_reference: None,
         elements,
     }
+}
+
+// Reuse the resolved semantic evaluator already used for unit conversion
+// factors. This folds only finite, unitless numeric source constants; it does
+// not execute functions, domain state, or general constraint programs.
+fn bind_literal_numeric_constants(
+    projected: &mut SysmlLiteral,
+    source_start: usize,
+    file_index: usize,
+    integer: bool,
+    workspace: &mut Workspace,
+) {
+    if let Some(elements) = &mut projected.elements {
+        let literal = projected.literal.trim();
+        let Some(inner) = literal.get(1..literal.len().saturating_sub(1)) else {
+            return;
+        };
+        let Some(parts) = split_top_level_comma_ranges(inner) else {
+            return;
+        };
+        if parts.len() != elements.len() {
+            return;
+        }
+        for (element, (part, offset)) in elements.iter_mut().zip(parts) {
+            let leading = part.len() - part.trim_start().len();
+            bind_literal_numeric_constants(
+                element,
+                source_start + 1 + offset + leading,
+                file_index,
+                integer,
+                workspace,
+            );
+        }
+        return;
+    }
+    if projected.literal_kind != SysmlLiteralKind::Expression {
+        return;
+    }
+    let end = source_start + projected.literal.len();
+    let node = workspace
+        .file_parse(file_index)
+        .syntax()
+        .descendants()
+        .find(|node| {
+            u32::from(node.text_range().start()) as usize == source_start
+                && u32::from(node.text_range().end()) as usize == end
+        });
+    let Some(node) = node else {
+        return;
+    };
+    let expression = lower_expression(
+        &node,
+        workspace,
+        file_index,
+        workspace.file_name(file_index),
+        0,
+        0,
+        0,
+    );
+    let Some(value) = unit_resolution::numeric_projected_expression(workspace, &expression, 0)
+        .and_then(SysmlNumber::new)
+    else {
+        return;
+    };
+    if integer {
+        let number = value.as_f64();
+        // Do not truncate fractional values or saturate an out-of-range Integer.
+        if number.fract() != 0.0 || number.abs() > (1_u64 << 53) as f64 {
+            return;
+        }
+        projected.integer_value = Some(number as i64);
+    }
+    projected.number_value = Some(value);
+    projected.number = Some(value.as_f64().to_string());
 }
 
 fn bind_literal_measurement_references(
@@ -3918,6 +4012,74 @@ mod tests {
     use super::*;
 
     static CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn source_numeric_expressions_resolve_across_packages_and_collections() {
+        let analysis = SysmlAnalysis::from_files([
+            (
+                "cad.sysml",
+                "package Cad { private import ScalarValues::*; part def Study { attribute mm : Real = 1000.0; attribute radius : Real = 450.0; attribute base : Real = 1700.0; } }",
+            ),
+            (
+                "runtime.sysml",
+                "package Runtime { private import ScalarValues::*; part def Rover { attribute radius : Real = Cad::Study::radius / Cad::Study::mm; attribute diameter : Real = 2.0 * radius; attribute stations : Real[2] = (-Cad::Study::base / (2.0 * Cad::Study::mm), Cad::Study::base / (2.0 * Cad::Study::mm)); } }",
+            ),
+        ]);
+        let value = |name: &str| {
+            analysis
+                .attributes()
+                .iter()
+                .find(|a| a.qualified_name == name)
+                .unwrap()
+                .value
+                .as_ref()
+                .unwrap()
+        };
+        assert_eq!(
+            value("Runtime::Rover::radius")
+                .number_value
+                .unwrap()
+                .as_f64(),
+            0.45
+        );
+        assert_eq!(
+            value("Runtime::Rover::diameter")
+                .number_value
+                .unwrap()
+                .as_f64(),
+            0.9
+        );
+        let stations = value("Runtime::Rover::stations").elements.as_ref().unwrap();
+        assert_eq!(stations[0].number_value.unwrap().as_f64(), -0.85);
+        assert_eq!(stations[1].number_value.unwrap().as_f64(), 0.85);
+        assert_eq!(
+            value("Runtime::Rover::radius").literal_kind,
+            SysmlLiteralKind::Expression
+        );
+        assert_eq!(
+            value("Runtime::Rover::radius").literal,
+            "Cad::Study::radius / Cad::Study::mm"
+        );
+    }
+
+    #[test]
+    fn source_numeric_expressions_reject_cycles_zero_division_and_nonfinite_results() {
+        let analysis = SysmlAnalysis::from_files([(
+            "bad.sysml",
+            "package Bad { private import ScalarValues::*; part def Values { attribute a : Real = b + 1.0; attribute b : Real = a + 1.0; attribute zero : Real = 1.0 / 0.0; attribute overflow : Real = 1e308 * 1e308; attribute missing : Real = unknown / 2.0; } }",
+        )]);
+        for attribute in analysis
+            .attributes()
+            .iter()
+            .filter(|a| a.owner == "Bad::Values")
+        {
+            assert!(
+                attribute.value.as_ref().unwrap().number_value.is_none(),
+                "{}",
+                attribute.name
+            );
+        }
+    }
 
     #[test]
     fn malformed_source_is_reported_without_panicking() {

@@ -294,14 +294,27 @@ fn model_source_literal_observation(
     Dynamic::from_map(observation)
 }
 
-fn model_value(model: &mut SysmlModelValue, name: &str) -> Dynamic {
-    model
+fn model_value(
+    model: &mut SysmlModelValue,
+    name: &str,
+) -> Result<Dynamic, Box<rhai::EvalAltResult>> {
+    let Some(attribute) = model
         .analysis
         .attributes()
         .iter()
         .find(|attribute| attribute.qualified_name == name)
-        .and_then(typed_attribute_value_dynamic)
-        .unwrap_or(Dynamic::UNIT)
+    else {
+        return Ok(Dynamic::UNIT);
+    };
+    if let Some(value) = typed_attribute_value_dynamic(attribute) {
+        return Ok(value);
+    }
+    if attribute.value.is_some() {
+        return Err(coverage_value_error(format!(
+            "SysML source initializer has no supported resolved value: {name}"
+        )));
+    }
+    Ok(Dynamic::UNIT)
 }
 
 fn model_requirement(model: &mut SysmlModelValue, name: &str) -> Dynamic {
@@ -3391,6 +3404,33 @@ fn diagnostic_dynamic(diagnostic: &SysmlDiagnostic) -> Dynamic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numeric_source_initializers_share_the_native_model_and_attribute_projection() {
+        let analysis = Arc::new(SysmlAnalysis::from_files([(
+            "source.sysml",
+            "package Cad { private import ScalarValues::*; part def Study { attribute mm : Real = 1000.0; attribute radius : Real = 450.0; } } package Runtime { private import ScalarValues::*; part def Rover { attribute radius : Real = Cad::Study::radius / Cad::Study::mm; attribute stations : Real[2] = (-radius, radius); attribute invalid : Real = 1.0 / 0.0; } }",
+        )]));
+        let mut engine = Engine::new();
+        register_sysml_types(&mut engine);
+        let mut scope = rhai::Scope::new();
+        scope.push("model", SysmlModelValue::new("source.sysml", analysis));
+        let values = engine.eval_with_scope::<Array>(&mut scope,
+            r#"[model.value("Runtime::Rover::radius"), model.attribute("Runtime::Rover::radius").typed_value, model.value("Runtime::Rover::stations")]"#).unwrap();
+        assert_eq!(values[0].as_float().unwrap(), 0.45);
+        assert_eq!(values[1].as_float().unwrap(), 0.45);
+        let stations = values[2].clone().cast::<Array>();
+        assert_eq!(stations[0].as_float().unwrap(), -0.45);
+        assert_eq!(stations[1].as_float().unwrap(), 0.45);
+        let error = engine
+            .eval_with_scope::<Dynamic>(&mut scope, r#"model.value("Runtime::Rover::invalid")"#)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("no supported resolved value: Runtime::Rover::invalid")
+        );
+    }
 
     #[test]
     fn evaluation_options_require_explicit_typed_values() {
