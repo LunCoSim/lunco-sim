@@ -3389,9 +3389,18 @@ impl ScriptEventInbox {
 
     /// Enqueue one event. The driver assigns canonical order at the pass boundary.
     ///
-    /// `false` is an explicit overflow signal. The caller owns the policy for
-    /// surfacing it; no event is silently evicted from the front of the queue.
+    /// `false` is an explicit overflow signal. Rejected events are not cloned;
+    /// the caller owns the policy for surfacing overflow, and no event is
+    /// silently evicted from the front of the queue.
     pub fn enqueue(&mut self, event: TelemetryEvent) -> bool {
+        self.enqueue_with(|| event)
+    }
+
+    fn enqueue_borrowed(&mut self, event: &TelemetryEvent) -> bool {
+        self.enqueue_with(|| event.clone())
+    }
+
+    fn enqueue_with(&mut self, event: impl FnOnce() -> TelemetryEvent) -> bool {
         if self.faulted || self.pending.len() >= SCRIPT_EVENT_INBOX_CAPACITY {
             self.overflowed = true;
             self.dropped = self.dropped.saturating_add(1);
@@ -3399,7 +3408,7 @@ impl ScriptEventInbox {
         }
         self.pending.push(QueuedScenarioEvent {
             sequence: self.next_sequence,
-            event,
+            event: event(),
         });
         self.next_sequence = self.next_sequence.wrapping_add(1);
         true
@@ -3511,7 +3520,7 @@ pub fn collect_script_events(
     if !gate.enabled {
         return;
     }
-    if inbox.enqueue(trigger.event().clone()) {
+    if inbox.enqueue_borrowed(trigger.event()) {
         return;
     }
     // Surface the terminal signal only once. The first rejected event is enough
