@@ -614,7 +614,10 @@ fn on_guided_stop_requested(
         });
         return;
     };
-    let Some(target) = entities.as_deref().and_then(|registry| registry.resolve(&owner)) else {
+    let Some(target) = entities
+        .as_deref()
+        .and_then(|registry| registry.resolve(&owner))
+    else {
         overlay.clear();
         commands.trigger(lunco_notifications_core::ShowNotification {
             text: "The guided lesson's scenario is no longer available.".into(),
@@ -1904,10 +1907,11 @@ mod tests {
         app.world_mut().flush();
 
         assert_eq!(app.world().resource::<GuidedStopTarget>().0, Some(target));
-        assert!(app
-            .world()
-            .resource::<lunco_workbench_guided_ui::GuidedOverlay>()
-            .tour
-            .is_none());
+        assert!(
+            app.world()
+                .resource::<lunco_workbench_guided_ui::GuidedOverlay>()
+                .tour
+                .is_none()
+        );
     }
 }

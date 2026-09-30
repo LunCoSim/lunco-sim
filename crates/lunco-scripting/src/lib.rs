@@ -13,9 +13,9 @@ pub mod python;
 pub mod scenario;
 pub mod source_asset;
 
-pub use doc::{ScenarioParameters, ScenarioReloadPolicy, ScriptDocument, ScriptedModel};
 #[cfg(any(feature = "rhai", feature = "python"))]
 pub use commands::StopScenario;
+pub use doc::{ScenarioParameters, ScenarioReloadPolicy, ScriptDocument, ScriptedModel};
 #[cfg(any(feature = "rhai", feature = "python"))]
 use lunco_doc::Document;
 use lunco_doc::{DocumentHost, DocumentId, FileBacked, Reject};

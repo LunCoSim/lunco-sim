@@ -799,8 +799,8 @@ impl Panel for WelcomePanel {
                         "Modelica library examples ({} available)",
                         examples.len()
                     ))
-                        .text_style(lunco_theme::TypographyRole::Label.text_style())
-                        .color(title_tint),
+                    .text_style(lunco_theme::TypographyRole::Label.text_style())
+                    .color(title_tint),
                 )
                 .id_salt("welcome_browse_all")
                 .default_open(false)

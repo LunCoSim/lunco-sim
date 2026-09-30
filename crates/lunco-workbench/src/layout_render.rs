@@ -1213,14 +1213,14 @@ pub(super) fn render_layout(
                             .show(ui, |ui| {
                                 ui.set_width(card_width);
                                 ui.heading(
-                                    egui::RichText::new(message)
-                                        .text_style(lunco_theme::TypographyRole::Title.text_style()),
+                                    egui::RichText::new(message).text_style(
+                                        lunco_theme::TypographyRole::Title.text_style(),
+                                    ),
                                 );
                                 if let Some(guidance) = guidance {
-                                    ui.label(
-                                        egui::RichText::new(guidance)
-                                            .text_style(lunco_theme::TypographyRole::Body.text_style()),
-                                    );
+                                    ui.label(egui::RichText::new(guidance).text_style(
+                                        lunco_theme::TypographyRole::Body.text_style(),
+                                    ));
                                 }
                                 ui.add_space(theme.spacing.item_spacing * 2.0);
                                 ui.vertical(|ui| {
@@ -1241,10 +1241,7 @@ pub(super) fn render_layout(
                                         };
                                         if ui
                                             .add_sized(
-                                                [
-                                                    ui.available_width(),
-                                                    action_height,
-                                                ],
+                                                [ui.available_width(), action_height],
                                                 button,
                                             )
                                             .clicked()
