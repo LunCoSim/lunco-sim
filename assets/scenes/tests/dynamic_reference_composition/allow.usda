@@ -12,7 +12,7 @@ def Xform "World"
     )
     {
         uniform token info:implementationSource = "sourceAsset"
-        uniform asset info:sourceAsset = @twin://dynamic_reference_composition/dynamic_reference_composition.rhai@
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/dynamic_reference_composition.rhai@
         uniform bool lunco:program:realtimeSafe = false
     }
 }
