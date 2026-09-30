@@ -4,7 +4,7 @@ use bevy::prelude::Resource;
 use egui::Rect;
 use std::collections::HashMap;
 
-use crate::PanelId;
+use crate::{PanelCtx, PanelId};
 
 /// Screen-space rectangles of named UI landmarks, refreshed by their renderers.
 ///
@@ -54,9 +54,26 @@ impl HelpAnchors {
     }
 }
 
-/// Optional empty-state text drawn over the viewport presentation region.
+/// One typed application action shown in the viewport's empty state.
+#[derive(Clone)]
+pub struct ViewportPlaceholderAction {
+    /// Human-readable button label.
+    pub label: String,
+    /// Short explanation shown alongside the action in the empty state.
+    pub description: String,
+    /// Whether this is the primary action in the empty state.
+    pub primary: bool,
+    /// Queue the owning application's typed command after the UI pass.
+    pub activate: for<'w> fn(&mut PanelCtx<'w>),
+}
+
+/// Optional empty-state presentation drawn over the viewport region.
 #[derive(Resource, Default)]
 pub struct ViewportPlaceholder {
     /// Text to show, or `None` to draw nothing.
     pub message: Option<String>,
+    /// Supporting guidance displayed below the current empty-state message.
+    pub guidance: Option<String>,
+    /// Optional typed actions contributed by the host application.
+    pub actions: Vec<ViewportPlaceholderAction>,
 }

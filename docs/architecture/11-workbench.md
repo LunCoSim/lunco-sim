@@ -336,6 +336,13 @@ policy uses this host to project its catalog and launch lessons through the
 generic `RunScenarioAsset` command. `WorkbenchSnapshot` supplies normal shell
 geometry; lesson lifecycle and scene composition remain outside the workbench.
 
+The generic `ViewportPlaceholder` carries the domain's current empty-state
+message plus host-authored guidance and typed actions. Each action provides a
+short visible description alongside its button. The shell renders those actions
+in the viewport and defers their `PanelCtx` commands until the layout render
+scope ends; applications own the action labels, descriptions, and command
+targets.
+
 Panel landmarks use the registered panel id as their canonical anchor:
 `panel.<id>`. The Workbench publishes that exact rect for both docked and
 explicit side-panel rendering. Generic slot anchors (`panel.center`,

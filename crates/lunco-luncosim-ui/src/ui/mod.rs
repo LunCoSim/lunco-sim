@@ -15,8 +15,9 @@ use lunco_modelica_ui::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
 use lunco_usd_bevy_camera::camera_switch::{
     CameraSelectionOwner, CameraSelectionStatus, ObserveAvatar, ResumeCameraDirector,
 };
+use lunco_workbench_core::presentation::{ViewportPlaceholder, ViewportPlaceholderAction};
 use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
-use lunco_workbench_core::{MenuCtx, WorkbenchMenuRegistry, WorkbenchSnapshot};
+use lunco_workbench_core::{MenuCtx, PanelCtx, WorkbenchMenuRegistry, WorkbenchSnapshot};
 
 /// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
 mod celestial_time;
@@ -106,6 +107,53 @@ pub struct LunCoSimUiConfig {
     pub repository_url: &'static str,
     /// Optional scene selected by the application's startup policy.
     pub initial_scene: Option<String>,
+}
+
+fn install_viewport_placeholder_actions(world: &mut World) {
+    let mut placeholder = world.resource_mut::<ViewportPlaceholder>();
+    placeholder.guidance = Some("Choose what you'd like to do:".into());
+    placeholder.actions = vec![
+        ViewportPlaceholderAction {
+            label: "Open demo sandbox".into(),
+            description: "Open a sandbox you can explore freely.".into(),
+            primary: true,
+            activate: load_sandbox_demo,
+        },
+        ViewportPlaceholderAction {
+            label: "Start tutorial".into(),
+            description: "Follow a step-by-step guide to learn the basics.".into(),
+            primary: false,
+            activate: start_sandbox_tutorial,
+        },
+        ViewportPlaceholderAction {
+            label: "Open Twin".into(),
+            description: "Choose a Twin project folder from your computer.".into(),
+            primary: false,
+            activate: open_twin,
+        },
+    ];
+}
+
+fn load_sandbox_demo(ctx: &mut PanelCtx<'_>) {
+    ctx.trigger(lunco_usd_bevy_runtime_core::scene::LoadScene {
+        path: "lunco://scenes/luncosim/sandbox_scene.usda".into(),
+        root_prim: String::new(),
+    });
+}
+
+fn start_sandbox_tutorial(ctx: &mut PanelCtx<'_>) {
+    ctx.trigger(lunco_scripting_rhai_runtime::commands::RunScenarioAsset {
+        source_asset: "lunco://tutorials/sandbox/sandbox_intro.rhai".into(),
+        scene_asset: "lunco://tutorials/sandbox/sandbox_intro.usda".into(),
+        reload_policy: lunco_scripting::ScenarioReloadPolicy::Restart,
+        ..Default::default()
+    });
+}
+
+fn open_twin(ctx: &mut PanelCtx<'_>) {
+    ctx.trigger(lunco_workspace::open::OpenTwin {
+        path: String::new(),
+    });
 }
 
 /// Interactive presentation for the luncosim application.
@@ -272,6 +320,7 @@ impl Plugin for LunCoSimUiPlugin {
             // registration goes here.
             .add_plugins(|app: &mut App| {
                 use lunco_workbench_core::WorkbenchPanelAppExt;
+                install_viewport_placeholder_actions(app.world_mut());
                 app.add_observer(on_runtime_ui_action)
                     .add_observer(on_guided_hud_action)
                     .add_observer(on_runtime_error_warning)

@@ -1180,24 +1180,82 @@ pub(super) fn render_layout(
     // Never in Design mode, where Camera3d is inactive and the centre
     // is chrome. Centered on the window, which is the viewport region
     // in View mode and close enough in Build.
-    let placeholder = world
-        .get_resource::<ViewportPlaceholder>()
-        .and_then(|p| p.message.clone());
-    if let Some(msg) = placeholder {
+    let placeholder = world.get_resource::<ViewportPlaceholder>().and_then(|p| {
+        p.message
+            .as_ref()
+            .map(|message| (message.clone(), p.guidance.clone(), p.actions.clone()))
+    });
+    if let Some((message, guidance, actions)) = placeholder {
         let viewport_visible = viewport::layout_is_empty(layout)
             || viewport::layout_contains_panel(layout, VIEWPORT_PANEL_ID);
         if viewport_visible {
+            let mut activate = None;
             egui::Area::new(egui::Id::new("lunco_viewport_empty_placeholder"))
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-                .interactable(false)
+                .interactable(!actions.is_empty())
                 .show(ctx, |ui| {
-                    ui.label(
-                        egui::RichText::new(msg)
-                            .color(theme.tokens.text_subdued)
-                            .italics()
-                            .size(16.0),
-                    );
+                    if actions.is_empty() {
+                        ui.label(
+                            egui::RichText::new(message)
+                                .color(theme.tokens.text_subdued)
+                                .italics()
+                                .size(16.0),
+                        );
+                    } else {
+                        egui::Frame::new()
+                            .fill(theme.tokens.overlay_backdrop)
+                            .stroke(egui::Stroke::new(1.0, theme.tokens.overlay_border))
+                            .corner_radius(theme.rounding.window)
+                            .inner_margin(egui::Margin::same(
+                                theme.spacing.window_padding.round() as i8
+                            ))
+                            .show(ui, |ui| {
+                                ui.set_width(460.0);
+                                ui.heading(message);
+                                if let Some(guidance) = guidance {
+                                    ui.label(guidance);
+                                }
+                                ui.add_space(theme.spacing.item_spacing);
+                                ui.vertical(|ui| {
+                                    for (index, action) in actions.iter().enumerate() {
+                                        let button = egui::Button::new(action.label.as_str())
+                                            .corner_radius(theme.rounding.button);
+                                        let button = if action.primary {
+                                            button
+                                                .fill(theme.tokens.surface_raised)
+                                                .stroke(egui::Stroke::new(1.5, theme.tokens.accent))
+                                        } else {
+                                            button
+                                        };
+                                        if ui
+                                            .add_sized(
+                                                [
+                                                    ui.available_width(),
+                                                    ui.spacing().interact_size.y,
+                                                ],
+                                                button,
+                                            )
+                                            .clicked()
+                                        {
+                                            activate = Some(action.activate);
+                                        }
+                                        ui.label(
+                                            egui::RichText::new(&action.description)
+                                                .color(theme.tokens.text_subdued),
+                                        );
+                                        if index + 1 < actions.len() {
+                                            ui.add_space(theme.spacing.item_spacing);
+                                        }
+                                    }
+                                });
+                            });
+                    }
                 });
+            if let Some(activate) = activate {
+                let mut panel_ctx = PanelCtx::new(world);
+                activate(&mut panel_ctx);
+                panel_ctx.take_intents().apply(world);
+            }
         }
     }
 }

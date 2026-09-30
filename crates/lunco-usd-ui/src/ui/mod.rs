@@ -128,7 +128,7 @@ impl Plugin for UsdUiPlugin {
 
 /// The generic hint shown when the viewport is empty and no specific cause
 /// was recorded by the USD scene transition.
-pub const GENERIC_EMPTY_HINT: &str = "No visual scene is loaded.";
+pub const GENERIC_EMPTY_HINT: &str = "No scene is open yet.";
 
 /// Keep the workbench placeholder synchronized with USD's mounted scene and
 /// the domain-owned empty-scene diagnostic. The placeholder is presentation;

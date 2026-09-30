@@ -1088,9 +1088,10 @@ reusing source commands from `lunco-workbench-core` and the editor builder from
 Optional application presentation for authored guided scenarios. It owns the
 Rhai-facing HUD, spotlight, coach-mark, and recovery surfaces and is installed
 explicitly by a host after `lunco-workbench`. The generic `HelpAnchors` and
-`ViewportPlaceholder` resources remain in `lunco-workbench-core`, so the shell
-and domain panels can publish/read presentation facts without depending on a
-tutorial implementation.
+`ViewportPlaceholder` resources remain in `lunco-workbench-core`, so hosts can
+publish empty-state guidance and typed actions without making the shell depend
+on a tutorial implementation. The shell defers those actions until its layout
+render scope ends.
 
 **`lunco-workbench-file-dialog`**
 The production file-dialog capability used by the workbench and domain UI.
