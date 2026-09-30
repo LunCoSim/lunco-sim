@@ -7,3 +7,10 @@ paths = ["."]
 
 [usd]
 default_scene = "analysis.usda"
+
+[verification]
+[[verification.cases]]
+name = "AsyncTwinAnalysis::VerifyPowerBudget"
+scene = "power_budget.usda"
+script = "verify_power_budget.rhai"
+verdict_channel = "POWER_BUDGET"

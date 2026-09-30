@@ -39,6 +39,33 @@ pub(super) struct SysmlUnitResolver {
     definitions: HashMap<ElementId, SysmlUnitDefinition>,
 }
 
+#[cfg(test)]
+mod tests {
+    use crate::SysmlAnalysis;
+
+    #[test]
+    fn standard_watt_literal_carries_its_resolved_engineering_unit() {
+        let analysis = SysmlAnalysis::from_files([(
+            "power.sysml",
+            "package Example { private import ISQ::PowerValue; private import SI::W; attribute minimumPower : PowerValue = 45.0[W]; }",
+        )]);
+        let literal = analysis
+            .attributes()
+            .iter()
+            .find(|attribute| attribute.qualified_name == "Example::minimumPower")
+            .and_then(|attribute| attribute.value.as_ref())
+            .expect("power literal is projected");
+        let unit = literal
+            .measurement_reference
+            .as_ref()
+            .and_then(|reference| reference.unit_definition.as_ref())
+            .expect("standard watt resolves to an engineering unit");
+
+        assert_eq!(unit.dimension, [2, 1, -3, 0, 0, 0, 0]);
+        assert_eq!(unit.scale_to_si.as_f64(), 1.0);
+    }
+}
+
 impl SysmlUnitResolver {
     pub(super) fn new(workspace: &mut Workspace) -> Self {
         let model_ids = workspace.model().ids().collect::<Vec<_>>();
@@ -583,7 +610,18 @@ fn quantity_dimension(
 }
 
 fn inherits(workspace: &mut Workspace, element: ElementId, ancestor: ElementId) -> bool {
-    element == ancestor || workspace.supertypes(element).contains(&ancestor)
+    let mut pending = vec![element];
+    let mut visited = HashSet::new();
+    while let Some(candidate) = pending.pop() {
+        if candidate == ancestor {
+            return true;
+        }
+        if !visited.insert(candidate) {
+            continue;
+        }
+        pending.extend(workspace.supertypes(candidate));
+    }
+    false
 }
 
 fn unit_conversion_for(

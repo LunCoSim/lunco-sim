@@ -1502,7 +1502,7 @@ fn verification_source_revision(world: &World, cli: &Cli) -> Result<Option<u64>,
         .ok_or_else(|| "the verification Twin workspace is unavailable".to_owned())?;
     let (twin_id, twin) = workspace
         .twins()
-        .find(|(_, twin)| twin.root == root)
+        .find(|(_, twin)| lunco_doc::same_file(&twin.root, root))
         .ok_or_else(|| {
             "the verification Twin is not mounted in the scene-test process".to_owned()
         })?;

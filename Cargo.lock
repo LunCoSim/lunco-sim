@@ -9252,6 +9252,7 @@ dependencies = [
  "lunco-core",
  "lunco-core-runtime",
  "lunco-cosim-core",
+ "lunco-doc",
  "lunco-doc-bevy",
  "lunco-luncosim-edit-ui",
  "lunco-luncosim-runtime",
