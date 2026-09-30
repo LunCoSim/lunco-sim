@@ -1368,29 +1368,30 @@ impl WorkbenchLayout {
             central = center_after;
         }
 
-        // Target initial split: 15% side / 65% centre / 20% right.
+        // Target initial split: 22% side / 54% centre / 24% right.
         // Splits compound: split_right runs first, then split_left wraps
         // the whole tree and shrinks the previous splits proportionally.
         // To land at the target after compounding:
-        //   split_right with f_right = 0.765 → right = (1 - 0.765) of pre-left-split = 0.235
-        //   split_left  with f_left  = 0.15  → side = 0.15 of total
-        //   Right after compounding  = 0.235 × (1 - 0.15) = 0.200 ✓
-        //   Centre after compounding = 0.765 × (1 - 0.15) = 0.650 ✓
+        //   split_right with f_right = 0.6923 → right = (1 - 0.6923) of pre-left-split = 0.3077
+        //   split_left  with f_left  = 0.22  → side = 0.22 of total
+        //   Right after compounding  = 0.3077 × (1 - 0.22) = 0.240 ✓
+        //   Centre after compounding = 0.6923 × (1 - 0.22) = 0.540 ✓
         if !right_inspector_tabs.is_empty() {
             let main = dock.main_surface_mut();
             let [_old_root, right] =
-                main.split_right(NodeIndex::root(), 0.765, right_inspector_tabs);
+                main.split_right(NodeIndex::root(), 0.6923, right_inspector_tabs);
             if !right_inspector_bottom_tabs.is_empty() {
-                let [_top, _bottom] = main.split_below(right, 0.5, right_inspector_bottom_tabs);
+                // Keep more room for the selected item's details while leaving
+                // the inspector usable; the dock divider remains resizable.
+                let [_top, _bottom] = main.split_below(right, 0.38, right_inspector_bottom_tabs);
             }
         }
 
         if !side_browser_tabs.is_empty() {
             let main = dock.main_surface_mut();
             // For split_left, fraction is the NEW (left) share — see
-            // the table in the doc above. Bumped from 0.15 → 0.22 so
-            // the Twin Browser shows full library names ("Modelica
-            // Standard Library") without truncation at default zoom.
+            // the table in the doc above. The 22% share keeps long
+            // Twin Browser library names visible at default zoom.
             let [_old_root, left] = main.split_left(NodeIndex::root(), 0.22, side_browser_tabs);
             if !side_browser_bottom_tabs.is_empty() {
                 let [_top, _bottom] = main.split_below(left, 0.5, side_browser_bottom_tabs);

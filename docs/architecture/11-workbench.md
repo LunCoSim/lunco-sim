@@ -521,6 +521,10 @@ Builder, Editor, and Lunica submenus according to `PanelMenuGroup`;
 unclassified integrations use Other. The SysML Requirements browser is
 grouped under Editor and opens in Center. Its Requirement details panel
 contributes the lower-right Editor pane and follows the selected requirement.
+When a lower-right panel is present, the default split gives it about 62% of
+the right column and leaves 38% for the Inspector; the dock divider remains
+resizable. The initial cross-layout gives the right column about 24% of the
+workspace width, with about 22% for the side browser and 54% for the center.
 
 ### 5a. Side-browser architecture — Twin panel + Files panel
 

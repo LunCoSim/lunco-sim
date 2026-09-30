@@ -727,7 +727,7 @@ active Twin, search requirements, filter by evidence, test, and coverage status,
 and open a linked source at its declaration. A failed structured check also
 offers direct navigation to the associated requirement declaration. The detail
 pane initially selects a requirement with a Twin-mapped test when one is
-available. **Run selected requirement tests** runs the distinct mapped cases
+available. **Run selected tests** runs the distinct mapped cases
 for the selected requirement. **Run all mapped tests** runs each distinct case
 linked from any requirement once, sequentially. The completed suite retains its
 source revision and outcome counts; **Show failures** filters the list to
@@ -745,14 +745,33 @@ source.
 The overview separates requirement usages, definitions, and source-file counts.
 Its actionable counters filter missing formal `require` criteria, missing
 `verify` links, unmapped Twin tests, or mapped tests without a current result.
-The virtualized table sorts by identity, kind, source, evidence, Twin test,
+The virtualized table sorts by visible ID, kind, source, evidence, Twin test,
 model coverage, or overall status, keeping those status dimensions in separate
-columns. The table uses the full center pane; the docked Requirement details
+columns. Click a header to sort, drag its dotted handle to reorder it, and drag
+its divider to resize. Role cells say Definition or Usage, and source cells
+show the file name and line. The table uses the full center pane; the docked Requirement details
 panel follows the selected row in the lower-right Editor pane. It summarizes
 the formal criterion, declared subjects, explicit `satisfy` links, verification
 mappings, and evidence. Use **Open full traceability** to move to the complete
-map; when a verification case has no Twin test mapping, **Open Twin test
-mapping** opens the active Twin's `twin.toml` in the source viewer.
+map. The action focuses or opens the center SysML Requirements panel before
+showing its Traceability tab, even when another center panel is active. When a
+verification case has no Twin test mapping, **Open Twin test mapping** opens
+the active Twin's `twin.toml` in the source viewer. The missing-verify counter
+applies to usages; unmapped counts flag elements with at least one unmapped
+case, and not-run counts flag elements whose mapped cases have no current
+result. Details show a usage statement or,
+when absent, text from an unambiguously resolved definition, with separate
+source links. Each verification case shows its scene path near **Run mapped
+test**.
+
+Status explanations live on column-heading and status-label hints. **Status
+details** opens aggregate counts on demand; the main workspace does not expand
+a status reference. Summary cards use stacked text and native button focus,
+disabled, and selected states. Their counts describe requirement entries;
+run-button counts describe unique mapped tests. The selected requirement's
+statement precedes source metadata. The application catalog exposes
+**Tutorials → LunCoSim → SysML Requirements**, an authored Rhai tour using the
+active Twin and existing guided-tour commands.
 
 The overall status is `VERIFIED` only when the analyzed model has no source
 diagnostics, a formal `require` criterion exists, all `verify` links map to Twin
