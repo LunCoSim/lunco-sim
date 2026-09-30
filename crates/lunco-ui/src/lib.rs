@@ -64,7 +64,9 @@ pub mod prelude {
     pub use crate::diagrams::{ChartSeries, time_series_plot};
     pub use crate::widget;
     pub use bevy_egui::egui;
-    pub use lunco_theme::{Theme, ThemeMode, ThemePlugin};
+    pub use lunco_theme::{
+        Theme, ThemeApplySet, ThemeMode, ThemePlugin, TypographyRole, TypographyScale,
+    };
 }
 
 /// Minimal plugin that initializes LunCoSim-specific UI resources.

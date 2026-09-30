@@ -519,7 +519,7 @@ fn draw_guided_hud(
                         ui.label(
                             egui::RichText::new("OBJECTIVES")
                                 .color(accent)
-                                .small()
+                                .text_style(lunco_theme::TypographyRole::Label.text_style())
                                 .strong(),
                         );
                         ui.add_space(2.0);
@@ -531,7 +531,11 @@ fn draw_guided_hud(
                                 Some('▸') => theme.tokens.text,
                                 _ => theme.tokens.text_subdued,
                             };
-                            ui.label(egui::RichText::new(line).color(color).size(14.0));
+                            ui.label(
+                                egui::RichText::new(line)
+                                    .color(color)
+                                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
+                            );
                         }
                     }
                     if !hud.hint.is_empty() {
@@ -540,11 +544,7 @@ fn draw_guided_hud(
                             ui.separator();
                             ui.add_space(4.0);
                         }
-                        ui.label(
-                            egui::RichText::new(&hud.hint)
-                                .color(theme.tokens.text)
-                                .size(15.0),
-                        );
+                        ui.label(egui::RichText::new(&hud.hint).color(theme.tokens.text));
                     }
                     if !hud.actions.is_empty() {
                         if !hud.hint.is_empty() || !hud.objectives.is_empty() {
@@ -640,14 +640,13 @@ fn draw_guided_recovery(
                             ui.label(
                                 egui::RichText::new("Guided view unavailable")
                                     .strong()
-                                    .size(17.0),
+                                    .text_style(lunco_theme::TypographyRole::Section.text_style()),
                             );
                             ui.label(
                                 egui::RichText::new(
                                     "The lesson is still running; only this presentation target is missing.",
                                 )
                                 .color(theme.tokens.text_subdued)
-                                .small(),
                             );
                         });
                     });
@@ -856,7 +855,7 @@ fn draw_spotlight(
                     ui.label(
                         egui::RichText::new(&caption)
                             .color(theme.tokens.text)
-                            .size(15.0),
+                            .text_style(lunco_theme::TypographyRole::Body.text_style()),
                     );
                 });
         });
@@ -1196,7 +1195,7 @@ fn draw_tour(
                         banner_rect.min + egui::vec2(14.0, banner_h * 0.5),
                         egui::Align2::LEFT_CENTER,
                         banner_label,
-                        egui::FontId::proportional(12.5),
+                        lunco_theme::TypographyRole::Label.font_id(ui.style().as_ref()),
                         accent_text,
                     );
                     if step.total > 0 {
@@ -1204,7 +1203,7 @@ fn draw_tour(
                             banner_rect.max - egui::vec2(14.0, banner_h * 0.5),
                             egui::Align2::RIGHT_CENTER,
                             format!("Step {} / {}", step.index + 1, step.total),
-                            egui::FontId::proportional(11.5),
+                            lunco_theme::TypographyRole::Caption.font_id(ui.style().as_ref()),
                             accent_text,
                         );
                     }
@@ -1214,7 +1213,7 @@ fn draw_tour(
                         .inner_margin(egui::Margin::symmetric(18, 14))
                         .show(ui, |ui| {
                             if !step.body.is_empty() {
-                                ui.label(egui::RichText::new(&step.body).size(14.0).color(text));
+                                ui.label(egui::RichText::new(&step.body).color(text));
                                 ui.add_space(10.0);
                             }
 
@@ -1282,13 +1281,13 @@ fn draw_tour(
                                     back = true;
                                 }
                                 if ui
-                                    .button(egui::RichText::new("Skip").color(muted).size(11.0))
+                                    .button(egui::RichText::new("Skip").color(muted))
                                     .clicked()
                                 {
                                     skip = true;
                                 }
                                 if ui
-                                    .button(egui::RichText::new("Stop").color(muted).size(11.0))
+                                    .button(egui::RichText::new("Stop").color(muted))
                                     .on_hover_text("Stop this guided and clear its scene")
                                     .clicked()
                                 {

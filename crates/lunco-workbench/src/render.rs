@@ -14,7 +14,6 @@ pub(crate) struct WorkbenchVisualsCache {
     revision: u64,
     theme: Arc<lunco_theme::Theme>,
     visuals: egui::Visuals,
-    applied_context_revision: u64,
 }
 
 impl Default for WorkbenchVisualsCache {
@@ -23,7 +22,6 @@ impl Default for WorkbenchVisualsCache {
             revision: u64::MAX,
             theme: Arc::new(lunco_theme::Theme::default()),
             visuals: egui::Visuals::dark(),
-            applied_context_revision: u64::MAX,
         }
     }
 }
@@ -159,13 +157,12 @@ pub(crate) fn render_workbench(
             cache.visuals = cache.theme.to_visuals();
             cache.revision = theme_revision;
         }
-        if theme_changed || cache.applied_context_revision != theme_revision {
+        if theme_changed {
             // Context visuals are global egui state. Reapplying the same copy
             // on every frame needlessly clones and invalidates style state
             // while the workbench is otherwise only reading the cached
             // presentation.
             ctx.set_visuals(cache.visuals.clone());
-            cache.applied_context_revision = theme_revision;
         }
         Arc::clone(&cache.theme)
     };
@@ -851,7 +848,11 @@ pub(crate) fn render_settings_menu(
     world: &mut World,
     menus: &WorkbenchMenuRegistry,
 ) {
-    ui.label(egui::RichText::new("Theme").weak().small());
+    ui.label(
+        egui::RichText::new("Theme")
+            .text_style(lunco_theme::TypographyRole::Label.text_style())
+            .weak(),
+    );
     let mut theme = world.resource_mut::<lunco_theme::Theme>();
     let mode = theme.mode;
 
@@ -925,7 +926,11 @@ pub(crate) fn render_time_menu(
     world: &mut World,
     menus: &WorkbenchMenuRegistry,
 ) {
-    ui.label(egui::RichText::new("Simulation rate").weak().small());
+    ui.label(
+        egui::RichText::new("Simulation rate")
+            .text_style(lunco_theme::TypographyRole::Label.text_style())
+            .weak(),
+    );
     let (paused, rate) = world
         .get_resource::<lunco_time::TimeTransport>()
         .map(|t| (matches!(t.mode, lunco_time::TransportMode::Paused), t.rate))
@@ -934,7 +939,11 @@ pub(crate) fn render_time_menu(
     // Every listed rate uses the same causal fixed-step path. Higher rates
     // drain more fixed iterations per render frame while the fixed timestep
     // and solver fidelity stay unchanged.
-    ui.label(egui::RichText::new("Physics realtime").weak().small());
+    ui.label(
+        egui::RichText::new("Physics realtime")
+            .text_style(lunco_theme::TypographyRole::Label.text_style())
+            .weak(),
+    );
     ui.horizontal(|ui| {
         for &m in lunco_time::REALTIME_RATE_OPTIONS {
             let on = !paused && (rate - m).abs() < f64::EPSILON;
@@ -1095,7 +1104,7 @@ pub(crate) fn measured_titlebar_right_width(
 }
 
 pub(crate) fn truncate_title_to_width(ui: &egui::Ui, title: &str, max_width: f32) -> String {
-    let font = egui::FontId::proportional(12.0);
+    let font = lunco_theme::TypographyRole::Label.font_id(ui.style().as_ref());
     let color = ui.visuals().text_color();
     if max_width <= 0.0 {
         return String::new();
@@ -1358,7 +1367,9 @@ pub(crate) fn render_status_bar_inner(
                                     [ui.available_width(), 18.0],
                                     egui::Button::new(
                                         egui::RichText::new(display_message)
-                                            .small()
+                                            .text_style(
+                                                lunco_theme::TypographyRole::Caption.text_style(),
+                                            )
                                             .strong()
                                             .color(theme.tokens.error),
                                     )
@@ -1404,7 +1415,11 @@ pub(crate) fn render_status_bar_inner(
                             }
                         }
                     } else if matches!(&notification, StatusBarNotificationSnapshot::Ready) {
-                        ui.label(egui::RichText::new("ready").small().weak());
+                        ui.label(
+                            egui::RichText::new("ready")
+                                .text_style(lunco_theme::TypographyRole::Caption.text_style())
+                                .weak(),
+                        );
                     }
                 },
             )
@@ -1551,7 +1566,9 @@ pub(crate) fn render_status_bar_inner(
                         ui.add_sized(
                             [label_width, 18.0],
                             egui::Label::new(
-                                egui::RichText::new(displayed_perf_text).small().monospace(),
+                                egui::RichText::new(displayed_perf_text).text_style(
+                                    lunco_theme::TypographyRole::DenseCode.text_style(),
+                                ),
                             ),
                         )
                         .on_hover_text(&perf_text);
@@ -1864,7 +1881,7 @@ fn status_notification_layout_job(
     message: &str,
     level_color: egui::Color32,
 ) -> egui::text::LayoutJob {
-    let font_id = egui::TextStyle::Small.resolve(style);
+    let font_id = lunco_theme::TypographyRole::Caption.font_id(style);
     let normal = egui::TextFormat {
         font_id: font_id.clone(),
         color: style.visuals.text_color(),
@@ -2138,7 +2155,7 @@ fn perf_hud_sparkline_width(perf_width: f32, required_width: f32, item_spacing: 
 }
 
 fn perf_text_width(ui: &egui::Ui, text: &str) -> f32 {
-    let font = egui::FontId::monospace(egui::TextStyle::Small.resolve(ui.style()).size);
+    let font = lunco_theme::TypographyRole::DenseCode.font_id(ui.style().as_ref());
     ui.painter()
         .layout_no_wrap(text.to_owned(), font, ui.visuals().text_color())
         .size()
@@ -2377,7 +2394,7 @@ pub(crate) fn register_workbench_appearance_settings_menu(world: &mut World) {
                 "On uses a themed translucent surface; off uses the same opaque background in every tab.",
             )
             .weak()
-            .small(),
+            .text_style(lunco_theme::TypographyRole::Body.text_style()),
         );
         #[cfg(debug_assertions)]
         ui.checkbox(&mut settings.egui_debug_overlays, "Egui debug overlays")
@@ -2394,7 +2411,11 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
         return;
     };
     menus.register_settings_submenu("Graphics", |ui, ctx| {
-        ui.label(egui::RichText::new("Rendering").weak().small());
+        ui.label(
+            egui::RichText::new("Rendering")
+                .text_style(lunco_theme::TypographyRole::Label.text_style())
+                .weak(),
+        );
         if let Some(current) = ctx.resource::<lunco_render::RenderingQualitySettings>() {
             let Some(profiles) = ctx.resource::<lunco_render::RenderingQualityProfiles>() else {
                 ui.label("Rendering profiles are unavailable until the authored policy loads.");
@@ -2436,14 +2457,14 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                     "High is the highest shipped visual budget; USD-authored sky and lunar surface shaders remain authoritative.",
                 )
                 .weak()
-                .small(),
+                .text_style(lunco_theme::TypographyRole::Body.text_style()),
             );
             ui.label(
                 egui::RichText::new(
                     "Presets only suggest values. The fields below are authoritative and are never silently downgraded to another preset.",
                 )
                 .weak()
-                .small(),
+                .text_style(lunco_theme::TypographyRole::Body.text_style()),
             );
             ui.collapsing("Shadow edge filtering", |ui| {
                 settings_choice_menu(
@@ -2462,7 +2483,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                         "Gaussian smooths shadow-map edges with a wider filter; Hardware 2×2 is faster and sharper.",
                     )
                     .weak()
-                    .small(),
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
             });
             ui.collapsing("Shadow allocation", |ui| {
@@ -2494,7 +2515,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                             "Shadow-map sizes are unavailable until the render device reports its limits.",
                         )
                         .weak()
-                        .small(),
+                        .text_style(lunco_theme::TypographyRole::Body.text_style()),
                     );
                 }
                 ui.add(
@@ -2541,7 +2562,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                         "This explicit Depth32 shadow-storage ceiling must cover the configured caster limits. It never changes map sizes, cascades, or caster limits automatically; adapter limits are reported separately.",
                     )
                     .weak()
-                    .small(),
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
                 ui.add(
                     egui::DragValue::new(&mut settings.shadow_minimum_distance)
@@ -2608,7 +2629,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                         "These are explicit terrain-shadow quality controls. Cache use and bake sampling are never changed automatically by the platform or memory budget.",
                     )
                     .weak()
-                    .small(),
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
             });
             ui.collapsing("Light defaults", |ui| {
@@ -2617,7 +2638,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                         "These values apply only when a USD light omits its intensity; authored USD intensity remains authoritative.",
                     )
                     .weak()
-                    .small(),
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
                 ui.add(
                     egui::DragValue::new(&mut settings.distant_light_default_illuminance)
@@ -2657,7 +2678,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                         "NURBS tessellation controls mesh detail only; USD control nets, orders, and authored trim data remain authoritative.",
                     )
                     .weak()
-                    .small(),
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
                 ui.add(
                     egui::DragValue::new(&mut settings.nurbs_surface_samples_per_control_span)
@@ -2702,7 +2723,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                         "These settings control viewer tessellation for USD spheres, cylinders, cones, and capsules; USD dimensions remain authoritative.",
                     )
                     .weak()
-                    .small(),
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
                 ui.add(
                     egui::DragValue::new(&mut settings.primitive_sphere_longitudes)
@@ -2741,7 +2762,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                         "These settings control only the viewer tessellation of USD curve tubes; curve points, widths, and topology remain authored USD data.",
                     )
                     .weak()
-                    .small(),
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
                 ui.add(
                     egui::DragValue::new(&mut settings.curve_samples_per_segment)
@@ -2762,7 +2783,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                         "These settings apply to scene cameras when USD does not author an environment bloom override.",
                     )
                     .weak()
-                    .small(),
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
                 let tone_map_label = match settings.camera_tone_map {
                     lunco_render::ToneMap::None => "None",
@@ -2822,7 +2843,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                         "A positive bloom intensity enables HDR. An authored USD environment value wins over this default; no automatic quality downgrade is applied.",
                     )
                     .weak()
-                    .small(),
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
             });
             ui.collapsing("Presentation recovery", |ui| {
@@ -2831,7 +2852,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                         "These are safety timings for render failures, not quality fallbacks. The renderer never changes quality automatically.",
                     )
                     .weak()
-                    .small(),
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
                 ui.add(
                     egui::DragValue::new(&mut settings.render_failure_quiet_period_secs)
@@ -2861,7 +2882,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                         "The cache evicts least-recently-used meshes at this explicit ceiling; terrain detail is not silently downgraded.",
                     )
                     .weak()
-                    .small(),
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
             });
             ui.collapsing("Terrain derived maps", |ui| {
@@ -2916,7 +2937,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                         "These settings control the baked terrain roughness, ambient-occlusion, normal textures, and filtering. Changes rebake off-thread and keep the previous maps visible until ready.",
                     )
                     .weak()
-                    .small(),
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
             });
             ui.collapsing("Terrain rocks", |ui| {
@@ -2957,7 +2978,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                         "The instance limit is explicit: authored density is never silently reduced by a hidden renderer cap. Mesh detail and native visibility distances are Graphics settings.",
                     )
                     .weak()
-                    .small(),
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
             });
             ui.collapsing("Terrain LOD", |ui| {
@@ -3033,7 +3054,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                         "These are explicit terrain rendering controls. A custom value is applied as authored; the renderer does not silently choose a lower preset.",
                     )
                     .weak()
-                    .small(),
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
             });
             let validation_error = settings.validate().err().map(str::to_owned).or_else(|| {
@@ -3079,7 +3100,11 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
         }
 
         ui.separator();
-        ui.label(egui::RichText::new("Terrain").weak().small());
+        ui.label(
+            egui::RichText::new("Terrain")
+                .text_style(lunco_theme::TypographyRole::Label.text_style())
+                .weak(),
+        );
         let Some(mut settings) = ctx.resource::<lunco_settings::TerrainSettings>().cloned() else {
             return;
         };

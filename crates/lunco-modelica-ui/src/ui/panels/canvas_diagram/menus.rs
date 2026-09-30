@@ -213,11 +213,7 @@ pub(super) fn render_plot_node_menu(
 
     ui.menu_button("Bind signal", |ui| {
         if sigs.is_empty() {
-            ui.label(
-                egui::RichText::new("(no signals yet — run a simulation)")
-                    .weak()
-                    .small(),
-            );
+            ui.label(egui::RichText::new("(no signals yet — run a simulation)").weak());
             return;
         }
         let max_h = ui.ctx().content_rect().height() * 0.7;
@@ -539,11 +535,7 @@ pub(super) fn render_empty_menu(
         }
         ui.separator();
         if sigs.is_empty() {
-            ui.label(
-                egui::RichText::new("(no signals yet — run a simulation to bind)")
-                    .weak()
-                    .small(),
-            );
+            ui.label(egui::RichText::new("(no signals yet — run a simulation to bind)").weak());
             return;
         }
         // ScrollArea caps the height at 80 % of the screen so the

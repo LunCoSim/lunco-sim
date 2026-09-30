@@ -47,7 +47,7 @@ pub(super) fn render_error_overlay(
         egui::pos2(card_rect.min.x + 16.0, card_rect.min.y + 16.0),
         egui::Align2::LEFT_TOP,
         heading,
-        egui::FontId::proportional(14.0),
+        lunco_theme::TypographyRole::Section.font_id(ui.style().as_ref()),
         theme.tokens.error,
     );
     let display = if class_name.len() > 56 {
@@ -59,7 +59,7 @@ pub(super) fn render_error_overlay(
         egui::pos2(card_rect.min.x + 16.0, card_rect.min.y + 38.0),
         egui::Align2::LEFT_TOP,
         display,
-        egui::FontId::monospace(11.0),
+        lunco_theme::TypographyRole::DenseCode.font_id(ui.style().as_ref()),
         theme.tokens.text_subdued,
     );
     let trimmed = if error.len() > 220 {
@@ -69,7 +69,7 @@ pub(super) fn render_error_overlay(
     };
     let galley = painter.layout(
         trimmed,
-        egui::FontId::proportional(11.0),
+        lunco_theme::TypographyRole::Body.font_id(ui.style().as_ref()),
         theme.tokens.text,
         card_w - 32.0,
     );
@@ -207,24 +207,20 @@ pub(super) fn render_empty_diagram_overlay(
             child.label(
                 egui::RichText::new(&class_name)
                     .strong()
-                    .size(16.0)
+                    .text_style(lunco_theme::TypographyRole::Title.text_style())
                     .color(theme.text_heading()),
             );
             if let Some(t) = class_type {
                 child.label(
                     egui::RichText::new(t)
-                        .size(10.5)
+                        .text_style(lunco_theme::TypographyRole::Caption.text_style())
                         .italics()
                         .color(theme.text_muted()),
                 );
             }
             if let Some(desc) = &description {
                 child.add_space(6.0);
-                child.label(
-                    egui::RichText::new(desc)
-                        .size(11.5)
-                        .color(theme.tokens.text),
-                );
+                child.label(egui::RichText::new(desc).color(theme.tokens.text));
             }
             child.add_space(10.0);
             child.separator();
@@ -247,7 +243,7 @@ pub(super) fn render_empty_diagram_overlay(
                                 "{} equations · {} connect equations",
                                 counts.equations, counts.connects,
                             ))
-                            .small()
+                            .text_style(lunco_theme::TypographyRole::DenseData.text_style())
                             .color(theme.text_muted()),
                         );
                     }
@@ -260,7 +256,7 @@ pub(super) fn render_empty_diagram_overlay(
                     "This class has no diagram. Switch to the Text tab to read or edit its source.",
                 )
                 .italics()
-                .size(10.5)
+                .text_style(lunco_theme::TypographyRole::Body.text_style())
                 .color(theme.text_muted()),
             );
         },
@@ -410,7 +406,7 @@ pub(super) fn paint_symbol_band(
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.label(
             egui::RichText::new(format!("{label}:"))
-                .small()
+                .text_style(lunco_theme::TypographyRole::Caption.text_style())
                 .color(theme.text_muted()),
         );
         let shown = names.iter().take(6).cloned().collect::<Vec<_>>().join(", ");
@@ -424,7 +420,7 @@ pub(super) fn paint_symbol_band(
         };
         ui.monospace(
             egui::RichText::new(display)
-                .small()
+                .text_style(lunco_theme::TypographyRole::DenseCode.text_style())
                 .color(theme.tokens.accent),
         );
     });
@@ -457,11 +453,14 @@ pub(super) fn paint_class_type_badge(
     let pill_h = rect.height().min(120.0);
     let pill = egui::Rect::from_center_size(rect.center(), egui::vec2(pill_w, pill_h));
     painter.rect_filled(pill, 16.0, bg);
+    let mut font =
+        lunco_theme::TypographyRole::Display.font_id(painter.ctx().global_style().as_ref());
+    font.size = font.size.min(pill_h * 0.75);
     painter.text(
         pill.center(),
         egui::Align2::CENTER_CENTER,
         letter,
-        egui::FontId::proportional(pill_h * 0.55),
+        font,
         theme.class_badge_fg(),
     );
 }

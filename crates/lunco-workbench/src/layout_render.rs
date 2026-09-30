@@ -849,7 +849,7 @@ pub(super) fn render_layout(
                         title_gap.center(),
                         egui::Align2::CENTER_CENTER,
                         shown,
-                        egui::FontId::proportional(12.0),
+                        lunco_theme::TypographyRole::Label.font_id(ui.style().as_ref()),
                         theme.tokens.text_subdued,
                     );
                 }
@@ -1198,8 +1198,7 @@ pub(super) fn render_layout(
                         ui.label(
                             egui::RichText::new(message)
                                 .color(theme.tokens.text_subdued)
-                                .italics()
-                                .size(16.0),
+                                .italics(),
                         );
                     } else {
                         egui::Frame::new()

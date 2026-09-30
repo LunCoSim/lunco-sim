@@ -45,7 +45,6 @@ use lunco_usd_bevy_scene::billboard::{
 };
 use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 
-const BILLBOARD_FONT_SIZE: f32 = 13.0;
 const BILLBOARD_MAX_WIDTH: f32 = 220.0;
 const BILLBOARD_LABEL_GAP: f32 = 12.0;
 const BILLBOARD_BACKDROP_PADDING: egui::Vec2 = egui::vec2(5.0, 3.0);
@@ -209,7 +208,7 @@ pub fn draw_billboard_overlay(
         let color = egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha);
         let galley = painter.layout(
             d.text,
-            egui::FontId::proportional(BILLBOARD_FONT_SIZE),
+            lunco_theme::TypographyRole::Label.font_id(painter.ctx().global_style().as_ref()),
             color,
             wrap_width,
         );

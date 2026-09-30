@@ -48,7 +48,7 @@ net-diag = ["networking"]
 # the renderer-independent workbench contract. Implies `networking` because the
 # bridge re-dispatches the typed JoinServer/LeaveServer commands from
 # `client`/`sync`. OFF for headless servers.
-ui = ["networking", "dep:bevy_egui", "layout-sync"]
+ui = ["networking", "dep:bevy_egui", "dep:lunco-theme", "layout-sync"]
 # Perspective/layout sync against the renderer-independent workbench contract
 # (`sync.rs` ActivatePerspective + WorkbenchSnapshot reads). This does not pull
 # the concrete egui docking shell.
@@ -65,6 +65,7 @@ lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-id = { path = "../lunco-id" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 bevy = { workspace = true }
+lunco-theme = { path = "../lunco-theme", optional = true }
 lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-core = { path = "../lunco-core" }
 lunco-networking-core = { path = "../lunco-networking-core", optional = true }

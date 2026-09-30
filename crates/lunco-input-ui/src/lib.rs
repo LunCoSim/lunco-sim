@@ -101,7 +101,12 @@ pub fn draw_input_overlay(
                                 .inner_margin(egui::Margin::symmetric(7, 3))
                                 .show(ui, |ui| {
                                     ui.label(
-                                        egui::RichText::new(text).strong().size(15.0).color(glyph),
+                                        egui::RichText::new(text)
+                                            .strong()
+                                            .text_style(
+                                                lunco_theme::TypographyRole::Label.text_style(),
+                                            )
+                                            .color(glyph),
                                     );
                                 });
                         };
@@ -138,7 +143,7 @@ pub fn draw_input_overlay(
                                 ui.label(
                                     egui::RichText::new(mode)
                                         .strong()
-                                        .size(14.0)
+                                        .text_style(lunco_theme::TypographyRole::Label.text_style())
                                         .color(theme.tokens.overlay_backdrop),
                                 );
                             });
@@ -154,7 +159,7 @@ pub fn draw_input_overlay(
                                     cursor_pos.x, cursor_pos.y
                                 ))
                                 .weak()
-                                .size(10.0),
+                                .text_style(lunco_theme::TypographyRole::DenseData.text_style()),
                             );
                         }
                     });

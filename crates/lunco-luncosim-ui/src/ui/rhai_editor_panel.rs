@@ -201,7 +201,11 @@ impl Panel for RhaiEditorPanel {
             // ── Diagnostics list (the line/col gutter, as a jump list) ────────
             if !vm.diagnostics.is_empty() {
                 ui.separator();
-                ui.label(egui::RichText::new("Diagnostics").small().weak());
+                ui.label(
+                    egui::RichText::new("Diagnostics")
+                        .text_style(lunco_theme::TypographyRole::Label.text_style())
+                        .weak(),
+                );
                 egui::ScrollArea::vertical()
                     .id_salt("rhai_editor_diags")
                     .max_height(110.0)
@@ -275,9 +279,7 @@ fn empty_hint(ui: &mut egui::Ui, msg: &str) {
         ui.add_space(24.0);
         ui.label(egui::RichText::new(msg).weak());
         ui.label(
-            egui::RichText::new("Left-click an object, then edit its Rhai behaviour here.")
-                .weak()
-                .small(),
+            egui::RichText::new("Left-click an object, then edit its Rhai behaviour here.").weak(),
         );
     });
 }

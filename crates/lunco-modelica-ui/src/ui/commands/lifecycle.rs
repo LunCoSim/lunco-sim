@@ -1344,7 +1344,7 @@ pub fn render_close_dialogs(
                 let id = modals.request(ModalRequest {
                     title: format!("Save changes to '{display_name}'?"),
                     body: ModalBody::Custom(Arc::new(move |ui| {
-                        ui.label(egui::RichText::new(&body_text).size(12.0));
+                        ui.label(egui::RichText::new(&body_text));
                     })),
                     buttons,
                     dismiss_on_esc: true,

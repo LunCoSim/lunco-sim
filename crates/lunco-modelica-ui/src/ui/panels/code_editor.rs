@@ -480,7 +480,7 @@ impl Panel for CodeEditorPanel {
                     ui.heading("Opening model...");
                     ui.label(
                         egui::RichText::new("Reading from disk and indexing...")
-                            .size(10.0)
+                            .text_style(lunco_theme::TypographyRole::Caption.text_style())
                             .color(muted),
                     );
                 });

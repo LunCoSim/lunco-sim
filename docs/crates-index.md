@@ -184,7 +184,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | :--- | :--- |
 | **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance tabs, tab/source-view commands, scene display state, pending close state, panel registration, perspective layout plans, menu contributions, the published `WorkbenchSnapshot`, and shell scheduling labels. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
 | **`lunco-viewport-core`** | Small renderer-independent measured viewport geometry contract. Owns the physical-pixel `PanelRect` value shared by scene, camera, editor, and shell adapters without coupling that value to egui or the Workbench implementation. |
-| **`lunco-workbench-widgets`** | Shell-independent egui presentation primitives: semantic vector icons, standard text editors, and consistent hierarchy rows. Lightweight panel crates use it without linking the concrete dock shell. |
+| **`lunco-workbench-widgets`** | Shell-independent egui presentation primitives: semantic vector icons, standard text editors, and consistent hierarchy rows styled by `Theme.typography.tree`. Lightweight panel crates use it without linking the concrete dock shell. |
 | **`lunco-workbench-layout`** | Renderer-independent `egui_dock` layout state: perspective registration/activation, dock snapshots, panel placement, split sanitization, and scene-interaction synchronization. It consumes workbench contracts/state without the concrete Bevy/egui shell. |
 | **`lunco-workbench-perf-ui`** | Reusable performance capability: persisted HUD settings, typed toggle command, Bevy frame diagnostics, and live `PerfStats`. Physics adapters publish optional step timing into this package; the concrete shell only renders the values. |
 | **`lunco-workbench`** | The concrete IDE-like shell: `bevy_egui` rendering, panel-host consumption, viewport integration, and shell-owned command observers. Dock layout state and perspective materialization are supplied by `lunco-workbench-layout`; headless adapters use the core/layout contracts without linking this shell. |
@@ -425,7 +425,7 @@ The workspace hashing substrate. Fast tier provides dependency-free, wasm-clean 
 Content-addressed precompute disk cache. Provides the `bake_or_load` mechanism to run expensive pure functions once, persist the artifact keyed by its content hash (using `lunco-hash` and `lunco-storage`), and transparently load it on subsequent runs and networked peers. Serves as the home for terrain derived layers, horizon bakes, collider/mesh bakes, and USD stage compositions.
 
 **`lunco-theme`**
-Centralized design tokens based on the Catppuccin palette. Provides semantic tokens for general UI (accent, success, error) and schematic-specific colors for diagram wires and badges, ensuring visual consistency across all panels.
+Centralized design tokens based on the Catppuccin palette. Provides semantic colors for general UI and schematic editors, plus theme-owned egui typography roles for headings, body copy, buttons, labels, tree rows, captions, and dense data.
 
 **`lunco-settings`**
 Centralised user-settings system. Persists one namespaced JSON file at `<OS config dir>/lunco/settings.json` with auto-save on change, giving subsystems a single place to read and write per-user preferences. It also owns the application-wide `DownloadSettings` policy: total attempts, exponential retry delay, and delay cap.

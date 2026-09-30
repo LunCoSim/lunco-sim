@@ -354,7 +354,7 @@ pub fn draw_render_recovery_banner(
                                 egui::RichText::new(icon_label)
                                     .color(color)
                                     .strong()
-                                    .size(18.0),
+                                    .text_style(lunco_theme::TypographyRole::Section.text_style()),
                             );
                             ui.label(egui::RichText::new(title).color(color).strong());
                         });

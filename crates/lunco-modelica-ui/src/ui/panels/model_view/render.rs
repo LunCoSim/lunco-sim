@@ -247,7 +247,7 @@ impl InstancePanel for ModelViewPanel {
                                 "Read-only"
                             })
                             .color(theme.tokens.warning)
-                            .size(14.0),
+                            .text_style(lunco_theme::TypographyRole::Label.text_style()),
                         );
                         ui.label(
                             egui::RichText::new(if generated_document {
@@ -256,7 +256,6 @@ impl InstancePanel for ModelViewPanel {
                                 "Read-only library model — edits won't stick. Duplicate it to your workspace to make changes."
                             })
                             .color(theme.tokens.warning)
-                            .size(12.0),
                         );
                         ui.add_space(ui.available_width() - 170.0);
                         if ui.button("Duplicate to edit").clicked() {
@@ -861,9 +860,13 @@ fn render_docs_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         .show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 if let Some(name) = &class_name {
-                    ui.label(egui::RichText::new(name).size(22.0).strong());
+                    ui.label(
+                        egui::RichText::new(name)
+                            .text_style(lunco_theme::TypographyRole::Title.text_style())
+                            .strong(),
+                    );
                     if let Some(desc) = &class_description {
-                        ui.label(egui::RichText::new(desc).size(13.0).italics());
+                        ui.label(egui::RichText::new(desc).italics());
                     }
                     ui.add_space(12.0);
                 }
@@ -876,7 +879,11 @@ fn render_docs_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                     ui.add_space(24.0);
                     ui.separator();
                     ui.add_space(8.0);
-                    ui.label(egui::RichText::new("Revisions").strong().size(15.0));
+                    ui.label(
+                        egui::RichText::new("Revisions")
+                            .strong()
+                            .text_style(lunco_theme::TypographyRole::Section.text_style()),
+                    );
                     ui.add_space(6.0);
                     lunco_modelica_docs_ui::render_html_as_markdown(ui, ctx, 760.0, revs);
                 }
@@ -1005,13 +1012,12 @@ fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         egui::vec2(380.0, 170.0),
         &theme,
         |ui| {
-            ui.label(egui::RichText::new("Icon").size(24.0));
-            ui.label(egui::RichText::new("No icon defined for this class").strong());
             ui.label(
-                egui::RichText::new("Add an Icon annotation in the Text tab.")
-                    .italics()
-                    .size(11.0),
+                egui::RichText::new("Icon")
+                    .text_style(lunco_theme::TypographyRole::Title.text_style()),
             );
+            ui.label(egui::RichText::new("No icon defined for this class").strong());
+            ui.label(egui::RichText::new("Add an Icon annotation in the Text tab.").italics());
         },
     );
 }

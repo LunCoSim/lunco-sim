@@ -97,8 +97,7 @@ fn code_panel_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                 .to_owned()
                 + "Arbitrary .mo/.py attachment is not available from this panel yet.",
         )
-        .weak()
-        .small(),
+        .weak(),
     );
 }
 

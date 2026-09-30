@@ -364,7 +364,7 @@ impl Panel for ComponentPalettePanel {
                 } else {
                     format!("{} of {} matching", visible, pre_filter_total)
                 })
-                .size(10.0)
+                .text_style(lunco_theme::TypographyRole::Caption.text_style())
                 .color(muted_text),
             );
             if (!query_lc.is_empty() || selected_category.is_some())
@@ -478,7 +478,6 @@ impl Panel for ComponentPalettePanel {
                                 "+ {} more — refine the search",
                                 scored.len() - shown_cap
                             ))
-                            .size(10.0)
                             .italics()
                             .color(muted_text),
                         );
@@ -733,12 +732,19 @@ fn render_component_row(
                 // ends up highlighting characters instead of starting
                 // a palette → canvas drag.
                 ui.add(
-                    egui::Label::new(egui::RichText::new(comp.short_name()).size(12.0))
-                        .selectable(false),
+                    egui::Label::new(
+                        egui::RichText::new(comp.short_name())
+                            .text_style(lunco_theme::TypographyRole::Label.text_style()),
+                    )
+                    .selectable(false),
                 );
                 ui.add(
-                    egui::Label::new(egui::RichText::new(&comp.category).size(9.0).color(muted))
-                        .selectable(false),
+                    egui::Label::new(
+                        egui::RichText::new(&comp.category)
+                            .text_style(lunco_theme::TypographyRole::Caption.text_style())
+                            .color(muted),
+                    )
+                    .selectable(false),
                 );
             });
         })
@@ -788,11 +794,15 @@ fn chip(ui: &mut egui::Ui, name: &str, color: egui::Color32, count: usize, selec
     // Latte. Non-selected chips inherit the category `color` itself,
     // which is already a schematic-token value.
     let resp = ui.add(
-        egui::Button::new(egui::RichText::new(label).size(11.0).color(if selected {
-            egui::Color32::WHITE
-        } else {
-            color
-        }))
+        egui::Button::new(
+            egui::RichText::new(label)
+                .text_style(lunco_theme::TypographyRole::Button.text_style())
+                .color(if selected {
+                    egui::Color32::WHITE
+                } else {
+                    color
+                }),
+        )
         .fill(fill)
         .stroke(egui::Stroke::new(1.0, stroke_color)),
     );

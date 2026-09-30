@@ -12,6 +12,7 @@ lunco-core = { path = "../lunco-core" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-exposure-core = { path = "../lunco-exposure-core" }
 lunco-settings = { path = "../lunco-settings" }
+lunco-theme = { path = "../lunco-theme" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 serde = { workspace = true }
 

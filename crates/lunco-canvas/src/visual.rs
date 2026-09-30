@@ -284,7 +284,7 @@ impl NodeVisual for PlaceholderNodeVisual {
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 &node.label,
-                egui::FontId::proportional(12.0),
+                lunco_theme::TypographyRole::Label.font_id(painter.ctx().global_style().as_ref()),
                 egui::Color32::from_rgb(220, 220, 225),
             );
         }

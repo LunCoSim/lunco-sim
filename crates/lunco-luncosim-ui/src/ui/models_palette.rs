@@ -365,9 +365,7 @@ fn models_palette_content(
             }
         });
         ui.label(
-            egui::RichText::new("Click a USD body in the scene to author the program.")
-                .weak()
-                .small(),
+            egui::RichText::new("Click a USD body in the scene to author the program.").weak(),
         );
         ui.separator();
     }
@@ -435,8 +433,7 @@ fn models_palette_content(
         egui::RichText::new(
         "Select a document-backed USD body. The attachment is authored in the USD scene layer and uses the normal projection; sources without declared ports require explicit wiring before they step.",
         )
-        .weak()
-        .small(),
+        .weak(),
     );
 }
 

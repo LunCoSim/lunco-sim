@@ -857,7 +857,7 @@ pub(crate) fn render_workspace_doc(
                 ui.visuals().weak_text_color(),
             )
         };
-        ui.label(egui::RichText::new(text).color(color).small().italics());
+        ui.label(egui::RichText::new(text).color(color).italics());
         return;
     }
     for class in &classes {

@@ -133,7 +133,7 @@ impl BrowserSection for TwinDatasetsSection {
         ui.label(
             egui::RichText::new(format!("{installed}/{} ready", rows.len()))
                 .weak()
-                .small(),
+                .text_style(lunco_theme::TypographyRole::DenseData.text_style()),
         );
 
         enum Action {

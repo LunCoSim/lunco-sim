@@ -115,11 +115,14 @@ pub fn label(
 ) -> egui::Response {
     ui.add_sized(
         row_size(ui, width),
-        egui::Button::new(text)
-            .right_text(egui::Atom::grow())
-            .truncate()
-            .sense(sense)
-            .frame(false),
+        egui::Button::new(
+            text.into()
+                .text_style(lunco_theme::TypographyRole::Tree.text_style()),
+        )
+        .right_text(egui::Atom::grow())
+        .truncate()
+        .sense(sense)
+        .frame(false),
     )
 }
 
@@ -136,8 +139,12 @@ pub fn selectable_label(
 ) -> egui::Response {
     ui.add_sized(
         row_size(ui, width),
-        egui::Button::selectable(selected, text)
-            .right_text(egui::Atom::grow())
-            .truncate(),
+        egui::Button::selectable(
+            selected,
+            text.into()
+                .text_style(lunco_theme::TypographyRole::Tree.text_style()),
+        )
+        .right_text(egui::Atom::grow())
+        .truncate(),
     )
 }

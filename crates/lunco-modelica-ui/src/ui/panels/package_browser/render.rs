@@ -124,7 +124,10 @@ pub(crate) fn render_node_single_ro(
                             "Memory"
                         }
                     };
-                    ui.label(egui::RichText::new(icon).size(11.0));
+                    ui.label(
+                        egui::RichText::new(icon)
+                            .text_style(lunco_theme::TypographyRole::Caption.text_style()),
+                    );
                 }
                 let mut label = egui::RichText::new(name.as_str());
                 if is_active {

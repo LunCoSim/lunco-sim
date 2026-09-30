@@ -126,7 +126,11 @@ impl Panel for JournalPanel {
                 }
                 None => "(no active document)".to_string(),
             };
-            ui.label(egui::RichText::new(label).size(10.0).color(muted));
+            ui.label(
+                egui::RichText::new(label)
+                    .text_style(lunco_theme::TypographyRole::Caption.text_style())
+                    .color(muted),
+            );
         });
         ui.separator();
 
@@ -137,7 +141,7 @@ impl Panel for JournalPanel {
                     egui::RichText::new(
                         "(no edits yet — add a component, draw a connection, or paste source)",
                     )
-                    .size(10.0)
+                    .text_style(lunco_theme::TypographyRole::Body.text_style())
                     .italics()
                     .color(muted),
                 );
@@ -155,31 +159,35 @@ impl Panel for JournalPanel {
                     let offset = (row.at_ms.saturating_sub(session_start_ms) as f32) / 1000.0;
                     let ts = format!("[+{offset:>6.2}s]");
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(&ts).monospace().size(10.0).color(muted));
+                        ui.label(
+                            egui::RichText::new(&ts)
+                                .text_style(lunco_theme::TypographyRole::DenseCode.text_style())
+                                .color(muted),
+                        );
                         ui.label(
                             egui::RichText::new(format!("L{:>4}", row.lamport))
                                 .monospace()
-                                .size(10.0)
+                                .text_style(lunco_theme::TypographyRole::DenseCode.text_style())
                                 .color(muted),
                         );
                         ui.label(
                             egui::RichText::new(&row.tag)
                                 .monospace()
-                                .size(10.0)
+                                .text_style(lunco_theme::TypographyRole::DenseCode.text_style())
                                 .strong()
                                 .color(row.color),
                         );
                         ui.label(
                             egui::RichText::new(&row.summary)
                                 .monospace()
-                                .size(11.0)
+                                .text_style(lunco_theme::TypographyRole::DenseCode.text_style())
                                 .color(theme.tokens.text),
                         );
                         if !row.author.is_empty() {
                             ui.label(
                                 egui::RichText::new(format!("@{}", row.author))
                                     .monospace()
-                                    .size(10.0)
+                                    .text_style(lunco_theme::TypographyRole::DenseCode.text_style())
                                     .color(muted),
                             );
                         }

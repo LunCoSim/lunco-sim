@@ -887,7 +887,11 @@ fn register_settings_submenu(world: &mut World) {
         return;
     };
     menus.register_settings_submenu("Modelica", |ui, ctx| {
-        ui.label(egui::RichText::new("Code Editor").weak().small());
+        ui.label(
+            egui::RichText::new("Code Editor")
+                .text_style(lunco_theme::TypographyRole::Label.text_style())
+                .weak(),
+        );
         let Some((original_word_wrap, original_auto_indent)) = ctx
             .resource::<panels::code_editor::EditorBufferState>()
             .map(|buf| (buf.word_wrap, buf.auto_indent))
@@ -907,7 +911,11 @@ fn register_settings_submenu(world: &mut World) {
             });
         }
         ui.separator();
-        ui.label(egui::RichText::new("Component Palette").weak().small());
+        ui.label(
+            egui::RichText::new("Component Palette")
+                .text_style(lunco_theme::TypographyRole::Label.text_style())
+                .weak(),
+        );
         let Some(mut palette) = ctx
             .resource::<panels::canvas_diagram::PaletteSettings>()
             .cloned()
@@ -929,7 +937,11 @@ fn register_settings_submenu(world: &mut World) {
             ctx.set_resource(palette);
         }
         ui.separator();
-        ui.label(egui::RichText::new("Diagram").weak().small());
+        ui.label(
+            egui::RichText::new("Diagram")
+                .text_style(lunco_theme::TypographyRole::Label.text_style())
+                .weak(),
+        );
         let Some(mut limits) = ctx
             .resource::<panels::canvas_diagram::DiagramProjectionLimits>()
             .cloned()
@@ -1041,8 +1053,8 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
 
     ui.label(
         egui::RichText::new("Assets — source library")
-            .weak()
-            .small(),
+            .text_style(lunco_theme::TypographyRole::Label.text_style())
+            .weak(),
     );
 
     match state.as_ref() {

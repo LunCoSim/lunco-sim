@@ -65,7 +65,8 @@ including persistence and viewport integration. Its dock resource and
 perspective materialization live in the focused `src/layout.rs` module; menu,
 status, and viewport code consume that private shell boundary. The
 `lunco-workbench-widgets` crate owns reusable icons, text-editor builders, and
-hierarchy-row presentation without depending on the shell. The optional
+hierarchy-row presentation without depending on the shell. Its shared tree rows
+resolve `Theme.typography.tree`. The optional
 `lunco-workbench-guided-ui` crate owns guided HUD, authored action buttons,
 spotlight, coach-mark, and recovery presentation without depending on the shell.
 Action buttons dispatch a stable id to a registered Rhai tool hook through the
@@ -617,8 +618,8 @@ navigation actions.
 
 `lunco-workbench-widgets::tree::{branch, leaf}` is the single presentation owner for
 hierarchy rows rendered by workbench panels. It provides the common disclosure
-control, full-width row allocation, persistent expansion identity, and
-indented child body. `branch` also reports whether expansion changed in the
+control, themed tree text, full-width row allocation, persistent expansion
+identity, and indented child body. `branch` also reports whether expansion changed in the
 current frame so virtualized panels can invalidate a cached row index without
 re-reading every branch. USD prim/stage browsers, entity trees, telemetry trees,
 the Ports entity browser, Modelica package/class trees, Twin folders, and
@@ -910,7 +911,7 @@ crates):
 
 | KEY | Owner crate | Purpose |
 |-----|-------------|---------|
-| `ui` | `lunco-workbench` | Tab styling (italic for unsaved/Untitled, dirty-dot glyph), font sizes |
+| `ui` | `lunco-workbench` | Tab styling (italic for unsaved/Untitled, dirty-dot glyph); shared typography roles live in `lunco-theme` |
 | `modelica.naming` | `lunco-modelica-ui` | Class↔file rename behaviour (`Always`/`Ask`/`Never`), default-filename-from-class, tab-title source (class vs filename) |
 | `modelica.canvas` | `lunco-modelica-ui` | Diagram defaults (grid snap, default port side, auto-layout) |
 | `modelica.canvas.animation` | `lunco-modelica-ui` | Tween/pulse durations, ease curve, per-origin animation policy (Local / Api / Remote — see `20-domain-modelica.md` § 9c) |
@@ -1001,6 +1002,12 @@ surfaces, and user-global preferences remain in `settings.json`.
 
 Both are simple pass-throughs to egui and `bevy_workbench`-style registries;
 no novel design.
+
+`lunco-theme::ThemePlugin` applies the shared egui typography roles in
+`ThemeApplySet`. The workbench orders its main render set after that boundary
+and application overlays after the workbench; direct egui render systems placed
+before the workbench must also run after `ThemeApplySet`. The workbench remains
+the owner of palette-derived `egui::Visuals`.
 
 The workbench owns the scene/editor keyboard handoff. A press resolved to the
 main 3D scene surrenders any retained egui `TextEdit` focus before publishing

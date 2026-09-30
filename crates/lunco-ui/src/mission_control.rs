@@ -189,7 +189,11 @@ impl Panel for MissionControl {
                 });
                 // The shared option list is owned by lunco-time and dispatches
                 // the single causal SetTimeTransport command.
-                ui.label(egui::RichText::new("Physics realtime").weak().small());
+                ui.label(
+                    egui::RichText::new("Physics realtime")
+                        .text_style(lunco_theme::TypographyRole::Label.text_style())
+                        .weak(),
+                );
                 egui::Grid::new("time_multipliers")
                     .num_columns(4)
                     .spacing([4.0, 4.0])
@@ -295,7 +299,12 @@ impl Panel for MissionControl {
                                     lunco_core_session::PossessionPolicy::Exclusive
                                 );
                             let resp =
-                                ui.add_enabled(!locked, egui::Button::new("Possess").small());
+                                ui.add_enabled(
+                                    !locked,
+                                    egui::Button::new(egui::RichText::new("Possess").text_style(
+                                        lunco_theme::TypographyRole::Button.text_style(),
+                                    )),
+                                );
                             if locked {
                                 resp.on_disabled_hover_text(
                                     "Controlled by another player (One-each policy)",

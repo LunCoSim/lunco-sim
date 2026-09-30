@@ -841,11 +841,11 @@ impl Panel for UsdCanvasPanel {
             }
 
             ui.horizontal(|ui| {
-                ui.small("Signals flow toward the arrowhead");
+                ui.label("Signals flow toward the arrowhead");
                 ui.separator();
                 ui.colored_label(lunco_theme::active(ui.ctx()).tokens.port_input, "input");
                 ui.colored_label(lunco_theme::active(ui.ctx()).tokens.port_output, "output");
-                ui.small("Names come from the USD port contract");
+                ui.label("Names come from the USD port contract");
             });
             if let Some(error) = state.last_error.as_deref() {
                 ui.colored_label(

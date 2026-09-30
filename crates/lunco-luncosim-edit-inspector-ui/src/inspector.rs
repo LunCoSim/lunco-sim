@@ -978,7 +978,7 @@ fn usd_editor_session_context(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             if projection_ready {
                 ui.small(format!("projected generation {projected_generation}"));
             } else {
-                ui.small("USD projection pending");
+                ui.label("USD projection pending");
             }
             if let Some((generation, base_revision, dirty)) = document_state {
                 ui.small(format!("document generation {generation}"));
@@ -989,7 +989,7 @@ fn usd_editor_session_context(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             }
         });
         if proposals.is_empty() {
-            ui.small("proposal: none");
+            ui.label("proposal: none");
         } else {
             for proposal in proposals {
                 ui.small(format!(
@@ -1097,7 +1097,7 @@ fn usd_preview_transform_section(
     egui::CollapsingHeader::new("Transform")
         .default_open(true)
         .show(ui, |ui| {
-            ui.small("Local · canonical metres · Euler XYZ degrees · scale unitless");
+            ui.label("Local · canonical metres · Euler XYZ degrees · scale unitless");
             let (translate_x, translate_y, translate_z) = ui
                 .horizontal(|ui| {
                     (
@@ -1657,7 +1657,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
             ui.separator();
         }
         if is_component {
-            ui.small("Standard USD properties · component policy stays in Rhai");
+            ui.label("Standard USD properties · component policy stays in Rhai");
             ui.horizontal_wrapped(|ui| {
                 ui.label("Recipe:");
                 ui.monospace("component_editor::update_plan");
@@ -1725,7 +1725,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
                             format!("invalid · {provenance}"),
                         );
                         if let Some(diagnostic) = &p.diagnostic {
-                            ui.small(diagnostic);
+                            ui.label(diagnostic);
                         }
                     });
                     continue;
@@ -1807,7 +1807,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
                 ui.separator();
                 ui.label(egui::RichText::new("Review proposals").strong());
                 if proposals.is_empty() {
-                    ui.small("No proposal for this component.");
+                    ui.label("No proposal for this component.");
                 } else {
                     for proposal in &proposals {
                         ui.horizontal_wrapped(|ui| {
@@ -1833,7 +1833,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
                                     );
                                 }
                                 UsdProposalState::Muted => {
-                                    ui.small("muted; review it in the USD browser");
+                                    ui.label("muted; review it in the USD browser");
                                 }
                             }
                         });
@@ -2791,11 +2791,7 @@ fn obstacle_field_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         if ui.button("♻ Regenerate").clicked() {
             regen = true;
         }
-        ui.label(
-            egui::RichText::new("Field rebuilds on slider release.")
-                .small()
-                .weak(),
-        );
+        ui.label(egui::RichText::new("Field rebuilds on slider release.").weak());
 
         if regen {
             regen_spec = Some(spec.clone());
@@ -2853,11 +2849,7 @@ fn joint_control_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, j: JointReadout)
         });
     }
     if j.wired {
-        ui.label(
-            egui::RichText::new("Driven by a wire — setpoint is transient")
-                .small()
-                .weak(),
-        );
+        ui.label(egui::RichText::new("Driven by a wire — setpoint is transient").weak());
     }
 }
 
@@ -3559,11 +3551,7 @@ fn modelica_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: En
         None => return,
     };
     if params.is_empty() {
-        ui.label(
-            egui::RichText::new("(no tunable parameters)")
-                .weak()
-                .small(),
-        );
+        ui.label(egui::RichText::new("(no tunable parameters)").weak());
         return;
     }
 

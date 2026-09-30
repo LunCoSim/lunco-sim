@@ -106,7 +106,7 @@ fn draw_control_blackout(
                             ui.label(
                                 egui::RichText::new("NO LINK")
                                     .color(alert)
-                                    .size(16.0)
+                                    .text_style(lunco_theme::TypographyRole::Label.text_style())
                                     .strong(),
                             );
                         });
@@ -117,8 +117,7 @@ fn draw_control_blackout(
                                 "commands are not reaching {} — autonomy only",
                                 down.join(", ")
                             ))
-                            .color(theme.tokens.text)
-                            .size(13.0),
+                            .color(theme.tokens.text),
                         );
                     });
                 });

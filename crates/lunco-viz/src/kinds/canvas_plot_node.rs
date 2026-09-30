@@ -660,8 +660,12 @@ impl NodeVisual for PlotNodeVisual {
             // the inspector. egui's `Label::sense(hover)` lets us
             // attach a tooltip without affecting layout.
             let label_resp = child.add(
-                egui::Label::new(egui::RichText::new(title).small().color(theme.tokens.text))
-                    .sense(egui::Sense::hover()),
+                egui::Label::new(
+                    egui::RichText::new(title)
+                        .text_style(lunco_theme::TypographyRole::Label.text_style())
+                        .color(theme.tokens.text),
+                )
+                .sense(egui::Sense::hover()),
             );
             if label_resp.hovered() {
                 label_resp.on_hover_ui(|ui| {
@@ -675,7 +679,6 @@ impl NodeVisual for PlotNodeVisual {
                             "in-canvas plot — bound to a single \
                              scalar signal; drag corner to resize",
                         )
-                        .small()
                         .weak(),
                     );
                 });
@@ -833,7 +836,7 @@ impl NodeVisual for PlotNodeVisual {
             // `t` on the X axis. Theme-driven colour so they stay
             // readable on any card fill.
             let label_color = theme.tokens.text;
-            let font = egui::FontId::monospace(9.0);
+            let font = lunco_theme::TypographyRole::DenseCode.font_id(ctx.ui.style().as_ref());
             let pad = 3.0;
             let var = short_name(&self.data.signal_path);
             // y-axis: max top-left, min bottom-left

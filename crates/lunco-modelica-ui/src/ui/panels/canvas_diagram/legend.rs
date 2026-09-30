@@ -71,21 +71,18 @@ pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges:
                     });
                     ui.label(
                         egui::RichText::new("Colors follow authored connector Icons")
-                            .color(theme.tokens.text_subdued)
-                            .small(),
+                            .color(theme.tokens.text_subdued),
                     );
                     ui.label(
                         egui::RichText::new("Hover a wire for endpoint values and flow")
-                            .color(theme.tokens.text_subdued)
-                            .small(),
+                            .color(theme.tokens.text_subdued),
                     );
                     ui.add_space(4.0);
 
                     if entries.is_empty() {
                         ui.label(
                             egui::RichText::new("No typed connections in this diagram")
-                                .color(theme.tokens.text_subdued)
-                                .small(),
+                                .color(theme.tokens.text_subdued),
                         );
                     } else {
                         for (connector, entry) in entries {

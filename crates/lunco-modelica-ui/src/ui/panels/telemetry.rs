@@ -381,7 +381,11 @@ impl Panel for TelemetryPanel {
             .and_then(|v| v.target_plot);
         let mut new_target: Option<Option<lunco_viz::VizId>> = None;
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Plot:").size(11.0).color(muted));
+            ui.label(
+                egui::RichText::new("Plot:")
+                    .text_style(lunco_theme::TypographyRole::Label.text_style())
+                    .color(muted),
+            );
             let label = match pinned {
                 None => "Active plot".to_string(),
                 Some(id) => plot_options
@@ -578,7 +582,8 @@ impl Panel for TelemetryPanel {
                                         ui.painter()
                                             .layout_no_wrap(
                                                 desc.to_owned(),
-                                                egui::FontId::proportional(11.0),
+                                                lunco_theme::TypographyRole::Caption
+                                                    .font_id(ui.style().as_ref()),
                                                 muted,
                                             )
                                             .size()
@@ -600,7 +605,10 @@ impl Panel for TelemetryPanel {
                                             egui::RichText::new(desc)
                                                 .italics()
                                                 .color(muted)
-                                                .size(11.0),
+                                                .text_style(
+                                                    lunco_theme::TypographyRole::Caption
+                                                        .text_style(),
+                                                ),
                                             desc_width,
                                             egui::Sense::hover(),
                                         )
@@ -660,7 +668,7 @@ fn render_runtime_hint(ui: &mut egui::Ui, muted: egui::Color32, ctx: &mut PanelC
         .and_then(|w| w.active_document);
     let mut compile_doc: Option<lunco_doc::DocumentId> = None;
     ui.horizontal_wrapped(|ui| {
-        ui.label(egui::RichText::new(msg).color(muted).size(11.0));
+        ui.label(egui::RichText::new(msg).color(muted));
         if let Some(doc) = active_doc {
             if ui
                 .small_button("Compile")
@@ -767,7 +775,6 @@ fn render_selected_components_inspector(
                     egui::RichText::new(
                         "No active class — open a model class on the canvas to edit parameters.",
                     )
-                    .size(11.0)
                     .color(muted),
                 );
                 return;
@@ -802,7 +809,7 @@ fn render_selected_components_inspector(
                         if row.parameters.is_empty() {
                             ui.label(
                                 egui::RichText::new("(no parameters)")
-                                    .size(11.0)
+                                    .text_style(lunco_theme::TypographyRole::Caption.text_style())
                                     .color(muted)
                                     .italics(),
                             );
@@ -1394,7 +1401,7 @@ fn render_active_class_parameters(ui: &mut egui::Ui, ctx: &mut PanelCtx, muted: 
                             egui::Label::new(
                                 egui::RichText::new(path.clone())
                                     .color(muted)
-                                    .size(11.0),
+                                    .text_style(lunco_theme::TypographyRole::Tree.text_style()),
                             )
                             .sense(egui::Sense::hover()),
                         );
@@ -1404,7 +1411,7 @@ fn render_active_class_parameters(ui: &mut egui::Ui, ctx: &mut PanelCtx, muted: 
                         ui.label(
                             egui::RichText::new(&display_value)
                                 .monospace()
-                                .size(11.0),
+                                .text_style(lunco_theme::TypographyRole::Code.text_style()),
                         );
                     }
                 }

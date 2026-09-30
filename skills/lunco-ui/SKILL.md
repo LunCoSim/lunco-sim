@@ -31,6 +31,7 @@ and design decisions. This skill is a quick-reference summary.
 2. **UI never mutates state** — all interactions emit typed command events (the `#[Command]` structs, triggered via `ctx.trigger(...)`) that observers handle. This makes the UI AI-native: AI observes the same command stream as humans and can emit identical commands.
 3. **Panels are `Panel` impls** (the contract lives in `lunco_workbench_core`) — registered via `lunco_workbench_core::WorkbenchPanelAppExt::register_panel()`. The concrete shell drains that registration into its docking system.
 4. **Headless must work** — removing UI plugins (Layers 3 and 4) leaves a functioning simulation. See `AGENTS.md` §4.1 for the four-layer architecture.
+5. **Typography roles are shared.** `ThemePlugin` maps egui's built-in styles and `TypographyRole` styles from `Theme.typography` across egui surfaces in `ThemeApplySet`. Render systems outside the workbench should run after that set. Let ordinary widgets use the mapped Body, Button, Heading, Small, and Monospace styles. Use `TypographyRole::text_style()` for `RichText` and `TypographyRole::font_id(ui.style())` for custom painter text. Guidance and status messages use Body; Caption is for secondary metadata and compact status-bar summaries. Dense data roles are for chart labels, timestamps, and similarly compact values. Authored model text and world-space labels retain their content/spatial owner.
 
 The workbench is deliberately split into contracts, reusable presentation,
 optional guided presentation, and the concrete shell. `lunco-workbench-core` contains
@@ -174,7 +175,8 @@ typed navigation actions. Do not add a per-domain search resource or make the
 browser search generated ids.
 
 For hierarchy rows, use `lunco_workbench_widgets::tree::{branch, leaf}` and
-`tree::{label, selectable_label}` for row text. The shared renderer owns the
+`tree::{label, selectable_label}` for row text. The shared renderer resolves
+`Theme.typography.tree` and owns the
 disclosure control, full-width row geometry, left-aligned label presentation,
 persistent expansion identity, indentation, and the default depth-based
 expansion policy. Domain panels own only their view-model filtering, stable

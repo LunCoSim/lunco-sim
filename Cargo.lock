@@ -8878,6 +8878,7 @@ dependencies = [
  "lunco-networking-scenario",
  "lunco-networking-sync",
  "lunco-storage",
+ "lunco-theme",
  "lunco-twin",
  "lunco-twin-journal",
  "lunco-usd-compose",
@@ -10924,6 +10925,7 @@ dependencies = [
  "egui",
  "lunco-assets-core",
  "lunco-assets-datasets",
+ "lunco-theme",
  "lunco-workbench-browser",
  "lunco-workspace",
 ]
@@ -11007,6 +11009,7 @@ dependencies = [
  "lunco-core-runtime",
  "lunco-exposure-core",
  "lunco-settings",
+ "lunco-theme",
  "lunco-workbench-core",
  "serde",
 ]
@@ -11076,6 +11079,7 @@ name = "lunco-workbench-widgets"
 version = "0.1.0-dev"
 dependencies = [
  "egui",
+ "lunco-theme",
 ]
 
 [[package]]

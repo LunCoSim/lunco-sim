@@ -157,7 +157,7 @@ fn spawn_palette_content(
     }
 
     ui.separator();
-    ui.small("Click an item, then click in scene to place.");
-    ui.small("Or drag an item from here, then click in scene to place.");
-    ui.small("Use Cancel to back out (Escape / Backspace by default).");
+    ui.label("Click an item, then click in scene to place.");
+    ui.label("Or drag an item from here, then click in scene to place.");
+    ui.label("Use Cancel to back out (Escape / Backspace by default).");
 }

@@ -405,8 +405,8 @@ impl Panel for CinematicPanel {
             {
                 ctx.trigger(AddCameraHere { name: None });
             }
-            ui.small("Fly the view, then capture — the camera is authored into");
-            ui.small("the scene and saved with it.");
+            ui.label("Fly the view, then capture — the camera is authored into");
+            ui.label("the scene and saved with it.");
 
             ui.add_space(6.0);
             let show = ctx.resource::<CinematicViz>().is_some_and(|v| v.show_paths);
@@ -437,12 +437,12 @@ fn transport_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     // an explicit no-target state, not permission to control another domain.
     let path_domain = ctx.resource::<CinematicTarget>().and_then(|t| t.domain);
     let Some(domain) = path_domain else {
-        ui.small("No unique authored camera path is active.");
+        ui.label("No unique authored camera path is active.");
         return;
     };
     let target = path_domain;
     let Some(pb) = ctx.get::<Playback>(domain) else {
-        ui.small("The active camera path has no playback domain.");
+        ui.label("The active camera path has no playback domain.");
         return;
     };
     let (start, end, head, rate, looping) = (pb.start, pb.end, pb.head, pb.rate, pb.looping);
@@ -496,7 +496,7 @@ fn transport_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     });
 
     if !bounded {
-        ui.small("No keyed animation in this scene yet.");
+        ui.label("No keyed animation in this scene yet.");
         return;
     }
 

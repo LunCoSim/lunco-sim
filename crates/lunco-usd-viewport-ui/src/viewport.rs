@@ -243,7 +243,7 @@ fn render_preview_view(
         }
     });
     if mode == UsdPreviewViewMode::Visual {
-        ui.small("L-drag pan · gizmo handles edit · R-drag orbit · M-drag pan · wheel zoom");
+        ui.label("L-drag pan · gizmo handles edit · R-drag orbit · M-drag pan · wheel zoom");
     }
     ui.separator();
 

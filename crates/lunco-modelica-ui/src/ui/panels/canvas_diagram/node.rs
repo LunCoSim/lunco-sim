@@ -167,14 +167,14 @@ fn painter_rect_diagnostic(
         egui::pos2(rect.center().x, rect.center().y - 8.0),
         egui::Align2::CENTER_CENTER,
         title,
-        egui::FontId::proportional(11.0),
+        lunco_theme::TypographyRole::Label.font_id(painter.ctx().global_style().as_ref()),
         accent,
     );
     painter.text(
         egui::pos2(rect.center().x, rect.center().y + 10.0),
         egui::Align2::CENTER_CENTER,
         message,
-        egui::FontId::proportional(8.0),
+        lunco_theme::TypographyRole::Caption.font_id(painter.ctx().global_style().as_ref()),
         text,
     );
 }
@@ -625,17 +625,34 @@ pub(super) fn paint_hover_card(
         }
     }
 
-    let line_h = 14.0_f32;
     let pad = 6.0_f32;
-    // Estimate width: 7 px per char (monospace). egui doesn't expose
-    // `Painter::text_size` cheaply; this is plenty for the typical
-    // path widths we render.
-    let text_w = lines
+    let line_gap = ui.spacing().item_spacing.y;
+    let line_layouts = lines
         .iter()
-        .map(|(s, _)| s.chars().count() as f32 * 7.0)
+        .map(|(line, is_title)| {
+            let font = if *is_title {
+                lunco_theme::TypographyRole::Label.font_id(ui.style().as_ref())
+            } else {
+                lunco_theme::TypographyRole::DenseCode.font_id(ui.style().as_ref())
+            };
+            let color = if *is_title {
+                overlay_text
+            } else {
+                overlay_text.gamma_multiply(0.85)
+            };
+            (painter.layout_no_wrap(line.clone(), font, color), color)
+        })
+        .collect::<Vec<_>>();
+    let text_w = line_layouts
+        .iter()
+        .map(|(galley, _)| galley.size().x)
         .fold(0.0_f32, f32::max);
     let card_w = (text_w + pad * 2.0).clamp(120.0, 360.0);
-    let card_h = lines.len() as f32 * line_h + pad * 2.0;
+    let text_h = line_layouts
+        .iter()
+        .map(|(galley, _)| galley.size().y)
+        .sum::<f32>();
+    let card_h = text_h + line_gap * lines.len().saturating_sub(1) as f32 + pad * 2.0;
 
     // Anchor card to the right of the cursor with a small offset;
     // flip to the left if we'd run off the canvas edge.
@@ -656,25 +673,9 @@ pub(super) fn paint_hover_card(
     );
 
     let mut y = origin.y + pad;
-    for (line, is_title) in &lines {
-        let font = if *is_title {
-            egui::FontId::proportional(13.0)
-        } else {
-            egui::FontId::monospace(11.0)
-        };
-        let color = if *is_title {
-            overlay_text
-        } else {
-            overlay_text.gamma_multiply(0.85)
-        };
-        painter.text(
-            egui::pos2(origin.x + pad, y),
-            egui::Align2::LEFT_TOP,
-            line,
-            font,
-            color,
-        );
-        y += line_h;
+    for (galley, color) in line_layouts {
+        painter.galley(egui::pos2(origin.x + pad, y), galley.clone(), color);
+        y += galley.size().y + line_gap;
     }
 }
 

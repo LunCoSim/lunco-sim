@@ -68,8 +68,7 @@ impl Panel for RhaiReplPanel {
         });
         ui.label(
             egui::RichText::new("Runs against the live app — same RunRhai path as the API/MCP.")
-                .weak()
-                .small(),
+                .weak(),
         );
         ui.separator();
 

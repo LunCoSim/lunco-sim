@@ -4053,7 +4053,7 @@ fn trace_arrow(ui: &mut egui::Ui, theme: &lunco_theme::Theme) {
         [22.0, 36.0],
         egui::Label::new(
             egui::RichText::new("→")
-                .size(20.0)
+                .text_style(lunco_theme::TypographyRole::Button.text_style())
                 .color(theme.tokens.text_subdued),
         ),
     );

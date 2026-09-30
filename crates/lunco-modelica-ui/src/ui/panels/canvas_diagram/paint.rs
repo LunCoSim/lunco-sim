@@ -100,7 +100,7 @@ pub(super) fn paint_wire_tooltip(
             egui::Id::new("lunco_modelica_wire_tooltip"),
         ))
         .with_clip_rect(painter.clip_rect());
-    let font = egui::FontId::proportional(11.0);
+    let font = lunco_theme::TypographyRole::DenseData.font_id(ctx.global_style().as_ref());
     let galley = top.layout_no_wrap(
         text.to_string(),
         font,

@@ -547,13 +547,10 @@ pub(crate) fn render_compile_class_picker(
         .show(ctx, |ui| {
             ui.heading(title);
             ui.separator();
-            ui.label(
-                egui::RichText::new(
-                    "This file is a package with more than one model. Pick \
+            ui.label(egui::RichText::new(
+                "This file is a package with more than one model. Pick \
                      the class you want to compile:",
-                )
-                .size(12.0),
-            );
+            ));
             ui.add_space(8.0);
             let mut selected = entry
                 .preselected

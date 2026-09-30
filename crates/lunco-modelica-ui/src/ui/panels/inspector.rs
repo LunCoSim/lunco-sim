@@ -271,7 +271,7 @@ impl Panel for InspectorPanel {
         ui.heading(&component_info.name);
         ui.label(
             egui::RichText::new(&component_info.type_name)
-                .size(11.0)
+                .text_style(lunco_theme::TypographyRole::Caption.text_style())
                 .color(muted),
         );
         if !component_info.description.is_empty() {
@@ -419,7 +419,11 @@ fn render_plot_node_editor(
         // fires on Enter / focus loss to avoid a write per
         // keystroke (each one would re-parse the document).
         ui.add_space(4.0);
-        ui.label(egui::RichText::new("Title").small().weak());
+        ui.label(
+            egui::RichText::new("Title")
+                .text_style(lunco_theme::TypographyRole::Label.text_style())
+                .weak(),
+        );
         let buf_id = egui::Id::new(("plot_title_buf", node_id.0));
         let mut buf: String = ui
             .memory(|m| m.data.get_temp::<String>(buf_id))
@@ -459,11 +463,7 @@ fn render_plot_node_editor(
         .unwrap_or_default();
 
     if sigs.is_empty() {
-        ui.label(
-            egui::RichText::new("(no signals yet — run a simulation to bind)")
-                .weak()
-                .small(),
-        );
+        ui.label(egui::RichText::new("(no signals yet — run a simulation to bind)").weak());
         return;
     }
 

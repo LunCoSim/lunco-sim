@@ -60,7 +60,7 @@ impl Label3D {
         Self {
             text: text.into(),
             offset: DVec3::ZERO,
-            font_size: 16.0,
+            font_size: theme.typography.body,
             color: Color::srgb_u8(
                 theme.colors.text.r(),
                 theme.colors.text.g(),

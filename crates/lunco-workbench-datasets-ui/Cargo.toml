@@ -10,6 +10,7 @@ bevy = { workspace = true }
 egui = { workspace = true }
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-theme = { path = "../lunco-theme" }
 lunco-workbench-browser = { path = "../lunco-workbench-browser" }
 lunco-workspace = { path = "../lunco-workspace" }
 

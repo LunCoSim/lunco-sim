@@ -644,7 +644,7 @@ impl JournalTokens {
     }
 }
 
-/// Core design tokens — colors, spacing, and rounding.
+/// Core design tokens — color, typography, spacing, and rounding.
 #[derive(Resource, Clone, Debug)]
 pub struct Theme {
     pub mode: ThemeMode,
@@ -661,6 +661,8 @@ pub struct Theme {
     /// Plot / timeseries colours. The signal-series palette lives here rather than
     /// hardcoded in `lunco-viz`, so plots follow the active theme like everything else.
     pub plot: PlotTokens,
+    /// Semantic egui font roles shared by every application UI surface.
+    pub typography: TypographyScale,
     /// Anchor + invert rules for re-coloring authored Modelica icon
     /// primitives so source library (designed for paper-white backgrounds) reads
     /// well under the active theme. Identity in light mode.
@@ -892,6 +894,131 @@ pub struct RoundingScale {
     pub panel: f32,
 }
 
+/// Semantic text roles used throughout LunCoSim's egui interfaces.
+///
+/// Sizes are egui logical points. Egui applies the operating-system scale
+/// factor separately, so these values remain consistent across display DPI.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypographyScale {
+    pub display: f32,
+    pub title: f32,
+    pub section: f32,
+    pub body: f32,
+    pub button: f32,
+    pub label: f32,
+    pub tree: f32,
+    pub caption: f32,
+    pub dense_data: f32,
+    pub dense_code: f32,
+    pub code: f32,
+}
+
+impl Default for TypographyScale {
+    fn default() -> Self {
+        Self {
+            display: 32.0,
+            title: 24.0,
+            section: 20.0,
+            body: 16.0,
+            button: 16.0,
+            label: 14.0,
+            tree: 14.0,
+            caption: 12.0,
+            dense_data: 11.0,
+            dense_code: 11.0,
+            code: 14.0,
+        }
+    }
+}
+
+/// A stable egui text-style key for a semantic typography role.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TypographyRole {
+    Display,
+    Title,
+    Section,
+    Body,
+    Button,
+    Label,
+    Tree,
+    Caption,
+    DenseData,
+    DenseCode,
+    Code,
+}
+
+impl TypographyRole {
+    /// Resolve this role through an egui style configured by [`TypographyScale`].
+    pub fn text_style(self) -> egui::TextStyle {
+        match self {
+            Self::Display => egui::TextStyle::Name("lunco.display".into()),
+            Self::Title => egui::TextStyle::Name("lunco.title".into()),
+            Self::Section => egui::TextStyle::Heading,
+            Self::Body => egui::TextStyle::Body,
+            Self::Button => egui::TextStyle::Button,
+            Self::Label => egui::TextStyle::Name("lunco.label".into()),
+            Self::Tree => egui::TextStyle::Name("lunco.tree".into()),
+            Self::Caption => egui::TextStyle::Small,
+            Self::DenseData => egui::TextStyle::Name("lunco.dense_data".into()),
+            Self::DenseCode => egui::TextStyle::Name("lunco.dense_code".into()),
+            Self::Code => egui::TextStyle::Monospace,
+        }
+    }
+
+    /// Resolve this role's font from the active egui style.
+    pub fn font_id(self, style: &egui::Style) -> egui::FontId {
+        self.text_style().resolve(style)
+    }
+}
+
+impl TypographyScale {
+    /// Apply role sizes to an egui style while retaining egui's named-style
+    /// resolution for widgets and text layout.
+    pub fn apply_to_style(&self, style: &mut egui::Style) {
+        use egui::{FontId, TextStyle};
+
+        style.text_styles.insert(
+            TextStyle::Name("lunco.display".into()),
+            FontId::proportional(self.display),
+        );
+        style.text_styles.insert(
+            TextStyle::Name("lunco.title".into()),
+            FontId::proportional(self.title),
+        );
+        style
+            .text_styles
+            .insert(TextStyle::Heading, FontId::proportional(self.section));
+        style
+            .text_styles
+            .insert(TextStyle::Body, FontId::proportional(self.body));
+        style
+            .text_styles
+            .insert(TextStyle::Button, FontId::proportional(self.button));
+        style.text_styles.insert(
+            TextStyle::Name("lunco.label".into()),
+            FontId::proportional(self.label),
+        );
+        style.text_styles.insert(
+            TextStyle::Name("lunco.tree".into()),
+            FontId::proportional(self.tree),
+        );
+        style
+            .text_styles
+            .insert(TextStyle::Small, FontId::proportional(self.caption));
+        style.text_styles.insert(
+            TextStyle::Name("lunco.dense_data".into()),
+            FontId::proportional(self.dense_data),
+        );
+        style.text_styles.insert(
+            TextStyle::Name("lunco.dense_code".into()),
+            FontId::monospace(self.dense_code),
+        );
+        style
+            .text_styles
+            .insert(TextStyle::Monospace, FontId::monospace(self.code));
+    }
+}
+
 impl Default for RoundingScale {
     fn default() -> Self {
         Self {
@@ -923,6 +1050,7 @@ impl Theme {
             schematic,
             journal,
             plot,
+            typography: TypographyScale::default(),
             modelica_icons,
             spacing: SpacingScale::default(),
             rounding: RoundingScale::default(),
@@ -944,6 +1072,7 @@ impl Theme {
             schematic,
             journal,
             plot,
+            typography: TypographyScale::default(),
             modelica_icons: ModelicaIconPalette::identity(),
             spacing: SpacingScale::default(),
             rounding: RoundingScale::default(),
@@ -995,8 +1124,9 @@ impl Theme {
             ThemeMode::Dark => Self::dark(),
             ThemeMode::Light => Self::light(),
         };
-        // Preserve overrides
+        // Preserve user-selected presentation across palette changes.
         new_theme.overrides = self.overrides.clone();
+        new_theme.typography = self.typography.clone();
         new_theme.revision = self.revision.wrapping_add(1);
         *self = new_theme;
     }
@@ -1083,6 +1213,13 @@ pub mod fonts;
 /// `Proportional` / `Monospace` font families.
 pub struct ThemePlugin;
 
+/// Ordering boundary for applying `Theme.typography` to egui styles.
+///
+/// Application UI systems that render outside the workbench should run after
+/// this set so their first frame and theme-change frame use the active roles.
+#[derive(bevy::ecs::schedule::SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ThemeApplySet;
+
 impl Plugin for ThemePlugin {
     fn build(&self, app: &mut App) {
         lunco_settings::ensure_download_settings(app);
@@ -1090,7 +1227,11 @@ impl Plugin for ThemePlugin {
             .init_resource::<fonts::FontsInstalled>()
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
-                (publish_active_theme, install_fallback_fonts_once),
+                publish_active_theme.in_set(ThemeApplySet),
+            )
+            .add_systems(
+                bevy_egui::EguiPrimaryContextPass,
+                install_fallback_fonts_once,
             );
     }
 }
@@ -1119,6 +1260,7 @@ fn publish_active_theme(mut contexts: bevy_egui::EguiContexts, theme: Res<Theme>
     let present = ctx.data(|d| d.get_temp::<Arc<Theme>>(active_theme_id()).is_some());
     if theme.is_changed() || !present {
         store_active(ctx, &theme);
+        ctx.all_styles_mut(|style| theme.typography.apply_to_style(style));
     }
 }
 
@@ -1187,5 +1329,37 @@ mod tests {
 
         theme.set_mode(ThemeMode::Light);
         assert!(theme.revision() > changed);
+    }
+
+    #[test]
+    fn typography_roles_resolve_from_the_shared_scale() {
+        let typography = TypographyScale::default();
+        let mut style = egui::Style::default();
+        typography.apply_to_style(&mut style);
+
+        for (role, expected) in [
+            (TypographyRole::Display, typography.display),
+            (TypographyRole::Title, typography.title),
+            (TypographyRole::Section, typography.section),
+            (TypographyRole::Body, typography.body),
+            (TypographyRole::Button, typography.button),
+            (TypographyRole::Label, typography.label),
+            (TypographyRole::Tree, typography.tree),
+            (TypographyRole::Caption, typography.caption),
+            (TypographyRole::DenseData, typography.dense_data),
+            (TypographyRole::DenseCode, typography.dense_code),
+            (TypographyRole::Code, typography.code),
+        ] {
+            assert_eq!(role.font_id(&style).size, expected);
+        }
+
+        assert_eq!(
+            TypographyRole::DenseCode.font_id(&style).family,
+            egui::FontFamily::Monospace
+        );
+        assert_eq!(
+            TypographyRole::Code.font_id(&style).family,
+            egui::FontFamily::Monospace
+        );
     }
 }

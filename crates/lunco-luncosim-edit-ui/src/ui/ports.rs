@@ -478,7 +478,6 @@ impl PortPanel {
             egui::RichText::new(
                 "Inspect every registered vehicle/system port. Writes use the shared SetPorts command.",
             )
-            .small()
             .weak(),
         );
         ui.add_space(4.0);
@@ -500,7 +499,7 @@ impl PortPanel {
                 view.total_ports,
                 10.0,
             ))
-            .small()
+            .text_style(lunco_theme::TypographyRole::DenseData.text_style())
             .weak(),
         );
 
@@ -767,12 +766,12 @@ impl PortPanel {
             }
         });
         if local_origin.is_none() {
-            ui.small(
+            ui.label(
                 egui::RichText::new("local control session unavailable").color(egui::Color32::RED),
             );
         }
         if let Err(error) = &draft.validation {
-            ui.small(egui::RichText::new(error).color(egui::Color32::RED));
+            ui.label(egui::RichText::new(error).color(egui::Color32::RED));
         }
     }
 }

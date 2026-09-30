@@ -124,6 +124,6 @@ impl Panel for CommandDeck {
                 bind_camera: true,
             });
         }
-        ui.small("Programs and route policy are authored by the active Twin.");
+        ui.label("Programs and route policy are authored by the active Twin.");
     }
 }

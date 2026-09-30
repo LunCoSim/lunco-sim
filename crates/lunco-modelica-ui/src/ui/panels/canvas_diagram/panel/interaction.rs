@@ -209,7 +209,7 @@ pub(crate) fn handle_drag_and_drop(
                 egui::pos2(ghost_rect.center().x, ghost_rect.max.y + 4.0),
                 egui::Align2::CENTER_TOP,
                 def.short_name(),
-                egui::FontId::proportional(11.0),
+                lunco_theme::TypographyRole::Tree.font_id(ui.style().as_ref()),
                 accent,
             );
             ui.ctx().request_repaint();

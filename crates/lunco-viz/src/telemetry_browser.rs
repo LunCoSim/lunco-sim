@@ -1436,11 +1436,7 @@ fn attach_row_tooltip(response: egui::Response, row: &Row) {
         if let Some(description) = &row.description {
             ui.label(description);
         } else {
-            ui.label(
-                egui::RichText::new("No description is authored for this value.")
-                    .small()
-                    .weak(),
-            );
+            ui.label(egui::RichText::new("No description is authored for this value.").weak());
         }
         if let Some(unit) = &row.unit {
             ui.label(egui::RichText::new(format!("Unit: {unit}")).small().weak());
@@ -1472,16 +1468,10 @@ fn attach_row_tooltip(response: egui::Response, row: &Row) {
         }
         if !row.active {
             ui.label(
-                egui::RichText::new("Publisher despawned; samples are retained for review.")
-                    .small()
-                    .weak(),
+                egui::RichText::new("Publisher despawned; samples are retained for review.").weak(),
             );
         }
-        ui.label(
-            egui::RichText::new("Drag to a canvas; double-click to plot.")
-                .small()
-                .weak(),
-        );
+        ui.label(egui::RichText::new("Drag to a canvas; double-click to plot.").weak());
     });
 }
 
@@ -1907,14 +1897,13 @@ impl Panel for TelemetryBrowserPanel {
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     egui::RichText::new("Internal state")
-                        .small()
+                        .text_style(lunco_theme::TypographyRole::Label.text_style())
                         .color(theme.warning),
                 );
                 ui.label(
                     egui::RichText::new(
                         "Amber labels are implementation values; hover a row for its exact path.",
                     )
-                    .small()
                     .color(subdued),
                 );
             });
@@ -1942,11 +1931,7 @@ impl Panel for TelemetryBrowserPanel {
             )
             .on_disabled_hover_text("Select something in the scene to scope the list.");
             if !has_focus {
-                ui.label(
-                    egui::RichText::new("nothing selected")
-                        .small()
-                        .color(subdued),
-                );
+                ui.label(egui::RichText::new("nothing selected").color(subdued));
             }
             ui.checkbox(&mut self.show_model_variables, "Internal variables")
                 .on_hover_text(
@@ -1983,7 +1968,6 @@ impl Panel for TelemetryBrowserPanel {
                 );
                 ui.label(
                     egui::RichText::new("Display only; stored samples and plot data stay exact.")
-                        .small()
                         .color(subdued),
                 );
             });
@@ -2137,7 +2121,6 @@ impl Panel for TelemetryBrowserPanel {
                     egui::RichText::new(format!(
                         "{hidden_count} internal variables hidden — enable Internal variables to inspect the complete model state."
                     ))
-                    .small()
                     .color(subdued),
                 );
             }
@@ -2274,7 +2257,7 @@ impl Panel for TelemetryBrowserPanel {
             });
         });
         if let Some(description) = description {
-            ui.label(egui::RichText::new(description).small().color(subdued));
+            ui.label(egui::RichText::new(description).color(subdued));
         }
         if let Some(metadata) = metadata {
             if let Some(model_class) = metadata.model_class.as_deref() {

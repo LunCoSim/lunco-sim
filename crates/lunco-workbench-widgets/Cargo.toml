@@ -7,6 +7,7 @@ description = "Reusable egui widgets shared by LunCoSim domain UI crates"
 
 [dependencies]
 egui = { workspace = true }
+lunco-theme = { path = "../lunco-theme" }
 
 [lints]
 workspace = true

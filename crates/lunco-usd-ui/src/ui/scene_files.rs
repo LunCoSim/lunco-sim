@@ -436,7 +436,6 @@ impl BrowserSection for SceneFilesSection {
                     "{unresolved} reference(s) could not be resolved (unmounted Twin or unknown \
                      scheme) — the list is partial."
                 ))
-                .small()
                 .weak(),
             );
         }

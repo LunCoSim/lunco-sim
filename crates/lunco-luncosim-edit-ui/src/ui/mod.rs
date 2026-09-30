@@ -801,6 +801,7 @@ impl Plugin for SceneEditUiPlugin {
                     billboard_overlay::draw_billboard_overlay,
                     scene_context_menu::draw_scene_context_menu,
                 )
+                    .after(lunco_theme::ThemeApplySet)
                     .before(lunco_workbench_core::WorkbenchRenderSet),
             );
         cinematic::register_all_commands(app);
@@ -817,7 +818,11 @@ fn register_debug_viz_settings(world: &mut World) {
         return;
     };
     menus.register_settings_submenu("Debug visualization", |ui, ctx| {
-        ui.label(egui::RichText::new("Debug Visualization").weak().small());
+        ui.label(
+            egui::RichText::new("Debug Visualization")
+                .text_style(lunco_theme::TypographyRole::Label.text_style())
+                .weak(),
+        );
         let Some(mut store) = ctx
             .resource::<crate::diagnostic_visuals::DiagnosticVisualStore>()
             .cloned()

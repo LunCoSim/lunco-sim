@@ -42,9 +42,16 @@ fn sky_clock_ui(
     let mut request = None;
 
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Sky").weak().size(11.0));
-        ui.label(egui::RichText::new(utc).monospace().size(11.0))
-            .on_hover_text(format!("JD {epoch_jd:.4} (TDB)"));
+        ui.label(
+            egui::RichText::new("Sky")
+                .weak()
+                .text_style(lunco_theme::TypographyRole::Label.text_style()),
+        );
+        ui.label(
+            egui::RichText::new(utc)
+                .text_style(lunco_theme::TypographyRole::DenseCode.text_style()),
+        )
+        .on_hover_text(format!("JD {epoch_jd:.4} (TDB)"));
     });
 
     // ── Seek to a date ────────────────────────────────────────────────────
@@ -60,7 +67,11 @@ fn sky_clock_ui(
         .unwrap_or_else(|| utc.trim_end_matches(" UTC").to_string());
 
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Go to").weak().size(11.0));
+        ui.label(
+            egui::RichText::new("Go to")
+                .weak()
+                .text_style(lunco_theme::TypographyRole::Label.text_style()),
+        );
         let parsed = lunco_time::utc_string_to_tdb_jd(&buf);
         let field = lunco_workbench_widgets::text_editor::singleline(&mut buf)
             .desired_width(172.0)
@@ -105,7 +116,11 @@ fn sky_clock_ui(
     ui.data_mut(|d| d.insert_temp(buf_id, buf));
 
     ui.horizontal_wrapped(|ui| {
-        ui.label(egui::RichText::new("Rate").weak().size(11.0));
+        ui.label(
+            egui::RichText::new("Rate")
+                .weak()
+                .text_style(lunco_theme::TypographyRole::Label.text_style()),
+        );
         // The celestial epoch scales from WorldTime. Physics retains its fixed
         // timestep; models consume the shared celestial sample at that cadence.
         for m in [
@@ -142,7 +157,7 @@ fn sky_clock_ui(
 /// no celestial bodies — no sky, no sky clock, the same rule the overlay follows.
 pub(crate) fn sky_clock_menu_ui(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
     if !ctx.has_component::<CelestialBody>() {
-        ui.label(egui::RichText::new("No sky in this scene").weak().small());
+        ui.label(egui::RichText::new("No sky in this scene").weak());
         return;
     }
     let (Some(clocks), Some(celestial)) = (
@@ -153,11 +168,7 @@ pub(crate) fn sky_clock_menu_ui(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
     };
     let state = sky_clock_state(clocks, ctx.get::<TimeDomain>(clocks.celestial).copied());
     let Some(scale) = state else {
-        ui.label(
-            egui::RichText::new("Celestial clock unavailable")
-                .weak()
-                .small(),
-        );
+        ui.label(egui::RichText::new("Celestial clock unavailable").weak());
         return;
     };
 

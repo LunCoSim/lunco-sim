@@ -181,7 +181,11 @@ impl Overlay for NavBarOverlay {
 
         // Zoom out
         if child
-            .button(egui::RichText::new("−").size(16.0).monospace())
+            .button(
+                egui::RichText::new("−")
+                    .text_style(lunco_theme::TypographyRole::Button.text_style())
+                    .monospace(),
+            )
             .on_hover_text("Zoom out")
             .clicked()
         {
@@ -210,7 +214,11 @@ impl Overlay for NavBarOverlay {
 
         // Zoom in
         if child
-            .button(egui::RichText::new("+").size(16.0).monospace())
+            .button(
+                egui::RichText::new("+")
+                    .text_style(lunco_theme::TypographyRole::Button.text_style())
+                    .monospace(),
+            )
             .on_hover_text("Zoom in")
             .clicked()
         {
@@ -223,7 +231,10 @@ impl Overlay for NavBarOverlay {
         // Reset to 100 %. With `use_physical_reference = true`,
         // that lands at physical scale (1 world-mm = 1 screen-mm).
         if child
-            .button(egui::RichText::new("1:1").size(12.0))
+            .button(
+                egui::RichText::new("1:1")
+                    .text_style(lunco_theme::TypographyRole::Button.text_style()),
+            )
             .on_hover_text("Reset zoom to 100 %")
             .clicked()
         {
@@ -237,7 +248,10 @@ impl Overlay for NavBarOverlay {
 
         // Fit all
         if child
-            .button(egui::RichText::new("Fit").size(12.0))
+            .button(
+                egui::RichText::new("Fit")
+                    .text_style(lunco_theme::TypographyRole::Button.text_style()),
+            )
             .on_hover_text("Fit the whole scene (F)")
             .clicked()
         {

@@ -36,10 +36,11 @@ decision guide for *where* colors/spacing come from in this repo.
    Consumer code reads **fields**; `get_token` is reserved for
    resolving pinned user overrides.
 4. **Never call `ctx.set_visuals(...)` from a panel.**
-   `lunco-workbench`'s layout/render loop already applies
-   `theme.to_visuals()` to the egui context each frame (it calls
-   `ctx.set_visuals(theme.to_visuals())` so chrome panels — menu bar,
-   status bar — paint correctly).
+   `lunco-workbench` applies `theme.to_visuals()` when its theme changes;
+   `ThemePlugin` applies shared typography styles in `ThemeApplySet`. Systems
+   that render directly before the workbench should run after that set; the
+   workbench orders its panels and overlays around it. The shell owns chrome
+   styling.
 5. **Dark/light is `theme.toggle_mode()`, not a branch on
    `ThemeMode`.** Overrides survive the toggle automatically.
 6. **Spacing and rounding come from `theme.spacing` and
@@ -51,6 +52,17 @@ decision guide for *where* colors/spacing come from in this repo.
    Let `lunco-workbench` own the body fill and keep standard `PanelCtx` content
    frames transparent over it; do not introduce panel-local alpha values or
    duplicate backdrop tokens.
+8. **Typography is role-based and theme-owned.** `ThemePlugin` maps egui's
+   built-in text styles and LunCoSim named roles from `theme.typography` across
+   the primary egui context. Use egui's normal widget styles for ordinary body,
+   button, heading, caption, and monospace text. Use
+   `TypographyRole::text_style()` for semantic `RichText`, and
+   `TypographyRole::font_id(ui.style())` for custom painter text. Help, status
+   messages, and ordinary guidance use Body. Caption is for secondary metadata
+   and compact status-bar summaries; reserve DenseData and DenseCode for
+   genuinely compact information such as chart labels, timestamps, and log
+   rows. Keep authored model text and spatial label sizing under their
+   content/spatial owner.
 
 ### Runtime-authored HTML/CSS surfaces
 
@@ -266,7 +278,7 @@ world.resource_mut::<lunco_theme::Theme>().toggle_mode();
 | `Color32::from_rgb(46, 194, 126)`                     | `theme.tokens.success`                                  |
 | `theme.colors.blue` in a panel                        | Add a field to `SchematicTokens` or `DesignTokens`      |
 | `self.colors.blue` as a default in an extension trait | `self.schematic.wire_electrical` field (add if missing) |
-| `ui.visuals_mut().override_text_color = Some(...)`    | Let `sync_theme_system` push `theme.to_visuals()`       |
+| `ui.visuals_mut().override_text_color = Some(...)`    | Let `lunco-workbench` apply `theme.to_visuals()`        |
 | `if mode == Dark { red } else { dark_red }`           | One token; palette handles the swap                     |
 | `wire_color_for(connector)` local function per crate  | Domain extension trait returning `theme.schematic.wire_*` |
 | `Margin::same(8.0)`                                   | `theme.spacing.window_padding`                          |
@@ -288,6 +300,10 @@ Before merging any UI change, scan the diff for:
 - [ ] No new `ctx.set_visuals` calls in panel code.
 - [ ] Spacing/rounding pulled from `theme.spacing` / `theme.rounding`
       where a token exists.
+- [ ] UI text resolves through `Theme.typography` roles; no ad-hoc font sizes
+      remain in ordinary widget or painter text.
+- [ ] Guidance and status use Body; DenseData/DenseCode are limited to compact
+      data such as charts, timestamps, and log rows.
 - [ ] No `theme.mode == Dark` branches picking colors.
 
 ## Quick sanity check on an existing file
@@ -302,7 +318,7 @@ grep -rn "theme\.colors\." crates/ \
   | grep -v "crates/lunco-theme/" \
   | grep -v "from_palette"
 
-# ctx.set_visuals calls (should only be in lunco-ui's sync_theme_system):
+# ctx.set_visuals calls (should only be in the workbench theme refresh):
 grep -rn "set_visuals" crates/
 ```
 

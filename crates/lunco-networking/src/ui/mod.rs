@@ -143,7 +143,11 @@ fn register_settings_submenu(world: &mut World) {
             return;
         };
 
-        ui.label(egui::RichText::new("Presence Cursors").weak().small());
+        ui.label(
+            egui::RichText::new("Presence Cursors")
+                .text_style(lunco_theme::TypographyRole::Label.text_style())
+                .weak(),
+        );
         let mut cursor_settings_changed = false;
         if ui.checkbox(&mut settings.enabled, "Transmit my cursor position")
             .on_hover_text(
@@ -168,7 +172,11 @@ fn register_settings_submenu(world: &mut World) {
 
         ui.separator();
 
-        ui.label(egui::RichText::new("Tutorial / Teach Mode").weak().small());
+        ui.label(
+            egui::RichText::new("Tutorial / Teach Mode")
+                .text_style(lunco_theme::TypographyRole::Label.text_style())
+                .weak(),
+        );
 
         let mut teach_mode = tut_settings.teach_mode;
         if ui.checkbox(&mut teach_mode, "Teach Mode (Broadcast status)")
@@ -423,7 +431,7 @@ pub fn draw_collaborator_cursors(
                 ui.label(
                     egui::RichText::new(label)
                         .color(egui::Color32::WHITE)
-                        .small(),
+                        .text_style(lunco_theme::TypographyRole::Label.text_style()),
                 );
             },
         );
@@ -445,14 +453,14 @@ pub fn draw_collaborator_cursors(
                 ui.label(
                     egui::RichText::new("Teaching Mode (Broadcasting)")
                         .color(egui::Color32::WHITE)
-                        .small(),
+                        .text_style(lunco_theme::TypographyRole::Label.text_style()),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .button(
                             egui::RichText::new("Stop")
                                 .color(egui::Color32::from_rgb(166, 227, 161))
-                                .small(),
+                                .text_style(lunco_theme::TypographyRole::Button.text_style()),
                         )
                         .clicked()
                     {
@@ -492,7 +500,7 @@ pub fn draw_collaborator_cursors(
                 egui::Color32::WHITE
             };
 
-            let font = egui::FontId::proportional(11.0);
+            let font = lunco_theme::TypographyRole::Label.font_id(ctx.global_style().as_ref());
             let galley = painter.layout_no_wrap(info.display_name.clone(), font, text_color);
             let size = galley.size();
 

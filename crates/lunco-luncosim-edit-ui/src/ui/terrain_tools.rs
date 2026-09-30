@@ -134,13 +134,13 @@ fn terrain_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_theme::
 
     ui.separator();
     if tool == TerrainTool::None {
-        ui.small("Pick a brush, then click the terrain to sculpt it.");
+        ui.label("Pick a brush, then click the terrain to sculpt it.");
     } else {
-        ui.small(egui::RichText::new("Brush armed — click the terrain.").color(tokens.success));
+        ui.label(egui::RichText::new("Brush armed — click the terrain.").color(tokens.success));
     }
-    ui.small("Shift + ↑/↓ or Shift+scroll — brush radius");
-    ui.small("Alt + ↑/↓ or Alt+scroll — brush strength");
-    ui.small("Alt+click — dig · Ctrl+click — flatten · Esc — off");
+    ui.label("Shift + ↑/↓ or Shift+scroll — brush radius");
+    ui.label("Alt + ↑/↓ or Alt+scroll — brush strength");
+    ui.label("Alt+click — dig · Ctrl+click — flatten · Esc — off");
 }
 
 /// SCRIPT-AUTHORED tools — one button per registered tool exposing
@@ -196,16 +196,16 @@ fn script_tools_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_th
     ui.add_space(4.0);
     match armed {
         Some(name) => {
-            ui.small(
+            ui.label(
                 egui::RichText::new(format!("{name} armed — click an object."))
                     .color(tokens.success),
             );
         }
         None => {
-            ui.small("Script-authored — each is a .rhai in assets/scripting/tools/.");
+            ui.label("Script-authored — each is a .rhai in assets/scripting/tools/.");
         }
     }
-    ui.small("Esc — off");
+    ui.label("Esc — off");
 }
 
 /// `"recover"` → `"Recover"`. Tool names are file stems, so this is the whole

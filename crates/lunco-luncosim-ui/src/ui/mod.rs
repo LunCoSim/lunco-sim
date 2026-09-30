@@ -1151,7 +1151,11 @@ fn register_downloadable_assets_settings(world: &mut World) {
         return;
     };
     menus.register_settings_submenu("Data & libraries", |ui, ctx| {
-        ui.label(egui::RichText::new("Downloadable data").weak().small());
+        ui.label(
+            egui::RichText::new("Downloadable data")
+                .text_style(lunco_theme::TypographyRole::Label.text_style())
+                .weak(),
+        );
         let Some(mut settings) = ctx.resource::<lunco_settings::DownloadSettings>().cloned() else {
             return;
         };
@@ -1199,8 +1203,7 @@ fn register_downloadable_assets_settings(world: &mut World) {
                 egui::RichText::new(
                     "The same bounded policy is used for assets, source library, scenario HTTP, and app updates. Attempts include the first request; delays grow exponentially and stop at the configured maximum.",
                 )
-                .weak()
-                .small(),
+                .weak(),
             );
             ui.add_space(8.0);
         }
@@ -1442,11 +1445,7 @@ fn report_scenario_registry_error(ctx: &mut MenuCtx, detail: impl Into<String>) 
 
 fn render_scenario_registry_unavailable(ui: &mut bevy_egui::egui::Ui) {
     ui.label(SCENARIO_REGISTRY_ERROR_LABEL);
-    ui.label(
-        bevy_egui::egui::RichText::new("See Recent status for diagnostic details.")
-            .weak()
-            .small(),
-    );
+    ui.label(bevy_egui::egui::RichText::new("See Recent status for diagnostic details.").weak());
 }
 
 fn register_sandbox_scenarios_menu(world: &mut World) {
@@ -1458,8 +1457,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
         ui.label(
             bevy_egui::egui::RichText::new("Scenarios load a world or demo.")
-                .weak()
-                .small(),
+                .weak(),
         );
         ui.separator();
         let has_scene = ctx

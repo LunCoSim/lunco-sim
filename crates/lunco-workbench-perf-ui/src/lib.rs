@@ -115,7 +115,11 @@ fn register_settings_submenu(world: &mut World) {
         return;
     };
     menus.register_settings_submenu("Performance", |ui, ctx| {
-        ui.label(egui::RichText::new("Performance HUD").weak().small());
+        ui.label(
+            egui::RichText::new("Performance HUD")
+                .text_style(lunco_theme::TypographyRole::Label.text_style())
+                .weak(),
+        );
         let Some(mut settings) = ctx.resource::<PerfHudSettings>().copied() else {
             return;
         };

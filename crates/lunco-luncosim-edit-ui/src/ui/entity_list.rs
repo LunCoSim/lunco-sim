@@ -54,7 +54,11 @@ pub(crate) fn register_settings_submenu(world: &mut World) {
         return;
     };
     menus.register_settings_submenu("Entity list", |ui, ctx| {
-        ui.label(egui::RichText::new("Entity list").weak().small());
+        ui.label(
+            egui::RichText::new("Entity list")
+                .text_style(lunco_theme::TypographyRole::Label.text_style())
+                .weak(),
+        );
         let current = ctx
             .resource::<EntityListSettings>()
             .is_some_and(|s| s.show_system);
@@ -72,10 +76,10 @@ pub(crate) fn register_settings_submenu(world: &mut World) {
         ui.separator();
         ui.label(
             egui::RichText::new("Runtime scene edits (active Twin)")
+                .text_style(lunco_theme::TypographyRole::Label.text_style())
                 .weak()
-                .small(),
         );
-        ui.small("Route points, runtime spawns, and gizmo edits use Twin Runtime (@runtime@).");
+        ui.label("Route points, runtime spawns, and gizmo edits use Twin Runtime (@runtime@).");
         let persistence_state = ctx.resource::<WorkspaceResource>().map(|workspace| {
             let Some(twin_id) = workspace.active_twin else {
                 return (false, Ok(false));

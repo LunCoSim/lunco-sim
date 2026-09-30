@@ -603,7 +603,6 @@ impl LinePlot {
                         "Add one from the ➕ picker above, or drag a \
                          variable from Telemetry.",
                     )
-                    .size(10.0)
                     .color(muted),
                 );
             });
@@ -708,14 +707,12 @@ impl LinePlot {
                     } else {
                         format!("Awaiting: {names}")
                     })
-                    .size(10.0)
                     .color(muted),
                 );
                 ui.label(
                     egui::RichText::new(
                         "The plot will reconnect automatically when this scene publishes it.",
                     )
-                    .size(10.0)
                     .color(muted),
                 );
             });
@@ -724,14 +721,12 @@ impl LinePlot {
 
         if !unavailable.is_empty() {
             ctx.ui.label(
-                egui::RichText::new(format!("Waiting for: {}", unavailable.join(", ")))
-                    .size(10.0)
-                    .color(
-                        ctx.wb
-                            .resource::<lunco_theme::Theme>()
-                            .map(|t| t.tokens.text_subdued)
-                            .unwrap_or(egui::Color32::DARK_GRAY),
-                    ),
+                egui::RichText::new(format!("Waiting for: {}", unavailable.join(", "))).color(
+                    ctx.wb
+                        .resource::<lunco_theme::Theme>()
+                        .map(|t| t.tokens.text_subdued)
+                        .unwrap_or(egui::Color32::DARK_GRAY),
+                ),
             );
         }
 
@@ -845,7 +840,9 @@ fn render_toolbar(
     ctx.ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         // X picker.
-        ui.label(egui::RichText::new("X:").size(11.0));
+        ui.label(
+            egui::RichText::new("X:").text_style(lunco_theme::TypographyRole::Label.text_style()),
+        );
         let x_current = style
             .x_signal
             .as_ref()
@@ -878,7 +875,9 @@ fn render_toolbar(
                 }
             });
         ui.separator();
-        ui.label(egui::RichText::new("Y:").size(11.0));
+        ui.label(
+            egui::RichText::new("Y:").text_style(lunco_theme::TypographyRole::Label.text_style()),
+        );
         // Reserve a compact action cluster on the right, and give the Y
         // binding strip every remaining pixel. This keeps long canonical
         // names readable without letting the action buttons drift into the

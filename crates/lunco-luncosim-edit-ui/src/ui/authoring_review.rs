@@ -660,7 +660,7 @@ impl Panel for AuthoringReviewPanel {
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         ui.heading("Authoring review");
-        ui.small("Selection, control authority, camera target, diagnostics, and inspection layers");
+        ui.label("Selection, control authority, camera target, diagnostics, and inspection layers");
         ui.separator();
 
         let Some(view) = ctx.resource::<AuthoringReviewView>().cloned() else {
@@ -686,7 +686,7 @@ impl Panel for AuthoringReviewPanel {
             if let Some(path) = &view.camera_target_path {
                 ui.small(path);
             }
-            ui.small(
+            ui.label(
                 "These are independent states; selection never implies control or camera focus.",
             );
         });
@@ -756,7 +756,7 @@ impl Panel for AuthoringReviewPanel {
                     egui::Color32::LIGHT_RED,
                     format!("FAULT · {kind} · {subject}"),
                 );
-                ui.small(detail);
+                ui.label(detail);
             }
             if view.findings.is_empty() {
                 ui.weak("No active runtime diagnostics");
@@ -798,6 +798,6 @@ impl Panel for AuthoringReviewPanel {
         });
 
         ui.separator();
-        ui.small("Geometry measurements, tolerances, and requirement policy are authored in Rhai over QueryUsdPrim; this panel never guesses dimensions.");
+        ui.label("Geometry measurements, tolerances, and requirement policy are authored in Rhai over QueryUsdPrim; this panel never guesses dimensions.");
     }
 }

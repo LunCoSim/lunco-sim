@@ -646,7 +646,10 @@ impl Plugin for WorkbenchPlugin {
         );
         app.configure_sets(
             EguiPrimaryContextPass,
-            ApplicationOverlayRenderSet.after(WorkbenchRenderSet),
+            (
+                WorkbenchRenderSet.after(lunco_theme::ThemeApplySet),
+                ApplicationOverlayRenderSet.after(WorkbenchRenderSet),
+            ),
         );
         // Egui host + viewport-geometry sync + invariant sentinels.
         // See `viewport.rs` doc-comment for the layered full-window scene

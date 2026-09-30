@@ -251,7 +251,7 @@ pub(crate) fn render_diagram_canvas(
                 .painter()
                 .clone()
                 .with_clip_rect(ui.clip_rect().intersect(response.rect));
-            let font = egui::FontId::proportional(11.0);
+            let font = lunco_theme::TypographyRole::Body.font_id(ui.style().as_ref());
             let mut y = response.rect.bottom() - 8.0;
             let first_line = if library_is_loading {
                 format!(

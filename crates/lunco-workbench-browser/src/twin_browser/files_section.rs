@@ -198,7 +198,11 @@ impl BrowserSection for FilesSection {
                 .unwrap_or(false);
             ui.horizontal(|ui| {
                 if entry.is_unsaved {
-                    ui.label(egui::RichText::new("•").color(dirty_dot_color).size(8.0));
+                    ui.label(
+                        egui::RichText::new("•")
+                            .color(dirty_dot_color)
+                            .text_style(lunco_theme::TypographyRole::Caption.text_style()),
+                    );
                 } else {
                     ui.label(egui::RichText::new("  "));
                 }
@@ -431,7 +435,7 @@ impl BrowserSection for FilesSection {
                         } else {
                             "(empty)"
                         };
-                        ui.label(egui::RichText::new(message).weak().italics().small());
+                        ui.label(egui::RichText::new(message).weak().italics());
                         return;
                     }
                     // Render the directory tree DIRECTLY — no inner

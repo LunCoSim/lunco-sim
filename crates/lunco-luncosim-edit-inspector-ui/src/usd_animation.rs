@@ -373,6 +373,6 @@ pub fn authored_animation_section(
                     ),
                 );
             }
-            ui.small("Use Environment → Animation to play or scrub the USD timeline.");
+            ui.label("Use Environment → Animation to play or scrub the USD timeline.");
         });
 }

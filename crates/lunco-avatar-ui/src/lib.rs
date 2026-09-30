@@ -66,7 +66,11 @@ pub fn register_avatar_settings(world: &mut World) {
         return;
     };
     menus.register_settings_submenu("Avatar", |ui, ctx| {
-        ui.label(egui::RichText::new("Avatar collision").weak().small());
+        ui.label(
+            egui::RichText::new("Avatar collision")
+                .text_style(lunco_theme::TypographyRole::Label.text_style())
+                .weak(),
+        );
         let policy =
             avatar_soil_collision_policy(ctx.resource::<lunco_workspace::WorkspaceResource>());
         match &policy {
@@ -75,15 +79,13 @@ pub fn register_avatar_settings(world: &mut World) {
                     egui::RichText::new(
                         "The avatar bypasses projected colliders in the active Twin.",
                     )
-                    .weak()
-                    .small(),
+                    .weak(),
                 );
             }
             Ok(AvatarSoilCollisionPolicy::CollisionEnabled) => {
                 ui.label(
                     egui::RichText::new("Projected colliders block avatar movement by default.")
-                        .weak()
-                        .small(),
+                        .weak(),
                 );
             }
             Ok(AvatarSoilCollisionPolicy::Unavailable) => {
@@ -102,8 +104,7 @@ pub fn register_avatar_settings(world: &mut World) {
                 );
                 ui.label(
                     egui::RichText::new("Collision remains enabled until the value is repaired.")
-                        .weak()
-                        .small(),
+                        .weak(),
                 );
             }
         }
@@ -473,7 +474,9 @@ impl Plugin for AvatarUiPlugin {
         app.add_systems(Startup, register_avatar_settings);
         app.add_systems(
             EguiPrimaryContextPass,
-            draw_rover_name_tags.before(lunco_workbench_core::WorkbenchRenderSet),
+            draw_rover_name_tags
+                .after(lunco_theme::ThemeApplySet)
+                .before(lunco_workbench_core::WorkbenchRenderSet),
         );
         app.add_systems(
             EguiPrimaryContextPass,
@@ -644,7 +647,7 @@ pub fn draw_notifications(mut egui_ctx: EguiContexts, notes: Res<ScreenNotificat
             ),
         };
 
-        let font = egui::FontId::proportional(16.0);
+        let font = lunco_theme::TypographyRole::Body.font_id(ctx.global_style().as_ref());
         let galley = painter.layout_no_wrap(t.text.clone(), font, fg);
         let size = galley.size();
         let top_left = egui::pos2(cx - size.x * 0.5, y);

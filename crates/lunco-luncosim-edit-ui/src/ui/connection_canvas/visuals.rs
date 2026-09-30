@@ -56,7 +56,7 @@ impl NodeVisual for UsdPrimNodeVisual {
                 egui::pos2(rect.center().x, rect.min.y + 12.0),
                 egui::Align2::CENTER_TOP,
                 &node.label,
-                egui::FontId::proportional(13.0),
+                lunco_theme::TypographyRole::Label.font_id(ctx.ui.style().as_ref()),
                 t.text,
             );
             if !self.type_name.is_empty() && rect.height() > 40.0 {
@@ -64,7 +64,7 @@ impl NodeVisual for UsdPrimNodeVisual {
                     egui::pos2(rect.center().x, rect.min.y + 29.0),
                     egui::Align2::CENTER_TOP,
                     &self.type_name,
-                    egui::FontId::proportional(10.0),
+                    lunco_theme::TypographyRole::Caption.font_id(ctx.ui.style().as_ref()),
                     t.text_subdued,
                 );
             }
@@ -105,7 +105,7 @@ impl NodeVisual for UsdPrimNodeVisual {
                     egui::pos2(p.x + offset.x, p.y + offset.y),
                     anchor,
                     port.id.as_str(),
-                    egui::FontId::proportional(9.0_f32.max((10.0 * zoom).min(12.0))),
+                    lunco_theme::TypographyRole::DenseData.font_id(ctx.ui.style().as_ref()),
                     t.text_subdued,
                 );
             }

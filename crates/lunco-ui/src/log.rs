@@ -140,7 +140,7 @@ pub fn render_log_view(
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(format!("{count} messages"))
-                .size(10.0)
+                .text_style(lunco_theme::TypographyRole::Caption.text_style())
                 .color(muted),
         );
         if ui
@@ -166,7 +166,7 @@ pub fn render_log_view(
             ui.add_space(20.0);
             ui.label(
                 egui::RichText::new(empty_hint)
-                    .size(10.0)
+                    .text_style(lunco_theme::TypographyRole::Body.text_style())
                     .italics()
                     .color(muted),
             );
@@ -190,11 +190,15 @@ pub fn render_log_view(
                     .as_secs_f32();
                 let ts = format!("[+{:>6.2}s]", offset);
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&ts).monospace().size(10.0).color(muted));
+                    ui.label(
+                        egui::RichText::new(&ts)
+                            .text_style(lunco_theme::TypographyRole::DenseCode.text_style())
+                            .color(muted),
+                    );
                     ui.label(
                         egui::RichText::new(entry.level.tag())
                             .monospace()
-                            .size(10.0)
+                            .text_style(lunco_theme::TypographyRole::DenseCode.text_style())
                             .strong()
                             .color(color),
                     );
@@ -208,7 +212,7 @@ pub fn render_log_view(
                         ui.label(
                             egui::RichText::new(format!("[{pill}]"))
                                 .monospace()
-                                .size(10.0)
+                                .text_style(lunco_theme::TypographyRole::DenseCode.text_style())
                                 .color(theme.tokens.accent),
                         )
                         .on_hover_text(model.to_owned());
@@ -217,7 +221,7 @@ pub fn render_log_view(
                         ui.label(
                             egui::RichText::new(format!("L{}:{}", loc.line, loc.column))
                                 .monospace()
-                                .size(10.0)
+                                .text_style(lunco_theme::TypographyRole::DenseCode.text_style())
                                 .color(theme.tokens.accent),
                         );
                         let response = ui
@@ -225,7 +229,9 @@ pub fn render_log_view(
                                 egui::Label::new(
                                     egui::RichText::new(&entry.text)
                                         .monospace()
-                                        .size(11.0)
+                                        .text_style(
+                                            lunco_theme::TypographyRole::DenseCode.text_style(),
+                                        )
                                         .color(color),
                                 )
                                 .sense(egui::Sense::click()),
@@ -242,7 +248,7 @@ pub fn render_log_view(
                         ui.label(
                             egui::RichText::new(&entry.text)
                                 .monospace()
-                                .size(11.0)
+                                .text_style(lunco_theme::TypographyRole::DenseCode.text_style())
                                 .color(color),
                         );
                     }

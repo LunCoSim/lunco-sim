@@ -34,7 +34,11 @@ pub(crate) fn register_settings_submenu(world: &mut World) {
         return;
     };
     menus.register_settings_submenu("Asset browser", |ui, ctx| {
-        ui.label(egui::RichText::new("Assets").weak().small());
+        ui.label(
+            egui::RichText::new("Assets")
+                .text_style(lunco_theme::TypographyRole::Label.text_style())
+                .weak(),
+        );
         let Some(mut settings) = ctx.resource::<AssetVisibilitySettings>().copied() else {
             return;
         };

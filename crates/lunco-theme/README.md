@@ -21,6 +21,9 @@ downstream crates**.
     domain (electrical, mechanical, signal, thermal, fluid, …), class-
     kind badge backgrounds (model, block, package, …), schematic-
     panel text (muted / heading).
+  - `typography: TypographyScale` — **application-wide egui type roles**
+    for display, title, section, body, button, label, tree, caption, dense
+    data, and code text.
   - `spacing: SpacingScale` — `window_padding`, `item_spacing`, `button_padding`,
     and the shared merged-titlebar height/control size.
   - `rounding: RoundingScale` — `window`, `button`, `panel`.
@@ -31,12 +34,51 @@ downstream crates**.
 - **`ThemePlugin`** — registers `Theme` as a `Resource` (default = `dark`).
   Auto-added by `lunco-workbench`; add it yourself for headless-UI tests.
 
-`Theme::revision()` is the invalidation contract for consumers that cache
-derived UI state. It advances when the active mode or an override changes;
-workbench panels reuse one derived `egui::Visuals` snapshot until that
-revision moves.
+`Theme::revision()` tracks active-mode and override changes for consumers that
+cache derived UI state. Workbench visual caching also reads Bevy change
+detection, so edits to public fields such as `Theme.typography` are applied
+without requiring a palette revision.
 
-`lunco_theme::ThemePlugin`, `Theme`, and `ThemeMode` are re-exported from
+`ThemePlugin` applies the type roles to egui's built-in text styles and named
+styles, so egui widgets, panels, menus, and overlays resolve text through the
+same theme. Sizes are logical points; egui applies native display scaling.
+Its built-in Cmd/Ctrl +/−/0 shortcuts zoom the full interface, including these
+roles.
+Default roles are display 32, title 24, section 20, body/button 16, label/tree
+14, caption 12, dense data/dense code 11, and regular code 14. `DenseCode` is
+11-point monospace; `Code` is 14-point monospace. Use Caption for secondary
+metadata and compact status-bar summaries. Use DenseData and DenseCode only for
+compact information such as chart labels, timestamps, and log rows. Ordinary
+help, status messages, and guidance use Body. Change public fields on
+`Theme.typography` to customize the application ramp; palette changes preserve
+these values.
+
+| Role | Default | Typical use |
+|---|---:|---|
+| Display | 32 pt | Large in-product display headings |
+| Title | 24 pt | Screen or panel title |
+| Section | 20 pt | Section heading |
+| Body | 16 pt | Guidance, descriptions, and ordinary content |
+| Button | 16 pt | Action labels |
+| Label | 14 pt | Form labels and compact controls |
+| Tree | 14 pt | Hierarchy and tree rows |
+| Caption | 12 pt | Secondary metadata and compact status-bar summaries |
+| Dense data | 11 pt | Chart labels and compact data columns |
+| Dense code | 11 pt | Compact monospace values and log rows |
+| Code | 14 pt | Monospace content that should remain easy to read |
+
+Use `TypographyRole::text_style()` for semantic `RichText` and
+`TypographyRole::font_id(ui.style())` for custom painter text. Prefer egui's
+ordinary widget APIs so built-in styles (`Body`, `Button`, `Heading`, `Small`,
+and `Monospace`) inherit the mapped roles automatically. Systems that render
+directly in `EguiPrimaryContextPass` before the workbench should run after
+`ThemeApplySet`; the workbench orders its panels and application overlays around
+that set. Authored Modelica text, icon annotations, and world-space labels keep
+their content-owned or spatial typography because their size is part of those
+respective contracts.
+
+`lunco_theme::ThemePlugin`, `ThemeApplySet`, `Theme`, `ThemeMode`,
+`TypographyScale`, and `TypographyRole` are re-exported from
 `lunco_ui::prelude`, so most call sites import from there.
 
 ## Three token tiers
@@ -67,9 +109,11 @@ app.add_plugins(lunco_workbench::WorkbenchPlugin); // adds ThemePlugin
 app.add_plugins(lunco_theme::ThemePlugin);
 ```
 
-`lunco-ui::LuncoUiPlugin` installs a `sync_theme_system` that pushes
-`theme.to_visuals()` into the active egui context whenever the resource
-changes — you don't need to call `ctx.set_visuals` yourself.
+`ThemePlugin` applies typography in `ThemeApplySet`. The workbench applies
+`theme.to_visuals()` when the resource changes. UI systems rendered directly
+before the workbench must run after `ThemeApplySet`; the workbench orders its
+panels and application overlays around the same boundary. Panels should not
+call `ctx.set_visuals` or apply typography themselves.
 
 ### 2. Reading in a system
 
@@ -101,8 +145,8 @@ let theme = {
 ### 4. Styling an `egui::Ui` wholesale
 
 `Theme::to_visuals()` returns a full `egui::Visuals` mapped from the
-palette. `sync_theme_system` in `lunco-ui` calls this automatically on
-change — don't reapply yourself.
+palette. The workbench shell applies it when the theme changes — don't
+reapply it from panels.
 
 ### 5. Toggling dark/light
 

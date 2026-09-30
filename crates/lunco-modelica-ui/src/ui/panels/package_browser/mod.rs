@@ -284,7 +284,7 @@ pub fn render_root_subtree(
                     ui.add_space(20.0);
                     ui.label(
                         egui::RichText::new("⌛ Loading...")
-                            .size(10.0)
+                            .text_style(lunco_theme::TypographyRole::Body.text_style())
                             .italics()
                             .color(egui::Color32::GRAY),
                     );

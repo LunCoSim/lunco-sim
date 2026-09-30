@@ -281,7 +281,7 @@ impl Panel for ExperimentsPanel {
                 ui.add_space(12.0);
                 ui.label(
                     egui::RichText::new("Experiments")
-                        .size(13.0)
+                        .text_style(lunco_theme::TypographyRole::Section.text_style())
                         .strong(),
                 );
                 ui.add_space(2.0);
@@ -959,7 +959,7 @@ impl ExperimentsPanel {
             ui.label(
                 egui::RichText::new("t_end must be greater than t_start")
                     .color(col_error)
-                    .size(11.0),
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
             );
         }
 
@@ -974,7 +974,7 @@ impl ExperimentsPanel {
                      will start automatically once source library is ready.",
                 )
                 .color(col_accent)
-                .size(11.0),
+                .text_style(lunco_theme::TypographyRole::Body.text_style()),
             );
             // Coarse poll, not a per-frame spin — source library readiness flips on a
             // background task; a ~250ms re-check clears the notice promptly.
@@ -989,7 +989,7 @@ impl ExperimentsPanel {
                          ({err})"
                     ))
                     .color(col_error)
-                    .size(11.0),
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
             }
         }
@@ -1982,7 +1982,7 @@ fn render_experiments_plot_inner(
                     if let Some(t) = scrub_time {
                         ui.label(
                             egui::RichText::new(format!("t={t:.3}s"))
-                                .size(11.0)
+                                .text_style(lunco_theme::TypographyRole::DenseCode.text_style())
                                 .monospace(),
                         );
                     }
@@ -1990,7 +1990,7 @@ fn render_experiments_plot_inner(
                 if shared_unit.is_none() && !series.is_empty() && picked_vars.len() > 1 {
                     ui.label(
                         egui::RichText::new("Mixed units")
-                            .size(11.0)
+                            .text_style(lunco_theme::TypographyRole::Label.text_style())
                             .color(col_warning),
                     )
                     .on_hover_text(

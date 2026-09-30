@@ -97,7 +97,7 @@ pub(crate) fn register_time_menu(world: &mut World) {
         ui.label(
             bevy_egui::egui::RichText::new("Viewport overlays")
                 .weak()
-                .small(),
+                .text_style(lunco_theme::TypographyRole::Label.text_style()),
         );
         // Edit a copy and write back only on a real change: `set_resource`
         // applies the replacement after the menu pass, so opening the menu does
@@ -133,7 +133,7 @@ pub(crate) fn camera_menu_ui(
     ui.label(
         bevy_egui::egui::RichText::new("Viewport overlays")
             .weak()
-            .small(),
+            .text_style(lunco_theme::TypographyRole::Label.text_style()),
     );
     ui.checkbox(&mut edited.view_switcher, "View switcher (top-centre)")
         .on_hover_text(
@@ -195,11 +195,7 @@ fn render_twin_bool_setting(
             ui.add_enabled_ui(false, |ui| {
                 ui.checkbox(&mut disabled, label);
             });
-            ui.label(
-                bevy_egui::egui::RichText::new(format!("Unavailable: {reason}"))
-                    .weak()
-                    .small(),
-            );
+            ui.label(bevy_egui::egui::RichText::new(format!("Unavailable: {reason}")).weak());
             return;
         }
     };
@@ -248,7 +244,11 @@ fn register_hud_settings_menu(world: &mut World) {
     menus.register_settings_submenu("HUD", |ui, ctx| {
         use bevy_egui::egui;
 
-        ui.label(egui::RichText::new("User-controlled HUDs").weak().small());
+        ui.label(
+            egui::RichText::new("User-controlled HUDs")
+                .weak()
+                .text_style(lunco_theme::TypographyRole::Label.text_style()),
+        );
 
         let Some(mut overlays) = ctx.resource::<OverlaySettings>().copied() else {
             return;
@@ -323,7 +323,11 @@ fn register_hud_settings_menu(world: &mut World) {
         );
 
         ui.separator();
-        ui.label(egui::RichText::new("Automatic HUDs").weak().small());
+        ui.label(
+            egui::RichText::new("Automatic HUDs")
+                .weak()
+                .text_style(lunco_theme::TypographyRole::Label.text_style()),
+        );
         for (label, owner) in [
             ("Rover HUD", "Driven-vessel possession and capability state"),
             (
@@ -343,7 +347,7 @@ fn register_hud_settings_menu(world: &mut World) {
                 ui.label(label);
                 ui.label(egui::RichText::new("Automatic").weak().small());
             });
-            ui.label(egui::RichText::new(owner).weak().small());
+            ui.label(egui::RichText::new(owner).weak());
         }
     });
 }

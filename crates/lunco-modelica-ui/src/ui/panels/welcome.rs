@@ -396,10 +396,12 @@ impl Panel for WelcomePanel {
 
             // ── Hero ───────────────────────────────────────
             ui.vertical_centered(|ui| {
-                ui.heading(egui::RichText::new("Lunica (LunCoSim Modelica Workbench)").size(24.0));
+                ui.heading(
+                    egui::RichText::new("Lunica (LunCoSim Modelica Workbench)")
+                        .text_style(lunco_theme::TypographyRole::Title.text_style()),
+                );
                 ui.label(
                     egui::RichText::new("Build physics models, simulate them, see the numbers.")
-                        .size(13.0)
                         .color(muted),
                 );
             });
@@ -414,7 +416,9 @@ impl Panel for WelcomePanel {
                         .add_sized(
                             [272.0, 44.0],
                             egui::Button::new(
-                                egui::RichText::new("➕  New Model").size(14.0).strong(),
+                                egui::RichText::new("➕  New Model")
+                                    .text_style(lunco_theme::TypographyRole::Button.text_style())
+                                    .strong(),
                             ),
                         )
                         .on_hover_text("Create a new untitled model (Ctrl+N)")
@@ -430,7 +434,11 @@ impl Panel for WelcomePanel {
                     if ui
                         .add_sized(
                             [272.0, 44.0],
-                            egui::Button::new(egui::RichText::new(label).size(14.0).strong()),
+                            egui::Button::new(
+                                egui::RichText::new(label)
+                                    .text_style(lunco_theme::TypographyRole::Button.text_style())
+                                    .strong(),
+                            ),
                         )
                         .on_hover_text(hover)
                         .clicked()
@@ -474,7 +482,7 @@ impl Panel for WelcomePanel {
                 };
                 egui::CollapsingHeader::new(
                     egui::RichText::new(format!("LunCoSim demos ({} bundled)", bundled.len()))
-                        .size(14.0)
+                        .text_style(lunco_theme::TypographyRole::Label.text_style())
                         .color(title_tint),
                 )
                 .id_salt("welcome_bundled_demos")
@@ -485,7 +493,6 @@ impl Panel for WelcomePanel {
                             "Our in-house starters — small, annotated, \
                              read-only. Duplicate to edit.",
                         )
-                        .size(11.0)
                         .color(muted),
                     );
                     ui.add_space(8.0);
@@ -520,7 +527,7 @@ impl Panel for WelcomePanel {
                                     rect.min + egui::vec2(14.0, 8.0),
                                     egui::Align2::LEFT_TOP,
                                     display.to_string(),
-                                    egui::FontId::proportional(13.5),
+                                    lunco_theme::TypographyRole::Label.font_id(ui.style().as_ref()),
                                     title_tint,
                                 );
                                 // Trim tagline so both cards stay
@@ -537,7 +544,7 @@ impl Panel for WelcomePanel {
                                     rect.min + egui::vec2(14.0, 28.0),
                                     egui::Align2::LEFT_TOP,
                                     tagline,
-                                    egui::FontId::proportional(10.5),
+                                    lunco_theme::TypographyRole::Body.font_id(ui.style().as_ref()),
                                     muted,
                                 );
                                 if resp.clicked() {
@@ -570,14 +577,17 @@ impl Panel for WelcomePanel {
                     .filter(|s| progress.is_opened(&s.qualified))
                     .count();
                 ui.horizontal(|ui| {
-                    ui.heading(egui::RichText::new("example paths").size(16.0));
+                    ui.heading(
+                        egui::RichText::new("example paths")
+                            .text_style(lunco_theme::TypographyRole::Section.text_style()),
+                    );
                     ui.add_space(8.0);
                     ui.label(
                         egui::RichText::new(format!(
                             "{} of {} steps opened",
                             done_steps, total_steps
                         ))
-                        .size(11.0)
+                        .text_style(lunco_theme::TypographyRole::Caption.text_style())
                         .color(muted),
                     );
                 });
@@ -587,7 +597,6 @@ impl Panel for WelcomePanel {
                         "Three guided tours through Modelica. Click to \
                          expand, click a step to open it read-only.",
                     )
-                    .size(11.0)
                     .color(muted),
                 );
                 ui.add_space(10.0);
@@ -601,7 +610,7 @@ impl Panel for WelcomePanel {
                     let is_expanded = wstate.expanded == Some(i);
 
                     // Header button — full-width, title row + dots.
-                    let header_h = 56.0;
+                    let header_h = 72.0;
                     let resp = ui
                         .add_sized(
                             [ui.available_width(), header_h],
@@ -626,14 +635,14 @@ impl Panel for WelcomePanel {
                         rect.min + egui::vec2(16.0, 10.0),
                         egui::Align2::LEFT_TOP,
                         format!("{}  {}", path.icon, path.title),
-                        egui::FontId::proportional(15.0),
+                        lunco_theme::TypographyRole::Section.font_id(ui.style().as_ref()),
                         title_tint,
                     );
                     painter.text(
-                        rect.min + egui::vec2(16.0, 32.0),
+                        rect.min + egui::vec2(16.0, 40.0),
                         egui::Align2::LEFT_TOP,
                         path.subtitle.as_str(),
-                        egui::FontId::proportional(11.0),
+                        lunco_theme::TypographyRole::Body.font_id(ui.style().as_ref()),
                         muted,
                     );
 
@@ -652,7 +661,7 @@ impl Panel for WelcomePanel {
                         rect.max - egui::vec2(16.0, header_h - 14.0),
                         egui::Align2::RIGHT_TOP,
                         dots.trim_end(),
-                        egui::FontId::proportional(14.0),
+                        lunco_theme::TypographyRole::Label.font_id(ui.style().as_ref()),
                         if opened > 0 { success } else { muted },
                     );
                     painter.text(
@@ -663,7 +672,7 @@ impl Panel for WelcomePanel {
                         } else {
                             format!("{} of {}  ▸", opened, path.steps.len())
                         },
-                        egui::FontId::proportional(11.0),
+                        lunco_theme::TypographyRole::Caption.font_id(ui.style().as_ref()),
                         muted,
                     );
 
@@ -725,7 +734,7 @@ impl Panel for WelcomePanel {
                                     rect.min + egui::vec2(14.0, 15.0),
                                     egui::Align2::LEFT_TOP,
                                     if is_open { "●" } else { "○" },
-                                    egui::FontId::proportional(15.0),
+                                    lunco_theme::TypographyRole::Label.font_id(ui.style().as_ref()),
                                     if is_open { success } else { muted },
                                 );
                                 // Name + goal.
@@ -733,14 +742,14 @@ impl Panel for WelcomePanel {
                                     rect.min + egui::vec2(36.0, 8.0),
                                     egui::Align2::LEFT_TOP,
                                     step.label.as_str(),
-                                    egui::FontId::proportional(13.0),
+                                    lunco_theme::TypographyRole::Label.font_id(ui.style().as_ref()),
                                     title_tint,
                                 );
                                 painter.text(
                                     rect.min + egui::vec2(36.0, 28.0),
                                     egui::Align2::LEFT_TOP,
                                     format!("Goal: {}", step.goal),
-                                    egui::FontId::proportional(10.5),
+                                    lunco_theme::TypographyRole::Body.font_id(ui.style().as_ref()),
                                     muted,
                                 );
                                 // Open-count pill on the right —
@@ -756,7 +765,8 @@ impl Panel for WelcomePanel {
                                             opens,
                                             if opens == 1 { "" } else { "s" }
                                         ),
-                                        egui::FontId::proportional(10.5),
+                                        lunco_theme::TypographyRole::Caption
+                                            .font_id(ui.style().as_ref()),
                                         success,
                                     );
                                 }
@@ -786,7 +796,7 @@ impl Panel for WelcomePanel {
 
                 egui::CollapsingHeader::new(
                     egui::RichText::new(format!("Browse all {} examples", examples.len()))
-                        .size(14.0)
+                        .text_style(lunco_theme::TypographyRole::Label.text_style())
                         .color(title_tint),
                 )
                 .id_salt("welcome_browse_all")
@@ -797,7 +807,6 @@ impl Panel for WelcomePanel {
                             "The full installed source-library example set. \
                              Filter by domain; search across name or description.",
                         )
-                        .size(11.0)
                         .color(muted),
                     );
                     ui.add_space(8.0);
@@ -829,21 +838,25 @@ impl Panel for WelcomePanel {
                     let domain_counts = &catalog.domain_counts;
 
                     ui.horizontal_wrapped(|ui| {
-                        let chip = |ui: &mut egui::Ui,
-                                    label: String,
-                                    active: bool|
-                         -> egui::Response {
-                            let (fill, fg) = if active {
-                                (chip_fill_active, chip_text_active)
-                            } else {
-                                (chip_fill_idle, chip_text_idle)
-                            };
-                            ui.add(
-                                egui::Button::new(egui::RichText::new(label).size(11.0).color(fg))
+                        let chip =
+                            |ui: &mut egui::Ui, label: String, active: bool| -> egui::Response {
+                                let (fill, fg) = if active {
+                                    (chip_fill_active, chip_text_active)
+                                } else {
+                                    (chip_fill_idle, chip_text_idle)
+                                };
+                                ui.add(
+                                    egui::Button::new(
+                                        egui::RichText::new(label)
+                                            .text_style(
+                                                lunco_theme::TypographyRole::Button.text_style(),
+                                            )
+                                            .color(fg),
+                                    )
                                     .fill(fill)
                                     .stroke(egui::Stroke::new(1.0, chip_fill_idle)),
-                            )
-                        };
+                                )
+                            };
 
                         if chip(
                             ui,
@@ -885,7 +898,7 @@ impl Panel for WelcomePanel {
                         ui.label(egui::RichText::new("No examples match.").color(muted));
                     } else {
                         let col_w = 372.0;
-                        let row_h = 62.0;
+                        let row_h = 72.0;
                         let mut iter = filtered.iter();
                         loop {
                             let left = iter.next();
@@ -919,14 +932,16 @@ impl Panel for WelcomePanel {
                                         rect.min + egui::vec2(12.0, 10.0),
                                         egui::Align2::LEFT_TOP,
                                         dot.0,
-                                        egui::FontId::proportional(13.0),
+                                        lunco_theme::TypographyRole::Label
+                                            .font_id(ui.style().as_ref()),
                                         dot.1,
                                     );
                                     painter.text(
                                         rect.min + egui::vec2(28.0, 8.0),
                                         egui::Align2::LEFT_TOP,
                                         format!("{}  {}", domain_icon(c.domain()), c.short_name()),
-                                        egui::FontId::proportional(13.0),
+                                        lunco_theme::TypographyRole::Label
+                                            .font_id(ui.style().as_ref()),
                                         title_tint,
                                     );
                                     let sub = card_subtitle(c);
@@ -941,14 +956,16 @@ impl Panel for WelcomePanel {
                                         rect.min + egui::vec2(28.0, 28.0),
                                         egui::Align2::LEFT_TOP,
                                         sub,
-                                        egui::FontId::proportional(10.5),
+                                        lunco_theme::TypographyRole::Body
+                                            .font_id(ui.style().as_ref()),
                                         muted,
                                     );
                                     painter.text(
                                         rect.min + egui::vec2(28.0, row_h - 16.0),
                                         egui::Align2::LEFT_TOP,
                                         c.domain(),
-                                        egui::FontId::proportional(9.5),
+                                        lunco_theme::TypographyRole::Caption
+                                            .font_id(ui.style().as_ref()),
                                         muted,
                                     );
                                     if resp.clicked() {
@@ -972,7 +989,7 @@ impl Panel for WelcomePanel {
                          Ctrl+Z / Ctrl+Shift+Z  undo/redo    ·    \
                          F5  compile",
                     )
-                    .size(10.0)
+                    .text_style(lunco_theme::TypographyRole::Caption.text_style())
                     .color(egui::Color32::DARK_GRAY),
                 );
             });

@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use bevy_egui::egui::{self, Align2, FontId, Rect, Vec2};
+use bevy_egui::egui::{self, Align2, Rect, Vec2};
 use lunco_theme::{ColorAlpha, Theme};
 use web_time::Instant;
 
@@ -105,7 +105,7 @@ impl LoadingIndicator {
             egui::pos2(card_rect.min.x + 60.0, card_rect.center().y - 8.0),
             Align2::LEFT_CENTER,
             header,
-            FontId::proportional(13.0),
+            lunco_theme::TypographyRole::Label.font_id(ui.style().as_ref()),
             theme.tokens.text,
         );
 
@@ -122,7 +122,7 @@ impl LoadingIndicator {
                 egui::pos2(card_rect.min.x + 60.0, card_rect.center().y + 10.0),
                 Align2::LEFT_CENTER,
                 detail,
-                FontId::monospace(11.0),
+                lunco_theme::TypographyRole::DenseCode.font_id(ui.style().as_ref()),
                 theme.tokens.text_subdued,
             );
         }
