@@ -15,8 +15,8 @@ def Xform "SolarPanel" (
     uniform bool lunco:spawnable = true
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/SolarPanel.mo@
-    double parameters:area = 18.0
-    double parameters:efficiency = 0.3
+    float parameters:area = 18.0
+    float parameters:efficiency = 0.30000001192092896
     float inputs:irradiance = 1361.0
     float inputs:panel_normal_x = 0.0
     float inputs:panel_normal_y = 1.0
