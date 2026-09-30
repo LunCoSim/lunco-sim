@@ -142,6 +142,14 @@ update count with an unchanged physics result is additional same-host evidence
 that the current gate compares simulation state independently of render/update
 cadence. It does not establish cross-machine numeric agreement.
 
+After integrating `7550adc24` on local `main`, the regular default-feature
+`cargo build --bin luncosim -j 4` succeeded at `0898f43ca2279176b6ab7d78c44a2342ad1f7cb9`.
+The same production profile passed at 780 ticks and 972 application updates,
+matching the exact reference hash above. Scene readiness held for 7,670
+application updates before physics admission settled; this varied from the
+earlier local run while the simulation comparison remained unchanged. This is
+still same-host evidence only.
+
 ## Findings
 
 | ID | Severity | Finding and evidence | Status |
