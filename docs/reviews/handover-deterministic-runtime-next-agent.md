@@ -949,6 +949,9 @@ enough to promise same-state continuation from an arbitrary capture tick.
   transition 2 and verified the expected missing-stage AssetServer failure and
   cleanup. All four processes returned exit 0 from the rebuilt production
   binary.
+- All four production gates also passed with `RUST_LOG=off` after rebuilding
+  at `432655ce825a1e2663e57273989f77c6e97e0fd4`, observing the expected
+  rejection and missing-stage errors and clearing failed scene state.
 - Initial-stage `reject_scene` before startup admits a scenario, and the
   broader replay, cross-machine numeric, browser-worker, and performance gaps
   remain open.
@@ -1103,6 +1106,17 @@ enough to promise same-state continuation from an arbitrary capture tick.
   scripts/test-deterministic-physics-profiles.sh`, the focused production run,
   the full matrix, and `git diff --check` passed. Neither `pwsh` nor
   `powershell` is installed here, so the PowerShell wrapper was not executed.
+- After fast-forwarding to latest local `main` at
+  `432655ce825a1e2663e57273989f77c6e97e0fd4`, the regular production build and
+  `scene-4-serial` rerun passed. It completed 780 ticks and 1,062 application
+  updates at 60 Hz, serial Compute, zero jitter, and seed
+  `6840157149251759617`, matching reference SHA-256
+  `4f1785e86deb5e05083561007ec8e08891ca5a0d19c82e9edcdb8f70c92e3496` with
+  `numeric_tolerance=0`. Scene readiness held for 9,481 updates and physics
+  admission settled in three zero-duration updates. The worktree also carried
+  scene-load failure acceptance edits; the multi-rover fixture and reference
+  were unchanged. This is same-host evidence on the latest integrated physics
+  admission path, not a remote reproduction.
 - The earlier remote `scene-4-serial` failure still has no assertion detail.
   Its reported clean source was `1df5d85e7a242ac4ee3544c38a141a91ee407ee3`; the
   fixture committed there hashes to

@@ -133,7 +133,8 @@ and reject gates and both initial-composition gates passed on the default
 production binary built from the source tree based on `7028573d4` with the
 scene-failure changes in this review. The dynamic-reference allow run observed
 the exact unresolved-dependency rejection; both initial-composition runs
-observed the expected missing-stage failure. A process launched with a
+observed the expected missing-stage failure. All four gates also passed with `RUST_LOG=off` on the rebuilt default binary
+at `432655ce825a1e2663e57273989f77c6e97e0fd4`. A process launched with a
 `--scene` whose initial root is rejected before any scenario can declare an
 expected outcome remains unverified.
 
