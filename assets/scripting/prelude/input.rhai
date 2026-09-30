@@ -64,6 +64,14 @@ fn input_pointer_button(button, state, x, y) {
     }})
 }
 
+// Raw relative motion is distinct from cursor positioning: the native input
+// map consumes it for camera look while the configured look button is held.
+fn input_mouse_motion(delta_x, delta_y) {
+    cmd("InjectWindowInput", #{ event: #{
+        MouseMotion: #{ delta_x: delta_x, delta_y: delta_y }
+    }})
+}
+
 fn input_pointer_press(button, x, y) {
     input_pointer_button(button, "pressed", x, y)
 }

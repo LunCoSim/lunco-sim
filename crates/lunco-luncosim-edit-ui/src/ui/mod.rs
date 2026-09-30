@@ -400,6 +400,8 @@ impl Plugin for SceneEditUiPlugin {
             .init_resource::<crate::script_tools::ScenePointerDispatch>()
             .init_resource::<crate::script_tools::PendingUsdCurveViews>()
             .add_plugins(crate::perf_bridge::PerfBridgePlugin);
+        app.add_observer(crate::script_tools::clear_scene_pointer_move_hook_on_document_closed);
+        app.add_observer(crate::script_tools::clear_scene_pointer_move_hooks_on_twin_closed);
         app.world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
             .register(crate::diagnostic_visuals::DiagnosticVisualsQueryProvider);
@@ -415,6 +417,10 @@ impl Plugin for SceneEditUiPlugin {
         app.add_systems(
             lunco_core::SceneTeardown,
             crate::script_tools::reset_pending_usd_curve_views,
+        );
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            crate::script_tools::reset_scene_pointer_move_hooks,
         );
         app.add_systems(
             Update,

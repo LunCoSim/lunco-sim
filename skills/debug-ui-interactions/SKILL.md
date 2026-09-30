@@ -55,7 +55,10 @@ scene selection. Selecting a point is separate from the `Move route point`
 action: select enables the generic gizmo, while Move selects its explicit point
 and arms click-to-place with a disposable ghost. That selected point remains the
 move target until placement or cancellation. Hover alone must not arm movement.
-The context gesture itself must not enable the transform gizmo. The hover
+The context gesture itself must not enable the transform gizmo. Ordinary clicks
+carry `active_pointer_move { interaction_id, tool, hook, context }` only for
+an interaction registered in their document. Placement consumes that context;
+an idle click must not discover armed tools or routes by traversing USD. The hover
 dispatcher scopes movement from the hit prim's document and carries the
 same-document selected/control paths as route context. The hit prim's registered
 `LunCoPointerInteractionAPI` must authorize that button as `context`; the generic
@@ -109,17 +112,23 @@ when several documents can mount the same authored path. Generic `MoveEntity`
 persistence resolves the write document from the moved entity's stage, not the
 active editor tab.
 
-Scene `Pointer<Move>` and `Pointer<Enter>` observers used for an armed
-route-point preview must coalesce the newest raw hit per pointer and picking
-frame before resolving scene identity, coordinates, or terrain position. A
-fallback terrain raycast then runs at most once per pointer per picking frame;
+Scene `Pointer<Move>` and `Pointer<Enter>` observers may collect raw hits, but
+the viewport must dispatch movement only for a document with an active typed
+`SetScenePointerMoveHook` subscription. Supply a caller-owned `interaction_id`
+to both Set and Clear so stale cleanup cannot end a newer interaction.
+Coalesce the newest raw hit per pointer and picking frame. With no active
+subscriptions, drop samples before resolving scene identity; with subscriptions
+on other documents, perform the lightweight document lookup and drop the hit
+before coordinate conversion or terrain work. For an active interaction, a
+fallback terrain raycast runs at most once per pointer per picking frame;
 direct analytic surface hits do not need that fallback. Queue one typed hook
-after resolution. Enter
-provides the first sample after a scene hit replaces a popup's previous-frame
-capture hit. Bevy can emit move events for both the pass-through preview and
-lower hits. Before deduplication, skip the preview event and stop its ancestor
-propagation; otherwise the preview can consume the cursor sample intended for
-terrain beneath it. Keep the hook presentation-only: update the
+after resolution. Clear the subscription when the interaction ends; document
+close, Twin close, and scene teardown own cleanup.
+Enter provides the first sample after a scene hit replaces a popup's
+previous-frame capture hit. Bevy can emit move events for both the pass-through
+preview and lower hits. Before deduplication, skip the preview event and stop
+its ancestor propagation; otherwise the preview can consume the cursor sample
+intended for terrain beneath it. Keep the hook presentation-only: update the
 live transform of the projected `@view@` preview through the generic typed
 preview-transform command. It validates document and view-layer ownership and
 uses the canonical active-frame/parent-local conversion; hover must not edit the

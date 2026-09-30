@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**245 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**247 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -24,7 +24,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Scene editing & authoring**
 
 - [`lunco-luncosim-edit-core`](#lunco-luncosim-edit-core) (1 command)
-- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (9 commands)
+- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (11 commands)
 - [`lunco-scene-commands`](#lunco-scene-commands) (5 commands)
 
 **USD / scenes**
@@ -164,6 +164,17 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `name` | `Option < String >` |  Prim name for the new camera. `None` picks the first free `View_N`. |
 
+#### `ClearScenePointerMoveHook`
+
+ End the active scene-pointer movement subscription for one document.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/script_tools.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `doc_id` | `u64` |  USD document whose pointer movement should stop reaching a hook. |
+| `interaction_id` | `String` |  Identity supplied when the active interaction subscribed. |
+
 #### `ReleaseDiagnosticVisual`
 
  Release one opaque diagnostic lease.
@@ -227,6 +238,23 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `enabled` | `bool` |   |
 | `layers` | `Vec < String >` |   |
+
+#### `SetScenePointerMoveHook`
+
+ Subscribe one document to a typed Rhai pointer-move hook while an
+ interaction is active. Only one interaction owns movement updates per
+ document, and the scene-pointer adapter drops passive samples before scene
+ or terrain resolution when no subscription matches.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/script_tools.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `doc_id` | `u64` |  USD document whose pointer movement should reach the hook. |
+| `interaction_id` | `String` |  Caller-owned identity used to prevent stale cleanup from ending a newer interaction. |
+| `tool` | `String` |  Registered Rhai tool namespace. |
+| `hook` | `String` |  One-argument pointer-move hook name. |
+| `context` | `BTreeMap < String, String >` |  Stable context merged with each live pointer sample. |
 
 #### `SetUsdViewPreviewTransform`
 
@@ -902,6 +930,11 @@ actually call, with the fields the deserializer actually accepts. See the
  command directly. Instead, the next input phase receives the same Bevy
  `WindowEvent` plus typed keyboard/mouse messages that the winit backend
  normally emits, so every existing consumer follows its ordinary path.
+
+ Absolute `PointerMove { x, y }` drives cursor picking and UI. Relative
+ `MouseMotion { delta_x, delta_y }` supplies raw mouse input for camera look.
+ Hold the configured look button to rotate; cursor positioning alone does
+ not rotate the camera. Input coordinates and deltas must be finite.
 
 - *defined in:* `crates/lunco-controller/src/lib.rs`
 
@@ -3798,7 +3831,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 245 commands from the runtime schema; scanned 967 .rs files for docs (0 parse failure(s) skipped).
+<!-- 247 commands from the runtime schema; scanned 967 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

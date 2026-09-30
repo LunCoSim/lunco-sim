@@ -60,9 +60,9 @@ fn on_pointer(context) {
     #{ ok: true, handled: true, action: "select" }
 }
 
-// High-frequency movement is delivered only to the selected entity's Twin
-// document and coalesced by the viewport adapter. Route policy validates
-// that selection before it applies a one-prim @view@ transform.
+// The route policy subscribes while a move preview is armed. The viewport
+// adapter coalesces samples for that document and does no pointer-context
+// resolution or Rhai dispatch while the interaction is idle.
 fn on_pointer_move(context) {
     waypoint_editor::on_pointer_move(context)
 }
