@@ -1189,6 +1189,32 @@ struct ExpectedFaults(std::collections::BTreeSet<String>);
 #[derive(Resource, Default)]
 struct ExpectedRuntimeFaults(std::collections::BTreeSet<String>);
 
+#[derive(Clone)]
+enum SceneLoadTerminalOutcome {
+    Completed,
+    Failed {
+        id: lunco_core::SceneTransitionId,
+        error: String,
+    },
+}
+
+#[derive(Clone)]
+struct ExpectedSceneLoadFailure {
+    path: String,
+    detail_contains: String,
+    after_sequence: u64,
+    outcome: Option<SceneLoadTerminalOutcome>,
+}
+
+/// Test scenarios can remain alive at the process boundary after a scene-load
+/// transaction removes their actor, then assert its typed terminal event.
+#[derive(Resource, Default, Clone)]
+struct ExpectedSceneLoadFailures {
+    terminal_sequence: u64,
+    expected: Option<ExpectedSceneLoadFailure>,
+    invalid: Option<String>,
+}
+
 /// `expect_fault(port)` in rhai lands here.
 fn catch_expected_fault(trigger: On<TelemetryEvent>, mut expected: ResMut<ExpectedFaults>) {
     let evt = trigger.event();
@@ -1214,6 +1240,107 @@ fn catch_expected_runtime_fault(
         return;
     };
     expected.0.insert(kind.clone());
+}
+
+/// `expect_scene_load_failure(path, detail_contains)` in Rhai declares the
+/// exact LoadScene transaction whose failed terminal edge the runner must see.
+fn catch_expected_scene_load_failure(
+    trigger: On<TelemetryEvent>,
+    mut state: ResMut<ExpectedSceneLoadFailures>,
+) {
+    let event = trigger.event();
+    if event.name != "EXPECT_SCENE_LOAD_FAILURE" {
+        return;
+    }
+    if state.expected.is_some() || state.invalid.is_some() {
+        state.invalid =
+            Some("a scene test declared more than one expected LoadScene failure".into());
+        return;
+    }
+    let TelemetryValue::Map(fields) = &event.data else {
+        state.invalid = Some("expected LoadScene failure declaration was not a typed map".into());
+        return;
+    };
+    let (Some(TelemetryValue::String(path)), Some(TelemetryValue::String(detail_contains))) =
+        (fields.get("path"), fields.get("detail_contains"))
+    else {
+        state.invalid = Some(
+            "expected LoadScene failure declaration requires string path and detail_contains"
+                .into(),
+        );
+        return;
+    };
+    if path.trim().is_empty() || detail_contains.trim().is_empty() {
+        state.invalid =
+            Some("expected LoadScene failure path and detail_contains must be non-empty".into());
+        return;
+    }
+    state.expected = Some(ExpectedSceneLoadFailure {
+        path: path.clone(),
+        detail_contains: detail_contains.clone(),
+        after_sequence: state.terminal_sequence,
+        outcome: None,
+    });
+}
+
+fn record_scene_load_terminal_outcome(
+    state: &mut ExpectedSceneLoadFailures,
+    transition: &lunco_core::SceneTransition,
+    outcome: SceneLoadTerminalOutcome,
+) {
+    let Some(sequence) = state.terminal_sequence.checked_add(1) else {
+        state.invalid = Some("scene transition terminal sequence overflowed".into());
+        return;
+    };
+    state.terminal_sequence = sequence;
+    let lunco_core::SceneTransition::Load { path, .. } = transition else {
+        return;
+    };
+    let matches = state
+        .expected
+        .as_ref()
+        .is_some_and(|expected| sequence > expected.after_sequence && path == &expected.path);
+    if !matches {
+        return;
+    }
+    if state
+        .expected
+        .as_ref()
+        .is_some_and(|expected| expected.outcome.is_some())
+    {
+        state.invalid = Some(format!(
+            "LoadScene `{path}` reached more than one terminal transition edge"
+        ));
+        return;
+    }
+    if let Some(expected) = state.expected.as_mut() {
+        expected.outcome = Some(outcome);
+    }
+}
+
+fn capture_scene_load_completed(
+    trigger: On<lunco_core::SceneTransitionCompleted>,
+    mut state: ResMut<ExpectedSceneLoadFailures>,
+) {
+    record_scene_load_terminal_outcome(
+        &mut state,
+        &trigger.event().transition,
+        SceneLoadTerminalOutcome::Completed,
+    );
+}
+
+fn capture_scene_load_failed(
+    trigger: On<lunco_core::SceneTransitionFailed>,
+    mut state: ResMut<ExpectedSceneLoadFailures>,
+) {
+    record_scene_load_terminal_outcome(
+        &mut state,
+        &trigger.event().transition,
+        SceneLoadTerminalOutcome::Failed {
+            id: trigger.event().id,
+            error: trigger.event().error.clone(),
+        },
+    );
 }
 
 fn catch_verdict(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
@@ -1251,6 +1378,49 @@ fn catch_verdict(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
         verdict.failure_detail_bytes = next_bytes;
         verdict.failure_details.push(detail);
     }
+}
+
+fn scene_load_failure_cleanup_problem(
+    world: &mut World,
+    transition_id: lunco_core::SceneTransitionId,
+) -> Option<String> {
+    if world
+        .get_resource::<lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight>()
+        .is_some()
+    {
+        return Some("the failed scene still has a stage load in flight".into());
+    }
+    if world
+        .get_resource::<lunco_usd_bevy_scene::FailedSceneLoad>()
+        .is_some()
+    {
+        return Some("the failed scene load diagnostic remains after its terminal failure".into());
+    }
+    let Some(coordinator) = world.get_resource::<lunco_core::SceneTransitionCoordinator>() else {
+        return Some("SceneTransitionCoordinator is unavailable after scene failure".into());
+    };
+    if coordinator.active_id().is_some() {
+        return Some("a scene transition remains active after its failure edge".into());
+    }
+    let Some(mounts) = world.get_resource::<lunco_core::SceneMountState>() else {
+        return Some("SceneMountState is unavailable after scene failure".into());
+    };
+    if mounts.active_root().is_some() {
+        return Some("the failed scene still has an active mount root".into());
+    }
+    let Some(progress) = world.get_resource::<lunco_core_runtime::SimulationProgress>() else {
+        return Some("SimulationProgress is unavailable after scene failure".into());
+    };
+    if progress.contains(lunco_core_runtime::SimulationProgressKey::scene_transition(
+        transition_id,
+    )) {
+        return Some("the failed scene transition still holds simulation admission".into());
+    }
+    let remaining_prim = {
+        let mut query = world.query::<&lunco_usd_bevy_scene::UsdPrimPath>();
+        query.iter(world).map(|prim| prim.path.clone()).min()
+    };
+    remaining_prim.map(|path| format!("rejected scene prim '{path}' remains projected"))
 }
 
 fn finish_scene_test(
@@ -1845,6 +2015,10 @@ pub fn run() -> u8 {
     app.add_observer(catch_expected_fault);
     app.init_resource::<ExpectedRuntimeFaults>();
     app.add_observer(catch_expected_runtime_fault);
+    app.init_resource::<ExpectedSceneLoadFailures>();
+    app.add_observer(catch_expected_scene_load_failure);
+    app.add_observer(capture_scene_load_completed);
+    app.add_observer(capture_scene_load_failed);
 
     app.finish();
     app.cleanup();
@@ -2351,7 +2525,18 @@ pub fn run() -> u8 {
                 }
             }
         }
-        if app.world().resource::<Verdict>().result.is_some() {
+        let scene_load_expectation = app.world().resource::<ExpectedSceneLoadFailures>();
+        if scene_load_expectation.invalid.is_some()
+            || scene_load_expectation
+                .expected
+                .as_ref()
+                .is_some_and(|expected| expected.outcome.is_some())
+        {
+            break;
+        }
+        if let Some((_, verdict)) = app.world().resource::<Verdict>().result.as_ref()
+            && (*verdict != VerificationVerdict::Pass || scene_load_expectation.expected.is_none())
+        {
             break;
         }
         // Something asked the app to quit before a verdict — e.g.
@@ -2527,6 +2712,122 @@ pub fn run() -> u8 {
                 missing.join(", ")
             )),
         );
+    }
+
+    let scene_load_expectation = app.world().resource::<ExpectedSceneLoadFailures>().clone();
+    if let Some(error) = scene_load_expectation.invalid {
+        println!(
+            "luncosim test FAIL  scene={}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
+            cli.scene
+        );
+        println!("  invalid scene-load expectation: {error}");
+        return finish_scene_test(
+            &app,
+            &cli,
+            1,
+            SceneTestProcessStatus::RunnerError,
+            Some(format!("Invalid scene-load expectation: {error}")),
+        );
+    }
+    if let Some(expected) = scene_load_expectation.expected {
+        let terminal = match expected.outcome.as_ref() {
+            Some(SceneLoadTerminalOutcome::Failed { id, error }) => {
+                if error.contains(&expected.detail_contains) {
+                    Ok((*id, error.as_str()))
+                } else {
+                    Err(format!(
+                        "LoadScene '{}' failed with unexpected detail: {error}",
+                        expected.path
+                    ))
+                }
+            }
+            Some(SceneLoadTerminalOutcome::Completed) => Err(format!(
+                "LoadScene '{}' completed, but the Rhai test expected it to fail",
+                expected.path
+            )),
+            None => Err(format!(
+                "LoadScene '{}' did not reach a terminal transition edge",
+                expected.path
+            )),
+        };
+        let terminal = terminal.and_then(|(id, detail)| {
+            scene_load_failure_cleanup_problem(app.world_mut(), id).map_or(Ok((id, detail)), Err)
+        });
+        let verdict = app.world().resource::<Verdict>().result.clone();
+        let authored_channel = match verdict {
+            Some((channel, VerificationVerdict::Pass)) => Some(channel),
+            Some((channel, result)) => {
+                let details = app.world().resource::<Verdict>().failure_details.join("; ");
+                let message = format!(
+                    "the scene reported {result:?} on {channel} before the expected scene-load failure{}",
+                    if details.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {details}")
+                    }
+                );
+                println!(
+                    "luncosim test FAIL  scene={}  channel={channel}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
+                    cli.scene
+                );
+                println!("  {message}");
+                return finish_scene_test(
+                    &app,
+                    &cli,
+                    1,
+                    SceneTestProcessStatus::RunnerError,
+                    Some(message),
+                );
+            }
+            None => None,
+        };
+        let Some(channel) = authored_channel else {
+            let message = "no authored Rhai PASS verdict preceded the expected scene-load failure";
+            println!(
+                "luncosim test FAIL  scene={}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
+                cli.scene
+            );
+            println!("  {message}");
+            return finish_scene_test(
+                &app,
+                &cli,
+                1,
+                SceneTestProcessStatus::RunnerError,
+                Some(message.to_owned()),
+            );
+        };
+        match terminal {
+            Ok((id, detail)) => {
+                println!(
+                    "luncosim test PASS  scene={}  channel={channel}  expected scene-load failure path={} transition={} detail={}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
+                    cli.scene,
+                    expected.path,
+                    id.get(),
+                    detail
+                );
+                return finish_scene_test(
+                    &app,
+                    &cli,
+                    if cli.verification.is_some() { 2 } else { 0 },
+                    SceneTestProcessStatus::VerdictProduced,
+                    None,
+                );
+            }
+            Err(error) => {
+                println!(
+                    "luncosim test FAIL  scene={}  channel={channel}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
+                    cli.scene
+                );
+                println!("  {error}");
+                return finish_scene_test(
+                    &app,
+                    &cli,
+                    1,
+                    SceneTestProcessStatus::RunnerError,
+                    Some(error),
+                );
+            }
+        }
     }
 
     let (process_exit_code, process_status, runner_diagnostic) = match app

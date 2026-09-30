@@ -197,6 +197,7 @@ fn record_scene_load_terminal_outcome(
     q_projecting: Query<&UsdPrimPath, With<UsdSceneProjectionQueued>>,
     q_lights: Query<&bevy::light::DirectionalLight>,
     scene_entities: SceneEntities,
+    mut mount_state: Option<ResMut<lunco_core::SceneMountState>>,
     mut pending: ResMut<PendingSceneStageOutcome>,
     mut commands: Commands,
 ) {
@@ -264,6 +265,10 @@ fn record_scene_load_terminal_outcome(
 
     if let SceneStageAssetOutcome::Failed { error, .. } = outcome {
         pending.outcome = None;
+        if let Some(state) = mount_state.as_deref_mut() {
+            state.begin_replacement();
+        }
+        clear_scene_entities(&mut commands, &scene_entities);
         commands.remove_resource::<SceneLoadInFlight>();
         commands.remove_resource::<FailedSceneLoad>();
         commands.trigger(SceneTransitionFailed {
@@ -315,6 +320,9 @@ fn record_scene_load_terminal_outcome(
         };
         if let Some(error) = admission_error {
             warn!("[scene] {error}");
+            if let Some(state) = mount_state.as_deref_mut() {
+                state.begin_replacement();
+            }
             clear_scene_entities(&mut commands, &scene_entities);
             pending.outcome = None;
             commands.remove_resource::<SceneLoadInFlight>();

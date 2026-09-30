@@ -122,8 +122,20 @@ unresolved child was absent, and runtime diagnostics retained
 `USD_COMPOSITION_MISSING_DEPENDENCY` for `missing.usda`. This exercises the
 shipped application policy's `allow_partial` default on the initial
 AssetServer path. The separate `initial_allow.usda` gate covers a Twin policy
-override. Initial-stage `reject_scene` terminal-fault behavior remains
-unverified.
+override. The `dynamic_reference_composition/allow.usda` gate then loads an
+incomplete root stage under `reject_scene`, observes the typed
+`SceneTransitionFailed`, and checks that the failed root has no remaining
+in-flight load, failed-load marker, active transition, mount root,
+simulation-progress hold, or projected prim. The `initial_default.usda` and
+`initial_allow.usda` gates also issue a root load for a missing stage and verify
+the same cleanup after the AssetServer failure. The dynamic-reference allow
+and reject gates and both initial-composition gates passed on the default
+production binary built from the source tree based on `7028573d4` with the
+scene-failure changes in this review. The dynamic-reference allow run observed
+the exact unresolved-dependency rejection; both initial-composition runs
+observed the expected missing-stage failure. A process launched with a
+`--scene` whose initial root is rejected before any scenario can declare an
+expected outcome remains unverified.
 
 ### Four-rover rerun after main integration (2026-09-30)
 
@@ -223,6 +235,19 @@ requires every rover to travel more than 0.25 m. This confirms local behavior
 on the current comparison contract, not cross-machine agreement. The remote
 failure's exact cause remains unknown until that machine reruns the same source
 revision and reference with the typed failure details.
+
+After fast-forwarding to local `main` at `432655ce825a1e2663e57273989f77c6e97e0fd4`,
+the regular `cargo build --bin luncosim -j 4` passed. The production
+`scene-4-serial` profile then passed at 780 ticks and 1,062 application
+updates, with 60 Hz, serial Compute, zero jitter, and seed
+`6840157149251759617`. It matched the exact reference with SHA-256
+`4f1785e86deb5e05083561007ec8e08891ca5a0d19c82e9edcdb8f70c92e3496` and
+`numeric_tolerance=0`. Scene readiness held for 9,481 updates before physics
+admission settled in three zero-duration updates. The worktree also contained
+in-progress scene-load failure acceptance edits; the multi-rover fixture and
+reference were unchanged. This verifies the latest integrated physics
+admission path on this host. It does not identify which assertion failed on
+the older machine, or establish cross-machine equality.
 
 ### Live Modelica and port input capture (2026-09-28)
 

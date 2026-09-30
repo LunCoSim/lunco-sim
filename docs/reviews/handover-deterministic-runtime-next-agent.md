@@ -888,6 +888,68 @@ enough to promise same-state continuation from an arbitrary capture tick.
   replay, cross-machine numeric, browser-worker, and performance gaps remain
   open as recorded above.
 
+## Initial AssetServer composition policy acceptance (2026-09-30)
+
+- `assets/scenes/tests/dynamic_reference_composition/initial_allow.usda`
+  loads the shared `initial_usd_composition.rhai` scenario against an initial
+  stage containing an available referenced prim whose nested arc is missing.
+  The Twin `scene_composition` policy returns `allow_partial` for this fixture.
+- The production scene gate passed four assertions at `SimTick=1`: `/World`
+  and `/World/Partial` were projected, `/World/Partial/Missing` was not
+  fabricated, and runtime diagnostics retained
+  `USD_COMPOSITION_MISSING_DEPENDENCY` with the `missing.usda` subject.
+  Output: `TESTS_OK 4`, `INITIAL USD COMPOSITION: PASS`, and
+  `luncosim test PASS ... ticks=1 updates=4 sim=0.02s`.
+- Reproduce with the production binary:
+
+  ```sh
+  LUNCO_ASSET_ROOT="$PWD/assets" RUST_LOG=info \
+    target/debug/luncosim test \
+    --scene assets/scenes/tests/dynamic_reference_composition/initial_allow.usda \
+    --max-ticks 900
+  ```
+
+- The isolated `assets/scenes/tests/initial_usd_composition_default` Twin has
+  no local composition-policy source. Its `initial_default.usda` references
+  the co-located `partial.usda`, which in turn references a missing layer in
+  the same Twin. The root and partial stage projected, while diagnostics named
+  `missing.usda`; the four-assertion Rhai gate passed through the shipped
+  application policy's default `allow_partial` decision. Readback through
+  `InspectUsdDocument` confirmed both authored arcs and the saved documents.
+  The Twin override and application default paths are now both covered.
+- Reproduce the application-default case with the production binary:
+
+  ```sh
+  LUNCO_ASSET_ROOT="$PWD/assets" RUST_LOG=info \
+    target/debug/luncosim test \
+    --scene assets/scenes/tests/initial_usd_composition_default/initial_default.usda \
+    --max-ticks 900
+  ```
+
+- The default-policy run printed `TESTS_OK 4` and
+  `INITIAL USD COMPOSITION: PASS`. After fast-forwarding to `ab13d36cf` and
+  rebuilding with `cargo build --bin luncosim -j 4`, both production scenes
+  were rerun with `RUST_LOG=off`; each returned exit 0 and
+  `luncosim test PASS` (application default at one tick, Twin override at two).
+  The scenario then requests a root load for a missing stage and declares that
+  expected terminal failure before reporting its verdict. The runner keeps the
+  expectation after the outgoing scenario is removed and verifies the failed
+  transition cleared `SceneLoadInFlight`, `FailedSceneLoad`, the active
+  coordinator id, the matching simulation-progress hold, the primary mount
+  root, and every projected `UsdPrimPath`.
+- The same production runner coverage passed on the source tree based on
+  `7028573d4` with the scene-failure changes in this review. The
+  `dynamic_reference_composition/allow.usda` case reached transition 2 and
+  verified `reject_scene` reported the unresolved nested dependency; the
+  `reject.usda` case still observed the expected `usd-reference-admission`
+  runtime fault. `initial_allow.usda` and `initial_default.usda` each reached
+  transition 2 and verified the expected missing-stage AssetServer failure and
+  cleanup. All four processes returned exit 0 from the rebuilt production
+  binary.
+- Initial-stage `reject_scene` before startup admits a scenario, and the
+  broader replay, cross-machine numeric, browser-worker, and performance gaps
+  remain open.
+
 ## Rhai deterministic-reference comparison (2026-09-29)
 
 - `luncosim test --determinism-reference PATH` loads the reference JSON into
@@ -952,13 +1014,24 @@ enough to promise same-state continuation from an arbitrary capture tick.
   not sustained performance evidence.
 - The supplied other-computer `scene-4-serial` output is timestamped
   2026-09-29 17:51. It reached 780 ticks and returned a terminal scene failure,
-  but gave no assertion detail, build revision, or reference hash. This predates
-  `bb00f9bb4` (22:44), which added typed authored failure details, and
-  `f095634e8` (2026-09-30), which removed rendered `Transform` values from the
-  physics comparison. The old result does not identify a physics-state
-  mismatch. Cross-machine comparison remains open; rerun the single profile
-  from the current branch and capture its first expected/actual field, exact
-  `HEAD`, and reference SHA-256.
+  but gave no authored assertion detail. The supplied report identifies clean
+  source `1df5d85e7a242ac4ee3544c38a141a91ee407ee3`; its committed reference
+  fixture hashes to
+  `3297aa8682cf9f503ea7085a7b07bdccf31ebdd392173bc9ef0e06b9562eb87f`, though
+  the run itself did not print the hash. This predates `bb00f9bb4` (22:44),
+  which added typed authored failure details, and `f095634e8` (2026-09-30),
+  which removed rendered `Transform` values from the physics comparison. The
+  old row included cell-local `Transform.translation`, so a render-projection
+  mismatch is plausible; the missing assertion detail means it cannot be
+  confirmed as the failure cause. The old result does not establish a
+  physics-state mismatch. After removing only `|localTf=...` from profile rows,
+  the canonicalized `.profiles` objects in the old and current references have
+  the same SHA-256:
+  `62604e5ed1274c2852f0b0005a657e27ded3821bba2ef69025a084d198c117fa`. The
+  physics, Modelica, articulated, and final-stage reference values were
+  unchanged by that comparison-field removal. Cross-machine comparison
+  remains open; rerun the single profile from the current branch and capture
+  its first expected/actual field, exact `HEAD`, and reference SHA-256.
 - This work is for local `main` integration only; no push is authorized. The
   unrelated untracked `scripts/perf/` work remains preserved.
 
@@ -991,6 +1064,27 @@ enough to promise same-state continuation from an arbitrary capture tick.
 
 ## Current cross-machine failure investigation (2026-09-30)
 
+- After fast-forwarding to `ab13d36cf`, the regular default-feature
+  `cargo build --bin luncosim -j 4` passed. The rebuilt production binary
+  passed `scene-4-serial` at 780 ticks with the exact reference, serial
+  Compute, zero jitter, seed `6840157149251759617`, and 941 application
+  updates. The reference SHA-256 was
+  `4f1785e86deb5e05083561007ec8e08891ca5a0d19c82e9edcdb8f70c92e3496`.
+  This is current same-host evidence after main integration, not a remote
+  reproduction.
+- The locally available production binary (built from `e901abe7`; the current
+  source `9f9a301c` adds only telemetry-browser changes after it) passed the
+  four-rover production gate at 780 ticks. It used the checked-in reference
+  SHA-256 `4f1785e86deb5e05083561007ec8e08891ca5a0d19c82e9edcdb8f70c92e3496`.
+  The shell profile matrix had already passed on this source line; this was a
+  focused rerun prompted by the supplied remote failure.
+- `world_pos` uses `SimulationPoseQuery`, which reads Avian's seeded f64
+  `Position`/`Rotation` for rigid bodies. The current Rhai comparison excludes
+  render `Transform` and also checks that each rover moves more than 0.25 m.
+  The older scene gate serialized cell-local `Transform.translation` into the
+  exact physics row and used it in the startup pose check. That f32 render
+  projection could vary with interpolation/update timing and was not
+  authoritative physics evidence.
 - Rebuilt the default-feature production binary with the regular command
   `cargo build --bin luncosim -j 4` at
   `f095634e825fa487b1893d2239a094fbe420963d`. The focused production
@@ -1006,11 +1100,15 @@ enough to promise same-state continuation from an arbitrary capture tick.
   scripts/test-deterministic-physics-profiles.sh`, the focused production run,
   the full matrix, and `git diff --check` passed. Neither `pwsh` nor
   `powershell` is installed here, so the PowerShell wrapper was not executed.
-- The earlier remote `scene-4-serial` failure still has no assertion detail or
-  reference identity. Its output predates typed Rhai failure details and the
-  removal of render-interpolated `Transform` from physics comparison, so it
-  cannot establish whether either caused the failure. Do not change tolerance
-  or infer a physics mismatch from that output. Cross-machine acceptance stays
+- The earlier remote `scene-4-serial` failure still has no assertion detail.
+  Its reported clean source was `1df5d85e7a242ac4ee3544c38a141a91ee407ee3`; the
+  fixture committed there hashes to
+  `3297aa8682cf9f503ea7085a7b07bdccf31ebdd392173bc9ef0e06b9562eb87f`, but the
+  run did not record the file hash. Its output predates typed Rhai failure
+  details and the removal of render-interpolated `Transform` from physics
+  comparison, so it cannot establish whether either caused the failure. Do not
+  change tolerance or infer a physics mismatch from that output.
+  Cross-machine acceptance stays
   open until the other computer reruns the profile from the same committed
   source revision and reference and reports the source revision, reference
   SHA-256, full output, and any `luncosim test detail:` field difference. On

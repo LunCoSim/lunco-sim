@@ -59,6 +59,12 @@ fn on_tick(me, ctx) {
     let expected_scene = parameters.scene.index_of("initial_allow.usda") >= 0
         || parameters.scene.index_of(
             "initial_usd_composition_default/initial_default.usda") >= 0;
+    let missing_scene = if parameters.scene.index_of("initial_allow.usda") >= 0 {
+        "twin://dynamic_reference_composition/missing-stage.usda"
+    } else {
+        "twin://initial_usd_composition_default/missing-stage.usda"
+    };
+    expect_scene_load_failure(missing_scene, "missing-stage.usda");
     report_verdict([
         t_true(expected_scene,
             "an initial-stage composition-policy fixture was loaded"),
@@ -70,4 +76,5 @@ fn on_tick(me, ctx) {
         t_true(missing_dependency,
             "the loaded-stage diagnostics retain the exact unresolved composition dependency"),
     ], "INITIAL USD COMPOSITION", "INITIAL_USD_COMPOSITION");
+    load_scene(missing_scene);
 }

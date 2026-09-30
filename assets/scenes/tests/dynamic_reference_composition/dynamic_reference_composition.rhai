@@ -116,6 +116,11 @@ fn on_tick(me, ctx) {
 
     let inspected = query("QueryUsdPrim", #{ path: "/World/Partial" });
     let absent_child = find_path("/World/Partial/Missing");
+    let rejected_scene = "twin://dynamic_reference_composition/partial.usda";
+    expect_scene_load_failure(
+        rejected_scene,
+        "unresolved USD composition dependencies",
+    );
     this.done = true;
     report_verdict([
         t_true(inspected != () && inspected.ok != false,
@@ -123,4 +128,5 @@ fn on_tick(me, ctx) {
         t_true(absent_child < 0,
             "the unresolved nested reference did not fabricate a child prim"),
     ], "DYNAMIC REFERENCE COMPOSITION", "DYNAMIC_REFERENCE_COMPOSITION");
+    load_scene(rejected_scene);
 }
