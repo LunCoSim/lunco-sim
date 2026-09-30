@@ -10,11 +10,11 @@ fn steps() {
         // 0
         #{ anchor: "",                      focus: (),             title: "Welcome to LunCoSim",   body: "This is the Sandbox: a live 3D world.\n\nYou will learn the camera, selection, spawning, and control handoff. Click Next to begin.", require: "cmd:GuidedNext" },
         // 1
-        #{ anchor: "panel.center",          focus: (),             title: "Look around",            body: "Hold " + input_hint("look_button") + " and drag to look around. Use the mouse wheel to move along your view. Click Next after trying both.", require: "cmd:GuidedNext" },
+        #{ anchor: "panel.center",          focus: (),             title: "Look around",            body: "Hold " + input_hint("look_button") + " and drag to look around. Use the mouse wheel to move along your view. Try both controls, then click Next when you are ready.", require: "cmd:GuidedNext" },
         // 2
-        #{ anchor: "panel.center",          focus: (),             title: "Move around",            body: "Move with " + input_hint("forward") + "/" + input_hint("backward") + ". Strafe with " + input_hint("left") + "/" + input_hint("right") + ". Adjust height with " + input_hint("yaw_left") + "/" + input_hint("yaw_right") + ". Click Next after moving around the rover.", require: "cmd:GuidedNext" },
+        #{ anchor: "panel.center",          focus: (),             title: "Move around",            body: "Move with " + input_hint("forward") + "/" + input_hint("backward") + ". Strafe with " + input_hint("left") + "/" + input_hint("right") + ". Turn with " + input_hint("yaw_left") + "/" + input_hint("yaw_right") + ". Try the controls, then click Next when you are ready.", require: "cmd:GuidedNext" },
         // 3
-        #{ anchor: "panel.entity_list",     focus: "entity_list",     title: "Select an object",       body: "In Entities, click the Rover. The selected object becomes the subject of Inspector.", require: "cmd:SelectEntity" },
+        #{ anchor: "panel.entity_list",     focus: "entity_list",     title: "Select an object",       body: "In Entities, click the Rover to select it. Its selection persists when you switch to Build, where Inspector shows its properties.", require: "cmd:SelectEntity" },
         // 4
         #{ anchor: "panel.spawn_palette",   focus: "spawn_palette",   title: "Spawn an object",        body: "Open Spawn in the right dock. Click a rover, prop, or structure, then place it in the scene. Cancel with " + input_hint("cancel") + ".", require: "cmd:SpawnEntity" },
         // 5

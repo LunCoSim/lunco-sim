@@ -2,8 +2,8 @@
 //!
 //! This observer does not call the tutorial's commands. It emits only the
 //! public event names that the real UI produces and checks the lesson's public
-//! MISSION_COMPLETE surface. Camera guidance is intentionally Next-gated: the
-//! input map belongs to the avatar, not to this tutorial.
+//! MISSION_COMPLETE surface. Camera practice remains optional: the input map
+//! belongs to the avatar, and Next is the authored progression action.
 
 fn on_start(me, ctx) {
     this.step = 0;
