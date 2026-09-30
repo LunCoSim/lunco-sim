@@ -118,9 +118,11 @@ event list. Hide the entire event summary from the strip while that history
 view is open, including its fallback to the latest discrete event; preserve
 the strip click target so it can close the popup. Active
 progress opens the compact state of this same popup when it belongs on the
-surface, showing the source and a truncated first-line summary of the
-owner-written message. Keep the complete message in the tooltip and do not
-infer phase from free-form text. Terrain tile streaming, optional terrain
+surface. Scene progress is titled “Scene loading…” or “Scene unloading…” for a
+clear transition; other progress keeps its source label. The complete
+owner-written message wraps inside the card, and the status strip uses the same
+concise scene label. Do not infer phase from free-form text. Terrain tile
+streaming, optional terrain
 refinement, and post-projection scene geometry stay published for readiness
 consumers but drive the workbench loading notice only during an admitted or
 active scene transition. This prevents camera movement after scene load from
