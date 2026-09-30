@@ -32,9 +32,35 @@ impl RevolvedProfileMeshData {
         &self.face_vertex_indices
     }
 
-    /// One outward flat normal for every face-vertex corner.
+    /// One outward shading normal for every face-vertex corner.
     pub fn face_varying_normals(&self) -> &[DVec3] {
         &self.face_varying_normals
+    }
+
+    /// Smooth shared face corners within an explicit crease angle. Geometry
+    /// and sharp profile rims stay unchanged; only shading normals are edited.
+    pub fn smooth_normals(&mut self, crease_angle_deg: f64) -> Result<(), ProfileRevolutionError> {
+        if !crease_angle_deg.is_finite() || !(0.0..=180.0).contains(&crease_angle_deg) {
+            return Err(ProfileRevolutionError::InvalidCreaseAngle);
+        }
+        if crease_angle_deg == 0.0 {
+            return Ok(());
+        }
+        let threshold = crease_angle_deg.to_radians().cos();
+        let mut incident = vec![Vec::new(); self.points.len()];
+        for (corner, index) in self.face_vertex_indices.iter().enumerate() {
+            incident[*index as usize].push(self.face_varying_normals[corner]);
+        }
+        for (corner, index) in self.face_vertex_indices.iter().enumerate() {
+            let face_normal = self.face_varying_normals[corner];
+            let sum = incident[*index as usize]
+                .iter()
+                .filter(|normal| face_normal.dot(**normal) >= threshold)
+                .copied()
+                .sum::<DVec3>();
+            self.face_varying_normals[corner] = sum.normalize();
+        }
+        Ok(())
     }
 
     pub fn vertex_count(&self) -> usize {
@@ -60,6 +86,7 @@ pub enum ProfileRevolutionError {
     SelfIntersecting,
     MeshTooLarge,
     DegenerateFace,
+    InvalidCreaseAngle,
 }
 
 impl std::fmt::Display for ProfileRevolutionError {
@@ -76,6 +103,9 @@ impl std::fmt::Display for ProfileRevolutionError {
             Self::SelfIntersecting => "profile must be a simple closed polygon",
             Self::MeshTooLarge => "revolved mesh exceeds the supported vertex limit",
             Self::DegenerateFace => "profile generated a degenerate surface face",
+            Self::InvalidCreaseAngle => {
+                "normal crease angle must be finite and within 0..180 degrees"
+            }
         };
         f.write_str(message)
     }
@@ -283,4 +313,46 @@ fn segments_intersect(a: DVec2, b: DVec2, c: DVec2, d: DVec2, epsilon: f64) -> b
         return true;
     }
     (abc > 0.0) != (abd > 0.0) && (cda > 0.0) != (cdb > 0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn smooth_revolution_keeps_rims_and_geometry() {
+        let mut mesh = revolve_profile(
+            &[
+                DVec2::new(0.0, 0.0),
+                DVec2::new(1.0, 0.0),
+                DVec2::new(1.0, 1.0),
+                DVec2::new(0.0, 1.0),
+            ],
+            48,
+        )
+        .unwrap();
+        let original = mesh.clone();
+        mesh.smooth_normals(35.0).unwrap();
+        assert_eq!(mesh.points, original.points);
+        assert_eq!(mesh.face_vertex_indices, original.face_vertex_indices);
+        for (corner, normal) in mesh.face_varying_normals.iter().enumerate() {
+            assert!((normal.length() - 1.0).abs() < 1.0e-12);
+            let flat = original.face_varying_normals[corner];
+            if flat.y.abs() > 0.99 {
+                assert!((*normal - flat).length() < 1.0e-12);
+            } else {
+                let point = mesh.points[mesh.face_vertex_indices[corner] as usize];
+                let radial = DVec3::new(point.x, 0.0, point.z).normalize();
+                assert!(normal.dot(radial) > 0.9999);
+            }
+        }
+        assert_eq!(
+            mesh.smooth_normals(f64::NAN),
+            Err(ProfileRevolutionError::InvalidCreaseAngle)
+        );
+        assert_eq!(
+            mesh.smooth_normals(181.0),
+            Err(ProfileRevolutionError::InvalidCreaseAngle)
+        );
+    }
 }

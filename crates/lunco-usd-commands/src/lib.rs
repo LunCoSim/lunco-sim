@@ -1665,10 +1665,11 @@ fn expand_usd_geometry_ops(ops: Vec<UsdOp>) -> Result<Vec<UsdOp>, String> {
                 path,
                 profile,
                 angular_segments,
+                normal_crease_angle_deg,
                 display_color,
                 collision_enabled,
             } => {
-                let mesh = lunco_geometry_core::profile_revolution::revolve_profile(
+                let mut mesh = lunco_geometry_core::profile_revolution::revolve_profile(
                     &profile
                         .into_iter()
                         .map(|[radius, height]| DVec2::new(radius, height))
@@ -1678,6 +1679,10 @@ fn expand_usd_geometry_ops(ops: Vec<UsdOp>) -> Result<Vec<UsdOp>, String> {
                 .map_err(|error| {
                     format!("RevolveProfileMesh `{path}` profile is invalid: {error}")
                 })?;
+                mesh.smooth_normals(normal_crease_angle_deg)
+                    .map_err(|error| {
+                        format!("RevolveProfileMesh `{path}` normals are invalid: {error}")
+                    })?;
                 (
                     edit_target,
                     path,

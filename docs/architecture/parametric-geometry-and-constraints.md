@@ -167,3 +167,7 @@ of material strength, collision ownership, or flight qualification.
 - [OpenUSD `UsdGeomMesh`](https://openusd.org/release/api/class_usd_geom_mesh.html)
   defines indexed polygon geometry; [OpenUSD `UsdPhysics` joints](https://openusd.org/dev/api/usd_physics_page_front.html)
   define simulation-time rigid-body joints, not design-time CAD mates.
+
+### Revolved profile shading
+
+`RevolveProfileMesh.normal_crease_angle_deg` controls crease-aware face-varying normals in the geometry kernel. Zero retains flat shading; a finite angle from 0 to 180 degrees averages adjacent face normals at each shared indexed vertex only within that angle. Positions, topology, physical dimensions and collision geometry are unchanged. Sharp rims remain separate normals when their dihedral angle exceeds the threshold. The authored result uses ordinary USD mesh normals; no additional persistent schema is introduced.

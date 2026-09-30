@@ -648,3 +648,12 @@ facts; keep them in separate layers and verify the composed result.
   loops, control nets and joints are arithmetic — check the arithmetic. A view
   chosen on a symmetry axis of the hypotheses you are deciding between cannot
   discriminate them, and will confidently confirm whichever you already believe.
+
+### Revolved profile shading
+
+`RevolveProfileMesh` accepts `normal_crease_angle_deg`: zero preserves flat
+shading; a positive angle smooths shared face corners within that crease.
+Choose the angle in the owning component recipe/requirements. Geometry,
+collision and topology remain unchanged, and profile rims above the threshold
+keep sharp normals. The command expands to ordinary USD mesh normals; do not
+substitute extra geometry to hide flat shading.

@@ -951,6 +951,9 @@ pub enum UsdOp {
         profile: Vec<[f64; 2]>,
         /// Angular tessellation count. Rust validates the supported range.
         angular_segments: u16,
+        /// Shading crease angle in degrees; zero preserves flat face normals.
+        #[serde(default)]
+        normal_crease_angle_deg: f64,
         /// Constant display colour written as `primvars:displayColor`.
         display_color: [f64; 3],
         /// Whether the generated render mesh should be marked as collidable.
