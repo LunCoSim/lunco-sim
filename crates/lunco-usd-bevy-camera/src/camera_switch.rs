@@ -41,6 +41,9 @@ use lunco_viewport_core::SceneViewport;
 
 use lunco_usd_bevy_scene::UsdPrimPath;
 
+/// Telemetry event name for camera admission findings shown in Recent Events.
+pub const CAMERA_CONTRACT_EVENT_NAME: &str = "camera-contract";
+
 /// Stable camera selection across re-projection. ECS entities are disposable;
 /// an authored camera is identified by the composed stage plus its USD path.
 #[derive(Resource, Clone, PartialEq, Eq, Default)]
@@ -106,11 +109,11 @@ pub struct CameraSelectionStatusChanged;
 /// Hook seam for the application-level initial presentation decision.
 ///
 /// The camera package supplies only derived USD/ECS facts and realizes the
-/// closed decision returned by the policy. It never invents an authored camera
-/// or chooses the first camera in a query. The interactive application
-/// registers the Rhai implementation from `assets/scripting/policy`; headless
-/// hosts can leave the convenience policy absent and retain an explicit
-/// no-camera state.
+/// closed decision returned by the policy. The application policy may select
+/// an authored camera by stable USD-path order; Rust resolves that choice from
+/// active-root candidates. The interactive application registers the Rhai
+/// implementation from `assets/scripting/policy`; headless hosts can leave
+/// the convenience policy absent and retain an explicit no-camera state.
 
 /// Marks the camera generated for an explicit standalone-assembly presentation.
 ///
@@ -242,6 +245,7 @@ impl StandalonePresentationSettings {
 enum DefaultPresentationAction {
     None,
     Embodiment,
+    FirstAuthored,
     Generated,
 }
 
@@ -290,14 +294,24 @@ fn default_presentation_action(
     match value.as_str() {
         Some("none") => Ok(DefaultPresentationAction::None),
         Some("avatar") => Ok(DefaultPresentationAction::Embodiment),
+        Some("first") => Ok(DefaultPresentationAction::FirstAuthored),
         Some("generated") => Ok(DefaultPresentationAction::Generated),
         Some(other) => Err(format!(
             "camera default-presentation policy '{DEFAULT_PRESENTATION_HOOK}' returned unsupported action '{other}'"
         )),
         None => Err(format!(
-            "camera default-presentation policy '{DEFAULT_PRESENTATION_HOOK}' must return 'none', 'avatar', or 'generated'"
+            "camera default-presentation policy '{DEFAULT_PRESENTATION_HOOK}' must return 'none', 'avatar', 'first', or 'generated'"
         )),
     }
+}
+
+/// Apply the policy's stable first-camera rule to active-root candidates.
+/// Both window framing and the authored contract validator use this ordering.
+fn first_authored_camera(candidates: impl IntoIterator<Item = (Entity, String)>) -> Option<Entity> {
+    candidates
+        .into_iter()
+        .min_by(|(_, left_path), (_, right_path)| left_path.cmp(right_path))
+        .map(|(entity, _)| entity)
 }
 
 fn presentation_runtime_context(time: &Time<Real>) -> lunco_core::RuntimeExecutionContext {
@@ -314,21 +328,26 @@ fn presentation_runtime_context(time: &Time<Real>) -> lunco_core::RuntimeExecuti
     }
 }
 
-/// Mandatory presentation contract for a windowed scene.
+/// One viewport contract state for authored and standalone camera presentation.
 ///
-/// The render host opts into `required`. The USD projection owns the verdict:
-/// an authored camera track/LocalEmbodiment or an explicit standalone presentation
-/// must resolve to a window camera. A missing or invalid contract is not
-/// repaired by choosing an authored camera; the scene admission owner can
-/// reject it and the UI can highlight the finding.
+/// The render host opts into `required`. This state owns the verdict and
+/// findings; `RuntimeDiagnostics` and Recent Events are projections of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CameraContractFinding {
+    pub severity: lunco_core::DiagnosticSeverity,
+    pub subject: String,
+    pub message: String,
+}
+
 #[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
 pub struct CameraContractStatus {
     /// Whether the current host requires a presentable authored scene.
     pub required: bool,
     /// Whether the current authored contract has passed validation.
     pub ready: bool,
-    /// Stable owning errors for the current scene contract.
-    pub errors: Vec<String>,
+    /// Canonical findings for the current scene contract. RuntimeDiagnostics
+    /// and Recent Events are projections of this same state.
+    pub findings: Vec<CameraContractFinding>,
 }
 
 impl ViewportCameraSelection {
@@ -487,14 +506,114 @@ pub(crate) fn resolve_named_camera(
 fn record_camera_error(
     status: &mut CameraSelectionStatus,
     message: String,
+    event_name: &'static str,
     commands: &mut Commands,
 ) {
-    if status.last_error.as_deref() != Some(message.as_str()) {
-        warn!("[camera] {message}");
-        lunco_core::trigger_runtime_error(commands, "camera-selection", message.clone());
-        status.last_error = Some(message);
-        commands.trigger(CameraSelectionStatusChanged);
+    if update_camera_error_status(status, &message, commands) {
+        lunco_core::trigger_runtime_error(commands, event_name, message.clone());
     }
+}
+
+fn record_camera_contract_finding(
+    status: &mut CameraSelectionStatus,
+    message: String,
+    commands: &mut Commands,
+) {
+    if update_camera_error_status(status, &message, commands) {
+        lunco_telemetry_core::emit_status_telemetry_event(
+            commands,
+            CAMERA_CONTRACT_EVENT_NAME,
+            lunco_telemetry_core::Severity::Warning,
+            message,
+        );
+    }
+}
+
+fn camera_contract_finding(
+    severity: lunco_core::DiagnosticSeverity,
+    subject: impl Into<String>,
+    message: impl Into<String>,
+) -> CameraContractFinding {
+    CameraContractFinding {
+        severity,
+        subject: subject.into(),
+        message: message.into(),
+    }
+}
+
+/// Commit one canonical camera-contract verdict, then project it to the shared
+/// diagnostics query and Recent Events feed. Severity and text have one owner.
+fn publish_camera_contract_status(
+    contract: &mut CameraContractStatus,
+    diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+    status: &mut CameraSelectionStatus,
+    commands: &mut Commands,
+    ready: bool,
+    findings: Vec<CameraContractFinding>,
+) {
+    let changed = contract.ready != ready || contract.findings != findings;
+    contract.ready = ready;
+    contract.findings = findings;
+
+    if let Some(diagnostics) = diagnostics.as_deref_mut() {
+        let projected = contract
+            .findings
+            .iter()
+            .map(|finding| lunco_core::RuntimeDiagnostic {
+                code: CAMERA_CONTRACT_EVENT_NAME.to_string(),
+                severity: finding.severity,
+                producer: "usd-camera".to_string(),
+                subject: finding.subject.clone(),
+                message: finding.message.clone(),
+            });
+        diagnostics.replace_producer("usd-camera", projected);
+    }
+
+    if !changed {
+        return;
+    }
+    if let Some(error) = contract
+        .findings
+        .iter()
+        .find(|finding| finding.severity == lunco_core::DiagnosticSeverity::Error)
+    {
+        record_camera_contract_finding(status, error.message.clone(), commands);
+    } else if let Some(warning) = contract.findings.first() {
+        if status
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("[camera-contract]"))
+        {
+            clear_camera_error(status, commands);
+        }
+        warn!("[camera] {}", warning.message);
+        lunco_telemetry_core::emit_status_telemetry_event(
+            commands,
+            CAMERA_CONTRACT_EVENT_NAME,
+            lunco_telemetry_core::Severity::Warning,
+            warning.message.clone(),
+        );
+    } else if status
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.starts_with("[camera-contract]"))
+    {
+        clear_camera_error(status, commands);
+    }
+}
+
+fn update_camera_error_status(
+    status: &mut CameraSelectionStatus,
+    message: &str,
+    commands: &mut Commands,
+) -> bool {
+    if status.last_error.as_deref() == Some(message) {
+        return false;
+    }
+    warn!("[camera] {message}");
+    status.last_error = Some(message.to_owned());
+    commands.trigger(CameraSelectionStatusChanged);
+    true
 }
 
 fn clear_camera_error(status: &mut CameraSelectionStatus, commands: &mut Commands) {
@@ -545,7 +664,7 @@ pub fn on_set_active_camera(
     match resolve_named_camera(want, &q_cams) {
         Ok(target) => commands.trigger(ActivateCamera::director(target)),
         Err(message) => {
-            record_camera_error(&mut status, message, &mut commands);
+            record_camera_error(&mut status, message, "camera-selection", &mut commands);
         }
     }
 }
@@ -561,7 +680,7 @@ pub fn on_set_user_camera(
     match resolve_named_camera(want, &q_cams) {
         Ok(target) => commands.trigger(ActivateCamera::user(target)),
         Err(message) => {
-            record_camera_error(&mut status, message, &mut commands);
+            record_camera_error(&mut status, message, "camera-selection", &mut commands);
         }
     }
 }
@@ -584,7 +703,7 @@ pub fn on_request_local_avatar_view(
     let target = local_avatar.0.filter(|entity| q_cameras.contains(*entity));
     let Some(target) = target else {
         let message = "the scene has no local avatar camera to observe".to_string();
-        record_camera_error(&mut status, message, &mut commands);
+        record_camera_error(&mut status, message, "camera-selection", &mut commands);
         return;
     };
     commands.trigger(ActivateCamera::user(target));
@@ -603,7 +722,7 @@ pub fn on_resume_camera_director(
     selection.director_revision = selection.director_revision.wrapping_add(1);
     if q_tracks.is_empty() {
         let message = "the scene has no authored CameraTrack to resume".to_string();
-        record_camera_error(&mut status, message, &mut commands);
+        record_camera_error(&mut status, message, "camera-selection", &mut commands);
     } else {
         clear_camera_error(&mut status, &mut commands);
     }
@@ -706,7 +825,7 @@ pub fn on_activate_camera(
                 );
             } else {
                 let message = format!("camera {target:?} is not a window camera");
-                record_camera_error(&mut status, message, &mut commands);
+                record_camera_error(&mut status, message, "camera-selection", &mut commands);
             }
         }
         Err(_) => {
@@ -720,7 +839,7 @@ pub fn on_activate_camera(
                 })
                 .unwrap_or_else(|| "entity no longer exists".to_string());
             let message = format!("camera {target:?} ({identity}) is not a SceneCamera");
-            record_camera_error(&mut status, message, &mut commands);
+            record_camera_error(&mut status, message, "camera-selection", &mut commands);
         }
     }
 }
@@ -1037,8 +1156,12 @@ pub(crate) struct StandalonePresentationQueries<'w, 's> {
     >,
     bounds: Query<'w, 's, (Entity, &'static Aabb, &'static GlobalTransform)>,
     tracks: Query<'w, 's, Entity, With<crate::camera_track::CameraTrack>>,
-    authored_cameras:
-        Query<'w, 's, Entity, (With<SceneCamera>, Without<StandalonePresentationCamera>)>,
+    authored_cameras: Query<
+        'w,
+        's,
+        (Entity, &'static UsdPrimPath),
+        (With<SceneCamera>, Without<StandalonePresentationCamera>),
+    >,
     avatar_cameras: Query<
         'w,
         's,
@@ -1071,7 +1194,6 @@ pub(crate) fn ensure_standalone_presentation(
     mut viewport: ResMut<SceneViewport>,
     queries: StandalonePresentationQueries,
     mut commands: Commands,
-    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let active_root = mount.active_root();
 
@@ -1101,7 +1223,6 @@ pub(crate) fn ensure_standalone_presentation(
                 enabled,
                 ..default()
             });
-            publish_standalone_presentation_diagnostic(&mut diagnostics, None);
         }
         return;
     }
@@ -1121,7 +1242,6 @@ pub(crate) fn ensure_standalone_presentation(
             pending: true,
             ..default()
         });
-        publish_standalone_presentation_diagnostic(&mut diagnostics, None);
     }
 
     // An explicit operator/director/policy selection is a terminal takeover of
@@ -1143,7 +1263,6 @@ pub(crate) fn ensure_standalone_presentation(
             policy_generation: lunco_hooks::generation(),
             ..default()
         });
-        publish_standalone_presentation_diagnostic(&mut diagnostics, None);
         return;
     }
 
@@ -1183,7 +1302,6 @@ pub(crate) fn ensure_standalone_presentation(
                 enabled,
                 ..default()
             });
-            publish_standalone_presentation_diagnostic(&mut diagnostics, None);
         }
         return;
     }
@@ -1237,16 +1355,53 @@ pub(crate) fn ensure_standalone_presentation(
                 error: Some(message.clone()),
                 ..default()
             });
-            publish_standalone_presentation_diagnostic(&mut diagnostics, Some(&message));
-            error!("[usd-presentation] {message}");
+            error!("[camera] {message}");
         }
         return;
     }
 
     let policy_generation = lunco_hooks::generation();
-    let authored_camera_count = queries.authored_cameras.iter().count();
-    let camera_track_count = queries.tracks.iter().count();
-    let local_avatar_camera_count = queries.avatar_cameras.iter().count();
+    let authored_cameras: Vec<(Entity, String)> = queries
+        .authored_cameras
+        .iter()
+        .filter(|(entity, _)| {
+            entity_belongs_to_root(
+                *entity,
+                root,
+                &queries.scene_roots,
+                &queries.child_of,
+                &queries.entities,
+            )
+        })
+        .map(|(entity, prim)| (entity, prim.path.clone()))
+        .collect();
+    let authored_camera_count = authored_cameras.len();
+    let camera_track_count = queries
+        .tracks
+        .iter()
+        .filter(|entity| {
+            entity_belongs_to_root(
+                *entity,
+                root,
+                &queries.scene_roots,
+                &queries.child_of,
+                &queries.entities,
+            )
+        })
+        .count();
+    let local_avatar_camera_count = queries
+        .avatar_cameras
+        .iter()
+        .filter(|entity| {
+            entity_belongs_to_root(
+                *entity,
+                root,
+                &queries.scene_roots,
+                &queries.child_of,
+                &queries.entities,
+            )
+        })
+        .count();
     if presentation.root == Some(root)
         && !presentation.pending
         && presentation.camera.is_none()
@@ -1282,7 +1437,6 @@ pub(crate) fn ensure_standalone_presentation(
                 error: Some(message.clone()),
                 ..default()
             });
-            publish_standalone_presentation_diagnostic(&mut diagnostics, Some(&message));
             error!("[camera] {message}");
             return;
         }
@@ -1301,7 +1455,6 @@ pub(crate) fn ensure_standalone_presentation(
             policy_generation,
             ..default()
         });
-        publish_standalone_presentation_diagnostic(&mut diagnostics, None);
         return;
     }
     if action == DefaultPresentationAction::Embodiment {
@@ -1322,8 +1475,39 @@ pub(crate) fn ensure_standalone_presentation(
             error: Some(message.clone()),
             ..default()
         });
-        publish_standalone_presentation_diagnostic(&mut diagnostics, Some(&message));
         error!("[camera] {message}");
+        return;
+    }
+    if action == DefaultPresentationAction::FirstAuthored {
+        let Some(camera) = first_authored_camera(authored_cameras.iter().cloned()) else {
+            let message =
+                "[camera-policy] policy selected the first authored camera, but the active scene has none"
+                    .to_string();
+            let enabled = presentation.enabled;
+            presentation.set_if_neq(StandalonePresentationState {
+                enabled,
+                root: Some(root),
+                policy_generation,
+                error: Some(message.clone()),
+                ..default()
+            });
+            error!("[camera] {message}");
+            return;
+        };
+        despawn_generated_presentation(
+            &generated_entities,
+            &mut selection,
+            &mut viewport,
+            &mut commands,
+        );
+        let enabled = presentation.enabled;
+        presentation.set_if_neq(StandalonePresentationState {
+            enabled,
+            root: Some(root),
+            policy_generation,
+            ..default()
+        });
+        commands.trigger(ActivateCamera::policy(camera));
         return;
     }
 
@@ -1373,7 +1557,6 @@ pub(crate) fn ensure_standalone_presentation(
         if should_activate {
             commands.trigger(ActivateCamera::generated(camera));
         }
-        publish_standalone_presentation_diagnostic(&mut diagnostics, None);
         return;
     }
 
@@ -1396,8 +1579,7 @@ pub(crate) fn ensure_standalone_presentation(
                 error: Some(message.clone()),
                 ..default()
             });
-            publish_standalone_presentation_diagnostic(&mut diagnostics, Some(&message));
-            error!("[usd-presentation] {message}");
+            error!("[camera] {message}");
         }
         return;
     };
@@ -1463,7 +1645,6 @@ pub(crate) fn ensure_standalone_presentation(
         policy_generation,
         ..default()
     });
-    publish_standalone_presentation_diagnostic(&mut diagnostics, None);
 }
 
 fn entity_belongs_to_root(
@@ -1585,25 +1766,6 @@ fn standalone_presentation_pose(
             .max(perspective.near + 1.0);
     }
     (camera_transform, light_transform, projection)
-}
-
-fn publish_standalone_presentation_diagnostic(
-    diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
-    error: Option<&str>,
-) {
-    let Some(diagnostics) = diagnostics.as_deref_mut() else {
-        return;
-    };
-    let findings = error
-        .into_iter()
-        .map(|message| lunco_core::RuntimeDiagnostic {
-            code: "standalone-presentation".to_string(),
-            severity: lunco_core::DiagnosticSeverity::Error,
-            producer: "usd-presentation".to_string(),
-            subject: "standalone-assembly".to_string(),
-            message: message.to_string(),
-        });
-    diagnostics.replace_producer("usd-presentation", findings);
 }
 
 /// Run the authored camera-contract admission check only when one of its
@@ -1740,7 +1902,8 @@ pub(crate) fn camera_contract_inputs_changed(
 /// Validate the window presentation contract after USD camera-track plans are
 /// derived. An accepted standalone presentation is handled before the
 /// authored structural scan. Duplicate tracks, absent cameras, unresolved
-/// names, and multiple mounted stages are errors owned by the camera domain.
+/// names, and duplicate active-root tracks are errors owned by the camera
+/// domain. Additive roots do not participate in the single viewport contract.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct AuthoredAvatarSelection<'w, 's> {
     local_avatar: Res<'w, TheLocalEmbodiment>,
@@ -1771,7 +1934,11 @@ pub(crate) fn validate_authored_camera_contract(
     q_child_of: Query<&ChildOf>,
     q_entities: Query<Entity>,
     tracks: Query<
-        (&UsdPrimPath, Option<&crate::camera_track::CameraTrackPlan>),
+        (
+            Entity,
+            &UsdPrimPath,
+            Option<&crate::camera_track::CameraTrackPlan>,
+        ),
         With<crate::camera_track::CameraTrack>,
     >,
     cameras: Query<(Entity, &Name, &UsdPrimPath, Has<LocalEmbodiment>), With<SceneCamera>>,
@@ -1784,37 +1951,25 @@ pub(crate) fn validate_authored_camera_contract(
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     if !contract.required {
-        publish_camera_contract_diagnostics(&mut diagnostics, &[]);
-        if !contract.errors.is_empty() || !contract.ready {
-            *contract = CameraContractStatus {
-                ready: true,
-                ..default()
-            };
-        }
-        if status
-            .last_error
-            .as_deref()
-            .is_some_and(|error| error.starts_with("[camera-contract]"))
-        {
-            clear_camera_error(&mut status, &mut commands);
-        }
+        publish_camera_contract_status(
+            &mut contract,
+            &mut diagnostics,
+            &mut status,
+            &mut commands,
+            true,
+            Vec::new(),
+        );
         return;
     }
     if mount.active_root().is_none() {
-        publish_camera_contract_diagnostics(&mut diagnostics, &[]);
-        if !contract.errors.is_empty() || contract.ready {
-            *contract = CameraContractStatus {
-                required: contract.required,
-                ..default()
-            };
-        }
-        if status
-            .last_error
-            .as_deref()
-            .is_some_and(|error| error.starts_with("[camera-contract]"))
-        {
-            clear_camera_error(&mut status, &mut commands);
-        }
+        publish_camera_contract_status(
+            &mut contract,
+            &mut diagnostics,
+            &mut status,
+            &mut commands,
+            false,
+            Vec::new(),
+        );
         return;
     }
 
@@ -1838,50 +1993,43 @@ pub(crate) fn validate_authored_camera_contract(
         // interval before authored camera entities exist into a contract
         // failure; once the active root is fully projected, the same validator
         // reports a real missing/invalid camera contract as an Error.
-        publish_camera_contract_diagnostics(&mut diagnostics, &[]);
-        if contract.required || contract.ready || !contract.errors.is_empty() {
-            *contract = CameraContractStatus {
-                required: contract.required,
-                ..default()
-            };
-        }
-        if status
-            .last_error
-            .as_deref()
-            .is_some_and(|error| error.starts_with("[camera-contract]"))
-        {
-            clear_camera_error(&mut status, &mut commands);
-        }
+        publish_camera_contract_status(
+            &mut contract,
+            &mut diagnostics,
+            &mut status,
+            &mut commands,
+            false,
+            Vec::new(),
+        );
         return;
     }
 
     if presentation.root == active_root {
         if presentation.pending {
-            publish_camera_contract_diagnostics(&mut diagnostics, &[]);
-            if contract.ready || !contract.errors.is_empty() {
-                *contract = CameraContractStatus {
-                    required: contract.required,
-                    ..default()
-                };
-            }
-            if status.last_error.as_deref().is_some_and(|error| {
-                error.starts_with("[camera-contract]") || error.starts_with("[usd-presentation]")
-            }) {
-                clear_camera_error(&mut status, &mut commands);
-            }
+            publish_camera_contract_status(
+                &mut contract,
+                &mut diagnostics,
+                &mut status,
+                &mut commands,
+                false,
+                Vec::new(),
+            );
             return;
         }
         if let Some(error) = presentation.error.as_deref() {
-            let errors = vec![format!("[usd-presentation] {error}")];
-            publish_camera_contract_diagnostics(&mut diagnostics, &errors);
-            let changed = contract.ready || contract.errors != errors;
-            contract.ready = false;
-            contract.errors = errors;
-            if changed {
-                if let Some(error) = contract.errors.first() {
-                    record_camera_error(&mut status, error.clone(), &mut commands);
-                }
-            }
+            let findings = vec![camera_contract_finding(
+                lunco_core::DiagnosticSeverity::Error,
+                "standalone-presentation",
+                format!("[camera-contract] standalone presentation: {error}"),
+            )];
+            publish_camera_contract_status(
+                &mut contract,
+                &mut diagnostics,
+                &mut status,
+                &mut commands,
+                false,
+                findings,
+            );
             return;
         }
         let generated_ready = presentation
@@ -1893,191 +2041,226 @@ pub(crate) fn validate_authored_camera_contract(
                     .iter()
                     .any(|layers| layers.is_none()));
         if generated_ready {
-            publish_camera_contract_diagnostics(&mut diagnostics, &[]);
-            if !contract.ready || !contract.errors.is_empty() {
-                *contract = CameraContractStatus {
-                    required: contract.required,
-                    ready: true,
-                    ..default()
-                };
-            }
-            if status.last_error.as_deref().is_some_and(|error| {
-                error.starts_with("[camera-contract]") || error.starts_with("[usd-presentation]")
-            }) {
-                clear_camera_error(&mut status, &mut commands);
-            }
+            publish_camera_contract_status(
+                &mut contract,
+                &mut diagnostics,
+                &mut status,
+                &mut commands,
+                true,
+                Vec::new(),
+            );
             return;
         }
     }
 
-    let mut stage_ids = std::collections::BTreeSet::new();
-    let mut camera_names = Vec::new();
-    let mut local_avatar_names = Vec::new();
+    let active_root = active_root.expect("active root was checked above");
+    let mut camera_candidates: Vec<(Entity, String, String, bool)> = Vec::new();
+    let mut user_camera_selected = false;
     for (entity, name, prim, local_avatar) in &cameras {
-        stage_ids.insert(prim.stage_handle.id());
-        camera_names.push((entity, name.as_str().to_string()));
-        if local_avatar {
-            local_avatar_names.push(name.as_str().to_string());
+        if entity_belongs_to_root(entity, active_root, &q_scene_root, &q_child_of, &q_entities) {
+            user_camera_selected |= selection.owner() == CameraSelectionOwner::User
+                && selection.matches_requested(entity, Some(prim));
+            camera_candidates.push((
+                entity,
+                name.as_str().to_string(),
+                prim.path.clone(),
+                local_avatar,
+            ));
         }
     }
-    for (prim, _) in &tracks {
-        stage_ids.insert(prim.stage_handle.id());
-    }
+    camera_candidates.sort_by(|left, right| left.2.cmp(&right.2));
+    let camera_names: Vec<(Entity, String)> = camera_candidates
+        .iter()
+        .map(|(entity, name, _, _)| (*entity, name.clone()))
+        .collect();
+    let local_avatar_names: Vec<String> = camera_candidates
+        .iter()
+        .filter(|(_, _, _, local_avatar)| *local_avatar)
+        .map(|(_, name, _, _)| name.clone())
+        .collect();
+    let active_tracks: Vec<_> = tracks
+        .iter()
+        .filter(|(entity, _, _)| {
+            entity_belongs_to_root(
+                *entity,
+                active_root,
+                &q_scene_root,
+                &q_child_of,
+                &q_entities,
+            )
+        })
+        .collect();
 
-    let mut errors = Vec::new();
-    if stage_ids.len() > 1 {
-        errors.push(
-            "[camera-contract] multiple USD stages provide one viewport; author explicit viewport scopes"
-                .to_string(),
-        );
-    }
-    if cameras.is_empty() {
-        errors.push(
+    let track_severity = if user_camera_selected {
+        lunco_core::DiagnosticSeverity::Warning
+    } else {
+        lunco_core::DiagnosticSeverity::Error
+    };
+    let mut findings = Vec::new();
+    if camera_candidates.is_empty() {
+        findings.push(camera_contract_finding(
+            lunco_core::DiagnosticSeverity::Error,
+            "window-presentation",
             "[camera-contract] scene has no authored SceneCamera for the window presentation"
                 .to_string(),
-        );
-    }
-    if tracks.is_empty() {
-        match local_avatar_names.as_slice() {
-            [_] if selection.requested.is_some() => {}
-            [_] => match request_authored_local_avatar_view(
-                &cameras,
-                &tracks,
-                &selection,
-                &avatar_selection.local_avatar,
-                &avatar_selection.retiring,
-                &mut commands,
-                presentation_runtime_context(&presentation_queries.time),
-            ) {
-                Ok(DefaultPresentationAction::Embodiment) => {}
-                Ok(DefaultPresentationAction::None) => errors.push(
-                    "[camera-contract] the default presentation policy selected no initial camera"
-                        .to_string(),
-                ),
-                Ok(DefaultPresentationAction::Generated) => errors.push(
-                    "[camera-policy] the default presentation policy selected generated framing while a LocalEmbodiment camera is authored"
-                        .to_string(),
-                ),
-                Err(error) => errors.push(format!("[camera-policy] {error}")),
-            },
-            [] => errors.push(
-                "[camera-contract] scene has no authored CameraTrack or LocalEmbodiment initial presentation"
-                    .to_string(),
-            ),
-            names => errors.push(format!(
-                "[camera-contract] scene has multiple LocalEmbodiment initial presentations: {}",
-                names.join(", ")
-            )),
-        }
-    } else if tracks.iter().count() > 1 {
-        errors.push(
-            "[camera-contract] scene has multiple CameraTrack providers without an explicit viewport scope"
-                .to_string(),
-        );
+        ));
     }
 
-    for (prim, plan) in &tracks {
+    if active_tracks.is_empty() && selection.requested.is_none() {
+        if local_avatar_names.len() > 1 {
+            findings.push(camera_contract_finding(
+                lunco_core::DiagnosticSeverity::Error,
+                "window-presentation",
+                format!(
+                "[camera-contract] scene has multiple LocalEmbodiment initial presentations: {}",
+                local_avatar_names.join(", ")
+                ),
+            ));
+        } else {
+            match default_presentation_action(
+                false,
+                camera_candidates.len(),
+                0,
+                local_avatar_names.len(),
+                presentation_runtime_context(&presentation_queries.time),
+            ) {
+                Ok(DefaultPresentationAction::Embodiment) => {
+                    let candidate = camera_candidates
+                        .iter()
+                        .find(|(_, _, _, local_avatar)| *local_avatar)
+                        .map(|(entity, _, _, _)| *entity);
+                    match candidate {
+                        Some(candidate) => {
+                            if let Err(error) = request_authored_local_avatar_view(
+                                candidate,
+                                &avatar_selection.local_avatar,
+                                &avatar_selection.retiring,
+                                &mut commands,
+                            ) {
+                                findings.push(camera_contract_finding(
+                                    lunco_core::DiagnosticSeverity::Error,
+                                    "window-presentation",
+                                    format!("[camera-policy] {error}"),
+                                ));
+                            }
+                        }
+                        None => findings.push(camera_contract_finding(
+                            lunco_core::DiagnosticSeverity::Error,
+                            "window-presentation",
+                            "[camera-policy] the default presentation policy selected avatar without an active LocalEmbodiment camera",
+                        )),
+                    }
+                }
+                Ok(DefaultPresentationAction::FirstAuthored) => {
+                    let authored_cameras = camera_candidates
+                        .iter()
+                        .map(|(entity, _, path, _)| (*entity, path.clone()));
+                    if let Some(camera) = first_authored_camera(authored_cameras) {
+                        commands.trigger(ActivateCamera::policy(camera));
+                    } else {
+                        findings.push(camera_contract_finding(
+                            lunco_core::DiagnosticSeverity::Error,
+                            "window-presentation",
+                            "[camera-policy] the default presentation policy selected the first camera, but the active scene has none",
+                        ));
+                    }
+                }
+                Ok(DefaultPresentationAction::None) => findings.push(camera_contract_finding(
+                    lunco_core::DiagnosticSeverity::Error,
+                    "window-presentation",
+                    "[camera-contract] the default presentation policy selected no initial camera",
+                )),
+                Ok(DefaultPresentationAction::Generated) => findings.push(camera_contract_finding(
+                    lunco_core::DiagnosticSeverity::Error,
+                    "window-presentation",
+                    "[camera-policy] the default presentation policy selected generated framing for an authored scene",
+                )),
+                Err(error) => findings.push(camera_contract_finding(
+                    lunco_core::DiagnosticSeverity::Error,
+                    "window-presentation",
+                    format!("[camera-policy] {error}"),
+                )),
+            }
+        }
+    } else if active_tracks.len() > 1 {
+        findings.push(camera_contract_finding(
+            track_severity,
+            "window-presentation",
+            "[camera-contract] scene has multiple CameraTrack providers without an explicit viewport scope",
+        ));
+    }
+
+    for (_, prim, plan) in &active_tracks {
         let Some(plan) = plan else {
-            errors.push(format!(
-                "[camera-contract] CameraTrack '{}' has not finished projection",
-                prim.path
+            findings.push(camera_contract_finding(
+                track_severity,
+                prim.path.clone(),
+                format!(
+                    "[camera-contract] CameraTrack '{}' has not finished projection",
+                    prim.path
+                ),
             ));
             continue;
         };
         if plan.keys.is_empty() {
-            errors.push(format!(
-                "[camera-contract] CameraTrack '{}' has no activeCamera keys",
-                prim.path
+            findings.push(camera_contract_finding(
+                track_severity,
+                prim.path.clone(),
+                format!(
+                    "[camera-contract] CameraTrack '{}' has no activeCamera keys",
+                    prim.path
+                ),
             ));
         }
         for (_, want) in &plan.keys {
             if let Err(reason) = resolve_camera_names(want, &camera_names) {
-                errors.push(format!(
-                    "[camera-contract] CameraTrack '{}' cannot resolve '{want}': {reason}",
-                    prim.path
+                findings.push(camera_contract_finding(
+                    track_severity,
+                    prim.path.clone(),
+                    format!(
+                        "[camera-contract] CameraTrack '{}' cannot resolve '{want}': {reason}",
+                        prim.path
+                    ),
                 ));
             }
         }
     }
 
-    let ready = errors.is_empty();
-    publish_camera_contract_diagnostics(&mut diagnostics, &errors);
-    let changed = contract.ready != ready || contract.errors != errors;
-    contract.ready = ready;
-    contract.errors = errors;
-    if changed {
-        if let Some(error) = contract.errors.first() {
-            record_camera_error(&mut status, error.clone(), &mut commands);
-        } else if status
-            .last_error
-            .as_deref()
-            .is_some_and(|error| error.starts_with("[camera-contract]"))
-        {
-            clear_camera_error(&mut status, &mut commands);
-        }
-    }
+    let ready = findings
+        .iter()
+        .all(|finding| finding.severity != lunco_core::DiagnosticSeverity::Error);
+    publish_camera_contract_status(
+        &mut contract,
+        &mut diagnostics,
+        &mut status,
+        &mut commands,
+        ready,
+        findings,
+    );
 }
 
-/// Ask the application policy whether a valid authored LocalEmbodiment camera should
-/// become the initial presentation. The role slot, not ECS iteration order,
-/// supplies the candidate identity. A `none` decision is returned to the
-/// contract validator; it is not converted into another camera.
+/// Resolve the policy-selected active-root LocalEmbodiment camera through its
+/// authoritative role slot before activation.
 fn request_authored_local_avatar_view(
-    cameras: &Query<(Entity, &Name, &UsdPrimPath, Has<LocalEmbodiment>), With<SceneCamera>>,
-    tracks: &Query<
-        (&UsdPrimPath, Option<&crate::camera_track::CameraTrackPlan>),
-        With<crate::camera_track::CameraTrack>,
-    >,
-    selection: &Res<ViewportCameraSelection>,
+    candidate: Entity,
     local_avatar: &TheLocalEmbodiment,
     retiring: &Query<(), With<lunco_render::CameraRetiring>>,
     commands: &mut Commands,
-    runtime_context: lunco_core::RuntimeExecutionContext,
-) -> Result<DefaultPresentationAction, String> {
-    if !tracks.is_empty() || selection.requested.is_some() {
-        return Ok(DefaultPresentationAction::None);
-    }
+) -> Result<(), String> {
     let target = local_avatar.0.ok_or_else(|| {
         "the LocalEmbodiment camera is present but the authoritative role slot is empty".to_string()
     })?;
-    if retiring.get(target).is_ok()
-        || !cameras
-            .iter()
-            .any(|(entity, _, _, local)| entity == target && local)
-    {
+    if target != candidate {
         return Err(
-            "the LocalEmbodiment role slot does not identify a live SceneCamera candidate"
+            "the LocalEmbodiment role slot does not identify the active scene camera candidate"
                 .to_string(),
         );
     }
-    let action = default_presentation_action(
-        false,
-        cameras.iter().count(),
-        tracks.iter().count(),
-        1,
-        runtime_context,
-    )?;
-    if action == DefaultPresentationAction::Embodiment {
-        commands.trigger(ActivateCamera::policy(target));
+    if retiring.get(target).is_ok() {
+        return Err("the LocalEmbodiment camera is retiring".to_string());
     }
-    Ok(action)
-}
-
-fn publish_camera_contract_diagnostics(
-    diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
-    errors: &[String],
-) {
-    let Some(diagnostics) = diagnostics.as_deref_mut() else {
-        return;
-    };
-    let findings = errors.iter().map(|message| lunco_core::RuntimeDiagnostic {
-        code: "camera-contract".to_string(),
-        severity: lunco_core::DiagnosticSeverity::Error,
-        producer: "usd-camera".to_string(),
-        subject: "window-presentation".to_string(),
-        message: message.clone(),
-    });
-    diagnostics.replace_producer("usd-camera", findings);
+    commands.trigger(ActivateCamera::policy(target));
+    Ok(())
 }
 
 /// Scene teardown is the ownership boundary for camera selection. A stale
@@ -2089,7 +2272,6 @@ pub fn reset_camera_selection(
     mut presentation: ResMut<StandalonePresentationState>,
     q_generated_cameras: Query<Entity, With<StandalonePresentationCamera>>,
     q_generated_lights: Query<Entity, With<StandalonePresentationLight>>,
-    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     mut commands: Commands,
 ) {
     let generated_entities: Vec<Entity> = q_generated_cameras
@@ -2109,7 +2291,6 @@ pub fn reset_camera_selection(
         enabled,
         ..default()
     };
-    publish_standalone_presentation_diagnostic(&mut diagnostics, None);
     if *status != CameraSelectionStatus::default() {
         *status = CameraSelectionStatus::default();
         commands.trigger(CameraSelectionStatusChanged);
@@ -2533,7 +2714,7 @@ mod tests {
         let contract = app.world().resource::<CameraContractStatus>();
         assert!(contract.required);
         assert!(!contract.ready);
-        assert!(contract.errors.is_empty());
+        assert!(contract.findings.is_empty());
     }
 
     #[test]
@@ -2972,6 +3153,7 @@ mod tests {
             .world_mut()
             .spawn((
                 SceneCamera::default(),
+                ChildOf(root),
                 Name::new("Old"),
                 UsdPrimPath {
                     stage_handle: Handle::default(),
@@ -2984,6 +3166,7 @@ mod tests {
             .world_mut()
             .spawn((
                 SceneCamera::default(),
+                ChildOf(root),
                 Name::new("New"),
                 UsdPrimPath {
                     stage_handle: Handle::default(),

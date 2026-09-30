@@ -12,6 +12,7 @@ bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", 
 big_space = { workspace = true }
 lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-core = { path = "../lunco-core" }
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-spatial = { path = "../lunco-spatial" }

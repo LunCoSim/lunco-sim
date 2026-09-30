@@ -10102,6 +10102,7 @@ dependencies = [
  "lunco-hooks",
  "lunco-render",
  "lunco-spatial",
+ "lunco-telemetry-core",
  "lunco-time",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",
