@@ -174,15 +174,15 @@ pub(crate) fn on_open_visualization_requested(
 pub struct ChannelDragPayload {
     /// `Entity::to_bits()` of the channel's owning entity.
     pub entity_bits: u64,
-    /// Signal path, e.g. `"P.y"`.
-    pub path: String,
+    /// Shared immutable signal path, e.g. `"P.y"`.
+    pub path: Arc<str>,
 }
 
 impl ChannelDragPayload {
     pub fn from_signal(sig: &SignalRef) -> Self {
         Self {
             entity_bits: sig.entity.to_bits(),
-            path: sig.path.clone(),
+            path: Arc::from(sig.path.as_str()),
         }
     }
 }
@@ -250,7 +250,7 @@ pub fn plot_node_at(
         binding: PlotBinding::Pinned {
             entity: payload.entity_bits,
         },
-        signal_path: payload.path.clone(),
+        signal_path: payload.path.to_string(),
         title: String::new(),
     });
     lunco_canvas::scene::Node {
@@ -276,7 +276,10 @@ pub fn bind_dropped_channel(
     viz_id: VizId,
     payload: &ChannelDragPayload,
 ) -> bool {
-    let source = SignalRef::new(Entity::from_bits(payload.entity_bits), payload.path.clone());
+    let source = SignalRef::new(
+        Entity::from_bits(payload.entity_bits),
+        payload.path.to_string(),
+    );
     let Some(config) = registry.get_mut(viz_id) else {
         return false;
     };
@@ -292,6 +295,8 @@ pub fn bind_dropped_channel(
 #[derive(Debug)]
 struct Row {
     sig: SignalRef,
+    /// Reused by visible rows so each repaint only clones a shared path handle.
+    drag_payload: ChannelDragPayload,
     unit: Option<String>,
     description: Option<String>,
     provenance: Option<String>,
@@ -374,6 +379,7 @@ fn snapshot_rows(reg: &SignalRegistry) -> Vec<Row> {
             let meta = reg.meta(sig);
             Row {
                 sig: sig.clone(),
+                drag_payload: ChannelDragPayload::from_signal(sig),
                 unit: meta.and_then(|m| m.unit.clone()),
                 description: meta.and_then(|m| m.description.clone()),
                 provenance: meta.and_then(|m| m.provenance.clone()),
@@ -797,6 +803,7 @@ pub(crate) fn prepare_telemetry_catalog(
             snapshot.rows.push(Row {
                 in_focus: signal.entity != Entity::PLACEHOLDER,
                 active: registry.is_active(&signal),
+                drag_payload: ChannelDragPayload::from_signal(&signal),
                 unit: meta.and_then(|meta| meta.unit.clone()),
                 description: meta.and_then(|meta| meta.description.clone()),
                 provenance: meta.and_then(|meta| meta.provenance.clone()),
@@ -1360,7 +1367,7 @@ fn render_visible_telemetry_row(
                     let label_width = (width * 0.55).max(72.0).min(width);
                     let inner = ui.dnd_drag_source(
                         ui.id().with(("tb_row", &row.sig)),
-                        ChannelDragPayload::from_signal(&row.sig),
+                        row.drag_payload.clone(),
                         |ui| {
                             lunco_workbench_widgets::tree::selectable_label(
                                 ui,
@@ -1383,7 +1390,7 @@ fn render_visible_telemetry_row(
                         queue_plot_drop(
                             ui.ctx(),
                             PlotDropRequest {
-                                payload: ChannelDragPayload::from_signal(&row.sig),
+                                payload: row.drag_payload.clone(),
                                 world_pos: None,
                             },
                         );
@@ -2368,6 +2375,10 @@ mod tests {
     fn draggable_telemetry_rows_use_left_aligned_tree_labels() {
         let row = Arc::new(Row {
             sig: SignalRef::new(ent(1), "x"),
+            drag_payload: ChannelDragPayload {
+                entity_bits: ent(1).to_bits(),
+                path: Arc::from("x"),
+            },
             unit: None,
             description: None,
             provenance: None,
@@ -2441,6 +2452,10 @@ mod tests {
     fn telemetry_labels_keep_public_names_concise_and_internal_names_distinct() {
         let public = Row {
             sig: SignalRef::new(ent(1), "electrical_power"),
+            drag_payload: ChannelDragPayload {
+                entity_bits: ent(1).to_bits(),
+                path: Arc::from("electrical_power"),
+            },
             unit: None,
             description: None,
             provenance: None,
@@ -2462,6 +2477,7 @@ mod tests {
             ent(1),
             "__member_Traverse_x2f_Rover_x2f_Motor_L0.electrical_power",
         );
+        internal.drag_payload = ChannelDragPayload::from_signal(&internal.sig);
         internal.exposure = SignalExposure::Internal;
         assert_eq!(telemetry_row_label(&internal, false), "electrical power");
         assert_eq!(
@@ -2964,7 +2980,7 @@ mod tests {
     fn dropped_node_goes_through_the_plot_substrate() {
         let payload = ChannelDragPayload {
             entity_bits: ent(7).to_bits(),
-            path: "P.y".to_string(),
+            path: Arc::from("P.y"),
         };
         let node = plot_node_at(
             lunco_canvas::scene::NodeId(1),
@@ -2992,7 +3008,7 @@ mod tests {
         let req = PlotDropRequest {
             payload: ChannelDragPayload {
                 entity_bits: 1,
-                path: "x".into(),
+                path: Arc::from("x"),
             },
             world_pos: None,
         };
@@ -3037,6 +3053,10 @@ mod tests {
     fn telemetry_labels_explain_modelica_connector_state() {
         let mut internal = Row {
             sig: SignalRef::new(ent(1), "network_system.Battery.p.v"),
+            drag_payload: ChannelDragPayload {
+                entity_bits: ent(1).to_bits(),
+                path: Arc::from("network_system.Battery.p.v"),
+            },
             unit: Some("V".into()),
             description: Some("Electrical pin voltage".into()),
             provenance: Some("modelica".into()),

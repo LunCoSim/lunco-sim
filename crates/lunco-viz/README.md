@@ -57,6 +57,9 @@ not the full theme, and empty-unit help is registered only on hover. Persistent
 requested signal selections are resolved when the request or catalog revision
 changes and reused across repaints; focus roots are inspected without copying
 the selection list.
+Each catalog row retains its drag payload with an `Arc<str>` path, so visible
+row repaints clone only the shared handle; a `String` path is materialized when
+a drop is committed into a visualization or canvas node.
 The line-plot signal pickers enumerate scalar channels only while a picker is
 open and reuse signal references and metadata until the signal catalog changes;
 owner labels are resolved live while the menu is visible. Decimated plot points
