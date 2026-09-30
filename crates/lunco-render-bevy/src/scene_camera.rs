@@ -231,7 +231,10 @@ fn apply(commands: &mut Commands, e: Entity, cam: &SceneCamera, profile: RenderP
 fn apply_graphics_camera_quality(
     settings: Res<lunco_render::RenderingQualitySettings>,
     bloom_override: Res<lunco_render::SceneBloomOverride>,
-    mut cameras: Query<&mut SceneCamera, With<lunco_render::GraphicsCameraDefaults>>,
+    mut cameras: Query<
+        (&mut SceneCamera, Has<lunco_render::EditorPreviewCamera>),
+        With<lunco_render::GraphicsCameraDefaults>,
+    >,
 ) {
     let profile = match settings.validated_profile() {
         Ok(profile) => profile,
@@ -240,8 +243,8 @@ fn apply_graphics_camera_quality(
             return;
         }
     };
-    for mut camera in &mut cameras {
-        apply_camera_quality(&mut camera, profile, bloom_override.intensity);
+    for (mut camera, editor) in &mut cameras {
+        apply_camera_quality(&mut camera, profile, bloom_override.intensity, editor);
     }
 }
 
@@ -249,7 +252,7 @@ fn sync_new_scene_camera(
     settings: Res<lunco_render::RenderingQualitySettings>,
     bloom_override: Res<lunco_render::SceneBloomOverride>,
     mut cameras: Query<
-        &mut SceneCamera,
+        (&mut SceneCamera, Has<lunco_render::EditorPreviewCamera>),
         (
             With<lunco_render::GraphicsCameraDefaults>,
             Added<SceneCamera>,
@@ -265,8 +268,8 @@ fn sync_new_scene_camera(
             return;
         }
     };
-    for mut camera in &mut cameras {
-        apply_camera_quality(&mut camera, profile, bloom_override.intensity);
+    for (mut camera, editor) in &mut cameras {
+        apply_camera_quality(&mut camera, profile, bloom_override.intensity, editor);
     }
 }
 
@@ -274,10 +277,15 @@ fn apply_camera_quality(
     camera: &mut SceneCamera,
     profile: lunco_render::RenderQualityProfile,
     bloom_override: Option<f32>,
+    editor: bool,
 ) {
     camera.tone_map = profile.camera_tone_map;
     camera.msaa = profile.camera_msaa;
-    let bloom_intensity = bloom_override.unwrap_or(profile.camera_bloom_intensity);
+    let bloom_intensity = if editor && !profile.editor_camera_bloom_enabled {
+        0.0
+    } else {
+        bloom_override.unwrap_or(profile.camera_bloom_intensity)
+    };
     camera.bloom = (bloom_intensity > 0.0).then(|| {
         lunco_render::BloomLook::new(bloom_intensity, profile.camera_bloom_low_frequency_boost)
     });
@@ -557,6 +565,37 @@ mod tests {
             Some(BloomLook::new(0.4, 0.2))
         );
         assert!(!a.world().entity(explicit).get::<SceneCamera>().unwrap().hdr);
+    }
+
+    #[test]
+    fn editor_bloom_policy_survives_scene_override_and_graphics_changes() {
+        let mut profile = lunco_render::RenderingQualitySettings::default().profile();
+        profile.camera_bloom_low_frequency_boost = 0.7;
+        let mut editor = SceneCamera::default();
+        let mut scene = SceneCamera::default();
+        apply_camera_quality(&mut editor, profile, Some(0.42), true);
+        apply_camera_quality(&mut scene, profile, Some(0.42), false);
+        assert!(editor.bloom.is_none());
+        assert!(!editor.hdr);
+        assert_eq!(scene.bloom, Some(BloomLook::new(0.42, 0.7)));
+        assert!(scene.hdr);
+        profile.editor_camera_bloom_enabled = true;
+        apply_camera_quality(&mut editor, profile, Some(0.42), true);
+        assert_eq!(editor.bloom, scene.bloom);
+        profile.editor_camera_bloom_enabled = false;
+        apply_camera_quality(&mut editor, profile, Some(0.42), true);
+        assert!(editor.bloom.is_none());
+        // Verify that the pipeline actually removes an existing bloom pass.
+        let mut a = app();
+        let e = a.world_mut().spawn(scene).id();
+        a.update();
+        assert!(a.world().entity(e).contains::<Bloom>());
+        *a.world_mut()
+            .entity_mut(e)
+            .get_mut::<SceneCamera>()
+            .unwrap() = editor;
+        a.update();
+        assert!(!a.world().entity(e).contains::<Bloom>());
     }
 
     #[test]

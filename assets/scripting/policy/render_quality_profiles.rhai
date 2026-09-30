@@ -28,6 +28,8 @@ fn render_quality_profile(id) {
             camera_exposure_ev100: 16.0,
             render_failure_quiet_period_secs: 0.5,
             render_failure_give_up_after_secs: 5.0,
+            // Inspection views need crisp edges, independent of scene bloom.
+            editor_camera_bloom_enabled: false,
             camera_bloom_intensity: 0.0,
             camera_bloom_low_frequency_boost: 0.0,
             distant_light_default_illuminance: 128000.0,
@@ -101,6 +103,8 @@ fn render_quality_profile(id) {
             camera_exposure_ev100: 16.0,
             render_failure_quiet_period_secs: 0.5,
             render_failure_give_up_after_secs: 5.0,
+            // Inspection views need crisp edges, independent of scene bloom.
+            editor_camera_bloom_enabled: false,
             camera_bloom_intensity: 0.15,
             camera_bloom_low_frequency_boost: 0.7,
             distant_light_default_illuminance: 128000.0,
@@ -174,6 +178,8 @@ fn render_quality_profile(id) {
             camera_exposure_ev100: 16.0,
             render_failure_quiet_period_secs: 0.5,
             render_failure_give_up_after_secs: 5.0,
+            // Inspection views need crisp edges, independent of scene bloom.
+            editor_camera_bloom_enabled: false,
             camera_bloom_intensity: 0.15,
             camera_bloom_low_frequency_boost: 0.7,
             distant_light_default_illuminance: 128000.0,

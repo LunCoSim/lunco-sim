@@ -960,13 +960,18 @@ fn create_preview_view(
     // camera. The explicit profile supplies the exposure that matches the
     // graphics light; relying on Bevy's implicit exposure against the canonical
     // lunar sun overexposes the USD assembly before any authored camera opinion.
-    let (camera_intent, exposure) = scene_camera_look_with_profile(None, profile);
+    let (mut camera_intent, exposure) = scene_camera_look_with_profile(None, profile);
+    if !profile.editor_camera_bloom_enabled {
+        camera_intent.bloom = None;
+        camera_intent.hdr = false;
+    }
     let mut commands = world.commands();
     let camera = commands
         .spawn((
             camera_intent,
             exposure,
             GraphicsCameraDefaults,
+            lunco_render::EditorPreviewCamera,
             Camera3d::default(),
             Camera {
                 clear_color: ClearColorConfig::Custom(Color::srgb(0.10, 0.10, 0.12)),
@@ -3334,6 +3339,7 @@ mod tests {
             camera_exposure_ev100: 16.0,
             render_failure_quiet_period_secs: 0.5,
             render_failure_give_up_after_secs: 5.0,
+            editor_camera_bloom_enabled: false,
             camera_bloom_intensity: 0.0,
             camera_bloom_low_frequency_boost: 0.0,
             distant_light_default_illuminance: 128_000.0,

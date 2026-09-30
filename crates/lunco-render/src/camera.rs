@@ -177,6 +177,11 @@ fn retire_camera(mut world: DeferredWorld, context: HookContext) {
 #[reflect(Component)]
 pub struct GraphicsCameraDefaults;
 
+/// An Editor inspection camera; uses the authored Editor post-processing policy.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
+#[reflect(Component)]
+pub struct EditorPreviewCamera;
+
 impl Default for SceneCamera {
     fn default() -> Self {
         Self {

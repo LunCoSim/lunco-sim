@@ -24,8 +24,8 @@ pub use appearance::{
     ScreenConstantMarkerVisibility, SurfaceAlpha,
 };
 pub use camera::{
-    BloomLook, CameraRetiring, GraphicsCameraDefaults, MsaaLevel, SceneCamera, ToneMap, WorldLabel,
-    scene_camera_look_with_profile, usd_default_perspective_projection,
+    BloomLook, CameraRetiring, EditorPreviewCamera, GraphicsCameraDefaults, MsaaLevel, SceneCamera,
+    ToneMap, WorldLabel, scene_camera_look_with_profile, usd_default_perspective_projection,
 };
 pub use quality::{
     LightGraphicsDefaults, RENDER_DEFAULT_QUALITY_PROFILE_HOOK, RENDER_QUALITY_PROFILE_HOOK,

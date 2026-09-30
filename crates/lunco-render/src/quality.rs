@@ -35,7 +35,7 @@ lunco_hooks::declare_hook! {
     installable: true,
 }
 
-const PROFILE_FIELD_NAMES: [&str; 69] = [
+const PROFILE_FIELD_NAMES: [&str; 70] = [
     "directional_shadow_map_size",
     "point_shadow_map_size",
     "directional_cascades",
@@ -59,6 +59,7 @@ const PROFILE_FIELD_NAMES: [&str; 69] = [
     "camera_exposure_ev100",
     "render_failure_quiet_period_secs",
     "render_failure_give_up_after_secs",
+    "editor_camera_bloom_enabled",
     "camera_bloom_intensity",
     "camera_bloom_low_frequency_boost",
     "distant_light_default_illuminance",
@@ -229,6 +230,8 @@ pub struct RenderQualityProfile {
     pub render_failure_quiet_period_secs: f64,
     /// Wall-clock grace period before a persistent render failure stops presentation.
     pub render_failure_give_up_after_secs: f64,
+    /// Whether Editor inspection cameras participate in scene bloom.
+    pub editor_camera_bloom_enabled: bool,
     /// Bloom intensity used when the USD environment omits bloom.
     pub camera_bloom_intensity: f32,
     /// Bloom low-frequency boost used when the USD environment omits bloom.
@@ -432,6 +435,7 @@ impl RenderQualityProfile {
                 entries,
                 "render_failure_give_up_after_secs",
             )?,
+            editor_camera_bloom_enabled: profile_bool(entries, "editor_camera_bloom_enabled")?,
             camera_bloom_intensity: profile_f32(entries, "camera_bloom_intensity")?,
             camera_bloom_low_frequency_boost: profile_f32(
                 entries,
@@ -625,6 +629,7 @@ pub struct RenderingQualitySettings {
     pub camera_exposure_ev100: f32,
     pub render_failure_quiet_period_secs: f64,
     pub render_failure_give_up_after_secs: f64,
+    pub editor_camera_bloom_enabled: bool,
     pub camera_bloom_intensity: f32,
     pub camera_bloom_low_frequency_boost: f32,
     pub distant_light_default_illuminance: f32,
@@ -776,6 +781,7 @@ impl RenderingQualitySettings {
             camera_exposure_ev100: self.camera_exposure_ev100,
             render_failure_quiet_period_secs: self.render_failure_quiet_period_secs,
             render_failure_give_up_after_secs: self.render_failure_give_up_after_secs,
+            editor_camera_bloom_enabled: self.editor_camera_bloom_enabled,
             camera_bloom_intensity: self.camera_bloom_intensity,
             camera_bloom_low_frequency_boost: self.camera_bloom_low_frequency_boost,
             distant_light_default_illuminance: self.distant_light_default_illuminance,
@@ -872,6 +878,7 @@ impl RenderingQualitySettings {
         self.camera_exposure_ev100 = profile.camera_exposure_ev100;
         self.render_failure_quiet_period_secs = profile.render_failure_quiet_period_secs;
         self.render_failure_give_up_after_secs = profile.render_failure_give_up_after_secs;
+        self.editor_camera_bloom_enabled = profile.editor_camera_bloom_enabled;
         self.camera_bloom_intensity = profile.camera_bloom_intensity;
         self.camera_bloom_low_frequency_boost = profile.camera_bloom_low_frequency_boost;
         self.distant_light_default_illuminance = profile.distant_light_default_illuminance;
@@ -1271,6 +1278,7 @@ impl Default for RenderingQualitySettings {
             camera_exposure_ev100: profile.camera_exposure_ev100,
             render_failure_quiet_period_secs: profile.render_failure_quiet_period_secs,
             render_failure_give_up_after_secs: profile.render_failure_give_up_after_secs,
+            editor_camera_bloom_enabled: profile.editor_camera_bloom_enabled,
             camera_bloom_intensity: profile.camera_bloom_intensity,
             camera_bloom_low_frequency_boost: profile.camera_bloom_low_frequency_boost,
             distant_light_default_illuminance: profile.distant_light_default_illuminance,
@@ -1442,6 +1450,7 @@ mod tests {
             camera_exposure_ev100: 16.0,
             render_failure_quiet_period_secs: 0.5,
             render_failure_give_up_after_secs: 5.0,
+            editor_camera_bloom_enabled: false,
             camera_bloom_intensity: 0.0,
             camera_bloom_low_frequency_boost: 0.0,
             distant_light_default_illuminance: 128_000.0,

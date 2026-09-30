@@ -387,3 +387,9 @@ former. Here the beam is authored because it is the visual of `rangeAxis`/`range
 which are already authored on the same prim — splitting them is the incoherence being
 removed. If a beam is ever wanted as a pure throwaway diagnostic, Isaac's answer is the
 right one and this is the wrong one.
+
+Editor inspection cameras carry `EditorPreviewCamera`. The authored rendering
+profiles set `editor_camera_bloom_enabled: false` so geometry stays crisp.
+The camera binder applies this policy on creation and Graphics changes, including
+when the active scene authors environment bloom. Scene cameras retain their
+authored bloom and ordinary graphics profile.
