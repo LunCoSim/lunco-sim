@@ -139,11 +139,17 @@ one cycle, reject other contexts and verify the real scheduled owner path in
 an authored production test. For example, `readiness.action` runs under
 `Core/Simulation/Behavior` with fixed-clock time and the latest `SimTick`; its
 policy rejects direct calls from other cycles.
-Physics initialization is a discrete lifecycle decision: use the declared
+Physics initialization is a discrete lifecycle decision: use the required
 `physics.initialization(facts)` seam, a generation-qualified
-`Twin/Lifecycle/Preparation` route, and no clock sample. Keep authored
-selector names in `facts.policy`; do not construct dynamic hook ids or expose
-process-local ECS entity ids as deterministic policy facts.
+`Twin/Lifecycle/Preparation` route, and no clock sample. Its stable facts include
+the selector, validation status, pose, assembly size, and measured penetration
+when present. `accept` admits the authored pose unchanged, `pause` disables the
+validated penetrating assembly and removes it from scene readiness, and
+`reject` keeps it held. The shipped Application policy pauses measured terrain
+penetrations and remains installed across Twin reloads; a mounted Twin may
+replace it. Keep authored selector names in `facts.policy`; do not construct
+dynamic hook ids or expose process-local ECS entity ids as deterministic policy
+facts.
 
 The application `twin.lifecycle` policy selects the active Twin's default USD
 scene, tool libraries, timeline data, SysML/KerML sources, and Modelica roots

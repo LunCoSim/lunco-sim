@@ -192,8 +192,20 @@ USD physics projection follows the same lifecycle boundary: the BigSpace bridge
 seeds body poses in `PreUpdate`, then the joint owner's `JointPreparation` set
 resolves authored joints in `Update` after USD simulation projection and before
 `JointAdmission`.
-Joint topology therefore completes without waiting for a fixed physics cycle;
-the first cycle runs only after all startup owners release their holds.
+If a dynamic endpoint needs an Avian `BodyIslandNode` before its joint can be
+admitted, the USD owner stages that body as dynamic only after
+`PhysicsHolds::BODY_ADMISSION` is active. An unfrozen body keeps its
+`ShouldBeDynamic` admission marker until authored joint and differential
+markers clear, so the fixed clock cannot run between endpoint staging and
+constraint admission. Joints in a policy-paused assembly leave the shared
+admission batch, allowing unrelated valid joints to commit. A body already
+frozen for a scoped readiness wait may complete its local state transition
+while the shared hold waits on the pending constraints. Scene readiness and the
+first cycle release only after the complete body and constraint boundary closes.
+Terrain initial-pose support validation also waits for the active root's
+structural and USD simulation projection to settle before checking colliders;
+bounded projection order cannot admit a body while its authored support
+collider is still absent.
 Rhai compilation, dependency planning, initialization, and `on_start` run in an
 ordered pre-tick lifecycle pass; the scenario's preparation hold remains active
 until `on_start` completes. A fresh process therefore starts `on_start` at
@@ -976,6 +988,14 @@ surface; it does not depend on `LocalGravity`, which is produced by the first
 fixed simulation cycle after admission. This keeps authored-pose validation
 inside lifecycle preparation without inventing a gravity sample or advancing a
 physics clock to obtain one.
+
+The articulated rigid colliders are also checked against live static support
+colliders with Avian's exact narrow phase. This catches an authored rover whose
+axle probe starts inside a ramp and therefore produces no ray hit. A measured
+overlap follows the same initialization policy as other support penetration;
+the owner pauses the assembly in place and publishes its diagnostic before
+dynamic admission, and sends a `PHYSICS_INITIALIZATION_PAUSED` warning to
+Recent status.
 
 Scene readiness follows the same rule. Initial composition must establish one
 simulation start boundary: asynchronous load duration must not consume

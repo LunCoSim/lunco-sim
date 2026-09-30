@@ -270,6 +270,10 @@ After `Exit`, verify that the process and `:4101` listener are gone before
 starting another session. A queued command or a reachable socket is not proof
 that a scene is ready; `/api/ready` is the gate for scene load, Modelica compile
 and participant initialization.
+For scene replacements that change `ActivePhysicsFrame`, also query each new
+dynamic body with `QueryPhysicsState` and require `physics_pose_seeded == true`
+before declaring admission complete; this catches a physics clock blocked
+before the replacement scene's first pose is written.
 
 ## Curl shape
 

@@ -122,7 +122,7 @@ fn surface_camera_removed(mut world: DeferredWorld, context: HookContext) {
     world
         .commands()
         .entity(context.entity)
-        .remove::<SurfaceCameraFrame>();
+        .try_remove::<SurfaceCameraFrame>();
 }
 
 fn spring_arm_camera_added(mut world: DeferredWorld, context: HookContext) {

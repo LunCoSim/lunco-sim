@@ -499,7 +499,7 @@ fn queue_procedural_skybox(
 fn remove_skybox_material(remove: On<Remove, ProceduralSkybox>, mut commands: Commands) {
     commands
         .entity(remove.entity)
-        .remove::<ProceduralSkyboxMaterial>();
+        .try_remove::<ProceduralSkyboxMaterial>();
 }
 
 #[cfg(test)]

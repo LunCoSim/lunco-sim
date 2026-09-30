@@ -195,6 +195,12 @@ When the selected site Grid itself is atomically reparented during scene
 mounting, bodies below it are reseeded from their new site-local hierarchy;
 only their velocity vectors are rotated into the new axes. A normal active-frame
 switch without frame reparenting transports the complete existing physics pose.
+During admission across a frame switch, fresh bodies are seeded directly in the
+selected frame so readiness never waits for a fixed step that admission itself
+has blocked. Any established body still carrying the previous frame remains
+there until the next fixed boundary; the bridge transports only those bodies,
+then advances the recorded frame. This keeps the solver from seeing a mixed
+frame state and avoids deadlocking scene readiness on the physics clock.
 
 The shared backend admission contract lives in `lunco-physics::avian_backend`.
 In this f64-physics build Avian's OBVHS spatial-query and collider-tree

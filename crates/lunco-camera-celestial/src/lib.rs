@@ -121,7 +121,7 @@ fn publish_surface_camera_frames(
             if let Some(frame) = next_frame {
                 entity_commands.insert(frame);
             } else {
-                entity_commands.remove::<SurfaceCameraFrame>();
+                entity_commands.try_remove::<SurfaceCameraFrame>();
             }
         }
     }

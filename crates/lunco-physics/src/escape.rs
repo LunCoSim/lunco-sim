@@ -131,10 +131,59 @@ pub const ESCAPE_MARGIN_MIN: Scalar = 100.0;
 /// extent. This catches runaway integration without rewriting physics state.
 pub const ESCAPE_VERTICAL_FACTOR: Scalar = 10.0;
 
-/// Marks an entity in an articulated object stopped by the escape policy.
+/// Marks a disabled body, collider, or joint that a physics policy has paused.
 /// Readiness release leaves Avian's disable in place while this marker remains.
-#[derive(Component, Debug, Clone, Copy)]
-pub(super) struct PhysicsEscapePaused;
+#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[reflect(Component)]
+pub struct PhysicsObjectPaused;
+
+/// Disable a validated articulated body set without changing its authored pose.
+///
+/// Joints are disabled before their endpoint bodies so Avian can detach the
+/// island safely. The marker prevents a concurrent readiness release from
+/// re-enabling any part of the paused object.
+pub fn pause_physics_members<F: bevy::ecs::query::QueryFilter>(
+    members: &[Entity],
+    joint_links: &Query<(Entity, &crate::PhysicsJointLink), F>,
+    colliders: &Query<(Entity, Option<&ColliderOf>), With<Collider>>,
+    commands: &mut Commands,
+) {
+    let member_set: EntityHashSet = members.iter().copied().collect();
+    let mut joints = joint_links
+        .iter()
+        .filter_map(|(joint, link)| {
+            (member_set.contains(&link.body0) || member_set.contains(&link.body1)).then_some(joint)
+        })
+        .collect::<Vec<_>>();
+    joints.sort_unstable_by_key(|entity| entity.to_bits());
+    let mut owned_colliders = colliders
+        .iter()
+        .filter_map(|(collider, owner)| {
+            (member_set.contains(&collider)
+                || owner.is_some_and(|owner| member_set.contains(&owner.body)))
+            .then_some(collider)
+        })
+        .collect::<Vec<_>>();
+    owned_colliders.sort_unstable_by_key(|entity| entity.to_bits());
+    let mut bodies = members.to_vec();
+    bodies.sort_unstable_by_key(|entity| entity.to_bits());
+
+    for joint in joints {
+        commands
+            .entity(joint)
+            .try_insert((JointDisabled, PhysicsObjectPaused));
+    }
+    for collider in owned_colliders {
+        commands
+            .entity(collider)
+            .try_insert((ColliderDisabled, PhysicsObjectPaused));
+    }
+    for body in bodies {
+        commands
+            .entity(body)
+            .try_insert((RigidBodyDisabled, PhysicsObjectPaused));
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EscapePolicyAction {
@@ -293,7 +342,7 @@ fn pause_dynamic_object(
     seed: Entity,
     body_modes: &Query<&RigidBody>,
     joint_links: &Query<(Entity, &crate::PhysicsJointLink), Without<JointDisabled>>,
-    colliders: &Query<(Entity, &ColliderOf)>,
+    colliders: &Query<(Entity, Option<&ColliderOf>), With<Collider>>,
     reported: &mut ReportedEscapes,
     commands: &mut Commands,
 ) -> usize {
@@ -301,26 +350,8 @@ fn pause_dynamic_object(
         .into_iter()
         .collect();
     island.sort_unstable_by_key(|entity| entity.to_bits());
-    let mut island_set = EntityHashSet::default();
+    pause_physics_members(&island, joint_links, colliders, commands);
     for entity in &island {
-        island_set.insert(*entity);
-    }
-    for (joint, link) in joint_links.iter() {
-        if island_set.contains(&link.body0) || island_set.contains(&link.body1) {
-            commands.entity(joint).try_insert(JointDisabled);
-        }
-    }
-    for (collider, collider_of) in colliders.iter() {
-        if island_set.contains(&collider_of.body) {
-            commands
-                .entity(collider)
-                .try_insert((ColliderDisabled, PhysicsEscapePaused));
-        }
-    }
-    for entity in &island {
-        commands
-            .entity(*entity)
-            .try_insert((RigidBodyDisabled, PhysicsEscapePaused));
         // One event and one policy decision describe the whole articulated
         // object even if several of its bodies crossed the bounds this step.
         reported.0.insert(*entity);
@@ -458,7 +489,7 @@ fn report_escaped_bodies(
     mut commands: Commands,
     body_modes: Query<&RigidBody>,
     joint_links: Query<(Entity, &crate::PhysicsJointLink), Without<JointDisabled>>,
-    colliders: Query<(Entity, &ColliderOf)>,
+    colliders: Query<(Entity, Option<&ColliderOf>), With<Collider>>,
     // Changed position or velocity is the query-level activity filter: avian
     // has no per-variant marker component (`RigidBody` is one enum component),
     // so "dynamic only" cannot be a `With<>` filter. The solver writes every

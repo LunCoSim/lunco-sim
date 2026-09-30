@@ -66,7 +66,7 @@ pub use avian_backend::{
     avian_backend_point_is_valid, avian_backend_pose_is_valid, avian_backend_rotation_is_valid,
     avian_backend_vector_is_valid,
 };
-pub use escape::{EscapeDiagnosticPlugin, WorldBounds};
+pub use escape::{EscapeDiagnosticPlugin, PhysicsObjectPaused, WorldBounds, pause_physics_members};
 pub use joint_solver::{DeterministicJointSolverPlugin, PhysicsJointSolvePass};
 pub use order::{
     PhysicsOrderError, PhysicsOrderKey, ordered_physics_entities, report_invalid_physics_order,
@@ -75,8 +75,9 @@ pub use pose::{PhysicsPoseSeeded, SimulationPoseQuery, SimulationPoseReadState};
 pub use readiness::{Integrable, ReadinessEffectPlugin};
 pub use spatial::{GridSpatialQuery, GridSpatialQueryState};
 pub use support::{
-    PHYSICS_INITIALIZATION_POLICY_HOOK, PhysicsInitializationExternalValidator,
-    PhysicsInitializationInvalid, PhysicsInitializationPending, PhysicsInitializationPolicy,
+    PHYSICS_INITIALIZATION_POLICY_HOOK, PhysicsInitializationCheck, PhysicsInitializationDecision,
+    PhysicsInitializationExternalValidator, PhysicsInitializationInvalid,
+    PhysicsInitializationPaused, PhysicsInitializationPending, PhysicsInitializationPolicy,
     PhysicsInitializationSubject, PhysicsJointDetachRequested, PhysicsJointDetachSet,
     PhysicsJointLink, PhysicsJointPending, PhysicsJointTopologyPending, PhysicsSupportContact,
     PhysicsSupportFootprint, PhysicsSupportSet, PhysicsSupportState, PhysicsWheelContact,
@@ -1341,13 +1342,15 @@ fn validate_surface_independent_initialization(
             continue;
         }
         let result = if policy.is_strict_authored() {
-            evaluate_initialization_policy(
-                &policy,
-                lunco_hooks::HookValue::Unit,
-                physics_initialization_context(coordinator.as_deref()),
-            )
+            Ok(support::PhysicsInitializationDecision::Accept)
         } else if let Some(subject) = subject {
-            let facts = physics_initialization_facts(&policy, subject, position.0, 1);
+            let facts = physics_initialization_facts(
+                &policy,
+                subject,
+                position.0,
+                1,
+                support::PhysicsInitializationCheck::AuthoredPose,
+            );
             evaluate_initialization_policy(
                 &policy,
                 facts,
@@ -1360,10 +1363,22 @@ fn validate_surface_independent_initialization(
             )
         };
         match result {
-            Ok(()) => {
+            Ok(support::PhysicsInitializationDecision::Accept) => {
                 commands
                     .entity(entity)
                     .try_remove::<PhysicsInitializationPending>();
+            }
+            Ok(support::PhysicsInitializationDecision::Pause) => {
+                findings.push(lunco_core::RuntimeDiagnostic {
+                    code: "physics-initialization-policy".to_string(),
+                    severity: lunco_core::DiagnosticSeverity::Error,
+                    producer: "physics-initialization".to_string(),
+                    subject: subject_label.to_string(),
+                    message: format!(
+                        "initialization policy `{}` requested a pause without a validated support penetration; authored pose remains held",
+                        policy.0
+                    ),
+                });
             }
             Err(message) => findings.push(lunco_core::RuntimeDiagnostic {
                 code: "physics-initialization-policy".to_string(),
@@ -1385,9 +1400,11 @@ impl Plugin for PhysicsGatePlugin {
     fn build(&self, app: &mut App) {
         pose::register_spatial_query_providers(app);
         app.register_type::<PhysicsInitializationPolicy>()
+            .register_type::<PhysicsObjectPaused>()
             .register_type::<PhysicsOrderKey>()
             .register_type::<PhysicsInitializationPending>()
             .register_type::<PhysicsInitializationInvalid>()
+            .register_type::<PhysicsInitializationPaused>()
             .register_type::<PhysicsInitializationSubject>()
             .register_type::<PhysicsSupportFootprint>()
             .register_type::<PhysicsSupportContact>()

@@ -53,13 +53,24 @@ for hook in hooks {
 checks.push(t_true(physics_initialization_hook != ()
         && physics_initialization_hook.declared == true
         && physics_initialization_hook.deterministic == true
-        && physics_initialization_hook.required == false
+        && physics_initialization_hook.required == true
         && physics_initialization_hook.installable == true
         && physics_initialization_hook.parameters.len() == 1
         && physics_initialization_hook.parameters[0].name == "facts"
         && physics_initialization_hook.parameters[0].type == "map"
         && physics_initialization_hook.output == "string",
-    "physics initialization exposes one declared deterministic owner policy seam"));
+    "physics initialization exposes one required deterministic owner policy seam"));
+let physics_initialization_off_cycle = invoke_hook("physics.initialization", [#{
+    policy: "strict-authored",
+    subject: "/HookPolicyTest/Body",
+    status: "terrain_penetration",
+    penetration_m: 0.1,
+    position: [0.0, 0.0, 0.0],
+    assembly_member_count: 1,
+}]);
+checks.push(t_true(physics_initialization_off_cycle.ok == false
+        && physics_initialization_off_cycle.status == "fault",
+    "the initialization policy rejects calls outside its Twin lifecycle owner context"));
 let default_escape_policy = invoke_hook("physics.body_escape", [#{
     kind: "finite_world_exit",
     path: "/EscapeContainmentTest/Escapee",

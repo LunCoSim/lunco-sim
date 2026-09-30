@@ -127,7 +127,7 @@ pub(crate) fn reconcile_frozen_subtrees(
         ),
     >,
     frozen: Query<(Entity, &FrozenForReadiness)>,
-    escape_paused: Query<(), With<crate::escape::PhysicsEscapePaused>>,
+    object_paused: Query<(), With<crate::escape::PhysicsObjectPaused>>,
     mut commands: Commands,
 ) {
     let mut joints_to_freeze = Vec::new();
@@ -197,10 +197,10 @@ pub(crate) fn reconcile_frozen_subtrees(
             continue;
         }
         let mut e = commands.entity(entity);
-        if record.body && !escape_paused.contains(entity) {
+        if record.body && !object_paused.contains(entity) {
             e.try_remove::<RigidBodyDisabled>();
         }
-        if record.collider && !escape_paused.contains(entity) {
+        if record.collider && !object_paused.contains(entity) {
             e.try_remove::<ColliderDisabled>();
         }
         e.try_remove::<FrozenForReadiness>();
@@ -216,16 +216,18 @@ pub(crate) fn reconcile_frozen_subtrees(
 fn release_frozen_joints(
     held: Query<Entity, With<HeldForReadiness>>,
     frozen: Query<(Entity, &FrozenJointForReadiness)>,
+    object_paused: Query<(), With<crate::escape::PhysicsObjectPaused>>,
     mut commands: Commands,
 ) {
     for (entity, record) in &frozen {
         if held.contains(record.owner) {
             continue;
         }
-        commands
-            .entity(entity)
-            .try_remove::<JointDisabled>()
-            .try_remove::<FrozenJointForReadiness>();
+        let mut joint = commands.entity(entity);
+        if !object_paused.contains(entity) {
+            joint.try_remove::<JointDisabled>();
+        }
+        joint.try_remove::<FrozenJointForReadiness>();
     }
 }
 

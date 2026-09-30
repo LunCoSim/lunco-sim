@@ -41,17 +41,22 @@ Simulation-specific behaviors applied by this crate are intended to take priorit
 
 Every USD dynamic rigid body starts kinematic and crosses into Avian only after
 its composed pose has been read in the active physics frame. The default
-`strict-authored` policy accepts a finite pose without changing it. On a scene
-with terrain, an authored body or support probe that penetrates the live
-surface produces a persistent `physics-initialization-terrain-penetration`
-error and stays held; the runtime does not lift, reseat, zero, or otherwise
-repair the body.
+`strict-authored` policy accepts a finite, supported pose without changing it.
+When live support validation measures terrain penetration, the required
+`physics.initialization` policy receives that failure and the measured depth.
+The Application policy disables the complete articulated object, clears its
+physics preparation markers, and lets independent bodies and joint batches
+finish scene readiness. It keeps the authored pose unchanged and publishes a
+persistent warning. The object and its colliders and joints stay disabled until
+a scene reload admits a corrected pose or an explicitly selected policy
+accepts it.
 
-The default needs no custom USD property. A Twin that needs a different
-initialization rule applies `LunCoPhysicsInitializationAPI` to the rigid-body
-prim and authors a selector. One declared deterministic
-`physics.initialization(facts) -> String` hook receives that selector; Rhai owns
-its interpretation and the accept/reject decision:
+The default needs no custom USD property. The deterministic application policy
+is installed once at application startup and remains installed across Twin
+reloads. A Twin may replace it or select a different initialization rule by
+applying `LunCoPhysicsInitializationAPI` to the rigid-body prim and authoring a
+selector. One declared deterministic
+`physics.initialization(facts: Map) -> String` hook carries the policy decision:
 
 ```usda
 prepend apiSchemas = ["LunCoPhysicsInitializationAPI"]
@@ -72,6 +77,9 @@ def LunCoPolicy "PhysicsInitialization"
             if facts.policy != "my-policy" {
                 throw "unknown physics initialization selector";
             }
+            if facts.status == "terrain_penetration" {
+                return "pause";
+            }
             "accept"
         }
     '''
@@ -79,12 +87,28 @@ def LunCoPolicy "PhysicsInitialization"
 }
 ```
 
-The hook receives the stable USD subject path, selector, finite pose, and
-articulated assembly member count. It never receives process-local ECS entity
-ids. It must return exactly `"accept"` or `"reject"`. Missing schema or
-selector, missing policy, a non-deterministic registration, malformed result,
-or rejection leaves the body held and publishes a runtime diagnostic; there is
-no engine fallback or implicit pose repair.
+The hook receives the stable USD subject path, selector, finite pose,
+articulated assembly member count, and validation status. Terrain penetration
+facts also include `penetration_m`, measured from rigid collider overlap or
+support-probe displacement against composed support geometry. A pause emits a
+`PHYSICS_INITIALIZATION_PAUSED` warning in Recent status. The hook never
+receives process-local ECS entity ids. `"accept"` admits the authored pose
+unchanged, `"pause"` disables the validated penetrating assembly and removes
+only that assembly from readiness, and `"reject"` keeps it held. Pause is
+accepted only with measured terrain penetration facts. Missing schema or
+selector, missing policy,
+a non-deterministic registration, malformed result, or rejection leaves the
+body held and publishes a runtime diagnostic; there is no pose repair or
+engine-side decision fallback.
+
+After pose validation, USD may stage a dynamic endpoint under the shared
+`BODY_ADMISSION` physics hold so Avian can create the solver node that joint
+admission requires. For an unfrozen body, `ShouldBeDynamic` remains set until
+pending authored joints and differentials are installed. A body already frozen
+by a scoped readiness owner can complete its local state transition while that
+subtree stays disabled; the shared hold still waits for its pending constraints.
+The hold keeps the fixed clock closed through that two-phase admission, then
+scene readiness releases once the complete constraint set is live.
 
 ## Implementation Status
 *   [x] Basic `PhysxVehicleWheelAPI` intercept.
