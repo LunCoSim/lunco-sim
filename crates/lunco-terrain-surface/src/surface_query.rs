@@ -93,7 +93,7 @@ pub struct TerrainPoseInPhysicsFrame {
     pub rotation: DQuat,
 }
 
-/// Immutable terrain sampling view for presentation work that runs off-thread.
+/// Immutable terrain frame and coverage facts for presentation work off-thread.
 /// It owns only shareable oracle snapshots and committed poses; it carries no
 /// Bevy `World`, query, or render state.
 #[derive(Clone)]
@@ -116,18 +116,40 @@ impl TerrainSurfaceSnapshot {
         self.frame
     }
 
-    /// Sample the immutable composed terrain data in the captured active frame.
-    pub fn sample_surface(&self, point: GridPos, eps: f64) -> Option<SurfaceSample> {
-        self.terrains.iter().find_map(|terrain| {
-            sample_terrain_surface(
-                terrain.entity,
-                terrain.oracle.as_ref(),
-                terrain.position,
-                terrain.rotation,
-                point,
-                eps,
-            )
-        })
+    /// Resolve a whole sparse stroke into one terrain-local plane. A convex
+    /// DEM footprint contains every leg when its endpoints and width fit.
+    /// Missing or ambiguous ownership is a terminal surface-contract error.
+    pub fn project_curve(
+        &self,
+        points: &[DVec3],
+        width_m: f64,
+    ) -> Result<(Entity, Vec<bevy::math::DVec2>), String> {
+        let mut owners = Vec::new();
+        for terrain in &self.terrains {
+            let inverse = terrain.rotation.inverse();
+            let local: Vec<_> = points
+                .iter()
+                .map(|point| inverse * (*point - terrain.position))
+                .collect();
+            let half = f64::from(terrain.oracle.half_extent()) - width_m * 0.5;
+            if local
+                .iter()
+                .all(|point| point.is_finite() && point.x.abs() <= half && point.z.abs() <= half)
+            {
+                owners.push((
+                    terrain.entity,
+                    local
+                        .into_iter()
+                        .map(|point| bevy::math::DVec2::new(point.x, point.z))
+                        .collect(),
+                ));
+            }
+        }
+        match owners.len() {
+            1 => Ok(owners.remove(0)),
+            0 => Err("curve has no complete terrain coverage".into()),
+            _ => Err("curve has ambiguous terrain ownership".into()),
+        }
     }
 }
 
@@ -264,6 +286,21 @@ impl GridSurfaceQuery<'_, '_> {
             })
             .collect();
         Some(TerrainSurfaceSnapshot { frame, terrains })
+    }
+
+    /// Interpret an annotation query in its owning terrain's local plane.
+    pub fn terrain_local_point(
+        &self,
+        terrain: Entity,
+        point: GridPos,
+    ) -> Option<bevy::math::DVec2> {
+        let (_, _, pose) = self.terrains.get(terrain).ok()?;
+        let (frame, _) = self.frame()?;
+        if pose.frame != frame {
+            return None;
+        }
+        let local = pose.rotation.inverse() * (point.0 - pose.position);
+        Some(bevy::math::DVec2::new(local.x, local.z))
     }
 
     /// Convert a render-space point into the grid frame — the boundary crossing

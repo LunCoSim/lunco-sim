@@ -22,7 +22,7 @@
 //!   reinterprets through its own `Material` struct**. That is what makes the set
 //!   of parameters a property of the *asset*, not of the engine.
 //!
-//! # Textures: named layers, and why there are eight
+//! # Textures: named, optional layers
 //!
 //! A "moon look" is several rasters merged by the shader — a colour mosaic, a
 //! DEM-derived normal map, a packed scalar layer, a mineral/class map. So texture
@@ -44,8 +44,8 @@
 //! Such a look must opt out with [`ShaderLook::unshared`], which gives it a private
 //! material the binder mutates in place instead of re-keying.
 //!
-//! The eight texture roles occupy sixteen bind-group entries including their
-//! samplers, the portable WebGPU/WebGL2 floor. Roles are fixed and optional:
+//! Nine texture roles stay within the portable sampled-texture floor. The sparse
+//! annotation role is non-filtered and needs no sampler. Roles are optional:
 //! shaders that do not declare a binding ignore it (`None` binds Bevy's neutral
 //! image binding). The two continuation roles let a site shader retain the
 //! Moon-wide appearance maps while blending the cropped DEM's local maps.
@@ -94,6 +94,8 @@ pub enum TextureLayer {
     /// Site-local packed roughness/AO supplied to a lunar-surface continuation
     /// shader while the ordinary `Surface` layer remains body-wide.
     ContinuationSurface,
+    /// Sparse terrain-local vector annotations, read with textureLoad.
+    SurfaceAnnotations,
 }
 
 /// A custom-shader surface, stated as data.
@@ -248,6 +250,8 @@ pub struct ShaderLookSourceInterface {
     pub identifier: Option<String>,
     /// Whether the loaded source passes the fragment-stage validator.
     pub source_valid: bool,
+    /// Optional shader capabilities declared by //!@capability annotations.
+    pub capabilities: BTreeSet<String>,
     /// Typed defaults reflected from the current source for composed material consumers.
     pub defaults: BTreeMap<String, ParamValue>,
 }

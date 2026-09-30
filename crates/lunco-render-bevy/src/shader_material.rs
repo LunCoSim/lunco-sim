@@ -147,6 +147,9 @@ pub struct ShaderMaterial {
     #[texture(14)]
     #[sampler(15)]
     pub continuation_surface_map: Option<Handle<Image>>,
+    /// Sparse surface annotation records; no filtering or sampler.
+    #[texture(16, sample_type = "float", filterable = false)]
+    pub surface_annotations: Option<Handle<Image>>,
     /// Per-instance fragment shader. **Not** a bind-group resource — it drives
     /// pipeline specialization (see [`ShaderMaterial::specialize`]) and is kept
     /// as a strong handle so the asset stays loaded.
@@ -208,6 +211,7 @@ impl Default for ShaderMaterial {
             shadow_cache: None,
             continuation_albedo_map: None,
             continuation_surface_map: None,
+            surface_annotations: None,
             shader: Handle::default(),
             vertex_shader: None,
             schema: empty_schema_arc(),

@@ -6,15 +6,9 @@
 
 // Module functions are used instead of top-level variables because imported
 // Rhai tool functions execute in their own module scope.
-// Keep the overview ribbon readable above the terrain renderer's LOD seams.
+// Terrain routes are sparse surface annotations; authored points remain the
+// only navigation topology. Width is presentation policy, in metres.
 fn route_ribbon_width() { 0.12 }
-fn route_ribbon_clearance() { 0.03 }
-// Keep presentation work bounded while preserving the authored route points
-// as exact ribbon endpoints.
-fn route_ribbon_sample_spacing() { 3.0 }
-// Long legs increase sample spacing adaptively to stay within the presentation
-// mesh budget; route authoring sends only the ordered centerline points.
-fn route_ribbon_max_samples() { 256 }
 
 // Marker appearance is a generic route-tool policy. State is a transient view
 // of the authored program's visited set, written through the standard gprim
@@ -786,8 +780,8 @@ fn ribbon_seed_ops(route, points) {
     ]
 }
 
-// Route geometry and terrain are sampled by the presentation owner from an
-// immutable snapshot. The document contains only the standard USD curve
+// Sparse route points are prepared by the presentation owner from immutable
+// terrain frame and coverage facts. The document contains the standard USD curve
 // identity and interaction schema needed for picking and material binding.
 fn update_ribbon_view(doc, route, points) {
     let ribbon = ribbon_path(route);
@@ -801,9 +795,6 @@ fn update_ribbon_view(doc, route, points) {
             curve_entity_id: curve_entity,
             points: points,
             width_m: route_ribbon_width(),
-            clearance_m: route_ribbon_clearance(),
-            sample_spacing_m: route_ribbon_sample_spacing(),
-            max_samples: route_ribbon_max_samples(),
         });
         if result == () || result.ok != true {
             return #{ ok: false, retryable: true,

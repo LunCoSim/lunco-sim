@@ -308,7 +308,7 @@ is the first design decision.
 | Plane | What it is | Belongs here | Mechanism |
 |---|---|---|---|
 | **1 — terrain material** | recolours the surface *per pixel*, lit + occlusion-correct, inside the terrain material's fragment stage | albedo/mosaic texture, mineral map, slope/AO/roughness, elevation ramp, connectivity coverage | a standard USD `UsdShade` material supplies the shader source and authored maps; the render-free `ShaderLook` reconciler adds only engine-derived map inputs |
-| **2 — diagnostic/annotation** | either temporarily replaces the terrain material for analysis, or marks/annotates over it as independent geometry | slope/LOD diagnostics, lat/lon graticule, region/ROI boundaries, traverse paths, landing rings, coordinate labels | a separate authored diagnostic material for analysis; `Gizmos`/overlay meshes/labels for annotations |
+| **2 — diagnostic/annotation** | either temporarily replaces the terrain material for analysis, or marks it with surface strokes or independent geometry | slope/LOD diagnostics, lat/lon graticule, region/ROI boundaries, traverse paths, landing rings, coordinate labels | a separate authored diagnostic material for analysis; sparse fragment strokes for terrain routes; overlay meshes/labels for other annotations |
 
 Rule of thumb: **does the layer change how the ground *looks under light* (Plane 1),
 or is it a temporary diagnostic/marking tool (Plane 2)?** The terrain diagnostic is

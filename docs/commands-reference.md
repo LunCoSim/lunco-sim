@@ -258,9 +258,10 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `UpdateUsdCurveView`
 
  Queue a live render update for an existing USD curve entity. The request is
- coalesced by target, terrain sampling and ribbon meshing run from immutable
- snapshots on the compute pool, and the current result replaces only the
- Bevy mesh. No USD layer or scene projection is changed.
+ coalesced by target and immutable preparations run on the compute pool.
+ Terrain curves publish sparse strokes consumed by the ground shader; a scene
+ without declared terrain renders its authored 3D curve. No USD layer or
+ scene projection is changed.
 
 - *defined in:* `crates/lunco-luncosim-edit-ui/src/script_tools.rs`
 
@@ -271,9 +272,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | `curve_entity_id` | `u64` |  Stable API identity of the projected UsdGeomBasisCurves entity. |
 | `points` | `Vec < [f64 ; 3] >` |  Ordered centerline points in the route parent's local USD coordinates. |
 | `width_m` | `f64` |  Full ribbon width in metres. |
-| `clearance_m` | `f64` |  Separation from the sampled surface in metres. |
-| `sample_spacing_m` | `f64` |  Maximum horizontal distance between terrain samples in metres. |
-| `max_samples` | `u64` |  Maximum sample count before spacing is increased to fit the request. |
 
 ### `lunco-scene-commands` <a id="lunco-scene-commands"></a>
 
@@ -3798,7 +3796,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 245 commands from the runtime schema; scanned 967 .rs files for docs (0 parse failure(s) skipped).
+<!-- 245 commands from the runtime schema; scanned 968 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

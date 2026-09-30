@@ -338,8 +338,9 @@ refresh dense per-edit geometry. Keep high-frequency or terrain-sampled view
 geometry in its transient render owner; snapshot inputs, coalesce per target,
 bound worker admission, and commit only current results to the existing render
 entity. For example, route edits update their normal authored projection once,
-then `UpdateUsdCurveView` rebuilds the ribbon mesh without a second USD
-generation.
+then `UpdateUsdCurveView` prepares sparse surface strokes without a second USD
+generation. Terrain fragments own the drape, so LOD/elevation changes need no
+route tessellation. Inspect current publication through `InspectUsdCurveView`.
 
 `usd.document.projected` includes the reconciled `changed_prim_paths` in its
 typed event data. A policy that caches composed facts should check this path set

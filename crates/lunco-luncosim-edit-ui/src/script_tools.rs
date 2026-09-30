@@ -43,10 +43,11 @@ use lunco_embodiment_core::roles::TheLocalEmbodiment;
 use lunco_input_core::InputBindingsSettings;
 use lunco_scene_selection::SelectedEntities;
 use lunco_spatial::coords::{
-    ACTIVE_FRAME_NAME, ActiveFrameCoordinates, GridPos, RENDER_FRAME_NAME, RenderPos,
+    ACTIVE_FRAME_NAME, ActiveFrameCoordinates, RENDER_FRAME_NAME, RenderPos,
 };
 use lunco_spatial::world::ActivePhysicsFrame;
 use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
+use lunco_terrain_surface::annotations::{SurfaceAnnotationImages, SurfaceCurveAnnotation};
 use lunco_terrain_surface::{GridSurfaceQuery, TerrainSurfaceSnapshot};
 use lunco_usd_bevy_mesh::{TransientUsdCurveView, UsdCurveMesh};
 use lunco_usd_document::document::{LayerId, UsdDocument};
@@ -76,6 +77,8 @@ const MAX_ACTIVE_CURVE_VIEW_BUILDS: usize = 2;
 pub(crate) struct PendingUsdCurveViews {
     next_revision: u64,
     requests: HashMap<Entity, UsdCurveViewRequest>,
+    sources: HashMap<Entity, UsdCurveViewRequest>,
+    terrain_owners: Vec<Entity>,
     tasks: HashMap<Entity, Task<UsdCurveViewBuild>>,
     latest_revision: HashMap<Entity, u64>,
     status: HashMap<Entity, UsdCurveViewStatus>,
@@ -85,11 +88,11 @@ pub(crate) struct PendingUsdCurveViews {
 struct UsdCurveViewStatus {
     requested_revision: u64,
     completed_revision: u64,
-    applied_revision: u64,
-    vertex_count: usize,
+    segment_count: usize,
     error: Option<String>,
 }
 
+#[derive(Clone)]
 struct UsdCurveViewRequest {
     revision: u64,
     root: Entity,
@@ -98,9 +101,7 @@ struct UsdCurveViewRequest {
     stage_id: bevy::asset::AssetId<lunco_usd_bevy_stage::UsdStageAsset>,
     points: Vec<[f64; 3]>,
     width_m: f64,
-    clearance_m: f64,
-    sample_spacing_m: f64,
-    max_samples: usize,
+    color: LinearRgba,
 }
 
 struct UsdCurveViewBuild {
@@ -108,7 +109,13 @@ struct UsdCurveViewBuild {
     root: Entity,
     curve: Entity,
     stage_id: bevy::asset::AssetId<lunco_usd_bevy_stage::UsdStageAsset>,
-    result: Result<Option<(Mesh, DVec3)>, String>,
+    result: Result<Option<CurveViewProduct>, String>,
+}
+
+enum CurveViewProduct {
+    /// A scene without terrain uses its authored three-dimensional curve.
+    Authored(Mesh, DVec3, usize),
+    Surface(SurfaceCurveAnnotation),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -248,9 +255,10 @@ fn on_set_usd_view_preview_transform(
 }
 
 /// Queue a live render update for an existing USD curve entity. The request is
-/// coalesced by target, terrain sampling and ribbon meshing run from immutable
-/// snapshots on the compute pool, and the current result replaces only the
-/// Bevy mesh. No USD layer or scene projection is changed.
+/// coalesced by target and immutable preparations run on the compute pool.
+/// Terrain curves publish sparse strokes consumed by the ground shader; a scene
+/// without declared terrain renders its authored 3D curve. No USD layer or
+/// scene projection is changed.
 #[Command(default)]
 pub struct UpdateUsdCurveView {
     /// USD document which owns both target prims.
@@ -263,15 +271,9 @@ pub struct UpdateUsdCurveView {
     pub points: Vec<[f64; 3]>,
     /// Full ribbon width in metres.
     pub width_m: f64,
-    /// Separation from the sampled surface in metres.
-    pub clearance_m: f64,
-    /// Maximum horizontal distance between terrain samples in metres.
-    pub sample_spacing_m: f64,
-    /// Maximum sample count before spacing is increased to fit the request.
-    pub max_samples: u64,
 }
 
-/// Read the latest requested USD curve-view result.
+/// Read the latest requested USD curve-view result, including terrain-image publication.
 ///
 /// The result is presentation state: it does not read or mutate a USD layer.
 /// Callers use the revision fields to distinguish a committed mesh or hidden
@@ -308,7 +310,7 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
             ]),
             exactly_one_of: Vec::new(),
             response: Some(
-                "{ doc_id, entity_id, path, state, requested_revision, completed_revision, applied_revision, local_visibility, result_vertex_count, error }"
+                "{ doc_id, entity_id, path, state, requested_revision, completed_revision, applied_revision, local_visibility, result_segment_count, projection, surface_binding_count, error }"
                     .to_owned(),
             ),
         }
@@ -388,12 +390,35 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
                     "InspectUsdCurveView has no build result for this curve",
                 )
             })?;
-        let state = if status.completed_revision != status.requested_revision {
+        let publication = world
+            .get::<SurfaceCurveAnnotation>(entity)
+            .and_then(|annotation| {
+                world
+                    .get_resource::<SurfaceAnnotationImages>()
+                    .and_then(|images| images.published.get(&annotation.terrain))
+                    .filter(|published| {
+                        published
+                            .sources
+                            .contains(&(entity, status.requested_revision))
+                    })
+            });
+        let surface_pending =
+            world.get::<SurfaceCurveAnnotation>(entity).is_some() && publication.is_none();
+        let error = status
+            .error
+            .as_ref()
+            .or_else(|| publication.and_then(|p| p.error.as_ref()));
+        let state = if status.completed_revision != status.requested_revision || surface_pending {
             "pending"
-        } else if status.error.is_some() {
+        } else if error.is_some() {
             "failed"
         } else {
             "ready"
+        };
+        let applied_revision = if state == "ready" {
+            status.requested_revision
+        } else {
+            0
         };
         let visibility = match world.get::<Visibility>(entity) {
             Some(Visibility::Hidden) => "hidden",
@@ -406,6 +431,29 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
                 ));
             }
         };
+        let annotation = world.get::<SurfaceCurveAnnotation>(entity);
+        let surface_binding_count = if let (Some(annotation), Some(image)) =
+            (annotation, publication.and_then(|p| p.image.as_ref()))
+        {
+            world
+                .iter_entities()
+                .filter(|candidate| {
+                    let owner = candidate
+                        .get::<lunco_terrain_surface::LodTileOf>()
+                        .map(|tile| tile.0);
+                    (candidate.id() == annotation.terrain || owner == Some(annotation.terrain))
+                        && candidate
+                            .get::<lunco_materials::ShaderLook>()
+                            .is_some_and(|look| {
+                                look.textures
+                                    .get(&lunco_materials::TextureLayer::SurfaceAnnotations)
+                                    == Some(image)
+                            })
+                })
+                .count()
+        } else {
+            0
+        };
         Ok(Some(api_value!({
             "doc_id": raw_doc,
             "entity_id": raw_entity,
@@ -413,10 +461,12 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
             "state": state,
             "requested_revision": status.requested_revision,
             "completed_revision": status.completed_revision,
-            "applied_revision": status.applied_revision,
+            "applied_revision": applied_revision,
             "local_visibility": visibility,
-            "result_vertex_count": status.vertex_count as u64,
-            "error": status.error.clone().unwrap_or_default(),
+            "result_segment_count": status.segment_count as u64,
+            "projection": if annotation.is_some() { "terrain_surface" } else { "authored_curve" },
+            "surface_binding_count": surface_binding_count as u64,
+            "error": error.cloned().unwrap_or_default(),
         })))
     }
 }
@@ -428,6 +478,7 @@ fn on_update_usd_curve_view(
     asset_server: Res<AssetServer>,
     entities: Res<lunco_api::registry::ApiEntityRegistry>,
     q_root: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
+    q_look: Query<&lunco_render::PbrLook>,
     q_parents: Query<&ChildOf>,
     mut q_curve: Query<
         (&lunco_usd_bevy_scene::UsdPrimPath, &Mesh3d, &mut Visibility),
@@ -446,15 +497,6 @@ fn on_update_usd_curve_view(
     }
     if !command.width_m.is_finite() || command.width_m <= 0.0 {
         return Err("curve view width must be finite and positive".to_string());
-    }
-    if !command.clearance_m.is_finite() || command.clearance_m < 0.0 {
-        return Err("curve view clearance must be finite and non-negative".to_string());
-    }
-    if !command.sample_spacing_m.is_finite() || command.sample_spacing_m <= 0.0 {
-        return Err("curve view sample spacing must be finite and positive".to_string());
-    }
-    if !(2..=4096).contains(&command.max_samples) {
-        return Err("curve view max_samples must be between 2 and 4096".to_string());
     }
     if command
         .points
@@ -495,6 +537,15 @@ fn on_update_usd_curve_view(
     if target_doc != doc {
         return Err("curve view targets belong to another USD document".to_string());
     }
+    let look = q_look
+        .get(curve)
+        .map_err(|_| "curve view material is not projected".to_string())?;
+    let color = LinearRgba::new(
+        look.base_color.red + look.emissive.red,
+        look.base_color.green + look.emissive.green,
+        look.base_color.blue + look.emissive.blue,
+        look.base_color.alpha,
+    );
     let parent = q_parents
         .get(root)
         .map_err(|_| "curve view anchor has no USD route parent".to_string())?
@@ -514,6 +565,12 @@ fn on_update_usd_curve_view(
     }
 
     if command.points.len() >= 2
+        && pending.sources.len() >= MAX_PENDING_CURVE_VIEW_REQUESTS
+        && !pending.sources.contains_key(&curve)
+    {
+        return Err("curve view source budget exceeded".into());
+    }
+    if command.points.len() >= 2
         && pending.requests.len() + pending.tasks.len() >= MAX_PENDING_CURVE_VIEW_REQUESTS
         && !pending.requests.contains_key(&curve)
         && !pending.tasks.contains_key(&curve)
@@ -526,42 +583,40 @@ fn on_update_usd_curve_view(
         .ok_or_else(|| "curve view operation revision is exhausted".to_string())?;
     pending.next_revision = revision;
     pending.latest_revision.insert(curve, revision);
-    let applied_revision = pending
-        .status
-        .get(&curve)
-        .map_or(0, |status| status.applied_revision);
     let completed_revision = pending
         .status
         .get(&curve)
         .map_or(0, |status| status.completed_revision);
-    let vertex_count = pending
+    let segment_count = pending
         .status
         .get(&curve)
-        .map_or(0, |status| status.vertex_count);
+        .map_or(0, |status| status.segment_count);
     pending.status.insert(
         curve,
         UsdCurveViewStatus {
             requested_revision: revision,
             completed_revision,
-            applied_revision,
-            vertex_count,
+            segment_count,
             error: None,
         },
     );
     if command.points.len() < 2 {
         *visibility = Visibility::Hidden;
         pending.requests.remove(&curve);
+        pending.sources.remove(&curve);
         pending.latest_revision.remove(&curve);
         pending.status.insert(
             curve,
             UsdCurveViewStatus {
                 requested_revision: revision,
                 completed_revision: revision,
-                applied_revision: revision,
-                vertex_count: 0,
+                segment_count: 0,
                 error: None,
             },
         );
+        commands
+            .entity(curve)
+            .try_remove::<SurfaceCurveAnnotation>();
         commands.entity(curve).try_insert(TransientUsdCurveView);
         return Ok(Ack::new(OpId::new()));
     }
@@ -575,11 +630,12 @@ fn on_update_usd_curve_view(
             stage_id: root_prim.stage_handle.id(),
             points: command.points.clone(),
             width_m: command.width_m,
-            clearance_m: command.clearance_m,
-            sample_spacing_m: command.sample_spacing_m,
-            max_samples: command.max_samples as usize,
+            color,
         },
     );
+    if let Some(request) = pending.requests.get(&curve).cloned() {
+        pending.sources.insert(curve, request);
+    }
     // Once the route tool takes ownership, subsequent authored stage changes
     // must not rebuild this mesh from its intentionally minimal USD seed.
     commands.entity(curve).try_insert(TransientUsdCurveView);
@@ -593,6 +649,10 @@ pub(crate) fn prepare_pending_usd_curve_views(
     mut pending: ResMut<PendingUsdCurveViews>,
     surface: GridSurfaceQuery,
     active_frame: Option<Res<ActivePhysicsFrame>>,
+    mut removed_curves: RemovedComponents<UsdCurveMesh>,
+    declared_terrains: Query<Entity, With<lunco_terrain_surface::DemTerrainSurface>>,
+    added_terrains: Query<(), Added<lunco_terrain_surface::DemTerrainSurface>>,
+    mut removed_terrains: RemovedComponents<lunco_terrain_surface::DemTerrainSurface>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -602,20 +662,54 @@ pub(crate) fn prepare_pending_usd_curve_views(
         With<UsdCurveMesh>,
     >,
 ) {
+    for entity in removed_curves.read() {
+        pending.sources.remove(&entity);
+        pending.requests.remove(&entity);
+        pending.latest_revision.remove(&entity);
+        pending.status.remove(&entity);
+    }
+    let terrain_removed = removed_terrains.read().count() > 0;
+    let terrain_owners_changed = !added_terrains.is_empty() || terrain_removed;
+    if terrain_owners_changed {
+        pending.terrain_owners = declared_terrains.iter().collect();
+        pending.terrain_owners.sort();
+        let sources: Vec<_> = pending
+            .sources
+            .values()
+            .filter(|source| q_root.contains(source.root) && q_curve.contains(source.curve))
+            .cloned()
+            .collect();
+        for mut source in sources {
+            pending.next_revision += 1;
+            source.revision = pending.next_revision;
+            pending
+                .latest_revision
+                .insert(source.curve, source.revision);
+            if let Some(status) = pending.status.get_mut(&source.curve) {
+                status.requested_revision = source.revision;
+                status.error = None;
+            }
+            pending.sources.insert(source.curve, source.clone());
+            pending.requests.insert(source.curve, source);
+        }
+        pending
+            .sources
+            .retain(|_, source| q_root.contains(source.root) && q_curve.contains(source.curve));
+    }
     if pending.tasks.len() >= MAX_ACTIVE_CURVE_VIEW_BUILDS || pending.requests.is_empty() {
         return;
     }
-    let has_sampled_route = pending
+    let has_surface_curve = pending
         .requests
         .values()
         .any(|request| request.points.len() >= 2);
-    let terrain = if surface.has_terrain() && has_sampled_route {
+    let terrain = if !pending.terrain_owners.is_empty() && has_surface_curve {
         surface.snapshot()
     } else {
         None
     };
-    if surface.has_terrain() && has_sampled_route && terrain.is_none() {
-        warn!("[usd-curve-view] terrain exists without a committed active-frame snapshot");
+    if !pending.terrain_owners.is_empty() && has_surface_curve && !surface.has_terrain() {
+        return;
     }
     let frame = active_frame.as_deref().map(|frame| frame.0);
     let mut entities: Vec<_> = pending.requests.keys().copied().collect();
@@ -633,7 +727,7 @@ pub(crate) fn prepare_pending_usd_curve_views(
         let Some(queued) = pending.requests.get(&entity) else {
             continue;
         };
-        let needs_surface = queued.points.len() >= 2 && surface.has_terrain();
+        let needs_surface = queued.points.len() >= 2 && !pending.terrain_owners.is_empty();
         if needs_surface && terrain.is_none() {
             continue;
         }
@@ -693,7 +787,7 @@ pub(crate) fn prepare_pending_usd_curve_views(
         let terrain = terrain.clone();
         let task_request = request;
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            let result = build_usd_curve_view_mesh(
+            let result = prepare_usd_curve_view_product(
                 &task_request,
                 terrain.as_ref(),
                 parent_position,
@@ -717,6 +811,7 @@ pub(crate) fn prepare_pending_usd_curve_views(
 pub(crate) fn poll_pending_usd_curve_views(
     mut pending: ResMut<PendingUsdCurveViews>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut commands: Commands,
     mut q_root: Query<(&lunco_usd_bevy_scene::UsdPrimPath, &mut Transform)>,
     mut q_curve: Query<
         (&lunco_usd_bevy_scene::UsdPrimPath, &Mesh3d, &mut Visibility),
@@ -773,48 +868,59 @@ pub(crate) fn poll_pending_usd_curve_views(
                 pending.latest_revision.remove(&entity);
                 *visibility = Visibility::Hidden;
                 complete_curve_view_status(&mut pending, entity, revision, 0, Some(error.clone()));
-                warn!("[usd-curve-view] mesh preparation failed: {error}");
+                commands
+                    .entity(entity)
+                    .try_remove::<SurfaceCurveAnnotation>();
+                warn!("[usd-curve-view] preparation failed: {error}");
                 continue;
             }
         };
-        if let Some((mesh, anchor)) = build_result {
-            let anchor = anchor.as_vec3();
-            if !anchor.is_finite() {
-                pending.latest_revision.remove(&entity);
+        match build_result {
+            Some(CurveViewProduct::Surface(annotation)) => {
+                let count = annotation.points.len().saturating_sub(1);
                 *visibility = Visibility::Hidden;
-                complete_curve_view_status(
-                    &mut pending,
-                    entity,
-                    revision,
-                    0,
-                    Some("computed anchor exceeds render-space range".to_owned()),
-                );
-                warn!("[usd-curve-view] computed anchor exceeds render-space range");
-                continue;
+                commands.entity(entity).try_insert(annotation);
+                complete_curve_view_status(&mut pending, entity, revision, count, None);
             }
-            let vertex_count = mesh.count_vertices();
-            let Some(mut current_mesh) = meshes.get_mut(&mesh_handle.0) else {
-                pending.latest_revision.remove(&entity);
-                *visibility = Visibility::Hidden;
-                complete_curve_view_status(
-                    &mut pending,
-                    entity,
-                    revision,
-                    0,
-                    Some("projected curve mesh asset is unavailable".to_owned()),
-                );
-                warn!("[usd-curve-view] projected curve mesh asset is unavailable");
-                continue;
-            };
-            *current_mesh = mesh;
-            if root_transform.translation != anchor {
+            Some(CurveViewProduct::Authored(mesh, anchor, count)) => {
+                let anchor = anchor.as_vec3();
+                if !anchor.is_finite() {
+                    *visibility = Visibility::Hidden;
+                    complete_curve_view_status(
+                        &mut pending,
+                        entity,
+                        revision,
+                        0,
+                        Some("computed anchor exceeds render-space range".into()),
+                    );
+                    continue;
+                }
+                let Some(mut current_mesh) = meshes.get_mut(&mesh_handle.0) else {
+                    *visibility = Visibility::Hidden;
+                    complete_curve_view_status(
+                        &mut pending,
+                        entity,
+                        revision,
+                        0,
+                        Some("projected curve mesh asset is unavailable".into()),
+                    );
+                    continue;
+                };
+                *current_mesh = mesh;
                 root_transform.translation = anchor;
+                *visibility = Visibility::Inherited;
+                commands
+                    .entity(entity)
+                    .try_remove::<SurfaceCurveAnnotation>();
+                complete_curve_view_status(&mut pending, entity, revision, count, None);
             }
-            *visibility = Visibility::Inherited;
-            complete_curve_view_status(&mut pending, entity, revision, vertex_count, None);
-        } else {
-            *visibility = Visibility::Hidden;
-            complete_curve_view_status(&mut pending, entity, revision, 0, None);
+            None => {
+                *visibility = Visibility::Hidden;
+                commands
+                    .entity(entity)
+                    .try_remove::<SurfaceCurveAnnotation>();
+                complete_curve_view_status(&mut pending, entity, revision, 0, None);
+            }
         }
         if !pending.requests.contains_key(&entity) {
             pending.latest_revision.remove(&entity);
@@ -826,7 +932,7 @@ fn complete_curve_view_status(
     pending: &mut PendingUsdCurveViews,
     entity: Entity,
     revision: u64,
-    vertex_count: usize,
+    segment_count: usize,
     error: Option<String>,
 ) {
     let Some(status) = pending.status.get_mut(&entity) else {
@@ -836,137 +942,61 @@ fn complete_curve_view_status(
         return;
     }
     status.completed_revision = revision;
-    status.vertex_count = vertex_count;
+    status.segment_count = segment_count;
     status.error = error;
-    if status.error.is_none() {
-        status.applied_revision = revision;
-    }
 }
 
 pub(crate) fn reset_pending_usd_curve_views(mut pending: ResMut<PendingUsdCurveViews>) {
     *pending = PendingUsdCurveViews::default();
 }
 
-fn build_usd_curve_view_mesh(
+fn prepare_usd_curve_view_product(
     request: &UsdCurveViewRequest,
     terrain: Option<&TerrainSurfaceSnapshot>,
     parent_position: DVec3,
     parent_rotation: bevy::math::DQuat,
-) -> Result<Option<(Mesh, DVec3)>, String> {
-    let authored_local_points: Vec<DVec3> = request
+) -> Result<Option<CurveViewProduct>, String> {
+    if request.points.len() < 2 {
+        return Ok(None);
+    }
+    let local: Vec<_> = request
         .points
         .iter()
         .map(|point| DVec3::from_array(*point))
         .collect();
-    if authored_local_points.len() < 2 {
-        return Ok(None);
-    }
-    let authored_points: Vec<DVec3> = authored_local_points
-        .iter()
-        .map(|point| parent_position + parent_rotation * *point)
-        .collect();
-    let mut spacing = request.sample_spacing_m;
-    let limit = request.max_samples.max(authored_points.len());
-    let mut sample_count = route_ribbon_sample_count(&authored_points, spacing);
-    let mut refinements = 0;
-    while sample_count > limit {
-        spacing *= 1.25;
-        refinements += 1;
-        if !spacing.is_finite() || refinements > 256 {
-            return Err(
-                "route ribbon sampling could not meet its bounded sample count".to_string(),
-            );
-        }
-        sample_count = route_ribbon_sample_count(&authored_points, spacing);
-    }
-    let dense_points = route_ribbon_dense_points(&authored_points, spacing);
-    if dense_points.len() < 2 {
-        return Err("route ribbon needs at least two distinct centerline samples".to_string());
-    }
-
-    let first_surface =
-        terrain.and_then(|terrain| terrain.sample_surface(GridPos(dense_points[0]), 1.0));
-    let world_ribbon_points = if let Some(first_surface) = first_surface {
-        let mut samples = Vec::with_capacity(dense_points.len());
-        samples.push(RibbonPoint {
-            position: first_surface.point.0,
-            normal: first_surface.normal,
-        });
-        for point in dense_points.iter().skip(1) {
-            if let Some(sample) =
-                terrain.and_then(|terrain| terrain.sample_surface(GridPos(*point), 1.0))
-            {
-                samples.push(RibbonPoint {
-                    position: sample.point.0,
-                    normal: sample.normal,
-                });
-            } else {
-                samples.push(RibbonPoint {
-                    position: *point,
-                    normal: DVec3::Y,
-                });
-            }
-        }
-        samples
-    } else {
-        authored_points
+    if let Some(terrain) = terrain {
+        let world: Vec<_> = local
             .iter()
-            .copied()
-            .map(|position| RibbonPoint {
-                position,
-                normal: DVec3::Y,
-            })
-            .collect()
-    };
-    let anchor_world = world_ribbon_points[0].position;
-    let inverse_parent_rotation = parent_rotation.inverse();
-    let anchor = inverse_parent_rotation * (anchor_world - parent_position);
-    let ribbon_points: Vec<RibbonPoint> = world_ribbon_points
-        .into_iter()
+            .map(|point| parent_position + parent_rotation * *point)
+            .collect();
+        let (owner, points) = terrain.project_curve(&world, request.width_m)?;
+        return Ok(Some(CurveViewProduct::Surface(SurfaceCurveAnnotation {
+            terrain: owner,
+            revision: request.revision,
+            points,
+            width_m: request.width_m,
+            color: request.color,
+        })));
+    }
+    let anchor = local[0];
+    let points: Vec<_> = local
+        .iter()
         .map(|point| RibbonPoint {
-            position: anchor + inverse_parent_rotation * (point.position - anchor_world),
-            normal: inverse_parent_rotation * point.normal,
+            position: *point,
+            normal: DVec3::Y,
         })
         .collect();
-    // Mesh uploads use f32 vertex buffers; authoring, terrain samples, and the
-    // anchor remain f64 until this explicit renderer boundary.
     let half_width = (request.width_m * 0.5) as f32;
-    let clearance = request.clearance_m as f32;
-    if !half_width.is_finite() || !clearance.is_finite() {
-        return Err("route ribbon dimensions exceed render-space range".to_string());
+    if !half_width.is_finite() || half_width <= 0.0 {
+        return Err("curve width exceeds render-space range".into());
     }
-    let mesh = build_ribbon_mesh(&ribbon_points, anchor, &[half_width], clearance, false)
-        .ok_or_else(|| "route centerline cannot form a finite ribbon mesh".to_string())?;
-    Ok(Some((mesh, anchor)))
-}
-
-fn route_ribbon_sample_count(points: &[DVec3], spacing: f64) -> usize {
-    let mut count = 1usize;
-    for pair in points.windows(2) {
-        let distance = DVec3::new(pair[1].x - pair[0].x, 0.0, pair[1].z - pair[0].z).length();
-        let steps = (distance / spacing).ceil().max(1.0) as usize;
-        count = count.saturating_add(steps);
-    }
-    count
-}
-
-fn route_ribbon_dense_points(points: &[DVec3], spacing: f64) -> Vec<DVec3> {
-    if points.len() == 1 {
-        return points.to_vec();
-    }
-    let mut dense = Vec::with_capacity(route_ribbon_sample_count(points, spacing));
-    for pair in points.windows(2) {
-        let distance = DVec3::new(pair[1].x - pair[0].x, 0.0, pair[1].z - pair[0].z).length();
-        let steps = (distance / spacing).ceil().max(1.0) as usize;
-        for step in 0..steps {
-            let t = step as f64 / steps as f64;
-            dense.push(pair[0].lerp(pair[1], t));
-        }
-    }
-    if let Some(last) = points.last() {
-        dense.push(*last);
-    }
-    dense
+    let mesh = build_ribbon_mesh(&points, anchor, &[half_width], 0.0, false)
+        .ok_or_else(|| "curve cannot form a finite authored mesh".to_string())?;
+    Ok(Some(CurveViewProduct::Authored(
+        mesh,
+        anchor,
+        points.len() - 1,
+    )))
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
@@ -1000,6 +1030,8 @@ pub(crate) struct SceneToolWorld<'w, 's> {
     backed: Res<'w, lunco_usd_bevy_twin::DocBackedTwinScenes>,
     asset_server: Res<'w, AssetServer>,
     coordinates: ActiveFrameCoordinates<'w, 's>,
+    q_annotations: Query<'w, 's, (Entity, &'static SurfaceCurveAnnotation)>,
+    annotation_images: Option<Res<'w, SurfaceAnnotationImages>>,
 }
 
 /// Disarm the armed script tool on Cancel (Esc), like every other cursor mode.
@@ -1076,6 +1108,8 @@ pub(crate) fn on_scene_click_script_tool(
         &world.q_lod_tiles,
         &world.viewport,
         &world.surface,
+        &world.q_annotations,
+        world.annotation_images.as_deref(),
     );
     commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiTool {
         tool,
@@ -1115,6 +1149,8 @@ fn scene_tool_context(
     q_lod_tiles: &Query<&lunco_terrain_surface::stream_viz::LodTileOf>,
     viewport: &lunco_viewport_core::SceneViewport,
     surface: &lunco_terrain_surface::GridSurfaceQuery<'_, '_>,
+    annotations: &Query<(Entity, &SurfaceCurveAnnotation)>,
+    annotation_images: Option<&SurfaceAnnotationImages>,
 ) -> TelemetryValue {
     let root = crate::selection::find_selectable(click.entity, q_selectable, q_mobility, q_parents);
 
@@ -1303,7 +1339,7 @@ fn scene_tool_context(
             ));
         }
     }
-    if let Some(surface_position) = pointer_surface_render_position(
+    let surface_position = pointer_surface_render_position(
         click,
         q_prim,
         q_parents,
@@ -1311,7 +1347,8 @@ fn scene_tool_context(
         q_scene_cameras,
         viewport,
         surface,
-    ) {
+    );
+    if let Some(surface_position) = surface_position {
         let surface_position = RenderPos(surface_position);
         context.push((
             "surface_render_position".to_string(),
@@ -1352,6 +1389,74 @@ fn scene_tool_context(
                 "position_error".to_string(),
                 TelemetryValue::String("active scene coordinate frame is unavailable".to_string()),
             ));
+        }
+    }
+    // Surface drapes have no independently rendered/picked mesh. Resolve their
+    // identity only after the foreground hit was proved to be terrain; a prop
+    // or rover in front of the ground must retain the ordinary hit context.
+    if let Some(render) = surface_position
+        && let Some(point) = coordinates.render_to_active(RenderPos(render))
+        && let Some(images) = annotation_images
+    {
+        let mut hits = Vec::new();
+        for (entity, annotation) in annotations {
+            if !images.published.get(&annotation.terrain).is_some_and(|p| {
+                p.error.is_none()
+                    && p.image.is_some()
+                    && p.sources.contains(&(entity, annotation.revision))
+            }) {
+                continue;
+            }
+            let Some(local) = surface.terrain_local_point(annotation.terrain, point) else {
+                continue;
+            };
+            let distance = annotation.distance(local);
+            if distance <= annotation.width_m * 0.5
+                && let (Ok(id), Ok(prim)) = (q_ids.get(entity), q_prim.get(entity))
+            {
+                hits.push((distance, id.get(), entity, prim));
+            }
+        }
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        if let Some((_, id, entity, prim)) = hits.first() {
+            let replacements = [
+                ("hit_entity_id", TelemetryValue::I64(*id as i64)),
+                ("target_entity_id", TelemetryValue::I64(*id as i64)),
+                ("hit_path", TelemetryValue::String(prim.path.clone())),
+                ("target_path", TelemetryValue::String(prim.path.clone())),
+                (
+                    "prim_paths",
+                    TelemetryValue::Array(vec![TelemetryValue::String(prim.path.clone())]),
+                ),
+            ];
+            for (name, value) in replacements {
+                context.retain(|(key, _)| key != name);
+                context.push((name.into(), value));
+            }
+            if let Some(doc) = lunco_usd_bevy_twin::scene_document_for(
+                backed,
+                asset_server,
+                prim.stage_handle.id(),
+            ) {
+                context.retain(|(key, _)| key != "doc_id");
+                context.push(("doc_id".into(), TelemetryValue::U64(doc.raw())));
+            }
+            if let Ok(policy) = q_pointer_policy.get(*entity) {
+                context.retain(|(key, _)| key != "pointer_policy");
+                context.push((
+                    "pointer_policy".into(),
+                    tool_map(vec![
+                        (
+                            "left".into(),
+                            TelemetryValue::String(pointer_interaction_name(policy.left).into()),
+                        ),
+                        (
+                            "right".into(),
+                            TelemetryValue::String(pointer_interaction_name(policy.right).into()),
+                        ),
+                    ]),
+                ));
+            }
         }
     }
     tool_map(context)
@@ -1593,6 +1698,8 @@ pub(crate) fn on_scene_pointer_event(
         &world.q_lod_tiles,
         &world.viewport,
         &world.surface,
+        &world.q_annotations,
+        world.annotation_images.as_deref(),
     );
     let source = world
         .q_ids
@@ -1962,7 +2069,7 @@ mod usd_curve_view_tests {
     use super::*;
     use bevy::math::DQuat;
 
-    fn request(points: Vec<[f64; 3]>, max_samples: usize) -> UsdCurveViewRequest {
+    fn request(points: Vec<[f64; 3]>) -> UsdCurveViewRequest {
         UsdCurveViewRequest {
             revision: 1,
             root: Entity::PLACEHOLDER,
@@ -1971,26 +2078,26 @@ mod usd_curve_view_tests {
             stage_id: bevy::asset::AssetId::default(),
             points,
             width_m: 0.12,
-            clearance_m: 0.03,
-            sample_spacing_m: 3.0,
-            max_samples,
+            color: LinearRgba::WHITE,
         }
     }
 
     #[test]
     fn curve_view_mesh_uses_parent_local_route_frame_and_preserves_endpoints() {
         let points = vec![[1.0, 2.0, 3.0], [1.0, 2.0, -7.0]];
-        let request = request(points.clone(), 256);
+        let request = request(points.clone());
         let parent_position = DVec3::new(100.0, -20.0, 300.0);
         let parent_rotation = DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
-        let result = build_usd_curve_view_mesh(&request, None, parent_position, parent_rotation)
-            .unwrap()
-            .unwrap();
+        let Some(CurveViewProduct::Authored(mesh, anchor, _)) =
+            prepare_usd_curve_view_product(&request, None, parent_position, parent_rotation)
+                .unwrap()
+        else {
+            panic!("authored mesh");
+        };
 
-        assert!(result.1.abs_diff_eq(DVec3::from_array(points[0]), 1.0e-9));
-        assert!(result.0.count_vertices() >= 4);
-        let bevy::mesh::VertexAttributeValues::Float32x3(vertices) = result
-            .0
+        assert!(anchor.abs_diff_eq(DVec3::from_array(points[0]), 1.0e-9));
+        assert!(mesh.count_vertices() >= 4);
+        let bevy::mesh::VertexAttributeValues::Float32x3(vertices) = mesh
             .attribute(Mesh::ATTRIBUTE_POSITION)
             .expect("ribbon mesh must contain vertex positions")
         else {
@@ -2000,27 +2107,30 @@ mod usd_curve_view_tests {
     }
 
     #[test]
-    fn curve_view_mesh_adapts_spacing_before_allocating_long_routes() {
-        let request = request(vec![[0.0, 0.0, 0.0], [0.0, 0.0, -10_000.0]], 256);
-        let (mesh, _) = build_usd_curve_view_mesh(&request, None, DVec3::ZERO, DQuat::IDENTITY)
-            .unwrap()
-            .unwrap();
+    fn authored_curve_has_only_endpoint_vertices_regardless_of_length() {
+        let request = request(vec![[0.0, 0.0, 0.0], [0.0, 0.0, -10_000.0]]);
+        let Some(CurveViewProduct::Authored(mesh, _, count)) =
+            prepare_usd_curve_view_product(&request, None, DVec3::ZERO, DQuat::IDENTITY).unwrap()
+        else {
+            panic!("authored mesh");
+        };
+        assert_eq!(count, 1);
 
-        assert!(mesh.count_vertices() <= 512);
+        assert_eq!(mesh.count_vertices(), 4);
     }
 
     #[test]
     fn short_curve_views_have_no_mesh_to_render() {
-        let request = request(vec![[1.0, 2.0, 3.0]], 256);
+        let request = request(vec![[1.0, 2.0, 3.0]]);
         assert!(
-            build_usd_curve_view_mesh(&request, None, DVec3::ZERO, DQuat::IDENTITY,)
+            prepare_usd_curve_view_product(&request, None, DVec3::ZERO, DQuat::IDENTITY,)
                 .unwrap()
                 .is_none()
         );
     }
 
     #[test]
-    fn failed_current_curve_view_completes_without_advancing_applied_revision() {
+    fn failed_current_curve_view_completes_with_its_terminal_error() {
         let entity = Entity::PLACEHOLDER;
         let mut pending = PendingUsdCurveViews::default();
         pending.status.insert(
@@ -2028,8 +2138,7 @@ mod usd_curve_view_tests {
             UsdCurveViewStatus {
                 requested_revision: 8,
                 completed_revision: 7,
-                applied_revision: 6,
-                vertex_count: 12,
+                segment_count: 2,
                 error: None,
             },
         );
@@ -2044,8 +2153,7 @@ mod usd_curve_view_tests {
 
         let status = pending.status.get(&entity).unwrap();
         assert_eq!(status.completed_revision, 8);
-        assert_eq!(status.applied_revision, 6);
-        assert_eq!(status.vertex_count, 0);
+        assert_eq!(status.segment_count, 0);
         assert_eq!(status.error.as_deref(), Some("test mesh failure"));
     }
 
@@ -2058,8 +2166,7 @@ mod usd_curve_view_tests {
             UsdCurveViewStatus {
                 requested_revision: 9,
                 completed_revision: 7,
-                applied_revision: 7,
-                vertex_count: 12,
+                segment_count: 2,
                 error: None,
             },
         );
@@ -2069,8 +2176,7 @@ mod usd_curve_view_tests {
         let status = pending.status.get(&entity).unwrap();
         assert_eq!(status.requested_revision, 9);
         assert_eq!(status.completed_revision, 7);
-        assert_eq!(status.applied_revision, 7);
-        assert_eq!(status.vertex_count, 12);
+        assert_eq!(status.segment_count, 2);
         assert_eq!(status.error, None);
     }
 

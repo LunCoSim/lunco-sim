@@ -21,7 +21,7 @@ vehicles or autopilot programs.
 | Optional named geofence events (`enter:<zone>` / `exit:<zone>`) | Generic physics/sensor runtime from `TriggerZone` metadata |
 | Steering math and named-port writes | Generic navigation/port mechanisms |
 | Equations, actuator dynamics, and contact response | Modelica / Avian |
-| Route ribbon presentation | Rhai route policy plus the generic `UpdateUsdCurveView` command and bounded Bevy mesh preparation |
+| Route ribbon presentation | Rhai route policy plus the generic `UpdateUsdCurveView` command and bounded surface-annotation preparation |
 
 USD stays the authoring source; the live scene still needs ECS entities for
 rendering, sensors, and physics. Its projection is incremental: a move updates
@@ -115,22 +115,24 @@ and the ribbon's USD identity are disposable `@view@` presentation. A standard
 `BasisCurves` seed references
 [`assets/markers/route_ribbon.usda`](../../assets/markers/route_ribbon.usda)
 once so the existing USD renderer supplies a stable path, material, and
-pointer-interaction contract. The generated terrain-following mesh is then
-owned by the live presentation system. `UpdateUsdCurveView` consumes the
-ordered parent-local route points, captures the route parent's active-frame
-pose and an immutable terrain-surface snapshot, and builds the mesh on at most
-two background workers. It updates the existing mesh and anchor directly in
-Bevy; it does not write ribbon points or normals to `@view@` and does not
-advance document generation. Each durable route edit therefore causes only its
-normal incremental USD projection, not a second projection for presentation.
-The mesh remains under the route's real USD parent, so transformed route scopes
-keep their correct frame. Removing the view layer leaves only the authored
-route, and another Twin can use the same tool without importing a persisted
-route-specific mesh.
+pointer-interaction contract. `UpdateUsdCurveView` captures ordered f64
+parent-local route points and resolves them into the owning terrain's local
+plane. The terrain annotation owner builds a bounded spatial index off-thread;
+its production and diagnostic fragments paint the route on their own surface,
+including CDLOD morphs and stitched seams. Camera movement and elevation edits
+require no route resampling. The separate curve mesh is hidden, while a
+foreground terrain hit resolves its annotation identity for authored click
+policy. Scenes without declared terrain render the authored 3D curve directly.
+The public inspection reports sparse segment count and current terrain-image
+publication. Missing coverage, unsupported shaders and exceeded work/precision
+bounds are terminal presentation errors, independent of navigation. Removing
+the curve entity removes its annotation; source revisions fence background
+results. This presentation changes neither USD generation nor waypoint topology.
+See [USD-driven visuals](50-usd-driven-visuals.md) for the rendering ABI and gate.
 
 The route-following program owns live ribbon refreshes. The waypoint editor
 commits only the authored route operation; it does not also submit a preview
-mesh from a second point snapshot. `usd.document.projected` is emitted once the
+view from a second point snapshot. `usd.document.projected` is emitted once the
 document generation has reached the live stage and every active referenced
 subtree from that edit has a live instance projection. The event carries the
 union of the reconciled stage paths, so the route policy refreshes from the
@@ -144,14 +146,13 @@ authoring commands, including local overrides for referenced children. The
 standard Delete command removes a runtime-only point and deactivates a
 base-authored or referenced point in the runtime layer; it never tries to
 remove a spec from a layer that does not own it. Durable changes are journaled
-and feed the live ribbon mesh owner. Route moves, adds, deletes, and external
+and feed the live ribbon presentation owner. Route moves, adds, deletes, and external
 document edits refresh through the route-follow program after the complete
 projected change event. Visited-marker colors synchronize only when the visited
 set changes. Runtime-layer snapshots
 are serialized and written asynchronously, with newer revisions coalesced
 while a write is in flight; no whole-scene serialization or file I/O runs in
-the pointer handler. Terrain samples and generated ribbon vertices are not
-serialized as document point3f opinions.
+the pointer handler. Derived surface annotations are not serialized as document point3f opinions.
 For a point below a reference, payload, or selected variant, the canonical
 composed path is the edit identity: the stronger local layer authors an `over`
 and the transform opinion there, and undo/redo removes or restores only that
@@ -311,10 +312,10 @@ arm movement.
 Placement resolves the preview's `Target_<point>` from the explicit `@view@`
 layer with `ResolveUsdTarget(authored_children: true)`. It does not wait for the
 composed stage to enumerate a preview that was just authored.
-The route ribbon mesh is prepared asynchronously from a coalesced point
+The route ribbon view is prepared asynchronously from a coalesced point
 snapshot. Hover changes to the move ghost update only its live transform; they
 do not sample terrain, author a USD operation, or wait for a projection. The
-ribbon follows a committed route change after its mesh worker returns.
+ribbon follows a committed route change after its current surface image is published.
 
 The point context menu labels insertion by its placement: interior actions name
 the neighboring points and midpoint, while endpoint actions name the point and
@@ -426,20 +427,15 @@ trigger is invisible and has its own authored radius. Billboard text and placeme
 read by the generic billboard renderer. The ribbon is a separate, lightweight
 world-space annotation. Its stable `BasisCurves` identity uses standard
 `wrap = "nonperiodic"` topology, so only adjacent ordered points connect; the
-last point never connects back to the first. The presentation owner densifies
-long legs at a 3 m base spacing, caps each prepared mesh at 256 samples (or the
-route's point count when larger), samples support normals from a committed
-`TerrainSurfaceSnapshot`, and offsets vertices 0.03 m along their support
-normals. Only the generated render mesh uses f32 vertex buffers; route
-positions and terrain samples remain f64 until that renderer boundary. No
-Rhai point-string payload or USD curve-attribute rewrite runs on a route edit.
-This work is presentation-only and does not participate in physics or route
-control. The marker and route tool own this shared presentation contract;
-individual Twins do not duplicate it.
+last point never connects back to the first. The surface-annotation contract
+above paints those original segments on terrain fragments without extra route
+points. Width is measured in the terrain-local horizontal plane.
 
 The visual contract is covered by
 [`assets/scenes/tests/waypoint_visual.usda`](../../assets/scenes/tests/waypoint_visual.usda)
-and its Rhai observer. Real Avian trigger arrival and route resume are covered
+and its Rhai observer; DEM surface publication and missing-coverage rejection
+are covered by `route_surface_annotation.rhai` attached to an existing route.
+Real Avian trigger arrival and route resume are covered
 by [`route_progress.usda`](../../assets/scenes/tests/route_progress.usda); the
 windowed pointer/menu path is covered by
 [`route_interaction.usda`](../../assets/scenes/tests/editor/route_interaction/route_interaction.usda).

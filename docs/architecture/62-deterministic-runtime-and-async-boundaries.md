@@ -56,19 +56,17 @@ may precede `on_start`; scenario inboxes do not replay pre-start edges, so
 Derived route geometry is presentation work. Rhai selects route points and
 submits them through `UpdateUsdCurveView`; the route-follow program is the
 single live ribbon-refresh owner, and the waypoint editor submits no duplicate
-mesh request after committing an edit. The UI-owned presentation system
-captures the route parent's active-frame pose and an immutable
-`TerrainSurfaceSnapshot`, then admits at most two curve builds at a time.
-Requests for one curve coalesce behind its active build. A result updates the
-existing mesh only if its operation revision and stage identity still match;
-it cannot edit USD, choose route state, or delay a simulation tick. A route with
-fewer than two points has no drawable geometry, so its owner hides the curve
-and completes that presentation revision immediately without terrain sampling
-or a worker task.
-`InspectUsdCurveView` exposes requested, completed, and applied view revisions plus
-the terminal presentation result and local visibility. Authored tests can wait
-for a terminal revision, require a successful mesh application, and observe
-hidden or failed results without reading stale USD seed attributes. The
+view request after committing an edit. The UI presentation owner captures the
+route-parent pose and immutable terrain facts, coalesces requests and admits
+at most two preparations. The terrain owner then prepares spatially indexed
+sparse stroke records on bounded workers and publishes only current source
+revisions. Its fragment shader consumes that image on the ground's own LOD
+surface; camera changes and elevation edits do not schedule curve preparation.
+A scene without declared terrain uses its authored 3D curve. Fewer than two
+points removes the view immediately. These products cannot edit USD, choose
+route state or delay a simulation tick. `InspectUsdCurveView` includes current
+surface-image publication in readiness and reports segment count, projection,
+binding count and terminal failures. The
 `usd.document.projected` telemetry event carries `changed_prim_paths` for the
 reconciled stage batches and fires after the affected referenced roots have
 reached their live instance projection. The pending roots come from the edit's

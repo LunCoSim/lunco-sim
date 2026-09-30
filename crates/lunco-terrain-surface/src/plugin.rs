@@ -200,6 +200,17 @@ impl Plugin for TerrainSurfaceVisualizationPlugin {
         #[cfg(not(target_arch = "wasm32"))]
         app.init_resource::<crate::stream_viz::TerrainTileBakeResults>();
         app.add_systems(PreUpdate, crate::stream_viz::advance_terrain_stream_cadence);
+        app.init_resource::<crate::annotations::SurfaceAnnotationSettings>();
+        app.init_resource::<crate::annotations::SurfaceAnnotationImages>();
+        app.add_systems(
+            Update,
+            (
+                crate::annotations::prepare_surface_annotations,
+                crate::annotations::publish_surface_annotations,
+            )
+                .chain()
+                .in_set(lunco_core::RuntimeCycleSet::Visualization),
+        );
         crate::overlay::register(app);
         crate::derived_layers::register(app);
 
