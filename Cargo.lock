@@ -10817,6 +10817,7 @@ dependencies = [
  "lunco-workbench-widgets",
  "serde",
  "serde_json",
+ "smallvec",
 ]
 
 [[package]]

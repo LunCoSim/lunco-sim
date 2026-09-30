@@ -68,6 +68,9 @@ snapshotted at most 20 times per second, and pairing, log conversion, and
 decimation run on the async-compute pool; the plot keeps drawing its latest
 completed buffer while that work runs. This bounds presentation lag to roughly
 50 ms without making the UI wait for history conversion.
+The active line plot keeps its binding and frame-series lists inline for the
+usual small curve count and moves each formatted label into its plot item once
+per paint, without cloning retained point buffers.
 
 Persisted bindings are reconciled from stable `GlobalEntityId` identity only
 when the visualization registry or an identity publication changes. Unchanged

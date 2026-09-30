@@ -26,6 +26,7 @@ ui = [
     "dep:lunco-settings",
     "dep:serde",
     "dep:serde_json",
+    "dep:smallvec",
 ]
 
 [dependencies]
@@ -55,6 +56,7 @@ lunco-settings = { path = "../lunco-settings", optional = true }
 lunco-canvas = { path = "../lunco-canvas", features = ["ui"], optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+smallvec = { workspace = true, optional = true }
 
 [lints]
 workspace = true

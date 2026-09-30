@@ -23,6 +23,7 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use egui;
 use egui_plot::{Corner, Legend, Line, Plot, PlotPoints};
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use std::collections::HashMap;
 
 use crate::registry::{VisualizationRegistry, VizFitRequests};
@@ -582,7 +583,7 @@ impl LinePlot {
 
         // Collect `y`-role bindings. Filter hidden + missing-signal
         // bindings here so the legend shows the same set as the plot.
-        let y_bindings: Vec<&SignalBinding> = config
+        let y_bindings: SmallVec<[&SignalBinding; 8]> = config
             .inputs
             .iter()
             .filter(|b| b.role == ROLE_Y.role && b.visible)
@@ -613,7 +614,7 @@ impl LinePlot {
         // before the replacement source has emitted. Do not render that as a
         // blank chart: tell the participant exactly what is happening and keep
         // the binding alive for the lifecycle reconciler to restore.
-        let unavailable: Vec<String> = y_bindings
+        let unavailable: SmallVec<[String; 8]> = y_bindings
             .iter()
             .filter(|b| {
                 registry
@@ -652,43 +653,44 @@ impl LinePlot {
         //
         // History changes rebuild the point buffer; plot width, X source, and
         // style changes also invalidate the per-binding cache.
-        let series_to_plot: Vec<(PlotSeriesPoints, String, egui::Color32)> = y_bindings
-            .iter()
-            .filter_map(|b| {
-                let hist = registry.scalar_history(&b.source)?;
-                if hist.is_empty() {
-                    return None;
-                }
-                let key = SeriesKey {
-                    y: hist_fingerprint(hist),
-                    x: x_fp,
-                    x_signal: style.x_signal.clone(),
-                    log_y: style.log_y,
-                    px_w: remaining.x.max(1.0) as u32,
-                };
-                let cache_id =
-                    egui::Id::new(("line_plot_async_series", config.id.raw())).with(&b.source);
-                let series = cached_plot_series_points(
-                    ctx.ui.ctx(),
-                    cache_id,
-                    key,
-                    hist,
-                    x_history,
-                    remaining.x,
-                )?;
-                if series.1.is_empty() {
-                    return None;
-                }
-                // Entity identity is part of the visible label: four physical
-                // wheels may all expose `axle_torque` at once.
-                let meta = registry.meta(&b.source);
-                let label = binding_label(ctx.wb, b, meta);
-                let color = b
-                    .color
-                    .unwrap_or_else(|| crate::signal::color_for_signal(&theme, &b.source.path));
-                Some((series, label, color))
-            })
-            .collect();
+        let mut series_to_plot: SmallVec<[(PlotSeriesPoints, String, egui::Color32); 8]> =
+            y_bindings
+                .iter()
+                .filter_map(|b| {
+                    let hist = registry.scalar_history(&b.source)?;
+                    if hist.is_empty() {
+                        return None;
+                    }
+                    let key = SeriesKey {
+                        y: hist_fingerprint(hist),
+                        x: x_fp,
+                        x_signal: style.x_signal.clone(),
+                        log_y: style.log_y,
+                        px_w: remaining.x.max(1.0) as u32,
+                    };
+                    let cache_id =
+                        egui::Id::new(("line_plot_async_series", config.id.raw())).with(&b.source);
+                    let series = cached_plot_series_points(
+                        ctx.ui.ctx(),
+                        cache_id,
+                        key,
+                        hist,
+                        x_history,
+                        remaining.x,
+                    )?;
+                    if series.1.is_empty() {
+                        return None;
+                    }
+                    // Entity identity is part of the visible label: four physical
+                    // wheels may all expose `axle_torque` at once.
+                    let meta = registry.meta(&b.source);
+                    let label = binding_label(ctx.wb, b, meta);
+                    let color = b
+                        .color
+                        .unwrap_or_else(|| crate::signal::color_for_signal(&theme, &b.source.path));
+                    Some((series, label, color))
+                })
+                .collect();
 
         if series_to_plot.is_empty() {
             let muted = ctx
@@ -801,10 +803,11 @@ impl LinePlot {
         }
 
         plot.show(ctx.ui, |plot_ui| {
-            for (series, label, color) in &series_to_plot {
+            for (series, label, color) in &mut series_to_plot {
                 crate::multi_series_plot::add_cached_line(
                     plot_ui,
-                    Line::new(label.clone(), PlotPoints::from(series.1.as_slice())).color(*color),
+                    Line::new(std::mem::take(label), PlotPoints::from(series.1.as_slice()))
+                        .color(*color),
                     series.2,
                     style.x_signal.is_none(),
                 );
