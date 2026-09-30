@@ -26,7 +26,7 @@ fn _close(actual, expected, tolerance) {
 
 fn _numeric(value) {
     let kind = type_of(value);
-    kind == "float" || kind == "int" || kind == "f32" || kind == "f64"
+    kind == "float" || kind == "int" || kind == "i64" || kind == "f32" || kind == "f64"
         || kind == "decimal"
 }
 
