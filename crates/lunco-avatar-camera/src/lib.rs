@@ -43,6 +43,7 @@ mod locomotion;
 mod scroll_transit;
 mod spring_arm;
 mod subject;
+mod terrain_handoff;
 mod transactions;
 
 /// Realizes avatar camera modes that need source-specific spatial adaptation.
@@ -597,14 +598,15 @@ fn on_leave_surface_command(
 /// - Below `engage_altitude` → insert `SurfaceRelativeMode`
 /// - Above `disengage_altitude` → remove `SurfaceRelativeMode`
 ///
-/// Altitude is computed as `|body_local_position| - body_radius` from the
-/// avatar's `GravityBody` binding. Runs in `Update` so camera systems
-/// see the mode change immediately.
+/// Clearance uses the analytic DEM under the camera when terrain covers the
+/// active-frame position, and the body's reference radius otherwise. Runs in
+/// `Update` so camera systems see the mode change immediately.
 fn surface_mode_transition_system(
     q_avatar: Query<
         (
             Entity,
             &Transform,
+            &CellCoord,
             &ChildOf,
             Option<&GravityBody>,
             Option<&SurfaceRelativeMode>,
@@ -622,6 +624,8 @@ fn surface_mode_transition_system(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
+    terrain: lunco_terrain_surface::GridSurfaceQuery,
     camera_input_settings: Res<CameraInputSettings>,
     field: Res<LocalGravityField>,
     q_site: Query<(), With<lunco_celestial::SiteAnchor>>,
@@ -629,7 +633,7 @@ fn surface_mode_transition_system(
 ) {
     // An orbital view owns the complete camera pose. Surface policy must not
     // mutate a rig while its orbit mode is active.
-    let Some((avatar_ent, transform, child_of, maybe_gb, maybe_mode, maybe_sc, maybe_spring)) =
+    let Some((avatar_ent, transform, cell, child_of, maybe_gb, maybe_mode, maybe_sc, maybe_spring)) =
         q_avatar.single().ok()
     else {
         return;
@@ -646,8 +650,24 @@ fn surface_mode_transition_system(
             .zip(q_bodies.get(b).ok())
             .map(|(distance, body)| distance - body.radius_m)
     };
-    let engage_altitude_m = engage_body.and_then(altitude_to).unwrap_or(f64::MAX);
-    let altitude = disengage_body.and_then(altitude_to).unwrap_or(f64::MAX);
+    let body_datum_engage_altitude_m = engage_body.and_then(altitude_to).unwrap_or(f64::MAX);
+    let body_datum_altitude = disengage_body.and_then(altitude_to).unwrap_or(f64::MAX);
+    let terrain_clearance_m = terrain_handoff::clearance_m(
+        avatar_ent,
+        Some(cell),
+        transform,
+        active_frame.as_deref(),
+        &terrain,
+        &q_parents,
+        &q_grids,
+        &q_spatial,
+    );
+    let engage_altitude_m = if engage_body.is_some() {
+        terrain_clearance_m.unwrap_or(body_datum_engage_altitude_m)
+    } else {
+        body_datum_engage_altitude_m
+    };
+    let altitude = terrain_clearance_m.unwrap_or(body_datum_altitude);
 
     // SurfaceRelativeMode is a coordinate-policy marker, not a camera mode.
     // `SurfaceCamera` owns a free camera's complete surface-relative pose;
@@ -758,10 +778,8 @@ fn orbit_system(
     >,
     q_world_grid: Query<Entity, With<lunco_spatial::WorldGrid>>,
     frame_index: Res<lunco_celestial_spatial_core::ReferenceFrameIndex>,
-    q_grids: Query<&Grid>,
-    q_parents: Query<&ChildOf>,
+    terrain_frame: terrain_handoff::TerrainHandoffFrame,
     q_bodies: Query<(Entity, &CelestialBody)>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
     q_dragging: Query<(), With<lunco_interaction_core::GizmoDragging>>,
     defaults: Res<CameraDefaults>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -777,6 +795,9 @@ fn orbit_system(
     let Ok(root_grid) = q_world_grid.single() else {
         return;
     };
+    let q_grids = &terrain_frame.grids;
+    let q_parents = &terrain_frame.parents;
+    let q_spatial = &terrain_frame.spatial;
     let dt = time.delta_secs();
     let dt_f64 = time.delta_secs_f64();
 
@@ -887,7 +908,24 @@ fn orbit_system(
         }
 
         let min_dist = if let Some(body) = body {
-            body.radius_m + camera_input_settings.surface_mode_engage_altitude_m
+            let terrain_radius = (zoom.delta > 0.0
+                && orbital_pin.as_ref().is_some_and(|pin| pin.active))
+            .then(|| {
+                terrain_handoff::terrain_radius_m(
+                    physical_target,
+                    avatar_ent,
+                    Some(&*cell),
+                    &tf,
+                    terrain_frame.active_frame.as_deref(),
+                    &terrain_frame.terrain,
+                    q_parents,
+                    q_grids,
+                    q_spatial,
+                )
+            })
+            .flatten();
+            terrain_radius.unwrap_or(body.radius_m)
+                + camera_input_settings.surface_mode_engage_altitude_m
         } else {
             10.0
         };

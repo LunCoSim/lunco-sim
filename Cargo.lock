@@ -7306,6 +7306,7 @@ dependencies = [
  "lunco-port-core",
  "lunco-render",
  "lunco-spatial",
+ "lunco-terrain-surface",
  "lunco-time",
  "lunco-workspace",
 ]

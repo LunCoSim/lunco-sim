@@ -398,7 +398,9 @@ Rhai can call `set_camera_input(...)` to tune pointer response, and the
 `set_camera_surface_mode_altitudes(...)` and
 `set_orbit_direction_animation_duration(...)` helpers update the persisted
 `CameraInputSettings` properties. The default surface/orbit handoff is 1,000 m
-above the body's reference radius; surface mode releases at 2,000 m by default.
+above sampled local DEM terrain where the active terrain covers the camera, and
+uses the body's reference radius outside terrain coverage. Surface mode releases
+at 2,000 m by default under the same clearance rule.
 Mission-site direction animation defaults to 0.6 s. Rust validates these
 generic settings and consumes the engage altitude for both surface-mode entry
 and the orbital zoom floor; Rhai reads the animation duration when dispatching

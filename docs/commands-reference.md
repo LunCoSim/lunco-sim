@@ -1704,8 +1704,8 @@ actually call, with the fields the deserializer actually accepts. See the
 | `look_radians_per_pointer_unit` | `Option < f32 >` |  Camera radians per pointer-motion unit. |
 | `orbit_surface_min_scale` | `Option < f64 >` |  Lower bound for orbital rotation at the body's surface, in `[0, 1]`. |
 | `orbit_distance_curve_exponent` | `Option < f64 >` |  Positive exponent shaping the apparent-horizon distance response. |
-| `surface_mode_engage_altitude_m` | `Option < f64 >` |  Non-negative altitude in metres above the body's reference radius where surface mode engages;  must be less than `surface_mode_disengage_altitude_m`. |
-| `surface_mode_disengage_altitude_m` | `Option < f64 >` |  Altitude in metres above the body's reference radius where surface mode disengages; must be  greater than `surface_mode_engage_altitude_m`. |
+| `surface_mode_engage_altitude_m` | `Option < f64 >` |  Non-negative clearance in metres above covered DEM terrain (or the body's reference radius) where surface mode engages;  must be less than `surface_mode_disengage_altitude_m`. |
+| `surface_mode_disengage_altitude_m` | `Option < f64 >` |  Clearance in metres above covered DEM terrain (or the body's reference radius) where surface mode disengages; must be  greater than `surface_mode_engage_altitude_m`. |
 | `orbit_direction_animation_duration_s` | `Option < f64 >` |  Positive finite default duration for authored orbit-direction animations, in seconds. |
 
 #### `SetCameraLookAt`
@@ -3798,7 +3798,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 245 commands from the runtime schema; scanned 966 .rs files for docs (0 parse failure(s) skipped).
+<!-- 245 commands from the runtime schema; scanned 967 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

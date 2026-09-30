@@ -20,6 +20,7 @@ use lunco_environment::GravityBody;
 use lunco_interaction_core::DragModeActive;
 use lunco_spatial::ActivePhysicsFrame;
 use lunco_spatial::coords::grid_absolute_seeded;
+use lunco_terrain_surface::GridSurfaceQuery;
 use lunco_workspace::WorkspaceResource;
 
 use crate::locomotion::{
@@ -100,6 +101,7 @@ pub(crate) fn freeflight_scroll_transit_system(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
+    terrain: GridSurfaceQuery,
     q_site: Query<&GeodeticAnchor, With<SiteAnchor>>,
     q_bodies: Query<(Entity, &CelestialBody)>,
     drag_mode: Option<Res<DragModeActive>>,
@@ -174,7 +176,18 @@ pub(crate) fn freeflight_scroll_transit_system(
             zoom.delta = 0.0;
             continue;
         };
-        let alt = (pos - center).length() - radius_m;
+        let datum_altitude_m = (pos - center).length() - radius_m;
+        let alt = crate::terrain_handoff::clearance_m(
+            avatar_ent,
+            Some(&cell),
+            &tf,
+            active_frame.as_deref(),
+            &terrain,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        )
+        .unwrap_or(datum_altitude_m);
         let factor = zoom_factor(zoom.delta, CAMERA_ZOOM_SENSITIVITY);
         let transition_direction = zoom.delta;
         let scroll_out = zoom.delta < 0.0;
@@ -217,10 +230,19 @@ pub(crate) fn freeflight_scroll_transit_system(
         // Past the orbital floor going OUT -> hand over to the celestial
         // OrbitCamera. A first entry derives the arm from the exact transit pose;
         // a later entry restores the avatar's saved body presentation pose.
-        if scroll_out
-            && (next - center).length() - radius_m
-                > camera_input_settings.surface_mode_engage_altitude_m
-        {
+        let next_datum_altitude_m = (next - center).length() - radius_m;
+        let next_altitude_m = crate::terrain_handoff::clearance_m(
+            avatar_ent,
+            Some(&cell),
+            &tf,
+            active_frame.as_deref(),
+            &terrain,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        )
+        .unwrap_or(next_datum_altitude_m);
+        if scroll_out && next_altitude_m > camera_input_settings.surface_mode_engage_altitude_m {
             let Ok((_, body)) = q_bodies.get(body_ent) else {
                 warn!(
                     target = ?body_ent,

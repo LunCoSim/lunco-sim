@@ -138,7 +138,8 @@ fn set_camera_input(look_radians_per_pointer_unit, orbit_surface_min_scale, orbi
         orbit_distance_curve_exponent: orbit_distance_curve_exponent
     })
 }
-/// Set the user-global surface-mode engage and release altitudes above the body's reference radius.
+/// Set the user-global surface-mode engage and release clearances above covered DEM terrain.
+/// Outside terrain coverage, the camera uses the body's reference radius.
 fn set_camera_surface_mode_altitudes(engage_altitude_m, disengage_altitude_m) {
     cmd("SetCameraInput", #{
         surface_mode_engage_altitude_m: engage_altitude_m,

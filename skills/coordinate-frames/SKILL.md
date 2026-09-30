@@ -134,9 +134,11 @@ along the current orbit without changing its radius or vertical offset; the
 orbit writer commits each BigSpace pose and refreshes the orbital pin. Direct
 user look input cancels the transition. Surface/orbit transitions use the
 persisted `CameraInputSettings.surface_mode_engage_altitude_m` property as the
-shared engage altitude and orbital zoom floor (1,000 m by default). Its
-companion `surface_mode_disengage_altitude_m` property provides hysteresis and
-defaults to 2,000 m.
+shared engage altitude and orbital zoom floor (1,000 m by default). Clearance
+uses sampled local DEM terrain where the active terrain covers the camera and
+the body's reference radius outside that coverage. Its companion
+`surface_mode_disengage_altitude_m` property provides hysteresis and defaults
+to 2,000 m under the same rule.
 
 For transform gizmos, use `transform-gizmo-bevy` only as a render-space
 frontend on an unparented proxy. Capture through `SimulationPoseQuery`, keep

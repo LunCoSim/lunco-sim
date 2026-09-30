@@ -29,6 +29,7 @@ lunco-physics = { path = "../lunco-physics" }
 lunco-render = { path = "../lunco-render" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-time = { path = "../lunco-time" }
+lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-workspace = { path = "../lunco-workspace" }
 
 [lints]

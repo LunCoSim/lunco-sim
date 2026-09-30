@@ -35,9 +35,9 @@ pub struct CameraInputSettings {
     pub orbit_surface_min_scale: f64,
     /// Shapes the geometric visible-horizon response.
     pub orbit_distance_curve_exponent: f64,
-    /// Altitude below which surface mode engages, in metres above the body's reference radius.
+    /// Clearance below which surface mode engages, in metres above covered DEM terrain or the body's reference radius.
     pub surface_mode_engage_altitude_m: f64,
-    /// Altitude above which surface mode disengages, in metres above the body's reference radius.
+    /// Clearance above which surface mode disengages, in metres above covered DEM terrain or the body's reference radius.
     pub surface_mode_disengage_altitude_m: f64,
     /// Default duration for authored orbit-direction animations, in seconds.
     pub orbit_direction_animation_duration_s: f64,
