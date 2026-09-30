@@ -128,6 +128,29 @@ failure remains unclassified until rerun with the typed failure-detail build.
 | D27 | Partial | The bounded session input queue captures external semantic controls, live Modelica inputs, identified SetPorts/ReleasePort/ReleaseControl commands, local port-inspector actions, raw-file spawns, physical frames, and fixed-tick lifecycle input-hold releases. `ControlAuthorityChanged` admits a lifecycle release for each live released endpoint. `ReleaseControlInputs` clears controller-owned holds and simulated intents after earlier admitted inputs while preserving authored program setpoints, endpoint values, and physics state. Twin policy owns stop setpoints through explicit `SetPorts` writes. The API acceptance scenarios check that authority release retains nonzero endpoint values while recording the lifecycle release and that ordered ReleaseControl preserves the latest explicit throttle value. Whole-session playback and baseline assembly remain open. | Partial; typed admission/capture, authority-release lifecycle ordering, explicit-write preservation, and pose continuity are covered by current production API/window gates; whole-session playback and baseline assembly remain open |
 | D28 | Partial | `process_usd_sim_prims` applies its 32-row prefix before identifying preview descendants, so preview rows cannot consume simulation admission or request unused topology. Candidate and topology-preparation order use stable logical USD stage source, optional instance-root path, and authored prim path, never Bevy entity bits or asset allocation ids. Missing stage/instance identity or duplicate live stage/instance/path identity faults and remains queued; preview descendants that share a live path are excluded from collision checks. `PhysicsOrderKey` uses the same stage/instance/path identity. Dynamic-body promotion follows the same order and checks both pending and already-admitted body identities before promotion. `cargo test -p lunco-usd-sim pending_sim_work_tests -j 4` passes all 10 projection/instance-order tests, and `cargo test -p lunco-usd-sim dynamic_activation_tests -j 4` passes all 5 activation tests, including duplicate identities across admitted and pending bodies. | Partial; focused ordering and activation checks pass; a production editor stress fixture with more than 32 preview prims remains open |
 
+### Four-rover cross-machine failure review (2026-09-30)
+
+The other-machine `scene-4-serial` run at 2026-09-29 17:51 reached 780 ticks
+and produced a terminal scene failure without authored assertion details, source
+revision, or reference hash. It predates the typed failure reporter
+(`bb00f9bb4`) and the change that removed render `Transform` values from exact
+physics comparisons (`f095634e8`). The old output cannot identify whether a
+physics assertion or reference comparison failed. The old comparison did
+include cell-local `Transform.translation` in its exact physics row and startup
+pose check; that render projection is f32 and may be interpolated between fixed
+ticks, so it was not valid authoritative physics evidence.
+
+On 2026-09-30, the available production binary (built from `e901abe7`; the
+current `9f9a301c` source adds only telemetry-browser changes after it) passed
+the four-rover production gate at 780 ticks against reference SHA-256
+`4f1785e86deb5e05083561007ec8e08891ca5a0d19c82e9edcdb8f70c92e3496`. The
+current Rhai gate compares `world_pos`/`world_rotation` and `QueryPhysicsState`;
+for rigid bodies, `world_pos` reads Avian's seeded f64 `Position`. It also
+requires every rover to travel more than 0.25 m. This confirms local behavior
+on the current comparison contract, not cross-machine agreement. The remote
+failure's exact cause remains unknown until that machine reruns the same source
+revision and reference with the typed failure details.
+
 ### Live Modelica and port input capture (2026-09-28)
 
 SetModelInput selects live co-simulation participants by stable target_gid; editor models continue to use doc_id. Live API and direct typed callers supply stable nonzero producer ids. Actorless Rhai does the same, while Twin Rhai records its route and actor identity. Local Modelica canvas changes use the current LocalSession. External live values are admitted for the next fixed tick and captured as typed Modelica inputs with the declared name, exact f64 value, and command correlation id. The Modelica owner applies each record through the existing port-first helper at the ordered session commit boundary.
