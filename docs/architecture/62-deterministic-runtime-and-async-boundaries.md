@@ -1194,9 +1194,9 @@ The whole-simulation guarantee remains open because:
    A failed root-stage load invalidates mount ownership before clearing the
    projected scene. Production scene tests declare an expected failure through
    Rhai `expect_scene_load_failure(path, detail_contains)`; the runner observes
-   the typed terminal event and checks that the load, transition, mount,
-   progress hold, and projected prims are gone before accepting the scenario's
-   verdict.
+   the typed terminal event and checks that `SceneLoadInFlight`, the failed-load
+   marker, active transition, mount root, progress hold, and projected prims
+   are gone before accepting the scenario's verdict.
    Scene tests pump materialization, participant compilation, and physical
    admission with a zero-duration manual clock. Compilation publishes each
    Modelica solver's initialized time-zero state; preparation does not run a

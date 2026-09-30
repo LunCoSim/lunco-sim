@@ -937,6 +937,9 @@ enough to promise same-state continuation from an arbitrary capture tick.
   transition cleared `SceneLoadInFlight`, `FailedSceneLoad`, the active
   coordinator id, the matching simulation-progress hold, the primary mount
   root, and every projected `UsdPrimPath`.
+- The first live root-stage rejection exposed a stale `SceneMountState` root.
+  Both AssetServer failure and policy rejection now invalidate mount ownership
+  before clearing the rejected scene entities.
 - The same production runner coverage passed on the source tree based on
   `7028573d4` with the scene-failure changes in this review. The
   `dynamic_reference_composition/allow.usda` case reached transition 2 and
