@@ -80,8 +80,9 @@ API identities from `me` as well as signed ids returned by `find_path`. `name(id
 remains a human-readable presentation label and must not be used to construct
 scene paths.
 
-The scalar-port prelude provides `read_ports(entity)`,
-`read_ports_batch(entities)`, `write_ports(entity, writes)`,
+The scalar-port prelude provides `read_ports(entity, port_names)`,
+`read_ports_batch(targets)`, `read_modelica_step_samples(targets)`,
+`write_ports(entity, writes)`,
 `write_ports_batch(batches)`, and `actuator_status(entity, command_port,
 measured_port, rate_port, tolerance, rate_tolerance)`. Port reads include the
 owner's unit, frame, limits, authority, and writability contract. Batch reads
@@ -91,6 +92,9 @@ rate are within their supplied tolerances. Scripts select targets and decide
 how long to wait; the port owner supplies the measured state. All script port
 writes use `write_ports(...)`, so fixed-tick admission, ownership, metadata
 validation, and the command result contract are shared with other producers.
+`read_modelica_step_samples` reports exact inputs and outputs, session, step,
+and simulation-time interval from each participant's most recently accepted
+Modelica transaction.
 `set(entity, component_field, value)` writes reflected component fields only; it
 does not resolve port names.
 

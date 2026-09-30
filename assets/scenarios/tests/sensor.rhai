@@ -224,7 +224,7 @@ fn undeclared_modelica_access_source() {
     source += "  let error = \"\";\n";
     source += "  try { error = result.error; } catch (failure) { }\n";
     source += "  emit(\"sensor_undeclared_command_rejected\", result != () && result.ok == false && error.contains(\"without this scenario's declared dependency\"));\n";
-    source += "  let ports = query(\"ReadPorts\", #{ api_id: ctx.modelica_target });\n";
+    source += "  let ports = query(\"ReadPorts\", #{ api_id: ctx.modelica_target, port_names: [\"specific_force_x\"] });\n";
     source += "  emit(\"sensor_undeclared_readports_rejected\", ports != () && ports.ok == false && ports.error.contains(\"without this scenario's declared dependency\"));\n";
     source += "  port(ctx.modelica_target, \"specific_force_x\");\n";
     source += "}\n";

@@ -57,7 +57,8 @@ fn on_tick(me, params) {
         let release_stamp = this.port_admission;
         let control_stamp = this.control_admission;
         if sim_tick() >= control_stamp["effective_tick"] {
-            let ports = query("ReadPorts", #{ api_id: this.target_gid });
+            let ports = query("ReadPorts", #{ api_id: this.target_gid,
+                port_names: ["throttle"] });
             let live_throttle = ();
             if ports != () && ports["ports"] != () {
                 for port in ports["ports"] {

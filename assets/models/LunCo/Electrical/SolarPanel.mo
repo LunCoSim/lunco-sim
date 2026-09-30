@@ -31,6 +31,7 @@ model SolarPanel
 
   Real panel_normal_norm "Magnitude of the authored panel normal";
   Real alignment "Signed alignment of the unit target direction and panel normal";
+  Real unconstrained_available_power_w "Incident electrical power before a nameplate limit";
 equation
   panel_normal_norm = sqrt(max(1.0e-12,
     panel_normal_x^2 + panel_normal_y^2 + panel_normal_z^2));
@@ -46,9 +47,10 @@ equation
   // whole operating range — that is the defining characteristic of a
   // photovoltaic device, and it is why panels are rated by short-circuit current.
   // `p.i` is negative because current LEAVES the panel into the node.
+  unconstrained_available_power_w = max(
+    area * efficiency * irradiance * cos_incidence, 0.0);
   available_power_w = min(
-    max(area * efficiency * irradiance * cos_incidence, 0.0),
-    max(peak_power_rating_w, 0.0));
+    unconstrained_available_power_w, max(peak_power_rating_w, 0.0));
   p.i = -available_power_w / v_mp;
 
   // Delivered power FOLLOWS from the current and the bus voltage it actually

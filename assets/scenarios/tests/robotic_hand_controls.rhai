@@ -99,7 +99,8 @@ fn on_tick(me, ctx) {
             this.phase_start = this.t;
             print("[hand] OPEN: open_command=1 grasp_command=0");
         } else if this.t >= this.readiness_timeout {
-            let ports = query("ReadPorts", #{ api_id: this.controller });
+            let ports = query("ReadPorts", #{ api_id: this.controller,
+                port_names: ["open_command", "grasp_command", "closure"] });
             print("[hand] readiness ids controller=" + this.controller +
                   " left_joint=" + this.left_joint + " center_joint=" + this.center_joint +
                   " right_joint=" + this.right_joint + " palm=" + this.palm +

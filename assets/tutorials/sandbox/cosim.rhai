@@ -35,7 +35,7 @@ fn steps() {
 
         #{ anchor: "",
            title: "Verify it from code",
-           body: "Use `CosimStatus` to inspect the co-simulation graph. Use `ReadPorts` for live named values and `GetBrokenConnections` for dropped wires.\n\nRead typed state to verify the link; do not infer it from the picture." },
+           body: "Use `CosimStatus` to inspect the co-simulation graph. Discover exact names with `ListPorts`, then pass selected names to `ReadPorts` in `port_names`. Use `GetBrokenConnections` for dropped wires.\n\nRead typed state to verify the link; do not infer it from the picture." },
 
         #{ anchor: "",
            title: "Your turn: a battery on a rover",

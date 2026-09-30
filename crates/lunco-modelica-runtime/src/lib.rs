@@ -63,12 +63,29 @@ pub fn resolve_communication_period_secs(
         .and_then(validate_communication_period_secs)
 }
 
+/// Values exchanged in one accepted Modelica communication transaction.
+///
+/// Inputs and outputs are retained together so observations can distinguish a
+/// consumed input from a newer connected value and identify the exact outputs
+/// produced by that input vector.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelicaStepSample {
+    pub session_id: u64,
+    pub step_id: u64,
+    pub input_time_s: f64,
+    pub output_time_s: f64,
+    pub inputs: Vec<(String, f64)>,
+    pub outputs: Vec<(String, f64)>,
+}
+
 /// One exact communication transaction awaiting a worker result.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InFlightModelicaStep {
     pub step_id: u64,
     pub start_time: f64,
     pub stop_time: f64,
+    /// The values sent to the solver, in stable name order.
+    pub sampled_inputs: Vec<(String, f64)>,
     /// Monotonic owner timestamp used for diagnostic response-latency samples.
     pub submitted_at: web_time::Instant,
 }
@@ -417,6 +434,9 @@ pub struct ModelicaModel {
     pub is_stepping: bool,
     #[reflect(ignore)]
     pub in_flight_step: Option<InFlightModelicaStep>,
+    /// Exact input sample that produced the currently published outputs.
+    #[reflect(ignore)]
+    pub last_accepted_step: Option<ModelicaStepSample>,
     #[reflect(ignore)]
     pub next_step_id: u64,
     #[reflect(ignore)]
@@ -454,6 +474,7 @@ impl Default for ModelicaModel {
             document: lunco_doc::DocumentId::default(),
             is_stepping: false,
             in_flight_step: None,
+            last_accepted_step: None,
             next_step_id: 1,
             is_compiling: false,
             is_compiled: false,

@@ -5,11 +5,42 @@ use lunco_api_core::{
     IntoApiValue, api_value_from_serializable, api_value_from_u64,
 };
 use lunco_engineering_values::{Unit, UnitReference, UnitScaleExactness};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub mod ports;
 pub use ports::{ReadActuatorStatusProvider, ReadPortsBatchProvider};
+pub mod modelica;
+pub use modelica::ReadModelicaStepSamplesProvider;
+
+pub(crate) fn query_schema(
+    name: &'static str,
+    description: &'static str,
+    parameters: Vec<ApiQueryParameterSchema>,
+    response: impl Into<String>,
+) -> ApiQuerySchema {
+    ApiQuerySchema {
+        name: name.to_owned(),
+        description: Some(description.to_owned()),
+        parameters: Some(parameters),
+        exactly_one_of: Vec::new(),
+        response: Some(response.into()),
+    }
+}
+
+pub(crate) fn required_parameter(
+    name: &str,
+    type_name: &str,
+    description: &str,
+) -> ApiQueryParameterSchema {
+    ApiQueryParameterSchema {
+        name: name.to_owned(),
+        type_name: type_name.to_owned(),
+        required: true,
+        description: description.to_owned(),
+        allowed_values: None,
+    }
+}
 
 /// Typed result from a read-only API query provider.
 pub type ApiQueryResult = Result<Option<ApiValue>, ApiQueryError>;
@@ -158,7 +189,11 @@ pub fn execute_query_response(
 
 /// Read a required unsigned integer parameter.
 pub fn api_param_u64(params: &ApiValue, name: &str) -> Option<u64> {
-    match params.get(name)? {
+    api_value_u64(params.get(name)?)
+}
+
+pub(crate) fn api_value_u64(value: &ApiValue) -> Option<u64> {
+    match value {
         ApiValue::Int(value) => u64::try_from(*value).ok(),
         ApiValue::UInt(value) => Some(*value),
         _ => None,
@@ -207,12 +242,19 @@ impl Plugin for ApiQueryRegistryPlugin {
     }
 }
 
-/// `ReadPorts` — every exposed port on an entity (model I/O, physics velocity,
-/// sensors, joints), by `api_id`. A one-shot read of the same `PortRegistry`
-/// backends the telemetry stream samples — the direct alternative to subscribing.
-/// params: `{ api_id: u64 }` · returns:
+/// `ReadPorts` — selected exposed ports on an entity, by `api_id`. A one-shot
+/// read of the same `PortRegistry` backends the telemetry stream samples — the
+/// direct alternative to subscribing. Select names discovered through
+/// `ListPorts`; this keeps high-cardinality entities bounded in script values.
+/// params: `{ api_id: u64, port_names: string[] }` · returns:
 /// `{ api_id, ports: [{ name, value, direction, metadata }] }`
 pub struct ReadPortsProvider;
+
+/// Maximum number of distinct port names accepted by one port-read target.
+pub(crate) const MAX_PORT_READ_NAMES: usize = 128;
+
+/// Maximum number of returned port rows in one single or batch read.
+pub(crate) const MAX_PORT_READ_ROWS: usize = 128;
 
 pub(super) fn port_unit_api_schema() -> &'static str {
     "{ id, definition: { symbol, dimension_si: [i8; 7], scale_to_si, offset_to_si, scale_exactness } | () } | ()"
@@ -335,16 +377,78 @@ pub fn port_info_to_api_value(port: &lunco_port_core::ports::PortInfo) -> ApiVal
     ])
 }
 
+pub(crate) fn parse_port_names(
+    params: &ApiValue,
+    query_name: &str,
+) -> Result<Vec<String>, ApiQueryError> {
+    parse_selected_names(params, "port_names", query_name)
+}
+
+pub(crate) fn parse_selected_names(
+    params: &ApiValue,
+    field_name: &str,
+    query_name: &str,
+) -> Result<Vec<String>, ApiQueryError> {
+    let raw_names = api_param_array(params, field_name).ok_or_else(|| {
+        ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            format!("{query_name}: `{field_name}` (string[]) required"),
+        )
+    })?;
+    if raw_names.is_empty() || raw_names.len() > MAX_PORT_READ_NAMES {
+        return Err(ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            format!("{query_name}: `{field_name}` must contain 1..={MAX_PORT_READ_NAMES} names"),
+        ));
+    }
+
+    let mut names = Vec::with_capacity(raw_names.len());
+    let mut seen = HashSet::with_capacity(raw_names.len());
+    for raw_name in raw_names {
+        let Some(name) = raw_name.as_str() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                format!("{query_name}: every `{field_name}` entry must be a string"),
+            ));
+        };
+        if name.trim().is_empty() {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                format!("{query_name}: `{field_name}` entries must not be empty"),
+            ));
+        }
+        if !seen.insert(name) {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                format!("{query_name}: duplicate `{field_name}` value `{name}`"),
+            ));
+        }
+        names.push(name.to_owned());
+    }
+    Ok(names)
+}
+
 pub(crate) fn read_entity_ports(
     world: &World,
     registry: &lunco_port_core::ports::PortRegistry,
     entity: Entity,
-) -> Vec<ApiValue> {
-    registry
-        .entity_port_infos(world, entity)
-        .iter()
-        .map(port_info_to_api_value)
-        .collect()
+    requested_names: &[String],
+) -> Result<Vec<ApiValue>, String> {
+    let infos = registry.entity_port_infos_for_names(world, entity, requested_names);
+    let found_names: HashSet<&str> = infos.iter().map(|port| port.name.as_str()).collect();
+    for requested_name in requested_names {
+        if !found_names.contains(requested_name.as_str()) {
+            return Err(format!(
+                "requested port `{requested_name}` is not declared on the entity"
+            ));
+        }
+    }
+    if infos.len() > MAX_PORT_READ_ROWS {
+        return Err(format!(
+            "requested port rows exceed the {MAX_PORT_READ_ROWS}-row read limit"
+        ));
+    }
+    Ok(infos.iter().map(port_info_to_api_value).collect())
 }
 
 impl ApiQueryProvider for ReadPortsProvider {
@@ -355,14 +459,23 @@ impl ApiQueryProvider for ReadPortsProvider {
     fn schema(&self) -> ApiQuerySchema {
         ApiQuerySchema {
             name: self.name().to_owned(),
-            description: Some("Read every declared port and owner-provided value contract for one stable entity identity.".to_owned()),
-            parameters: Some(vec![ApiQueryParameterSchema {
-                name: "api_id".to_owned(),
-                type_name: "u64".to_owned(),
-                required: true,
-                description: "Stable entity identity whose ports are read.".to_owned(),
-                allowed_values: None,
-            }]),
+            description: Some("Read selected declared ports and owner-provided value contracts for one stable entity identity.".to_owned()),
+            parameters: Some(vec![
+                ApiQueryParameterSchema {
+                    name: "api_id".to_owned(),
+                    type_name: "u64".to_owned(),
+                    required: true,
+                    description: "Stable entity identity whose ports are read.".to_owned(),
+                    allowed_values: None,
+                },
+                ApiQueryParameterSchema {
+                    name: "port_names".to_owned(),
+                    type_name: "string[]".to_owned(),
+                    required: true,
+                    description: format!("Distinct names discovered with ListPorts; 1..={MAX_PORT_READ_NAMES} entries."),
+                    allowed_values: None,
+                },
+            ]),
             exactly_one_of: Vec::new(),
             response: Some(format!("{{ api_id, ports: [{}] }}", port_info_api_schema())),
         }
@@ -380,6 +493,7 @@ impl ApiQueryProvider for ReadPortsProvider {
     }
 
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let port_names = parse_port_names(params, self.name())?;
         let Some(api_id) = api_param_u64(params, "api_id") else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
@@ -410,7 +524,13 @@ impl ApiQueryProvider for ReadPortsProvider {
                 "ReadPorts: PortRegistry resource is not present",
             ));
         };
-        let ports = read_entity_ports(world, &registry, entity);
+        let ports =
+            read_entity_ports(world, &registry, entity, &port_names).map_err(|message| {
+                ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    format!("ReadPorts: entity {api_id}: {message}"),
+                )
+            })?;
         Ok(Some(ApiValue::map([
             ("api_id", api_value_from_u64(api_id)),
             ("ports", ApiValue::Array(ports)),
@@ -698,6 +818,7 @@ pub fn register_builtin_queries(registry: &mut ApiQueryRegistry) {
     // `PortRegistry`), so it registers here with the other always-available queries.
     registry.register(ReadPortsProvider);
     registry.register(ReadPortsBatchProvider);
+    registry.register(ReadModelicaStepSamplesProvider);
     registry.register(ReadActuatorStatusProvider);
     // Readiness status — backs `GET /api/ready`. Always available; degrades to
     // `readiness_tracked: false` when the readiness substrate isn't installed.

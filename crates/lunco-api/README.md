@@ -130,12 +130,15 @@ Returns all available commands with their field types:
       ]
     }
   ],
-  "queries": ["GetBrokenConnections", "GetReadiness", "ListPorts", "Nearest", "ReadActuatorStatus", "ReadExposures", "ReadPorts", "ReadPortsBatch"]
+  "queries": ["GetBrokenConnections", "GetReadiness", "ListPorts", "Nearest", "ReadActuatorStatus", "ReadExposures", "ReadModelicaStepSamples", "ReadPorts", "ReadPortsBatch"]
 }
 ```
 
-`ReadPortsBatch` returns every requested entity's port rows with one shared
-`sim_tick`. `ReadActuatorStatus` compares explicitly named writable input,
+`ReadPorts` and `ReadPortsBatch` require explicit `port_names`. Use `ListPorts`
+to discover names, then request only the values needed. Batch targets each carry
+an `api_id` and `port_names`; the response preserves target order and returns
+all selected rows with one shared `sim_tick`. A batch is limited to 16 entities
+and 128 returned port rows. `ReadActuatorStatus` compares explicitly named writable input,
 measured output, and measured rate ports. It requires compatible value/frame
 metadata and a resolved rate unit equal to the measured value's unit per second.
 Its `settled` predicate requires both position error and measured rate to be
@@ -143,6 +146,13 @@ within their caller-supplied tolerances. `motion_state` reports `moving` or
 `stationary` from measured rate. The authored Rhai prelude exposes these as
 `read_ports_batch()` and `actuator_status()` while keeping target selection and
 waiting policy in Rhai.
+
+`ReadModelicaStepSamples` returns selected inputs and outputs from one accepted
+solver step, with its input and output simulation times and session/step
+identity. A `sample: ()` response means that the participant has not accepted a
+step in its current session. This provenance distinguishes newly connected
+values from the exact outputs produced by an accepted input vector. Rhai exposes
+the batch through `read_modelica_step_samples(targets)`.
 
 Port rows report `value: f64` only when the owner has a live sample; `()` means
 the port is declared but currently unavailable. Unit definitions, unit identity,

@@ -2,15 +2,23 @@
 // same-tick snapshots, and actuator convergence; authored scripts choose which
 // entities and mechanisms to inspect.
 
-/// Read one entity's ports and owner metadata. `entity` is a stable entity id
-/// returned by `find()` or the entity hierarchy.
-fn read_ports(entity) {
-    query("ReadPorts", #{ api_id: entity })
+/// Read selected ports and owner metadata. `port_names` are exact names
+/// discovered through ListPorts; callers must state which values they need.
+fn read_ports(entity, port_names) {
+    query("ReadPorts", #{ api_id: entity, port_names: port_names })
 }
 
-/// Read several entities' ports from one immutable simulation-tick snapshot.
-fn read_ports_batch(entities) {
-    query("ReadPortsBatch", #{ api_ids: entities })
+/// Read selected ports across entities from one immutable simulation-tick snapshot.
+/// Each target is #{api_id: stable_entity_id, port_names: [exact_port_names]}.
+fn read_ports_batch(targets) {
+    query("ReadPortsBatch", #{ targets: targets })
+}
+
+/// Read selected inputs and outputs from each Modelica participant's last
+/// accepted step. A target is #{api_id: stable_entity_id,
+/// input_names: [names], output_names: [names]}.
+fn read_modelica_step_samples(targets) {
+    query("ReadModelicaStepSamples", #{ targets: targets })
 }
 
 /// Compare an actuator target, measured value, and measured rate. `tolerance`

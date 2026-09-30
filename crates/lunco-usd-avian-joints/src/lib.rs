@@ -253,7 +253,7 @@ fn admit_pending_joints<J: Component + Clone>(
         }
         if let Some(seat) = p.seat {
             seat_joint_bodies(
-                "pending joint",
+                &p.order_key,
                 p.body0,
                 p.body1,
                 seat,
@@ -737,7 +737,7 @@ fn seated_body1_velocity(
 }
 
 fn seat_joint_bodies(
-    label: &str,
+    joint_path: &str,
     body0: Entity,
     body1: Entity,
     seat: JointSeat,
@@ -776,10 +776,13 @@ fn seat_joint_bodies(
     if seat_pos || seat_rot {
         let worst = delta.length().max(angle);
         let detail = format!(
-            "[usd-avian] joint {label} starts violated by {:.3} m / {:.3} rad — seating body1 {:?} onto the authored joint frame",
+            "[usd-avian] joint {joint_path} ({body0:?} <-> {body1:?}) starts violated by {:.3} m / {:.3} rad — authored frames body0=({:?}, {:?}) body1=({:?}, {:?}); runtime poses body0=({p0:?}, {r0:?}) body1=({p1:?}, {r1:?}); seating body1 onto ({p1_seated:?}, {r1_seated:?})",
             delta.length(),
             angle,
-            body1,
+            seat.local_pos0,
+            seat.local_rot0,
+            seat.local_pos1,
+            seat.local_rot1,
         );
         if worst > JOINT_SEAT_ERROR_THRESHOLD {
             error!("{detail}");

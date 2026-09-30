@@ -100,7 +100,8 @@ Don't trust the picture — read the ports. Over the HTTP API
   available native worker backlog diagnostics. Set `include_values: false` for
   a bounded fleet view without input/output maps or verbose model/error details;
   use `include_entities: false` for aggregate Modelica worker metrics only.
-- `ReadPorts` — reads one entity's typed named ports.
+- `ReadPorts` — reads selected typed named ports from one entity. Discover exact
+  names with `ListPorts`, then pass them in the required `port_names` array.
 - `GetBrokenConnections` — reports terminal and pending wiring diagnostics.
 
 If `CosimStatus` lists the entity and its variables are changing, the
@@ -147,7 +148,7 @@ To cosim it onto a rover:
    `connect()`-ed pin to pin inside one Modelica model. A rover motor pulling
    current is a load on that bus; adding a second load changes the first one's
    share without editing either.
-3. **Observe** — poll `ReadPorts` for `soc_out` while you drive; it falls as the bus
+3. **Observe** — poll `ReadPorts` with `port_names: ["soc_out"]` while you drive; it falls as the bus
    draws.
 
 > **Status note:** the model ships and `assets/scenes/tests/lint_selftest.usda`

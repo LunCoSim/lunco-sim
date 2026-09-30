@@ -39,7 +39,7 @@
 
 use bevy::prelude::*;
 use std::any::TypeId;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, Index, IndexMut};
@@ -1396,6 +1396,24 @@ impl PortRegistry {
             .collect()
     }
 
+    /// Sample only the exposed ports whose exact names are requested.
+    ///
+    /// Every declared direction and backend owner row for a selected name is
+    /// retained. Unselected ports are listed for discovery but their metadata
+    /// and live values are not resolved or sampled.
+    pub fn entity_port_infos_for_names(
+        &self,
+        world: &World,
+        entity: Entity,
+        requested_names: &[String],
+    ) -> Vec<PortInfo> {
+        let requested_names: HashSet<&str> = requested_names.iter().map(String::as_str).collect();
+        self.entity_port_infos_with_handles_matching(world, entity, Some(&requested_names))
+            .into_iter()
+            .map(|(_, info)| info)
+            .collect()
+    }
+
     /// Enumerate every exposed port with its owning backend handle.
     ///
     /// This is the cache-friendly inspection surface. The handle lets a
@@ -1406,11 +1424,25 @@ impl PortRegistry {
         world: &World,
         entity: Entity,
     ) -> Vec<(PortHandle, PortInfo)> {
+        self.entity_port_infos_with_handles_matching(world, entity, None)
+    }
+
+    fn entity_port_infos_with_handles_matching(
+        &self,
+        world: &World,
+        entity: Entity,
+        requested_names: Option<&HashSet<&str>>,
+    ) -> Vec<(PortHandle, PortInfo)> {
         let mut out = Vec::new();
         for (backend_index, backend) in self.backends.iter().enumerate() {
             let mut ports = Vec::new();
             (backend.list)(world, entity, &mut ports);
-            out.extend(ports.into_iter().map(|port| {
+            for port in ports {
+                if let Some(names) = requested_names
+                    && !names.contains(port.name.as_str())
+                {
+                    continue;
+                }
                 let (slot, reader) = match port.direction {
                     PortDirection::In => backend
                         .resolve_input
@@ -1439,7 +1471,7 @@ impl PortRegistry {
                 };
                 let value =
                     self.read_port_for_handle(world, handle, entity, &port.name, port.direction);
-                (
+                out.push((
                     handle,
                     PortInfo {
                         metadata: (backend.metadata)(world, entity, &port.name, port.direction),
@@ -1447,8 +1479,8 @@ impl PortRegistry {
                         direction: port.direction,
                         value,
                     },
-                )
-            }));
+                ));
+            }
         }
         out
     }

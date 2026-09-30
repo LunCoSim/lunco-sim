@@ -2,37 +2,8 @@
 
 use super::*;
 
-fn query_schema(
-    name: &'static str,
-    description: &'static str,
-    parameters: Vec<lunco_api_core::ApiQueryParameterSchema>,
-    response: impl Into<String>,
-) -> ApiQuerySchema {
-    ApiQuerySchema {
-        name: name.to_owned(),
-        description: Some(description.to_owned()),
-        parameters: Some(parameters),
-        exactly_one_of: Vec::new(),
-        response: Some(response.into()),
-    }
-}
-
-fn required_parameter(
-    name: &str,
-    type_name: &str,
-    description: &str,
-) -> lunco_api_core::ApiQueryParameterSchema {
-    lunco_api_core::ApiQueryParameterSchema {
-        name: name.to_owned(),
-        type_name: type_name.to_owned(),
-        required: true,
-        description: description.to_owned(),
-        allowed_values: None,
-    }
-}
-
-/// `ReadPortsBatch` returns a coherent port snapshot for at most
-/// `MAX_PORT_BATCH_TARGETS` stable entity identities, all at one simulation tick.
+/// `ReadPortsBatch` returns selected port rows for stable entity identities,
+/// all sampled at one simulation tick.
 pub struct ReadPortsBatchProvider;
 
 impl ApiQueryProvider for ReadPortsBatchProvider {
@@ -44,11 +15,13 @@ impl ApiQueryProvider for ReadPortsBatchProvider {
         let target_limit = lunco_port_core::ports::MAX_PORT_BATCH_TARGETS;
         query_schema(
             self.name(),
-            "Read ports for multiple stable entity identities at one simulation tick.",
+            "Read explicitly selected ports across stable entity identities at one simulation tick.",
             vec![required_parameter(
-                "api_ids",
-                "u64[]",
-                &format!("Unique stable entity identities, between 1 and {target_limit} entries."),
+                "targets",
+                "{ api_id: u64, port_names: string[] }[]",
+                &format!(
+                    "Unique entity targets with selected port names, between 1 and {target_limit} entries."
+                ),
             )],
             format!(
                 "{{ sim_tick, entities: [{{ api_id, ports: [{}] }}] }}",
@@ -62,46 +35,57 @@ impl ApiQueryProvider for ReadPortsBatchProvider {
     }
 
     fn simulation_entity_reads(&self, params: &ApiValue) -> Vec<lunco_core::GlobalEntityId> {
-        api_param_array(params, "api_ids")
+        api_param_array(params, "targets")
             .into_iter()
             .flatten()
-            .filter_map(api_value_u64)
+            .filter_map(|target| target.get("api_id").and_then(api_value_u64))
             .map(lunco_core::GlobalEntityId::from_raw)
             .collect()
     }
 
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
-        let raw_ids = api_param_array(params, "api_ids").ok_or_else(|| {
+        let raw_targets = api_param_array(params, "targets").ok_or_else(|| {
             ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "ReadPortsBatch: `api_ids` (u64[]) required",
+                "ReadPortsBatch: `targets` ({ api_id: u64, port_names: string[] }[]) required",
             )
         })?;
-        if raw_ids.is_empty() || raw_ids.len() > lunco_port_core::ports::MAX_PORT_BATCH_TARGETS {
+        if raw_targets.is_empty()
+            || raw_targets.len() > lunco_port_core::ports::MAX_PORT_BATCH_TARGETS
+        {
             return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
                 format!(
-                    "ReadPortsBatch: `api_ids` must contain 1..={} identities",
+                    "ReadPortsBatch: `targets` must contain 1..={} entities",
                     lunco_port_core::ports::MAX_PORT_BATCH_TARGETS
                 ),
             ));
         }
-        let mut api_ids = Vec::with_capacity(raw_ids.len());
-        let mut seen = std::collections::HashSet::with_capacity(raw_ids.len());
-        for value in raw_ids {
-            let api_id = api_value_u64(value).ok_or_else(|| {
-                ApiQueryError::new(
-                    ApiErrorCode::DeserializationError,
-                    "ReadPortsBatch: every `api_ids` entry must be an unsigned integer",
-                )
-            })?;
+        let mut targets = Vec::with_capacity(raw_targets.len());
+        let mut seen = std::collections::HashSet::with_capacity(raw_targets.len());
+        for target in raw_targets {
+            let api_id = target
+                .get("api_id")
+                .and_then(api_value_u64)
+                .ok_or_else(|| {
+                    ApiQueryError::new(
+                        ApiErrorCode::DeserializationError,
+                        "ReadPortsBatch: every target requires an unsigned `api_id`",
+                    )
+                })?;
             if !seen.insert(api_id) {
                 return Err(ApiQueryError::new(
                     ApiErrorCode::DeserializationError,
                     format!("ReadPortsBatch: duplicate api_id {api_id}"),
                 ));
             }
-            api_ids.push(api_id);
+            let port_names = super::parse_port_names(target, self.name()).map_err(|error| {
+                ApiQueryError::new(
+                    error.code,
+                    format!("ReadPortsBatch target {api_id}: {}", error.message),
+                )
+            })?;
+            targets.push((api_id, port_names));
         }
 
         let sim_tick = world
@@ -129,9 +113,10 @@ impl ApiQueryProvider for ReadPortsBatchProvider {
                 )
             })?;
 
-        let rows = api_ids
+        let mut total_rows = 0usize;
+        let rows = targets
             .into_iter()
-            .map(|api_id| {
+            .map(|(api_id, port_names)| {
                 let gid = lunco_core::GlobalEntityId::from_raw(api_id);
                 let entity = entities.resolve(&gid).ok_or_else(|| {
                     ApiQueryError::new(
@@ -139,7 +124,23 @@ impl ApiQueryProvider for ReadPortsBatchProvider {
                         format!("ReadPortsBatch: no entity for api_id {api_id}"),
                     )
                 })?;
-                let ports = super::read_entity_ports(world, &registry, entity);
+                let ports = super::read_entity_ports(world, &registry, entity, &port_names)
+                    .map_err(|message| {
+                        ApiQueryError::new(
+                            ApiErrorCode::DeserializationError,
+                            format!("ReadPortsBatch target {api_id}: {message}"),
+                        )
+                    })?;
+                total_rows += ports.len();
+                if total_rows > super::MAX_PORT_READ_ROWS {
+                    return Err(ApiQueryError::new(
+                        ApiErrorCode::DeserializationError,
+                        format!(
+                            "ReadPortsBatch: selected port rows exceed the {}-row batch limit",
+                            super::MAX_PORT_READ_ROWS
+                        ),
+                    ));
+                }
                 Ok(ApiValue::map([
                     ("api_id", api_value_from_u64(api_id)),
                     ("ports", ApiValue::Array(ports)),
@@ -461,14 +462,6 @@ fn range_value(min: Option<f64>, max: Option<f64>) -> ApiValue {
     }
 }
 
-fn api_value_u64(value: &ApiValue) -> Option<u64> {
-    match value {
-        ApiValue::Int(value) => u64::try_from(*value).ok(),
-        ApiValue::UInt(value) => Some(*value),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,8 +620,27 @@ mod tests {
             .execute(
                 &world,
                 &ApiValue::map([(
-                    "api_ids",
-                    ApiValue::Array(vec![api_value_from_u64(22), api_value_from_u64(11)]),
+                    "targets",
+                    ApiValue::Array(vec![
+                        ApiValue::map([
+                            ("api_id", api_value_from_u64(22)),
+                            (
+                                "port_names",
+                                ApiValue::Array(vec![
+                                    ApiValue::str("target"),
+                                    ApiValue::str("measured"),
+                                    ApiValue::str("rate"),
+                                ]),
+                            ),
+                        ]),
+                        ApiValue::map([
+                            ("api_id", api_value_from_u64(11)),
+                            (
+                                "port_names",
+                                ApiValue::Array(vec![ApiValue::str("measured")]),
+                            ),
+                        ]),
+                    ]),
                 )]),
             )
             .expect("valid batch query")
@@ -650,6 +662,55 @@ mod tests {
             .find(|port| port.get("name") == Some(&ApiValue::str("target")))
             .expect("target port is present");
         assert_eq!(target.get("value"), Some(&ApiValue::Float(100.0)));
+        let Some(ApiValue::Array(second_ports)) = entities[1].get("ports") else {
+            panic!("second entity response includes its selected port samples");
+        };
+        assert_eq!(second_ports.len(), 1);
+        assert_eq!(
+            second_ports[0].get("name"),
+            Some(&ApiValue::str("measured"))
+        );
+    }
+
+    #[test]
+    fn read_ports_returns_only_requested_names_and_rejects_missing_names() {
+        let mut world = World::new();
+        world.insert_resource(ApiEntityRegistry::default());
+        install_port_registry(&mut world);
+        install_actuator(&mut world, 42);
+
+        let selected = ReadPortsProvider
+            .execute(
+                &world,
+                &ApiValue::map([
+                    ("api_id", api_value_from_u64(42)),
+                    (
+                        "port_names",
+                        ApiValue::Array(vec![ApiValue::str("measured")]),
+                    ),
+                ]),
+            )
+            .expect("valid selected port query")
+            .expect("selected port query has a result");
+        let Some(ApiValue::Array(ports)) = selected.get("ports") else {
+            panic!("selected port response includes a port array");
+        };
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].get("name"), Some(&ApiValue::str("measured")));
+
+        let missing = ReadPortsProvider
+            .execute(
+                &world,
+                &ApiValue::map([
+                    ("api_id", api_value_from_u64(42)),
+                    (
+                        "port_names",
+                        ApiValue::Array(vec![ApiValue::str("missing")]),
+                    ),
+                ]),
+            )
+            .expect_err("unknown port names are rejected");
+        assert!(missing.message.contains("missing"));
     }
 
     #[test]

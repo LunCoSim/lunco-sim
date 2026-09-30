@@ -18,7 +18,7 @@ fn simulation_dependencies(me, ctx) {
 }
 
 fn input_port_value(target, name) {
-    let ports = query("ReadPorts", #{ api_id: target });
+    let ports = query("ReadPorts", #{ api_id: target, port_names: [name] });
     if ports == () || ports.ports == () { return (); }
     for port in ports.ports {
         if port.name == name && port.direction == "in" { return port.value; }
