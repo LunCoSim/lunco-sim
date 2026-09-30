@@ -10,8 +10,12 @@ model RCSJet
   parameter Real minimum_isp_g0 = 1.0e-6
     "Smallest specific-impulse/gravity product used for flow";
   // The plume width is also the effective exit radius for this compact jet.
-  // Shared PlumePhotometry derives length from delivered momentum and pressure.
+  // Shared plume photometry derives length from delivered momentum and pressure.
   parameter Real plume_width_m = 0.28 "Effective exit radius (m)";
+  parameter Real ambient_pressure_pa = 0.0 "Ambient pressure at the nozzle (Pa)";
+  parameter Real design_chamber_pressure_pa = 5500000.0 "Nozzle design chamber pressure (Pa)";
+  parameter Real radial_expansion = 1.6 "Visible jet radius / nozzle exit radius";
+  parameter Real core_radius_fraction = 0.65 "Core / outer visible envelope radius";
   parameter Real geometry_capacity_m = 0.0 "Optional shader envelope length; zero derives from physics (m)";
   parameter Real pressure_threshold_pa = 1000.0
     "Visible free-jet pressure floor (Pa)";
@@ -57,14 +61,13 @@ model RCSJet
 
   RCSThruster thruster(f_nom_n=f_nom_n, isp_sec=isp_sec, g0=g0,
     minimum_isp_g0=minimum_isp_g0);
-  PlumePhotometry photometry(
-    fuel_family=fuel_family, mixture_ratio=mixture_ratio,
-    stoichiometric_mixture_ratio=stoichiometric_mixture_ratio,
-    nozzle_exit_radius_m=plume_width_m, geometry_capacity_m=geometry_capacity_m,
-    pressure_threshold_pa=pressure_threshold_pa, luminance=plume_luminance,
-    exitance=plume_exitance, width_idle=plume_width_idle,
-    throttle_exponent=plume_throttle_exponent, r_idle=plume_radius_idle,
-    r_gain=plume_radius_gain);
+  Real width;
+  Real length;
+  Real render_throttle;
+  Real area;
+  Real visual_intensity;
+  Real visual_radius;
+  Real momentum_flux_n;
   Real feed_availability;
   Real exhaust_velocity_mps;
 equation
@@ -77,22 +80,37 @@ equation
   mass_flow_kgs = thruster.mass_flow_kgs;
   activity = max(0.0, min(1.0, thrust_n / max(minimum_isp_g0, f_nom_n)));
   exhaust_velocity_mps = max(0.0, isp_sec) * max(0.0, g0);
-  photometry.throttle = activity;
-  photometry.thrust_n = thrust_n;
-  photometry.maximum_thrust_n = f_nom_n;
-  photometry.propellant_flow_kgs = mass_flow_kgs;
-  photometry.exhaust_velocity_mps = exhaust_velocity_mps;
-  photometry.design_exhaust_velocity_mps = exhaust_velocity_mps;
-  light_intensity = photometry.intensity;
-  light_radius = photometry.radius;
-  full_throttle_length_m = photometry.full_throttle_length_m;
-  visual_length_fraction = photometry.visual_length_fraction;
-  exit_dynamic_pressure_pa = photometry.exit_dynamic_pressure_pa;
-  envelope_radius_m = photometry.envelope_radius_m;
-  core_envelope_radius_m = photometry.core_envelope_radius_m;
-  envelope_length_m = photometry.envelope_length_m;
-  envelope_center_y_m = photometry.envelope_center_y_m;
-  color_r = photometry.color_r;
-  color_g = photometry.color_g;
-  color_b = photometry.color_b;
+  {envelope_radius_m, core_envelope_radius_m, envelope_length_m,
+    envelope_center_y_m, color_r, color_g, color_b, width, length,
+    full_throttle_length_m, visual_length_fraction, render_throttle, area,
+    light_intensity, visual_intensity, light_radius, visual_radius,
+    momentum_flux_n, exit_dynamic_pressure_pa} = computePlumePhotometry(
+      engine_count=1,
+      throttle=activity,
+      thrust_n=thrust_n,
+      maximum_thrust_n=f_nom_n,
+      propellant_flow_kgs=mass_flow_kgs,
+      exhaust_velocity_mps=exhaust_velocity_mps,
+      design_exhaust_velocity_mps=exhaust_velocity_mps,
+      nozzle_exit_radius_m=plume_width_m,
+      nozzle_exit_area_m2=0.0,
+      nozzle_exit_pressure_pa=0.0,
+      chamber_pressure_pa=0.0,
+      design_chamber_pressure_pa=design_chamber_pressure_pa,
+      ambient_pressure_pa=ambient_pressure_pa,
+      pressure_threshold_pa=pressure_threshold_pa,
+      geometry_capacity_m=geometry_capacity_m,
+      w_max=0.0,
+      width_idle=plume_width_idle,
+      throttle_exponent=plume_throttle_exponent,
+      luminance=plume_luminance,
+      exitance=plume_exitance,
+      r_idle=plume_radius_idle,
+      r_gain=plume_radius_gain,
+      fuel_family=fuel_family,
+      mixture_mode=0.0,
+      mixture_ratio=mixture_ratio,
+      stoichiometric_mixture_ratio=stoichiometric_mixture_ratio,
+      radial_expansion=radial_expansion,
+      core_radius_fraction=core_radius_fraction);
 end RCSJet;
