@@ -212,6 +212,13 @@ an actual authored source/topology change or an explicit library-set change;
 normal scene projection and solver stepping do not recompile an unchanged USD
 participant.
 
+Native admission bounds the combined compiler, source-root, and solve-lowering
+pipeline to the solve-pool worker count plus two staged operations. That small
+lookahead lets the serialized Rumoca owner compile later independent programs
+while existing DAE lowerings occupy the pool, without allowing an unbounded
+queue of retained compilation artifacts. Solve results still commit in
+submission order, regardless of worker completion order.
+
 When an authored USD `inputs:*` value changes on a live participant, the USD
 projection advances the backend-neutral `lunco_core::ModelStateRevision`. It
 does not request a Modelica compile. The Modelica adapter compares that

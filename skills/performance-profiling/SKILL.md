@@ -166,7 +166,10 @@ For Modelica startup, separate Rumoca compile time, prepared-solve cache lookup,
 `lower_for_live`, and ordered result commit. When equivalent requests share the
 same structural solve key, coalesce in-flight lowering instead of occupying a
 second worker; preserve one result position per participant in the existing
-stable commit queue.
+stable commit queue. Keep the combined compiler/root/lowering admission bounded
+to the solve-pool worker count plus two staged operations, so the serialized
+Rumoca owner can compile later programs while solve workers are busy without
+building an unbounded DAE backlog.
 
 Application policy startup has separate Tracy spans for
 `application_policy_source_prepare_offthread`,

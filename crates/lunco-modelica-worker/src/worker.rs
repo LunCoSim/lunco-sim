@@ -403,6 +403,14 @@ impl SolvePreparationPool {
         id
     }
 
+    /// Bound the full compile-to-solve pipeline while leaving two entries of
+    /// lookahead beyond the workers currently lowering solve models. This lets
+    /// the serialized Rumoca owner prepare later independent programs while
+    /// the solve pool is busy, without allowing an unbounded DAE backlog.
+    fn can_admit(&self, pending_operations: usize) -> bool {
+        pending_operations < self.pool.current_num_threads().saturating_add(2)
+    }
+
     fn submit(&mut self, work: &CompileWork) -> u64 {
         let id = self.allocate_id();
         let key = work.plan.key.clone();
@@ -1046,12 +1054,15 @@ fn dispatch_ready_source_roots(
     compiler: &mut CompilerActor,
     compiler_order: &mut VecDeque<u64>,
     pending_solve_preparations: usize,
+    solve_preparation_pool: &SolvePreparationPool,
     pending_installs: &mut HashSet<u64>,
     latest_source_root_operations: &HashMap<String, u64>,
     tx: &Sender<ModelicaResult>,
 ) {
     loop {
-        if !compiler.can_submit(compiler_order.len() + pending_solve_preparations) {
+        if !solve_preparation_pool
+            .can_admit(compiler_order.len() + pending_solve_preparations + order.len())
+        {
             return;
         }
         let Some(result) = pop_ready_in_order(order, ready) else {
@@ -2752,6 +2763,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
             &mut compiler,
             &mut compiler_order,
             pending_compile_works.len(),
+            &solve_preparation_pool,
             &mut pending_source_root_installs,
             &latest_source_root_operations,
             &tx,
@@ -2824,6 +2836,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
             &mut compiler,
             &mut compiler_order,
             pending_compile_works.len(),
+            &solve_preparation_pool,
             &mut pending_source_root_installs,
             &latest_source_root_operations,
             &tx,
@@ -2913,13 +2926,13 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         &prepared_solve_cache,
                     );
                 let needs_async_rebuild = cache_needs_compile || !cached_solve_prepared;
-                let compiler_load = compiler_order.len()
+                let pipeline_load = compiler_order.len()
                     + pending_compile_works.len()
                     + source_root_preparation_order.len();
-                let compiler_has_capacity = compiler.can_submit(compiler_load);
+                let pipeline_has_capacity = solve_preparation_pool.can_admit(pipeline_load);
                 if needs_init
                     && cached_model_matches
-                    && (source_roots_pending || (needs_async_rebuild && !compiler_has_capacity))
+                    && (source_roots_pending || (needs_async_rebuild && !pipeline_has_capacity))
                 {
                     pending_entities.insert(*entity);
                 }
@@ -2931,7 +2944,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
             &pending_entities,
             !pending_compile_works.is_empty() || !pending_compiles.is_empty(),
             !source_root_preparation_order.is_empty() || !pending_source_root_installs.is_empty(),
-            compiler.can_submit(
+            solve_preparation_pool.can_admit(
                 compiler_order.len()
                     + pending_compile_works.len()
                     + source_root_preparation_order.len(),
@@ -3228,10 +3241,10 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     library_revision,
                                 ) {
                                     if !cached.artifact_is_valid(library_gen) {
-                                        let compiler_load = compiler_order.len()
+                                        let pipeline_load = compiler_order.len()
                                             + pending_compile_works.len()
                                             + source_root_preparation_order.len();
-                                        if !compiler.can_submit(compiler_load) {
+                                        if !solve_preparation_pool.can_admit(pipeline_load) {
                                             step_lane.push_front(ModelicaCommand::Step {
                                                 entity,
                                                 session_id,

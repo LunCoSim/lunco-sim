@@ -12,8 +12,6 @@ use crossbeam_channel::{Receiver, Sender};
 use std::collections::HashMap;
 use std::thread::JoinHandle;
 
-const MAX_PENDING_COMPILER_OPERATIONS: usize = 4;
-
 pub(super) enum CompilerCompletion {
     Compile {
         id: u64,
@@ -83,10 +81,6 @@ impl CompilerActor {
             next_id: 1,
             thread: Some(thread),
         }
-    }
-
-    pub(super) fn can_submit(&self, pending: usize) -> bool {
-        pending < MAX_PENDING_COMPILER_OPERATIONS
     }
 
     pub(super) fn submit_compile(

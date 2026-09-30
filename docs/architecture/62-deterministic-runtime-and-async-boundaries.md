@@ -678,7 +678,11 @@ of later root installs. Application roots stay installed across Twin closure.
 Immutable DAE lowering and persistent solve-cache reads, decoding, encoding,
 and writes run on the bounded solve-preparation pool. The command owner only
 commits the ready solve model. Actor admission is bounded across submitted
-compiles, root installs, and lowerings.
+compiles, root installs, and lowerings to the solve-pool worker count plus two
+staged operations. This lookahead keeps the serialized Rumoca owner preparing
+later independent programs while the pool lowers existing DAEs, while keeping
+retained compilation state bounded. Solve results still commit in submission
+order.
 Parameter updates, resets, and cache-invalidating Step auto-init are
 continuations on that same FIFO. The command owner keeps servicing other
 entities while Rumoca compiles and the bounded pool lowers immutable DAE data;
