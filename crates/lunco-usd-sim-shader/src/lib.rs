@@ -411,10 +411,12 @@ fn apply_usd_shader_material_read(
                 })
         })
         .flatten();
+    let interface = reader.text(&shader_prim, "info:wgsl:interface");
     let mut look = ShaderLook::new(shader)
         .with_values(values)
         .with_driven(driven);
     look.vertex_shader = vertex_shader;
+    look.interface = interface;
     look.textures = textures;
     look.no_shadow_cast = no_shadow_cast;
     look.unshared = unshared;
@@ -604,7 +606,10 @@ fn texture_layer_for_input(snake: &str) -> Option<TextureLayer> {
 /// The shader receives linear samples for every role; only the two color layers
 /// need the image loader's sRGB-to-linear decode.
 fn texture_layer_is_srgb(layer: TextureLayer) -> bool {
-    matches!(layer, TextureLayer::Albedo | TextureLayer::Mineral)
+    matches!(
+        layer,
+        TextureLayer::Albedo | TextureLayer::Mineral | TextureLayer::ContinuationAlbedo
+    )
 }
 
 /// Reads the `asset`-typed `inputs:*` of a `Shader` prim: `(slot, authored

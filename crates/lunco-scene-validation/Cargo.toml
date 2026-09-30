@@ -26,6 +26,7 @@ lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 lunco-hash = { path = "../lunco-hash" }
 lunco-lint = { path = "../lunco-lint" }
 lunco-materials = { path = "../lunco-materials" }
+lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-sysml-ast = { path = "../lunco-sysml-ast" }
 lunco-sysml = { path = "../lunco-sysml", optional = true }

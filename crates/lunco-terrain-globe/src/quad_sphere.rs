@@ -2,8 +2,8 @@
 
 use bevy::math::DVec3;
 
-/// A square-site relief shoulder and cutout perimeter that need minimum
-/// globe-tile detail.
+/// A rectangular site handoff whose exterior band needs minimum globe-tile
+/// detail.
 ///
 /// `radius_m` is a conservative spherical bound around the refined region.
 /// Intersecting tiles are refined until their nominal arc size is no larger than
@@ -15,15 +15,17 @@ pub struct LodRefinementRegion {
     pub center: DVec3,
     /// Conservative spherical bound of the perimeter band, in metres.
     pub radius_m: f64,
-    /// Unit east and north axes at the square boundary's centre.
+    /// Unit east and north axes at the site's centre.
     pub east: DVec3,
     pub north: DVec3,
-    /// Radius at which the site's tangent-plane square is defined.
+    /// Radius at which the site's tangent-plane rectangle is defined.
     pub site_radius_m: f64,
-    /// Half side of the square site's projected footprint.
-    pub half_extent_m: f64,
-    /// Outward expansion beyond the clipped site edge that needs fixed detail.
-    pub width_m: f64,
+    /// Inner site's projected bounds in east-min, east-max, north-min,
+    /// north-max order. Tiles wholly inside this rectangle remain camera LOD.
+    pub inner_bounds_m: [f64; 4],
+    /// Outer cutout bounds in the same order. The band between the inner site
+    /// and this boundary receives the fixed minimum detail.
+    pub outer_bounds_m: [f64; 4],
     /// Largest allowed tile arc size where this region intersects a tile.
     pub max_tile_size_m: f64,
     /// Deepest subdivision allowed for the region, independent of the camera.
@@ -205,10 +207,14 @@ pub fn subdivide_face(
                     && region.north.is_finite()
                     && region.site_radius_m.is_finite()
                     && region.site_radius_m > 0.0
-                    && region.half_extent_m.is_finite()
-                    && region.half_extent_m > 0.0
-                    && region.width_m.is_finite()
-                    && region.width_m >= 0.0
+                    && region.inner_bounds_m.iter().all(|bound| bound.is_finite())
+                    && region.outer_bounds_m.iter().all(|bound| bound.is_finite())
+                    && region.inner_bounds_m[0] < region.inner_bounds_m[1]
+                    && region.inner_bounds_m[2] < region.inner_bounds_m[3]
+                    && region.outer_bounds_m[0] <= region.inner_bounds_m[0]
+                    && region.outer_bounds_m[1] >= region.inner_bounds_m[1]
+                    && region.outer_bounds_m[2] <= region.inner_bounds_m[2]
+                    && region.outer_bounds_m[3] >= region.inner_bounds_m[3]
                     && region.max_tile_size_m.is_finite()
                     && region.max_tile_size_m > 0.0
                     && region.max_lod < 31
@@ -237,7 +243,7 @@ pub fn subdivide_face(
         if center_distance > outer_chord_radius + tile_size {
             return false;
         }
-        tile_intersects_square_boundary_band(
+        tile_intersects_boundary_band(
             face,
             level,
             i,
@@ -246,8 +252,8 @@ pub fn subdivide_face(
             region.east,
             region.north,
             region.site_radius_m,
-            region.half_extent_m,
-            region.width_m,
+            region.inner_bounds_m,
+            region.outer_bounds_m,
         )
     });
 
@@ -290,7 +296,7 @@ pub fn subdivide_face(
     }
 }
 
-fn tile_intersects_square_boundary_band(
+fn tile_intersects_boundary_band(
     face: u8,
     level: u32,
     i: i32,
@@ -299,8 +305,8 @@ fn tile_intersects_square_boundary_band(
     east: DVec3,
     north: DVec3,
     site_radius_m: f64,
-    half_extent_m: f64,
-    width_m: f64,
+    inner_bounds_m: [f64; 4],
+    outer_bounds_m: [f64; 4],
 ) -> bool {
     let tiles_at_level = 1_u32 << level;
     let step = 2.0 / f64::from(tiles_at_level);
@@ -332,19 +338,15 @@ fn tile_intersects_square_boundary_band(
         max_north = max_north.max(north_m);
     }
 
-    let outer_extent_m = half_extent_m + width_m;
-    // The finite site owns and renders its full interior. Globe fixed detail is
-    // needed only in the outward strip where globe triangles meet that edge.
-    let inner_extent_m = half_extent_m;
-    let overlaps_outer_square = max_east >= -outer_extent_m
-        && min_east <= outer_extent_m
-        && max_north >= -outer_extent_m
-        && min_north <= outer_extent_m;
-    let fully_inside_inner_square = min_east > -inner_extent_m
-        && max_east < inner_extent_m
-        && min_north > -inner_extent_m
-        && max_north < inner_extent_m;
-    overlaps_outer_square && !fully_inside_inner_square
+    let overlaps_outer_bounds = max_east >= outer_bounds_m[0]
+        && min_east <= outer_bounds_m[1]
+        && max_north >= outer_bounds_m[2]
+        && min_north <= outer_bounds_m[3];
+    let fully_inside_inner_bounds = min_east > inner_bounds_m[0]
+        && max_east < inner_bounds_m[1]
+        && min_north > inner_bounds_m[2]
+        && max_north < inner_bounds_m[3];
+    overlaps_outer_bounds && !fully_inside_inner_bounds
 }
 
 #[cfg(test)]
@@ -428,8 +430,8 @@ mod tests {
             east: DVec3::Z,
             north: DVec3::Y,
             site_radius_m: radius_m,
-            half_extent_m: 10_000.0,
-            width_m: 1_000.0,
+            inner_bounds_m: [-10_000.0, 10_000.0, -10_000.0, 10_000.0],
+            outer_bounds_m: [-10_000.0, 10_000.0, -10_000.0, 11_000.0],
             max_tile_size_m: 50_000.0,
             max_lod: 6,
         };

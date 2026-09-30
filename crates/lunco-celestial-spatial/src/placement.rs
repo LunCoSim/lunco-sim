@@ -733,6 +733,7 @@ pub(crate) fn sync_globe_handoffs(
         )>,
     >,
     q_built_dem: Query<(
+        Entity,
         &lunco_terrain_surface::DemHeightField,
         Option<&lunco_terrain_surface::TerrainGeoref>,
     )>,
@@ -880,7 +881,7 @@ pub(crate) fn sync_globe_handoffs(
 
     let candidates: Vec<_> = q_built_dem
         .iter()
-        .filter(|(_, georef)| {
+        .filter(|(_, _, georef)| {
             georef.map_or(lunco_terrain_surface::DEFAULT_ANCHOR_BODY, |value| {
                 value.body
             }) == body
@@ -906,11 +907,12 @@ pub(crate) fn sync_globe_handoffs(
         return;
     }
     let selected_dem = candidates.into_iter().next();
+    let terrain_source = selected_dem.map(|(entity, _, _)| entity);
     let half_extent = selected_dem.map_or_else(
         || flat_surface.map_or(0.0, |surface| surface.half_extent_x_m),
-        |(dem, _)| dem.0.half_extent() as f64,
+        |(_, dem, _)| dem.0.half_extent() as f64,
     );
-    let oracle = selected_dem.map(|(dem, _)| dem.0.clone());
+    let oracle = selected_dem.map(|(_, dem, _)| dem.0.clone());
     let matching_anchors: Vec<_> = site_anchors
         .iter()
         .copied()
@@ -999,6 +1001,13 @@ pub(crate) fn sync_globe_handoffs(
                 half_extent,
             );
             if handoff.is_some_and(|handoff| handoff.matches_dem_input(input_key)) {
+                if let Some(handoff) = handoff
+                    && handoff.terrain_source() != terrain_source
+                {
+                    let mut updated = handoff.clone();
+                    updated.set_terrain_source(terrain_source);
+                    entity_commands.insert(updated);
+                }
                 if preparation
                     .as_ref()
                     .is_some_and(|preparation| preparation.is_complete())
@@ -1016,9 +1025,10 @@ pub(crate) fn sync_globe_handoffs(
                     };
                     entity_commands.remove::<crate::globe_lod::GlobeHandoffPreparation>();
                     match result {
-                        Ok(next) => {
+                        Ok(mut next) => {
+                            next.set_terrain_source(terrain_source);
                             let collar_m = next.collar_m;
-                            commands.entity(entity).try_insert(next);
+                            entity_commands.try_insert(next);
                             debug!(
                                 "globe handoff composed at site body {body} (footprint ±{half_extent:.0} m, measured-source collar {collar_m:.0} m)"
                             );

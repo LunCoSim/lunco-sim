@@ -44,7 +44,7 @@ use bevy::shader::Shader;
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use lunco_materials::{
     ParamSchema, Rgba8MipMode, ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady,
-    ShaderStage, TextureLayer, rgba8_mip_chain, validate_shader_stage,
+    ShaderLookSourceInterface, ShaderStage, TextureLayer, rgba8_mip_chain, validate_shader_stage,
 };
 use lunco_render::{ProceduralSkybox, SurfaceAlpha};
 use std::sync::Arc;
@@ -53,6 +53,18 @@ use std::sync::Arc;
 /// Sharing, the `unshared` bypass, and eviction all live in
 /// [`LookCache`](crate::look_cache::LookCache), shared with the PBR binder.
 pub type ShaderLookCache = LookCache<ShaderLook>;
+
+#[derive(Component)]
+struct ShaderLookSourcePending {
+    handle: Handle<Shader>,
+    shader: String,
+}
+
+#[derive(Component)]
+struct ShaderLookSourceHandle {
+    handle: Handle<Shader>,
+    shader: String,
+}
 
 impl CachedLook for ShaderLook {
     type Key = ShaderLookKey;
@@ -107,6 +119,8 @@ fn shader_material(look: &ShaderLook, asset_server: &AssetServer) -> ShaderMater
             TextureLayer::Surface => &mut m.surface_map,
             TextureLayer::Normal => &mut m.normal_map,
             TextureLayer::ShadowCache => &mut m.shadow_cache,
+            TextureLayer::ContinuationAlbedo => &mut m.continuation_albedo_map,
+            TextureLayer::ContinuationSurface => &mut m.continuation_surface_map,
         };
         *slot = Some(image.clone());
     }
@@ -212,6 +226,7 @@ fn clear_shader_render_components(commands: &mut Commands, entity: Entity) {
         .try_remove::<MeshMaterial3d<StandardMaterial>>()
         .try_remove::<ShaderLookBound>()
         .try_remove::<ShaderLookReady>()
+        .try_remove::<ShaderLookSourceInterface>()
         .try_remove::<crate::procedural_sky::ProceduralSkyboxMaterial>();
 }
 
@@ -293,19 +308,30 @@ fn bind_shader_render_components(
 /// material from scratch every tick the look moved.
 fn textures_match(m: &ShaderMaterial, look: &ShaderLook) -> bool {
     use TextureLayer::*;
-    [Height, Albedo, Mineral, Surface, Normal, ShadowCache]
-        .iter()
-        .all(|layer| {
-            let slot = match layer {
-                Height => &m.height_map,
-                Albedo => &m.albedo_map,
-                Mineral => &m.mineral_map,
-                Surface => &m.surface_map,
-                Normal => &m.normal_map,
-                ShadowCache => &m.shadow_cache,
-            };
-            slot.as_ref().map(Handle::id) == look.textures.get(layer).map(Handle::id)
-        })
+    [
+        Height,
+        Albedo,
+        Mineral,
+        Surface,
+        Normal,
+        ShadowCache,
+        ContinuationAlbedo,
+        ContinuationSurface,
+    ]
+    .iter()
+    .all(|layer| {
+        let slot = match layer {
+            Height => &m.height_map,
+            Albedo => &m.albedo_map,
+            Mineral => &m.mineral_map,
+            Surface => &m.surface_map,
+            Normal => &m.normal_map,
+            ShadowCache => &m.shadow_cache,
+            ContinuationAlbedo => &m.continuation_albedo_map,
+            ContinuationSurface => &m.continuation_surface_map,
+        };
+        slot.as_ref().map(Handle::id) == look.textures.get(layer).map(Handle::id)
+    })
 }
 
 /// `On<Add, ShaderLook>` — the moment intent appears, give it a material.
@@ -747,11 +773,13 @@ struct MippedShaderImage {
 
 fn authored_shader_image_mip_mode(layer: TextureLayer) -> Option<Rgba8MipMode> {
     match layer {
-        // These are the four filterable image roles authored by the USD shader
+        // These are the filterable image roles authored by the USD shader
         // reader. Height and ShadowCache have different formats/access patterns
         // and are intentionally not treated as RGBA8 colour images here.
-        TextureLayer::Albedo | TextureLayer::Mineral => Some(Rgba8MipMode::SrgbColor),
-        TextureLayer::Surface => Some(Rgba8MipMode::Linear),
+        TextureLayer::Albedo | TextureLayer::Mineral | TextureLayer::ContinuationAlbedo => {
+            Some(Rgba8MipMode::SrgbColor)
+        }
+        TextureLayer::Surface | TextureLayer::ContinuationSurface => Some(Rgba8MipMode::Linear),
         TextureLayer::Normal => Some(Rgba8MipMode::Normal),
         TextureLayer::Height | TextureLayer::ShadowCache => None,
     }
@@ -980,6 +1008,8 @@ pub(crate) fn build(app: &mut App) {
         .add_systems(
             Update,
             (
+                queue_shader_look_source_reflection,
+                reflect_shader_look_source_interfaces,
                 rebind_changed_shader_look,
                 invalidate_shader_look_ready,
                 mark_shader_look_ready.after(crate::reflect_shader_schemas),
@@ -998,6 +1028,143 @@ pub(crate) fn build(app: &mut App) {
     // `ShaderLook::live`, which `rebind_changed_shader_look` above drains.
 }
 
+/// Resolve the actual WGSL interface for every authored look, including USD
+/// material carriers that do not own a render mesh. The source path remains in
+/// `ShaderLook`; this render-side fact only records what the loaded asset says.
+fn queue_shader_look_source_reflection(
+    mut commands: Commands,
+    changed: Query<(Entity, &ShaderLook, Option<&ShaderLookSourceHandle>), Changed<ShaderLook>>,
+    asset_server: Option<Res<AssetServer>>,
+) {
+    let Some(asset_server) = asset_server else {
+        return;
+    };
+    for (entity, look, current) in &changed {
+        let handle = asset_server.load::<Shader>(look.shader.clone());
+        if current.is_some_and(|current| current.handle.id() == handle.id()) {
+            continue;
+        }
+        commands
+            .entity(entity)
+            .try_remove::<ShaderLookSourceInterface>()
+            .try_remove::<ShaderLookSourceHandle>()
+            .try_insert(ShaderLookSourcePending {
+                handle,
+                shader: look.shader.clone(),
+            });
+    }
+}
+
+/// Publish shader-source reflection after asset loading or hot reload. Pending
+/// entries are only the unresolved shader assets; resolved looks are event
+/// driven and do not rescan the shader store each frame.
+fn reflect_shader_look_source_interfaces(
+    mut commands: Commands,
+    mut shader_events: Option<MessageReader<AssetEvent<Shader>>>,
+    mut removed_looks: RemovedComponents<ShaderLook>,
+    pending: Query<(Entity, &ShaderLookSourcePending)>,
+    reflected: Query<(Entity, &ShaderLookSourceHandle)>,
+    shaders: Option<Res<Assets<Shader>>>,
+    asset_server: Option<Res<AssetServer>>,
+) {
+    let (Some(shaders), Some(asset_server), Some(shader_events)) =
+        (shaders, asset_server, shader_events.as_mut())
+    else {
+        return;
+    };
+    let mut changed = HashSet::new();
+    let mut removed = HashSet::new();
+    for entity in removed_looks.read() {
+        commands
+            .entity(entity)
+            .try_remove::<ShaderLookSourceInterface>()
+            .try_remove::<ShaderLookSourcePending>()
+            .try_remove::<ShaderLookSourceHandle>();
+    }
+    for event in shader_events.read() {
+        match event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } => {
+                changed.insert(*id);
+            }
+            AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
+                removed.insert(*id);
+            }
+            AssetEvent::LoadedWithDependencies { .. } => {}
+        }
+    }
+
+    for (entity, handle) in &reflected {
+        if removed.contains(&handle.handle.id()) {
+            commands
+                .entity(entity)
+                .try_remove::<ShaderLookSourceInterface>()
+                .try_remove::<ShaderLookSourceHandle>()
+                .try_insert(ShaderLookSourcePending {
+                    handle: handle.handle.clone(),
+                    shader: handle.shader.clone(),
+                });
+        } else if changed.contains(&handle.handle.id()) {
+            if let Some(shader) = shaders.get(&handle.handle) {
+                commands
+                    .entity(entity)
+                    .try_insert(shader_source_interface(&handle.shader, shader));
+            }
+        }
+    }
+
+    for (entity, pending) in &pending {
+        if let Some(shader) = shaders.get(&pending.handle) {
+            commands
+                .entity(entity)
+                .try_remove::<ShaderLookSourcePending>()
+                .try_insert((
+                    shader_source_interface(&pending.shader, shader),
+                    ShaderLookSourceHandle {
+                        handle: pending.handle.clone(),
+                        shader: pending.shader.clone(),
+                    },
+                ));
+        } else if asset_server
+            .get_load_state(pending.handle.id())
+            .is_some_and(|state| state.is_failed())
+        {
+            // A terminal asset failure is reflected as a resolved-invalid
+            // source so required consumers can fail visibly instead of waiting
+            // forever for an event that cannot arrive.
+            commands
+                .entity(entity)
+                .try_remove::<ShaderLookSourcePending>()
+                .try_insert((
+                    ShaderLookSourceInterface {
+                        shader: pending.shader.clone(),
+                        identifier: None,
+                        source_valid: false,
+                    },
+                    ShaderLookSourceHandle {
+                        handle: pending.handle.clone(),
+                        shader: pending.shader.clone(),
+                    },
+                ));
+        }
+    }
+}
+
+fn shader_source_interface(path: &str, shader: &Shader) -> ShaderLookSourceInterface {
+    let Some(source) = wgsl_source(shader) else {
+        return ShaderLookSourceInterface {
+            shader: path.to_owned(),
+            identifier: None,
+            source_valid: false,
+        };
+    };
+    ShaderLookSourceInterface {
+        shader: path.to_owned(),
+        identifier: lunco_materials::dyn_params::shader_interface_identifier(source)
+            .map(str::to_owned),
+        source_valid: validate_shader_stage(source, ShaderStage::Fragment).is_ok(),
+    }
+}
+
 /// A shader hot reload invalidates the material layout that was previously
 /// proven ready. Keep the mesh hidden until reflection and material repacking
 /// have completed for the new source; otherwise a reload can expose a zeroed
@@ -1012,7 +1179,7 @@ pub(crate) fn build(app: &mut App) {
 fn invalidate_shader_look_ready(
     mut shader_events: Option<MessageReader<AssetEvent<Shader>>>,
     mut image_events: Option<MessageReader<AssetEvent<Image>>>,
-    q: Query<(Entity, &MeshMaterial3d<ShaderMaterial>), With<ShaderLookReady>>,
+    q: Query<(Entity, &MeshMaterial3d<ShaderMaterial>), With<ShaderLook>>,
     materials: Option<Res<Assets<ShaderMaterial>>>,
     mut commands: Commands,
 ) {
@@ -1050,13 +1217,19 @@ fn invalidate_shader_look_ready(
                 material_asset.surface_map.as_ref(),
                 material_asset.normal_map.as_ref(),
                 material_asset.shadow_cache.as_ref(),
+                material_asset.continuation_albedo_map.as_ref(),
+                material_asset.continuation_surface_map.as_ref(),
             ]
             .into_iter()
             .flatten()
             .any(|handle| handle.id() == *id)
         });
         if shader_changed || image_changed {
-            commands.entity(entity).try_remove::<ShaderLookReady>();
+            let mut entity = commands.entity(entity);
+            if shader_changed {
+                entity.try_remove::<ShaderLookSourceInterface>();
+            }
+            entity.try_remove::<ShaderLookReady>();
         }
     }
 }
@@ -1116,6 +1289,8 @@ fn material_texture_dependencies_ready(material: &ShaderMaterial, images: &Asset
         material.surface_map.as_ref(),
         material.normal_map.as_ref(),
         material.shadow_cache.as_ref(),
+        material.continuation_albedo_map.as_ref(),
+        material.continuation_surface_map.as_ref(),
     ]
     .into_iter()
     .flatten()

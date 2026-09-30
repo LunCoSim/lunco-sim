@@ -1,5 +1,7 @@
 //! Layered lunar terrain material — `regolith.wgsl` + non-destructive map layers.
 //!
+//!@interface lunco.lunar-surface-continuation.v1
+//!
 //! The procedural regolith (DEM-anchored micro detail + lunar BRDF + heightfield
 //! shadow march) is the **floor**: even where a layer map is low-res or absent
 //! the rover camera still sees real close-range detail. Larger procedural relief
@@ -111,6 +113,14 @@
 //!@default authored_surface_on 0
 //!@default authored_normal_on  0
 //!@default terrain_half_extent 1.0
+//!@engine  site_blend_widths_m
+//!@engine  site_weight_albedo
+//!@engine  site_weight_rough
+//!@engine  site_weight_ao
+//!@default site_blend_widths_m 1.0,1.0,1.0,1.0
+//!@default site_weight_albedo 0.0
+//!@default site_weight_rough 0.0
+//!@default site_weight_ao 0.0
 //!@default morph_start  1.0e20
 //!@default morph_end    1.0e21
 //!@default stitch_edges 0,0,0,0
@@ -154,6 +164,10 @@ struct Material {
     authored_surface_on: f32, // engine-filled: authored surface is active
     authored_normal_on:  f32, // engine-filled: authored normal is active
     terrain_half_extent: f32, // engine-filled: streamed DEM half extent (m)
+    site_blend_widths_m: vec4<f32>, // engine-filled: visual-only site-to-globe material blend
+    site_weight_albedo: f32, // engine-filled: site-local albedo contribution
+    site_weight_rough: f32, // engine-filled: site-local roughness contribution
+    site_weight_ao: f32, // engine-filled: site-local ambient-occlusion contribution
     morph_start:      f32,  // engine-filled: CDLOD morph start distance
     morph_end:        f32,  // engine-filled: CDLOD morph end distance
     stitch_edges:     vec4<f32>, // engine-filled: coarser-neighbour edge mask
@@ -191,6 +205,16 @@ var surface_smp: sampler;
 var normal_tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(9)
 var normal_smp: sampler;
+// Site maps are independent from the body-wide Albedo/Surface layers. The
+// collar blends these local DEM inputs into the material selected for the body.
+@group(#{MATERIAL_BIND_GROUP}) @binding(12)
+var continuation_albedo_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(13)
+var continuation_albedo_smp: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(14)
+var continuation_surface_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(15)
+var continuation_surface_smp: sampler;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
@@ -275,19 +299,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var map_n = textureSample(normal_tex, normal_smp, uv);
     var map_s = textureSample(surface_tex, surface_smp, uv);
     let map_footprint = pw / mat.map_texel_size_m;
-    // Fade authored surface maps into the base regolith at the finite DEM
-    // boundary. The globe renderer owns the adjoining surface, so a hard map
-    // edge reads as a vertical slab even when the two geometries meet.
-    let edge_uv = min(
-        min(in.uv.x, 1.0 - in.uv.x),
-        min(in.uv.y, 1.0 - in.uv.y),
+    let outside_site_uv = vec2(
+        max(max(-uv.x, uv.x - 1.0), 0.0),
+        max(max(-uv.y, uv.y - 1.0), 0.0),
     );
-    let edge_distance_m = max(edge_uv, 0.0) * 2.0 * mat.terrain_half_extent;
-    let edge_fade_width_m = max(
-        mat.terrain_half_extent * 0.08,
-        mat.map_texel_size_m * 16.0,
-    );
-    let map_edge_fade = smoothstep(0.0, edge_fade_width_m, edge_distance_m);
+    // The exterior material uses the same rectangle as the geometry.
+    let outside_m = outside_site_uv * 2.0 * mat.terrain_half_extent;
+    let width_x = select(mat.site_blend_widths_m.y, mat.site_blend_widths_m.x, uv.x < 0.0);
+    let width_z = select(mat.site_blend_widths_m.z, mat.site_blend_widths_m.w, uv.y < 0.0);
+    let transition = max(outside_m.x / max(width_x, 1e-6), outside_m.y / max(width_z, 1e-6));
+    let site_material_weight = 1.0 - smoothstep(0.0, 1.0, transition);
     let map_weights = terrain_map_weights(
         map_footprint,
         mat.derived_surface_on,
@@ -299,17 +320,27 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         mat.weight_ao,
         mat.weight_normal,
     );
-    let map_weight_normal = map_weights.x * map_edge_fade;
-    let map_weight_rough = map_weights.y * map_edge_fade;
-    let map_weight_ao = map_weights.z * map_edge_fade;
-    let map_weight_tone = map_weights.w * map_edge_fade;
+    let map_weight_normal = map_weights.x;
+    let map_weight_rough = map_weights.y;
+    let map_weight_ao = map_weights.z;
+    let map_weight_tone = map_weights.w;
     var map_ao = 1.0;
     // Albedo is already a linear material colour. The asset pipeline separates
     // source-image illumination from local surface detail before writing this
     // sRGB-authored texture; this shader must not relight the source image.
     if (authored_albedo_weight > 0.0) {
         let a = textureSample(albedo_tex, albedo_smp, uv).rgb;
-        albedo = mix(albedo, a, authored_albedo_weight * map_edge_fade);
+        albedo = mix(albedo, a, authored_albedo_weight);
+    }
+    if (mat.site_weight_albedo > 0.0) {
+        let site_uv = clamp(uv, vec2(0.0), vec2(1.0));
+        let site_albedo = textureSample(
+            continuation_albedo_tex, continuation_albedo_smp, site_uv).rgb;
+        albedo = mix(
+            albedo,
+            site_albedo,
+            clamp(mat.site_weight_albedo, 0.0, 1.0) * site_material_weight,
+        );
     }
     // (Mineral/classification is NOT applied here: it is an OVERLAY — data
     // visualization, not material — and composites after lighting below, so a
@@ -321,6 +352,21 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         roughness = clamp(mix(roughness, map_s.r, map_weight_rough), 0.05, 1.0);
         map_ao = terrain_surface_occlusion(
             map_s, map_weight_ao, mat.authored_surface_on);
+    }
+    if (mat.site_weight_rough > 0.0 || mat.site_weight_ao > 0.0) {
+        let site_uv = clamp(uv, vec2(0.0), vec2(1.0));
+        let site_surface = textureSample(
+            continuation_surface_tex, continuation_surface_smp, site_uv);
+        roughness = clamp(mix(
+            roughness,
+            site_surface.r,
+            clamp(mat.site_weight_rough, 0.0, 1.0) * site_material_weight,
+        ), 0.05, 1.0);
+        map_ao = mix(
+            map_ao,
+            site_surface.g,
+            clamp(mat.site_weight_ao, 0.0, 1.0) * site_material_weight,
+        );
     }
     // Normal: perturb the procedural WORLD normal toward the map's baked
     // DEM-local ENU normal.  The mesh instance is the authoritative

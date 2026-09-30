@@ -202,6 +202,8 @@ pub struct ParamField {
 #[derive(Clone, Debug, Default)]
 pub struct ParamSchema {
     pub fields: Vec<ParamField>,
+    /// Optional shader ABI identifier declared by a `//!@interface` annotation.
+    pub interface: Option<String>,
     /// Total uniform size in bytes (rounded up to 16).
     pub size: usize,
     /// Field name → index into [`fields`](Self::fields), built once at
@@ -300,10 +302,22 @@ impl ParamSchema {
             .collect();
         Some(ParamSchema {
             fields,
+            interface: shader_interface_identifier(wgsl).map(str::to_owned),
             size,
             index,
         })
     }
+}
+
+/// Read the shader ABI identifier from its source annotation.
+///
+/// This is source metadata only. USD remains authoritative for selecting the
+/// shader and declaring which interface the bound material expects.
+pub fn shader_interface_identifier(wgsl: &str) -> Option<&str> {
+    wgsl.lines().find_map(|line| {
+        let annotation = line.trim().strip_prefix("//!@interface")?.trim();
+        (!annotation.is_empty()).then_some(annotation)
+    })
 }
 
 /// Default presentation for a type with no `@ui` annotation.
@@ -511,6 +525,20 @@ mod tests {
         assert_eq!(
             ParamValue::parse_authoring(ParamType::Vec4, "0.1,0.2,0.3,0.4"),
             Some(ParamValue::Vec4([0.1, 0.2, 0.3, 0.4]))
+        );
+    }
+
+    #[test]
+    fn reflects_the_shader_interface_annotation_without_naming_the_asset() {
+        let source = "//!@interface lunco.lunar-surface-continuation.v1\nstruct Material { color: vec3<f32>, }";
+        let schema = ParamSchema::parse(source).expect("Material schema");
+        assert_eq!(
+            schema.interface.as_deref(),
+            Some("lunco.lunar-surface-continuation.v1")
+        );
+        assert_eq!(
+            shader_interface_identifier("//!@interface \nstruct Material {}"),
+            None
         );
     }
 }

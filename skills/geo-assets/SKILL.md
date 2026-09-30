@@ -61,6 +61,22 @@ is visual closure outside the crop; terrain queries and colliders remain on the
 local surface. Globe tiles cut out the collar footprint with bounded
 orthographic edge sampling. Do not copy the collar into each tile or make
 global LOD follow DEM posting density. No body-wide raster asset is required.
+Derive the visual collar width from this crop's measured edge relief and
+one-sided edge slope with a 0.20 relief-grade sizing target. Continue the
+measured slope over one posting, then fade one nearest-perimeter signal to
+the sphere. Geometry and appearance share four side widths; the native
+inner posting lattice tapers to a outer boundary with at least 32 segments per side. Keep
+the DEM and all in-crop heights unchanged. Refine the globe only in the band
+between the exact crop and the collar's outer cutout; set the local minimum tile
+size from that handoff footprint, independent of DEM posting density.
+The collar reads map roles from the cropped DEM prim and appearance from the
+body's USD-selected `UsdShade` material. A continuation-capable WGSL shader and
+its USD Shader prim must declare the matching
+`lunco.lunar-surface-continuation.v1` interface. Rhai owns mismatch handling:
+the default holds simulation while retaining the ready body look over the
+cutout; an authored `fallback` option shows that body look without local DEM
+maps and keeps simulation running. `RunLint` checks the composed declaration
+against reflected WGSL. The shader asset path is never selected in Rust.
 
 The active crop supplies its own georeference, posting spacing, border datum,
 and measured edge profile, so this works with Twin-local crops at different

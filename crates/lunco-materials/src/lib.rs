@@ -41,7 +41,10 @@ pub use catalog::{
 pub use dyn_params::{ParamField, ParamSchema, ParamType, ParamValue, UiKind};
 pub use engine_params::{AttrRead, EngineParam, EngineParams, EngineSource, engine_params};
 pub use image_mips::{Rgba8MipMode, rgba8_mip_chain};
-pub use look::{ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady, TextureLayer};
+pub use look::{
+    ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady, ShaderLookSourceInterface,
+    TextureLayer,
+};
 pub use naming::to_snake_case;
 pub use shader_stage::{ShaderStage, ShaderStageError, validate_shader_stage};
 pub use vertex::{

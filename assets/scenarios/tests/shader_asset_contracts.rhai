@@ -46,6 +46,96 @@ fn schema_checks(path, fields) {
     failures
 }
 
+fn empty_usd_lint_facts(shader_interface) {
+    let facts = #{};
+    facts.bodies = [];
+    facts.joints = [];
+    facts.filtered_pairs = [];
+    facts.collision_groups = [];
+    facts.prims = [];
+    facts.runtime_connections = [];
+    facts.runtime_port_collisions = [];
+    facts.runtime_joints = [];
+    facts.control_bindings = [];
+    facts.vehicle_parts = [];
+    facts.unsupported_program_prims = [];
+    facts.connector_programs = [];
+    facts.collections = [];
+    facts.network_roots = [];
+    facts.drives = [];
+    facts.gear_drives = [];
+    facts.wheel_attachments = [];
+    facts.invalid_wheel_attachments = [];
+    facts.collision_enabled_without_api = [];
+    facts.telemetry_declarations = [];
+    facts.shader_interfaces = [shader_interface];
+    let stage = #{};
+    stage.meters_per_unit_authored = true;
+    stage.fixed_hz = 60.0;
+    stage.physics_substeps = 1;
+    stage.substep_dt = 1.0 / 60.0;
+    stage.default_prim = "";
+    stage.root_spawnable = false;
+    facts.stage = stage;
+    facts
+}
+
+fn continuation_facts(expected, declared, actual, reflected, valid, shader) {
+    let facts = #{};
+    facts.expected_interface = expected;
+    facts.declared_interface = declared;
+    facts.actual_interface = actual;
+    facts.source_reflected = reflected;
+    facts.source_valid = valid;
+    facts.shader_path = shader;
+    facts.fallback_available = true;
+    facts
+}
+
+fn shader_interface_issue(expected) {
+    let issue = #{};
+    issue.subject = "/ShaderAssetContracts/Body/Shader";
+    issue.shader_path = "lunco://shaders/blueprint.wgsl";
+    issue.declared_interface = expected;
+    issue.actual_interface = "";
+    issue.source_reflected = true;
+    issue.source_valid = true;
+    issue.continuation_required = true;
+    issue.expected_interface = expected;
+    issue
+}
+
+fn shader_interface_policy_checks() {
+    let expected = "lunco.lunar-surface-continuation.v1";
+    let good_facts = continuation_facts(expected, expected, expected, true, true,
+        "lunco://shaders/terrain_layered.wgsl");
+    let good = invoke_hook("terrain.lunar_surface_continuation", [good_facts]);
+    let bad_facts = continuation_facts(expected, expected, "", true, true,
+        "lunco://shaders/blueprint.wgsl");
+    let bad = invoke_hook("terrain.lunar_surface_continuation", [bad_facts]);
+    let issue = shader_interface_issue(expected);
+    let lint = invoke_hook("lint.usd", [empty_usd_lint_facts(issue)]);
+    let lint_finding = false;
+    if lint != () && lint.status == "ok" && lint.value != () {
+        for finding in lint.value {
+            if finding.rule == "usd-shader-interface-contract"
+                && finding.subject == issue.subject {
+                lint_finding = true;
+            }
+        }
+    }
+    [
+        t_true(good != () && good.status == "ok"
+            && good.value.action == "compose",
+            "a reflected matching USD/WGSL interface did not compose"),
+        t_true(bad != () && bad.status == "ok"
+            && bad.value.action == "hold",
+            "a reflected interface mismatch did not use the default hold policy"),
+        t_true(lint != () && lint.status == "ok" && lint_finding,
+            "USD lint did not report the required shader-interface mismatch"),
+    ]
+}
+
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
        query_reads: ["ValidateAsset"], required_inputs: [] }
@@ -69,6 +159,11 @@ fn on_tick(me, ctx) {
         #{ name: "blueprint_origin", type: "Vec3" },
         #{ name: "blueprint_frame_origin", type: "Vec3" },
         #{ name: "blueprint_frame_rotation", type: "Vec4" },
+        #{ name: "terrain_half_extent", type: "F32" },
+        #{ name: "site_blend_widths_m", type: "Vec4" },
+        #{ name: "site_weight_albedo", type: "F32" },
+        #{ name: "site_weight_rough", type: "F32" },
+        #{ name: "site_weight_ao", type: "F32" },
     ]) { failures.push(failure); }
     for failure in schema_checks("lunco://shaders/solar_panel.wgsl", [
         #{ name: "seamless_u", type: "F32" },
@@ -115,6 +210,7 @@ fn on_tick(me, ctx) {
         failures.push(t_true(has_param(report, "horizon_march_steps", "F32"),
             path + " is missing horizon_march_steps"));
     }
+    for failure in shader_interface_policy_checks() { failures.push(failure); }
 
     this.done = true;
     report_verdict(failures, "SHADER ASSET CONTRACTS", "SHADER_ASSET_CONTRACTS");
