@@ -94,6 +94,15 @@ from `lunco-doc-bevy` is installed by each Modelica host; generated-document
 metadata is a separate runtime resource because it follows projection lifecycle
 rather than authored editing.
 
+Live preparation reports typed `ModelicaPreparationPhase` transitions through
+the worker result transport: compilation queue, solver-cache lookup, equation
+lowering, cache reuse, and measured preparation duration. The bridge validates
+the participant session and source generation before publishing lifecycle
+notices, then returns without consuming these messages as solver transactions.
+The UI mirrors all notice severities into Recent status as discrete entries.
+Preparation notifications do not change simulation time, outputs, compile
+completion, or the required participant admission hold.
+
 ## 2. Architecture in layers
 
 ```

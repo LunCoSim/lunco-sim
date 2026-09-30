@@ -184,6 +184,9 @@ pub enum LoadSourceRootPayload {
 pub struct ModelicaResult {
     pub entity: Entity,
     pub session_id: u64,
+    /// Presentation-only preparation transition; never a solver transaction.
+    #[serde(default)]
+    pub preparation_phase: Option<ModelicaPreparationPhase>,
     #[serde(default)]
     pub step_id: Option<u64>,
     pub new_time: f64,
@@ -238,6 +241,7 @@ impl Default for ModelicaResult {
         Self {
             entity: Entity::PLACEHOLDER,
             session_id: 0,
+            preparation_phase: None,
             step_id: None,
             new_time: 0.0,
             outputs: Vec::new(),
@@ -263,6 +267,16 @@ impl Default for ModelicaResult {
             live_solver_snapshot: None,
         }
     }
+}
+
+/// Owner-reported stages of preparing one live Modelica participant.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ModelicaPreparationPhase {
+    QueuedForCompilation,
+    CheckingSolverCache,
+    LoweringEquations,
+    CachedSolverLoaded,
+    SolverPrepared { elapsed_secs: f64 },
 }
 
 /// The registered solver capabilities selected for one live Modelica model.

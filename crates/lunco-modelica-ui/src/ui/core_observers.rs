@@ -237,30 +237,18 @@ pub fn drain_sim_samples_to_viz(
     // via the Telemetry panel checkboxes.
 }
 
-/// Reactive UI: project runtime [`lunco_modelica_runtime::ModelicaNotice`] events into the Console
-/// panel. The core worker emits notices; this observer renders them.
-pub fn drain_notices_to_console(
+/// Publish lifecycle notices to Recent status; the shared history adapter feeds Console.
+pub fn drain_notices_to_status_bus(
     mut notices: MessageReader<lunco_modelica_runtime::ModelicaNotice>,
-    console: Option<ResMut<LogBuffer>>,
-    bus: Option<ResMut<StatusBus>>,
+    mut bus: ResMut<StatusBus>,
 ) {
-    let mut console = console;
-    let mut bus = bus;
     for n in notices.read() {
-        if let Some(console) = console.as_deref_mut() {
-            match n.level {
-                lunco_modelica_runtime::NoticeLevel::Info => console.info(n.text.clone()),
-                lunco_modelica_runtime::NoticeLevel::Warn => console.warn(n.text.clone()),
-                lunco_modelica_runtime::NoticeLevel::Error => console.error(n.text.clone()),
-            }
-        }
-        if n.level == lunco_modelica_runtime::NoticeLevel::Error {
-            if let Some(bus) = bus.as_deref_mut() {
-                // A notice is emitted for a worker response, never by a
-                // polling system, so a failure produces one status entry.
-                bus.push("Modelica", StatusLevel::Error, n.text.clone());
-            }
-        }
+        let level = match n.level {
+            lunco_modelica_runtime::NoticeLevel::Info => StatusLevel::Info,
+            lunco_modelica_runtime::NoticeLevel::Warn => StatusLevel::Warn,
+            lunco_modelica_runtime::NoticeLevel::Error => StatusLevel::Error,
+        };
+        bus.push("Modelica", level, n.text.clone());
     }
 }
 
@@ -472,6 +460,45 @@ pub fn project_run_results_to_ui(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modelica_lifecycle_notices_reach_recent_status_once() {
+        use lunco_modelica_runtime::{ModelicaNotice, NoticeLevel};
+        let mut app = App::new();
+        app.add_message::<ModelicaNotice>()
+            .init_resource::<StatusBus>()
+            .add_systems(Update, drain_notices_to_status_bus);
+        for (level, text) in [
+            (NoticeLevel::Info, "Preparing simulation equations"),
+            (NoticeLevel::Warn, "Discarded stale preparation"),
+            (NoticeLevel::Error, "Preparation failed"),
+        ] {
+            app.world_mut().write_message(ModelicaNotice {
+                level,
+                text: text.into(),
+            });
+        }
+        app.update();
+        let levels: Vec<_> = app
+            .world()
+            .resource::<StatusBus>()
+            .history()
+            .map(|event| event.level)
+            .collect();
+        assert_eq!(
+            levels,
+            vec![StatusLevel::Info, StatusLevel::Warn, StatusLevel::Error]
+        );
+        assert_eq!(
+            app.world()
+                .resource::<StatusBus>()
+                .active_progress()
+                .count(),
+            0
+        );
+        app.update();
+        assert_eq!(app.world().resource::<StatusBus>().history().count(), 3);
+    }
 
     #[test]
     fn standalone_modelica_entities_still_project_live_samples() {

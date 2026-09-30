@@ -88,6 +88,12 @@ in another package's perspective, so the perspective does not need a dependency
 on the panel package or a copied panel id. Cached user layouts still restore as
 saved; contributions apply when a perspective builds its default layout.
 
+Modelica preparation emits discrete lifecycle notices for its compilation queue,
+solver-cache lookup, equation lowering, cache reuse, and elapsed preparation time.
+The shared Modelica notice observer projects Info, Warn, and Error into Recent
+status. Preparation notices are session/source-fenced and never solver results;
+they must not release the simulation hold or change the model's time or outputs.
+
 The workbench status history is one shared presentation surface: render Info,
 Warn, Error, and Attention through the same responsive
 level/source/message/action row. Its popup is compact, sized to roughly
