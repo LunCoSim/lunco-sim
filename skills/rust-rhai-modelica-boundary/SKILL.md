@@ -138,7 +138,8 @@ the first entity, a fabricated value, or an older behavior.
   persistence.
 - `lunco-camera-core::DEFAULT_PRESENTATION_HOOK` is the camera example:
   Rust derives USD/ECS facts and realizes the closed decision, while the
-  Rhai policy chooses `avatar`, `generated`, or `none`.
+  Rhai policy chooses `avatar`, the first authored camera, `generated`, or
+  `none` for the initial presentation.
 - `lunco-assets-core` and `lunco-storage` own asset resolution and storage;
   runtime/domain crates must not open asset bytes with raw filesystem paths.
 

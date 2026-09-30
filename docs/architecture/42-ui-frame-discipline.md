@@ -201,10 +201,13 @@ identity changed. USD wiring or member-source invalidation explicitly requests
 the broader root pass; an unrelated descendant identity does not.
 
 The authored camera-contract admission check follows the same boundary. It
-validates roots, camera-track plans, camera identities, and ancestry only after
-the scene mount, USD revision, camera/track lifecycle, or required-host setting
-changes. Its verdict is not treated as an input, so publishing diagnostics does
-not reopen the structural scan on every frame.
+validates camera-track plans, camera identities, and ancestry under the active
+scene root only after the scene mount, USD revision, camera/track lifecycle, or
+required-host setting changes. Additive roots remain outside that viewport
+contract. One canonical finding set supplies readiness, `RuntimeDiagnostics`,
+and Recent Events; publishing those projections does not reopen the structural
+scan on every frame. A valid operator override downgrades dormant track
+findings to warnings until director control resumes.
 
 ## 2. The UI must stay responsive
 The user types, drags, and right-clicks into the same event queue
