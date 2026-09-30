@@ -125,6 +125,16 @@ SHA-256 `4f1785e86deb5e05083561007ec8e08891ca5a0d19c82e9edcdb8f70c92e3496`.
 It confirms the same-host gate remains green after the scenario event-inbox
 change; cross-machine numeric agreement remains unverified.
 
+After local `main` advanced to `2dbc5c617` (`perf(mobility): reuse fixed-weld
+lookup per tick`), the default-feature `cargo build --bin luncosim -j 4`
+passed at `295a9062312343aa42ed9fc2ee96de8f4710719a`. The production
+`scene-4-serial` gate again matched the exact reference at 60 Hz, serial
+Compute, zero jitter, and seed `6840157149251759617`: 780 ticks and 1,055
+application updates. The reference hash remained
+`4f1785e86deb5e05083561007ec8e08891ca5a0d19c82e9edcdb8f70c92e3496`. This
+checks that integrated mobility change on this host; cross-machine numeric
+agreement remains open.
+
 ## Findings
 
 | ID | Severity | Finding and evidence | Status |
