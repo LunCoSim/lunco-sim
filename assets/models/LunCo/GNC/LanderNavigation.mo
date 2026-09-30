@@ -12,9 +12,7 @@ model LanderNavigation
 
   input Real altimeter_range = 0.0 "Range sensor reading to the surface (m)";
   input Real altimeter_position_valid = 0.0
-    "1 when the ray hit provides a valid vehicle X/Z observation";
-  input Real altimeter_altitude_confidence = 0.0
-    "0..1 confidence that the ray provides vertical altitude evidence";
+    "1 when a valid ray return provides a back-projected 3D vehicle position";
   input Real altimeter_vehicle_position_x = 0.0
     "Altimeter-derived vehicle X position (m)";
   input Real altimeter_vehicle_position_y = 0.0
@@ -35,7 +33,7 @@ model LanderNavigation
   parameter Real altitude_position_correction_gain = 4.0
     "Complementary altitude position correction gain (1/s)";
   parameter Real altitude_observation_acquisition_time_constant_s = 0.5
-    "Continuous authority ramp when vertical altitude evidence returns (s)";
+    "Continuous authority ramp when geometric ray position evidence returns (s)";
   input Real altitude_velocity_correction_gain = 4.0
     "Complementary altitude velocity correction gain (1/s2)";
   input Real lateral_position_correction_gain = 2.0
@@ -50,7 +48,7 @@ model LanderNavigation
   parameter Real initial_vel_y = 0.0 "Mission-initialized Y velocity (m/s)";
   parameter Real initial_vel_z = 0.0 "Mission-initialized Z velocity (m/s)";
   output Real nav_pos_x(unit = "m") "Estimated X position";
-  output Real nav_pos_y(unit = "m") "Estimated Y position from altimeter";
+  output Real nav_pos_y(unit = "m") "Estimated Y position from geometric ray observation";
   output Real nav_pos_z(unit = "m") "Estimated Z position";
   output Real nav_vel_x(unit = "m/s") "Estimated X velocity";
   output Real nav_vel_y(unit = "m/s") "Estimated Y velocity";
@@ -64,7 +62,6 @@ model LanderNavigation
   Real lateral_position_error_x;
   Real lateral_position_error_z;
   Real position_observation_valid;
-  Real altitude_observation_confidence;
   Real altitude_position_error
     "Geometric altitude innovation used by the observer";
   LunCo.Sensors.FilteredSignal altitude_observation_authority(
@@ -89,23 +86,18 @@ equation
   navigation_accel_y = acceleration_transform.world_frame_y + gravity_nav_y;
   navigation_accel_z = acceleration_transform.world_frame_z + gravity_nav_z;
 
-  // Integrate navigation-frame acceleration for velocity and lateral position.
-  // Vertical position and velocity form the same continuous observer as the
-  // lateral axes: IMU acceleration propagates the state, while a valid
-  // geometric altimeter height corrects both position and velocity drift.
-  // The altimeter's slant-range derivative is not treated as world-Y speed:
-  // during attitude recovery it is the derivative of an oblique ray.
-  // A nadir terrain return also carries the horizontal location of the ray
-  // hit. Use it as a complementary position correction so IMU integration
-  // remains the high-rate propagation while long-flight lateral drift stays
-  // observable. During attitude recovery the ray is invalid and this term
-  // naturally disappears.
+  // Integrate navigation-frame acceleration for velocity and position. The
+  // altimeter Modelica component back-projects the hit point along the full
+  // attitude-transformed ray and removes the sensor mount. A valid return
+  // therefore observes all three vehicle-position axes, including when the
+  // ray is oblique. Vertical range confidence remains separate for policies
+  // that use projected slant range; it must not disable geometric position.
   lateral_position_error_x = altimeter_vehicle_position_x - nav_pos_x;
   lateral_position_error_z = altimeter_vehicle_position_z - nav_pos_z;
-  // Alpha-beta observer correction: the terrain hit corrects both position
-  // drift and the velocity integral that would otherwise acquire an incorrect
-  // sign during a long powered descent.  This is the ordinary continuous
-  // position/velocity observer, not a truth-position feed or a scripted path.
+  // Alpha-beta observer correction: the geometric terrain observation
+  // corrects both position drift and the velocity integral. This is the
+  // ordinary continuous position/velocity observer, not a truth-position feed
+  // or a scripted path.
   der(nav_pos_x) = nav_vel_x + lateral_position_correction_gain
     * position_observation_valid * lateral_position_error_x;
   der(nav_pos_z) = nav_vel_z + lateral_position_correction_gain
@@ -113,17 +105,13 @@ equation
   der(nav_vel_x) = navigation_accel_x + lateral_velocity_correction_gain
     * position_observation_valid * lateral_position_error_x;
   position_observation_valid = max(0.0, min(1.0, altimeter_position_valid));
-  altitude_observation_confidence = max(0.0,
-    min(1.0, altimeter_altitude_confidence));
-  // A nadir return can disappear and reappear as the airframe rotates.  The
-  // first valid sample after that gap may have a large geometric innovation
-  // because the IMU-only state has continued to propagate.  Reuse the
-  // canonical sensor acquisition primitive so measurement authority itself is
-  // a continuous state: it acquires the evidence with its authored time
-  // constant and begins releasing it as soon as the evidence is gone.  This is
-  // sensor dynamics, not a frame-count delay or a mission-script handoff.
+  // A geometric height observation can disappear and reappear as the ray
+  // loses and reacquires a terrain return. The first valid sample after that
+  // gap may have a large innovation because the IMU-only state continued to
+  // propagate. The canonical acquisition primitive makes authority continuous
+  // as valid position evidence resumes.
   altitude_observation_authority.u = 0.0;
-  altitude_observation_authority.sample_valid = altitude_observation_confidence;
+  altitude_observation_authority.sample_valid = position_observation_valid;
   altitude_position_error = altimeter_vehicle_position_y - nav_pos_y;
   der(nav_pos_y) = nav_vel_y + altitude_position_correction_gain
     * altitude_observation_authority.acquisition * altitude_position_error;

@@ -49,6 +49,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use std::time::Duration;
 
+pub mod assembly;
 pub mod avian_backend;
 pub mod escape;
 pub mod force_ports;
@@ -60,6 +61,10 @@ pub mod raycast;
 pub mod readiness;
 pub mod spatial;
 pub mod support;
+pub use assembly::{
+    DynamicJointIslandMass, DynamicJointIslandMasses, aggregate_dynamic_joint_island_masses,
+    dynamic_joint_islands, refresh_dynamic_joint_island_masses,
+};
 pub use avian_backend::{
     avian_backend_aabb_is_valid, avian_backend_collider_is_leaf,
     avian_backend_collider_shape_is_valid, avian_backend_collider_shape_kind,

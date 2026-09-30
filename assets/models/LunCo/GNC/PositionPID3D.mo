@@ -15,7 +15,7 @@ model PositionPID3D
   // ports, never to the rigid body's ground-truth position/velocity ports.
   input Real altimeter_range = 0.0 "Altimeter range to terrain (m)";
   input Real altimeter_position_valid = 0.0
-    "1 when the raw ray provides a valid vehicle X/Z observation";
+    "1 when a valid raw ray provides a back-projected 3D vehicle position";
   input Real altimeter_altitude_confidence = 0.0
     "0..1 confidence that the raw ray provides vertical altitude evidence";
   input Real altimeter_vehicle_position_x = 0.0
@@ -79,9 +79,10 @@ model PositionPID3D
     "Altimeter range below which guidance maintains hover thrust until touchdown (m)";
   input Real g = 1.62 "Local gravity (m/s²)";
   input Real max_thrust = 60000.0 "Maximum engine thrust (N)";
-  input Real vehicle_mass = 2000.0 "Vehicle mass (kg)";
-  input Real minimum_positive_mass_kg = 1.0e-6
-    "Smallest mass used in acceleration normalization (kg)";
+  input Real vehicle_mass(unit = "kg")
+    "Complete dynamic joint-island mass seen by the vehicle (kg)";
+  input Real mass_properties_valid(unit = "1") = 0.0
+    "1 only when vehicle_mass is a complete current solver measurement";
   input Real minimum_vertical_accel_mps2 = 1.0e-6
     "Smallest vertical acceleration used in tilt normalization (m/s²)";
   input Real minimum_thrust_accel_mps2 = 1.0e-6
@@ -93,7 +94,7 @@ model PositionPID3D
 
   // The airframe uses normalized guidance commands.
   input Real piloted = 0.0 "1 while a pilot owns the vehicle";
-  input Real engage = 1.0 "1 while this mission guidance is active";
+  input Real engage = 0.0 "1 while this mission guidance is active";
   input Real touchdown = 0.0
     "Touchdown state; guidance is removed as the vehicle settles on its legs";
   input Real landing_contact = 0.0
@@ -217,7 +218,6 @@ equation
   // Sensor -> navigation block.
   navigation.altimeter_range = altimeter_range;
   navigation.altimeter_position_valid = altimeter_position_valid;
-  navigation.altimeter_altitude_confidence = altimeter_altitude_confidence;
   navigation.altimeter_vehicle_position_x = altimeter_vehicle_position_x;
   navigation.altimeter_vehicle_position_y = altimeter_vehicle_position_y;
   navigation.altimeter_vehicle_position_z = altimeter_vehicle_position_z;
@@ -378,8 +378,12 @@ equation
   pid_z.output_limit = max_lateral_accel;
   pid_z.anti_windup_gain = anti_windup_gain;
 
-  max_thrust_accel = max_thrust
-    / max(minimum_positive_mass_kg, vehicle_mass);
+  // Keep the realtime model event-free: the Rust output is exactly 0 or 1,
+  // so it directly gates the available acceleration. The tiny denominator
+  // floor only makes an invalid zero-mass sample numerically defined; it is
+  // never used as vehicle mass or as a source of control authority.
+  max_thrust_accel = max_thrust * mass_properties_valid
+    / max(vehicle_mass, 1.0e-9);
   // PIDAxis owns saturation. Keep this boundary as a direct signal connection
   // so the parent does not create a second, redundant limiter around the
   // reusable controller's public command.
@@ -529,7 +533,11 @@ equation
   // hands off to the suspension. Contact away from the target does not
   // terminate guidance: the vehicle must perform a real go-around or
   // repositioning manoeuvre using the same thrust and sensor loops.
+  // Fail closed until the connected physics body publishes a complete live
+  // dynamic-joint-island mass. This prevents a missing attached-body sample
+  // from being interpreted as zero mass and producing maximum thrust demand.
   flight_command_gain = engage * (1.0 - piloted)
+    * mass_properties_valid
     * max(0.0, min(1.0, 1.0 - landing_handoff));
   flight_authority_gate = flight_command_gain;
   engine_alignment_gate_output = engine_alignment_gate;
