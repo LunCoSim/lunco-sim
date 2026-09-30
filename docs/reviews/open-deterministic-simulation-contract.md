@@ -135,6 +135,13 @@ application updates. The reference hash remained
 checks that integrated mobility change on this host; cross-machine numeric
 agreement remains open.
 
+At `07b530ea8e1bd732715a8481afb6605120f83b8a`, with no simulation-source
+changes since that run, the same production profile passed again: 780 ticks,
+976 application updates, and the same exact reference hash. The differing
+update count with an unchanged physics result is additional same-host evidence
+that the current gate compares simulation state independently of render/update
+cadence. It does not establish cross-machine numeric agreement.
+
 ## Findings
 
 | ID | Severity | Finding and evidence | Status |
