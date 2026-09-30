@@ -343,6 +343,11 @@ explicit side-panel rendering. Generic slot anchors (`panel.center`,
 viewport or whole dock slot in both docked and viewport-only layouts; tutorial
 copy that names a panel must use the exact panel key.
 
+The shell reuses its title-bar anchor buffer across UI passes. Stable menu,
+window, toolbar, slot, and model-view keys are borrowed static strings, and
+registered panel landmarks use `PanelId` directly. Refreshing these anchors does
+not allocate a new key string for each visible control or panel.
+
 ## 4. Workspaces
 
 A workspace is a named task-specific UI configuration. LunCoSim ships with

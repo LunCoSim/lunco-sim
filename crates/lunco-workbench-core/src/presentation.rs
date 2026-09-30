@@ -4,6 +4,8 @@ use bevy::prelude::Resource;
 use egui::Rect;
 use std::collections::HashMap;
 
+use crate::PanelId;
+
 /// Screen-space rectangles of named UI landmarks, refreshed by their renderers.
 ///
 /// Guided overlays and other presentation adapters use these stable keys to
@@ -11,6 +13,8 @@ use std::collections::HashMap;
 #[derive(Resource, Default, Debug, Clone)]
 pub struct HelpAnchors {
     rects: HashMap<String, Rect>,
+    static_rects: HashMap<&'static str, Rect>,
+    panel_rects: HashMap<&'static str, Rect>,
 }
 
 impl HelpAnchors {
@@ -19,14 +23,34 @@ impl HelpAnchors {
         self.rects.insert(key.into(), rect);
     }
 
+    /// Publish an anchor with a compile-time key without allocating a key
+    /// string on every UI pass.
+    pub fn set_static(&mut self, key: &'static str, rect: Rect) {
+        self.static_rects.insert(key, rect);
+    }
+
+    /// Publish a panel landmark using its stable registered identity.
+    pub fn set_panel(&mut self, panel: PanelId, rect: Rect) {
+        self.panel_rects.insert(panel.as_str(), rect);
+    }
+
     /// Read the most recent rectangle under `key`, if any.
     pub fn get(&self, key: &str) -> Option<Rect> {
-        self.rects.get(key).copied()
+        self.static_rects
+            .get(key)
+            .or_else(|| self.rects.get(key))
+            .copied()
+            .or_else(|| {
+                key.strip_prefix("panel.")
+                    .and_then(|panel| self.panel_rects.get(panel).copied())
+            })
     }
 
     /// Drop all recorded rectangles at the start of a new UI frame.
     pub fn clear(&mut self) {
         self.rects.clear();
+        self.static_rects.clear();
+        self.panel_rects.clear();
     }
 }
 

@@ -2,6 +2,7 @@
 
 use super::*;
 use lunco_workbench_core::trigger_or_defer;
+use std::borrow::Cow;
 
 pub(super) fn render_layout(
     ctx: &egui::Context,
@@ -10,6 +11,7 @@ pub(super) fn render_layout(
     theme: &lunco_theme::Theme,
     menus: &WorkbenchMenuRegistry,
     direct_menu_labels: &[String],
+    anchor_rects: &mut Vec<(Cow<'static, str>, egui::Rect)>,
 ) {
     // ── Clean capture ───────────────────────────────────────────────
     // A frame the offline recorder is capturing is a FILM frame: the whole
@@ -246,8 +248,7 @@ pub(super) fn render_layout(
             // controls. Published to `HelpAnchors` after this layout
             // closure finishes so we don't double-borrow `world`
             // while the menu_button closures already hold it.
-            let mut anchor_rects: Vec<(String, egui::Rect)> = Vec::new();
-            anchor_rects.push(("menu.bar".to_owned(), ui.max_rect()));
+            anchor_rects.push((Cow::Borrowed("menu.bar"), ui.max_rect()));
 
             // macOS: leave room for the native traffic lights that
             // float over our content because of `fullsize_content_view`.
@@ -457,7 +458,7 @@ pub(super) fn render_layout(
                 let r_network = ui.menu_button("Network", |ui| {
                     render_network_menu(ui, world);
                 });
-                anchor_rects.push(("menu.network".to_owned(), r_network.response.rect));
+                anchor_rects.push((Cow::Borrowed("menu.network"), r_network.response.rect));
 
                 ui.separator();
 
@@ -493,12 +494,12 @@ pub(super) fn render_layout(
                     ui.close();
                 }
             });
-            anchor_rects.push(("menu.file".to_owned(), r_file.response.rect));
+            anchor_rects.push((Cow::Borrowed("menu.file"), r_file.response.rect));
             if matches!(menu_mode, TopMenuMode::Direct) {
                 let r_edit = ui.menu_button("Edit", |ui| {
                     render_edit_menu(ui, world, menus);
                 });
-                anchor_rects.push(("menu.edit".to_owned(), r_edit.response.rect));
+                anchor_rects.push((Cow::Borrowed("menu.edit"), r_edit.response.rect));
             } else {
                 let r_more = ui.menu_button("More", |ui| {
                     ui.menu_button("Edit", |ui| {
@@ -515,7 +516,7 @@ pub(super) fn render_layout(
                         render_time_menu(ui, world, menus);
                     });
                 });
-                anchor_rects.push(("menu.more".to_owned(), r_more.response.rect));
+                anchor_rects.push((Cow::Borrowed("menu.more"), r_more.response.rect));
             }
             let r_view = ui.menu_button("View", |ui| {
                 if ui.button("Reset Layout").clicked() {
@@ -685,29 +686,29 @@ pub(super) fn render_layout(
                     });
                 }
             });
-            anchor_rects.push(("menu.view".to_owned(), r_view.response.rect));
+            anchor_rects.push((Cow::Borrowed("menu.view"), r_view.response.rect));
 
             if matches!(menu_mode, TopMenuMode::Direct) {
             // Custom top-level menus are rendered through the same helper in
             // direct and compact layouts, so registered commands keep one
             // owner and one callback path.
-            render_custom_menus(ui, world, menus, Some(&mut anchor_rects));
+            render_custom_menus(ui, world, menus, Some(anchor_rects));
 
             let r_settings = ui.menu_button("Settings", |ui| {
                 render_settings_menu(ui, world, menus);
             });
-            anchor_rects.push(("menu.settings".to_owned(), r_settings.response.rect));
+            anchor_rects.push((Cow::Borrowed("menu.settings"), r_settings.response.rect));
             let r_help = ui.menu_button("Help", |ui| {
                 render_help_menu(ui, world, menus);
             });
-            anchor_rects.push(("menu.help".to_owned(), r_help.response.rect));
+            anchor_rects.push((Cow::Borrowed("menu.help"), r_help.response.rect));
 
             // Time — causal simulation-rate controls and any registered
             // application-level time actions. Pause/resume stays on the toolbar.
             let r_time = ui.menu_button("Time", |ui| {
                 render_time_menu(ui, world, menus);
             });
-            anchor_rects.push(("menu.time".to_owned(), r_time.response.rect));
+            anchor_rects.push((Cow::Borrowed("menu.time"), r_time.response.rect));
             }
 
             // Pause/Resume simulation via the single transport authority
@@ -726,7 +727,7 @@ pub(super) fn render_layout(
                     (UiIcon::Pause, "Pause simulation")
                 };
                 let btn_resp = icon_button_sized(ui, icon, hover, titlebar_control_size);
-                anchor_rects.push(("toolbar.run".to_owned(), btn_resp.rect));
+                anchor_rects.push((Cow::Borrowed("toolbar.run"), btn_resp.rect));
                 if btn_resp.clicked() {
                     trigger_or_defer(world, lunco_time::SetTimeTransport {
                         playing: Some(paused),
@@ -754,7 +755,7 @@ pub(super) fn render_layout(
                         .unwrap_or(false);
                     let close_response =
                         icon_button_sized(ui, UiIcon::Close, "Close", titlebar_control_size);
-                    anchor_rects.push(("window.close".to_owned(), close_response.rect));
+                    anchor_rects.push((Cow::Borrowed("window.close"), close_response.rect));
                     if close_response.clicked() {
                         trigger_or_defer(world, lunco_workbench_window::CloseWindow {});
                     }
@@ -766,7 +767,7 @@ pub(super) fn render_layout(
                     let max_hover = if is_max { "Restore" } else { "Maximize" };
                     let maximize_response =
                         icon_button_sized(ui, max_icon, max_hover, titlebar_control_size);
-                    anchor_rects.push(("window.maximize".to_owned(), maximize_response.rect));
+                    anchor_rects.push((Cow::Borrowed("window.maximize"), maximize_response.rect));
                     if maximize_response.clicked() {
                         trigger_or_defer(world, lunco_workbench_window::MaximizeWindow { maximized: None });
                     }
@@ -776,7 +777,7 @@ pub(super) fn render_layout(
                         "Minimize",
                         titlebar_control_size,
                     );
-                    anchor_rects.push(("window.minimize".to_owned(), minimize_response.rect));
+                    anchor_rects.push((Cow::Borrowed("window.minimize"), minimize_response.rect));
                     if minimize_response.clicked() {
                         trigger_or_defer(world, lunco_workbench_window::MinimizeWindow {});
                     }
@@ -800,7 +801,10 @@ pub(super) fn render_layout(
                             button = button.fill(theme.tokens.surface_raised);
                         }
                         let response = ui.add(button);
-                        anchor_rects.push((perspective_help_anchor(*id), response.rect));
+                        anchor_rects.push((
+                            Cow::Owned(perspective_help_anchor(*id)),
+                            response.rect,
+                        ));
                         if response.clicked() && !*is_active {
                             world
                                 .resource_mut::<PendingLayoutRequests>()
@@ -855,8 +859,11 @@ pub(super) fn render_layout(
             // that the menu_button closures have returned and no
             // longer borrow `world`.
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
-                for (k, r) in anchor_rects {
-                    a.set(k, r);
+                for (key, rect) in anchor_rects.drain(..) {
+                    match key {
+                        Cow::Borrowed(key) => a.set_static(key, rect),
+                        Cow::Owned(key) => a.set(key, rect),
+                    }
                 }
             }
                 });
@@ -1059,17 +1066,17 @@ pub(super) fn render_layout(
             // contract or a guided would fail merely because its authored
             // perspective uses egui_dock.
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
-                a.set("panel.center", screen);
+                a.set_static("panel.center", screen);
                 let (side_rect, right_rect, bottom_rect) =
                     dock_group_rects(dock, side_browser, right_inspector, bottom);
                 if let Some(rect) = side_rect {
-                    a.set("panel.side_browser", rect);
+                    a.set_static("panel.side_browser", rect);
                 }
                 if let Some(rect) = right_rect {
-                    a.set("panel.right_inspector", rect);
+                    a.set_static("panel.right_inspector", rect);
                 }
                 if let Some(rect) = bottom_rect {
-                    a.set("panel.bottom", rect);
+                    a.set_static("panel.bottom", rect);
                 }
             }
             if let Some(mut g) = world.get_resource_mut::<ScenePickGate>() {
@@ -1115,7 +1122,7 @@ pub(super) fn render_layout(
                 });
             publish_panel_anchor(world, id, r.response.rect);
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
-                a.set("panel.side_browser", r.response.rect);
+                a.set_static("panel.side_browser", r.response.rect);
             }
         }
         if let Some(id) = layout.right_inspector.first().copied() {
@@ -1132,7 +1139,7 @@ pub(super) fn render_layout(
                 });
             publish_panel_anchor(world, id, r.response.rect);
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
-                a.set("panel.right_inspector", r.response.rect);
+                a.set_static("panel.right_inspector", r.response.rect);
             }
         }
         if let Some(id) = layout.bottom.first().copied() {
@@ -1148,13 +1155,13 @@ pub(super) fn render_layout(
                 });
             publish_panel_anchor(world, id, r.response.rect);
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
-                a.set("panel.bottom", r.response.rect);
+                a.set_static("panel.bottom", r.response.rect);
             }
         }
         let center = viewport_ui.available_rect_before_wrap();
         if center.width() > 4.0 && center.height() > 4.0 {
             if let Some(mut anchors) = world.get_resource_mut::<HelpAnchors>() {
-                anchors.set("panel.center", center);
+                anchors.set_static("panel.center", center);
             }
         }
         // Central area: do NOT call CentralPanel — egui's bottom/side

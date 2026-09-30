@@ -7,6 +7,7 @@ use super::*;
 use lunco_viz::{TelemetrySparklineOptions, render_values_sparkline, telemetry_values_stats};
 use lunco_workbench_core::{DeferredWorldTriggers, trigger_or_defer};
 use lunco_workbench_perf_ui::{PerfHudSettings, PerfStats};
+use std::borrow::Cow;
 
 #[derive(Resource)]
 pub(crate) struct WorkbenchVisualsCache {
@@ -32,6 +33,7 @@ pub(crate) fn render_workbench(
     state: &mut bevy::ecs::system::SystemState<(EguiContexts, Res<WorkbenchMenuRegistry>)>,
     mut menu_snapshot: Local<Option<WorkbenchMenuRegistry>>,
     mut direct_menu_labels: Local<Vec<String>>,
+    mut anchor_rects: Local<Vec<(Cow<'static, str>, egui::Rect)>>,
 ) {
     let (ctx, menu_registry_changed) = {
         let Ok((mut contexts, menus)) = state.get_mut(world) else {
@@ -103,6 +105,8 @@ pub(crate) fn render_workbench(
         gate.mark_rendered();
     }
 
+    anchor_rects.clear();
+
     let (theme_revision, theme_changed) = {
         let theme_ref = world
             .get_resource_ref::<lunco_theme::Theme>()
@@ -166,6 +170,7 @@ pub(crate) fn render_workbench(
             &theme,
             &menus,
             &direct_menu_labels,
+            &mut anchor_rects,
         );
     });
 
@@ -278,7 +283,7 @@ pub(crate) struct PanelTabViewer<'a> {
 /// lessons use this one registry-owned key in every Workbench render mode.
 pub(crate) fn publish_panel_anchor(world: &mut World, id: PanelId, rect: egui::Rect) {
     if let Some(mut anchors) = world.get_resource_mut::<HelpAnchors>() {
-        anchors.set(format!("panel.{}", id.as_str()), rect);
+        anchors.set_panel(id, rect);
     }
 }
 
@@ -959,7 +964,7 @@ pub(crate) fn render_custom_menus(
     ui: &mut egui::Ui,
     world: &mut World,
     menus: &WorkbenchMenuRegistry,
-    mut anchors: Option<&mut Vec<(String, egui::Rect)>>,
+    mut anchors: Option<&mut Vec<(Cow<'static, str>, egui::Rect)>>,
 ) {
     let _span = bevy::log::info_span!(
         "workbench_custom_menus_render",
@@ -981,7 +986,7 @@ pub(crate) fn render_custom_menus(
             }
         });
         if let Some(anchors) = anchors.as_deref_mut() {
-            anchors.push((name.clone(), response.response.rect));
+            anchors.push((Cow::Owned(name.clone()), response.response.rect));
         }
     }
     for (index, menu) in menus.scripted_menus.iter().enumerate() {
@@ -1007,7 +1012,7 @@ pub(crate) fn render_custom_menus(
             }
         });
         if let Some(anchors) = anchors.as_deref_mut() {
-            anchors.push((menu.label.clone(), response.response.rect));
+            anchors.push((Cow::Owned(menu.label.clone()), response.response.rect));
         }
     }
 }

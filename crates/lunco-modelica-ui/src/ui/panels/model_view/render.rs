@@ -487,7 +487,7 @@ fn render_unified_toolbar(
         if r_docs.clicked() { new_view_mode = ModelViewMode::Docs; }
         let toggles_rect = r_text.rect.union(r_docs.rect).union(r_canvas.rect).union(r_icon.rect);
         ctx.resource_scope::<lunco_workbench_core::presentation::HelpAnchors, _>(|_ctx, a| {
-            a.set("model_view.view_toggles", toggles_rect);
+            a.set_static("model_view.view_toggles", toggles_rect);
         });
         ui.separator();
 
@@ -637,7 +637,7 @@ fn render_unified_toolbar(
         // where simulation is launched.
         let compile_buttons_rect = r_compile.rect.union(r_run.rect).union(r_fast.rect);
         ctx.resource_scope::<lunco_workbench_core::presentation::HelpAnchors, _>(|_ctx, a| {
-            a.set("model_view.compile_buttons", compile_buttons_rect);
+            a.set_static("model_view.compile_buttons", compile_buttons_rect);
         });
 
         // Reset / Restart only make sense once a live sim exists. Distinct
