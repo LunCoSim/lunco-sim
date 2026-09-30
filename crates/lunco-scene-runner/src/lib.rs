@@ -1680,6 +1680,36 @@ fn arm_scenarios_after_startup(app: &mut App) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Reapply the authoritative transport projection after zero-duration startup
+/// preparation. The final readiness update can clear its hold after the time
+/// projection system has already run; without this handoff the virtual clock
+/// remains paused and the first deterministic fixed tick never runs.
+fn reproject_test_transport(app: &mut App) -> Result<(), &'static str> {
+    let transport = *app
+        .world()
+        .get_resource::<lunco_time::TimeTransport>()
+        .ok_or("TimeTransport resource is not installed")?;
+    let progress_held = app
+        .world()
+        .get_resource::<lunco_core_runtime::SimulationProgress>()
+        .ok_or("SimulationProgress resource is not installed")?
+        .is_held();
+    let barrier_held = app
+        .world()
+        .get_resource::<lunco_core_runtime::SimulationBarrier>()
+        .ok_or("SimulationBarrier resource is not installed")?
+        .held;
+    let Some(mut virtual_time) = app.world_mut().get_resource_mut::<Time<Virtual>>() else {
+        return Err("Time<Virtual> resource is not installed");
+    };
+    lunco_time::project_transport_state(
+        &transport,
+        &mut virtual_time,
+        progress_held || barrier_held,
+    );
+    Ok(())
+}
+
 fn dirty_authored_scene_document(world: &World) -> Option<String> {
     let registry = world.get_resource::<lunco_doc_bevy::DocumentRegistry<UsdDocument>>()?;
     registry.ids().find_map(|doc| {
@@ -2032,6 +2062,17 @@ pub fn run() -> u8 {
             2,
             SceneTestProcessStatus::RunnerError,
             Some(diagnostic),
+        );
+    }
+
+    if let Err(error) = reproject_test_transport(&mut app) {
+        eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
+        return finish_scene_test(
+            &app,
+            &cli,
+            2,
+            SceneTestProcessStatus::RunnerError,
+            Some(error.to_owned()),
         );
     }
 
