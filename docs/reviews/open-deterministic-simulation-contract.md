@@ -74,15 +74,22 @@ build at `abc365ea6` ran the updated Rhai gate at `671c0969a`. The complete
 `DETERMINISTIC_PHYSICS_PROFILES_OK`: all ten 4/8/20-rover serial/default-Compute
 and jitter/seed profiles compared exact state and final stages at 780 ticks.
 The supplied other-machine `scene-4-serial` output is timestamped 2026-09-29
-17:51. It reached 780 ticks and failed the scene verdict, but gave no assertion
-detail, build revision, or reference hash. That run predates `bb00f9bb4`
-(2026-09-29 22:44), which made authored failure details part of the typed
-verdict, and `f095634e8` (2026-09-30), which removed rendered `Transform` values
-from the physics reference rows. The old result therefore does not identify a
-state mismatch and is not evidence against the current physics-state path.
-Current Rhai verdicts carry the first expected/actual field difference to
-stdout independently of log settings. Cross-machine state comparison remains
-open until `scene-4-serial` is rerun from a recorded revision and reference.
+17:51 and identifies source revision
+`1df5d85e7a242ac4ee3544c38a141a91ee407ee3`. It reached 780 ticks and failed the
+scene verdict. The checked-in reference was present, but its hash was not
+reported. That source compared render-interpolated `Transform.translation`
+alongside Avian physics state and emitted only a status-string verdict for the
+final stress checks, so the output cannot tell whether an authoritative physics
+field differed. It predates `bb00f9bb4` (2026-09-29 22:44), which made authored
+failure details part of the typed verdict, and `f095634e8` (2026-09-30), which
+removed render `Transform` values from physics rows and validates startup pose
+through `world_pos`. The old failure is therefore inconclusive: presentation
+interpolation could have caused it, but an authoritative cross-machine
+mismatch was not ruled out. Current Rhai verdicts carry the first
+expected/actual field difference to stdout independently of log settings.
+Cross-machine state comparison remains open until `scene-4-serial` is rerun
+with the current physics-state path and a recorded source revision and
+reference hash.
 
 On 2026-09-30, the default-feature production binary built with
 `cargo build --bin luncosim -j 4` at `f095634e825fa487b1893d2239a094fbe420963d`
