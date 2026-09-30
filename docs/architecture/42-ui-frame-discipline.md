@@ -167,6 +167,12 @@ the normal tree-quality algorithm while keeping its cost in the schedule that
 admits it; the eight-substep solver contract is unchanged. Diagnostics measure
 this schedule and must not be disabled to hide the cost.
 
+Mobility refreshes the dynamic fixed-weld body set once at the start of its
+ordered force chain, then shares that live set between suspension and drive.
+The rollback replay chain refreshes it at the same boundary. This avoids
+repeating the fixed-joint scan and rebuilding the set in each consumer while
+keeping membership current for every authoritative or replayed tick.
+
 The empty scene-root mount path is resolved against the same live composed
 stage, through the USD boundary's shared `defaultPrim` resolver. Visual and
 celestial projection therefore read the identical concrete root even when

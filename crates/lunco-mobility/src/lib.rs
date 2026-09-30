@@ -68,6 +68,12 @@ pub struct LunCoMobilityPlugin;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WheelRaycastResultsSet;
 
+/// Dynamic bodies held by an authored fixed weld during the current mobility
+/// force pass. The ordered fixed-step chain refreshes this once and shares it
+/// with the suspension and tire-force systems.
+#[derive(Resource, Default)]
+struct DynamicFixedBodies(HashSet<Entity>);
+
 fn mark_wheel_ports_causal(
     trigger: On<Add, WheelRaycast>,
     query: Query<&WheelRaycast>,
@@ -107,7 +113,8 @@ impl Plugin for LunCoMobilityPlugin {
         // so scripts can react via `on_event` instead of polling distance().
         sensing::register_collision_event_bridge(app);
 
-        app.register_type::<Suspension>()
+        app.init_resource::<DynamicFixedBodies>()
+            .register_type::<Suspension>()
             .register_type::<WheelRaycast>()
             .register_type::<JointedWheelTire>()
             .register_type::<TireLateralStiffnessGraph>()
@@ -167,6 +174,7 @@ impl Plugin for LunCoMobilityPlugin {
             .add_systems(
                 FixedUpdate,
                 (
+                    refresh_dynamically_fixed_bodies,
                     apply_wheel_suspension,
                     update_raycast_support_state,
                     update_suspension_visuals,
@@ -266,6 +274,7 @@ impl Plugin for LunCoMobilityPlugin {
         app.add_systems(
             lunco_core_runtime::RollbackReplay,
             (
+                refresh_dynamically_fixed_bodies,
                 apply_wheel_suspension,
                 update_raycast_support_state,
                 update_suspension_visuals,
@@ -1470,26 +1479,23 @@ impl WheelRaycast {
     }
 }
 
-/// Bodies whose independent mobility force sources are held by a fixed weld to
-/// another dynamic body. A raycast wheel is not an Avian body, so its analytical
-/// suspension must not become a second support path while the chassis is being
-/// carried by that weld. The set is rebuilt from the live joint graph each tick;
-/// detaching the authored joint therefore releases the wheels without a
-/// scene-specific callback or stale latch.
-fn dynamically_fixed_bodies(
-    fixed_joints: &Query<&FixedJoint>,
-    bodies: &Query<&RigidBody>,
-) -> HashSet<Entity> {
-    let mut held = HashSet::new();
+/// Refresh the fixed-weld exclusion set once before mobility force systems run.
+/// Reuse its allocation and let both suspension and drive consume the same live
+/// joint graph for this deterministic tick.
+fn refresh_dynamically_fixed_bodies(
+    mut held: ResMut<DynamicFixedBodies>,
+    fixed_joints: Query<&FixedJoint>,
+    bodies: Query<&RigidBody>,
+) {
+    held.0.clear();
     for joint in fixed_joints.iter() {
         if matches!(bodies.get(joint.body1), Ok(RigidBody::Dynamic))
             && matches!(bodies.get(joint.body2), Ok(RigidBody::Dynamic))
         {
-            held.insert(joint.body1);
-            held.insert(joint.body2);
+            held.0.insert(joint.body1);
+            held.0.insert(joint.body2);
         }
     }
-    held
 }
 
 /// System solving the vertical suspension dynamics.
@@ -1524,8 +1530,7 @@ fn apply_wheel_suspension(
     // cleared, so force applied to it is stored, not spent, and discharges in
     // full on the step that eventually runs — see `lunco_physics::Integrable`.
     mut q_chassis: Query<(Forces, &RigidBody), lunco_physics::Integrable>,
-    fixed_joints: Query<&FixedJoint>,
-    q_bodies: Query<&RigidBody>,
+    fixed_dynamic_bodies: Res<DynamicFixedBodies>,
     mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<MobilityRoot>)>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
@@ -1547,8 +1552,6 @@ fn apply_wheel_suspension(
             return;
         }
     };
-    let fixed_dynamic_bodies = dynamically_fixed_bodies(&fixed_joints, &q_bodies);
-
     for entity in order {
         let Ok((_, _, mut wheel, susp, hits, mount)) = q_wheels.get_mut(entity) else {
             continue;
@@ -1563,7 +1566,7 @@ fn apply_wheel_suspension(
             // what lets a proxy's wheels rest on the terrain and report `on_ground`
             // to the spin model instead of floating at their authored rest offset.
             let apply_force = !matches!(body, RigidBody::Kinematic)
-                && !fixed_dynamic_bodies.contains(&parent_entity);
+                && !fixed_dynamic_bodies.0.contains(&parent_entity);
             let (world_pos, world_rot) = wheel_hub_pose(
                 GridPos(forces.position().0),
                 GridRot(forces.rotation().0),
@@ -1873,8 +1876,7 @@ fn apply_wheel_drive(
         ),
         lunco_physics::Integrable,
     >,
-    fixed_joints: Query<&FixedJoint>,
-    q_bodies: Query<&RigidBody>,
+    fixed_dynamic_bodies: Res<DynamicFixedBodies>,
     time: Res<Time<Fixed>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
@@ -1896,7 +1898,6 @@ fn apply_wheel_drive(
             return;
         }
     };
-    let fixed_dynamic_bodies = dynamically_fixed_bodies(&fixed_joints, &q_bodies);
     let dt = time.delta_secs_f64();
 
     for entity in order {
@@ -1905,7 +1906,7 @@ fn apply_wheel_drive(
         };
         let parent_entity = mount.body;
         if let Ok((mut forces, body, inputs, gravity)) = q_chassis.get_mut(parent_entity) {
-            if fixed_dynamic_bodies.contains(&parent_entity) {
+            if fixed_dynamic_bodies.0.contains(&parent_entity) {
                 continue;
             }
             // Skip forces if body is kinematic
