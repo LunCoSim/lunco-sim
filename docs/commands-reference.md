@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**243 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**245 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -24,7 +24,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Scene editing & authoring**
 
 - [`lunco-luncosim-edit-core`](#lunco-luncosim-edit-core) (1 command)
-- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (8 commands)
+- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (9 commands)
 - [`lunco-scene-commands`](#lunco-scene-commands) (5 commands)
 
 **USD / scenes**
@@ -84,7 +84,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Other (source location unknown)**
 
 - [`lunco-assets-datasets`](#lunco-assets-datasets) (3 commands)
-- [`lunco-camera-core`](#lunco-camera-core) (5 commands)
+- [`lunco-camera-core`](#lunco-camera-core) (6 commands)
 - [`lunco-capture`](#lunco-capture) (4 commands)
 - [`lunco-celestial-spatial`](#lunco-celestial-spatial) (3 commands)
 - [`lunco-control-core`](#lunco-control-core) (2 commands)
@@ -254,6 +254,26 @@ actually call, with the fields the deserializer actually accepts. See the
 | `target` | `Option < GlobalEntityId >` |  Optional replacement target. |
 | `kind` | `Option < String >` |  Optional replacement kind. |
 | `policy` | `Option < String >` |  Optional replacement policy. |
+
+#### `UpdateUsdCurveView`
+
+ Queue a live render update for an existing USD curve entity. The request is
+ coalesced by target, terrain sampling and ribbon meshing run from immutable
+ snapshots on the compute pool, and the current result replaces only the
+ Bevy mesh. No USD layer or scene projection is changed.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/script_tools.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `doc_id` | `u64` |  USD document which owns both target prims. |
+| `root_entity_id` | `u64` |  Stable API identity of the Xform carrying the curve's anchor. |
+| `curve_entity_id` | `u64` |  Stable API identity of the projected UsdGeomBasisCurves entity. |
+| `points` | `Vec < [f64 ; 3] >` |  Ordered centerline points in the route parent's local USD coordinates. |
+| `width_m` | `f64` |  Full ribbon width in metres. |
+| `clearance_m` | `f64` |  Separation from the sampled surface in metres. |
+| `sample_spacing_m` | `f64` |  Maximum horizontal distance between terrain samples in metres. |
+| `max_samples` | `u64` |  Maximum sample count before spacing is increased to fit the request. |
 
 ### `lunco-scene-commands` <a id="lunco-scene-commands"></a>
 
@@ -1684,9 +1704,9 @@ actually call, with the fields the deserializer actually accepts. See the
 | `look_radians_per_pointer_unit` | `Option < f32 >` |  Camera radians per pointer-motion unit. |
 | `orbit_surface_min_scale` | `Option < f64 >` |  Lower bound for orbital rotation at the body's surface, in `[0, 1]`. |
 | `orbit_distance_curve_exponent` | `Option < f64 >` |  Positive exponent shaping the apparent-horizon distance response. |
-| `surface_mode_engage_altitude_m` | `Option < f64 >` |  Non-negative altitude above the body's reference radius where surface mode engages and the orbital zoom floor is set. |
-| `surface_mode_disengage_altitude_m` | `Option < f64 >` |  Altitude above which surface mode disengages; must exceed the engage altitude. |
-| `orbit_direction_animation_duration_s` | `Option < f64 >` |  Positive default duration for authored orbit-direction animations. |
+| `surface_mode_engage_altitude_m` | `Option < f64 >` |  Non-negative altitude in metres above the body's reference radius where surface mode engages;  must be less than `surface_mode_disengage_altitude_m`. |
+| `surface_mode_disengage_altitude_m` | `Option < f64 >` |  Altitude in metres above the body's reference radius where surface mode disengages; must be  greater than `surface_mode_engage_altitude_m`. |
+| `orbit_direction_animation_duration_s` | `Option < f64 >` |  Positive finite default duration for authored orbit-direction animations, in seconds. |
 
 #### `SetCameraLookAt`
 
@@ -3778,7 +3798,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 243 commands from the runtime schema; scanned 964 .rs files for docs (0 parse failure(s) skipped).
+<!-- 245 commands from the runtime schema; scanned 966 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

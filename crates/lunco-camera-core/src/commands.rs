@@ -59,11 +59,13 @@ pub struct SetCameraInput {
     pub orbit_surface_min_scale: Option<f64>,
     /// Positive exponent shaping the apparent-horizon distance response.
     pub orbit_distance_curve_exponent: Option<f64>,
-    /// Altitude below which surface mode engages, in metres above the body's reference radius.
+    /// Non-negative altitude in metres above the body's reference radius where surface mode engages;
+    /// must be less than `surface_mode_disengage_altitude_m`.
     pub surface_mode_engage_altitude_m: Option<f64>,
-    /// Altitude above which surface mode disengages, in metres above the body's reference radius.
+    /// Altitude in metres above the body's reference radius where surface mode disengages; must be
+    /// greater than `surface_mode_engage_altitude_m`.
     pub surface_mode_disengage_altitude_m: Option<f64>,
-    /// Default duration for authored orbit-direction animations, in seconds.
+    /// Positive finite default duration for authored orbit-direction animations, in seconds.
     pub orbit_direction_animation_duration_s: Option<f64>,
 }
 
