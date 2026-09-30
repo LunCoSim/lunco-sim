@@ -102,6 +102,16 @@ Both platform launchers now print the source revision and reference hash before
 running profiles. This confirms same-machine behavior only; the older remote
 failure remains unclassified until rerun with the typed failure-detail build.
 
+After rebuilding the default-feature binary at `0dc1dee91c48c1b463aa3afba64a5c42f1e27517`,
+the focused `scene-4-serial` profile passed again: 780 ticks, 979 application
+updates, 60 Hz, serial Compute, zero jitter, and seed
+`6840157149251759617`. It matched the same reference SHA-256
+`4f1785e86deb5e05083561007ec8e08891ca5a0d19c82e9edcdb8f70c92e3496` with
+`RUST_LOG=off`. The update count differs while the authoritative state remains
+equal. This is fresh Linux same-host evidence; it does not classify the earlier
+remote failure. That machine still needs to rerun the exact profile against
+this source and reference to expose any first differing field.
+
 ### Initial-stage composition policy acceptance (2026-09-30)
 
 The production `initial_usd_composition_default` Twin has no local composition
