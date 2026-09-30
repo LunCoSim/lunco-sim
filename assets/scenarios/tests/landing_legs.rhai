@@ -413,6 +413,7 @@ fn on_tick(me, ctx) {
                 world_pos(this.pads[0]), world_pos(this.pads[1]),
                 world_pos(this.pads[2]), world_pos(this.pads[3]),
             ],
+            ground_pos: world_pos(this.ground),
             leg_pos: [
                 world_pos(this.legs[0]), world_pos(this.legs[1]),
                 world_pos(this.legs[2]), world_pos(this.legs[3]),
@@ -497,6 +498,10 @@ fn verdict(s) {
     for i in 0..4 {
         f.push(t_bounded(s.leg_pos[i], 100.0, "strut " + names[i]));
         f.push(t_bounded(s.pad_pos[i], 100.0, "pad " + names[i]));
+        let pad_lower_face_y = s.pad_pos[i][1] - 0.05;
+        f.push(t_true(pad_lower_face_y >= s.ground_pos[1] - 0.01,
+            "pad " + names[i] + " penetrated flat ground by " +
+            r4(s.ground_pos[1] - pad_lower_face_y) + " m"));
     }
 
     f.push(t_range(s.tilt, 0.0, 5.0, "hull tilt at rest (deg)"));

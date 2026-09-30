@@ -65,18 +65,4 @@ def Xform "LandingLocationMarker" (
         bool physics:collisionEnabled = false
     }
 
-    # Geofence trigger volume — overlap-only Sensor (invisible, NON-SOLID, so it
-    # never pushes the lander). `lunco:triggerZone` fires `enter:landing_location` /
-    # `exit:landing_location` events when a vehicle crosses it.
-    def Sphere "Zone" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
-    )
-    {
-        double radius = 4.0
-        double3 xformOp:translate = (0, 1.0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        bool physics:collisionEnabled = true
-        token visibility = "invisible"
-        custom string lunco:triggerZone = "landing_location"
-    }
 }
