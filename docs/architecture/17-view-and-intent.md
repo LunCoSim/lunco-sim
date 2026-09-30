@@ -100,8 +100,9 @@ Typed camera commands in `lunco-camera-core` express generic rig operations;
 typed control commands in `lunco-control-core` express producer/target
 relationships. Generic authored-camera selection and camera-path commands do
 not need an embodiment and are handled by `lunco-usd-bevy-camera`.
-`FocusTarget`, `FollowTarget`, `ReturnFromOrbit`, `SetCameraInput`, and
-`SetCameraLookAt` are generic camera contracts; `AcquireControl` is the
+`FocusTarget`, `FollowTarget`, `ReturnFromOrbit`,
+`AnimateOrbitCameraDirection`, `SetCameraInput`, and `SetCameraLookAt` are
+generic camera contracts; `AcquireControl` is the
 high-level embodiment composition of the generic control relationship. After
 committing authority, avatar emits `BindCameraTarget` when requested;
 `lunco-avatar-camera` realizes that presentation transaction.

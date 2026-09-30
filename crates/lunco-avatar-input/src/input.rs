@@ -1,7 +1,7 @@
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_avatar_camera_core::OrbitUserInput;
+use lunco_avatar_camera_core::{OrbitCameraTransition, OrbitUserInput};
 use lunco_camera_core::{
     CameraZoomInput, FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera,
     SurfaceRelativeMode,
@@ -119,7 +119,7 @@ pub(crate) fn avatar_behavior_input_system(
         ),
     >,
     mut q_orbit: Query<
-        (Entity, &mut OrbitCamera),
+        (Entity, &mut OrbitCamera, Option<&mut OrbitCameraTransition>),
         (
             With<Embodiment>,
             With<LocalEmbodiment>,
@@ -175,6 +175,9 @@ pub(crate) fn avatar_behavior_input_system(
     let delta_yaw = -look_delta.x * settings.look_radians_per_pointer_unit;
     let delta_pitch = -look_delta.y * settings.look_radians_per_pointer_unit;
     let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    if let Some((_, _, Some(mut transition))) = q_orbit.iter_mut().next() {
+        transition.cancel();
+    }
 
     if ctrl_pressed {
         // Momentary free-flight: apply look deltas directly to Transform.
@@ -208,7 +211,7 @@ pub(crate) fn avatar_behavior_input_system(
         if let Some(mut arm) = q_spring.iter_mut().next() {
             (arm.yaw, arm.pitch) = look_angles(arm.yaw, arm.pitch, look_delta, &settings, 1.0);
         }
-        if let Some((entity, mut orbit)) = q_orbit.iter_mut().next() {
+        if let Some((entity, mut orbit, _)) = q_orbit.iter_mut().next() {
             let physical_target =
                 lunco_spatial::find_descendant_or_self(orbit.target, &q_children, &q_bodies)
                     .unwrap_or(orbit.target);

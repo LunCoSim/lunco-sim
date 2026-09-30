@@ -296,6 +296,13 @@ setting; omission means hidden. The workbench's existing Twin-scoped
 must not derive coordinates from transforms, duplicate pose state, or keep a
 stale marker across avatar, Twin, or scene lifecycle changes.
 
+The same surface exposes a Mission button only while the Moon orbital pin is
+active and the scene has a valid lunar site anchor. It publishes the site's
+position as a typed f64 vector in the Moon inertial frame, independently of
+rover possession. Rhai computes the target direction and animation duration.
+The generic `AnimateOrbitCameraDirection` command moves the view along the
+existing orbit while preserving its current distance and vertical offset.
+
 ### Ownership and visibility
 
 Moving every overlay into the Twin would mix persistent project policy with

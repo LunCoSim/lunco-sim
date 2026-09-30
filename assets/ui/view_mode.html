@@ -7,6 +7,7 @@
   <property name="earth_display">none</property>
   <property name="earth_background">var(--button-background)</property>
   <property name="earth_color">var(--muted-color)</property>
+  <property name="mission_display">none</property>
   <property name="map_display">none</property>
   <property name="map_status">NO LUNAR FIX</property>
   <property name="map_coordinates">LAT — · LON —</property>
@@ -26,6 +27,9 @@
         </button>
         <button id="runtime-view-mode-earth" on_press="runtime_view_earth">
           <text>Earth</text>
+        </button>
+        <button id="runtime-view-mode-mission" on_press="runtime_ui_authored_action" tag:action="camera.focus.mission-site">
+          <text>Mission</text>
         </button>
       </node>
     </node>

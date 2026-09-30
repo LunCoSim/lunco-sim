@@ -16,8 +16,8 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_avatar_camera_core::{
-    CAMERA_ZOOM_SENSITIVITY, CurrentRegionArrival, OrbitUserInput, OrbitViewReturn, RadialArrival,
-    SURFACE_ORBIT_HANDOFF_ALTITUDE_M,
+    CAMERA_ZOOM_SENSITIVITY, CurrentRegionArrival, OrbitCameraTransition, OrbitUserInput,
+    OrbitViewReturn, RadialArrival, SURFACE_ORBIT_HANDOFF_ALTITUDE_M,
 };
 use lunco_camera_core::{
     CameraDefaults, CameraPoseLock, CameraUpdateSet, CameraZoomInput, FreeFlightCamera,
@@ -311,6 +311,7 @@ register_commands!(
     subject::on_follow_command,
     transactions::on_return_from_orbit,
     transactions::on_focus_command,
+    transactions::on_animate_orbit_camera_direction,
 );
 
 /// Hysteresis thresholds for the avatar's surface-relative camera policy.
@@ -758,6 +759,7 @@ fn orbit_system(
             &mut Transform,
             &mut CellCoord,
             &mut OrbitCamera,
+            Option<&mut OrbitCameraTransition>,
             &ChildOf,
             &mut CameraZoomInput,
             Has<CurrentRegionArrival>,
@@ -794,12 +796,14 @@ fn orbit_system(
         return;
     };
     let dt = time.delta_secs();
+    let dt_f64 = time.delta_secs_f64();
 
     for (
         avatar_ent,
         mut tf,
         mut cell,
         mut orbit,
+        orbit_transition,
         child_of,
         mut zoom,
         wants_current_region,
@@ -882,6 +886,22 @@ fn orbit_system(
                 }
             }
             commands.entity(avatar_ent).remove::<CurrentRegionArrival>();
+        }
+
+        if let Some(mut transition) = orbit_transition {
+            if let Some((rotation, finished)) = transition.advance(dt_f64) {
+                let direction = rotation.mul_vec3(Vec3::Z).as_dvec3();
+                (orbit.yaw, orbit.pitch) = orbit_angles_from_arm(direction);
+                if finished {
+                    commands
+                        .entity(avatar_ent)
+                        .remove::<OrbitCameraTransition>();
+                }
+            } else {
+                commands
+                    .entity(avatar_ent)
+                    .remove::<OrbitCameraTransition>();
+            }
         }
 
         let min_dist = if let Some(body) = body {

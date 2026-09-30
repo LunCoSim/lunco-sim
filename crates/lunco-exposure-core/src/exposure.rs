@@ -180,6 +180,13 @@ impl ExposureWriter<'_> {
         }
     }
 
+    /// Remove an optional property when its source identity is unavailable.
+    pub fn remove_property(&mut self, name: impl AsRef<str>) {
+        if self.surface.properties.remove(name.as_ref()).is_some() {
+            *self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
     /// Set the canonical entity represented by this surface.
     pub fn subject(&mut self, value: Option<GlobalEntityId>) {
         if self.surface.subject != value {

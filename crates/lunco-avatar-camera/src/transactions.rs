@@ -8,12 +8,12 @@ use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 use leafwing_input_manager::prelude::*;
 use lunco_avatar_camera_core::{
-    CurrentRegionArrival, OrbitReturnBehavior, OrbitUserInput, OrbitViewHistory, OrbitViewReturn,
-    RadialArrival,
+    CurrentRegionArrival, OrbitCameraTransition, OrbitReturnBehavior, OrbitUserInput,
+    OrbitViewHistory, OrbitViewReturn, RadialArrival,
 };
 use lunco_camera_core::{
-    AdaptiveNearPlane, CameraZoomInput, FocusTarget, FreeFlightCamera, OrbitCamera,
-    ReturnFromOrbit, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
+    AdaptiveNearPlane, AnimateOrbitCameraDirection, CameraZoomInput, FocusTarget, FreeFlightCamera,
+    OrbitCamera, ReturnFromOrbit, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
 };
 use lunco_celestial::CelestialBody;
 use lunco_control_core::{IntentAnalogState, UserIntent};
@@ -28,6 +28,115 @@ fn local_avatar_state_error(requested: Option<Entity>) -> String {
         Some(entity) => format!("requested avatar {entity:?} is not a complete local avatar"),
         None => "the authoritative local embodiment has no complete camera state".to_string(),
     }
+}
+
+fn report_orbit_direction_failure(
+    diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+    camera: Option<Entity>,
+    message: impl Into<String>,
+) {
+    let message = message.into();
+    warn!(target: "avatar-camera", ?camera, "[orbit direction] refused: {message}");
+    lunco_camera_core::replace_camera_diagnostic(
+        diagnostics,
+        "avatar-camera",
+        "OrbitCameraDirection",
+        Some(message),
+    );
+}
+
+/// Animate the local orbit camera to a new direction without changing its radius.
+#[on_command(AnimateOrbitCameraDirection)]
+pub(crate) fn on_animate_orbit_camera_direction(
+    trigger: On<AnimateOrbitCameraDirection>,
+    mut commands: Commands,
+    mut q_avatar: Query<
+        (&mut OrbitCamera, Has<lunco_camera_core::CameraPoseLock>),
+        (With<Embodiment>, With<LocalEmbodiment>),
+    >,
+    local_avatar: Option<Res<lunco_embodiment_core::roles::TheLocalEmbodiment>>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+) {
+    let cmd = trigger.event();
+    let camera = match lunco_embodiment_core::roles::resolve_requested_or_local(
+        cmd.camera,
+        local_avatar.as_deref(),
+    ) {
+        Ok(camera) => camera,
+        Err(message) => {
+            report_orbit_direction_failure(&mut diagnostics, cmd.camera, message);
+            return;
+        }
+    };
+    let Ok((mut orbit, pose_locked)) = q_avatar.get_mut(camera) else {
+        report_orbit_direction_failure(
+            &mut diagnostics,
+            Some(camera),
+            "the requested local camera is not in orbital mode",
+        );
+        return;
+    };
+    if pose_locked {
+        report_orbit_direction_failure(
+            &mut diagnostics,
+            Some(camera),
+            "the camera pose is owned by another presentation mode",
+        );
+        return;
+    }
+    if !cmd.yaw_rad.is_finite()
+        || !cmd.pitch_rad.is_finite()
+        || cmd.pitch_rad.abs() > std::f64::consts::FRAC_PI_2
+        || !cmd.duration_s.is_finite()
+        || cmd.duration_s < 0.0
+    {
+        report_orbit_direction_failure(
+            &mut diagnostics,
+            Some(camera),
+            "yaw, pitch, or transition duration is outside the orbit direction contract",
+        );
+        return;
+    }
+    // OrbitCamera stores presentation angles as f32. Keep the conversion at
+    // the presentation boundary and leave its f64 orbital radius untouched.
+    let yaw = cmd.yaw_rad as f32;
+    let pitch = cmd.pitch_rad as f32;
+    if !yaw.is_finite() || !pitch.is_finite() {
+        report_orbit_direction_failure(
+            &mut diagnostics,
+            Some(camera),
+            "the requested angles exceed the orbit camera's presentation range",
+        );
+        return;
+    }
+
+    let mut camera_commands = commands.entity(camera);
+    if cmd.duration_s == 0.0 {
+        orbit.yaw = yaw;
+        orbit.pitch = pitch;
+        camera_commands.remove::<OrbitCameraTransition>();
+    } else {
+        let from = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
+        let to = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+        let Some(transition) = OrbitCameraTransition::new(from, to, cmd.duration_s) else {
+            report_orbit_direction_failure(
+                &mut diagnostics,
+                Some(camera),
+                "the requested orbit direction cannot be animated",
+            );
+            return;
+        };
+        camera_commands.try_insert(transition);
+    }
+    camera_commands
+        .remove::<(CurrentRegionArrival, RadialArrival)>()
+        .try_insert(OrbitUserInput);
+    lunco_camera_core::replace_camera_diagnostic(
+        &mut diagnostics,
+        "avatar-camera",
+        "OrbitCameraDirection",
+        None,
+    );
 }
 
 fn remember_user_orbit_pose(
@@ -61,6 +170,10 @@ fn remember_orbit_pose_for_body(
 /// accidentally forget one exit route.
 fn remember_orbit_camera_on_remove(mut world: DeferredWorld, context: HookContext) {
     let entity = context.entity;
+    world
+        .commands()
+        .entity(entity)
+        .remove::<OrbitCameraTransition>();
     if world.get::<OrbitUserInput>(entity).is_none() {
         return;
     }
@@ -90,15 +203,18 @@ pub(crate) fn register_orbit_history_hook(app: &mut App) {
 pub(crate) fn clear_orbit_view_history_on_twin_closed(
     trigger: On<lunco_workspace::TwinClosed>,
     mut commands: Commands,
-    q_avatar: Query<Entity, With<OrbitViewHistory>>,
+    q_avatar: Query<Entity, Or<(With<OrbitViewHistory>, With<OrbitCameraTransition>)>>,
 ) {
     if !trigger.event().was_active {
         return;
     }
     for entity in &q_avatar {
-        commands
-            .entity(entity)
-            .remove::<(OrbitViewHistory, OrbitUserInput, CurrentRegionArrival)>();
+        commands.entity(entity).remove::<(
+            OrbitViewHistory,
+            OrbitUserInput,
+            CurrentRegionArrival,
+            OrbitCameraTransition,
+        )>();
     }
 }
 /// Install the behavior and frame-owned components captured by one
@@ -115,6 +231,7 @@ fn apply_orbit_return(commands: &mut Commands, avatar: Entity, state: &OrbitView
         .remove::<OrbitViewReturn>()
         .remove::<RadialArrival>()
         .remove::<CurrentRegionArrival>()
+        .remove::<OrbitCameraTransition>()
         .remove::<OrbitUserInput>();
 
     match state.behavior() {
@@ -406,6 +523,7 @@ pub(crate) fn on_focus_command(
     }
     ent.remove::<SpringArmCamera>()
         .remove::<FreeFlightCamera>()
+        .remove::<OrbitCameraTransition>()
         // Surface state must go too: the generic surface-camera runtime runs
         // after the celestial orbit writer and would rebuild the rotation as a ground-level
         // tangent frame every frame — the camera orbits the target but looks
@@ -545,6 +663,66 @@ mod tests {
     use lunco_camera_core::FollowAttitude;
     use lunco_celestial_spatial_core::LocalGravityField;
     use lunco_control_core::ControlLink;
+
+    #[test]
+    fn animate_orbit_camera_direction_preserves_radius_and_rejects_bad_pitch() {
+        let mut app = App::new();
+        app.init_resource::<lunco_core::RuntimeDiagnostics>()
+            .add_observer(on_animate_orbit_camera_direction);
+        let target = app.world_mut().spawn_empty().id();
+        let camera = app
+            .world_mut()
+            .spawn((
+                Embodiment,
+                LocalEmbodiment,
+                OrbitCamera {
+                    target,
+                    distance: 1_900_000.0,
+                    yaw: -0.4,
+                    pitch: 0.15,
+                    damping: None,
+                    vertical_offset: 12.0,
+                },
+            ))
+            .id();
+
+        app.world_mut().trigger(AnimateOrbitCameraDirection {
+            camera: Some(camera),
+            yaw_rad: 0.8,
+            pitch_rad: -0.3,
+            duration_s: 1.5,
+        });
+        app.world_mut().flush();
+
+        let orbit = app.world().get::<OrbitCamera>(camera).unwrap();
+        assert_eq!(orbit.distance, 1_900_000.0);
+        assert_eq!(orbit.yaw, -0.4);
+        assert_eq!(orbit.pitch, 0.15);
+        assert_eq!(orbit.vertical_offset, 12.0);
+        assert!(app.world().get::<OrbitCameraTransition>(camera).is_some());
+
+        app.world_mut().trigger(AnimateOrbitCameraDirection {
+            camera: Some(camera),
+            yaw_rad: 0.0,
+            pitch_rad: 2.0,
+            duration_s: 0.0,
+        });
+        app.world_mut().flush();
+
+        let orbit = app.world().get::<OrbitCamera>(camera).unwrap();
+        assert_eq!(orbit.distance, 1_900_000.0);
+        assert_eq!(orbit.yaw, -0.4);
+        assert_eq!(orbit.pitch, 0.15);
+        assert!(app.world().get::<OrbitCameraTransition>(camera).is_some());
+        let diagnostics = app.world().resource::<lunco_core::RuntimeDiagnostics>();
+        assert!(diagnostics.findings.iter().any(|finding| {
+            finding.producer == "avatar-camera"
+                && finding.subject == "OrbitCameraDirection"
+                && finding
+                    .message
+                    .contains("outside the orbit direction contract")
+        }));
+    }
 
     #[test]
     fn focus_refuses_an_explicit_non_local_avatar_without_entity_order_fallback() {

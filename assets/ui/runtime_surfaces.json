@@ -280,6 +280,10 @@
             "399": "var(--active-text-color)"
           }
         },
+        "mission_display": {
+          "source": "mission_view_available",
+          "map": { "true": "flex", "false": "none" }
+        },
         "map_display": { "source": "map_display" },
         "map_status": { "source": "map_status" },
         "map_coordinates": { "source": "map_coordinates" },

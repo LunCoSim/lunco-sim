@@ -116,6 +116,17 @@ f64 frame conversion and atomic grid migration remain the only placement path;
 the arrival marker is consumed by the orbit writer once and cannot become a
 second transform writer.
 
+The lunar `celestial-view` HUI exposes a Mission action while the Moon orbit is
+active and the scene has a valid lunar site anchor. It publishes that site's
+position as a typed f64 vector in the Moon's inertial frame, independently of
+rover possession. Rhai computes the orbit angles and chooses the animation
+duration, then sends `AnimateOrbitCameraDirection`. The generic camera
+transition interpolates the direction along the existing orbit at a fixed
+radius; it leaves orbital distance and vertical offset unchanged. The orbit
+writer stays active and continues publishing the Moon orbital pin. User look
+input cancels the transition, and the final direction is retained by the
+normal per-body orbit history.
+
 ## Coordinate and physics boundary
 
 Ephemeris, anchors, orbits, velocities, and rotations remain f64 until the

@@ -34,6 +34,22 @@ pub struct ReturnFromOrbit {
     pub camera: Entity,
 }
 
+/// Animate an existing celestial orbit camera to a new direction at its current radius.
+#[Command]
+pub struct AnimateOrbitCameraDirection {
+    /// The camera rig, when the caller does not use the local presentation rig.
+    #[sync_local]
+    #[serde(default)]
+    #[reflect(default)]
+    pub camera: Option<Entity>,
+    /// Orbit yaw in radians.
+    pub yaw_rad: f64,
+    /// Orbit pitch in radians.
+    pub pitch_rad: f64,
+    /// Duration of the camera movement in seconds. Zero applies the direction immediately.
+    pub duration_s: f64,
+}
+
 /// Tune pointer-to-camera response while the application is running.
 #[Command(default)]
 pub struct SetCameraInput {

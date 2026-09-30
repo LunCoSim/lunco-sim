@@ -10,6 +10,7 @@
   --ui-earth-display: none;
   --ui-earth-background: var(--button-background);
   --ui-earth-color: var(--muted-color);
+  --ui-mission-display: none;
   --ui-map-display: none;
   --ui-map-marker-display: none;
   --ui-map-marker-left: 0%;
@@ -181,7 +182,8 @@
 
 #runtime-view-mode-surface,
 #runtime-view-mode-moon,
-#runtime-view-mode-earth {
+#runtime-view-mode-earth,
+#runtime-view-mode-mission {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -217,9 +219,14 @@
   color: var(--ui-earth-color);
 }
 
+#runtime-view-mode-mission {
+  display: var(--ui-mission-display);
+}
+
 #runtime-view-mode-surface:hover,
 #runtime-view-mode-moon:hover,
-#runtime-view-mode-earth:hover {
+#runtime-view-mode-earth:hover,
+#runtime-view-mode-mission:hover {
   border-color: var(--accent-color);
   background-color: rgba(127, 212, 255, 0.24);
   color: var(--text-color);
