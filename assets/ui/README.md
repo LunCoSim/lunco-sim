@@ -56,9 +56,10 @@ stable surface IDs required for the current capture, and the recorder validates
 the selected IDs against visible retained surfaces before capture.
 
 Each exposed value is mirrored as a declared template property and as a CSS
-custom property named `--ui-<property-name>`. The registry stores typed values,
-not CSS or HUI types. A manifest binding may map exact rendered values such as
-`true`, `false`, or `301` into presentation values.
+custom property named `--ui-<property-name>`. The registry stores typed text,
+boolean, f64, array, and map values, not CSS or HUI types. A manifest binding
+may map exact rendered values such as `true`, `false`, or `301` into
+presentation values.
 
 HUI callbacks are semantic runtime actions. Built-in actions remain registered
 by the runtime, while Twin-authored actions are forwarded as typed
@@ -115,6 +116,13 @@ workspace state owns the draggable window override per Twin and clears it on
 `TwinClosed`, so camera/world movement cannot move the map. When there is no
 complete lunar surface pose, the exposure deliberately hides the marker and
 reports the authored no-fix state.
+
+When a lunar scene has a valid site anchor and the Moon orbital pin is active,
+the same switcher shows a Mission button. The engine publishes the scene site's
+position as a typed f64 vector in the Moon's inertial frame; Rhai chooses the
+target direction and animation duration. A generic camera command moves the
+view along its current orbit, preserving the orbital distance and vertical
+offset. The mission view is available even before a rover is possessed.
 
 The view switcher keeps its button card in the root's normal vertical flow and
 anchors the map below it. The map is absolutely positioned inside the movable

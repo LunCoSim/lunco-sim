@@ -100,6 +100,22 @@ fn current_camera_name() {
     if name == () || name == "" { "NO ACTIVE CAMERA" } else { name }
 }
 
+/// Convert an inertial mission-site direction to orbital camera angles.
+/// Rhai's two-argument atan(y, x) preserves the quadrant like atan2.
+fn mission_site_camera_angles(position) {
+    if position == () || position.len() != 3 { return (); }
+    let x = position[0];
+    let y = position[1];
+    let z = position[2];
+    if !x.is_finite() || !y.is_finite() || !z.is_finite() { return (); }
+    let radius_squared = x * x + y * y + z * z;
+    if !radius_squared.is_finite() || radius_squared <= 0.0 { return (); }
+    #{
+        yaw_rad: atan(x, z),
+        pitch_rad: -atan(y, sqrt(x * x + z * z))
+    }
+}
+
 /// Dispatch the authored camera-surface actions through the normal typed
 /// command bridge. The runtime UI layer only transports the action string; it
 /// does not know that these records happen to represent cameras.
@@ -123,6 +139,29 @@ fn handle_camera_ui_action(action) {
         let result = cmd("ResumeCameraDirector", #{});
         if result == () || result.ok != true {
             notify_kind("Authored camera director is unavailable", "error");
+        }
+        return true;
+    }
+    if action == "camera.focus.mission-site" {
+        let position = get_exposure("celestial-view", "site_orbit_position_m");
+        if position == () || position.len() != 3 {
+            notify_kind("The lunar mission location is unavailable", "warning");
+            return true;
+        }
+        let angles = mission_site_camera_angles(position);
+        if angles == () {
+            notify_kind("The lunar mission location is invalid", "error");
+            return true;
+        }
+        // Rhai chooses the target direction and animation duration. The
+        // generic camera command preserves the current orbital radius.
+        let result = cmd("AnimateOrbitCameraDirection", #{
+            yaw_rad: angles.yaw_rad,
+            pitch_rad: angles.pitch_rad,
+            duration_s: 1.5
+        });
+        if result == () || result.ok != true {
+            notify_kind("Could not frame the lunar mission location", "error");
         }
         return true;
     }

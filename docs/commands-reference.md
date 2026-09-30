@@ -1628,6 +1628,19 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ### `lunco-camera-core` <a id="lunco-camera-core"></a>
 
+#### `AnimateOrbitCameraDirection`
+
+ Animate an existing celestial orbit camera to a new direction at its current radius.
+
+- *defined in:* `crates/lunco-camera-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `camera` | `Option < Entity >` |  The camera rig, when the caller does not use the local presentation rig. |
+| `yaw_rad` | `f64` |  Orbit yaw in radians. |
+| `pitch_rad` | `f64` |  Orbit pitch in radians. |
+| `duration_s` | `f64` |  Duration of the camera movement in seconds. Zero applies the direction immediately. |
+
 #### `FocusTarget`
 
  Focus a camera rig on a target without taking control of it.

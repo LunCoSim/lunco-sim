@@ -91,6 +91,77 @@ pub struct CurrentRegionArrival;
 #[derive(Component, Debug, Clone, Copy)]
 pub struct RadialArrival;
 
+/// A camera-only arc between two orbit directions that preserves orbit radius.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct OrbitCameraTransition {
+    from: Quat,
+    to: Quat,
+    duration_s: f64,
+    elapsed_s: f64,
+    cancelled: bool,
+}
+
+impl OrbitCameraTransition {
+    /// Create a transition between finite unit camera rotations.
+    pub fn new(from: Quat, to: Quat, duration_s: f64) -> Option<Self> {
+        if !from.is_finite()
+            || !to.is_finite()
+            || from.length_squared() <= f32::EPSILON
+            || to.length_squared() <= f32::EPSILON
+            || !duration_s.is_finite()
+            || duration_s <= 0.0
+        {
+            return None;
+        }
+        Some(Self {
+            from: from.normalize(),
+            to: to.normalize(),
+            duration_s,
+            elapsed_s: 0.0,
+            cancelled: false,
+        })
+    }
+
+    /// Advance the eased arc and report whether it has reached its target.
+    pub fn advance(&mut self, delta_s: f64) -> Option<(Quat, bool)> {
+        if self.cancelled || !delta_s.is_finite() || delta_s < 0.0 {
+            return None;
+        }
+        self.elapsed_s = (self.elapsed_s + delta_s).min(self.duration_s);
+        let progress = (self.elapsed_s / self.duration_s).clamp(0.0, 1.0);
+        let eased = (progress * progress * (3.0 - 2.0 * progress)) as f32;
+        Some((self.from.slerp(self.to, eased).normalize(), progress >= 1.0))
+    }
+
+    /// Stop the arc when direct user look input takes control.
+    pub fn cancel(&mut self) {
+        self.cancelled = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OrbitCameraTransition;
+    use bevy::math::{Quat, Vec3};
+
+    #[test]
+    fn orbit_camera_transition_eases_through_the_arc_and_reaches_its_target() {
+        let target = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let mut transition = OrbitCameraTransition::new(Quat::IDENTITY, target, 2.0)
+            .expect("finite positive duration and rotations are valid");
+
+        let (midpoint, finished) = transition.advance(1.0).expect("transition advances");
+        let direction = midpoint.mul_vec3(Vec3::Z);
+        assert!(!finished);
+        assert!((direction.x - std::f32::consts::FRAC_1_SQRT_2).abs() < 1.0e-5);
+        assert!((direction.z - std::f32::consts::FRAC_1_SQRT_2).abs() < 1.0e-5);
+
+        let (final_rotation, finished) = transition.advance(1.0).expect("transition advances");
+        assert!(finished);
+        assert!(final_rotation.dot(target).abs() > 0.99999);
+    }
+}
+
 /// Marks an orbital camera whose pose changed through local user input.
 ///
 /// The avatar camera transaction owner consumes this marker when orbit mode ends

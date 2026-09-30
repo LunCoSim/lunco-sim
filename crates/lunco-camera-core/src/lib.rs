@@ -8,7 +8,10 @@
 pub mod commands;
 pub mod math;
 
-pub use commands::{FocusTarget, FollowTarget, ReturnFromOrbit, SetCameraInput, SetCameraLookAt};
+pub use commands::{
+    AnimateOrbitCameraDirection, FocusTarget, FollowTarget, ReturnFromOrbit, SetCameraInput,
+    SetCameraLookAt,
+};
 
 /// Project authored camera identities into concise, deterministic UI labels.
 ///

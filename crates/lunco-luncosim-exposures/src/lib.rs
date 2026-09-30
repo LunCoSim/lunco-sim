@@ -1744,6 +1744,7 @@ pub(crate) struct ExposureRuntime<'w, 's> {
     angular_velocity: Query<'w, 's, &'static AngularVelocity>,
     rotation: Query<'w, 's, &'static Rotation>,
     orbital_pin: Option<Res<'w, OrbitalViewPin>>,
+    frame_index: Option<Res<'w, lunco_celestial_spatial_core::ReferenceFrameIndex>>,
     stages: Res<'w, Assets<UsdStageAsset>>,
     canonical: NonSend<'w, CanonicalStages>,
 }
@@ -1757,6 +1758,7 @@ pub(crate) struct ExposureRuntime<'w, 's> {
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ExposureQueries<'w, 's> {
     avatar: Query<'w, 's, &'static ControlLink, (With<Embodiment>, With<LocalEmbodiment>)>,
+    site_anchors: Query<'w, 's, Entity, With<lunco_celestial::geo::SiteAnchor>>,
     name: Query<'w, 's, &'static Name>,
     callsign: Query<'w, 's, &'static lunco_core::markers::Callsign>,
     catalog_id: Query<'w, 's, &'static lunco_core::CatalogEntryId>,
@@ -2066,6 +2068,11 @@ pub(crate) fn publish_exposure(
             &runtime.local_avatar,
             &queries.avatar,
             &geo.surface_pose,
+            &queries.site_anchors,
+            runtime.frame_index.as_deref(),
+            &queries.parents,
+            &queries.grids,
+            &queries.spatial,
             workspace.as_deref(),
         );
     }
@@ -2082,6 +2089,11 @@ fn publish_celestial_capability(
     local_avatar: &TheLocalEmbodiment,
     avatars: &Query<&ControlLink, (With<Embodiment>, With<LocalEmbodiment>)>,
     surface_pose: &lunco_celestial_spatial_core::SurfacePoseQuery,
+    site_anchors: &Query<Entity, With<lunco_celestial::geo::SiteAnchor>>,
+    frame_index: Option<&lunco_celestial_spatial_core::ReferenceFrameIndex>,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     workspace: Option<&lunco_workspace::WorkspaceResource>,
 ) {
     let mut moon = false;
@@ -2095,10 +2107,32 @@ fn publish_celestial_capability(
     }
 
     let active_body = orbital_pin.filter(|pin| pin.active).map(|pin| pin.body);
-    let local_surface_pose = local_avatar
+    let local_target = local_avatar
         .0
         .and_then(|avatar| avatars.get(avatar).ok())
-        .and_then(|controller| surface_pose.get(controller.target));
+        .map(|controller| controller.target);
+    let local_surface_pose = local_target.and_then(|target| surface_pose.get(target));
+    let site_surface_pose = site_anchors
+        .single()
+        .ok()
+        .and_then(|site| surface_pose.get(site));
+    let site_orbit_position = site_surface_pose
+        .filter(|pose| pose.body == lunco_celestial::ephemeris_id::MOON)
+        .and_then(|pose| {
+            let index = frame_index?;
+            lunco_celestial_spatial_core::transform_pose_between_reference_frames(
+                pose.body_fixed_position.0,
+                DQuat::IDENTITY,
+                lunco_celestial::ReferenceFrame::BodyFixed { body: pose.body },
+                lunco_celestial::ReferenceFrame::EclipticJ2000 { center: pose.body },
+                index,
+                q_parents,
+                q_grids,
+                q_spatial,
+            )
+            .map(|(position, _)| position)
+        })
+        .filter(|position| position.is_finite());
     let lunar_map = project_lunar_map(
         twin_setting_is_enabled(workspace, LUNAR_MAP_SETTING_KEY),
         moon,
@@ -2110,6 +2144,22 @@ fn publish_celestial_capability(
     ui.property("body_moon_present", moon);
     ui.property("body_earth_present", earth);
     ui.property("active_body_id", f64::from(active_body.unwrap_or_default()));
+    ui.property(
+        "mission_view_available",
+        active_body == Some(lunco_celestial::ephemeris_id::MOON) && site_orbit_position.is_some(),
+    );
+    if let Some(position) = site_orbit_position {
+        ui.property(
+            "site_orbit_position_m",
+            ExposureValue::Array(vec![
+                ExposureValue::Number(position.x),
+                ExposureValue::Number(position.y),
+                ExposureValue::Number(position.z),
+            ]),
+        );
+    } else {
+        ui.remove_property("site_orbit_position_m");
+    }
     ui.property("map_display", lunar_map.display);
     ui.property("map_status", lunar_map.status);
     ui.property("map_coordinates", lunar_map.coordinates);

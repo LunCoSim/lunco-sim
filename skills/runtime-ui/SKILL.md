@@ -315,6 +315,14 @@ in the owning Rhai program through the existing typed command/query/event
 surface. Do not add a legacy callback alias or a widget-specific Rust shim
 merely to make one template work.
 
+For the shared lunar view switcher, publish the scene `SiteAnchor` position as
+a typed f64 vector in the Moon inertial frame. Show the `Mission` HUI action
+when that site and the Moon orbital pin are available; it must not depend on a
+possessed vessel. Rhai computes a target direction and animation duration,
+then sends a generic `AnimateOrbitCameraDirection` request. The camera owner
+animates along the existing orbit while preserving its current radius and
+vertical offset.
+
 ## Reload loop
 
 On native desktop, keep one production `luncosim` process running and edit assets:

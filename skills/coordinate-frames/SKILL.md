@@ -123,6 +123,15 @@ grid. Do not use a fixed world-axis/Sun-facing arrival, a scene-wide pose
 cache, or a second transform writer. Clear this transient history with
 active-Twin teardown and avatar demotion.
 
+When an orbital view must frame a mission site, publish the scene's valid
+`SiteAnchor` position transformed into the body's inertial grid as a typed f64
+vector. This location belongs to the scene frame and does not depend on a
+possessed vehicle. Rhai computes the orbit angles and chooses an animation
+duration, then sends the generic `AnimateOrbitCameraDirection` command. The
+camera transition moves along the current orbit without changing its radius or
+vertical offset; the orbit writer commits each BigSpace pose and refreshes the
+orbital pin. Direct user look input cancels the transition.
+
 For transform gizmos, use `transform-gizmo-bevy` only as a render-space
 frontend on an unparented proxy. Capture through `SimulationPoseQuery`, keep
 the proposed pose in the explicit `ActivePhysicsFrame`, convert the complete
