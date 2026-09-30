@@ -116,6 +116,15 @@ fn mission_site_camera_angles(position) {
     }
 }
 
+/// Read the persisted default duration for orbit-direction presentation moves.
+fn mission_site_camera_animation_duration_s() {
+    let duration_s = get_setting("CameraInputSettings.orbit_direction_animation_duration_s");
+    if duration_s == () || type_of(duration_s) != "f64" || !duration_s.is_finite() || duration_s <= 0.0 {
+        return ();
+    }
+    duration_s
+}
+
 /// Dispatch the authored camera-surface actions through the normal typed
 /// command bridge. The runtime UI layer only transports the action string; it
 /// does not know that these records happen to represent cameras.
@@ -153,12 +162,17 @@ fn handle_camera_ui_action(action) {
             notify_kind("The lunar mission location is invalid", "error");
             return true;
         }
+        let duration_s = mission_site_camera_animation_duration_s();
+        if duration_s == () {
+            notify_kind("The orbit direction animation setting is invalid", "error");
+            return true;
+        }
         // Rhai chooses the target direction and animation duration. The
         // generic camera command preserves the current orbital radius.
         let result = cmd("AnimateOrbitCameraDirection", #{
             yaw_rad: angles.yaw_rad,
             pitch_rad: angles.pitch_rad,
-            duration_s: 1.5
+            duration_s: duration_s
         });
         if result == () || result.ok != true {
             notify_kind("Could not frame the lunar mission location", "error");

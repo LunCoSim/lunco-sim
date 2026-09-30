@@ -7290,6 +7290,7 @@ dependencies = [
  "lunco-avatar-camera-core",
  "lunco-avatar-policy",
  "lunco-camera-core",
+ "lunco-camera-runtime",
  "lunco-celestial",
  "lunco-celestial-spatial",
  "lunco-celestial-spatial-core",

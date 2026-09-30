@@ -4,7 +4,6 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_avatar_camera_core::{
     CAMERA_ZOOM_SENSITIVITY, OrbitReturnBehavior, OrbitViewHistory, OrbitViewReturn, RadialArrival,
-    SURFACE_ORBIT_HANDOFF_ALTITUDE_M,
 };
 use lunco_avatar_policy::{
     AvatarCollisionSettings, AvatarSoilCollisionPolicy, avatar_soil_collision_policy,
@@ -13,6 +12,7 @@ use lunco_camera_core::{
     CameraPoseLock, CameraZoomInput, FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera,
     SurfaceRelativeMode, math::zoom_factor,
 };
+use lunco_camera_runtime::CameraInputSettings;
 use lunco_celestial::CelestialBody;
 use lunco_celestial::{GeodeticAnchor, SiteAnchor};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
@@ -106,6 +106,7 @@ pub(crate) fn freeflight_scroll_transit_system(
     active_frame: Option<Res<ActivePhysicsFrame>>,
     move_and_slide: Option<MoveAndSlide<'_, '_>>,
     collision_settings: Res<AvatarCollisionSettings>,
+    camera_input_settings: Res<CameraInputSettings>,
     workspace: Option<Res<WorkspaceResource>>,
     mut policy_error: Local<Option<String>>,
 ) {
@@ -216,7 +217,10 @@ pub(crate) fn freeflight_scroll_transit_system(
         // Past the orbital floor going OUT -> hand over to the celestial
         // OrbitCamera. A first entry derives the arm from the exact transit pose;
         // a later entry restores the avatar's saved body presentation pose.
-        if scroll_out && (next - center).length() - radius_m > SURFACE_ORBIT_HANDOFF_ALTITUDE_M {
+        if scroll_out
+            && (next - center).length() - radius_m
+                > camera_input_settings.surface_mode_engage_altitude_m
+        {
             let Ok((_, body)) = q_bodies.get(body_ent) else {
                 warn!(
                     target = ?body_ent,

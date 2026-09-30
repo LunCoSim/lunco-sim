@@ -1684,6 +1684,9 @@ actually call, with the fields the deserializer actually accepts. See the
 | `look_radians_per_pointer_unit` | `Option < f32 >` |  Camera radians per pointer-motion unit. |
 | `orbit_surface_min_scale` | `Option < f64 >` |  Lower bound for orbital rotation at the body's surface, in `[0, 1]`. |
 | `orbit_distance_curve_exponent` | `Option < f64 >` |  Positive exponent shaping the apparent-horizon distance response. |
+| `surface_mode_engage_altitude_m` | `Option < f64 >` |  Non-negative altitude above the body's reference radius where surface mode engages and the orbital zoom floor is set. |
+| `surface_mode_disengage_altitude_m` | `Option < f64 >` |  Altitude above which surface mode disengages; must exceed the engage altitude. |
+| `orbit_direction_animation_duration_s` | `Option < f64 >` |  Positive default duration for authored orbit-direction animations. |
 
 #### `SetCameraLookAt`
 

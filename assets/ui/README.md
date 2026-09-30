@@ -118,18 +118,24 @@ complete lunar surface pose, the exposure deliberately hides the marker and
 reports the authored no-fix state.
 
 When a lunar scene has a valid site anchor and the Moon orbital pin is active,
-the same switcher shows a Mission button. The engine publishes the scene site's
-position as a typed f64 vector in the Moon's inertial frame; Rhai chooses the
-target direction and animation duration. A generic camera command moves the
-view along its current orbit, preserving the orbital distance and vertical
-offset. The mission view is available even before a rover is possessed.
+the `celestial-view` surface shows a separate Focus mission site card below the
+body mode selector. The engine publishes the scene site's position as a typed
+f64 vector in the Moon's inertial frame. Rhai chooses the target direction and
+reads the persisted `CameraInputSettings.orbit_direction_animation_duration_s`
+property (0.6 s by default). A generic camera command moves the view along its
+current orbit, preserving the orbital distance and vertical offset. The mission
+view is available even before a rover is possessed.
 
-The view switcher keeps its button card in the root's normal vertical flow and
-anchors the map below it. The map is absolutely positioned inside the movable
-surface rectangle, so centering both children would let the later map panel
-paint over the switcher controls. Its authored default is top-centre; users can
-drag the window and use Settings ▸ HUD ▸ Reset position to remove the per-Twin
-override.
+The persisted `CameraInputSettings.surface_mode_engage_altitude_m` property
+sets the surface-mode engage altitude and orbital zoom floor (1,000 m by
+default). `surface_mode_disengage_altitude_m` defaults to 2,000 m to preserve
+hysteresis. Rhai can change both with `set_camera_surface_mode_altitudes(...)`.
+
+The body-mode selector and optional mission-site card stay in the root's
+normal vertical flow. The map is absolutely positioned below whichever controls
+are visible inside the movable surface rectangle. Its authored default is
+top-centre; users can drag the window and use Settings ▸ HUD ▸ Reset position to
+remove the per-Twin override.
 
 ## Performance and placement
 

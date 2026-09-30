@@ -17,7 +17,7 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_avatar_camera_core::{
     CAMERA_ZOOM_SENSITIVITY, CurrentRegionArrival, OrbitCameraTransition, OrbitUserInput,
-    OrbitViewReturn, RadialArrival, SURFACE_ORBIT_HANDOFF_ALTITUDE_M,
+    OrbitViewReturn, RadialArrival,
 };
 use lunco_camera_core::{
     CameraDefaults, CameraPoseLock, CameraUpdateSet, CameraZoomInput, FreeFlightCamera,
@@ -25,6 +25,7 @@ use lunco_camera_core::{
     math::{apply_scroll_zoom, camera_decay_alpha, surface_camera_angles, surface_camera_rotation},
 };
 use lunco_camera_core::{FocusTarget, ReturnFromOrbit};
+use lunco_camera_runtime::CameraInputSettings;
 use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial::{LeaveSurface, TeleportToSurface};
 use lunco_celestial_spatial_core::{
@@ -56,6 +57,9 @@ pub struct AvatarCelestialCameraPlugin;
 
 impl Plugin for AvatarCelestialCameraPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_camera_runtime::CameraRuntimePlugin>() {
+            app.add_plugins(lunco_camera_runtime::CameraRuntimePlugin);
+        }
         if !app.is_plugin_added::<lunco_time::TimePlugin>() {
             app.add_plugins(lunco_time::TimePlugin);
         }
@@ -63,9 +67,7 @@ impl Plugin for AvatarCelestialCameraPlugin {
             .init_resource::<lunco_avatar_policy::AvatarCollisionSettings>()
             .init_resource::<lunco_celestial_spatial_core::ReferenceFrameIndex>()
             .init_resource::<lunco_celestial_spatial_core::OrbitalViewPin>()
-            .init_resource::<SurfaceModeThreshold>()
             .register_type::<lunco_avatar_policy::AvatarCollisionSettings>()
-            .register_type::<SurfaceModeThreshold>()
             .add_systems(
                 PostUpdate,
                 (spring_arm::spring_arm_system, orbit_system)
@@ -313,30 +315,6 @@ register_commands!(
     transactions::on_focus_command,
     transactions::on_animate_orbit_camera_direction,
 );
-
-/// Hysteresis thresholds for the avatar's surface-relative camera policy.
-///
-/// The camera enters the body-fixed mode below `engage_altitude` and leaves it
-/// above `disengage_altitude`. Keeping the thresholds in the camera adapter
-/// makes the policy available to every avatar camera without coupling the
-/// command/authority runtime to celestial mode transitions.
-#[derive(Resource, Reflect, Clone, Debug)]
-#[reflect(Resource)]
-pub struct SurfaceModeThreshold {
-    /// Altitude in metres below which surface mode engages.
-    pub engage_altitude: f64,
-    /// Altitude in metres above which surface mode disengages.
-    pub disengage_altitude: f64,
-}
-
-impl Default for SurfaceModeThreshold {
-    fn default() -> Self {
-        Self {
-            engage_altitude: 50_000.0,
-            disengage_altitude: 100_000.0,
-        }
-    }
-}
 
 /// Clear cell-local easing at an avatar BigSpace handoff.
 ///
@@ -644,7 +622,7 @@ fn surface_mode_transition_system(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
-    thresholds: Res<SurfaceModeThreshold>,
+    camera_input_settings: Res<CameraInputSettings>,
     field: Res<LocalGravityField>,
     q_site: Query<(), With<lunco_celestial::SiteAnchor>>,
     mut commands: Commands,
@@ -685,7 +663,10 @@ fn surface_mode_transition_system(
     // configured handoff altitude.
     let site_anchored = !q_site.is_empty();
 
-    if has_surface_relative_writer && altitude > thresholds.disengage_altitude && !site_anchored {
+    if has_surface_relative_writer
+        && altitude > camera_input_settings.surface_mode_disengage_altitude_m
+        && !site_anchored
+    {
         // Too high → leave the surface coordinate policy. A free surface
         // camera changes to free flight; a spring arm remains the same writer
         // and resumes its non-surface heading basis.
@@ -702,7 +683,7 @@ fn surface_mode_transition_system(
                     damping: None,
                 });
         }
-    } else if engage_altitude_m < thresholds.engage_altitude {
+    } else if engage_altitude_m < camera_input_settings.surface_mode_engage_altitude_m {
         // Low enough and explicitly bound to a body → enter surface mode.
         commands.entity(avatar_ent).try_insert(SurfaceRelativeMode);
         // A free camera needs the dedicated surface writer. A spring arm
@@ -753,6 +734,7 @@ fn apply_current_region_arrival(
 
 fn orbit_system(
     time: Res<Time<Real>>,
+    camera_input_settings: Res<CameraInputSettings>,
     mut q_avatar: Query<
         (
             Entity,
@@ -905,7 +887,7 @@ fn orbit_system(
         }
 
         let min_dist = if let Some(body) = body {
-            body.radius_m + SURFACE_ORBIT_HANDOFF_ALTITUDE_M
+            body.radius_m + camera_input_settings.surface_mode_engage_altitude_m
         } else {
             10.0
         };
@@ -1130,6 +1112,7 @@ mod tests {
             .init_resource::<Time<Real>>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<CameraDefaults>()
+            .init_resource::<CameraInputSettings>()
             .init_resource::<lunco_celestial_spatial_core::ReferenceFrameIndex>()
             .add_systems(
                 First,
@@ -1240,7 +1223,7 @@ mod tests {
     #[test]
     fn surface_policy_preserves_the_possessed_spring_arm_writer() {
         let mut app = App::new();
-        app.init_resource::<SurfaceModeThreshold>()
+        app.init_resource::<CameraInputSettings>()
             .insert_resource(LocalGravityField {
                 body_entity: None,
                 body_relative_position: bevy::math::DVec3::ZERO,

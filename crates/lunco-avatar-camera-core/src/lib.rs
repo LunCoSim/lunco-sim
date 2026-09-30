@@ -173,10 +173,6 @@ pub struct OrbitUserInput;
 /// Shared exponential wheel sensitivity for avatar surface and orbital views.
 pub const CAMERA_ZOOM_SENSITIVITY: f32 = 5.0;
 
-/// Surface altitude at which the avatar's continuous wheel gesture enters or
-/// leaves the celestial orbital view.
-pub const SURFACE_ORBIT_HANDOFF_ALTITUDE_M: f64 = 50_000.0;
-
 /// One settled user-controlled pose for a celestial body.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OrbitPose {

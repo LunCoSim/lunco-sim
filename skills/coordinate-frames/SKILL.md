@@ -126,11 +126,17 @@ active-Twin teardown and avatar demotion.
 When an orbital view must frame a mission site, publish the scene's valid
 `SiteAnchor` position transformed into the body's inertial grid as a typed f64
 vector. This location belongs to the scene frame and does not depend on a
-possessed vehicle. Rhai computes the orbit angles and chooses an animation
-duration, then sends the generic `AnimateOrbitCameraDirection` command. The
-camera transition moves along the current orbit without changing its radius or
-vertical offset; the orbit writer commits each BigSpace pose and refreshes the
-orbital pin. Direct user look input cancels the transition.
+possessed vehicle. Show the mission-site action as its own HUI card, apart from
+the mode selector. Rhai computes the orbit angles, reads the persisted
+`CameraInputSettings.orbit_direction_animation_duration_s` property, and sends
+the generic `AnimateOrbitCameraDirection` command. The camera transition moves
+along the current orbit without changing its radius or vertical offset; the
+orbit writer commits each BigSpace pose and refreshes the orbital pin. Direct
+user look input cancels the transition. Surface/orbit transitions use the
+persisted `CameraInputSettings.surface_mode_engage_altitude_m` property as the
+shared engage altitude and orbital zoom floor (1,000 m by default). Its
+companion `surface_mode_disengage_altitude_m` property provides hysteresis and
+defaults to 2,000 m.
 
 For transform gizmos, use `transform-gizmo-bevy` only as a render-space
 frontend on an unparented proxy. Capture through `SimulationPoseQuery`, keep

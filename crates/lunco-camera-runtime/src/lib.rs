@@ -35,6 +35,12 @@ pub struct CameraInputSettings {
     pub orbit_surface_min_scale: f64,
     /// Shapes the geometric visible-horizon response.
     pub orbit_distance_curve_exponent: f64,
+    /// Altitude below which surface mode engages, in metres above the body's reference radius.
+    pub surface_mode_engage_altitude_m: f64,
+    /// Altitude above which surface mode disengages, in metres above the body's reference radius.
+    pub surface_mode_disengage_altitude_m: f64,
+    /// Default duration for authored orbit-direction animations, in seconds.
+    pub orbit_direction_animation_duration_s: f64,
 }
 
 impl Default for CameraInputSettings {
@@ -43,6 +49,9 @@ impl Default for CameraInputSettings {
             look_radians_per_pointer_unit: 0.001125,
             orbit_surface_min_scale: 0.04,
             orbit_distance_curve_exponent: 0.75,
+            surface_mode_engage_altitude_m: 1_000.0,
+            surface_mode_disengage_altitude_m: 2_000.0,
+            orbit_direction_animation_duration_s: 0.6,
         }
     }
 }
@@ -73,6 +82,37 @@ fn on_set_camera_input(trigger: On<SetCameraInput>, mut settings: ResMut<CameraI
             settings.orbit_distance_curve_exponent = value;
         } else {
             warn!("SetCameraInput rejected non-positive distance exponent: {value}");
+        }
+    }
+    if command.surface_mode_engage_altitude_m.is_some()
+        || command.surface_mode_disengage_altitude_m.is_some()
+    {
+        let engage_altitude_m = command
+            .surface_mode_engage_altitude_m
+            .unwrap_or(settings.surface_mode_engage_altitude_m);
+        let disengage_altitude_m = command
+            .surface_mode_disengage_altitude_m
+            .unwrap_or(settings.surface_mode_disengage_altitude_m);
+        if engage_altitude_m.is_finite()
+            && engage_altitude_m >= 0.0
+            && disengage_altitude_m.is_finite()
+            && disengage_altitude_m > engage_altitude_m
+        {
+            settings.surface_mode_engage_altitude_m = engage_altitude_m;
+            settings.surface_mode_disengage_altitude_m = disengage_altitude_m;
+        } else {
+            warn!(
+                "SetCameraInput rejected surface-mode altitudes without finite 0 <= engage < disengage values"
+            );
+        }
+    }
+    if let Some(value) = command.orbit_direction_animation_duration_s {
+        if value.is_finite() && value > 0.0 {
+            settings.orbit_direction_animation_duration_s = value;
+        } else {
+            warn!(
+                "SetCameraInput rejected non-positive/non-finite orbit direction duration: {value}"
+            );
         }
     }
 }

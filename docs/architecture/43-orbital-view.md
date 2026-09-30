@@ -116,16 +116,24 @@ f64 frame conversion and atomic grid migration remain the only placement path;
 the arrival marker is consumed by the orbit writer once and cannot become a
 second transform writer.
 
-The lunar `celestial-view` HUI exposes a Mission action while the Moon orbit is
-active and the scene has a valid lunar site anchor. It publishes that site's
-position as a typed f64 vector in the Moon's inertial frame, independently of
-rover possession. Rhai computes the orbit angles and chooses the animation
-duration, then sends `AnimateOrbitCameraDirection`. The generic camera
+The lunar `celestial-view` HUI shows a separate Focus mission site action while
+the Moon orbit is active and the scene has a valid lunar site anchor. It
+publishes that site's position as a typed f64 vector in the Moon's inertial
+frame, independently of rover possession. Rhai computes the orbit angles,
+reads the configurable `CameraInputSettings.orbit_direction_animation_duration_s`
+(default 0.6 s), and sends `AnimateOrbitCameraDirection`. The generic camera
 transition interpolates the direction along the existing orbit at a fixed
 radius; it leaves orbital distance and vertical offset unchanged. The orbit
 writer stays active and continues publishing the Moon orbital pin. User look
 input cancels the transition, and the final direction is retained by the
 normal per-body orbit history.
+
+`CameraInputSettings.surface_mode_engage_altitude_m` controls where the camera
+enters surface mode and sets the matching orbital zoom floor. It defaults to
+1,000 m above the body's reference radius. The configurable
+`surface_mode_disengage_altitude_m` defaults to 2,000 m and preserves hysteresis
+while returning from surface mode. Change both through `SetCameraInput` or the
+Rhai `set_camera_surface_mode_altitudes(...)` helper.
 
 ## Coordinate and physics boundary
 

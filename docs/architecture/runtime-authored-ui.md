@@ -237,6 +237,13 @@ available to Rhai as `get_twin_setting(key)` and is changed through
 owner. A surface opts into that policy with `setting` and declares its omitted
 value with `setting_default`.
 
+The lunar mission-site action is a distinct HUI card, separate from the body
+mode selector, while both remain children of the movable `celestial-view`
+surface. Its visibility follows the typed `mission_view_available` exposure.
+Its animation duration and surface-mode engage/release altitudes are persisted
+user camera settings in `CameraInputSettings`; Rhai reads the animation duration
+through `get_setting`, and `SetCameraInput` updates all three values.
+
 The camera-status surface is the reference composition. Rust publishes the
 full current camera fact (`active_name`) and a deterministic compact identity
 projection (`active_label`) through the generic `camera-status` exposure. Rhai
@@ -296,12 +303,13 @@ setting; omission means hidden. The workbench's existing Twin-scoped
 must not derive coordinates from transforms, duplicate pose state, or keep a
 stale marker across avatar, Twin, or scene lifecycle changes.
 
-The same surface exposes a Mission button only while the Moon orbital pin is
-active and the scene has a valid lunar site anchor. It publishes the site's
-position as a typed f64 vector in the Moon inertial frame, independently of
-rover possession. Rhai computes the target direction and animation duration.
-The generic `AnimateOrbitCameraDirection` command moves the view along the
-existing orbit while preserving its current distance and vertical offset.
+The same surface shows a separate Focus mission site card only while the Moon
+orbital pin is active and the scene has a valid lunar site anchor. It publishes
+the site's position as a typed f64 vector in the Moon inertial frame,
+independently of rover possession. Rhai computes the target direction, reads
+the persisted camera animation-duration setting, and sends the generic
+`AnimateOrbitCameraDirection` command. The camera moves along its existing
+orbit while preserving its current distance and vertical offset.
 
 ### Ownership and visibility
 

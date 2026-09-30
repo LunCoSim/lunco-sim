@@ -394,8 +394,15 @@ commit the claim, installs the local `ControlLink`, and optionally performs the
 camera transaction. `FocusTarget` and `FollowTarget` are likewise reachable
 high-level avatar camera commands; Rhai selects when and which target to request,
 while Rust enforces the local-avatar boundary and the BigSpace-safe pose update.
-Rhai can also call `set_camera_input(...)` to tune the generic camera response
-without a Rust rebuild; Rust retains only the validated hot-path mechanism.
+Rhai can call `set_camera_input(...)` to tune pointer response, and the
+`set_camera_surface_mode_altitudes(...)` and
+`set_orbit_direction_animation_duration(...)` helpers update the persisted
+`CameraInputSettings` properties. The default surface/orbit handoff is 1,000 m
+above the body's reference radius; surface mode releases at 2,000 m by default.
+Mission-site direction animation defaults to 0.6 s. Rust validates these
+generic settings and consumes the engage altitude for both surface-mode entry
+and the orbital zoom floor; Rhai reads the animation duration when dispatching
+the mission-site action.
 The generic command/value surface remains `SetPorts` for a controller that does
 not need an avatar camera. `AcquireControl` uses the same `SessionRegistry`
 transaction rather than maintaining a parallel ownership path.

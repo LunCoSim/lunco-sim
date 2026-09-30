@@ -280,9 +280,13 @@
             "399": "var(--active-text-color)"
           }
         },
-        "mission_display": {
+        "mission_card_display": {
           "source": "mission_view_available",
           "map": { "true": "flex", "false": "none" }
+        },
+        "map_top": {
+          "source": "mission_view_available",
+          "map": { "true": "102px", "false": "62px" }
         },
         "map_display": { "source": "map_display" },
         "map_status": { "source": "map_status" },
@@ -306,7 +310,7 @@
         "anchor": "top_center",
         "offset": [0.0, 34.0],
         "width": 444.0,
-        "height": 276.0
+        "height": 308.0
       }
     },
     {

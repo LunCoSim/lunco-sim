@@ -10,7 +10,8 @@
   --ui-earth-display: none;
   --ui-earth-background: var(--button-background);
   --ui-earth-color: var(--muted-color);
-  --ui-mission-display: none;
+  --ui-mission-card-display: none;
+  --ui-map-top: 62px;
   --ui-map-display: none;
   --ui-map-marker-display: none;
   --ui-map-marker-left: 0%;
@@ -24,6 +25,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
+  row-gap: 6px;
 }
 
 #runtime-view-mode-card {
@@ -45,7 +47,7 @@
 #runtime-lunar-map {
   display: var(--ui-map-display);
   position: absolute;
-  top: 62px;
+  top: var(--ui-map-top);
   left: 96px;
   width: 348px;
   height: 196px;
@@ -182,8 +184,7 @@
 
 #runtime-view-mode-surface,
 #runtime-view-mode-moon,
-#runtime-view-mode-earth,
-#runtime-view-mode-mission {
+#runtime-view-mode-earth {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -219,14 +220,48 @@
   color: var(--ui-earth-color);
 }
 
-#runtime-view-mode-mission {
-  display: var(--ui-mission-display);
-}
-
 #runtime-view-mode-surface:hover,
 #runtime-view-mode-moon:hover,
-#runtime-view-mode-earth:hover,
-#runtime-view-mode-mission:hover {
+#runtime-view-mode-earth:hover {
+  border-color: var(--accent-color);
+  background-color: rgba(127, 212, 255, 0.24);
+  color: var(--text-color);
+}
+
+#runtime-mission-site-card {
+  display: var(--ui-mission-card-display);
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  border-top-width: 1px;
+  border-right-width: 1px;
+  border-bottom-width: 1px;
+  border-left-width: 1px;
+  border-color: var(--panel-border);
+  border-radius: 9px;
+  background-color: var(--panel-background);
+}
+
+#runtime-mission-site-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 140px;
+  height: 30px;
+  padding: 5px 10px;
+  border-top-width: 1px;
+  border-right-width: 1px;
+  border-bottom-width: 1px;
+  border-left-width: 1px;
+  border-color: var(--button-border);
+  border-radius: 7px;
+  color: var(--active-text-color);
+  background-color: var(--button-background);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+#runtime-mission-site-action:hover {
   border-color: var(--accent-color);
   background-color: rgba(127, 212, 255, 0.24);
   color: var(--text-color);
