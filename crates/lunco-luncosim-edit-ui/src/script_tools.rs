@@ -26,6 +26,7 @@
 //! authored interaction policy can do anything a scenario can.
 
 use bevy::math::DVec3;
+use bevy::picking::hover::PreviousHoverMap;
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
@@ -59,8 +60,8 @@ pub(crate) fn tool_map(entries: Vec<(String, TelemetryValue)>) -> TelemetryValue
     TelemetryValue::Map(entries.into_iter().collect())
 }
 
-/// Pointer events bubble through every authored parent. Keep one dispatch key
-/// for the duration of the frame so the Rhai interaction policy sees one event.
+/// Keep one dispatch key for the duration of the frame so the Rhai interaction
+/// policy sees one button-resolved, depth-ordered scene hit.
 #[derive(Resource, Default)]
 pub struct ScenePointerDispatch {
     seen: HashSet<ScenePointerKey>,
@@ -1518,6 +1519,7 @@ fn coordinate_point(position: bevy::math::DVec3, frame: &str, source: &str) -> T
 pub(crate) fn on_scene_pointer_event(
     mut click: On<Pointer<Click>>,
     keys: Res<ButtonInput<KeyCode>>,
+    previous_hover_map: Res<PreviousHoverMap>,
     armed: Res<lunco_interaction_core::ArmedScriptTool>,
     spawn_state: Res<lunco_luncosim_edit_core::SpawnState>,
     terrain_active: Res<lunco_interaction_core::TerrainToolActive>,
@@ -1525,10 +1527,10 @@ pub(crate) fn on_scene_pointer_event(
     world: SceneToolWorld,
     mut commands: Commands,
 ) {
-    // ScenePickGate emits a foreground capture hit for UI chrome. The pointer
-    // event's hit is the current scene-ownership decision; EguiFocus is
-    // published after picking and can still describe the previous cursor
-    // location when the pointer has just left a menu.
+    // ScenePickGate emits a foreground capture hit for UI chrome. Resolve the
+    // actual scene target from the previous hover map used to emit this Click.
+    // EguiFocus is published after picking and can still describe the previous
+    // cursor location when the pointer has just left a menu.
     if armed.armed()
         || !matches!(
             spawn_state.as_ref(),
@@ -1538,19 +1540,22 @@ pub(crate) fn on_scene_pointer_event(
     {
         return;
     }
-    if click.hit.position.is_none() && world.q_prim.get(click.entity).is_err() {
-        return;
-    }
-    // Pass-through targets still emit their own Bevy event. The picking map
-    // also contains eligible lower hits, so stop this event's ancestor bubble
-    // and return before it can win the shared de-duplication key.
-    if inherited_pointer_interaction(
-        click.entity,
+    let Some(target) = ordered_scene_pointer_target(
+        &previous_hover_map,
+        click.pointer_id,
         click.button,
+        &world.q_ids,
+        &world.q_prim,
         &world.q_pointer_policy,
         &world.q_parents,
-    ) == Some(lunco_interaction_core::PointerInteraction::PassThrough)
-    {
+    ) else {
+        return;
+    };
+    // Bevy dispatches hovered entities from a hash map, so observer order is
+    // unrelated to hit depth. Only the entity selected from the ordered hit
+    // set may publish this gesture; a lower terrain event cannot win merely
+    // because its observer ran first.
+    if click.entity != target {
         click.propagate(false);
         return;
     }
@@ -1609,6 +1614,49 @@ pub(crate) fn on_scene_pointer_event(
         sim_secs: 0.0,
         sim_tick: 0,
     });
+}
+
+fn ordered_scene_pointer_target<'w, 's>(
+    previous_hover_map: &PreviousHoverMap,
+    pointer: PointerId,
+    button: PointerButton,
+    ids: &Query<'w, 's, &'static lunco_core::GlobalEntityId>,
+    prims: &Query<'w, 's, &'static lunco_usd_bevy_scene::UsdPrimPath>,
+    policies: &Query<'w, 's, &'static lunco_interaction_core::ScenePointerPolicy>,
+    parents: &Query<'w, 's, &'static ChildOf>,
+) -> Option<Entity> {
+    let hits = previous_hover_map.get(&pointer)?;
+    let mut candidates = Vec::with_capacity(hits.len());
+    for (&entity, hit) in hits {
+        let scene_hit =
+            nearest_scene_prim(entity, prims, parents).is_some() || ids.get(entity).is_ok();
+        if scene_hit {
+            candidates.push((entity, hit.depth));
+        }
+    }
+    ordered_scene_hit_target(candidates, |entity| {
+        inherited_pointer_interaction(entity, button, policies, parents)
+            .unwrap_or(lunco_interaction_core::PointerInteraction::Block)
+    })
+}
+
+fn ordered_scene_hit_target(
+    hits: impl IntoIterator<Item = (Entity, f32)>,
+    mut interaction: impl FnMut(Entity) -> lunco_interaction_core::PointerInteraction,
+) -> Option<Entity> {
+    let mut hits: Vec<_> = hits
+        .into_iter()
+        .filter(|(_, depth)| depth.is_finite())
+        .collect();
+    hits.sort_by(|(left_entity, left_depth), (right_entity, right_depth)| {
+        left_depth
+            .total_cmp(right_depth)
+            .then_with(|| left_entity.to_bits().cmp(&right_entity.to_bits()))
+    });
+    hits.into_iter().find_map(|(entity, _)| {
+        (interaction(entity) != lunco_interaction_core::PointerInteraction::PassThrough)
+            .then_some(entity)
+    })
 }
 
 /// Feed one coalesced scene-hover position to the authored interaction policy.
@@ -1868,11 +1916,11 @@ fn scene_pointer_move_args(
     Some(tool_map(entries))
 }
 
-fn nearest_scene_prim<'w, 's>(
+fn nearest_scene_prim<'q, 'w, 's>(
     entity: Entity,
-    prims: &'w Query<'w, 's, &'static lunco_usd_bevy_scene::UsdPrimPath>,
-    parents: &'w Query<'w, 's, &'static ChildOf>,
-) -> Option<&'w lunco_usd_bevy_scene::UsdPrimPath> {
+    prims: &'q Query<'w, 's, &'static lunco_usd_bevy_scene::UsdPrimPath>,
+    parents: &'q Query<'w, 's, &'static ChildOf>,
+) -> Option<&'q lunco_usd_bevy_scene::UsdPrimPath> {
     let mut current = Some(entity);
     while let Some(candidate) = current {
         if let Ok(prim) = prims.get(candidate) {
@@ -2024,5 +2072,35 @@ mod usd_curve_view_tests {
         assert_eq!(status.applied_revision, 7);
         assert_eq!(status.vertex_count, 12);
         assert_eq!(status.error, None);
+    }
+
+    #[test]
+    fn scene_click_target_uses_depth_and_button_policy_not_event_order() {
+        use lunco_interaction_core::PointerInteraction;
+
+        let marker = Entity::from_raw_u32(1).unwrap();
+        let terrain = Entity::from_raw_u32(2).unwrap();
+        let hits = [(terrain, 8.0), (marker, 2.0)];
+
+        assert_eq!(
+            ordered_scene_hit_target(hits, |entity| {
+                if entity == marker {
+                    PointerInteraction::Context
+                } else {
+                    PointerInteraction::Block
+                }
+            }),
+            Some(marker),
+        );
+        assert_eq!(
+            ordered_scene_hit_target(hits, |entity| {
+                if entity == marker {
+                    PointerInteraction::PassThrough
+                } else {
+                    PointerInteraction::Block
+                }
+            }),
+            Some(terrain),
+        );
     }
 }

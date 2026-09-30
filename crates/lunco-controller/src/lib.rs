@@ -461,14 +461,6 @@ pub struct InjectWindowInput {
 #[derive(Message)]
 struct PendingWindowInput(WindowInputEvent);
 
-/// Saves the native window cursor before projecting an injected pointer.
-/// During a held mouse gesture, the injected position must remain in
-/// `Window::cursor_position()` through presentation systems such as the gizmo
-/// frontend, which read it after `PostUpdate`. Restore the native value after
-/// the release frame so automation never moves the operating-system pointer.
-#[derive(Resource, Default)]
-struct InjectedCursorRestore(Option<(Entity, Option<Vec2>)>);
-
 fn finite_position(x: f32, y: f32) -> Result<Vec2, String> {
     if !x.is_finite() || !y.is_finite() {
         return Err("window input position must be finite".to_string());
@@ -551,16 +543,15 @@ fn on_inject_window_input(
 /// streams.
 fn emit_pending_window_input(
     mut pending: MessageReader<PendingWindowInput>,
-    mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
+    windows: Query<Entity, With<PrimaryWindow>>,
     settings: Res<InputBindingsSettings>,
-    mut cursor_restore: ResMut<InjectedCursorRestore>,
     mut window_events: MessageWriter<WindowEvent>,
     mut cursor_moved: MessageWriter<CursorMoved>,
     mut keyboard_input: MessageWriter<KeyboardInput>,
     mut mouse_button_input: MessageWriter<MouseButtonInput>,
     mut mouse_wheel: MessageWriter<MouseWheel>,
 ) {
-    let Ok((window, mut window_state)) = windows.single_mut() else {
+    let Ok(window) = windows.single() else {
         return;
     };
     for PendingWindowInput(event) in pending.read() {
@@ -590,16 +581,6 @@ fn emit_pending_window_input(
             }
             WindowInputEvent::PointerMove { x, y } => {
                 let position = Vec2::new(*x, *y);
-                if cursor_restore.0.is_none() {
-                    cursor_restore.0 = Some((window, window_state.cursor_position()));
-                }
-                // This is application input, not a request to warp the native
-                // cursor. Bevy's changed-window bridge mirrors a normally
-                // changed Window back to winit, which is unsupported on
-                // Wayland and would move the user's pointer on X11.
-                window_state
-                    .bypass_change_detection()
-                    .set_cursor_position(Some(position));
                 let moved = CursorMoved {
                     window,
                     position,
@@ -615,12 +596,6 @@ fn emit_pending_window_input(
                 y,
             } => {
                 let position = Vec2::new(*x, *y);
-                if cursor_restore.0.is_none() {
-                    cursor_restore.0 = Some((window, window_state.cursor_position()));
-                }
-                window_state
-                    .bypass_change_detection()
-                    .set_cursor_position(Some(position));
                 let moved = CursorMoved {
                     window,
                     position,
@@ -648,30 +623,6 @@ fn emit_pending_window_input(
                 mouse_wheel.write(input);
             }
         }
-    }
-}
-
-fn restore_injected_cursor(
-    mut cursor_restore: ResMut<InjectedCursorRestore>,
-    mut windows: Query<&mut Window>,
-    mouse: Option<Res<ButtonInput<MouseButton>>>,
-) {
-    let gesture_active = mouse.as_deref().is_some_and(|buttons| {
-        buttons.any_pressed([MouseButton::Left, MouseButton::Right, MouseButton::Middle])
-            || [MouseButton::Left, MouseButton::Right, MouseButton::Middle]
-                .into_iter()
-                .any(|button| buttons.just_released(button))
-    });
-    if gesture_active {
-        return;
-    }
-    let Some((window, position)) = cursor_restore.0.take() else {
-        return;
-    };
-    if let Ok(mut window_state) = windows.get_mut(window) {
-        window_state
-            .bypass_change_detection()
-            .set_cursor_position(position);
     }
 }
 
@@ -1426,8 +1377,7 @@ impl Plugin for LunCoControllerPlugin {
         if !app.is_plugin_added::<lunco_input_core::InputBindingsPlugin>() {
             app.add_plugins(lunco_input_core::InputBindingsPlugin);
         }
-        app.init_resource::<SimulatedIntents>()
-            .init_resource::<InjectedCursorRestore>();
+        app.init_resource::<SimulatedIntents>();
         app.add_message::<PendingWindowInput>();
         lunco_core::MarkClientLocalExt::mark_client_local::<InjectWindowInput>(app);
         app.init_resource::<lunco_core_session::CommandPolicyRegistry>();
@@ -1489,7 +1439,6 @@ impl Plugin for LunCoControllerPlugin {
                 .run_if(any_with_component::<PrimaryWindow>)
                 .before(bevy::picking::PickingSystems::Input),
         );
-        app.add_systems(PostUpdate, restore_injected_cursor);
         // The SINGLE input-bookkeeping chokepoint: every `SetPorts` — keyboard,
         // API, or wire-replayed — flows through this observer, so the client
         // prediction log and the host reconcile-ack no longer depend on how the
@@ -2471,14 +2420,15 @@ mod tests {
             .add_message::<MouseButtonInput>()
             .add_message::<MouseWheel>()
             .init_resource::<InputBindingsSettings>()
-            .init_resource::<InjectedCursorRestore>()
             .init_resource::<WindowInputObserved>()
             .add_systems(
                 Update,
                 (emit_pending_window_input, collect_window_input).chain(),
-            )
-            .add_systems(PostUpdate, restore_injected_cursor);
-        app.world_mut().spawn((Window::default(), PrimaryWindow));
+            );
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
 
         app.world_mut()
             .resource_mut::<Messages<PendingWindowInput>>()
@@ -2514,6 +2464,13 @@ mod tests {
         assert_eq!(observed.cursors[0].position, Vec2::new(12.0, 34.0));
         assert_eq!(observed.scroll.len(), 1);
         assert_eq!(observed.aggregate.len(), 4);
+        assert_eq!(
+            app.world()
+                .get::<Window>(window)
+                .expect("primary window")
+                .cursor_position(),
+            None
+        );
         assert!(matches!(
             observed.aggregate[0],
             WindowEvent::KeyboardInput(_)
@@ -2531,7 +2488,6 @@ mod tests {
         let mut app = App::new();
         app.add_message::<PendingWindowInput>()
             .init_resource::<InputBindingsSettings>()
-            .init_resource::<InjectedCursorRestore>()
             .add_systems(
                 Update,
                 emit_pending_window_input.run_if(any_with_component::<PrimaryWindow>),

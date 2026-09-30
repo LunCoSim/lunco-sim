@@ -1319,9 +1319,8 @@ fn on_select(context) {
     // selection owner. The route context is still valid there; only an
     // attended editor has a selection side effect to perform.
     if is_unattended() { return #{ ok: true, path: point, selected: false }; }
-    // Route menus edit an authored USD document. When its preview owns the
-    // editor selection, select the same prim in that preview; otherwise select
-    // the live scene projection that received the pointer gesture.
+    // Selection belongs to the currently focused editor surface. The hit path
+    // identifies the route target; it does not transfer selection ownership.
     let editor = query("InspectUsdSelection", #{});
     if editor == () || editor.ok == false {
         return failure("the editor selection owner is unavailable");

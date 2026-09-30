@@ -24,12 +24,14 @@ part of the failure.
 Build or resolve the production binary as `LUNCOSIM_BIN`, launch exactly one
 windowed `luncosim` process with an explicit free API port, and wait for
 `/api/ready` before injecting input. The `InjectWindowInput` command and
-`prelude/input.rhai` helpers enqueue typed Bevy window events. They do not call
-a scene tool directly, so egui, HUI, picking, focus, input bindings, and
-authored Rhai tools see the same application path as hardware input. During a
-held pointer gesture, the projected cursor remains available to late-frame
-consumers such as the transform gizmo through release; the saved native cursor
-is restored afterward without moving the operating-system pointer.
+`prelude/input.rhai` helpers enqueue typed Bevy window events and exercise the
+application event path after event creation. They bypass the OS device,
+compositor, and winit event-delivery path, so they cannot verify that a physical
+mouse reaches the app. egui, HUI, picking, focus, input bindings, and authored
+Rhai tools process the injected Bevy events. Injected events do not mutate the
+native window cursor. Bevy Picking's `PointerLocation` is the shared application
+cursor state; cursor-driven consumers such as the transform gizmo read it
+through `PrimaryMousePointer` in `lunco-interaction-core`.
 
 For a modifier gesture, use separate event phases and allow a frame between
 them when the result matters:
@@ -128,16 +130,22 @@ It updates the existing renderer mesh without changing USD generation. The
 next primary click commits a moved route point through the canonical
 `@runtime@` USD edit path, whose projected change updates the ribbon once. The
 `route_interaction` production gate verifies that Move selects and retains the
-target, the live ghost follows a coalesced native terrain cursor trace, and
-document generation stays unchanged during preview. The gate sequences native
-press/release on separate task ticks and waits for observable state with the
-Rhai behavior tree; do not use simulation-time sleeps or encode progression as
-numeric phase state.
+target, the live ghost follows a coalesced injected terrain cursor trace, and
+document generation stays unchanged during preview. It sequences typed Bevy
+press/release events on separate task ticks and waits for observable state with
+the Rhai behavior tree. It does not verify OS, compositor, or winit input
+delivery; actual headful input remains a separate check. Do not use
+simulation-time sleeps or encode progression as numeric phase state.
 The repeatable production gate is `assets/scenes/tests/editor/route_interaction/route_interaction.usda`,
-run by `scripts/run_editor_scene_tests.sh`; it sends typed native-window input
-through picking and verifies the mounted fixture, waypoint hit, semantic
-context intent, unchanged pre-menu selection, standalone selection, explicit
-Move menu action, ghost placement, and deletion. The runner waits for
+run by `scripts/run_editor_scene_tests.sh`; it uses `InjectWindowInput` to send
+typed Bevy window events through picking and verifies the mounted fixture,
+waypoint hit, semantic context intent, unchanged pre-menu selection, live scene
+selection in the focused editor owner, explicit Move menu action, ghost
+placement, and deletion. This gate does not exercise physical OS mouse input.
+Bevy emits one click observer per entity in its previous hover map, whose
+iteration order is unspecified. The runtime scene router resolves from that
+same event-source map by hit depth and the authored policy for the actual button
+before it dispatches one scene event. The runner waits for
 `/api/ready` and requires the API `Exit` command and port release after every
 verdict.
 
@@ -175,7 +183,7 @@ absence of a notification:
   document; do not treat a spawned ECS entity as persistence proof.
 
 For repeatable acceptance, put the assertions in
-`assets/scenarios/tests/*.rhai` and drive the native events from the scenario
+`assets/scenarios/tests/*.rhai` and drive typed Bevy events from the scenario
 with `RunScenarioAsset` in the already-running production session. Keep each
 phase event-driven or bounded by a timeout, and emit one terminal authored
 verdict. This is a headful interaction test, not a Rust test and not a direct

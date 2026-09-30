@@ -2043,7 +2043,7 @@ fn reconcile_runtime_ui_collections(
 /// data and ordering. HUI/Bevy provide the retained scroll position; the
 /// runtime only maps the existing mouse-wheel input to that position.
 fn scroll_runtime_ui_collections(
-    windows: Query<&Window, With<PrimaryWindow>>,
+    pointer: lunco_interaction_core::PrimaryMousePointer,
     scroll: Res<AccumulatedMouseScroll>,
     mut hosts: Query<
         (&ComputedNode, &UiGlobalTransform, &mut ScrollPosition),
@@ -2053,7 +2053,7 @@ fn scroll_runtime_ui_collections(
     if scroll.delta.y == 0.0 {
         return;
     }
-    let Some(cursor) = windows.iter().next().and_then(Window::cursor_position) else {
+    let Some(cursor) = pointer.position() else {
         return;
     };
     for (node, transform, mut position) in &mut hosts {

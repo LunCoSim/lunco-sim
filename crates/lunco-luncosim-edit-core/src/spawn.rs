@@ -2,9 +2,9 @@
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
 use lunco_command_contracts::OpId;
 use lunco_core::{Command, on_command, register_commands};
+use lunco_interaction_core::PrimaryMousePointer;
 use lunco_render::SceneCamera;
 use lunco_spatial::coords::GridPos;
 use lunco_usd_bevy_stage::UsdStageAsset;
@@ -312,7 +312,7 @@ pub fn update_spawn_ghost(
     mut canonical: NonSendMut<CanonicalStages>,
     mut footprint_cache: ResMut<FootprintCache>,
     camera_frame: SpawnCameraFrame,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    pointer: PrimaryMousePointer,
     q_ghost: Query<(Entity, &Transform), With<SpawnGhost>>,
     egui_focus: Res<lunco_control_core::EguiFocus>,
     // Diagnostics only: names the collider a placement ray actually landed on.
@@ -379,18 +379,9 @@ pub fn update_spawn_ghost(
         }
         return;
     }
-    let window = match windows.iter().next() {
-        Some(w) => w,
-        None => {
-            if diagnostics.enabled {
-                info!("[spawn-trace] ghost rejected: no window");
-            }
-            return;
-        }
-    };
-    let Some(cursor) = window.cursor_position() else {
+    let Some(cursor) = pointer.position() else {
         if diagnostics.enabled {
-            info!("[spawn-trace] ghost rejected: window has no cursor position");
+            info!("[spawn-trace] ghost rejected: primary mouse has no pointer location");
         }
         return;
     };

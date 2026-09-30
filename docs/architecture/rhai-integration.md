@@ -577,13 +577,11 @@ input_key_release("AltLeft");
 
 The Rust mechanism emits the same aggregate `WindowEvent` and typed
 `KeyboardInput`/`CursorMoved`/`MouseButtonInput`/`MouseWheel` messages produced
-by the Bevy winit backend. It does not move the operating-system pointer; the
-injected `CursorMoved` message and `Window::cursor_position()` projection are
-the application-level pointer input, avoiding platform-specific cursor-lock
-restrictions. The projected position remains available while a mouse button is
-held and through the release frame, so late presentation systems such as the
-transform gizmo consume the same position as picking. The controller restores
-the saved native window cursor afterward.
+by the Bevy winit backend. It does not mutate the native `Window` cursor or move
+the operating-system pointer. Bevy Picking owns the current mouse location in
+`PointerLocation`; cursor-driven tools read the shared
+`lunco_interaction_core::PrimaryMousePointer` system parameter, so native and
+injected events have one application-level position without cursor warping.
 That means egui, picking, focus, input bindings, and scene tools all observe
 one canonical path. Rhai owns sequences, chords, drag workflows, and retries;
 Rust owns only event validation and fan-out. The command accepts logical window

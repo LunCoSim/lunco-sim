@@ -23,8 +23,8 @@
 use bevy::input::mouse::MouseWheel;
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
 use big_space::prelude::CellCoord;
+use lunco_interaction_core::PrimaryMousePointer;
 use lunco_render::SceneCamera;
 use lunco_terrain_surface::{BrushTerrain, FlattenTerrain, PlaceCrater, PlaceRock};
 
@@ -177,7 +177,7 @@ pub fn update_terrain_brush_ghost(
         (With<Camera3d>, With<SceneCamera>),
     >,
     viewport: Res<lunco_viewport_core::SceneViewport>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    pointer: PrimaryMousePointer,
     egui_focus: Res<lunco_control_core::EguiFocus>,
     mut q_ghost: Query<
         (
@@ -217,10 +217,7 @@ pub fn update_terrain_brush_ghost(
     if !camera.is_active || !matches!(target, bevy::camera::RenderTarget::Window(_)) {
         return;
     }
-    let Some(window) = windows.iter().next() else {
-        return;
-    };
-    let Some(cursor) = window.cursor_position() else {
+    let Some(cursor) = pointer.position() else {
         return;
     };
     let Ok(ray) = camera.viewport_to_world(cam_tf, cursor) else {

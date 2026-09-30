@@ -1012,6 +1012,7 @@ fn drive_gizmo_drag(
     mut gate: Option<ResMut<ScenePickGate>>,
     hover_map: Res<HoverMap>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    pointer: lunco_interaction_core::PrimaryMousePointer,
     viewport: Option<Res<UsdViewportState>>,
     panel_rects: Option<Res<PanelRects>>,
     q_proxies: Query<(), With<GizmoProxy>>,
@@ -1021,8 +1022,8 @@ fn drive_gizmo_drag(
 ) {
     let window = windows.single().ok();
     let scale_factor = window.map(Window::scale_factor).unwrap_or(1.0);
-    let preview_pointer = window
-        .and_then(Window::cursor_position)
+    let preview_pointer = pointer
+        .position()
         .zip(focused_preview_rect(
             viewport.as_deref(),
             panel_rects.as_deref(),

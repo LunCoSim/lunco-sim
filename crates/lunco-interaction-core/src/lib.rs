@@ -4,7 +4,38 @@
 //! publishes the current drag state and affected-entity marker, while camera,
 //! possession, and follow runtimes decide how to stand down.
 
+use bevy::ecs::system::SystemParam;
+use bevy::picking::pointer::{PointerId, PointerLocation};
 use bevy::prelude::*;
+
+/// Shared read access to Bevy's current primary mouse location.
+///
+/// Both operating-system input and injected `CursorMoved` events update this
+/// location. Cursor-driven tools use it instead of writing a synthetic
+/// position into the native `Window` state.
+#[derive(SystemParam)]
+pub struct PrimaryMousePointer<'w, 's> {
+    primary_window: Query<'w, 's, Entity, With<bevy::window::PrimaryWindow>>,
+    pointers: Query<'w, 's, (&'static PointerId, &'static PointerLocation)>,
+}
+
+impl PrimaryMousePointer<'_, '_> {
+    /// Return the primary mouse position in logical window coordinates.
+    pub fn position(&self) -> Option<Vec2> {
+        let primary_window = self.primary_window.single().ok()?;
+        let target = bevy::camera::RenderTarget::Window(bevy::window::WindowRef::Primary)
+            .normalize(Some(primary_window))?;
+        self.pointers
+            .iter()
+            .find_map(|(pointer, pointer_location)| {
+                if *pointer != PointerId::Mouse {
+                    return None;
+                }
+                let location = pointer_location.location.as_ref()?;
+                (location.target == target).then_some(location.position)
+            })
+    }
+}
 
 /// Resource indicating that an entity transform is being dragged.
 #[derive(Resource, Default)]
@@ -130,7 +161,49 @@ impl CursorModeActive<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PointerInteraction, SceneInteractionMode, ScenePointerPolicy};
+    use super::{
+        PointerInteraction, PrimaryMousePointer, SceneInteractionMode, ScenePointerPolicy,
+    };
+    use bevy::picking::pointer::Location;
+
+    #[derive(bevy::prelude::Resource, Default)]
+    struct MousePositionSample(Option<bevy::prelude::Vec2>);
+
+    fn sample_primary_mouse_pointer(
+        pointer: PrimaryMousePointer,
+        mut sample: bevy::prelude::ResMut<MousePositionSample>,
+    ) {
+        sample.0 = pointer.position();
+    }
+
+    #[test]
+    fn primary_mouse_pointer_reads_bevy_pointer_location_for_primary_window() {
+        let mut app = bevy::prelude::App::new();
+        app.init_resource::<MousePositionSample>()
+            .add_systems(bevy::prelude::Update, sample_primary_mouse_pointer);
+
+        let window = app
+            .world_mut()
+            .spawn((bevy::window::Window::default(), bevy::window::PrimaryWindow))
+            .id();
+        let target = bevy::camera::RenderTarget::Window(bevy::window::WindowRef::Primary)
+            .normalize(Some(window))
+            .expect("primary window target");
+        app.world_mut().spawn((
+            bevy::picking::pointer::PointerId::Mouse,
+            bevy::picking::pointer::PointerLocation::new(Location {
+                target,
+                position: bevy::prelude::Vec2::new(17.0, 29.0),
+            }),
+        ));
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<MousePositionSample>().0,
+            Some(bevy::prelude::Vec2::new(17.0, 29.0))
+        );
+    }
 
     #[test]
     fn scene_pointer_policy_has_fail_safe_usd_semantics() {

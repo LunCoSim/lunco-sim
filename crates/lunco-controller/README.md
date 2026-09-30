@@ -84,11 +84,10 @@ clients, playback, and accessibility tooling. It accepts one typed
 `bevy_winit` delivery boundary. Picking, egui, focus, input bindings, and scene
 tools therefore see the same event path as hardware input.
 
-For injected pointer gestures, the controller keeps the projected cursor in
-`Window::cursor_position()` while a mouse button is held and through the release
-frame. This lets late presentation consumers such as the transform gizmo read
-the same pointer position as picking; after release, the saved native cursor
-position is restored without moving the operating-system pointer.
+Injected pointer events do not mutate `Window::cursor_position()` or move the
+operating-system pointer. Bevy Picking's `PointerLocation` is the shared
+application cursor state for native and injected events; cursor-driven tools
+read it through `lunco_interaction_core::PrimaryMousePointer`.
 
 Rhai owns gesture policy and sequencing. For example, an authored Alt-click is
 composed from `input_key_press("AltLeft")`, `input_click("primary", x, y)`,

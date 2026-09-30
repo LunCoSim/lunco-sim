@@ -239,8 +239,10 @@ typed tool hooks.
 
 This router is not yet a global gesture manager. Spawn, terrain, attachment,
 possession, camera, and gizmo paths still have engine-owned input consumers.
-Their active modes must remain mutually exclusive and the native gate must
-prove which owner received the physical gesture. The target contract is one
+Their active modes must remain mutually exclusive, and headful OS input must
+prove which owner received the physical gesture. The windowed production gate
+injects typed Bevy events and does not prove OS or compositor delivery. The
+target contract is one
 captured gesture with one owner, selected by typed Rhai policy and applied by
 generic Rust mechanisms; a tool-specific observer must not race selection or
 another armed tool.
@@ -355,12 +357,21 @@ not rediscover identity from a later viewport hit.
 Picking may target an entity below the USD prim that owns the hit, including a
 terrain LOD or collider child. Hover dispatch resolves the nearest ancestor with
 `UsdPrimPath` before choosing the document and scene root, matching click
-dispatch. Requiring a USD path directly on the picked child silently drops that
-sample; click telemetry cannot establish that the separate hover path succeeded.
+dispatch. Bevy emits click observers for each entity in its previous hover map,
+whose entity iteration order is unspecified. The scene router resolves one hit
+from that same event source by depth and the authored policy for the actual
+button before dispatch. Pass-through markers therefore expose the terrain for
+primary placement, while a secondary context hit on the marker wins even if
+terrain also appears in the hit set. Requiring a USD path directly on the
+picked child silently drops that sample; click telemetry cannot establish that
+the separate hover path succeeded.
 The windowed `route_interaction` production gate
 verifies possessed right-click, selection without accidental move arming,
-explicit Move selection, live ghost motion from a coalesced native cursor trace,
+explicit Move selection in the focused editor owner, live ghost motion from a
+coalesced injected cursor trace,
 unchanged document generation during preview, terrain placement, and deletion.
+It waits for the possession camera's waypoint projection to settle before each
+scene gesture, so coordinates match the rendered marker.
 The `route_lifecycle` gate covers route selection precedence, insertion order,
 and ribbon context policy, including placement from an authored preview before
 the composed query projection settles.
@@ -375,9 +386,10 @@ not wait for a physics tick, author a USD op, project a document revision, or
 rebuild the ribbon. Placement is a low-frequency boundary: the next primary
 surface click converts its hit through the active frame and commits one
 canonical `@runtime@` move. The `route_interaction` gate uses the Rhai behavior
-tree vocabulary (`seq`, `once`, `wait_until`, and `step`) to send native input
-across task ticks and verify that preview motion leaves document generation
-unchanged.
+tree vocabulary (`seq`, `once`, `wait_until`, and `step`) to send injected
+window input across task ticks and verify that preview motion leaves document
+generation unchanged. Its `InjectWindowInput` events exercise Bevy picking but
+do not verify OS, compositor, or winit delivery.
 
 In the editor, the runtime edit panel identifies `@runtime@` as the target for
 route points, runtime spawns, and gizmo edits. Its Twin setting tells the user

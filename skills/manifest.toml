@@ -198,7 +198,7 @@ evidence = "skills/author-rhai-tests/SKILL.md"
 [[skills]]
 name = "debug-ui-interactions"
 category = "verify"
-primary_for = ["headful UI workflow", "native input interaction", "click and key debugging"]
+primary_for = ["headful UI workflow", "window input interaction", "click and key debugging"]
 defer_to = ["test-via-api", "coordinate-frames", "runtime-ui"]
 evidence = "skills/debug-ui-interactions/SKILL.md"
 

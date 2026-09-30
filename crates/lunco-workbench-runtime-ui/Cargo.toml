@@ -24,6 +24,7 @@ lunco-exposure-core = { path = "../lunco-exposure-core" }
 # Use the shared runtime text-asset catalog; this crate does not own a second
 # JSON loader or a path-specific manifest convention.
 lunco-hooks = { path = "../lunco-hooks" }
+lunco-interaction-core = { path = "../lunco-interaction-core" }
 lunco-render = { path = "../lunco-render" }
 lunco-status-core = { path = "../lunco-status-core" }
 lunco-theme = { path = "../lunco-theme" }

@@ -1045,7 +1045,7 @@ fn route_task_tick(m) {
     // Document-projection events normally refresh route topology and the
     // disposable view. This branch retries only an explicitly pending or
     // retryable projection handoff; stable routes do no per-tick scene query.
-    if this.route_revision == () || this.marker_sync_pending {
+    if this.route_revision == () || this.marker_sync_pending || this.ribbon_sync_pending {
         let refreshed = refresh_route_view(m, this, ());
         this = refreshed.state;
         let view = refreshed.result;

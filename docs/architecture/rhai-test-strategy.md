@@ -233,8 +233,10 @@ is present in the live entity registry before waiting for its verdict. The
 pointer policy while a rover is possessed, and verifies selection alone does
 not arm movement. It then chooses the explicit Move menu action, checks the
 view-layer ghost, commits placement through native pointer input, and deletes
-the waypoint through the native menu. The fixture authors the local avatar
-camera required for the real possession path. Rust tests retain generic typed
+the waypoint through the native menu. Before each scene gesture, it waits for
+the possession camera's waypoint projection to settle so input targets the
+currently presented marker. The fixture authors the local avatar camera
+required for the real possession path. Rust tests retain generic typed
 selection-command and gizmo mechanisms; Rhai owns route/selection policy.
 
 Dynamic asset construction follows the same boundary. The generic

@@ -6,7 +6,7 @@ license.workspace = true
 description = "Shared cursor-interaction contracts for LunCoSim runtimes"
 
 [dependencies]
-bevy = { workspace = true }
+bevy = { workspace = true, features = ["bevy_camera", "bevy_picking", "bevy_window"] }
 
 [lints]
 workspace = true

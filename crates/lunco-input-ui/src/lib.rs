@@ -50,6 +50,7 @@ pub fn draw_input_overlay(
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    pointer: lunco_interaction_core::PrimaryMousePointer,
     theme: Option<Res<lunco_theme::Theme>>,
     authority: Option<Res<lunco_core::markers::FlightAuthority>>,
 ) {
@@ -143,18 +144,19 @@ pub fn draw_input_overlay(
                             });
                         ui.separator();
 
-                        let cursor_pos = window.cursor_position().unwrap_or(Vec2::ZERO);
                         draw_key(ui, "L", buttons.pressed(MouseButton::Left));
                         draw_key(ui, "M", buttons.pressed(MouseButton::Middle));
                         draw_key(ui, "R", buttons.pressed(MouseButton::Right));
-                        ui.label(
-                            egui::RichText::new(format!(
-                                " [{:.0}, {:.0}]",
-                                cursor_pos.x, cursor_pos.y
-                            ))
-                            .weak()
-                            .size(10.0),
-                        );
+                        if let Some(cursor_pos) = pointer.position() {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    " [{:.0}, {:.0}]",
+                                    cursor_pos.x, cursor_pos.y
+                                ))
+                                .weak()
+                                .size(10.0),
+                            );
+                        }
                     });
                 });
         });

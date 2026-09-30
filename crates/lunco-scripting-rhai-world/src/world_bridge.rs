@@ -149,6 +149,23 @@ fn dynamic_to_value<B: ValueBuilder>(b: &B, d: &Dynamic) -> Result<B::Value, Str
         Ok(b.int(i))
     } else if let Ok(f) = d.as_float() {
         Ok(b.float(f))
+    } else if let Some(value) = d.clone().try_cast::<u64>() {
+        Ok(b.uint(value))
+    } else if let Some(function) = d.clone().try_cast::<FnPtr>() {
+        let name = if function.is_anonymous() {
+            "<anonymous>"
+        } else {
+            function.fn_name()
+        };
+        Ok(b.map(vec![
+            ("kind".into(), b.string("function")),
+            ("name".into(), b.string(name)),
+            ("anonymous".into(), b.bool(function.is_anonymous())),
+            (
+                "curried_argument_count".into(),
+                b.uint(function.curry().len() as u64),
+            ),
+        ]))
     } else if d.is_string() {
         d.clone()
             .into_string()
@@ -5672,6 +5689,32 @@ mod tests {
     };
     use lunco_scripting::scenario::{CompileOutcome, CompilePreparation, ScenarioRuntime};
     use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
+
+    #[test]
+    fn scenario_state_introspection_preserves_unsigned_api_ids() {
+        let id = u64::MAX;
+        let state = rhai::Dynamic::from(id);
+        let value = super::dynamic_to_value(&lunco_scripting_bridge_core::ApiValueBuilder, &state)
+            .expect("unsigned scenario ids are part of the typed introspection value");
+        assert_eq!(value, lunco_api_core::api_value_from_u64(id));
+    }
+
+    #[test]
+    fn scenario_state_introspection_describes_callable_tree_leaves() {
+        let function = rhai::FnPtr::new("route_fixture_ready").expect("valid Rhai function name");
+        let state = rhai::Dynamic::from(function);
+        let value = super::dynamic_to_value(&lunco_scripting_bridge_core::ApiValueBuilder, &state)
+            .expect("callable task leaves are inspectable through the typed value contract");
+        assert_eq!(
+            value,
+            lunco_hooks::HookValue::map([
+                ("kind", lunco_hooks::HookValue::str("function")),
+                ("name", lunco_hooks::HookValue::str("route_fixture_ready")),
+                ("anonymous", lunco_hooks::HookValue::Bool(false)),
+                ("curried_argument_count", lunco_hooks::HookValue::UInt(0)),
+            ])
+        );
+    }
 
     #[test]
     fn rhai_content_closure_addresses_exact_root_imports_and_prelude_in_stable_order() {

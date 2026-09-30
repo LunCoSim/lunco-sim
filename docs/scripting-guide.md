@@ -45,9 +45,10 @@ typed producers that supply an id are captured the same way. Twin scenarios use
 their stable actor identity automatically. Simulation-clock Rhai commands remain
 in the authored scenario pass.
 
-For UI automation, use the native input helpers from `prelude/input.rhai`.
-They compose typed Bevy window events rather than calling an editor or scene
-tool directly:
+For windowed app automation, use the injected input helpers from
+`prelude/input.rhai`. They compose typed Bevy window events rather than calling
+an editor or scene tool directly; this exercises app event handling but does
+not test OS or hardware pointer delivery:
 
 ```rhai
 input_key_press("AltLeft");
@@ -59,7 +60,9 @@ The same path drives egui, picking, focus, key bindings, and authored tools.
 Use `input_pointer_move`, `input_pointer_press`/`release`, and `input_scroll`
 for drag and viewport workflows. Coordinates are logical primary-window pixels;
 Rhai owns the gesture sequence and `InjectWindowInput` owns only typed event
-validation and delivery.
+validation and delivery. Bevy Picking's `PointerLocation` is the shared cursor
+position for native and injected events; cursor-driven tools must read that
+state instead of writing an injected position into `Window`.
 
 The command result's `id` is also the edge's causal correlation id. Inspect the
 current downstream path with:
@@ -395,6 +398,11 @@ client, while the optional in-app panel uses that path directly.
   file/line/column).
 - `ScriptInspect { target }` shows the live `this` map, defined hooks, generation,
   paused/running.
+
+Rhai function pointers in live state (including behavior-tree leaf callbacks)
+are represented as read-only maps with `kind: "function"`, `name`, `anonymous`,
+and `curried_argument_count`. The API exposes their identity for diagnosis; it
+does not expose callable function values.
 
 ```json
 {"type":"ExecuteCommand", "command": "ScriptInspect", "params": { "target": 4869542932533563 } }

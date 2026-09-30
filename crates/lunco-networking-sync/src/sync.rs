@@ -2277,6 +2277,7 @@ pub fn send_local_cursor_updates(
     settings: Res<CursorSettings>,
     tutorial_settings: Res<TutorialSettings>,
     q_window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    pointer: lunco_interaction_core::PrimaryMousePointer,
     mut last_sent: Local<Option<[f32; 2]>>,
     mut timer: Local<f32>,
     time: Res<Time>,
@@ -2332,10 +2333,7 @@ pub fn send_local_cursor_updates(
             h * (0.5 + (elapsed * 2.0).sin() * 0.25),
         ])
     } else {
-        q_window
-            .iter()
-            .next()
-            .and_then(|window| window.cursor_position().map(|pos| [pos.x, pos.y]))
+        pointer.position().map(|pos| [pos.x, pos.y])
     };
 
     // Check if we need to send the update
