@@ -31,6 +31,11 @@ model and force/torque limit. They enable the motor and change its position
 target with zero target velocity; author drive gains and limits through the
 standard USD drive owner rather than through command-side tuning.
 
+Omitted joint limits retain standard unbounded travel. The native port adapter
+maps lower negative infinity and upper positive infinity to absent bounds;
+malformed nonfinite limits remain invalid. Do not add artificial finite travel
+limits to make a valid unbounded joint accept a command.
+
 Startup joint topology is prepared while the shared fixed clock is held. The
 BigSpace physics bridge seeds authored body poses in `PreUpdate`; USD joints
 are projected in `JointPreparation` during `Update`, after USD simulation
@@ -707,3 +712,9 @@ its exit code comes from a telemetry verdict:
 A physics change is not done until a scene runs clean: **zero** `left the
 world`, **zero** `starts violated`, and the scenario's own verdict PASSing. See
 [`author-scenario`](../author-scenario/SKILL.md) for writing the verdict.
+
+For raycast rover wheels, check the Cylinder axle and `lunco:wheel:headingAxis`
+together: travel is steering-axis cross axle-axis, transformed by the physical
+mount. Collinear axes are invalid. Align front/rear station names and the
+Modelica drivetrain `forward_yaw_offset` with that travel direction; native
+navigation uses −Z at zero offset, +X uses −π/2. Verify departure physically.

@@ -20,6 +20,10 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
 - Run a separate Tracy build/capture using the adjacent `../tracy` checkout;
   start `tracy-capture` before the production binary and inspect the settled
   window, not only startup.
+  Check the profiler listener and connection against the owned PID with
+  `ss -ltnp`/`ss -tnp`. A concurrent Tracy client can occupy 8086 and move the
+  owned app to the next port; pass that port with `tracy-capture -p`. A capture
+  from another process is not evidence for the task scene.
 - Compare Builder and View with the same scene, camera, rendering-quality
   settings, physics substeps, shadow settings, and terrain assets. A Builder-
   only cost usually means an editor observer, rebuild, projection, or UI path,

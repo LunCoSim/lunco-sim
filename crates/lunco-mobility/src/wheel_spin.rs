@@ -169,7 +169,14 @@ pub(crate) fn update_wheel_spin(
                 mount.local.translation.as_dvec3(),
                 wheel_local_rotation,
             );
-            let (wheel_forward, wheel_right) = wheel_heading(GridRot(rot.0), wheel_local_rotation);
+            let Some((wheel_forward, wheel_right)) = wheel_heading(
+                GridRot(rot.0),
+                wheel_local_rotation,
+                wheel.axle_axis,
+                wheel.heading_axis,
+            ) else {
+                continue;
+            };
             // Decompose in the CONTACT plane (the ray-hit normal), not a flat
             // wheel basis — the same basis `apply_wheel_drive` applies the force
             // in, so a leaning or side-sloped wheel splits slip correctly.
@@ -429,6 +436,7 @@ mod tests {
                 speed_port: port,
                 heading_port: port,
                 heading_axis: DVec3::Y,
+                axle_axis: DVec3::X,
                 heading_rotation: bevy::math::DQuat::IDENTITY,
                 wheel_radius: 0.5,
                 wheel_width: 0.28,
@@ -535,6 +543,7 @@ mod tests {
                     speed_port,
                     heading_port: port,
                     heading_axis: DVec3::Y,
+                    axle_axis: DVec3::Z,
                     heading_rotation: bevy::math::DQuat::IDENTITY,
                     wheel_radius: 0.4,
                     wheel_width: 0.28,

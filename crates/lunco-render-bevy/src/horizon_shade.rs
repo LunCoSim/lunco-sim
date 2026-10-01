@@ -401,7 +401,7 @@ pub fn wire_terrain_materials(
         // world space (world N/V), so it needs the world-space sun. Passing the
         // CPU-picked canonical sun here means the shader never has to guess it
         // from `directional_lights[0]` — robust to the earthshine fill light.
-        let inputs = TerrainEngineInputs {
+        let mut inputs = TerrainEngineInputs {
             height_map: height_map_handle,
             shadow_cache: cache_image,
             sun_dir: sun_local,
@@ -420,11 +420,18 @@ pub fn wire_terrain_materials(
         // identity, sun revision epsilon, and all engine scalars cover the
         // complete terrain shader contract.
         written_materials.clear();
+        // Cached streamed tiles do not cast terrain into CSM. Zero means their
+        // heightfield visibility owns the whole range; native object shadows
+        // still come from Bevy. Static meshes retain their native caster range.
+        if shadow_cache_on > 0.5 {
+            inputs.csm_far = 0.0;
+        }
         for handle in tiles {
             if written_materials.insert(handle.id()) {
                 write_terrain_material_if_needed(&mut shader_mats, handle, &inputs);
             }
         }
+        inputs.csm_far = csm_far;
         if let Some(shader_mat) = shader_mat {
             if written_materials.insert(shader_mat.0.id()) {
                 write_terrain_material_if_needed(&mut shader_mats, &shader_mat.0, &inputs);

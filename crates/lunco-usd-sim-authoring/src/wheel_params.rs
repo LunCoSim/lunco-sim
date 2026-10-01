@@ -396,6 +396,9 @@ impl WheelParams {
             }
         };
 
+        if heading_axis.cross(axle_axis).length_squared() <= 1.0e-12 {
+            missing.push("axis and lunco:wheel:headingAxis must define distinct axle and steering directions".to_owned());
+        }
         if !missing.is_empty() {
             return Err(missing);
         }
@@ -519,6 +522,7 @@ impl WheelParams {
         wheel.min_validated_speed = self.min_validated_speed;
         wheel.brake_torque_max = self.brake_torque_max;
         wheel.heading_axis = self.heading_axis;
+        wheel.axle_axis = self.axle_axis;
     }
 
     /// Write the suspension compliance into an existing `Suspension`.

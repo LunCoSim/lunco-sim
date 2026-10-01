@@ -19,6 +19,7 @@ model RoverAckermannDrivetrain
   parameter Real wheelbase = 2.45 "Front/rear axle spacing (m)";
   parameter Real track = 2.0 "Front wheel centre spacing (m)";
   parameter Real max_heading = 0.5 "Maximum front-wheel heading (rad)";
+  parameter Real forward_yaw_offset = 0.0 "Body-local travel heading relative to native -Z (rad)";
 
   input Real throttle "Normalized forward command, -1..1";
   input Real steer "Normalized right command, -1..1";
@@ -60,7 +61,7 @@ equation
   guidance.target_z = autopilot_target_z;
   guidance.position_x = autopilot_position_x;
   guidance.position_z = autopilot_position_z;
-  guidance.yaw = autopilot_yaw;
+  guidance.yaw = autopilot_yaw + forward_yaw_offset;
   guidance.yaw_rate = autopilot_yaw_rate;
   guidance.speed = autopilot_speed;
   guidance.radius = autopilot_radius;

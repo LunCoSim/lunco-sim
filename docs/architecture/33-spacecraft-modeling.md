@@ -343,7 +343,13 @@ rover rests at `speed 0`, no drift). For a leaning bike the basis follows the
 cambered contact plane, so drive + lateral grip are computed correctly. Unit-tested
 (`force_law_tests::contact_basis_*`). The **raked steering-head axis** is now
 USD-authorable too: `lunco:wheel:headingAxis` (float3, wheel-local) sets the
-heading rotation axis — default `+Y` (flat car steer, identical to the
+heading rotation axis. The authored Cylinder axle and steering axis define
+travel as `headingAxis × axleAxis`; collinear axes are rejected during projection.
+Traction uses this basis through the physical wheel mount and contact plane.
+`RoverAckermannDrivetrain.forward_yaw_offset` rotates the native −Z navigation
+heading into an authored rover travel frame (default zero; +X uses −π/2).
+The Twin must keep front/rear stations, wheel axle and this heading consistent.
+The heading axis defaults to `+Y` (flat car steer, identical to the
 `from_rotation_y`), a motorcycle fork authors e.g. `(0, 0.91, 0.42)` for a ~25°
 rake. **Remaining for full fidelity** (deferred): gyroscopic precession — balance
 itself is a *controller* (already expressible via the torque + attitude/rate

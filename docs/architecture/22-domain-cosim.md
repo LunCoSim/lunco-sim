@@ -49,7 +49,10 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   participant reads/writes through; the cosim engine registers the built-in backends.
   `entity_port_infos` adds the same live values with owner-supplied type, unit,
   bounds, source, authority, and writability for `ReadPorts` and the native
-  Ports panel. Map-backed `SimComponent` values use `ScalarPortMap`, which
+  Ports panel. Native joint lower `-infinity` and upper `+infinity` limits map
+  to absent port bounds, preserving unbounded travel. Other nonfinite bounds
+  remain invalid metadata and reject writes. Map-backed `SimComponent` values
+  use `ScalarPortMap`, which
   updates its identity key only when the set of port names changes; live samples
   remain independent of topology invalidation. Hot writers use borrowed-name
   `set`, or strict `set_existing` for declared inputs, and mark the component

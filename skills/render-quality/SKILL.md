@@ -22,6 +22,13 @@ For lunar-specific terrain data, regolith reflectance, multiscale detail, and
 LOD approaches, consult the source-linked
 [`lunar surface rendering research note`](../../docs/research/lunar-surface-rendering.md).
 
+Use a task-owned `LUNCOSIM_CONFIG` directory for visual acceptance so restored
+workbench documents cannot change the fixture. `LUNCOSIM_EPHEMERAL_SETTINGS=1`
+alone does not isolate workbench restoration. Confirm physical viewport size
+through `SceneCameraAudit` before comparing screenshots or FPS. Read the settled
+active camera pose through `QueryEntity` before and after an FPS window; startup
+view restoration can replace an early camera command.
+
 ## Diagnose in order
 
 1. Confirm the terrain prim, `material:binding`, Material surface connection,
@@ -40,6 +47,19 @@ LOD approaches, consult the source-linked
    and `primvars:doNotCastShadows` before changing material brightness. A
    renderer fallback that silently removes shadows is a failure to surface,
    not a quality setting to hide.
+   A committed heightfield cache disables streamed terrain CSM casting. The
+   render-input owner sets those tiles' `csm_far` to zero so cached visibility
+   covers every distance. Static terrain retains its native CSM range; object
+   shadows remain native CSM. Check both paths after shader edits.
+   The layered shader keeps measured landform normals and adds filtered
+   sub-metre clump/grain normals; unresolved slopes contribute to roughness.
+   Relief remaps have continuous slopes at their clipping thresholds. The
+   DEM normal-map weight selects the landform band without erasing the grain
+   tangent slope; use full weight when the measured map owns those slopes.
+   The layered material allows filtered `micro_albedo` grain only below an authored
+   raster's texel size; broad procedural colour is suppressed by raster weight.
+   `inputs:roughness` owns the base, with centred procedural variation.
+   Scatter boulder reflectance is linear, and shared boulders cast shadows.
    For close terrain breakup, inspect the High profile's first-cascade bound
    separately from its maximum shadow distance. Keep sub-DEM synthetic crater
    geometry within the terrain tile's resolved sampling; measured orthophoto

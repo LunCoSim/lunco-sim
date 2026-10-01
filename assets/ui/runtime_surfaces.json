@@ -65,7 +65,7 @@
       "id": "vehicle-control-left",
       "template": "ui/vehicle_control_compact.html",
       "stylesheet": "ui/vehicle_control_compact.css",
-      "namespace": "vehicle-control-0",
+      "namespace": "vehicle-control-left",
       "bindings": {
         "vehicle": { "source": "vehicle" },
         "status": { "source": "status" },
@@ -91,7 +91,7 @@
       "id": "vehicle-control-right",
       "template": "ui/vehicle_control_compact.html",
       "stylesheet": "ui/vehicle_control_compact.css",
-      "namespace": "vehicle-control-1",
+      "namespace": "vehicle-control-right",
       "bindings": {
         "vehicle": { "source": "vehicle" },
         "status": { "source": "status" },
