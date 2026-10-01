@@ -76,3 +76,9 @@ The rendering product has bounded history; GPU budget pressure can shorten its
 oldest retained portion. This is footprint presentation, not tire deformation
 or persisted terrain state. Continuous publication can lag by worker/render
 admission; it no longer waits for another half metre of vehicle travel.
+
+Integration retained main `d21f193f3`, including its authored axle/steering,
+HUD, filtered terrain-detail and shadow changes. The integrated production
+build passed, and the final owned High-quality session passed both the
+15-check trail gate and six-check route gate. Runtime command documentation
+was regenerated from the settled integrated schema without changes.
