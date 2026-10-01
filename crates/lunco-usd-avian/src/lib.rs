@@ -1603,6 +1603,24 @@ fn extract_avian_prim(
                     return;
                 }
             };
+        // Thin, falling collision geometry needs a swept trajectory, not only
+        // overlap at the end of a step. Honor the authored PhysX schema flag
+        // through Avian's backend; no vehicle-type inference is involved.
+        let ccd = match read_authored_bool_or_default(
+            reader,
+            sdf_path,
+            "physxRigidBody:enableCCD",
+            false,
+        ) {
+            Ok(value) => value,
+            Err(()) => {
+                error!(
+                    "[usd-avian] {sdf_path} has malformed physxRigidBody:enableCCD — refusing rigid-body projection"
+                );
+                commands.entity(entity).try_insert(UsdPhysicsProjected);
+                return;
+            }
+        };
         let kinematic =
             match read_authored_bool_or_default(reader, sdf_path, ptok::A_KINEMATIC_ENABLED, false)
             {
@@ -1667,6 +1685,11 @@ fn extract_avian_prim(
             }
         }
         apply_collision_groups(commands, entity, groups, sdf_path);
+        if ccd && simulated && !kinematic {
+            commands.entity(entity).try_insert(SweptCcd::default());
+        } else {
+            commands.entity(entity).try_remove::<SweptCcd>();
+        }
 
         // The schema's own `physics:rigidBodyEnabled` (default true) says whether
         // this body is simulated; a disabled body is unmoving collision geometry.
@@ -2725,7 +2748,7 @@ def Xform "World"
     fn run_extract(
         reader: &StageView<'_>,
         path: &SdfPath,
-    ) -> (Option<RigidBody>, Option<String>, Option<f32>, bool) {
+    ) -> (Option<RigidBody>, Option<String>, Option<f32>, bool, bool) {
         let mut world = World::new();
         let e = world.spawn_empty().id();
         let mut queue = CommandQueue::default();
@@ -2747,6 +2770,7 @@ def Xform "World"
             world.get::<Collider>(e).map(|c| format!("{c:?}")),
             world.get::<Mass>(e).map(|m| m.0),
             world.get::<super::ShouldBeDynamic>(e).is_some(),
+            world.get::<SweptCcd>(e).is_some(),
         )
     }
 
@@ -2771,6 +2795,36 @@ def Xform "World"
             "live: authored mass read off the stage"
         );
         assert!(live.3, "live: ShouldBeDynamic (settles to Dynamic)");
+    }
+
+    #[test]
+    fn authored_ccd_is_projected_only_for_enabled_dynamic_bodies() {
+        for (attrs, enabled, admitted) in [
+            ("", false, true),
+            ("bool physxRigidBody:enableCCD = true", true, true),
+            ("bool physxRigidBody:enableCCD = false", false, true),
+            (
+                "bool physxRigidBody:enableCCD = true\n bool physics:rigidBodyEnabled = false",
+                false,
+                true,
+            ),
+            (
+                "bool physxRigidBody:enableCCD = true\n bool physics:kinematicEnabled = true",
+                false,
+                true,
+            ),
+            ("string physxRigidBody:enableCCD = \"true\"", false, false),
+        ] {
+            let source = FIXTURE.replacen(
+                "double physics:mass = 500",
+                &format!("{attrs}\n double physics:mass = 500"),
+                1,
+            );
+            let stage = stage_from_source(&source);
+            let facts = run_extract(&stage.view(), &SdfPath::new("/Rover").unwrap());
+            assert_eq!(facts.4, enabled, "{attrs}");
+            assert_eq!(facts.0.is_some(), admitted, "{attrs}");
+        }
     }
 
     #[test]

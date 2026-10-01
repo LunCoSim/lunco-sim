@@ -427,8 +427,16 @@ Rocker-bogie fidelity needs G4+G5+G2.
 - Engine models: `assets/models/RocketEngine.mo`, `AnnotatedRocketStage.mo`, `Balloon.mo`
 
 A vessel control profile may author `double lunco:cameraFollowHeight` on
-its `Controls` prim. The generic projection supplies the subject camera's
+its `Controls` prim. Control acquisition and `FollowTarget` honor that authored
+profile. The generic projection supplies the subject camera's
 existing vertical focus offset in metres along surface up. Both orbit position
 and collision probe start at that raised focus; control/collision exclusions
 remain owned by the vessel. Omission preserves the selected follow mode's
 existing default. Use the payload/interface datum for a lander deck focus.
+
+Thin dynamic colliders may author `bool physxRigidBody:enableCCD = true` on
+their rigid-body owner. The USD bridge installs Avian's nonlinear `SweptCcd`,
+which sweeps translation and rotation against collision geometry. Omitted or
+false flags preserve discrete collision; disabled and kinematic bodies do not
+receive the sweep component. Malformed flag types reject body projection.
+This is numerical collision policy, independent of the body's domain role.
