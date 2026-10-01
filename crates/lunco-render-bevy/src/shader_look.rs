@@ -198,7 +198,9 @@ impl ShaderSourceCache {
                         .and_then(lunco_materials::dyn_params::shader_interface_identifier)
                         .map(str::to_owned),
                     source_valid,
-                    capabilities: source.map(lunco_materials::dyn_params::shader_capabilities).unwrap_or_default(),
+                    capabilities: source
+                        .map(lunco_materials::dyn_params::shader_capabilities)
+                        .unwrap_or_default(),
                     defaults: schema
                         .as_ref()
                         .map(|schema| {
