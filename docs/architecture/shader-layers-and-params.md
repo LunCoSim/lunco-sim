@@ -124,6 +124,18 @@ authored Rhai policy may observe that diagnostic and explicitly author a
 replacement or stop the scenario, so recovery remains visible and easy to
 override rather than hidden in the renderer.
 
+Shader-source preparation is asset-scoped in `lunco-render-bevy`. Its shared
+`ShaderSourceCache` retains stage validation (including rejection), an optional
+shared `ParamSchema`, and interface/default facts per shader asset. Binding,
+replacement readiness, source-interface publication, and schema assignment use
+that same cache. A tile changing its look only resolves the material and checks
+loaded dependencies plus reflected-layout identity; it does not parse WGSL.
+The cache invalidates on Added, Modified, Removed, or Unused shader events,
+after Bevy publishes asset events in PostUpdate and before the next owner Update.
+LoadedWithDependencies does not change source facts. This is a render mechanism,
+not a terrain or Twin policy hook: authored looks choose stages and parameters;
+Rust validates the selected source and enforces render readiness.
+
 Authored grayscale orthophotos are not intrinsic albedo: their broad brightness
 field contains acquisition illumination and would be lit a second time by the
 runtime. The native `lunco-assets-processing` processor therefore has a distinct

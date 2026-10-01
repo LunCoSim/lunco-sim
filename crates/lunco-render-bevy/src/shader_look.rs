@@ -14,9 +14,8 @@
 //! [`ShaderLookCache`] maps [`ShaderLookKey`] → one `Handle<ShaderMaterial>`. The
 //! terrain LOD path depends on it: the ~150–500 resident tiles collapse onto a
 //! handful of distinct looks (mode x morph-band bucket), and they
-//! MUST resolve to the same material — one bind group, one batch. This is exactly
-//! the hand-rolled `LodMaterials`/`MatKey` cache the terrain used to carry, done
-//! once, generically, keyed by the look's own content.
+//! MUST resolve to the same material — one bind group, one batch, keyed by the
+//! look's content.
 //!
 //! Shared cached materials stay structurally immutable after they are built: a
 //! tile that changes (an overlay re-tune, a late-bound derived map) edits its
@@ -28,8 +27,9 @@
 //! The schema (parameter name → std140 offset, reflected out of the WGSL) is
 //! filled in by [`reflect_shader_schemas`](crate::reflect_shader_schemas) once the shader
 //! source loads; a freshly built material carries the empty schema and its values
-//! by name, and is repacked the moment the schema lands. That machinery is
-//! untouched.
+//! by name, and is repacked the moment the schema lands. Stage validation,
+//! schemas, and source interfaces share asset-scoped facts; tile replacement
+//! never re-parses an unchanged shader.
 
 use crate::look_cache::{CachedLook, LookCache, sweep_look_cache};
 use crate::shader_material::{ShaderMaterial, build_shader_material, wgsl_source};
@@ -131,6 +131,102 @@ fn shader_material(look: &ShaderLook, asset_server: &AssetServer) -> ShaderMater
     build_shader_material(asset_server.load::<Shader>(look.shader.clone()), m)
 }
 
+/// Shader-source facts shared by binding, readiness, and reflection.
+/// Asset publication invalidates them before the next render-owner Update.
+#[derive(Resource, Default)]
+pub(crate) struct ShaderSourceCache {
+    ids_by_path: HashMap<String, AssetId<Shader>>,
+    stage_failures: HashMap<(AssetId<Shader>, ShaderStage), Option<String>>,
+    schemas: HashMap<AssetId<Shader>, Option<Arc<ParamSchema>>>,
+    interfaces: HashMap<AssetId<Shader>, ShaderLookSourceInterface>,
+}
+
+impl ShaderSourceCache {
+    fn shader_id(&mut self, path: &str, asset_server: &AssetServer) -> AssetId<Shader> {
+        *self
+            .ids_by_path
+            .entry(path.to_owned())
+            .or_insert_with(|| asset_server.load::<Shader>(path.to_owned()).id())
+    }
+
+    pub(crate) fn failure(
+        &mut self,
+        id: AssetId<Shader>,
+        stage: ShaderStage,
+        source: &str,
+    ) -> Option<String> {
+        self.stage_failures
+            .entry((id, stage))
+            .or_insert_with(|| {
+                let _span =
+                    bevy::log::info_span!("shader_source_validate", shader = ?id, stage = ?stage)
+                        .entered();
+                validate_shader_stage(source, stage)
+                    .err()
+                    .map(|error| error.to_string())
+            })
+            .clone()
+    }
+
+    pub(crate) fn schema(&mut self, id: AssetId<Shader>, source: &str) -> Option<Arc<ParamSchema>> {
+        self.schemas
+            .entry(id)
+            .or_insert_with(|| {
+                let _span = bevy::log::info_span!("shader_source_schema", shader = ?id).entered();
+                ParamSchema::parse(source).map(Arc::new)
+            })
+            .clone()
+    }
+
+    fn interface(
+        &mut self,
+        id: AssetId<Shader>,
+        path: &str,
+        shader: &Shader,
+    ) -> ShaderLookSourceInterface {
+        if !self.interfaces.contains_key(&id) {
+            let source = wgsl_source(shader);
+            let source_valid = source
+                .is_some_and(|source| self.failure(id, ShaderStage::Fragment, source).is_none());
+            let schema = source.and_then(|source| self.schema(id, source));
+            self.interfaces.insert(
+                id,
+                ShaderLookSourceInterface {
+                    shader: shader.path.clone(),
+                    identifier: source
+                        .and_then(lunco_materials::dyn_params::shader_interface_identifier)
+                        .map(str::to_owned),
+                    source_valid,
+                    defaults: schema
+                        .as_ref()
+                        .map(|schema| {
+                            schema
+                                .fields
+                                .iter()
+                                .filter_map(|field| {
+                                    field.default.map(|value| (field.name.clone(), value))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                },
+            );
+        }
+        let mut interface = self.interfaces[&id].clone();
+        if interface.shader != path {
+            interface.shader = path.to_owned();
+        }
+        interface
+    }
+
+    fn invalidate(&mut self, id: AssetId<Shader>) {
+        self.ids_by_path.retain(|_, cached| *cached != id);
+        self.stage_failures.retain(|(cached, _), _| *cached != id);
+        self.schemas.remove(&id);
+        self.interfaces.remove(&id);
+    }
+}
+
 /// Return a stage error only when the requested shader asset is already loaded.
 /// Unloaded assets are not errors yet: the normal asset event will validate them
 /// at publication time. Keeping this distinction lets a command-created look
@@ -140,64 +236,7 @@ fn loaded_shader_stage_failure(
     look: &ShaderLook,
     shaders: Option<&Assets<Shader>>,
     asset_server: &AssetServer,
-) -> Option<(ShaderStage, String)> {
-    let shaders = shaders?;
-    let fragment = asset_server.load::<Shader>(look.shader.clone());
-    if let Some(source) = shaders.get(&fragment).and_then(wgsl_source) {
-        if let Err(error) = validate_shader_stage(source, ShaderStage::Fragment) {
-            return Some((ShaderStage::Fragment, error.to_string()));
-        }
-    }
-    let Some(vertex_path) = look.vertex_shader.as_ref() else {
-        return None;
-    };
-    let vertex = asset_server.load::<Shader>(vertex_path.clone());
-    shaders
-        .get(&vertex)
-        .and_then(wgsl_source)
-        .and_then(|source| {
-            validate_shader_stage(source, ShaderStage::Vertex)
-                .err()
-                .map(|error| (ShaderStage::Vertex, error.to_string()))
-        })
-}
-
-#[derive(Default)]
-struct ShaderLookShaderCache {
-    ids_by_path: HashMap<String, AssetId<Shader>>,
-    stage_failures: HashMap<(AssetId<Shader>, ShaderStage), Option<String>>,
-}
-
-impl ShaderLookShaderCache {
-    fn shader_id(&mut self, path: &str, asset_server: &AssetServer) -> AssetId<Shader> {
-        *self
-            .ids_by_path
-            .entry(path.to_owned())
-            .or_insert_with(|| asset_server.load::<Shader>(path.to_owned()).id())
-    }
-
-    fn failure(&mut self, id: AssetId<Shader>, stage: ShaderStage, source: &str) -> Option<String> {
-        self.stage_failures
-            .entry((id, stage))
-            .or_insert_with(|| {
-                validate_shader_stage(source, stage)
-                    .err()
-                    .map(|error| error.to_string())
-            })
-            .clone()
-    }
-
-    fn invalidate(&mut self, id: AssetId<Shader>) {
-        self.ids_by_path.retain(|_, cached| *cached != id);
-        self.stage_failures.retain(|(cached, _), _| *cached != id);
-    }
-}
-
-fn changed_shader_stage_failure(
-    look: &ShaderLook,
-    shaders: Option<&Assets<Shader>>,
-    asset_server: &AssetServer,
-    cache: &mut ShaderLookShaderCache,
+    cache: &mut ShaderSourceCache,
 ) -> Option<(ShaderStage, String)> {
     let shaders = shaders?;
     let fragment_id = cache.shader_id(&look.shader, asset_server);
@@ -343,13 +382,14 @@ fn bind_shader_look(
     mut materials: ResMut<Assets<ShaderMaterial>>,
     asset_server: Res<AssetServer>,
     shaders: Option<Res<Assets<Shader>>>,
+    mut shader_cache: ResMut<ShaderSourceCache>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     mut commands: Commands,
 ) {
     let e = add.entity;
     let Ok(look) = looks.get(e) else { return };
     if let Some((stage, detail)) =
-        loaded_shader_stage_failure(look, shaders.as_deref(), &asset_server)
+        loaded_shader_stage_failure(look, shaders.as_deref(), &asset_server, &mut shader_cache)
     {
         clear_shader_render_components(&mut commands, e);
         if let Some(diagnostics) = diagnostics.as_deref_mut() {
@@ -378,13 +418,14 @@ fn bind_added_skybox_shader_look(
     mut materials: ResMut<Assets<ShaderMaterial>>,
     asset_server: Res<AssetServer>,
     shaders: Option<Res<Assets<Shader>>>,
+    mut shader_cache: ResMut<ShaderSourceCache>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     mut commands: Commands,
 ) {
     let e = add.entity;
     let Ok(look) = looks.get(e) else { return };
     if let Some((stage, detail)) =
-        loaded_shader_stage_failure(look, shaders.as_deref(), &asset_server)
+        loaded_shader_stage_failure(look, shaders.as_deref(), &asset_server, &mut shader_cache)
     {
         clear_shader_render_components(&mut commands, e);
         if let Some(diagnostics) = diagnostics.as_deref_mut() {
@@ -416,8 +457,9 @@ fn apply_shadow_intent(commands: &mut Commands, e: Entity, look: &ShaderLook) {
 /// Re-bind when a look is edited in place — a terrain tile changing mode,
 /// an overlay re-tune, a late-bound derived map, an Inspector edit.
 ///
-/// Change-driven, and it swaps a *handle* from the cache; it never touches the
-/// material asset. A static scene costs nothing.
+/// Structural shared-look changes swap a cached handle. Live parameters and
+/// explicitly unshared looks update their material in place. Unchanged looks
+/// perform no binding work.
 fn rebind_changed_shader_look(
     changed: Query<
         (
@@ -437,22 +479,8 @@ fn rebind_changed_shader_look(
     schemas: Option<Res<crate::ShaderSchemas>>,
     mut commands: Commands,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
-    // Owns resolved IDs and validation results for changed looks. Asset events
-    // retire both entries, while a shader shared by many changed tiles is
-    // loaded and validated only once until that event.
-    mut shader_events: MessageReader<AssetEvent<Shader>>,
-    mut shader_cache: Local<ShaderLookShaderCache>,
+    mut shader_cache: ResMut<ShaderSourceCache>,
 ) {
-    for event in shader_events.read() {
-        let id = match event {
-            AssetEvent::Added { id }
-            | AssetEvent::Modified { id }
-            | AssetEvent::Removed { id }
-            | AssetEvent::Unused { id }
-            | AssetEvent::LoadedWithDependencies { id } => *id,
-        };
-        shader_cache.invalidate(id);
-    }
     // Shared materials already written this run. Every terrain tile carries the same
     // global overlay values, so without this the one material they share would be
     // re-packed once per tile per change — hundreds of redundant writes per frame.
@@ -460,7 +488,7 @@ fn rebind_changed_shader_look(
 
     for (e, look, current, was_ready, skybox) in &changed {
         if let Some((stage, detail)) =
-            changed_shader_stage_failure(look, shaders.as_deref(), &asset_server, &mut shader_cache)
+            loaded_shader_stage_failure(look, shaders.as_deref(), &asset_server, &mut shader_cache)
         {
             clear_shader_render_components(&mut commands, e);
             if let Some(diagnostics) = diagnostics.as_deref_mut() {
@@ -574,7 +602,7 @@ fn rebind_changed_shader_look(
                 .zip(images.as_deref())
                 .zip(schemas.as_deref())
                 .is_some_and(|(((material, shaders), images), schemas)| {
-                    material_is_render_ready(material, shaders, images, schemas)
+                    material_is_render_ready(material, shaders, images, schemas, &mut shader_cache)
                 });
             if !replacement_ready {
                 commands.entity(e).try_remove::<ShaderLookReady>();
@@ -615,6 +643,7 @@ fn validate_shader_assets_on_change(
     asset_server: Res<AssetServer>,
     mut commands: Commands,
     diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+    mut shader_cache: ResMut<ShaderSourceCache>,
 ) {
     let mut changed: HashSet<AssetId<Shader>> = HashSet::default();
     let mut removed: HashSet<AssetId<Shader>> = HashSet::default();
@@ -662,9 +691,9 @@ fn validate_shader_assets_on_change(
         let fragment_loaded = fragment_source.is_some() || removed.contains(&fragment.id());
         let mut failure = fragment_source
             .and_then(|source| {
-                validate_shader_stage(source, ShaderStage::Fragment)
-                    .err()
-                    .map(|error| (ShaderStage::Fragment, error.to_string()))
+                shader_cache
+                    .failure(fragment.id(), ShaderStage::Fragment, source)
+                    .map(|error| (ShaderStage::Fragment, error))
             })
             .or_else(|| {
                 removed.contains(&fragment.id()).then_some((
@@ -683,9 +712,9 @@ fn validate_shader_assets_on_change(
                     .get(vertex_handle)
                     .and_then(wgsl_source)
                     .and_then(|source| {
-                        validate_shader_stage(source, ShaderStage::Vertex)
-                            .err()
-                            .map(|error| (ShaderStage::Vertex, error.to_string()))
+                        shader_cache
+                            .failure(vertex_handle.id(), ShaderStage::Vertex, source)
+                            .map(|error| (ShaderStage::Vertex, error))
                     })
                     .or_else(|| {
                         removed.contains(&vertex_handle.id()).then_some((
@@ -975,33 +1004,25 @@ fn clear_shader_image_mips(mut state: ResMut<ShaderImageMipState>) {
 /// [`LuncoRenderPlugin`](crate::LuncoRenderPlugin).
 ///
 /// NOTE: this does **not** add [`ShaderMaterialPlugin`](crate::ShaderMaterialPlugin)
-/// — [`LuncoRenderPlugin`](crate::LuncoRenderPlugin) does, right after calling this,
-/// and exactly once (the hand-rolled adds in `lunco-luncosim` and `luncosim` were
-/// deleted; Bevy panics on a duplicate plugin). Keeping the two separate lets this
+/// — [`LuncoRenderPlugin`](crate::LuncoRenderPlugin) installs that plugin once,
+/// after this binder. Keeping the two separate lets this
 /// binder be unit-tested on a bare `MinimalPlugins` app, with no render pipeline.
 pub(crate) fn build(app: &mut App) {
-    // The `ShaderMaterial` store must exist for the binder even before the pipeline plugin
-    // registers it (plugin order is not ours to control), and the `Shader` asset must be
-    // registered for `asset_server.load::<Shader>` not to panic.
-    //
-    // GUARDED, because `init_asset` is NOT idempotent — this code used to claim it was, and
-    // that was the bug. `AssetApp::init_asset::<A>` unconditionally builds a fresh
-    // `Assets::<A>::default()`, hands the `AssetServer` a NEW handle provider for `A`, and
-    // `insert_resource`s the empty store OVER the existing one. In a GUI build bevy's own
-    // shader plugin already owns `Assets<Shader>`, so calling it again wiped the populated
-    // store and swapped the index allocator underneath it. Handles minted by the OLD
-    // allocator then completed loading and were inserted by index into the NEW, empty
-    // storage — `index out of bounds: the len is 6 but the index is 7`, a hard panic in
-    // `handle_internal_asset_events` on every startup that loaded a shader.
-    //
-    // Init only what nobody has registered yet.
+    // Register only absent stores: init_asset replaces Assets and its handle
+    // provider, so re-registering an existing Shader store breaks live handles.
+    // The binder needs both stores even without the GPU pipeline plugin.
     if !app.world().contains_resource::<Assets<ShaderMaterial>>() {
         bevy::asset::AssetApp::init_asset::<ShaderMaterial>(app);
     }
     if !app.world().contains_resource::<Assets<Shader>>() {
         bevy::asset::AssetApp::init_asset::<Shader>(app);
     }
-    app.init_resource::<ShaderLookCache>()
+    app.init_resource::<ShaderSourceCache>()
+        .add_systems(
+            PostUpdate,
+            invalidate_shader_source_cache.after(bevy::asset::AssetEventSystems),
+        )
+        .init_resource::<ShaderLookCache>()
         .init_resource::<ShaderImageMipState>()
         .add_observer(bind_shader_look)
         .add_observer(bind_added_skybox_shader_look)
@@ -1066,6 +1087,7 @@ fn reflect_shader_look_source_interfaces(
     reflected: Query<(Entity, &ShaderLookSourceHandle)>,
     shaders: Option<Res<Assets<Shader>>>,
     asset_server: Option<Res<AssetServer>>,
+    mut shader_cache: ResMut<ShaderSourceCache>,
 ) {
     let (Some(shaders), Some(asset_server), Some(shader_events)) =
         (shaders, asset_server, shader_events.as_mut())
@@ -1093,21 +1115,25 @@ fn reflect_shader_look_source_interfaces(
         }
     }
 
-    for (entity, handle) in &reflected {
-        if removed.contains(&handle.handle.id()) {
-            commands
-                .entity(entity)
-                .try_remove::<ShaderLookSourceInterface>()
-                .try_remove::<ShaderLookSourceHandle>()
-                .try_insert(ShaderLookSourcePending {
-                    handle: handle.handle.clone(),
-                    shader: handle.shader.clone(),
-                });
-        } else if changed.contains(&handle.handle.id()) {
-            if let Some(shader) = shaders.get(&handle.handle) {
+    if !changed.is_empty() || !removed.is_empty() {
+        for (entity, handle) in &reflected {
+            if removed.contains(&handle.handle.id()) {
                 commands
                     .entity(entity)
-                    .try_insert(shader_source_interface(&handle.shader, shader));
+                    .try_remove::<ShaderLookSourceInterface>()
+                    .try_remove::<ShaderLookSourceHandle>()
+                    .try_insert(ShaderLookSourcePending {
+                        handle: handle.handle.clone(),
+                        shader: handle.shader.clone(),
+                    });
+            } else if changed.contains(&handle.handle.id()) {
+                if let Some(shader) = shaders.get(&handle.handle) {
+                    commands.entity(entity).try_insert(shader_cache.interface(
+                        handle.handle.id(),
+                        &handle.shader,
+                        shader,
+                    ));
+                }
             }
         }
     }
@@ -1118,7 +1144,7 @@ fn reflect_shader_look_source_interfaces(
                 .entity(entity)
                 .try_remove::<ShaderLookSourcePending>()
                 .try_insert((
-                    shader_source_interface(&pending.shader, shader),
+                    shader_cache.interface(pending.handle.id(), &pending.shader, shader),
                     ShaderLookSourceHandle {
                         handle: pending.handle.clone(),
                         shader: pending.shader.clone(),
@@ -1150,29 +1176,18 @@ fn reflect_shader_look_source_interfaces(
     }
 }
 
-fn shader_source_interface(path: &str, shader: &Shader) -> ShaderLookSourceInterface {
-    let Some(source) = wgsl_source(shader) else {
-        return ShaderLookSourceInterface {
-            shader: path.to_owned(),
-            identifier: None,
-            source_valid: false,
-            defaults: Default::default(),
-        };
-    };
-    ShaderLookSourceInterface {
-        shader: path.to_owned(),
-        identifier: lunco_materials::dyn_params::shader_interface_identifier(source)
-            .map(str::to_owned),
-        source_valid: validate_shader_stage(source, ShaderStage::Fragment).is_ok(),
-        defaults: ParamSchema::parse(source)
-            .map(|schema| {
-                schema
-                    .fields
-                    .into_iter()
-                    .filter_map(|field| field.default.map(|value| (field.name, value)))
-                    .collect()
-            })
-            .unwrap_or_default(),
+fn invalidate_shader_source_cache(
+    mut events: MessageReader<AssetEvent<Shader>>,
+    mut cache: ResMut<ShaderSourceCache>,
+) {
+    for event in events.read() {
+        match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::Removed { id }
+            | AssetEvent::Unused { id } => cache.invalidate(*id),
+            AssetEvent::LoadedWithDependencies { .. } => {}
+        }
     }
 }
 
@@ -1262,6 +1277,7 @@ fn material_is_render_ready(
     shaders: &Assets<Shader>,
     images: &Assets<Image>,
     schemas: &crate::ShaderSchemas,
+    cache: &mut ShaderSourceCache,
 ) -> bool {
     let Some(shader) = shaders.get(&material.shader) else {
         return false;
@@ -1269,19 +1285,26 @@ fn material_is_render_ready(
     let Some(source) = wgsl_source(shader) else {
         return false;
     };
-    if validate_shader_stage(source, ShaderStage::Fragment).is_err() {
+    if cache
+        .failure(material.shader.id(), ShaderStage::Fragment, source)
+        .is_some()
+    {
         return false;
     }
     let schema_ready = if let Some(reflected) = schemas.get(material.shader.id()) {
         Arc::ptr_eq(reflected, &material.schema)
     } else {
-        ParamSchema::parse(source).is_none()
+        cache.schema(material.shader.id(), source).is_none()
     };
     let vertex_ready = material.vertex_shader.as_ref().is_none_or(|vertex_handle| {
         shaders
             .get(vertex_handle)
             .and_then(wgsl_source)
-            .is_some_and(|source| validate_shader_stage(source, ShaderStage::Vertex).is_ok())
+            .is_some_and(|source| {
+                cache
+                    .failure(vertex_handle.id(), ShaderStage::Vertex, source)
+                    .is_none()
+            })
     });
     schema_ready && vertex_ready && material_texture_dependencies_ready(material, images)
 }
@@ -1322,6 +1345,7 @@ fn mark_shader_look_ready(
     shaders: Option<Res<Assets<Shader>>>,
     images: Option<Res<Assets<Image>>>,
     schemas: Option<Res<crate::ShaderSchemas>>,
+    mut shader_cache: ResMut<ShaderSourceCache>,
 ) {
     let (Some(materials), Some(shaders), Some(images)) = (materials, shaders, images) else {
         return;
@@ -1333,7 +1357,7 @@ fn mark_shader_look_ready(
         let Some(material) = materials.get(&material_handle.0) else {
             continue;
         };
-        if material_is_render_ready(material, &shaders, &images, schemas) {
+        if material_is_render_ready(material, &shaders, &images, schemas, &mut shader_cache) {
             commands.entity(entity).try_insert(ShaderLookReady);
         }
     }
@@ -1404,12 +1428,14 @@ mod tests {
             ..Default::default()
         };
         let schemas = ShaderSchemas::default();
+        let mut cache = ShaderSourceCache::default();
 
         assert!(material_is_render_ready(
             &material,
             app.world().resource::<Assets<Shader>>(),
             app.world().resource::<Assets<Image>>(),
             &schemas,
+            &mut cache,
         ));
 
         material.height_map = Some(Handle::default());
@@ -1418,6 +1444,7 @@ mod tests {
             app.world().resource::<Assets<Shader>>(),
             app.world().resource::<Assets<Image>>(),
             &schemas,
+            &mut cache,
         ));
     }
 
@@ -1446,32 +1473,76 @@ mod tests {
     }
 
     #[test]
-    fn shader_stage_validation_is_cached_until_asset_invalidation() {
-        let id = Handle::<Shader>::default().id();
-        let valid_fragment =
-            "@fragment fn fragment() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }";
-        let mut cache = ShaderLookShaderCache::default();
-
-        assert_eq!(
-            cache.failure(id, ShaderStage::Fragment, valid_fragment),
-            None
-        );
-        assert_eq!(cache.stage_failures.len(), 1);
-        assert_eq!(
-            cache.failure(id, ShaderStage::Fragment, "not a fragment shader"),
-            None,
-            "a shared asset is validated once while its source revision is unchanged"
-        );
-
-        cache.ids_by_path.insert("test.wgsl".to_string(), id);
-        cache.invalidate(id);
+    fn shader_source_facts_are_shared_and_invalidated_at_publication() {
+        let mut app = app();
+        let valid = "struct Material { gain: f32 }
+@fragment fn fragment() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }";
+        let shader = app
+            .world_mut()
+            .resource_mut::<Assets<Shader>>()
+            .add(Shader::from_wgsl(valid, "test.wgsl"));
+        // Publish initial addition before using the source cache.
+        app.update();
+        let id = shader.id();
+        let source = Shader::from_wgsl(valid, "test.wgsl");
+        let first_schema;
+        {
+            let mut cache = app.world_mut().resource_mut::<ShaderSourceCache>();
+            assert_eq!(cache.failure(id, ShaderStage::Fragment, valid), None);
+            assert!(cache.failure(id, ShaderStage::Vertex, valid).is_some());
+            first_schema = cache.schema(id, valid).expect("Material layout");
+            for _ in 0..500 {
+                assert_eq!(cache.failure(id, ShaderStage::Fragment, valid), None);
+                assert!(Arc::ptr_eq(
+                    &first_schema,
+                    &cache.schema(id, valid).unwrap()
+                ));
+                let interface = cache.interface(id, "alias.wgsl", &source);
+                assert!(interface.source_valid);
+                assert_eq!(interface.shader, "alias.wgsl");
+            }
+            assert_eq!(cache.stage_failures.len(), 2);
+            assert_eq!(cache.schemas.len(), 1);
+            assert_eq!(cache.interfaces.len(), 1);
+            cache.ids_by_path.insert("test.wgsl".to_owned(), id);
+        }
+        // An in-place reload keeps asset identity but retires all derived facts.
+        *app.world_mut()
+            .resource_mut::<Assets<Shader>>()
+            .get_mut(id)
+            .unwrap() = Shader::from_wgsl("not a shader", "test.wgsl");
+        app.update();
+        {
+            let mut cache = app.world_mut().resource_mut::<ShaderSourceCache>();
+            assert!(cache.stage_failures.is_empty());
+            assert!(cache.schemas.is_empty());
+            assert!(cache.interfaces.is_empty());
+            assert!(cache.ids_by_path.is_empty());
+            let invalid = Shader::from_wgsl("not a shader", "test.wgsl");
+            assert!(!cache.interface(id, "test.wgsl", &invalid).source_valid);
+            assert!(
+                cache
+                    .failure(id, ShaderStage::Fragment, "not a shader")
+                    .is_some()
+            );
+        }
+        *app.world_mut()
+            .resource_mut::<Assets<Shader>>()
+            .get_mut(id)
+            .unwrap() = Shader::from_wgsl(valid, "test.wgsl");
+        app.update();
+        {
+            let mut cache = app.world_mut().resource_mut::<ShaderSourceCache>();
+            assert!(cache.interface(id, "test.wgsl", &source).source_valid);
+            let restored = cache.schema(id, valid).expect("restored layout");
+            assert!(!Arc::ptr_eq(&first_schema, &restored));
+        }
+        app.world_mut().resource_mut::<Assets<Shader>>().remove(id);
+        app.update();
+        let cache = app.world().resource::<ShaderSourceCache>();
         assert!(cache.stage_failures.is_empty());
-        assert!(cache.ids_by_path.is_empty());
-        assert!(
-            cache
-                .failure(id, ShaderStage::Fragment, "not a fragment shader")
-                .is_some()
-        );
+        assert!(cache.schemas.is_empty());
+        assert!(cache.interfaces.is_empty());
     }
 
     fn material_of(app: &App, e: Entity) -> Handle<ShaderMaterial> {

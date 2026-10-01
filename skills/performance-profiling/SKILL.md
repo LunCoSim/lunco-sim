@@ -638,3 +638,12 @@ facts use the same complete-generation and affected-path checks when promoted.
 A missing batch, generation gap, plan replacement, or policy-affecting change
 must use full live extraction. Compare startup and settled edit captures after
 changing this path; compile evidence alone does not establish a timing gain.
+
+For movement across terrain LOD bands, inspect
+`rebind_changed_shader_look` and source reflection before blaming picking or
+physics. `shader_source_validate` and `shader_source_schema` execute once per
+loaded shader revision; streamed tiles and material replacements reuse their
+facts. Mark the exact idle/movement windows in Tracy messages, keep the initial
+avatar pose fixed, and seed a pointer in SceneView when reproducing native
+picking. Distinguish shader reload events from material/look changes. Verify
+invalid-stage diagnostics and hot-reload invalidation as well as frame time.
