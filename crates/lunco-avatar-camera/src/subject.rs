@@ -13,8 +13,8 @@ use lunco_avatar_camera_core::{
     RadialArrival,
 };
 use lunco_camera_core::{
-    BindCameraTarget, CameraFollow, CameraPoseLock, ClearCameraBinding, FollowAttitude,
-    FollowTarget, FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera,
+    BindCameraTarget, CameraFollow, CameraFollowHeight, CameraPoseLock, ClearCameraBinding,
+    FollowAttitude, FollowTarget, FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera,
     SurfaceRelativeMode,
 };
 use lunco_celestial::CelestialBody;
@@ -127,6 +127,7 @@ fn apply_subject_camera(
     target: Entity,
     camera_transform: &Transform,
     follow: CameraFollow,
+    focus_height: Option<CameraFollowHeight>,
     track_heading: bool,
     target_gravity: Option<GravityBody>,
     clear_control: bool,
@@ -150,6 +151,7 @@ fn apply_subject_camera(
         CameraFollow::Chase => (25.0, 3.0, -0.25),
         CameraFollow::Heading => (15.0, 2.0, -0.25),
     };
+    let vertical_offset = focus_height.map_or(vertical_offset, |height| height.0);
     let surface_frame = target_gravity.and_then(|gravity| {
         surface_target_frame(
             target_position,
@@ -247,7 +249,14 @@ pub(crate) fn on_bind_camera_target(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
-    q_target: Query<(Option<&CameraFollow>, Option<&GravityBody>), Controllable>,
+    q_target: Query<
+        (
+            Option<&CameraFollow>,
+            Option<&CameraFollowHeight>,
+            Option<&GravityBody>,
+        ),
+        Controllable,
+    >,
     q_gravity: Query<&GravityBody>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
@@ -268,13 +277,17 @@ pub(crate) fn on_bind_camera_target(
         return;
     }
 
-    let (follow, track_heading) = q_target
+    let (follow, focus_height, track_heading) = q_target
         .get(request.target)
-        .map(|(follow, _)| {
+        .map(|(follow, height, _)| {
             let follow = follow.copied().unwrap_or_default();
-            (follow, matches!(follow, CameraFollow::Heading))
+            (
+                follow,
+                height.copied(),
+                matches!(follow, CameraFollow::Heading),
+            )
         })
-        .unwrap_or((CameraFollow::Heading, false));
+        .unwrap_or((CameraFollow::Heading, None, false));
     let target_gravity = q_gravity.get(request.target).ok().copied();
     if let Err(error) = apply_subject_camera(
         &mut commands,
@@ -282,6 +295,7 @@ pub(crate) fn on_bind_camera_target(
         request.target,
         camera_transform,
         follow,
+        focus_height,
         track_heading,
         target_gravity,
         false,
@@ -350,6 +364,7 @@ pub(crate) fn on_follow_command(
         cmd.target,
         camera_transform,
         CameraFollow::Heading,
+        None,
         track_heading,
         target_gravity,
         true,
