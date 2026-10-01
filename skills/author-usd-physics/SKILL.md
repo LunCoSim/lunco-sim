@@ -31,6 +31,11 @@ model and force/torque limit. They enable the motor and change its position
 target with zero target velocity; author drive gains and limits through the
 standard USD drive owner rather than through command-side tuning.
 
+Omitted joint limits retain standard unbounded travel. The native port adapter
+maps lower negative infinity and upper positive infinity to absent bounds;
+malformed nonfinite limits remain invalid. Do not add artificial finite travel
+limits to make a valid unbounded joint accept a command.
+
 Startup joint topology is prepared while the shared fixed clock is held. The
 BigSpace physics bridge seeds authored body poses in `PreUpdate`; USD joints
 are projected in `JointPreparation` during `Update`, after USD simulation
