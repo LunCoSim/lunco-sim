@@ -49,11 +49,12 @@ no declared terrain, the three-dimensional authored curve is rendered directly.
 Fewer than two points removes the presentation immediately.
 
 `lunco-terrain-surface::annotations` owns surface presentation. Each disposable
-curve entity carries its terrain identity, source revision, sparse points,
+curve entity carries its terrain identity, source revision, independent segments,
 width and colour. At most two background jobs build spatially indexed stroke
 records per terrain. The RGBA32Float image is shared by every terrain tile;
 32-by-32 bins limit a fragment to nearby segments, with explicit segment and
-cell budgets. Excess density or insufficient GPU precision fails visibly.
+cell budgets. Snapshot density overflow or insufficient GPU precision fails
+visibly; bounded streaming history retires its oldest legs before admission.
 Source removal withdraws its publication; stale worker results cannot return
 it. Elevation edits, CDLOD morphs, seam stitching and camera movement need no
 annotation rebuild because the terrain's own fragments consume the strokes.
@@ -104,44 +105,57 @@ owner.
 
 ## Motion trails are bounded physics history
 
-A vehicle trail answers a different question from a route ribbon: where the vehicle
-actually travelled. `lunco_luncosim_edit_ui::ui::trail::VehicleTrailPlugin` records one bounded lane per
-topology-derived wheel after the solved physics step, in the active physics/grid frame.
-Raycast lanes use the wheel's retained Avian `RayHits` and the same mobility-owned
-contact-point geometry used by suspension and tire forces. Jointed lanes use the
-impulse-weighted points and support normals in Avian's contact manifolds, with the
-wheel/body orientation taken from the shared tire convention. A contact is a
-supported trail surface when it belongs to a static rigid body and its normal has
-an upward component; this includes ordinary authored static ramps such as the
-sandbox fixture without requiring a terrain marker, while excluding rover-to-rover
-contacts and vertical wall hits. It never samples `GlobalTransform`, controller
-intent, or the authored route. The history retains both point and support normal,
-interpolates them only to fill a large display-frame gap, is capped at 1024 points
-per lane, and uses the combined point+normal `GridSurfaceQuery` sample when an
-analytic DEM owns the location. A missing surface sample fails that lane closed
-rather than drawing a detached chord through unknown ground.
+`lunco_luncosim_edit_ui::ui::trail::VehicleTrailPlugin` records one bounded
+lane per topology-derived wheel in `FixedPostUpdate`, after
+`WheelRaycastResultsSet`. Raycast wheels use the same first nondegenerate
+Avian hit, strut geometry and physics heading as the mobility solver; visual
+wheel roll is not a contact orientation. A hit must compress the suspension,
+carry a positive finite load, belong to a static body, and support an upright
+wheel. Jointed wheels use impulse-weighted Avian manifold points, grouped by
+support owner, and reject an inverted carrier. Streamed collider tiles resolve
+through `ColliderTileOf` to their DEM owner, so tile replacement does not split
+one ground stroke. Ordinary authored static ramps retain their own support.
 
-Each trail lane uses the existing world-space triangle-strip builder. Its full
-width is derived from the authored wheel width for that lane (raycast and
-jointed wheels use the same physical fact), while the builder receives the
-corresponding half-width and a small surface clearance. The builder projects
-the tangent into each support plane, offsets clearance along the support normal,
-and writes that normal to the mesh. A trail remains transient Bevy presentation parented to the active
-physics frame; it is not USD topology, terrain deformation, telemetry, or a per-frame
-document edit. Scene teardown clears both the mesh and history, and an active-frame
-change starts a new history, so a later Twin or grid cannot inherit a stale path.
-`MobilityRoot` is the existing topology capability that selects vehicle owners; no
-name-based rover registry, second motion source, or second contact model is
-introduced. The same presentation plugin is installed by the interactive viewport
-and the GPU offscreen recorder; the recorder does not depend on the editor's egui,
-picking, or workbench plugin.
+Each wheel retains at most 1024 contact points. A fixed anchor and moving
+endpoint display travel below the half-metre history spacing without adding
+points every tick. Loss of contact or a change of support starts a new stroke;
+there is no interpolation between takeoff and landing. Frame changes start new
+history, and `SceneTeardown` removes history and disposable render entities.
+The full width is the realized wheel's authored width, with a half-width
+conversion only at the static-support ribbon builder's rendering boundary.
 
-Rhai owns whether a trail is enabled or how a scenario presents it; Rust keeps
-only the generic solved-contact sampler, bounded history, and mesh projection.
-That boundary is deliberate: moving per-contact history into a script would
-turn a fixed-rate physics presentation path into allocations and interpreter
-work, while leaving policy extensible without teaching the core about rovers,
-landers, or route names.
+DEM lanes use the same `SurfaceCurveAnnotation` owner as routes. Explicit
+independent segments preserve contact breaks, and one streaming source per
+wheel/terrain remains stable across landing. The terrain shader paints the
+footprint on its own fragments, so width edges and the centreline follow LOD,
+geomorph and elevation without height-fitting vertices or per-history terrain
+samples. Non-DEM static supports use solved contact-plane triangle strips;
+terrain tracks never acquire an independent mesh. Neither product edits USD,
+alters physics, or models terrain deformation.
+
+The annotation owner admits complete snapshot sources before streaming history.
+It simplifies each continuous ground stroke in blocks of at most 64 legs,
+with centreline error bounded by one percent of the half-width; turns and gaps
+are retained. It interleaves reduced streaming legs newest-first across sources,
+retiring the older history suffix on segment or per-cell budget pressure.
+This bounds CPU/GPU work without evicting routes or monopolizing admission with one wheel lane.
+Immutable preparation stays on the bounded worker pool. Continuous source
+revision changes retain the last image and coalesce the next snapshot within
+one publication generation, allowing completed builds to display while the
+head keeps moving. Successive images update one persistent texture identity,
+so material readiness does not restart on every frame. Producers precede the
+typed `SurfaceAnnotationSet::Prepare` admission boundary. Added/removed sources,
+snapshot revisions, shader interfaces and settings advance the generation and fence old work. Precision violations
+and malformed inputs remain explicit owner errors.
+
+`InspectVehicleTrail { id }` exposes the same bounded contact history and
+render publication: wheel and render widths, current contact, stroke endpoints,
+sample counts, projection kind and publication errors. The production
+`vehicle_trail_contact.rhai` gate exercises grounded motion, sub-spacing head
+updates, airborne/inverted rejection and a disconnected landing in an owned
+visual session. The plugin is shared by the interactive viewport and GPU
+recorder; contact math, history and bounded preparation are generic continuous
+presentation mechanisms rather than script polling or a second motion model.
 
 ## The unit-primitive idiom — live size is `xformOp:scale`
 

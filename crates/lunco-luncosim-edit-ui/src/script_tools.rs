@@ -1042,7 +1042,7 @@ pub(crate) fn poll_pending_usd_curve_views(
         };
         match build_result {
             Some(CurveViewProduct::Surface(annotation)) => {
-                let count = annotation.points.len().saturating_sub(1);
+                let count = annotation.segments.len();
                 *visibility = Visibility::Hidden;
                 commands.entity(entity).try_insert(annotation);
                 complete_curve_view_status(&mut pending, entity, revision, count, None);
@@ -1138,7 +1138,8 @@ fn prepare_usd_curve_view_product(
         return Ok(Some(CurveViewProduct::Surface(SurfaceCurveAnnotation {
             terrain: owner,
             revision: request.revision,
-            points,
+            segments: points.windows(2).map(|pair| [pair[0], pair[1]]).collect(),
+            streaming: false,
             width_m: request.width_m,
             color: request.color,
         })));

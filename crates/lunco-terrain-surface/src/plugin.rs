@@ -205,8 +205,10 @@ impl Plugin for TerrainSurfaceVisualizationPlugin {
         app.add_systems(
             Update,
             (
-                crate::annotations::prepare_surface_annotations,
-                crate::annotations::publish_surface_annotations,
+                crate::annotations::prepare_surface_annotations
+                    .in_set(crate::annotations::SurfaceAnnotationSet::Prepare),
+                crate::annotations::publish_surface_annotations
+                    .in_set(crate::annotations::SurfaceAnnotationSet::Publish),
             )
                 .chain()
                 .in_set(lunco_core::RuntimeCycleSet::Visualization),

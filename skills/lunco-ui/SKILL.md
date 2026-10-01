@@ -328,14 +328,19 @@ must be followed by a screenshot the agent inspects, and user feedback is a
 required checkpoint before the next material edit or save. Do not turn a panel
 into a direct file writer or a second session/state owner.
 
-World-space vehicle trails are transient render presentation, not UI-owned state.
-Read the vehicle root's solved Avian `Position` in the active physics/grid frame,
-project through `GridSurfaceQuery`, and use bounded history with explicit
-`SceneTeardown` cleanup. Do not derive trails from controller input, render
-`GlobalTransform`, authored route geometry, or a per-frame USD edit. Use the
-existing ribbon mesh builder so turns and BigSpace frame changes use one trail
-geometry contract; route presentation is a separate reusable USD `BasisCurves`
-tool in the document runtime layer.
+World-space vehicle trails are transient render presentation, not UI-owned
+state. Read solved wheel contacts after `WheelRaycastResultsSet`, retain bounded
+stroke history, and clear it on frame changes and `SceneTeardown`. A moving
+endpoint provides sub-spacing continuity; missing wheel support starts a new
+stroke, including airborne and inverted motion. Use the physical wheel's full
+width. DEM contacts resolve their `ColliderTileOf` owner and reuse streaming
+`SurfaceCurveAnnotation` segments painted on terrain fragments; ordinary static
+supports use the shared contact-plane ribbon builder. Do not derive tracks from
+root motion, visual wheel roll, controller input or authored routes. Inspect
+`InspectVehicleTrail` and exercise `vehicle_trail_contact.rhai` through the
+production API; verify the exact target scene visually. See the canonical
+[motion trail contract](../../docs/architecture/50-usd-driven-visuals.md#motion-trails-are-bounded-physics-history)
+for history, admission budgets and publication fencing.
 
 ## Runtime-authored HTML/CSS surfaces
 

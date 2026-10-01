@@ -1,20 +1,6 @@
-//! Bounded, terrain-conforming motion trails for topology-derived vehicles.
-//!
-//! A trail is presentation history, not a second vehicle state. Each lane is
-//! sampled from the wheel realization's solved ground contact: raycast wheels
-//! use their retained Avian ray hit and jointed wheels use Avian contact
-//! manifolds. The history is stored in the active physics/grid frame and is
-//! never inferred from render transforms, root motion, or controller intent.
-//! The analytic terrain oracle supplies the frame-correct point and support
-//! normal when the trail mesh is rebuilt.
-//!
-//! The history is deliberately bounded and session-scoped. It is cleared at
-//! [`lunco_core::SceneTeardown`], reset when the active physics frame changes,
-//! and rendered as transient mesh geometry parented to that frame. No trail
-//! state is authored into USD or retained across Twin replacement.
-
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::hash::{Hash, Hasher};
+//! Contact-derived, bounded motion history. DEM tracks use the terrain's own
+//! fragments; ordinary static supports use solved contact-plane ribbons.
+//! Physics records wheel contacts, never chassis intent or render transforms.
 
 use avian3d::prelude::{ColliderOf, Collisions, Position, RayHits, RigidBody, Rotation};
 use bevy::math::DVec3;
@@ -22,36 +8,27 @@ use bevy::prelude::*;
 use lunco_core::MobilityRoot;
 use lunco_mobility::wheel_kinematics::wheel_hub_pose;
 use lunco_mobility::{
-    JointedWheelTire, Suspension, WheelBodyMount, WheelRaycast, raycast_contact_point,
+    JointedWheelTire, Suspension, WheelBodyMount, WheelRaycast, WheelRaycastResultsSet,
+    raycast_contact_point,
 };
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_spatial::ActivePhysicsFrame;
 use lunco_spatial::coords::{GridPos, GridRot};
+use lunco_terrain_surface::annotations::SurfaceCurveAnnotation;
+use lunco_terrain_surface::{ColliderTileOf, DemHeightField};
 use lunco_usd_geometry::ribbon::{RibbonPoint, build_ribbon_mesh};
 use lunco_usd_sim_core::PhysicalWheel;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 
-/// Minimum horizontal travel before a new history sample is admitted.
+/// Fixed history spacing; a separate moving endpoint renders sub-spacing motion.
 const TRAIL_SAMPLE_SPACING_M: f64 = 0.5;
-/// Maximum retained samples per vehicle. At the sampling spacing this bounds
-/// the visible history to roughly 512 m, even on a rover that never stops.
+/// Approximately 512 m per lane. GPU admission can retire older streaming legs
+/// earlier when the shared spatial-index budget is full.
 const TRAIL_MAX_POINTS: usize = 1024;
-/// The trail is an annotation rather than a road or terrain deformation. Keep
-/// it just above the solved surface to avoid z-fighting without floating.
 const TRAIL_SURFACE_CLEARANCE_M: f32 = 0.02;
-/// A wheel contact must support some upward load. This excludes vertical wall
-/// contacts while preserving steep but physically driveable static surfaces.
 const TRAIL_MIN_SUPPORT_NORMAL_Y: f64 = 0.2;
-const TRAIL_SURFACE_NORMAL_EPS_M: f64 = 1.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TrailSurfaceMode {
-    /// The Avian contact point is already the authoritative surface sample.
-    PhysicsContact,
-    /// Reproject the contact's horizontal coordinates through the DEM oracle.
-    AnalyticTerrain,
-}
-
-/// Physics-frame contact history for one topology-derived vehicle.
 #[derive(Component, Clone, Debug, Default)]
 pub(crate) struct VehicleTrailHistory {
     frame: Option<Entity>,
@@ -61,22 +38,32 @@ pub(crate) struct VehicleTrailHistory {
 #[derive(Clone, Debug, Default)]
 struct WheelTrailHistory {
     points: VecDeque<TrailContact>,
+    connected: bool,
+    stroke: u64,
+    width: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TrailContact {
     point: DVec3,
     normal: DVec3,
+    support: Entity,
+    terrain: Option<Entity>,
+    stroke: u64,
 }
 
 impl TrailContact {
-    fn new(point: DVec3, normal: DVec3) -> Option<Self> {
-        if !point.is_finite() || !normal.is_finite() {
+    fn new(point: DVec3, normal: DVec3, support: Entity, terrain: Option<Entity>) -> Option<Self> {
+        if !point.is_finite() {
             return None;
         }
-        let normal = normal.normalize_or_zero();
-        (normal.length_squared() > 1.0e-12 && normal.y >= TRAIL_MIN_SUPPORT_NORMAL_Y)
-            .then_some(Self { point, normal })
+        Some(Self {
+            point,
+            normal: support_normal(normal)?,
+            support,
+            terrain,
+            stroke: 0,
+        })
     }
 }
 
@@ -86,54 +73,70 @@ impl VehicleTrailHistory {
         self.lanes.clear();
     }
 
-    /// Admit one solved pose, filling a large fixed-update gap with points on
-    /// the solved contact segment. The interpolation is only a bounded visual
-    /// approximation; the endpoints still come from Avian's actual contact.
-    fn record(&mut self, frame: Entity, wheel: Entity, contact: TrailContact) -> bool {
+    fn record(
+        &mut self,
+        frame: Entity,
+        wheel: Entity,
+        width: f64,
+        mut contact: TrailContact,
+    ) -> bool {
         if self.frame != Some(frame) {
             self.clear();
             self.frame = Some(frame);
         }
-
-        let points = &mut self.lanes.entry(wheel).or_default().points;
-        let Some(previous) = points.back().copied() else {
-            points.push_back(contact);
-            return true;
-        };
-        let distance = DVec3::new(
-            contact.point.x - previous.point.x,
-            0.0,
-            contact.point.z - previous.point.z,
-        )
-        .length();
-        if distance < TRAIL_SAMPLE_SPACING_M {
-            return false;
-        }
-
-        let steps = (distance / TRAIL_SAMPLE_SPACING_M).ceil().max(1.0) as usize;
-        for step in 1..=steps {
-            let t = step as f64 / steps as f64;
-            let point = previous.point.lerp(contact.point, t);
-            let normal = previous.normal.lerp(contact.normal, t).normalize_or_zero();
-            points.push_back(TrailContact { point, normal });
-            while points.len() > TRAIL_MAX_POINTS {
-                points.pop_front();
+        let lane = self.lanes.entry(wheel).or_default();
+        let changed_width = lane.width != width;
+        lane.width = width;
+        let same_support = lane
+            .points
+            .back()
+            .is_some_and(|previous| previous.support == contact.support);
+        if !lane.connected || !same_support {
+            lane.stroke += 1;
+            lane.connected = true;
+            contact.stroke = lane.stroke;
+            lane.points.push_back(contact);
+        } else {
+            contact.stroke = lane.stroke;
+            let previous = *lane.points.back().unwrap();
+            let delta = contact.point - previous.point;
+            let distance = DVec3::new(delta.x, 0.0, delta.z).length();
+            if distance < 0.001 {
+                return changed_width;
             }
+            // Preserve one fixed anchor and move only the live endpoint until
+            // another half metre is covered. There is no gap interpolation.
+            let anchor = lane
+                .points
+                .iter()
+                .rev()
+                .nth(1)
+                .filter(|p| p.stroke == lane.stroke);
+            if anchor.is_some_and(|p| {
+                let delta = contact.point - p.point;
+                DVec3::new(delta.x, 0.0, delta.z).length() < TRAIL_SAMPLE_SPACING_M
+            }) {
+                *lane.points.back_mut().unwrap() = contact;
+            } else {
+                lane.points.push_back(contact);
+            }
+        }
+        while lane.points.len() > TRAIL_MAX_POINTS {
+            lane.points.pop_front();
         }
         true
     }
 }
 
-/// One transient mesh for one vehicle's sampled path.
 #[derive(Component)]
-pub(crate) struct VehicleTrailMesh {
+pub(crate) struct VehicleTrailVisual {
     vehicle: Entity,
     wheel: Entity,
+    stroke: u64,
+    terrain: Option<Entity>,
     signature: u64,
 }
 
-/// The change-built render snapshot. Mesh reconciliation consumes this; it
-/// does not inspect physics, terrain, or scene topology itself.
 #[derive(Resource, Default)]
 pub(crate) struct TrailVisualProjection {
     frame: Option<Entity>,
@@ -144,15 +147,13 @@ pub(crate) struct TrailVisualProjection {
 #[derive(Clone, Debug)]
 struct TrailLane {
     wheel: Entity,
-    /// `build_ribbon_mesh` consumes half-width; this comes from the authored
-    /// full tire width for the wheel realization.
-    half_width: f32,
+    stroke: u64,
+    width: f64,
+    terrain: Option<Entity>,
     points: Vec<RibbonPoint>,
+    segments: Vec<[DVec3; 2]>,
 }
 
-/// Find the topology-derived vehicle owner for a wheel. The walk deliberately
-/// uses the existing ECS hierarchy and capability marker; it does not create a
-/// vehicle registry or classify names.
 fn mobility_root(
     entity: Entity,
     roots: &Query<(), With<MobilityRoot>>,
@@ -161,7 +162,7 @@ fn mobility_root(
     let mut current = entity;
     let mut visited = HashSet::new();
     loop {
-        if roots.get(current).is_ok() {
+        if roots.contains(current) {
             return Some(current);
         }
         if !visited.insert(current) {
@@ -181,430 +182,434 @@ fn support_normal(normal: DVec3) -> Option<DVec3> {
 
 fn static_body_for_collider(
     collider: Entity,
-    q_bodies: &Query<&RigidBody>,
-    q_collider_of: &Query<&ColliderOf>,
+    bodies: &Query<&RigidBody>,
+    collider_of: &Query<&ColliderOf>,
 ) -> Option<Entity> {
-    let body = q_collider_of
-        .get(collider)
-        .map_or(collider, |collider_of| collider_of.body);
-    q_bodies
+    let body = collider_of.get(collider).map_or(collider, |c| c.body);
+    bodies
         .get(body)
-        .ok()
-        .is_some_and(|body| body.is_static())
+        .is_ok_and(RigidBody::is_static)
         .then_some(body)
+}
+
+fn support_owner(
+    collider: Entity,
+    body: Entity,
+    tiles: &Query<&ColliderTileOf>,
+    terrains: &Query<(), With<DemHeightField>>,
+) -> (Entity, Option<Entity>) {
+    let terrain = tiles
+        .get(collider)
+        .or_else(|_| tiles.get(body))
+        .map(|tile| tile.0)
+        .ok()
+        .or_else(|| terrains.contains(body).then_some(body));
+    (terrain.unwrap_or(body), terrain)
 }
 
 fn valid_raycast_contact(
     wheel: &WheelRaycast,
     suspension: &Suspension,
     hits: &RayHits,
-    wheel_transform: &Transform,
     mount: &WheelBodyMount,
-    q_bodies: &Query<(&Position, &Rotation)>,
-    q_rigid_bodies: &Query<&RigidBody>,
-    q_collider_of: &Query<&ColliderOf>,
+    bodies: &Query<(&Position, &Rotation)>,
+    rigid_bodies: &Query<&RigidBody>,
+    collider_of: &Query<&ColliderOf>,
+    tiles: &Query<&ColliderTileOf>,
+    terrains: &Query<(), With<DemHeightField>>,
 ) -> Option<TrailContact> {
-    if wheel.last_normal_force < 1.0 {
+    if !wheel.last_normal_force.is_finite() || wheel.last_normal_force < 1.0 {
         return None;
     }
-    let hit = hits.iter_sorted().find(|hit| {
-        static_body_for_collider(hit.entity, q_rigid_bodies, q_collider_of).is_some()
-            && support_normal(hit.normal).is_some()
-    })?;
+    // Select the same first nondegenerate hit as the suspension solver. A
+    // rejected foreground hit never gives a farther surface contact authority.
+    let hit = hits
+        .iter_sorted()
+        .find(|h| h.normal.is_finite() && h.normal.length_squared() > 1.0e-12)?;
+    if !hit.distance.is_finite() || hit.distance >= suspension.rest_length {
+        return None;
+    }
+    let support_body = static_body_for_collider(hit.entity, rigid_bodies, collider_of)?;
     let normal = support_normal(hit.normal)?;
-    let (body_position, body_rotation) = q_bodies.get(mount.body).ok()?;
-    let (hub, rotation) = wheel_hub_pose(
-        GridPos(body_position.0),
-        GridRot(body_rotation.0),
+    let (position, rotation) = bodies.get(mount.body).ok()?;
+    let (hub, heading) = wheel_hub_pose(
+        GridPos(position.0),
+        GridRot(rotation.0),
         mount.local.translation.as_dvec3(),
-        (mount.local.rotation * wheel_transform.rotation).as_dquat(),
+        mount.local.rotation.as_dquat() * wheel.heading_rotation,
     );
+    if (heading.0 * DVec3::Y).dot(normal) <= TRAIL_MIN_SUPPORT_NORMAL_Y {
+        return None;
+    }
     let point = raycast_contact_point(
         hub.0,
-        rotation.0,
+        heading.0,
         suspension.rest_length,
         wheel.wheel_radius,
         hit.distance,
     );
-    TrailContact::new(point, normal)
+    let (support, terrain) = support_owner(hit.entity, support_body, tiles, terrains);
+    TrailContact::new(point, normal, support, terrain)
 }
 
-/// Avian contact-point centroid for a jointed wheel. Normal impulse is used as
-/// the weight so a manifold with several support points records the same
-/// effective patch that the shared tire solver consumes.
 fn physical_wheel_contact_point(
     collisions: &Collisions,
     wheel: Entity,
-    q_rigid_bodies: &Query<&RigidBody>,
-    q_collider_of: &Query<&ColliderOf>,
+    bodies: &Query<&RigidBody>,
+    collider_of: &Query<&ColliderOf>,
+    tiles: &Query<&ColliderTileOf>,
+    terrains: &Query<(), With<DemHeightField>>,
 ) -> Option<TrailContact> {
-    let mut weighted = DVec3::ZERO;
-    let mut weighted_normal = DVec3::ZERO;
-    let mut total_impulse = 0.0;
+    let mut supports: HashMap<Entity, (DVec3, DVec3, f64, Option<Entity>)> = HashMap::new();
     for pair in collisions.collisions_with(wheel) {
         if !pair.is_touching() {
             continue;
         }
-        let wheel_is_body1 = pair.body1 == Some(wheel);
-        let wheel_is_body2 = pair.body2 == Some(wheel);
-        if !wheel_is_body1 && !wheel_is_body2 {
+        let first = pair.body1 == Some(wheel);
+        if !first && pair.body2 != Some(wheel) {
             continue;
         }
-        let support_collider = if wheel_is_body1 {
+        let collider = if first {
             pair.collider2
         } else {
             pair.collider1
         };
-        let support_body = if wheel_is_body1 {
-            pair.body2
-        } else {
-            pair.body1
-        }
-        .or_else(|| {
-            q_collider_of
-                .get(support_collider)
-                .ok()
-                .map(|collider_of| collider_of.body)
-        });
-        let Some(support_body) = support_body else {
+        let Some(body) = static_body_for_collider(collider, bodies, collider_of) else {
             continue;
         };
-        if !q_rigid_bodies
-            .get(support_body)
-            .is_ok_and(RigidBody::is_static)
-        {
-            continue;
-        }
+        let (support, terrain) = support_owner(collider, body, tiles, terrains);
         for manifold in &pair.manifolds {
             let Some(normal) = lunco_mobility::contact_normal_for_body(pair, manifold, wheel)
+                .and_then(support_normal)
             else {
-                continue;
-            };
-            let Some(normal) = support_normal(normal) else {
                 continue;
             };
             for point in &manifold.points {
                 let impulse = point.normal_impulse;
                 if impulse.is_finite() && impulse > 0.0 && point.point.is_finite() {
-                    weighted += point.point * impulse;
-                    weighted_normal += normal * impulse;
-                    total_impulse += impulse;
+                    let sum =
+                        supports
+                            .entry(support)
+                            .or_insert((DVec3::ZERO, DVec3::ZERO, 0.0, terrain));
+                    sum.0 += point.point * impulse;
+                    sum.1 += normal * impulse;
+                    sum.2 += impulse;
                 }
             }
         }
     }
-    (total_impulse > 0.0)
-        .then(|| TrailContact::new(weighted / total_impulse, weighted_normal / total_impulse))?
+    let (support, (point, normal, impulse, terrain)) =
+        supports.into_iter().max_by(|(a, x), (b, y)| {
+            x.2.total_cmp(&y.2)
+                .then_with(|| a.to_bits().cmp(&b.to_bits()))
+        })?;
+    TrailContact::new(point / impulse, normal / impulse, support, terrain)
 }
 
-/// Shared ticket for sampling/projection changes, including removed scene
-/// entities. It prevents a removed history from leaving a stale mesh behind.
 #[derive(Resource, Default)]
 pub(crate) struct TrailProjectionRebuildRequested {
     pending: bool,
 }
 
-/// Presentation-only trail systems shared by the interactive viewport and the
-/// GPU offscreen recorder. It has no egui or picking dependency, so visual
-/// acceptance renders the same trail product that the desktop viewport uses.
 pub struct VehicleTrailPlugin;
-
 impl Plugin for VehicleTrailPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
+        app.world_mut()
+            .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
+            .register(InspectVehicleTrailProvider);
         app.init_resource::<TrailVisualProjection>()
             .init_resource::<TrailProjectionRebuildRequested>()
             .add_systems(lunco_core::SceneTeardown, clear_vehicle_trails)
             .add_systems(
+                FixedPostUpdate,
+                sample_vehicle_trails.after(WheelRaycastResultsSet),
+            )
+            .add_systems(
                 Update,
                 (
-                    ensure_vehicle_trail_history.before(sample_vehicle_trails),
-                    sample_vehicle_trails.before(arm_trail_projection_rebuild),
+                    ensure_vehicle_trail_history,
+                    refresh_vehicle_trail_widths,
                     arm_trail_projection_rebuild,
-                    rebuild_vehicle_trail_projection
-                        .after(arm_trail_projection_rebuild)
-                        .run_if(trail_projection_rebuild_is_pending),
-                    sync_vehicle_trail_meshes
-                        .after(rebuild_vehicle_trail_projection)
-                        .run_if(resource_changed::<TrailVisualProjection>),
-                ),
+                    rebuild_vehicle_trail_projection.run_if(trail_projection_rebuild_is_pending),
+                    sync_vehicle_trail_visuals.run_if(resource_changed::<TrailVisualProjection>),
+                )
+                    .chain()
+                    .in_set(lunco_core::RuntimeCycleSet::Visualization)
+                    .before(lunco_terrain_surface::annotations::SurfaceAnnotationSet::Prepare),
             );
     }
 }
 
-/// Add the presentation history to every topology-derived vehicle. `MobilityRoot`
-/// is the authored-vehicle capability projected by the USD simulation owner;
-/// this does not classify objects by a name or make a second rover registry.
 pub(crate) fn ensure_vehicle_trail_history(
     q_vehicles: Query<Entity, (With<MobilityRoot>, Without<VehicleTrailHistory>)>,
     mut commands: Commands,
 ) {
-    for vehicle in q_vehicles.iter() {
+    for vehicle in &q_vehicles {
         commands
             .entity(vehicle)
             .try_insert(VehicleTrailHistory::default());
     }
 }
 
-/// Sample solved wheel-ground contacts after the physics step. Raycast and
-/// jointed wheels share one presentation history; neither path samples a
-/// render transform or the vehicle root pose.
 pub(crate) fn sample_vehicle_trails(
     active_frame: Res<ActivePhysicsFrame>,
-    mut q_histories: Query<&mut VehicleTrailHistory, With<MobilityRoot>>,
+    mut histories: Query<&mut VehicleTrailHistory, With<MobilityRoot>>,
     mut request: ResMut<TrailProjectionRebuildRequested>,
-    q_roots: Query<(), With<MobilityRoot>>,
-    q_parents: Query<&ChildOf>,
-    q_bodies: Query<(&Position, &Rotation)>,
-    q_rigid_bodies: Query<&RigidBody>,
-    q_collider_of: Query<&ColliderOf>,
-    q_raycast_wheels: Query<(
+    roots: Query<(), With<MobilityRoot>>,
+    parents: Query<&ChildOf>,
+    bodies: Query<(&Position, &Rotation)>,
+    rigid_bodies: Query<&RigidBody>,
+    collider_of: Query<&ColliderOf>,
+    raycast_wheels: Query<(
         Entity,
         &WheelRaycast,
         &Suspension,
         &RayHits,
-        &Transform,
         &WheelBodyMount,
     )>,
-    q_physical_wheels: Query<(&PhysicalWheel, Entity), With<JointedWheelTire>>,
+    physical_wheels: Query<(&PhysicalWheel, Entity), With<JointedWheelTire>>,
     collisions: Collisions,
+    tiles: Query<&ColliderTileOf>,
+    terrains: Query<(), With<DemHeightField>>,
 ) {
-    let mut samples = Vec::new();
     let mut active_wheels = HashSet::new();
-    for (wheel_entity, wheel, suspension, hits, wheel_transform, mount) in q_raycast_wheels.iter() {
-        active_wheels.insert(wheel_entity);
-        let Some(vehicle) = mobility_root(wheel_entity, &q_roots, &q_parents) else {
+    let mut contacting = HashSet::new();
+    let mut samples = Vec::new();
+    for (entity, wheel, suspension, hits, mount) in &raycast_wheels {
+        active_wheels.insert(entity);
+        let Some(vehicle) = mobility_root(entity, &roots, &parents) else {
             continue;
         };
-        let Some(contact) = valid_raycast_contact(
+        if let Some(contact) = valid_raycast_contact(
             wheel,
             suspension,
             hits,
-            wheel_transform,
             mount,
-            &q_bodies,
-            &q_rigid_bodies,
-            &q_collider_of,
-        ) else {
-            continue;
-        };
-        samples.push((vehicle, wheel_entity, wheel.wheel_width, contact));
+            &bodies,
+            &rigid_bodies,
+            &collider_of,
+            &tiles,
+            &terrains,
+        ) {
+            samples.push((vehicle, entity, wheel.wheel_width, contact));
+        }
     }
-    for (physical_wheel, wheel_entity) in q_physical_wheels.iter() {
-        active_wheels.insert(wheel_entity);
-        let Some(vehicle) = mobility_root(wheel_entity, &q_roots, &q_parents) else {
+    for (wheel, entity) in &physical_wheels {
+        active_wheels.insert(entity);
+        let Some(vehicle) = mobility_root(entity, &roots, &parents) else {
             continue;
         };
-        let Some(contact) = physical_wheel_contact_point(
+        // The carrier attitude has no wheel-spin term. Reject roof/side contact
+        // even when a wheel collider happens to retain an upward manifold.
+        let mut parent = parents.get(entity).ok().map(ChildOf::parent);
+        let mut upright = false;
+        while let Some(entity) = parent {
+            if let Ok((_, rotation)) = bodies.get(entity) {
+                upright = (rotation.0 * DVec3::Y).y > TRAIL_MIN_SUPPORT_NORMAL_Y;
+                break;
+            }
+            parent = parents.get(entity).ok().map(ChildOf::parent);
+        }
+        if !upright {
+            continue;
+        }
+        if let Some(contact) = physical_wheel_contact_point(
             &collisions,
-            wheel_entity,
-            &q_rigid_bodies,
-            &q_collider_of,
-        ) else {
-            continue;
-        };
-        samples.push((
-            vehicle,
-            wheel_entity,
-            physical_wheel.wheel_width as f64,
-            contact,
-        ));
+            entity,
+            &rigid_bodies,
+            &collider_of,
+            &tiles,
+            &terrains,
+        ) {
+            samples.push((vehicle, entity, f64::from(wheel.wheel_width), contact));
+        }
     }
-
     for (vehicle, wheel, width, contact) in samples {
         if !width.is_finite() || width <= 0.0 {
             continue;
         }
-        if let Ok(mut history) = q_histories.get_mut(vehicle) {
+        contacting.insert(wheel);
+        if let Ok(mut history) = histories.get_mut(vehicle) {
             if history
                 .bypass_change_detection()
-                .record(active_frame.0, wheel, contact)
+                .record(active_frame.0, wheel, width, contact)
             {
                 history.set_changed();
                 request.pending = true;
             }
         }
     }
-    for mut history in q_histories.iter_mut() {
-        let lanes_changed = {
-            let history_data = history.bypass_change_detection();
-            let previous_lane_count = history_data.lanes.len();
-            history_data
-                .lanes
-                .retain(|wheel, _| active_wheels.contains(wheel));
-            history_data.lanes.len() != previous_lane_count
-        };
-        if lanes_changed {
+    for mut history in &mut histories {
+        let data = history.bypass_change_detection();
+        if data.frame.is_some_and(|frame| frame != active_frame.0) {
+            data.clear();
+            request.pending = true;
+        }
+        let old_count = data.lanes.len();
+        data.lanes.retain(|wheel, _| active_wheels.contains(wheel));
+        if data.lanes.len() != old_count {
+            request.pending = true;
+        }
+        for (&wheel, lane) in &mut data.lanes {
+            if !contacting.contains(&wheel) {
+                lane.connected = false;
+            }
+        }
+    }
+}
+
+/// Width edits and removed wheel realizations are presentation invalidations
+/// even while physics is paused. Broad wheel-component changes are not.
+fn refresh_vehicle_trail_widths(
+    mut histories: Query<&mut VehicleTrailHistory>,
+    wheels: Query<&WheelRaycast>,
+    physical: Query<&PhysicalWheel>,
+    mut request: ResMut<TrailProjectionRebuildRequested>,
+) {
+    for mut history in &mut histories {
+        let data = history.bypass_change_detection();
+        let mut changed = false;
+        data.lanes.retain(|wheel, lane| {
+            let width = wheels
+                .get(*wheel)
+                .map(|wheel| wheel.wheel_width)
+                .ok()
+                .or_else(|| {
+                    physical
+                        .get(*wheel)
+                        .ok()
+                        .map(|wheel| f64::from(wheel.wheel_width))
+                });
+            let Some(width) = width.filter(|w| w.is_finite() && *w > 0.0) else {
+                changed = true;
+                return false;
+            };
+            if lane.width != width {
+                lane.width = width;
+                changed = true;
+            }
+            true
+        });
+        if changed {
             history.set_changed();
             request.pending = true;
         }
     }
 }
 
-/// Arm a projection rebuild from authoritative changes. In steady state this
-/// checks sampled-history invalidation, projected wheel widths, and one
-/// surface-key comparison; terrain sampling is deferred to
-/// [`rebuild_vehicle_trail_projection`]. Physics pose and wheel components
-/// include continuously changing fields that do not change the visible trail,
-/// so their broad `Changed` filters are not projection invalidators.
 pub(crate) fn arm_trail_projection_rebuild(
     mut request: ResMut<TrailProjectionRebuildRequested>,
-    q_raycast_widths: Query<&WheelRaycast>,
-    q_physical_widths: Query<&PhysicalWheel>,
-    mut removed_histories: RemovedComponents<VehicleTrailHistory>,
+    mut removed: RemovedComponents<VehicleTrailHistory>,
     active_frame: Res<ActivePhysicsFrame>,
     surface: lunco_terrain_surface::GridSurfaceQuery,
     projection: Res<TrailVisualProjection>,
 ) {
-    let width_changed = projection.trails.values().flatten().any(|lane| {
-        let width = q_raycast_widths
-            .get(lane.wheel)
-            .map(|wheel| wheel.wheel_width)
-            .or_else(|_| {
-                q_physical_widths
-                    .get(lane.wheel)
-                    .map(|wheel| wheel.wheel_width as f64)
-            })
-            .ok()
-            .filter(|width| width.is_finite() && *width > 0.0)
-            .map(|width| (width as f32) * 0.5);
-        width != Some(lane.half_width)
-    });
-    let histories_removed = removed_histories.read().count() > 0;
-    if width_changed
-        || histories_removed
-        || active_frame.is_changed()
+    if removed.read().count() > 0
         || projection.frame != Some(active_frame.0)
         || projection.surface != surface.surface_key()
     {
         request.pending = true;
     }
 }
-
 pub(crate) fn trail_projection_rebuild_is_pending(
     request: Res<TrailProjectionRebuildRequested>,
 ) -> bool {
     request.pending
 }
 
-fn project_trail_to_surface(
-    contacts: impl Iterator<Item = TrailContact>,
-    surface: &lunco_terrain_surface::GridSurfaceQuery,
-    mode: TrailSurfaceMode,
-) -> Option<Vec<RibbonPoint>> {
-    if mode == TrailSurfaceMode::PhysicsContact {
-        // The solved physics contact is already on the authored static support
-        // collider. Keep both its point and support frame.
-        Some(
-            contacts
-                .map(|contact| RibbonPoint {
-                    position: contact.point,
-                    normal: contact.normal,
-                })
-                .collect(),
-        )
-    } else {
-        contacts
-            .map(|contact| {
-                surface
-                    .sample_surface(GridPos(contact.point), TRAIL_SURFACE_NORMAL_EPS_M)
-                    .map(|sample| RibbonPoint {
-                        position: sample.point.0,
-                        normal: sample.normal,
-                    })
-            })
-            .collect()
-    }
-}
-
-/// Convert all retained physics-frame history into one atomic render snapshot.
-/// If any sample is outside the active DEM footprint, the trail fails closed
-/// for that vehicle instead of drawing a chord through unknown terrain.
 pub(crate) fn rebuild_vehicle_trail_projection(
     active_frame: Res<ActivePhysicsFrame>,
     surface: lunco_terrain_surface::GridSurfaceQuery,
-    q_vehicles: Query<(Entity, &VehicleTrailHistory), With<MobilityRoot>>,
-    q_raycast_wheels: Query<&WheelRaycast>,
-    q_physical_wheels: Query<&PhysicalWheel>,
+    histories: Query<(Entity, &VehicleTrailHistory), With<MobilityRoot>>,
     mut request: ResMut<TrailProjectionRebuildRequested>,
     mut projection: ResMut<TrailVisualProjection>,
 ) {
     request.pending = false;
-    let frame = active_frame.0;
-    let surface_key = surface.surface_key();
-    let surface_mode = if surface_key.is_some() {
-        TrailSurfaceMode::AnalyticTerrain
-    } else {
-        TrailSurfaceMode::PhysicsContact
-    };
-    let mut trails: HashMap<Entity, Vec<TrailLane>> = HashMap::new();
-    for (vehicle, history) in q_vehicles.iter() {
-        if history.frame != Some(frame) {
+    let mut trails = HashMap::new();
+    for (vehicle, history) in &histories {
+        if history.frame != Some(active_frame.0) {
             continue;
         }
-        let mut lanes = history.lanes.iter().collect::<Vec<_>>();
-        lanes.sort_by_key(|(wheel, _)| wheel.to_bits());
-        for (&wheel, lane) in lanes {
-            if lane.points.len() < 2 {
-                continue;
-            }
-            let Some(half_width) = q_raycast_wheels
-                .get(wheel)
-                .map(|wheel| wheel.wheel_width)
-                .or_else(|_| {
-                    q_physical_wheels
-                        .get(wheel)
-                        .map(|wheel| wheel.wheel_width as f64)
-                })
-                .ok()
-                .filter(|width| width.is_finite() && *width > 0.0)
-                .map(|width| (width as f32) * 0.5)
-            else {
-                continue;
-            };
-            let Some(points) =
-                project_trail_to_surface(lane.points.iter().copied(), &surface, surface_mode)
-            else {
-                continue;
-            };
-            if points.len() >= 2 {
-                trails.entry(vehicle).or_default().push(TrailLane {
+        let mut lanes = Vec::new();
+        for (&wheel, lane) in &history.lanes {
+            let mut run: Option<TrailLane> = None;
+            for point in &lane.points {
+                if run.as_ref().is_some_and(|r| r.stroke != point.stroke) {
+                    let previous = run.take().unwrap();
+                    if previous.points.len() >= 2 {
+                        lanes.push(previous);
+                    }
+                }
+                let run = run.get_or_insert_with(|| TrailLane {
                     wheel,
-                    half_width,
-                    points,
+                    stroke: point.stroke,
+                    width: lane.width,
+                    terrain: point.terrain,
+                    points: Vec::new(),
+                    segments: Vec::new(),
+                });
+                if let Some(previous) = run.points.last() {
+                    run.segments.push([previous.position, point.point]);
+                }
+                run.points.push(RibbonPoint {
+                    position: point.point,
+                    normal: point.normal,
                 });
             }
+            if let Some(run) = run {
+                if run.points.len() >= 2 {
+                    lanes.push(run);
+                }
+            }
+        }
+        // One streaming source per wheel/terrain keeps the source identity
+        // stable across takeoff and landing. Explicit segments preserve breaks.
+        let mut ground: HashMap<(Entity, Entity), TrailLane> = HashMap::new();
+        let mut supports = Vec::new();
+        for mut lane in lanes {
+            if let Some(terrain) = lane.terrain {
+                lane.stroke = 0;
+                if let Some(existing) = ground.get_mut(&(lane.wheel, terrain)) {
+                    existing.points.extend(lane.points);
+                    existing.segments.extend(lane.segments);
+                } else {
+                    ground.insert((lane.wheel, terrain), lane);
+                }
+            } else {
+                supports.push(lane);
+            }
+        }
+        let mut lanes = supports;
+        lanes.extend(ground.into_values());
+        lanes.sort_by_key(|lane| (lane.wheel, lane.stroke));
+        if !lanes.is_empty() {
+            trails.insert(vehicle, lanes);
         }
     }
-    projection.frame = Some(frame);
-    projection.surface = surface_key;
+    projection.frame = Some(active_frame.0);
+    projection.surface = surface.surface_key();
     projection.trails = trails;
 }
 
-fn trail_signature(
-    vehicle: Entity,
-    wheel: Entity,
-    frame: Option<Entity>,
-    surface: Option<(Entity, u64)>,
-    half_width: f32,
-    points: &[RibbonPoint],
-) -> u64 {
+fn trail_signature(lane: &TrailLane) -> u64 {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
-    vehicle.hash(&mut hash);
-    wheel.hash(&mut hash);
-    frame.hash(&mut hash);
-    surface.hash(&mut hash);
-    half_width.to_bits().hash(&mut hash);
-    for point in points {
-        point.position.x.to_bits().hash(&mut hash);
-        point.position.y.to_bits().hash(&mut hash);
-        point.position.z.to_bits().hash(&mut hash);
-        point.normal.x.to_bits().hash(&mut hash);
-        point.normal.y.to_bits().hash(&mut hash);
-        point.normal.z.to_bits().hash(&mut hash);
+    lane.width.to_bits().hash(&mut hash);
+    lane.terrain.hash(&mut hash);
+    for pair in &lane.segments {
+        for point in pair {
+            for value in point.to_array() {
+                value.to_bits().hash(&mut hash);
+            }
+        }
+    }
+    for p in &lane.points {
+        for v in p.position.to_array().into_iter().chain(p.normal.to_array()) {
+            v.to_bits().hash(&mut hash);
+        }
     }
     hash.finish()
 }
-
 fn trail_look() -> PbrLook {
     PbrLook {
         base_color: LinearRgba::new(0.28, 0.14, 0.05, 0.78),
@@ -617,130 +622,152 @@ fn trail_look() -> PbrLook {
     }
 }
 
-/// Reconcile transient trail meshes from the snapshot. `build_ribbon_mesh`
-/// owns the frame-coherent ribbon tangent and turn handling shared with route
-/// annotations; this consumer only supplies trail width and appearance.
-pub(crate) fn sync_vehicle_trail_meshes(
+pub(crate) fn sync_vehicle_trail_visuals(
     projection: Res<TrailVisualProjection>,
-    q_existing: Query<(Entity, &VehicleTrailMesh, &Mesh3d, &ChildOf)>,
-    q_grids: Query<&big_space::prelude::Grid>,
+    existing_query: Query<(Entity, &VehicleTrailVisual, &ChildOf, Option<&Mesh3d>)>,
+    grids: Query<&big_space::prelude::Grid>,
+    surface: lunco_terrain_surface::GridSurfaceQuery,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
-    let Some(frame) = projection.frame else {
-        for (entity, ..) in q_existing.iter() {
+    let Some(frame) = projection.frame.filter(|f| grids.contains(*f)) else {
+        for (entity, ..) in &existing_query {
             commands.entity(entity).try_despawn();
         }
         return;
     };
-    let Ok(grid) = q_grids.get(frame) else {
-        for (entity, ..) in q_existing.iter() {
-            commands.entity(entity).try_despawn();
-        }
-        return;
-    };
-
+    let grid = grids.get(frame).unwrap();
     let mut existing = HashMap::new();
-    for (entity, trail, mesh, parent) in q_existing.iter() {
-        let key = (trail.vehicle, trail.wheel);
-        let value = (entity, trail.signature, mesh.0.clone(), parent.parent());
-        if let Some((stale, ..)) = existing.insert(key, value) {
-            commands.entity(stale).try_despawn();
+    for (entity, trail, parent, mesh) in &existing_query {
+        let key = (trail.vehicle, trail.wheel, trail.stroke, trail.terrain);
+        if let Some((old, ..)) = existing.insert(
+            key,
+            (
+                entity,
+                trail.signature,
+                parent.parent(),
+                mesh.map(|m| m.0.clone()),
+            ),
+        ) {
+            commands.entity(old).try_despawn();
         }
     }
-
     for (&vehicle, lanes) in &projection.trails {
         for lane in lanes {
-            let key = (vehicle, lane.wheel);
-            let signature = trail_signature(
-                vehicle,
-                lane.wheel,
-                projection.frame,
-                projection.surface,
-                lane.half_width,
-                &lane.points,
-            );
+            let key = (vehicle, lane.wheel, lane.stroke, lane.terrain);
             let previous = existing.remove(&key);
-            let Some(anchor) = lane.points.first().map(|point| point.position) else {
+            let signature = trail_signature(lane);
+            if previous
+                .as_ref()
+                .is_some_and(|(_, old, parent, _)| *old == signature && *parent == frame)
+            {
                 continue;
+            }
+            let marker = VehicleTrailVisual {
+                vehicle,
+                wheel: lane.wheel,
+                stroke: lane.stroke,
+                terrain: lane.terrain,
+                signature,
             };
-            let Some(new_mesh) = build_ribbon_mesh(
-                &lane.points,
-                anchor,
-                &[lane.half_width],
-                TRAIL_SURFACE_CLEARANCE_M,
-                false,
-            ) else {
+            if let Some(terrain) = lane.terrain {
+                let segments: Option<Vec<_>> = lane
+                    .segments
+                    .iter()
+                    .map(|pair| {
+                        Some([
+                            surface.terrain_local_point(terrain, GridPos(pair[0]))?,
+                            surface.terrain_local_point(terrain, GridPos(pair[1]))?,
+                        ])
+                    })
+                    .collect();
+                let Some(segments) = segments else {
+                    if let Some((entity, ..)) = previous {
+                        commands.entity(entity).try_despawn();
+                    }
+                    continue;
+                };
+                let annotation = SurfaceCurveAnnotation {
+                    terrain,
+                    revision: signature,
+                    segments,
+                    streaming: true,
+                    width_m: lane.width,
+                    color: trail_look().base_color,
+                };
+                if let Some((entity, _, parent, _)) = previous {
+                    if parent == frame {
+                        commands.entity(entity).try_insert((marker, annotation));
+                        continue;
+                    }
+                    commands.entity(entity).try_despawn();
+                }
+                commands.spawn((marker, annotation, ChildOf(frame)));
+            } else {
+                // Explicit rendering boundary: the ribbon builder consumes f32
+                // half-widths, while physics/history retain authored metres.
+                let half_width = (lane.width * 0.5) as f32;
+                if !half_width.is_finite() || half_width <= 0.0 {
+                    continue;
+                }
+                let anchor = lane.points[0].position;
+                let Some(mesh) = build_ribbon_mesh(
+                    &lane.points,
+                    anchor,
+                    &[half_width],
+                    TRAIL_SURFACE_CLEARANCE_M,
+                    false,
+                ) else {
+                    continue;
+                };
+                let (cell, local) = grid.translation_to_grid(anchor);
+                if let Some((entity, _, parent, Some(handle))) = previous.as_ref() {
+                    if *parent == frame {
+                        if let Some(mut old) = meshes.get_mut(handle) {
+                            *old = mesh;
+                            commands.entity(*entity).try_insert((
+                                marker,
+                                trail_look(),
+                                cell,
+                                Transform::from_translation(local),
+                            ));
+                            continue;
+                        }
+                    }
+                }
                 if let Some((entity, ..)) = previous {
                     commands.entity(entity).try_despawn();
                 }
-                continue;
-            };
-
-            if let Some((entity, old_signature, handle, parent)) = previous {
-                if old_signature == signature && parent == frame {
-                    continue;
-                }
-                if parent == frame {
-                    if let Some(mut mesh) = meshes.get_mut(&handle) {
-                        *mesh = new_mesh;
-                        let (cell, local) = grid.translation_to_grid(anchor);
-                        commands.entity(entity).try_insert((
-                            trail_look(),
-                            cell,
-                            Transform::from_translation(local),
-                            VehicleTrailMesh {
-                                vehicle,
-                                wheel: lane.wheel,
-                                signature,
-                            },
-                        ));
-                        continue;
-                    }
-                }
-                commands.entity(entity).try_despawn();
+                commands.spawn((
+                    marker,
+                    Mesh3d(meshes.add(mesh)),
+                    trail_look(),
+                    cell,
+                    Transform::from_translation(local),
+                    GlobalTransform::default(),
+                    ChildOf(frame),
+                ));
             }
-
-            let (cell, local) = grid.translation_to_grid(anchor);
-            commands.spawn((
-                Mesh3d(meshes.add(new_mesh)),
-                trail_look(),
-                cell,
-                Transform::from_translation(local),
-                GlobalTransform::default(),
-                ChildOf(frame),
-                VehicleTrailMesh {
-                    vehicle,
-                    wheel: lane.wheel,
-                    signature,
-                },
-            ));
         }
     }
-
     for (_, (entity, ..)) in existing {
         commands.entity(entity).try_despawn();
     }
 }
 
-/// Remove both the visual meshes and retained history at the scene/Twin
-/// boundary. This prevents an entity-id reuse from inheriting another Twin's
-/// path and leaves the next scene's projection empty until it records motion.
 pub(crate) fn clear_vehicle_trails(
     mut projection: ResMut<TrailVisualProjection>,
     mut request: ResMut<TrailProjectionRebuildRequested>,
-    mut q_histories: Query<&mut VehicleTrailHistory>,
-    q_meshes: Query<Entity, With<VehicleTrailMesh>>,
+    mut histories: Query<&mut VehicleTrailHistory>,
+    trails: Query<Entity, With<VehicleTrailVisual>>,
     mut commands: Commands,
 ) {
-    projection.frame = None;
-    projection.surface = None;
-    projection.trails.clear();
+    *projection = TrailVisualProjection::default();
     request.pending = true;
-    for mut history in q_histories.iter_mut() {
+    for mut history in &mut histories {
         history.clear();
     }
-    for entity in q_meshes.iter() {
+    for entity in &trails {
         commands.entity(entity).try_despawn();
     }
 }
@@ -748,278 +775,168 @@ pub(crate) fn clear_vehicle_trails(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn flat_contact(point: DVec3) -> TrailContact {
-        TrailContact::new(point, DVec3::Y).expect("flat support contact")
+    fn contact(x: f64) -> TrailContact {
+        TrailContact::new(DVec3::new(x, 0.0, 0.0), DVec3::Y, Entity::PLACEHOLDER, None).unwrap()
     }
-
     #[test]
-    fn only_upward_static_support_normals_can_leave_a_trail() {
-        assert!(support_normal(DVec3::Y).is_some());
-        assert!(support_normal(DVec3::new(-0.6, 0.8, 0.0)).is_some());
-        assert!(support_normal(DVec3::X).is_none());
-        assert!(support_normal(-DVec3::Y).is_none());
-        assert!(support_normal(DVec3::NAN).is_none());
-    }
-
-    #[test]
-    fn history_samples_contact_lanes_and_stays_bounded() {
+    fn moving_endpoint_preserves_sparse_history_and_contact_breaks() {
+        let mut history = VehicleTrailHistory::default();
         let frame = Entity::PLACEHOLDER;
         let wheel = Entity::from_bits(7);
+        for x in [0.0, 0.1, 0.2, 0.3] {
+            assert!(history.record(frame, wheel, 0.28, contact(x)));
+        }
+        assert_eq!(history.lanes[&wheel].points.len(), 2);
+        assert_eq!(history.lanes[&wheel].points.back().unwrap().point.x, 0.3);
+        history.record(frame, wheel, 0.28, contact(0.6));
+        assert_eq!(history.lanes[&wheel].points.len(), 3);
+        history.lanes.get_mut(&wheel).unwrap().connected = false;
+        history.record(frame, wheel, 0.28, contact(20.0));
+        history.record(frame, wheel, 0.28, contact(20.1));
+        let lane = &history.lanes[&wheel];
+        assert_ne!(lane.points[2].stroke, lane.points[3].stroke);
+        assert_eq!(lane.points[2].point.x, 0.6);
+        assert_eq!(lane.points[3].point.x, 20.0);
+        assert_eq!(lane.points[4].point.x, 20.1);
+    }
+    #[test]
+    fn history_is_bounded_and_resets_at_frame_boundary() {
         let mut history = VehicleTrailHistory::default();
-        assert!(history.record(frame, wheel, flat_contact(DVec3::ZERO)));
-        assert!(history.record(frame, wheel, flat_contact(DVec3::new(10.0, 5.0, 0.0)),));
-        let points = &history.lanes[&wheel].points;
-        assert_eq!(
-            points.front().map(|contact| contact.point),
-            Some(DVec3::ZERO)
-        );
-        assert_eq!(
-            points.back().map(|contact| contact.point),
-            Some(DVec3::new(10.0, 5.0, 0.0))
-        );
-        assert!(points.len() > 2);
-
-        for i in 0..(TRAIL_MAX_POINTS + 128) {
-            history.record(
-                frame,
-                wheel,
-                flat_contact(DVec3::new(10.0 + i as f64, 0.0, 0.0)),
-            );
+        let frame = Entity::PLACEHOLDER;
+        let wheel = Entity::from_bits(7);
+        for i in 0..TRAIL_MAX_POINTS + 10 {
+            history.record(frame, wheel, 0.4, contact(i as f64));
         }
         assert_eq!(history.lanes[&wheel].points.len(), TRAIL_MAX_POINTS);
-    }
-
-    #[test]
-    fn history_rejects_sub_spacing_motion_until_the_visual_path_changes() {
-        let frame = Entity::PLACEHOLDER;
-        let wheel = Entity::from_bits(17);
-        let mut history = VehicleTrailHistory::default();
-
-        assert!(history.record(frame, wheel, flat_contact(DVec3::ZERO)));
-        assert!(!history.record(
-            frame,
-            wheel,
-            flat_contact(DVec3::new(TRAIL_SAMPLE_SPACING_M * 0.5, 0.0, 0.0)),
-        ));
+        history.record(Entity::from_bits(8), wheel, 0.4, contact(0.0));
         assert_eq!(history.lanes[&wheel].points.len(), 1);
-
-        assert!(history.record(
-            frame,
-            wheel,
-            flat_contact(DVec3::new(TRAIL_SAMPLE_SPACING_M, 0.0, 0.0)),
-        ));
-        assert_eq!(history.lanes[&wheel].points.len(), 2);
     }
+}
 
-    #[test]
-    fn history_resets_when_the_active_physics_frame_changes() {
-        let first = Entity::from_bits(1);
-        let second = Entity::from_bits(2);
-        let wheel = Entity::from_bits(3);
-        let mut history = VehicleTrailHistory::default();
-        history.record(first, wheel, flat_contact(DVec3::new(10.0, 0.0, 20.0)));
-        history.record(first, wheel, flat_contact(DVec3::new(12.0, 0.0, 20.0)));
-        assert_eq!(history.lanes[&wheel].points.len(), 5);
-
-        history.record(second, wheel, flat_contact(DVec3::new(-3.0, 0.0, 4.0)));
-        assert_eq!(history.frame, Some(second));
-        assert_eq!(history.lanes.len(), 1);
-        assert_eq!(
-            history.lanes[&wheel].points.as_slices().0,
-            &[flat_contact(DVec3::new(-3.0, 0.0, 4.0))]
-        );
+/// Read-only evidence from the same history and publication used by rendering.
+/// This is presentation state, not a second wheel-contact or telemetry model.
+struct InspectVehicleTrailProvider;
+impl lunco_api::queries::ApiQueryProvider for InspectVehicleTrailProvider {
+    fn name(&self) -> &'static str {
+        "InspectVehicleTrail"
     }
-
-    #[test]
-    fn history_keeps_each_wheel_contact_on_its_own_lane() {
-        let frame = Entity::PLACEHOLDER;
-        let left = Entity::from_bits(11);
-        let right = Entity::from_bits(12);
-        let mut history = VehicleTrailHistory::default();
-
-        history.record(frame, left, flat_contact(DVec3::new(-1.0, 0.0, 0.0)));
-        history.record(frame, left, flat_contact(DVec3::new(-1.0, 0.0, -1.0)));
-        history.record(frame, right, flat_contact(DVec3::new(1.0, 0.0, 0.0)));
-        history.record(frame, right, flat_contact(DVec3::new(1.0, 0.0, -1.0)));
-
-        assert_eq!(history.lanes.len(), 2);
-        assert_eq!(
-            history.lanes[&left]
-                .points
-                .front()
-                .map(|contact| contact.point),
-            Some(DVec3::new(-1.0, 0.0, 0.0))
-        );
-        assert_eq!(
-            history.lanes[&right]
-                .points
-                .front()
-                .map(|contact| contact.point),
-            Some(DVec3::new(1.0, 0.0, 0.0))
-        );
+    fn schema(&self) -> lunco_api_core::ApiQuerySchema {
+        lunco_api_core::ApiQuerySchema {
+            name: "InspectVehicleTrail".into(),
+            description: Some("Inspect bounded solved-contact trail history, wheel widths and terrain publication.".into()),
+            parameters: Some(vec![lunco_api_core::ApiQueryParameterSchema {
+                name: "id".into(), type_name: "u64".into(), required: true,
+                description: "Stable identity of the topology-derived vehicle.".into(), allowed_values: None,
+            }]), exactly_one_of: Vec::new(),
+            response: Some("{ lanes: [{ wheel_id, width_m, wheel_width_m, render_width_m, contacting, sample_count, strokes: [{ id, count, start, end }], projection, published_revision, error }] }".into()),
+        }
     }
-
-    #[test]
-    fn history_retains_and_interpolates_the_solved_support_frame() {
-        let frame = Entity::PLACEHOLDER;
-        let wheel = Entity::from_bits(13);
-        let normal = DVec3::new(-0.6, 0.8, 0.0);
-        let mut history = VehicleTrailHistory::default();
-
-        history.record(frame, wheel, flat_contact(DVec3::ZERO));
-        history.record(
-            frame,
-            wheel,
-            TrailContact::new(DVec3::new(2.0, 0.0, 0.0), normal).unwrap(),
-        );
-        let samples = &history.lanes[&wheel].points;
-
-        assert_eq!(samples.len(), 5);
-        assert_eq!(samples.front().unwrap().normal, DVec3::Y);
-        assert!((samples.back().unwrap().normal - normal).length() < 1.0e-12);
-        assert!((samples[2].normal - DVec3::new(-0.3, 0.9, 0.0).normalize()).length() < 1.0e-12);
+    fn simulation_read_scope(
+        &self,
+        _: &lunco_api_core::ApiValue,
+    ) -> lunco_api::queries::SimulationQueryReadScope {
+        lunco_api::queries::SimulationQueryReadScope::EntityTargets
     }
-
-    #[test]
-    fn trail_mesh_is_a_surface_ribbon_with_turn_safe_vertices() {
-        let points = [
-            flat_contact(DVec3::new(0.0, 0.0, 0.0)),
-            flat_contact(DVec3::new(3.0, 1.0, 0.0)),
-            flat_contact(DVec3::new(3.0, 2.0, 3.0)),
-            flat_contact(DVec3::new(0.0, 3.0, 3.0)),
-        ];
-        let points = points.map(|contact| RibbonPoint {
-            position: contact.point,
-            normal: contact.normal,
-        });
-        let mesh = build_ribbon_mesh(
-            &points,
-            points[0].position,
-            &[0.16],
-            TRAIL_SURFACE_CLEARANCE_M,
-            false,
-        )
-        .expect("a four-point trail has ribbon geometry");
-        assert_eq!(mesh.count_vertices(), points.len() * 2);
-        assert_eq!(
-            mesh.primitive_topology(),
-            bevy::mesh::PrimitiveTopology::TriangleList
-        );
+    fn simulation_entity_reads(
+        &self,
+        params: &lunco_api_core::ApiValue,
+    ) -> Vec<lunco_core::GlobalEntityId> {
+        lunco_api::queries::api_param_u64(params, "id")
+            .map(lunco_core::GlobalEntityId::from_raw)
+            .into_iter()
+            .collect()
     }
-
-    #[test]
-    fn trail_mesh_clearance_and_normals_follow_a_ramp_support_frame() {
-        let normal = DVec3::new(-0.6, 0.8, 0.0);
-        let points = [
-            RibbonPoint {
-                position: DVec3::ZERO,
-                normal,
-            },
-            RibbonPoint {
-                position: DVec3::new(2.0, 1.5, 0.0),
-                normal,
-            },
-        ];
-        let mesh =
-            build_ribbon_mesh(&points, DVec3::ZERO, &[0.2], 0.1, false).expect("ramp ribbon");
-        let bevy::mesh::VertexAttributeValues::Float32x3(positions) = mesh
-            .attribute(Mesh::ATTRIBUTE_POSITION)
-            .expect("ribbon positions")
-        else {
-            panic!("ribbon positions must be Float32x3");
-        };
-        let bevy::mesh::VertexAttributeValues::Float32x3(normals) = mesh
-            .attribute(Mesh::ATTRIBUTE_NORMAL)
-            .expect("ribbon normals")
-        else {
-            panic!("ribbon normals must be Float32x3");
-        };
-
-        assert!((positions[0][1] - 0.08).abs() < 1.0e-6);
-        assert!((positions[0][0] - (-0.06)).abs() < 1.0e-6);
-        assert!((normals[0][0] - (-0.6)).abs() < 1.0e-6);
-        assert!((normals[0][1] - 0.8).abs() < 1.0e-6);
-    }
-
-    #[test]
-    fn contact_points_are_retained_without_an_analytic_dem() {
-        let contacts = [
-            flat_contact(DVec3::new(1.0, 0.25, 2.0)),
-            flat_contact(DVec3::new(2.0, 0.5, 2.0)),
-        ];
-        let mut app = App::new();
-        let system = app.world_mut().register_system(
-            move |surface: lunco_terrain_surface::GridSurfaceQuery| {
-                project_trail_to_surface(
-                    contacts.into_iter(),
-                    &surface,
-                    TrailSurfaceMode::PhysicsContact,
-                )
-            },
-        );
-        let projected = app.world_mut().run_system(system).unwrap();
-        assert_eq!(
-            projected,
-            Some(
-                contacts
-                    .into_iter()
-                    .map(|contact| RibbonPoint {
-                        position: contact.point,
-                        normal: contact.normal,
-                    })
-                    .collect()
+    fn execute(
+        &self,
+        world: &World,
+        params: &lunco_api_core::ApiValue,
+    ) -> lunco_api::ApiQueryResult {
+        use lunco_api::ApiQueryError;
+        use lunco_api_core::{ApiErrorCode, api_value};
+        let id = lunco_api::queries::api_param_u64(params, "id").ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "InspectVehicleTrail requires id",
             )
-        );
-    }
-
-    #[test]
-    fn scene_teardown_clears_history_and_projection() {
-        let frame = Entity::from_bits(21);
-        let wheel = Entity::from_bits(22);
-        let mut history = VehicleTrailHistory::default();
-        history.record(frame, wheel, flat_contact(DVec3::ZERO));
-        history.record(frame, wheel, flat_contact(DVec3::X));
-
-        let mut app = App::new();
-        let vehicle = app.world_mut().spawn((MobilityRoot, history)).id();
-        app.insert_resource(TrailVisualProjection {
-            frame: Some(frame),
-            surface: Some((frame, 1)),
-            trails: HashMap::from([(
-                vehicle,
-                vec![TrailLane {
-                    wheel,
-                    half_width: 0.5,
-                    points: vec![
-                        RibbonPoint {
-                            position: DVec3::ZERO,
-                            normal: DVec3::Y,
-                        },
-                        RibbonPoint {
-                            position: DVec3::X,
-                            normal: DVec3::Y,
-                        },
-                    ],
-                }],
-            )]),
-        });
-        app.insert_resource(TrailProjectionRebuildRequested::default());
-        app.add_systems(lunco_core::SceneTeardown, clear_vehicle_trails);
-
-        app.world_mut().run_schedule(lunco_core::SceneTeardown);
-
-        let projection = app.world().resource::<TrailVisualProjection>();
-        assert_eq!(projection.frame, None);
-        assert_eq!(projection.surface, None);
-        assert!(projection.trails.is_empty());
-        let history = app.world().get::<VehicleTrailHistory>(vehicle).unwrap();
-        assert_eq!(history.frame, None);
-        assert!(history.lanes.is_empty());
-        assert!(
-            app.world()
-                .resource::<TrailProjectionRebuildRequested>()
-                .pending
-        );
+        })?;
+        let registry = world
+            .get_resource::<lunco_api::registry::ApiEntityRegistry>()
+            .ok_or_else(|| {
+                ApiQueryError::new(ApiErrorCode::InternalError, "Entity registry unavailable")
+            })?;
+        let vehicle = registry
+            .resolve(&lunco_core::GlobalEntityId::from_raw(id))
+            .ok_or_else(|| {
+                ApiQueryError::new(ApiErrorCode::EntityNotFound, "Vehicle identity is not live")
+            })?;
+        let history = world.get::<VehicleTrailHistory>(vehicle).ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::EntityNotFound,
+                "Vehicle has no motion trail history",
+            )
+        })?;
+        let mut lanes = Vec::new();
+        let mut ordered: Vec<_> = history.lanes.iter().collect();
+        ordered.sort_by_key(|(wheel, _)| **wheel);
+        for (&wheel, lane) in ordered {
+            let mut strokes = Vec::new();
+            let mut start = 0;
+            let points: Vec<_> = lane.points.iter().collect();
+            while start < points.len() {
+                let stroke = points[start].stroke;
+                let end = (start + 1..points.len())
+                    .find(|&i| points[i].stroke != stroke)
+                    .unwrap_or(points.len());
+                strokes.push(api_value!({"id": stroke, "count": end - start, "start": points[start].point.to_array(), "end": points[end - 1].point.to_array()}));
+                start = end;
+            }
+            let publication = lane.points.back().and_then(|p| p.terrain).and_then(|terrain| world.get_resource::<lunco_terrain_surface::annotations::SurfaceAnnotationImages>().and_then(|images| images.published.get(&terrain)));
+            let published_revision = publication.and_then(|published| {
+                world.iter_entities().find_map(|entity| {
+                    let marker = entity.get::<VehicleTrailVisual>()?;
+                    if marker.vehicle != vehicle
+                        || marker.wheel != wheel
+                        || marker.terrain.is_none()
+                    {
+                        return None;
+                    }
+                    published
+                        .sources
+                        .iter()
+                        .find(|(source, _)| *source == entity.id())
+                        .map(|(_, revision)| *revision)
+                })
+            });
+            let wheel_width = world
+                .get::<WheelRaycast>(wheel)
+                .map(|wheel| wheel.wheel_width)
+                .or_else(|| {
+                    world
+                        .get::<PhysicalWheel>(wheel)
+                        .map(|wheel| f64::from(wheel.wheel_width))
+                });
+            let render_width = world.iter_entities().find_map(|entity| {
+                let marker = entity.get::<VehicleTrailVisual>()?;
+                if marker.vehicle != vehicle || marker.wheel != wheel {
+                    return None;
+                }
+                entity
+                    .get::<SurfaceCurveAnnotation>()
+                    .map(|source| source.width_m)
+                    .or_else(|| {
+                        world
+                            .get_resource::<TrailVisualProjection>()
+                            .and_then(|p| p.trails.get(&vehicle))
+                            .and_then(|lanes| {
+                                lanes.iter().find(|lane| {
+                                    lane.wheel == wheel && lane.stroke == marker.stroke
+                                })
+                            })
+                            .map(|lane| lane.width)
+                    })
+            });
+            lanes.push(api_value!({"wheel_id": registry.api_id_for(wheel).map(|id| id.get()), "width_m": lane.width, "wheel_width_m": wheel_width, "render_width_m": render_width, "contacting": lane.connected, "sample_count": lane.points.len(), "strokes": strokes, "projection": if lane.points.back().is_some_and(|p| p.terrain.is_some()) { "terrain" } else { "contact_mesh" }, "published_revision": published_revision, "error": publication.and_then(|p| p.error.clone())}));
+        }
+        Ok(Some(api_value!({"lanes": lanes})))
     }
 }
