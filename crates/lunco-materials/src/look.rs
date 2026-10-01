@@ -188,6 +188,10 @@ pub struct ShaderLook {
     /// material state, so two looks that differ only here still share one material
     /// and one bind group.
     pub no_shadow_cast: bool,
+    /// Disable shadow-map reception while retaining normal surface lighting.
+    /// The material binder owns the corresponding `NotShadowReceiver` marker.
+    /// Like casting intent, this entity-level flag is excluded from material identity.
+    pub no_shadow_receive: bool,
     /// How this surface handles transparency — the same [`SurfaceAlpha`] a
     /// [`PbrLook`](lunco_render::PbrLook) carries, from the same authored
     /// `primvars:displayOpacity`.

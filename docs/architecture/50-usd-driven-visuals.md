@@ -257,6 +257,13 @@ sounds like: a colour belongs in a bound `Material`, where USD says it belongs, 
 
 ## Casting shadows — `primvars:doNotCastShadows`
 
+Generated celestial globe tiles and their render-only DEM continuation collars
+disable both shadow casting and shadow reception through `ShaderLook` intent.
+The material binder reconciles `NotShadowCaster` and `NotShadowReceiver` independently;
+these entity flags do not change shared material identity. The shells retain
+sunlight shading. Measured DEM terrain and scene objects retain their shadow
+reception and their existing shadow producers.
+
 Terrain shadow production and filtered regolith detail follow the
 [terrain material contract](terrain-layered-rendering.md#shadow-ownership).
 Scatter boulders share meshes and a linear-reflectance `PbrLook`, and cast

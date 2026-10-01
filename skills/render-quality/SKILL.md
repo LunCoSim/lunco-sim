@@ -91,9 +91,13 @@ Standard `UsdPreviewSurface` input edits travel through
 and the renderer rebinds its material. If the authored value changes but the
 surface stays stale, inspect that owner path before adding a scene rebuild.
 
-For celestial globes, verify the installed Earth/Moon imagery dataset and the
-composed USD body look. A body shader look may add shader parameters, but it
-must retain the installed dataset albedo unless USD supplies an explicit
+For celestial globes, verify the installed Earth/Moon imagery dataset, composed
+USD body look, and generated shell's shadow intent. Globe tiles and their
+render-only DEM collars disable casting and receiving via `ShaderLook`; the
+material binder alone applies the Bevy markers. DEM terrain and scene objects
+retain their shadows, and shell surfaces retain normal sunlight shading.
+A body shader look may add shader parameters, but it must retain the installed
+dataset albedo unless USD supplies an explicit
 albedo layer or `AuthoredBodyAlbedo`. Body frames, globe tiles, stations,
 terrain, links, sky, and lighting share `CelestialTime`, a child of `WorldTime`.
 The ordinary render interpolation sample drives unbound USD time-sampled
