@@ -422,7 +422,17 @@ fn surface_annotation_color(data: texture_2d<f32>, p: vec2<f32>, base: vec4<f32>
     let grid = u32(header.x);
     let normalized = clamp((p - bounds.xy) / (bounds.zw - bounds.xy), vec2<f32>(0.0), vec2<f32>(1.0));
     let cell_xy = min(vec2<u32>(normalized * f32(grid)), vec2<u32>(grid - 1u));
-    let cell = annotation_texel(data, 2u + cell_xy.y * grid + cell_xy.x);
+    var cell = annotation_texel(data, 2u + cell_xy.y * grid + cell_xy.x);
+    var lo = bounds.xy + vec2<f32>(cell_xy) * (bounds.zw - bounds.xy) / f32(grid);
+    var hi = lo + (bounds.zw - bounds.xy) / f32(grid);
+    for (var depth = 0u; depth < u32(header.y); depth += 1u) {
+        if (cell.y >= 0.0) { break; }
+        let middle = (lo + hi) * 0.5;
+        let quadrant = vec2<u32>(select(vec2<u32>(0u), vec2<u32>(1u), p >= middle));
+        cell = annotation_texel(data, u32(cell.x) + quadrant.y * 2u + quadrant.x);
+        lo = select(lo, middle, quadrant == vec2<u32>(1u));
+        hi = select(middle, hi, quadrant == vec2<u32>(1u));
+    }
     var tint = vec4<f32>(0.0);
     for (var i = 0u; i < u32(cell.y); i += 1u) {
         let segment = u32(annotation_texel(data, u32(cell.x) + i).x);

@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use lunco_materials::{ShaderLook, ShaderLookSourceInterface, TextureLayer};
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::{DemHeightField, LodTileOf};
@@ -27,9 +28,9 @@ pub struct SurfaceCurveAnnotation {
     pub terrain: Entity,
     pub revision: u64,
     /// Independent segments, oldest first. Disconnected strokes never acquire a joining leg.
-    pub segments: Vec<[DVec2; 2]>,
-    /// Continuously sampled presentation history. Its oldest segments may be
-    /// retired to respect GPU budgets; snapshot sources always remain complete.
+    pub segments: Arc<[[DVec2; 2]]>,
+    /// Continuously sampled presentation history. Revisions coalesce while
+    /// asynchronous preparation preserves every retained segment.
     pub streaming: bool,
     pub width_m: f64,
     pub color: LinearRgba,
@@ -55,6 +56,9 @@ pub struct SurfaceAnnotationSettings {
     pub grid_resolution: usize,
     pub max_cell_segments: usize,
     pub max_segments: usize,
+    pub max_index_nodes: usize,
+    pub max_index_depth: usize,
+    pub max_index_references: usize,
     /// Maximum contiguous source legs per bounded simplification block.
     pub stream_chunk_segments: usize,
     /// Worker admission limit, between one and two inclusive.
@@ -66,7 +70,10 @@ impl Default for SurfaceAnnotationSettings {
         Self {
             grid_resolution: 32,
             max_cell_segments: 64,
-            max_segments: 4096,
+            max_segments: 262144,
+            max_index_nodes: 65536,
+            max_index_depth: 12,
+            max_index_references: 1048576,
             stream_chunk_segments: 64,
             max_active_builds: 2,
         }
@@ -107,19 +114,25 @@ fn image_bytes(
     max_cell: usize,
     max_segments: usize,
     stream_chunk: usize,
+    max_nodes: usize,
+    max_depth: usize,
+    max_references: usize,
 ) -> Result<Option<Vec<u8>>, String> {
     let _span = info_span!("surface_annotation_index_build_worker").entered();
     if !(1..=64).contains(&grid)
         || max_cell == 0
         || max_cell > 256
-        || max_segments > 4096
+        || !(1..=262144).contains(&max_segments)
+        || !(grid * grid..=65536).contains(&max_nodes)
+        || !(1..=12).contains(&max_depth)
+        || !(1..=1048576).contains(&max_references)
         || !(1..=64).contains(&stream_chunk)
     {
         return Err("invalid surface annotation preparation bounds".into());
     }
-    // Snapshot sources are admitted first. Streaming sources are interleaved
-    // newest-first so one long lane cannot evict the live heads of other lanes.
-    let mut candidates = Vec::new();
+    // All retained segments are admitted. Dense cells subdivide spatially;
+    // local density never silently removes the rest of a long history.
+    let mut segments = Vec::new();
     for annotation in annotations {
         if !annotation.width_m.is_finite()
             || annotation.width_m <= 0.0
@@ -132,118 +145,103 @@ fn image_bytes(
         {
             return Err("surface annotation width and colour must be finite".into());
         }
-        for pair in &annotation.segments {
+        for pair in annotation.segments.iter() {
             if !pair.iter().all(|p| p.is_finite()) || pair[0].distance_squared(pair[1]) <= 1e-18 {
                 return Err("surface annotation needs finite, distinct segment endpoints".into());
             }
         }
-        if !annotation.streaming {
-            for pair in &annotation.segments {
-                if candidates.len() == max_segments {
-                    return Err("surface annotation segment budget exceeded".into());
-                }
-                candidates.push((
-                    pair[0],
-                    pair[1],
-                    annotation.width_m * 0.5,
-                    annotation.color,
-                    false,
-                ));
-            }
+        let reduced;
+        let pairs: &[[DVec2; 2]] = if annotation.streaming {
+            reduced = simplify_stream_segments(
+                &annotation.segments,
+                annotation.width_m * 0.5 * 0.01,
+                stream_chunk,
+            );
+            &reduced
+        } else {
+            annotation.segments.as_ref()
+        };
+        if segments.len() + pairs.len() > max_segments {
+            return Err("surface annotation segment budget exceeded".into());
         }
+        segments.extend(
+            pairs
+                .iter()
+                .map(|pair| (pair[0], pair[1], annotation.width_m * 0.5, annotation.color)),
+        );
     }
-    let streams: Vec<_> = annotations
-        .iter()
-        .filter(|a| a.streaming)
-        .map(|a| {
-            (
-                a,
-                simplify_stream_segments(&a.segments, a.width_m * 0.5 * 0.01, stream_chunk),
-            )
-        })
-        .collect();
-    'history: for age in 0..streams
-        .iter()
-        .map(|(_, segments)| segments.len())
-        .max()
-        .unwrap_or(0)
-    {
-        for (annotation, segments) in &streams {
-            if let Some(index) = segments.len().checked_sub(age + 1) {
-                if candidates.len() == max_segments {
-                    break 'history;
-                }
-                let pair = segments[index];
-                candidates.push((
-                    pair[0],
-                    pair[1],
-                    annotation.width_m * 0.5,
-                    annotation.color,
-                    true,
-                ));
-            }
-        }
-    }
-    let mut segments = Vec::new();
-    if candidates.is_empty() {
+    if segments.is_empty() {
         return Ok(None);
     }
     let mut min = DVec2::splat(f64::INFINITY);
     let mut max = DVec2::splat(f64::NEG_INFINITY);
-    for (a, b, radius, _, _) in &candidates {
+    for (a, b, radius, _) in &segments {
         min = min.min(a.min(*b) - DVec2::splat(*radius));
         max = max.max(a.max(*b) + DVec2::splat(*radius));
     }
     let cell_size = (max - min) / grid as f64;
     let mut cells = vec![Vec::new(); grid * grid];
-    for (a, b, radius, color, streaming) in candidates {
-        let mut touched = Vec::new();
+    let mut root_references = 0;
+    for (index, &(a, b, radius, _)) in segments.iter().enumerate() {
         let lower = ((a.min(b) - DVec2::splat(radius) - min) / cell_size).floor();
         let upper = ((a.max(b) + DVec2::splat(radius) - min) / cell_size).floor();
         for z in (lower.y.max(0.0) as usize)..=(upper.y as usize).min(grid - 1) {
             for x in (lower.x.max(0.0) as usize)..=(upper.x as usize).min(grid - 1) {
-                // Exact segment/expanded-cell intersection avoids filling the
-                // whole bounding rectangle of a long diagonal with candidates.
-                let lo = min + DVec2::new(x as f64, z as f64) * cell_size - DVec2::splat(radius);
-                let hi = lo + cell_size + DVec2::splat(2.0 * radius);
-                if !segment_intersects_box(a, b, lo, hi) {
-                    continue;
+                let lo = min + DVec2::new(x as f64, z as f64) * cell_size;
+                if segment_intersects_box(
+                    a,
+                    b,
+                    lo - DVec2::splat(radius),
+                    lo + cell_size + DVec2::splat(radius),
+                ) {
+                    if root_references == max_references {
+                        return Err("surface annotation reference budget exceeded".into());
+                    }
+                    root_references += 1;
+                    cells[z * grid + x].push(index);
                 }
-                touched.push(z * grid + x);
             }
         }
-        if touched.iter().any(|&cell| cells[cell].len() == max_cell) {
-            if streaming {
-                break;
-            }
-            return Err("surface annotation cell budget exceeded".into());
-        }
-        let index = segments.len();
-        segments.push((a, b, radius, color));
-        for cell in touched {
-            cells[cell].push(index);
-        }
     }
-    if segments.is_empty() {
-        return Ok(None);
+    let mut nodes = vec![[0.0f32; 4]; grid * grid];
+    let mut indices = Vec::new();
+    for (cell, candidates) in cells.iter().enumerate() {
+        let lo = min + DVec2::new((cell % grid) as f64, (cell / grid) as f64) * cell_size;
+        fill_index_node(
+            cell,
+            candidates,
+            lo,
+            lo + cell_size,
+            0,
+            &segments,
+            &mut nodes,
+            &mut indices,
+            max_cell,
+            max_depth,
+            max_nodes,
+            max_references,
+        )?;
     }
-    let references = 2 + cells.len();
-    let records = references + cells.iter().map(Vec::len).sum::<usize>();
+    let references = 2 + nodes.len();
+    let records = references + indices.len();
     let mut texels = vec![[0.0f32; 4]; records + segments.len() * 3];
     texels[0] = [min.x as f32, min.y as f32, max.x as f32, max.y as f32];
     texels[1] = [
         grid as f32,
-        references as f32,
+        max_depth as f32,
         records as f32,
         segments.len() as f32,
     ];
-    let mut next = references;
-    for (index, cell) in cells.iter().enumerate() {
-        texels[2 + index] = [next as f32, cell.len() as f32, 0.0, 0.0];
-        for &segment in cell {
-            texels[next][0] = segment as f32;
-            next += 1;
-        }
+    for (index, mut node) in nodes.into_iter().enumerate() {
+        node[0] += if node[1] < 0.0 {
+            2.0
+        } else {
+            references as f32
+        };
+        texels[2 + index] = node;
+    }
+    for (index, segment) in indices.into_iter().enumerate() {
+        texels[references + index][0] = segment as f32;
     }
     for (index, (a, b, radius, color)) in segments.iter().enumerate() {
         let base = records + index * 3;
@@ -278,6 +276,76 @@ fn image_bytes(
             .flat_map(|p| p.iter().flat_map(|v| v.to_le_bytes()))
             .collect(),
     ))
+}
+
+type IndexedSegment = (DVec2, DVec2, f64, LinearRgba);
+
+/// Build only occupied subdivisions. Each shader lookup follows one quadrant
+/// per level and evaluates at most max_cell segment references at its leaf.
+#[allow(clippy::too_many_arguments)]
+fn fill_index_node(
+    node: usize,
+    candidates: &[usize],
+    lo: DVec2,
+    hi: DVec2,
+    depth: usize,
+    segments: &[IndexedSegment],
+    nodes: &mut Vec<[f32; 4]>,
+    indices: &mut Vec<usize>,
+    max_cell: usize,
+    max_depth: usize,
+    max_nodes: usize,
+    max_references: usize,
+) -> Result<(), String> {
+    if candidates.len() <= max_cell {
+        if indices.len() + candidates.len() > max_references {
+            return Err("surface annotation reference budget exceeded".into());
+        }
+        nodes[node] = [indices.len() as f32, candidates.len() as f32, 0.0, 0.0];
+        indices.extend_from_slice(candidates);
+        return Ok(());
+    }
+    if depth == max_depth {
+        return Err("surface annotation cell density exceeds subdivision depth".into());
+    }
+    if nodes.len() + 4 > max_nodes {
+        return Err("surface annotation index node budget exceeded".into());
+    }
+    let children = nodes.len();
+    nodes[node] = [children as f32, -1.0, 0.0, 0.0];
+    nodes.resize(children + 4, [0.0; 4]);
+    let half = (hi - lo) * 0.5;
+    for quadrant in 0..4 {
+        let child_lo = lo + DVec2::new((quadrant % 2) as f64, (quadrant / 2) as f64) * half;
+        let selected: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|&index| {
+                let (a, b, radius, _) = segments[index];
+                segment_intersects_box(
+                    a,
+                    b,
+                    child_lo - DVec2::splat(radius),
+                    child_lo + half + DVec2::splat(radius),
+                )
+            })
+            .collect();
+        fill_index_node(
+            children + quadrant,
+            &selected,
+            child_lo,
+            child_lo + half,
+            depth + 1,
+            segments,
+            nodes,
+            indices,
+            max_cell,
+            max_depth,
+            max_nodes,
+            max_references,
+        )?;
+    }
+    Ok(())
 }
 
 /// Bounded Ramer–Douglas–Peucker reduction in the worker. Chunking caps the
@@ -509,11 +577,14 @@ pub(crate) fn prepare_surface_annotations(
             );
             continue;
         }
-        let (grid, max_cell, max_segments, stream_chunk) = (
+        let (grid, max_cell, max_segments, stream_chunk, max_nodes, max_depth, max_references) = (
             settings.grid_resolution,
             settings.max_cell_segments,
             settings.max_segments,
             settings.stream_chunk_segments,
+            settings.max_index_nodes,
+            settings.max_index_depth,
+            settings.max_index_references,
         );
         state.tasks.insert(
             terrain,
@@ -526,7 +597,16 @@ pub(crate) fn prepare_surface_annotations(
                 AnnotationBuild {
                     revision,
                     sources: keys,
-                    result: image_bytes(&values, grid, max_cell, max_segments, stream_chunk),
+                    result: image_bytes(
+                        &values,
+                        grid,
+                        max_cell,
+                        max_segments,
+                        stream_chunk,
+                        max_nodes,
+                        max_depth,
+                        max_references,
+                    ),
                 }
             }),
         );
@@ -566,8 +646,17 @@ pub(crate) fn publish_surface_annotations(
             continue;
         }
         let (image, error) = match build.result {
-            Ok(Some(bytes)) => {
-                let height = bytes.len() / (IMAGE_WIDTH * 16);
+            Ok(Some(mut bytes)) => {
+                let previous = state.published.get(&terrain).and_then(|p| p.image.clone());
+                let required = bytes.len() / (IMAGE_WIDTH * 16);
+                let previous_height = previous
+                    .as_ref()
+                    .and_then(|h| images.get(h))
+                    .map_or(0, |image| image.texture_descriptor.size.height as usize);
+                // Geometric capacity growth avoids reallocating/rebinding on
+                // individual row changes. Capacity is retired with this owner.
+                let height = previous_height.max(required.next_power_of_two());
+                bytes.resize(height * IMAGE_WIDTH * 16, 0);
                 let image = Image::new(
                     Extent3d {
                         width: IMAGE_WIDTH as u32,
@@ -582,7 +671,6 @@ pub(crate) fn publish_surface_annotations(
                 // Continuous publication keeps one asset identity. Replacing
                 // the handle every frame would restart terrain material/image
                 // readiness faster than the renderer can upload the texture.
-                let previous = state.published.get(&terrain).and_then(|p| p.image.clone());
                 let handle = if let Some(handle) = previous.filter(|h| images.contains(h.id())) {
                     *images.get_mut(&handle).unwrap() = image;
                     handle
@@ -633,12 +721,12 @@ mod tests {
         let curve = SurfaceCurveAnnotation {
             terrain: Entity::PLACEHOLDER,
             revision: 1,
-            segments: vec![[DVec2::ZERO, DVec2::splat(10_000.0)]],
+            segments: vec![[DVec2::ZERO, DVec2::splat(10_000.0)]].into(),
             streaming: false,
             width_m: 0.12,
             color: LinearRgba::WHITE,
         };
-        let bytes = image_bytes(&[curve.clone()], 32, 64, 4096, 64)
+        let bytes = image_bytes(&[curve.clone()], 32, 64, 262144, 64, 65536, 12, 1048576)
             .unwrap()
             .unwrap();
         let values: Vec<_> = bytes
@@ -651,7 +739,17 @@ mod tests {
         let start = std::time::Instant::now();
         for _ in 0..1000 {
             std::hint::black_box(
-                image_bytes(std::slice::from_ref(&curve), 32, 64, 4096, 64).unwrap(),
+                image_bytes(
+                    std::slice::from_ref(&curve),
+                    32,
+                    64,
+                    262144,
+                    64,
+                    65536,
+                    12,
+                    1048576,
+                )
+                .unwrap(),
             );
         }
         eprintln!(
@@ -668,32 +766,50 @@ mod tests {
         let curve = SurfaceCurveAnnotation {
             terrain: Entity::PLACEHOLDER,
             revision: 1,
-            segments: vec![[DVec2::ZERO, DVec2::X]],
+            segments: vec![[DVec2::ZERO, DVec2::X]].into(),
             streaming: false,
             width_m: 0.12,
             color: LinearRgba::WHITE,
         };
         assert!(
-            image_bytes(&[curve.clone(), curve.clone()], 1, 1, 4096, 64)
-                .unwrap_err()
-                .contains("cell budget")
+            image_bytes(
+                &[curve.clone(), curve.clone()],
+                1,
+                1,
+                262144,
+                64,
+                65536,
+                12,
+                1048576
+            )
+            .unwrap_err()
+            .contains("cell density")
         );
         assert!(
-            image_bytes(std::slice::from_ref(&curve), 32, 64, 0, 64)
-                .unwrap_err()
-                .contains("segment budget")
+            image_bytes(
+                &[curve.clone(), curve.clone()],
+                32,
+                64,
+                1,
+                64,
+                65536,
+                12,
+                1048576
+            )
+            .unwrap_err()
+            .contains("segment budget")
         );
         let mut invalid = curve;
-        invalid.segments[0][1] = DVec2::ZERO;
-        assert!(image_bytes(&[invalid], 32, 64, 4096, 64).is_err());
+        Arc::make_mut(&mut invalid.segments)[0][1] = DVec2::ZERO;
+        assert!(image_bytes(&[invalid], 32, 64, 262144, 64, 65536, 12, 1048576).is_err());
     }
     #[test]
-    fn streaming_history_retires_old_legs_without_evicting_snapshot_or_live_heads() {
+    fn dense_streaming_cells_subdivide_without_retiring_history() {
         let route = SurfaceCurveAnnotation {
             terrain: Entity::PLACEHOLDER,
             revision: 1,
             streaming: false,
-            segments: vec![[DVec2::ZERO, DVec2::X]],
+            segments: vec![[DVec2::ZERO, DVec2::X]].into(),
             width_m: 0.12,
             color: LinearRgba::WHITE,
         };
@@ -707,18 +823,125 @@ mod tests {
             width_m: 0.28,
             color: LinearRgba::WHITE,
         };
-        let bytes = image_bytes(&[route, stream(2.0), stream(3.0)], 1, 3, 3, 64)
+        let curves = [route, stream(2.0), stream(3.0)];
+        let bytes = image_bytes(&curves, 1, 8, 262144, 64, 65536, 12, 1048576)
             .unwrap()
             .unwrap();
-        let values: Vec<_> = bytes
+        let values = image_values(&bytes);
+        assert_eq!(values[7], 201.0);
+        assert!(values[9] < 0.0, "dense root must subdivide");
+        for curve in &curves {
+            for pair in curve.segments.iter() {
+                assert!(indexed_coverage(&values, (pair[0] + pair[1]) * 0.5));
+            }
+        }
+        assert!(
+            image_bytes(&curves, 1, 8, 3, 64, 65536, 12, 1048576)
+                .unwrap_err()
+                .contains("segment budget")
+        );
+        assert!(
+            image_bytes(&curves, 1, 8, 262144, 64, 1, 12, 1048576)
+                .unwrap_err()
+                .contains("node budget")
+        );
+        assert!(
+            image_bytes(&curves, 1, 8, 262144, 64, 65536, 12, 1)
+                .unwrap_err()
+                .contains("reference budget")
+        );
+    }
+
+    fn image_values(bytes: &[u8]) -> Vec<f32> {
+        bytes
             .chunks_exact(4)
             .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .collect()
+    }
+
+    // Decode the production texture ABI, following the shader's one-child walk.
+    fn indexed_coverage(values: &[f32], point: DVec2) -> bool {
+        let grid = values[4] as usize;
+        let min = DVec2::new(values[0] as f64, values[1] as f64);
+        let max = DVec2::new(values[2] as f64, values[3] as f64);
+        let size = (max - min) / grid as f64;
+        let xy = ((point - min) / size)
+            .floor()
+            .clamp(DVec2::ZERO, DVec2::splat((grid - 1) as f64));
+        let mut node = 2 + xy.y as usize * grid + xy.x as usize;
+        let mut lo = min + xy * size;
+        let mut hi = lo + size;
+        for _ in 0..values[5] as usize {
+            if values[node * 4 + 1] >= 0.0 {
+                break;
+            }
+            let middle = (lo + hi) * 0.5;
+            let x = usize::from(point.x >= middle.x);
+            let y = usize::from(point.y >= middle.y);
+            node = values[node * 4] as usize + y * 2 + x;
+            if x == 0 {
+                hi.x = middle.x;
+            } else {
+                lo.x = middle.x;
+            }
+            if y == 0 {
+                hi.y = middle.y;
+            } else {
+                lo.y = middle.y;
+            }
+        }
+        assert!(values[node * 4 + 1] >= 0.0);
+        assert!(values[node * 4 + 1] <= 64.0);
+        (0..values[node * 4 + 1] as usize).any(|index| {
+            let segment = values[(values[node * 4] as usize + index) * 4] as usize;
+            let record = values[6] as usize * 4 + segment * 12;
+            let a = DVec2::new(values[record] as f64, values[record + 1] as f64);
+            let b = DVec2::new(values[record + 2] as f64, values[record + 3] as f64);
+            let delta = b - a;
+            let t = ((point - a).dot(delta) / delta.length_squared()).clamp(0.0, 1.0);
+            (point - a - delta * t).length() <= values[record + 4] as f64
+        })
+    }
+
+    #[test]
+    fn multi_kilometre_curved_history_preserves_oldest_middle_and_live_heads() {
+        let curves: Vec<_> = (0..8)
+            .map(|wheel| {
+                let point = |i: usize| {
+                    let z = i as f64 * 0.5;
+                    DVec2::new(20.0 * (z / 40.0).sin() + wheel as f64 * 0.6, z)
+                };
+                SurfaceCurveAnnotation {
+                    terrain: Entity::PLACEHOLDER,
+                    revision: 1,
+                    streaming: true,
+                    segments: (0..10000).map(|i| [point(i), point(i + 1)]).collect(),
+                    width_m: 0.3,
+                    color: LinearRgba::WHITE,
+                }
+            })
             .collect();
-        assert_eq!(values[7], 3.0);
-        let records = values[6] as usize * 4;
-        assert_eq!(&values[records..records + 4], &[0.0, 0.0, 1.0, 0.0]);
-        assert_eq!(&values[records + 12..records + 16], &[2.0, 99.0, 2.0, 99.5]);
-        assert_eq!(&values[records + 24..records + 28], &[3.0, 99.0, 3.0, 99.5]);
+        let start = std::time::Instant::now();
+        let bytes = image_bytes(&curves, 32, 64, 262144, 64, 65536, 12, 1048576)
+            .unwrap()
+            .unwrap();
+        eprintln!(
+            "eight 5km curved lanes: {:?} index preparation, {} bytes",
+            start.elapsed(),
+            bytes.len()
+        );
+        let values = image_values(&bytes);
+        for curve in &curves {
+            for index in (0..curve.segments.len()).step_by(17).chain([9999]) {
+                let [a, b] = curve.segments[index];
+                assert!(
+                    indexed_coverage(&values, a),
+                    "old/middle/current sample omitted: {index}"
+                );
+                assert!(indexed_coverage(&values, (a + b) * 0.5));
+                assert!(indexed_coverage(&values, b));
+            }
+        }
     }
 
     #[test]
@@ -753,7 +976,7 @@ mod tests {
         let start = std::time::Instant::now();
         let mut bytes = None;
         for _ in 0..100 {
-            bytes = image_bytes(&streams, 32, 64, 4096, 64).unwrap();
+            bytes = image_bytes(&streams, 32, 64, 262144, 64, 65536, 12, 1048576).unwrap();
         }
         let bytes = bytes.unwrap();
         let count = f32::from_le_bytes(bytes[28..32].try_into().unwrap());
