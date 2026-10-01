@@ -326,7 +326,7 @@ pub(crate) fn on_follow_command(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
-    q_target: Query<Entity, Controllable>,
+    q_target: Query<(Option<&CameraFollow>, Option<&CameraFollowHeight>), Controllable>,
     q_gravity: Query<&GravityBody>,
     local_avatar: Option<Res<lunco_embodiment_core::roles::TheLocalEmbodiment>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
@@ -357,14 +357,24 @@ pub(crate) fn on_follow_command(
         return;
     }
     let target_gravity = q_gravity.get(cmd.target).ok().copied();
-    let track_heading = q_target.contains(cmd.target);
+    let (follow, focus_height, track_heading) = q_target
+        .get(cmd.target)
+        .map(|(follow, height)| {
+            let follow = follow.copied().unwrap_or(CameraFollow::Heading);
+            (
+                follow,
+                height.copied(),
+                matches!(follow, CameraFollow::Heading),
+            )
+        })
+        .unwrap_or((CameraFollow::Heading, None, false));
     if let Err(error) = apply_subject_camera(
         &mut commands,
         camera,
         cmd.target,
         camera_transform,
-        CameraFollow::Heading,
-        None,
+        follow,
+        focus_height,
         track_heading,
         target_gravity,
         true,
