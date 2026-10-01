@@ -41,6 +41,9 @@ pub(crate) fn drain_document_changes(
     mut registry: ResMut<ModelicaDocuments>,
     mut commands: Commands,
 ) {
+    if !registry.has_pending_events() {
+        return;
+    }
     let pending = registry.drain_pending();
     for doc in pending.opened {
         commands.trigger(lunco_doc_bevy::DocumentOpened::local(doc));

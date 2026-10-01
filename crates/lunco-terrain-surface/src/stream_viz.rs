@@ -2480,6 +2480,15 @@ pub(crate) fn tile_look(
 ) -> ShaderLook {
     if overlay.mode > 0.5 {
         let mut look = diagnostic.clone();
+        if let Some(image) = template.textures.get(&TextureLayer::SurfaceAnnotations) {
+            look.textures
+                .insert(TextureLayer::SurfaceAnnotations, image.clone());
+        }
+        set_param(
+            &mut look,
+            "terrain_half_extent",
+            ParamValue::F32(terrain_half_extent),
+        );
         assert!(
             !look.shader.is_empty(),
             "terrain diagnostic requires an authored fragment shader source"

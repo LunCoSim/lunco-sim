@@ -163,11 +163,19 @@ def rotate_avatar(
             post(port, {"type": "ExecuteCommand", "command": "InjectWindowInput",
                         "params": {"event": {"MouseMotion": {
                             "delta_x": delta_x, "delta_y": 0.0}}}})
-            time.sleep(interval)
-            current = float(query_entity(port, gid)["euler"][0])
-            delta = sign * math.atan2(math.sin(current - previous), math.cos(current - previous))
-            if delta <= 1e-5:
-                raise RuntimeError("Native mouse look did not rotate the avatar; check UI capture and camera binding")
+            # Command admission precedes the controller's next input pass. Wait
+            # for the measured turn rather than treating a fixed sleep as an
+            # input-consumption barrier, particularly in diagnostic builds.
+            while True:
+                time.sleep(interval)
+                current = float(query_entity(port, gid)["euler"][0])
+                delta = sign * math.atan2(math.sin(current - previous), math.cos(current - previous))
+                if delta < -1e-5:
+                    raise RuntimeError("Avatar rotated opposite to the injected motion")
+                if delta > 1e-5:
+                    break
+                if time.monotonic() - started >= timeout:
+                    raise RuntimeError("Native mouse look was not consumed before the deadline; check UI capture and camera binding")
             gain = delta / units
             turned += delta
             previous = current
@@ -206,6 +214,12 @@ def main() -> None:
     args = parser.parse_args()
     if args.producer_id <= 0:
         parser.error("--producer-id must be nonzero")
+    if not all(math.isfinite(value) for value in (
+        args.move_seconds, args.rotate_seconds, args.rotate_degrees,
+        args.rotate_step_degrees, args.pointer_center_x,
+        args.pointer_center_y, args.pointer_radius,
+    )):
+        parser.error("motion parameters must be finite")
     if (
         args.move_seconds < 0
         or args.rotate_seconds <= 0

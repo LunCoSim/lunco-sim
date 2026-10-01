@@ -50,6 +50,13 @@ temporarily removes and reinserts the resource, which marks it changed even
 when the closure only reads it. Scope a mutable borrow only around a real
 state transition; otherwise a steady Builder repaint can wake change-detection
 systems and full-scene reconciliation on the next Update.
+USD authored/composed text painting borrows `UsdViewportState` and its cached
+source strings. Check `usd_preview_render_layer_propagation` when diagnosing
+preview invalidation; report traversal cost separately from frame time. Opening
+several previews must not add bodies, colliders, or joints to the mounted scene.
+For SysML requirements rebuilds, inspect `sysml_requirements_rebuild` input
+flags. Domain notification publishers check `has_pending_events` before
+mutably draining their registry; an empty queue must not invalidate readers.
 The shell's steady `WorkbenchSnapshot` check compares borrowed dock and
 perspective iterators before materializing owned vectors; preserve that
 allocation-free stable path when changing layout publication.
@@ -214,8 +221,10 @@ fault owner. Do not run a whole-stage topology traversal synchronously in
 
 For route-edit latency, record four separate spans: the bounded Rhai input
 hook, the durable route `ApplyUsdOps` and its one incremental projection,
-reference-marker admission, and `UpdateUsdCurveView`'s mesh worker/commit.
-Ribbon mesh preparation is presentation-only and must not issue another
+reference-marker admission, and `UpdateUsdCurveView`'s stroke preparation and
+terrain annotation-image publication. Fragment lookup uses bounded spatial bins;
+verify idle camera/terrain changes do not rebuild the stroke index.
+Ribbon presentation preparation is presentation-only and must not issue another
 `ApplyUsdTransientOps`, change document generation, or run inside the fixed
 scenario event that observes a projected route. Compare the UI hook and fixed
 tick against frame/physics budgets; a fast worker result does not excuse a
@@ -635,3 +644,12 @@ facts use the same complete-generation and affected-path checks when promoted.
 A missing batch, generation gap, plan replacement, or policy-affecting change
 must use full live extraction. Compare startup and settled edit captures after
 changing this path; compile evidence alone does not establish a timing gain.
+
+For movement across terrain LOD bands, inspect
+`rebind_changed_shader_look` and source reflection before blaming picking or
+physics. `shader_source_validate` and `shader_source_schema` execute once per
+loaded shader revision; streamed tiles and material replacements reuse their
+facts. Mark the exact idle/movement windows in Tracy messages, keep the initial
+avatar pose fixed, and seed a pointer in SceneView when reproducing native
+picking. Distinguish shader reload events from material/look changes. Verify
+invalid-stage diagnostics and hot-reload invalidation as well as frame time.

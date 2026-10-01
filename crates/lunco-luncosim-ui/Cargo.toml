@@ -87,6 +87,7 @@ winit = { version = "0.30.13" }
 num_cpus = { workspace = true }
 
 lunco-api-contracts = { path = "../lunco-api-contracts" }
+lunco-api = { path = "../lunco-api" }
 lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }
 lunco-updater = { path = "../lunco-updater", optional = true }
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
@@ -134,7 +135,7 @@ lunco-scene-commands = { path = "../lunco-scene-commands", optional = true }
 lunco-scene-camera = { path = "../lunco-scene-camera", optional = true }
 lunco-scene-selection = { path = "../lunco-scene-selection" }
 lunco-scene-catalog = { path = "../lunco-scene-catalog" }
-lunco-scripting = { path = "../lunco-scripting", default-features = false, features = ["window-audience"] }
+lunco-scripting = { path = "../lunco-scripting", default-features = false, features = ["window-audience", "rhai"] }
 lunco-scripting-rhai-core = { path = "../lunco-scripting-rhai-core" }
 lunco-scripting-rhai-runtime = { path = "../lunco-scripting-rhai-runtime" }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core", optional = true }

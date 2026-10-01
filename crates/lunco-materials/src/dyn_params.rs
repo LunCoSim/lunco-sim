@@ -309,6 +309,18 @@ impl ParamSchema {
     }
 }
 
+/// Read optional shader features without assuming an asset path or one interface.
+pub fn shader_capabilities(wgsl: &str) -> std::collections::BTreeSet<String> {
+    wgsl.lines()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("//!@capability")
+                .and_then(|value| value.split_whitespace().next())
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
 /// Read the shader ABI identifier from its source annotation.
 ///
 /// This is source metadata only. USD remains authoritative for selecting the
@@ -530,7 +542,8 @@ mod tests {
 
     #[test]
     fn reflects_the_shader_interface_annotation_without_naming_the_asset() {
-        let source = "//!@interface lunco.lunar-surface-continuation.v1\nstruct Material { color: vec3<f32>, }";
+        let source = "//!@interface lunco.lunar-surface-continuation.v1\n//!@capability lunco.surface-annotations.v1\nstruct Material { color: vec3<f32>, }";
+        assert!(shader_capabilities(source).contains("lunco.surface-annotations.v1"));
         let schema = ParamSchema::parse(source).expect("Material schema");
         assert_eq!(
             schema.interface.as_deref(),

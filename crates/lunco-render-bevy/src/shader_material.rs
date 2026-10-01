@@ -69,7 +69,7 @@ use std::sync::{Arc, OnceLock};
 use lunco_materials::dyn_params::{self, ParamSchema, ParamValue};
 use lunco_materials::{
     ATTRIBUTE_GLOBE_DIRECTION, ATTRIBUTE_MORPH_EDGE, ATTRIBUTE_MORPH_NORMAL,
-    ATTRIBUTE_MORPH_TARGET, ShaderCatalog, ShaderStage, to_snake_case, validate_shader_stage,
+    ATTRIBUTE_MORPH_TARGET, ShaderCatalog, ShaderStage, to_snake_case,
 };
 
 /// A general custom-shader material whose parameters are **dynamic**: each
@@ -147,6 +147,9 @@ pub struct ShaderMaterial {
     #[texture(14)]
     #[sampler(15)]
     pub continuation_surface_map: Option<Handle<Image>>,
+    /// Sparse surface annotation records; no filtering or sampler.
+    #[texture(16, sample_type = "float", filterable = false)]
+    pub surface_annotations: Option<Handle<Image>>,
     /// Per-instance fragment shader. **Not** a bind-group resource — it drives
     /// pipeline specialization (see [`ShaderMaterial::specialize`]) and is kept
     /// as a strong handle so the asset stays loaded.
@@ -208,6 +211,7 @@ impl Default for ShaderMaterial {
             shadow_cache: None,
             continuation_albedo_map: None,
             continuation_surface_map: None,
+            surface_annotations: None,
             shader: Handle::default(),
             vertex_shader: None,
             schema: empty_schema_arc(),
@@ -529,6 +533,7 @@ impl Plugin for ShaderMaterialPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<ShaderMaterial>::default());
         app.init_resource::<ShaderSchemas>();
+        app.init_resource::<crate::shader_look::ShaderSourceCache>();
         app.init_resource::<ShaderCatalog>();
         app.init_resource::<ShaderImportCatalog>();
         // Reflect each shader's `Material` struct → per-material `ParamSchema`.
@@ -639,11 +644,12 @@ pub(crate) fn wgsl_source(shader: &Shader) -> Option<&str> {
 /// Reflects each (re)loaded shader's `Material` struct into a [`ParamSchema`]
 /// and assigns it to materials using that shader. Shaders without a `Material`
 /// struct reflect to nothing (the material keeps its empty default schema).
-pub fn reflect_shader_schemas(
+pub(crate) fn reflect_shader_schemas(
     mut ev: MessageReader<AssetEvent<Shader>>,
     mut mat_ev: MessageReader<AssetEvent<ShaderMaterial>>,
     shaders: Option<Res<Assets<Shader>>>,
     mut cache: ResMut<ShaderSchemas>,
+    mut source_cache: ResMut<crate::shader_look::ShaderSourceCache>,
     mats: Option<ResMut<Assets<ShaderMaterial>>>,
 ) {
     let (Some(shaders), Some(mut mats)) = (shaders, mats) else {
@@ -651,17 +657,24 @@ pub fn reflect_shader_schemas(
     };
     let mut cache_changed = false;
     for e in ev.read() {
+        if let AssetEvent::Removed { id } | AssetEvent::Unused { id } = e {
+            cache_changed |= cache.map.remove(id).is_some();
+            continue;
+        }
         if let AssetEvent::Added { id } | AssetEvent::Modified { id } = e {
             if let Some(src) = shaders.get(*id).and_then(wgsl_source) {
                 // Reflection is a fragment-material operation. A vertex-only
                 // companion is a valid Shader asset, but it must not populate
                 // the fragment schema cache or be submitted as a material.
-                if validate_shader_stage(src, ShaderStage::Fragment).is_err() {
+                if source_cache
+                    .failure(*id, ShaderStage::Fragment, src)
+                    .is_some()
+                {
                     cache.map.remove(id);
                     cache_changed = true;
                     continue;
                 }
-                match ParamSchema::parse(src) {
+                match source_cache.schema(*id, src) {
                     Some(s) => {
                         // Every `//!@engine` field must name a registered
                         // provider AND agree with its type — otherwise the fill
@@ -669,7 +682,7 @@ pub fn reflect_shader_schemas(
                         // else. Checked once per (re)load, where the reflected
                         // types are known, and warned rather than packed.
                         lunco_materials::engine_params().validate_schema(&s, &format!("{id:?}"));
-                        cache.map.insert(*id, Arc::new(s));
+                        cache.map.insert(*id, s);
                     }
                     None => {
                         cache.map.remove(id);

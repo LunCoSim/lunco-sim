@@ -134,8 +134,14 @@ preview-transform command. It validates document and view-layer ownership and
 uses the canonical active-frame/parent-local conversion; hover must not edit the
 USD document, trigger projection, or sample a full terrain path. Route add and
 delete hooks send the accepted route-point snapshot to `UpdateUsdCurveView`;
-the mesh owner coalesces it and rebuilds from immutable terrain data off-thread.
-It updates the existing renderer mesh without changing USD generation. The
+the presentation owner coalesces it and prepares sparse terrain-local strokes.
+The terrain shader paints them on its own fragments without changing USD generation.
+For a DEM route, require `InspectUsdCurveView.projection = "terrain_surface"`,
+a positive `surface_binding_count`, and exactly one segment per authored leg;
+the separate mesh stays hidden. Right-click identity comes from a foreground
+terrain hit against the published stroke. Use `route_surface_annotation.rhai`
+through `RunScenarioAsset` for publication and missing-coverage evidence; pass
+its explicit `view_owner` scenario so the gate can isolate and restore that writer. The
 next primary click commits a moved route point through the canonical
 `@runtime@` USD edit path, whose projected change updates the ribbon once. The
 `route_interaction` production gate verifies that Move selects and retains the
@@ -186,7 +192,7 @@ absence of a notification:
   generic control boundary.
 - `CaptureScreenshot` or an X11 window capture proves the visual result.
 - For route workflows, assert the authored point count/revision, marker or live
-  ribbon mesh, `program_active`, and a nonzero guidance output after
+  ribbon publication, `program_active`, and a nonzero guidance output after
   selecting the rover and pressing the action binding. Add, move, context-menu
   delete, and undo/redo are separate assertions over the same canonical USD
   document; do not treat a spawned ECS entity as persistence proof.

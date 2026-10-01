@@ -39,6 +39,7 @@
 //!   `TerrainSurfaceVisualizationPlugin` separately owns camera-driven LOD and
 //!   derived visual products for hosts that present frames.
 
+pub mod annotations;
 pub mod band;
 pub mod collider_ring;
 pub mod derived_layers;

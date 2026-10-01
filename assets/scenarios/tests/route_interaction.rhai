@@ -93,11 +93,11 @@ fn route_curve_view_is_ready_after_edit_state(state) {
         return #{ state: state, ready: false };
     }
     if view.local_visibility != state.curve_expected_visibility
-        || (state.curve_expected_mesh && to_int(view.result_vertex_count) < 4)
-        || (!state.curve_expected_mesh && to_int(view.result_vertex_count) != 0) {
+        || (state.curve_expected_mesh && to_int(view.result_segment_count) < 1)
+        || (!state.curve_expected_mesh && to_int(view.result_segment_count) != 0) {
         state.failure = "route ribbon result after " + state.curve_edit_label
             + " disagrees with the route: local visibility=" + view.local_visibility
-            + ", vertices=" + view.result_vertex_count.to_string();
+            + ", segments=" + view.result_segment_count.to_string();
         return #{ state: state, ready: true };
     }
     #{ state: state, ready: true }
@@ -333,7 +333,7 @@ fn route_curve_view_is_ready_at_fixture(me) {
         && view.completed_revision == view.requested_revision
         && view.applied_revision == view.requested_revision
         && view.local_visibility == "inherited"
-        && to_int(view.result_vertex_count) >= 4
+        && to_int(view.result_segment_count) >= 1
 }
 
 fn prepare_route_and_add_unpossessed(me) {
@@ -869,6 +869,7 @@ fn prepare_cursor_trace(me) {
     this.move_preview_generation = usd_document_generation(this.doc);
     this.last_ghost_position = ghost_position;
     this.cursor_sample_seen = false;
+    // Keep the moved marker and its complete context menu inside the viewport.
     this.move_x = this.screen[0] + 240.0;
     this.move_y = this.screen[1];
     for offset in [20.0, 40.0, 60.0, 80.0, 100.0, 120.0,
@@ -992,6 +993,7 @@ fn third_context_is_valid(me) {
 fn prepare_delete_menu_row(me) {
     // P0 is an endpoint in the three-point fixture, so its menu contains
     // Select, Move, Add before, Add after, and Delete in that order.
+    // The placement keeps the whole menu inside the viewport at its anchor.
     this.menu_x = this.screen[0] + 20.0;
     this.menu_y = this.screen[1] + 16.0 + 4.0 * 21.0;
     let expectation = begin_curve_view_expectation(

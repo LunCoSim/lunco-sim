@@ -363,6 +363,15 @@ fn avian_topology_key(world: &World, entity: Entity) -> u64 {
     })
 }
 
+/// Native joint limits use signed infinities for an unbounded side. Port
+/// metadata uses None; retain other nonfinite bounds for contract diagnostics.
+fn joint_port_bounds(min: f64, max: f64) -> (Option<f64>, Option<f64>) {
+    (
+        (min != f64::NEG_INFINITY).then_some(min),
+        (max != f64::INFINITY).then_some(max),
+    )
+}
+
 fn avian_metadata(
     world: &World,
     entity: Entity,
@@ -382,13 +391,13 @@ fn avian_metadata(
             .get::<avian3d::prelude::RevoluteJoint>(entity)
             .and_then(|joint| joint.angle_limit)
             .map_or((None, None), |limit| {
-                (Some(limit.min as f64), Some(limit.max as f64))
+                joint_port_bounds(limit.min as f64, limit.max as f64)
             }),
         AvianRange::PrismaticLimits => world
             .get::<avian3d::prelude::PrismaticJoint>(entity)
             .and_then(|joint| joint.limits)
             .map_or((None, None), |limit| {
-                (Some(limit.min as f64), Some(limit.max as f64))
+                joint_port_bounds(limit.min as f64, limit.max as f64)
             }),
         AvianRange::ForceActuatorLimit => world
             .get::<lunco_cosim_core::ForceActuator>(entity)
@@ -1198,6 +1207,23 @@ pub fn register_builtin_port_backends(registry: &mut PortRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn joint_port_bounds_translate_only_native_unbounded_sentinels() {
+        assert_eq!(joint_port_bounds(-0.7, 1.2), (Some(-0.7), Some(1.2)));
+        assert_eq!(
+            joint_port_bounds(f64::NEG_INFINITY, f64::INFINITY),
+            (None, None)
+        );
+        assert_eq!(joint_port_bounds(f64::NEG_INFINITY, 1.2), (None, Some(1.2)));
+        assert_eq!(joint_port_bounds(-0.7, f64::INFINITY), (Some(-0.7), None));
+        let (min, max) = joint_port_bounds(f64::INFINITY, f64::NEG_INFINITY);
+        assert_eq!(min, Some(f64::INFINITY));
+        assert_eq!(max, Some(f64::NEG_INFINITY));
+        let (min, max) = joint_port_bounds(f64::NAN, f64::NAN);
+        assert!(min.unwrap().is_nan());
+        assert!(max.unwrap().is_nan());
+    }
 
     #[test]
     fn piloted_is_exposed_only_at_a_control_boundary() {

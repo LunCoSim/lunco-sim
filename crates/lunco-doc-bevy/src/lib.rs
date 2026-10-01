@@ -1278,6 +1278,14 @@ where
         let _ = self.remove(doc);
     }
 
+    /// Whether lifecycle notifications need a mutable drain. Check through a
+    /// shared borrow before draining an ECS resource to preserve idle change detection.
+    pub fn has_pending_events(&self) -> bool {
+        !self.pending_opened.is_empty()
+            || !self.pending_changes.is_empty()
+            || !self.pending_closed.is_empty()
+    }
+
     /// Drain the pending-events rings.
     pub fn drain_pending(&mut self) -> PendingEvents {
         PendingEvents {

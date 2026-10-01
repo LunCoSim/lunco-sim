@@ -337,6 +337,11 @@ Views observing a `UsdDocument`:
 - **USDA text editor** — text view of the stage
 - **Property inspector** — attributes of the selected prim
 
+The Editor text panel borrows the session’s generation-matched authored or
+composed snapshot through `PanelCtx::resource`. Painting is not a preview-state
+transition: it must preserve `UsdViewportState` change detection and must not
+wake render-layer reconciliation. Text-layer and mode changes use typed intents.
+
 ### Authored/view layers ⊕ the composed stage
 
 A running scene has three document layers and one composed stage. Each layer

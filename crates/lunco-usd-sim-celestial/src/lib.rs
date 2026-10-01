@@ -1,6 +1,7 @@
 //! USD → celestial components (doc 49): maps the authored `lunco:anchor:*` /
 //! `lunco:orbit:*` / `lunco:link:*` vocabulary to `lunco-celestial` components.
-//! Called from `process_usd_sim_prim_read` (once per prim, either read source).
+//! The pending projection queue admits live prims only. Render-only Editor
+//! hierarchies are excluded through the shared `UsdPreviewOnly` ancestry guard.
 //!
 //! There is no comms vocabulary and no comms component — a connectivity endpoint
 //! is a generic [`LinkNode`](lunco_celestial::LinkNode), and the domain (roles,
@@ -969,6 +970,8 @@ fn celestial_projection_due(pending: Res<PendingCelestialProjection>) -> bool {
 
 fn project_celestial_comms_prims(
     mut commands: Commands,
+    parents: Query<&ChildOf>,
+    preview_roots: Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     query: Query<(
         Entity,
         &lunco_usd_bevy_scene::UsdPrimPath,
@@ -987,6 +990,12 @@ fn project_celestial_comms_prims(
     entities.sort_unstable();
 
     for entity in entities {
+        // Editor stages retain their authored local frame. Projecting an
+        // anchor or celestial/link state here would activate domain placement
+        // inside a render-only hierarchy (including its root prim).
+        if lunco_usd_bevy_scene::is_preview_only(entity, &parents, &preview_roots) {
+            continue;
+        }
         let Ok((entity, prim_path, is_scene_root, root_already_projected)) = query.get(entity)
         else {
             continue;
@@ -1094,6 +1103,36 @@ mod tests {
     use super::*;
     use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
+
+    #[test]
+    fn preview_prims_do_not_enter_celestial_projection() {
+        use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath, UsdSceneRoot};
+        let mut app = App::new();
+        app.init_resource::<Assets<lunco_usd_bevy_stage::UsdStageAsset>>()
+            .init_resource::<PendingCelestialProjection>()
+            .insert_non_send_resource(lunco_usd_bevy_stage::canonical::CanonicalStages::default())
+            .add_systems(Update, project_celestial_comms_prims);
+        let preview = app.world_mut().spawn(UsdPreviewOnly).id();
+        let prim = || UsdPrimPath {
+            stage_handle: Handle::default(),
+            path: "/World".into(),
+        };
+        let root = app
+            .world_mut()
+            .spawn((prim(), UsdSceneRoot, ChildOf(preview)))
+            .id();
+        app.world_mut().spawn((prim(), ChildOf(root)));
+        let live = app.world_mut().spawn((prim(), UsdSceneRoot)).id();
+        app.update();
+        // Only the live stage waits for loading. Preview hierarchy must never
+        // gain site anchors, celestial bodies, link state or clock authority.
+        let queued = app
+            .world_mut()
+            .resource_mut::<PendingCelestialProjection>()
+            .0
+            .take_queued();
+        assert_eq!(queued.into_iter().collect::<Vec<_>>(), vec![live]);
+    }
 
     fn view(source: &str) -> (CanonicalStage, SdfPath) {
         let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))

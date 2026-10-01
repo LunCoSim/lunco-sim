@@ -15,7 +15,7 @@
 //!    `welcome_progress.rs`). Paths expand inline on click so only
 //!    one is open at a time — avoids the "wall of cards" feel of
 //!    the earlier draft.
-//! 4. **Browse all examples** — collapsed by default, behind a
+//! 4. **Modelica library examples** — collapsed by default, behind a
 //!    `CollapsingHeader`. Search box + domain chips + 2-col card
 //!    grid over the full ~700 source library examples. For power-users who
 //!    know what they want; no progress tracking here.
@@ -784,7 +784,7 @@ impl Panel for WelcomePanel {
 
             ui.add_space(24.0);
 
-            // ── Browse all examples (collapsed by default) ─
+            // ── Modelica library examples (collapsed by default) ─
             ui.vertical_centered(|ui| {
                 // Adaptive width — honour 760px as the comfort-read
                 // ceiling but shrink to fit narrow panels so the
@@ -795,17 +795,20 @@ impl Panel for WelcomePanel {
                 let examples = &catalog.examples;
 
                 egui::CollapsingHeader::new(
-                    egui::RichText::new(format!("Browse all {} examples", examples.len()))
-                        .text_style(lunco_theme::TypographyRole::Label.text_style())
-                        .color(title_tint),
+                    egui::RichText::new(format!(
+                        "Modelica library examples ({} available)",
+                        examples.len()
+                    ))
+                    .text_style(lunco_theme::TypographyRole::Label.text_style())
+                    .color(title_tint),
                 )
                 .id_salt("welcome_browse_all")
                 .default_open(false)
                 .show(ui, |ui| {
                     ui.label(
                         egui::RichText::new(
-                            "The full installed source-library example set. \
-                             Filter by domain; search across name or description.",
+                            "Installed Modelica library examples. \
+                             Filter by domain or search by name and description.",
                         )
                         .color(muted),
                     );

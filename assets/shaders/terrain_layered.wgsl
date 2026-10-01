@@ -1,3 +1,4 @@
+//!@capability lunco.surface-annotations.v1
 //! Layered lunar terrain material — `regolith.wgsl` + non-destructive map layers.
 //!
 //!@interface lunco.lunar-surface-continuation.v1
@@ -40,7 +41,7 @@
 }
 #import lunco::horizon::sun_visibility_resolved
 #import lunco::lunar::regolith_factor
-#import lunco::terrain::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights, terrain_surface_occlusion}
+#import lunco::terrain::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights, terrain_surface_occlusion, surface_annotation_color}
 
 //!@ui      albedo            color       "Albedo"
 //!@default albedo            0.13,0.13,0.13
@@ -176,6 +177,9 @@ struct Material {
     site_base_color: vec4<f32>,
     site_photometry: vec4<f32>,
 }
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(16)
+var surface_annotations: texture_2d<f32>;
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> mat: Material;
@@ -469,6 +473,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     }
 #endif
 
+#ifdef VERTEX_UVS_A
+    color = surface_annotation_color(surface_annotations, terrain_detail_position(in.uv, mat.terrain_half_extent).xz, color);
+#endif
     color = pbr_functions::main_pass_post_lighting_processing(pbr_input, color);
     return color;
 }

@@ -362,13 +362,14 @@ fn on_event(me, evt, ctx) {
 }
 
 fn finish(me) {
-    if me.done { return; }
+    if me.done { return me; }
     me.done = true;
     me.checks.push(t_true(me.first_behavior_tick_checked && me.first_behavior_tick_valid,
         "the first behavior-tree tick ran one admitted tick after scenario startup"));
     me.checks.push(t_true(me.first_physics_state_valid,
         "the first behavior tick observed a finite admitted body with authored mass and inertia"));
     report_verdict(me.checks, "ROUTE LIFECYCLE", "ROUTE_LIFECYCLE");
+    me
 }
 
 fn record_first_behavior_tick(me) {
@@ -403,7 +404,7 @@ fn reference_admission_projection_checked(me) {
     if landing < 0 || point < 0 {
         this.checks.push(t_true(false,
             "the first fixed tick after reference admission observed an incomplete primary USD projection"));
-        finish(this);
+        this = finish(this);
         return true;
     }
     this.checks.push(t_true(true,
@@ -447,7 +448,7 @@ fn route_lifecycle_timeout(me) {
             + ", first_tick_checked=" + this.application_admission_first_tick_checked.to_string();
     }
     this.checks.push(t_true(false, detail));
-    finish(this);
+    this = finish(this);
 }
 
 
@@ -492,7 +493,7 @@ fn route_step_route_fixture_action(me) {
         "generic program discovery lists the authored executable"));
     let hud = program_editor::enable_hud(this.doc, ROUTE, "always");
     this.checks.push(t_true(hud.ok, "Rhai can opt any USD program scope into the standard HUD"));
-    if !hud.ok { finish(this); return; }
+    if !hud.ok { this = finish(this); return; }
     let selected = program_editor::select(this.program_path);
     this.checks.push(t_true(selected.ok,
         "program selection establishes the active route without a Rust route registry"));
@@ -556,7 +557,7 @@ fn route_step_switch_program_source_action(me) {
 );
 if !switched.ok {
     this.checks.push(t_true(false, switched.error));
-    finish(this);
+    this = finish(this);
     return;
 }
 this.route_step_switch_program_source_finished = true;
@@ -588,7 +589,7 @@ fn route_step_replacement_program_ready_action(me) {
         this.program_path,
         "lunco://scenarios/route_follow.rhai",
     );
-    if !restored.ok { this.checks.push(t_true(false, restored.error)); finish(this); return; }
+    if !restored.ok { this.checks.push(t_true(false, restored.error)); this = finish(this); return; }
     this.route_step_replacement_program_ready_finished = true;
     return;
 }
@@ -658,7 +659,7 @@ fn route_step_restore_program_source_action(me) {
         this.checks.push(t_true(false,
             "primary-scene reference admission was rejected: "
                 + reason));
-        finish(this);
+        this = finish(this);
         return;
     }
     this.reference_admission_started = true;
@@ -681,7 +682,7 @@ fn route_step_transient_reference_edit_action(me) {
     if transient.ok != true || transient.path == () {
         this.checks.push(t_true(false,
             "a newly added route point is available to the edit policy immediately"));
-        finish(this);
+        this = finish(this);
         return;
     }
     let transient_path = transient.path;
@@ -720,7 +721,7 @@ fn route_step_append_route_point_action(me) {
     );
     if pointer.ok != true {
         this.checks.push(t_true(false, "generic pointer policy rejected the add-point intent"));
-        finish(this);
+        this = finish(this);
         return;
     }
     this.new_point = pointer.path;
@@ -858,7 +859,7 @@ fn route_step_move_preview_action(me) {
             if shown.ok != true {
                 this.checks.push(t_true(false,
                     "armed route-point hover updates a disposable move ghost in the view layer"));
-                finish(this);
+                this = finish(this);
                 return;
             }
             this.move_preview_update_sent = true;
@@ -915,7 +916,7 @@ fn route_step_move_preview_action(me) {
     if move_action.ok != true || move_action.armed != true {
         this.checks.push(t_true(false,
             "the explicit Move action arms the selected route point"));
-        finish(this);
+        this = finish(this);
         return;
     }
     this.checks.push(t_true(move_action.ok == true && move_action.armed == true,
@@ -1141,7 +1142,7 @@ fn route_step_delete_remaining_referenced_point_action(me) {
     this.checks.push(t_true(remaining_deleted.ok == true,
         "the remaining route point accepts a persistent delete"));
     if remaining_deleted.ok != true {
-        finish(this);
+        this = finish(this);
         return;
     }
     this.route_step_delete_remaining_referenced_point_finished = true;
@@ -1185,7 +1186,7 @@ fn route_step_empty_route_action(me) {
     if selected.ok != true {
         this.checks.push(t_true(false,
             "the route program can be selected after its last point is removed"));
-        finish(this);
+        this = finish(this);
         return;
     }
     this.route_step_empty_route_finished = true;
@@ -1227,12 +1228,12 @@ fn route_step_readd_empty_route_action(me) {
     let resolved = waypoint_editor::route_edit_path(add_context);
     this.checks.push(t_true(resolved == ROUTE,
         "the selected empty-route program resolves its route scope: " + resolved.to_string()));
-    if resolved != ROUTE { finish(this); return; }
+    if resolved != ROUTE { this = finish(this); return; }
     let added = waypoint_editor::on_click(add_context);
     this.checks.push(t_true(added.ok == true && added.path != (),
         "a selected route program accepts a new point after the route becomes empty"));
     if added.ok != true {
-        finish(this);
+        this = finish(this);
         return;
     }
     this.route_step_readd_empty_route_finished = true;
@@ -1252,7 +1253,7 @@ fn route_step_first_new_point_action(me) {
     this.checks.push(t_true(added.ok == true && added.path != (),
         "the route accepts a second point after rebuilding an empty path"));
     if added.ok != true {
-        finish(this);
+        this = finish(this);
         return;
     }
     this.route_step_first_new_point_finished = true;
@@ -1321,7 +1322,7 @@ fn route_step_edit_active_route_action(me) {
         if added.ok != true {
             this.checks.push(t_true(false,
                 "editing a route while it is running appends a point"));
-            finish(this);
+            this = finish(this);
             return;
         }
         this.checks.push(t_true(true,
@@ -1380,7 +1381,7 @@ fn route_step_route_point_reached_action(me) {
     if manual_edge == () || manual_edge.ok == false {
         this.checks.push(t_true(false,
             "a possessed rover accepts a semantic manual-control edge"));
-        finish(this);
+        this = finish(this);
         return;
     }
     this.route_step_route_point_reached_finished = true;
@@ -1403,7 +1404,7 @@ fn route_step_manual_route_pause_action(me) {
     if resumed == () || resumed.ok == false {
         this.checks.push(t_true(false,
             "the possessed rover accepts the route-resume action"));
-        finish(this);
+        this = finish(this);
         return;
     }
     this.route_step_manual_route_pause_finished = true;
@@ -1422,7 +1423,7 @@ fn route_step_release_subject_action(me) {
     if released == () || released.ok == false {
         this.checks.push(t_true(false,
             "the test releases rover possession before exercising non-subject input"));
-        finish(this);
+        this = finish(this);
         return;
     }
     this.route_step_release_subject_finished = true;
@@ -1449,7 +1450,7 @@ fn route_step_free_avatar_input_action(me) {
     if !free_input {
         this.checks.push(t_true(false,
             "the test publishes the free-avatar forward edge after rover release"));
-        finish(this);
+        this = finish(this);
         return;
     }
     this.route_step_free_avatar_input_finished = true;
@@ -1475,7 +1476,7 @@ fn route_step_route_after_free_input_action(me) {
     if possession == () || possession.ok == false {
         this.checks.push(t_true(false,
             "the test reacquires the rover after checking free-avatar input"));
-        finish(this);
+        this = finish(this);
         return;
     }
     this.route_step_route_after_free_input_finished = true;
@@ -1555,7 +1556,7 @@ fn route_step_generic_point_delete_action(me) {
     if deleted == () || deleted.ok == false {
         this.checks.push(t_true(false,
             "generic DeleteEntity accepted a selected authored route point"));
-        finish(this);
+        this = finish(this);
         return;
     }
     this.route_step_generic_point_delete_finished = true;
@@ -1578,7 +1579,7 @@ fn route_step_select_alternate_program_action(me) {
     let selected = program_editor::select(this.alternate_program_path);
     if !selected.ok {
         this.checks.push(t_true(false, selected.error));
-        finish(this);
+        this = finish(this);
         return;
     }
     this.route_step_select_alternate_program_finished = true;
@@ -1639,7 +1640,7 @@ fn route_step_alternate_route_edit_action(me) {
             "alternate route read did not settle: route=" + route_read.to_string()
             + "; children=" + children.to_string()
             + "; P0=" + p0.to_string() + "; P1=" + p1.to_string()));
-        finish(this);
+        this = finish(this);
         return;
     }
     this.checks.push(t_true(route_read.paths.contains(ALTERNATE_ROUTE + "/P0")
@@ -1650,7 +1651,7 @@ fn route_step_alternate_route_edit_action(me) {
     let before = waypoint_editor::on_insert_before(before_context);
     this.checks.push(t_true(before.ok == true && before.path == ALTERNATE_ROUTE + "/P2",
         "Add point before creates an ordinary point with a stable new path"));
-    if before.ok != true { finish(this); return; }
+    if before.ok != true { this = finish(this); return; }
     this.insert_before_path = before.path;
     this.route_step_alternate_route_edit_finished = true;
     return;
@@ -1679,7 +1680,7 @@ fn route_step_verify_insert_before_action(me) {
     let after = waypoint_editor::on_insert_after(after_context);
     this.checks.push(t_true(after.ok == true && after.path == ALTERNATE_ROUTE + "/P3",
         "Add point after creates the next stable route-point path"));
-    if after.ok != true { finish(this); return; }
+    if after.ok != true { this = finish(this); return; }
     this.insert_after_path = after.path;
     this.route_step_verify_insert_before_finished = true;
     return;
@@ -1714,7 +1715,7 @@ fn route_step_verify_insert_after_action(me) {
     this.checks.push(t_true(ribbon_add.ok == true
         && ribbon_add.path == ALTERNATE_ROUTE + "/P4",
         "the ribbon context action adds a route point at its typed pointer position"));
-    if ribbon_add.ok != true { finish(this); return; }
+    if ribbon_add.ok != true { this = finish(this); return; }
     this.ribbon_added_path = ribbon_add.path;
     this.route_step_verify_insert_after_finished = true;
     return;
@@ -1773,7 +1774,7 @@ fn route_step_application_projection_admission_action(me) {
     if generation == () {
         this.checks.push(t_true(false,
             "Application/Repl projection admission requires the current document generation"));
-        finish(this);
+        this = finish(this);
         return;
     }
     let code = "let edit = cmd(\"ApplyUsdOps\", #{ doc_id: "
@@ -1793,7 +1794,7 @@ fn route_step_application_projection_admission_action(me) {
     let queued = cmd("RunRhai", #{ code: code });
     this.checks.push(t_true(queued != () && queued.ok == true,
         "the Application/Repl script is admitted through the public command queue"));
-    if queued == () || queued.ok != true { finish(this); return; }
+    if queued == () || queued.ok != true { this = finish(this); return; }
     this.route_step_application_projection_admission_finished = true;
     return;
 }
@@ -1814,7 +1815,7 @@ fn route_step_application_projection_verdict_action(me) {
         this.checks.push(t_true(projected,
             "the first simulation tick after an Application/Repl USD edit sees its referenced prim projected"));
         this.application_admission_first_tick_checked = true;
-        if !projected { finish(this); return; }
+        if !projected { this = finish(this); return; }
         return;
     }
     if !this.application_admission_received { return; }
@@ -1830,7 +1831,7 @@ fn route_step_application_projection_verdict_action(me) {
         "entity lookup has not indexed the referenced prim immediately after the Application/Repl document edit"));
     this.checks.push(t_true(this.application_admission_pause_observed,
         "pending Application/Repl projection pauses simulation admission"));
-    finish(this);
+    this = finish(this);
 }
 
 fn route_step_application_projection_verdict_complete(me) { this.done || this.route_step_application_projection_verdict_finished == true }
@@ -1908,6 +1909,6 @@ fn task(me, ctx) {
 fn on_stop(me, ctx) {
     if !this.done {
         this.checks.push(t_true(false, "route lifecycle test stopped before its verdict"));
-        finish(this);
+        this = finish(this);
     }
 }

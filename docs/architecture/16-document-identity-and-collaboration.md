@@ -70,6 +70,11 @@ verbatim — it reloads saved in-memory state, possibly dirty, rather than re-re
 disk. It uses `DocumentRegistry::restore(source, origin)`, which says so; nothing
 else may. Do not widen `allocate` back to `DocumentOrigin`.
 
+Document lifecycle publishers check `DocumentRegistry::has_pending_events`
+through a shared borrow before calling `drain_pending`. An empty queue must
+preserve ECS change detection; draining is a real registry mutation only when
+notifications exist. SysML, USD, and Modelica use this same boundary.
+
 Three rules that are not obvious and were each paid for in bugs:
 
 - **Reusing the IDENTITY must not reuse the CONTENT.** Both open paths were once

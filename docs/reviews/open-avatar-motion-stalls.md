@@ -1,58 +1,76 @@
-# Avatar input and terrain movement performance
+# Avatar movement and Editor stalls
 
-Status: pointer dispatch and idle-click costs are corrected; remaining terrain
-movement spikes require unprofiled acceptance without competing workloads.
+## Current result
 
-## Ownership
+The input, shader-binding, and idle document-notification owners have been
+corrected. Product measurements below use the production binary, High quality,
+normal shadows and physics, and owned explicit API ports. Tracy remains a
+separate diagnostic run. Polling samples do not cover every rendered frame.
 
-The generic scene pointer adapter owns document-scoped subscriptions and
-coalesces raw movement before resolving coordinates or terrain. Authored Rhai
-owns registration, placement, and cancellation. An idle document sends no
-movement hooks; an idle primary click performs no route queries. This bound
-does not depend on the model's hierarchy size. Active preview transforms update
-the render entity without authoring USD. Placement performs the document edit.
-The complete contract is in [Rhai integration](../architecture/rhai-integration.md)
-and [waypoints](../architecture/waypoints-in-usd.md).
+## Architecture
 
-The controller's native automation boundary emits absolute cursor events and
-relative mouse motion as distinct streams. Camera look uses the existing input
-map and configured look button. The drivers in `scripts/perf/` measure actual
-avatar displacement and yaw through the production API.
+- Scene pointer dispatch is document-scoped and subscription-driven. Idle
+  movement invokes no Rhai hook; idle primary clicks perform no route queries.
+  Active preview transforms stay in ECS, while placement authors USD.
+- `lunco-render-bevy` shares shader-stage validation, optional uniform layout,
+  and interface facts by published shader asset revision. Tile replacements
+  check loaded dependencies and layout identity without parsing WGSL. Resolved
+  interfaces are visited only after shader asset events. See
+  [shader layers](../architecture/shader-layers-and-params.md).
+- Document notification publishers check their event queues before acquiring
+  mutable registry access. USD preview text painting borrows cached state.
+  Idle reads therefore do not invalidate SysML requirements view models.
+- Native automation uses semantic movement and distinct absolute pointer and
+  relative mouse-motion streams. Rotation waits for observed native yaw.
 
-## Evidence from September 30
+These are generic engine mechanisms. Authored Rhai retains interaction,
+selection, and scenario policy; USD retains scene facts and shader selection.
 
-Exact model: Summer Space School `sim/scenes/traverse_apollo15.usda`, High quality,
-normal shadows and substeps, no vsync or throttling. All sessions were launched
-from the optimization checkout on owned explicit API and Tracy ports.
+## Evidence
 
-| Measurement | Evidence | Result |
+Summer Space School: `sim/scenes/traverse_apollo15.usda` in the external
+`summer_space_school` model. The measured avatar starts at
+`[-340, -1907, -340]`; the pointer is seeded in SceneView through the rover's
+projected position. The October 1 scene includes the model's current authored
+changes and its opted-in runtime overlay. The completed measurements needed no
+explicit pose edit. Failed startup probes that observed the overlay's inactive
+translation were excluded.
+
+| Check | Evidence | Result |
 | --- | --- | --- |
-| Idle primary-click hook before correction | `target/perf/sss-calibrated-click-before.tracy` | 24 handler calls; mean 100.90 ms, max 188.32 ms |
-| Idle primary-click hook after correction | `target/perf/sss-calibrated-click-after.tracy` | 19 handler calls; mean 1.25 ms, max 5.11 ms |
-| Scene revisions during movement and forced camera rotation | `target/perf/sss-motion-click-isolated-before-20260930.tracy` and input log | Document 13 and stage 2 stayed unchanged; passive input ran no pointer-move Rhai hooks |
-| Native movement and rotation after 30 seconds of warmup | `target/perf/sss-native-warm-motion.tracy` and input log | 232.15 m movement; measured 360-degree native mouse turn |
-| GPU submission in that warmed movement / rotation window | `target/perf/sss-native-warm-submit.csv` | Maximum 3.94 / 2.81 ms |
-| Largest warmed movement Main schedule | `target/perf/sss-native-warm-schedules.csv` | 77.93 ms; includes 44.21 ms for three fixed ticks, 11.77 ms Update, and 13.97 ms PostUpdate |
+| Idle click hook cost | `sss-calibrated-click-before.tracy` / `sss-calibrated-click-after.tracy` | Before: 24 calls, mean 100.90 ms, max 188.32 ms. After: 19 calls, mean 1.25 ms, max 5.11 ms. Different call counts; not a matching frame comparison. |
+| Movement stall attribution | `sss-pointer-crossings-oct01.tracy` | Shader rebinding took 37–41 ms at repeated crossings around 4.3 and 7.0 s; picking stayed below 3 ms. |
+| Shared-source cache | `sss-shader-cache-after.tracy`, `.source.csv`, `.shader-stats.json` | No shader validation or schema parsing during movement. Rebinding near the former crossings is about 1 ms; one later rebinder outlier is 17.93 ms. |
+| Unprofiled native movement | `sss-shader-cache-plain.samples.json`, `.input.log` | 228.26 m; 473 observed frames, p50 8.79 ms, p99 18.28 ms, max 20.94 ms; no samples over 40 ms. |
+| Unprofiled native rotation | Same | Measured 360 degrees, 231 observed frames, p50 8.64 ms, max 15.29 ms. |
+| Unprofiled SceneView clicks | Same | 24 native clicks; 461 observed frames, p50 8.42 ms, p99 14.82 ms, max 34.58 ms. |
+| Scene stability | Same | Document generation 13 and all layer revisions unchanged through movement, rotation, and clicks. |
+| Source-cache lifecycle seam | `shader-source-cache-test.log` | PASS: 500 consumers share facts/layout identity; invalid reload, valid repair, and removal retire the prior revision. |
+| Production invalid shader | `shader-cache-negative-production.log`, `.app.log` | Existing authored `shader_fallback.rhai` verdict: `TESTS_OK 1`; runtime-invalid library shader rejected by `shader-render`, without a process crash. Probe executed after measurements in a separate owned session. |
 
-The click captures have different numbers of admitted handler calls; they do
-not establish a matching 24-click frame comparison. Tracy numbers are diagnostic
-CPU spans, not product FPS. The warmed run had other simulator sessions and a
-sibling build active. Its early revision query preceded full scene projection,
-so that before/after pair is not movement-rebuild evidence.
+Artifacts above are under `target/perf/`. The performance windows completed
+before a display-name lookup failed in the optional negative probe; the separate
+negative session uses the exact USD path and passes. No Cargo build, Tracy
+export, or other simulator ran during the completed unprofiled windows.
 
-The production editor `route_interaction` gate passes 36 checks, including
-native look, invalid raw-motion and subscription rejection, idle clicks, coalesced subscribed
-preview, stable preview document generation, placement, delete/undo, and ribbon
-states. `route_lifecycle` passes 125 checks. Both touched route tests use named
-behavior-tree actions and sequencing.
+The Editor check used `lunar-base-model/twins/astrobotic-griffin-1`, scene
+`griffin_flip_visual.usda`, and five exact USD source previews. The input flags
+in `griffin-editor-invalidation-before-oct01.tracy` attribute 342 phantom rebuilds
+to document change detection alone (p50 54.97 ms). The after capture has no such
+rebuilds. `griffin-editor-unprofiled-after-oct01.samples.json` observes p50
+13.52 ms without a preview, 15–21 ms with successive Visual previews, and
+16.71 ms with composed Text. Bodies/colliders/joints remain 33/33/12. That
+Editor run had another workload active and does not establish an uncontended
+before/after ratio.
 
-## Remaining work
+## Remaining test infrastructure issue
 
-The native-input unprofiled run (`target/perf/sss-native-unprofiled.summary.json`)
-observed 355 movement frames: p50 13.32 ms, p99 24.40 ms, maximum 52.77 ms,
-and three samples over 40 ms. Its 183 rotation samples stayed below 26.52 ms.
-The avatar moved 228.81 m and turned 360 degrees; document 12 and stage 2 stayed
-unchanged throughout. Physics at the three slow movement samples was 0.29–0.35 ms.
-Another simulator was active, and polling did not observe every frame. Remaining
-movement spikes need attribution and uncontended acceptance before claiming the
-goal is met. Preserve simulation ticks, rendering quality, and terrain detail.
+The shared scene-test folder contains two nested Twin policy manifests and its
+Twin bootstrap rejects that ambiguity. The standalone shader fixture therefore
+did not reach its verdict; this is distinct from the passing shader-owner probe.
+Fixture policy isolation remains open.
+
+The touched route tests use named behavior-tree actions and `seq`.
+`route_interaction` passes 36 checks; `route_lifecycle` emits one PASS with 110
+checks after retaining the verdict helper's returned state. Its scoped verdict
+does not establish a valid Twin bootstrap for the shared test folder.

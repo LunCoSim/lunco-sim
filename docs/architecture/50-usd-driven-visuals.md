@@ -6,8 +6,8 @@ A sensor beam or an exhaust plume may be authored USD geometry whose size tracks
 simulation value. A route ribbon is a different class: it is a derived scene annotation
 whose geometry is generated from USD mission topology and terrain. USD supplies its stable
 curve identity, material binding, and pointer schema. The reusable route tool submits the
-current point snapshot to `UpdateUsdCurveView`; bounded background work samples terrain and
-builds the live Bevy mesh without editing a USD layer or advancing document generation.
+current point snapshot to `UpdateUsdCurveView`; bounded background work prepares a sparse
+surface annotation without editing a USD layer or advancing document generation.
 
 Three rules, in order of how often they are broken:
 
@@ -41,20 +41,45 @@ standard `BasisCurves` identity from
 in `@view@`. This retains the USD path, material, and hit policy while the mesh
 itself remains a live presentation resource. Route edits still pass through the
 normal authored document and incremental scene projection once. They do not
-write a second ribbon edit: `UpdateUsdCurveView` coalesces the newest route
-points in route-parent local USD coordinates, samples an immutable terrain
-snapshot, and replaces only the existing mesh handle in `Update`. The owner
-combines those local points with the route parent's active-frame pose before
-terrain sampling. Views with fewer than two points are hidden and completed
-immediately without terrain sampling or a worker task. Worker admission is
-capped at two builds; stale results are discarded by operation revision, and
-the route simulation never waits for mesh preparation. `InspectUsdCurveView`
-reports requested,
-completed, and applied build revisions, result vertex count, local visibility,
-and terminal build errors without projecting presentation facts back into USD.
-A failed current build hides the ribbon and reports the failure instead of
-leaving old geometry visible as if it were current. The curve's standard
-`normals` make `widths` a ribbon width, so the seed is not a cylindrical tube.
+write a second ribbon edit. `UpdateUsdCurveView` coalesces ordered f64 points
+in the route parent's local coordinates and resolves them into one committed
+terrain-local plane. Declared terrain waits for its oracle and active-frame
+pose; incomplete or ambiguous footprint coverage is a terminal error. With
+no declared terrain, the three-dimensional authored curve is rendered directly.
+Fewer than two points removes the presentation immediately.
+
+`lunco-terrain-surface::annotations` owns surface presentation. Each disposable
+curve entity carries its terrain identity, source revision, sparse points,
+width and colour. At most two background jobs build spatially indexed stroke
+records per terrain. The RGBA32Float image is shared by every terrain tile;
+32-by-32 bins limit a fragment to nearby segments, with explicit segment and
+cell budgets. Excess density or insufficient GPU precision fails visibly.
+Source removal withdraws its publication; stale worker results cannot return
+it. Elevation edits, CDLOD morphs, seam stitching and camera movement need no
+annotation rebuild because the terrain's own fragments consume the strokes.
+There are no height-fitting vertices, clearance offsets or terrain raycasts in
+the render loop. Width is measured in the terrain-local horizontal plane.
+
+The fragment shader opts into `lunco.surface-annotations.v1` through its
+reflected `//!@capability` declaration and uses the `SurfaceAnnotations`
+non-filtered texture role at binding 16. Both production and diagnostic terrain
+shaders composite the unlit, antialiased stroke. Unsupported shaders report a
+terminal error rather than claiming an invisible annotation is ready. The
+independent curve mesh is hidden on terrain. Pointer context resolves the
+annotation identity only on a foreground terrain hit, preserving occlusion by
+vehicles/props and the curve's authored pointer policy.
+
+`InspectUsdCurveView` reports requested/completed/applied revisions, sparse
+segment count, projection kind, terrain binding count, local mesh visibility
+and terminal errors. Surface readiness includes publication of the current
+stroke image. The `route_surface_annotation.rhai` production GUI gate accepts
+an existing DEM route through `RunScenarioAsset` with an addressable scene
+`target` and explicit `doc_id`/`route_path`/`view_owner` parameters. The gate
+pauses that scenario writer and restores its prior pause state on completion
+or teardown, so its disposable negative fixture has one writer. It verifies sparse
+publication and unchanged waypoints, checks missing-coverage rejection, and
+restores the disposable view. `route_interaction` covers the editing contract.
+
 When a document is shared by the mounted scene and an Editor preview, live
 structural edits resolve entities only in the mounted scene. A same-path preview
 entity cannot stand in for a missing scene entity. Procedural backgrounds also

@@ -48,8 +48,8 @@
 //! is left entirely alone, so the two never fight over `joint.motor`.
 
 use avian3d::prelude::{
-    AngularVelocity, ComputedCenterOfMass, LinearVelocity, Mass, MotorModel, Position,
-    PrismaticJoint, RevoluteJoint, RigidBody, Rotation, Sleeping,
+    AngularVelocity, ComputedCenterOfMass, LinearVelocity, Mass, Position, PrismaticJoint,
+    RevoluteJoint, RigidBody, Rotation, Sleeping,
 };
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
@@ -64,30 +64,6 @@ use lunco_physics::joint::{
     JOINT_VELOCITY_PORT,
 };
 use lunco_port_core::ports::PortDirection;
-
-/// Maximum torque (N·m) the joint motor may apply to reach the commanded angle.
-/// Generous so the joint holds its target against gravity for the structures we
-/// drive (masts, panels); tune per-joint later if needed. A USD-authored
-/// `UsdPhysicsDriveAPI:angular physics:maxForce` overrides this at load.
-const JOINT_MOTOR_MAX_TORQUE: f64 = 1.0e8;
-
-/// Maximum force (N) a prismatic joint motor may apply — the linear analog of
-/// [`JOINT_MOTOR_MAX_TORQUE`]. Overridden by a USD `UsdPhysicsDriveAPI:linear
-/// physics:maxForce` at load.
-const JOINT_MOTOR_MAX_FORCE: f64 = 1.0e8;
-
-/// Motor model for the joint drive.
-///
-/// `SpringDamper`, slightly **overdamped** (`damping_ratio > 1.0`). avian's
-/// `MotorModel::DEFAULT` (5 Hz, ζ=1.0) overshoots ~40% on a hard step under
-/// XPBD substepping (effective damping drops below nominal — measured live), so
-/// we overdamp to track without overshoot. The frequency sets how fast the joint
-/// chases its setpoint; ~3 Hz settles in well under a second while staying smooth
-/// for the slow setpoints our Modelica controllers emit.
-const JOINT_MOTOR_MODEL: MotorModel = MotorModel::SpringDamper {
-    frequency: 3.0,
-    damping_ratio: 2.0,
-};
 
 /// The revolute-joint port group: measured/commanded `angle` in radians.
 /// Authored joint limits are published as metadata on that same port.
@@ -216,7 +192,7 @@ fn read_measured_angular_velocity(world: &World, entity: Entity) -> Option<f64> 
     Some((body2_rate - body1_rate).dot(axis))
 }
 
-/// Commit a metadata-validated commanded angle to the revolute motor.
+/// Commit a metadata-validated angle without changing the configured drive law or limit.
 fn write_motor_angle(world: &mut World, entity: Entity, value: f64) {
     let mut j = world
         .get_mut::<RevoluteJoint>(entity)
@@ -225,10 +201,6 @@ fn write_motor_angle(world: &mut World, entity: Entity, value: f64) {
     j.motor.enabled = true;
     j.motor.target_position = value;
     j.motor.target_velocity = 0.0;
-    j.motor.motor_model = JOINT_MOTOR_MODEL;
-    if j.motor.max_torque <= 0.0 {
-        j.motor.max_torque = JOINT_MOTOR_MAX_TORQUE;
-    }
     let bodies = [j.body1, j.body2];
     drop(j);
     if wake_bodies {
@@ -547,7 +519,7 @@ pub fn joint_reaction_force(world: &World, entity: Entity) -> Option<f64> {
     })
 }
 
-/// Commit a metadata-validated commanded displacement to the prismatic motor.
+/// Commit a metadata-validated displacement without changing the configured drive law or limit.
 fn write_motor_displacement(world: &mut World, entity: Entity, value: f64) {
     let mut j = world
         .get_mut::<PrismaticJoint>(entity)
@@ -556,10 +528,6 @@ fn write_motor_displacement(world: &mut World, entity: Entity, value: f64) {
     j.motor.enabled = true;
     j.motor.target_position = value;
     j.motor.target_velocity = 0.0;
-    j.motor.motor_model = JOINT_MOTOR_MODEL;
-    if j.motor.max_force <= 0.0 {
-        j.motor.max_force = JOINT_MOTOR_MAX_FORCE;
-    }
     let bodies = [j.body1, j.body2];
     drop(j);
     if wake_bodies {
@@ -631,6 +599,43 @@ fn twist_angle(q1: Quat, q2: Quat, axis: Vec3) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use avian3d::prelude::MotorModel;
+
+    #[test]
+    fn position_commands_preserve_configured_motor_models_and_limits() {
+        let mut world = World::new();
+        let body1 = world.spawn(RigidBody::Static).id();
+        let body2 = world.spawn(RigidBody::Dynamic).id();
+        let model = MotorModel::SpringDamper {
+            frequency: 7.0,
+            damping_ratio: 0.8,
+        };
+        for limit in [0.0, 123.0] {
+            let mut revolute = RevoluteJoint::new(body1, body2);
+            revolute.motor.motor_model = model;
+            revolute.motor.max_torque = limit;
+            let angle = world.spawn(revolute).id();
+            write_motor_angle(&mut world, angle, 0.4);
+            let motor = &world.get::<RevoluteJoint>(angle).unwrap().motor;
+            assert_eq!(motor.motor_model, model);
+            assert_eq!(motor.max_torque, limit);
+            assert_eq!(motor.target_position, 0.4);
+            assert_eq!(motor.target_velocity, 0.0);
+            assert!(motor.enabled);
+
+            let mut prismatic = PrismaticJoint::new(body1, body2);
+            prismatic.motor.motor_model = model;
+            prismatic.motor.max_force = limit;
+            let displacement = world.spawn(prismatic).id();
+            write_motor_displacement(&mut world, displacement, 0.2);
+            let motor = &world.get::<PrismaticJoint>(displacement).unwrap().motor;
+            assert_eq!(motor.motor_model, model);
+            assert_eq!(motor.max_force, limit);
+            assert_eq!(motor.target_position, 0.2);
+            assert_eq!(motor.target_velocity, 0.0);
+            assert!(motor.enabled);
+        }
+    }
 
     #[test]
     fn displacement_projects_onto_slider_axis() {
