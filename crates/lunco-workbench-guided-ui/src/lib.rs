@@ -27,6 +27,7 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use lunco_core::{Command, on_command, register_commands};
 use lunco_workbench_core::presentation::{HelpAnchors, ViewportPlaceholder};
+use lunco_workbench_core::{PerspectiveId, WorkbenchSnapshot};
 use lunco_workbench_widgets::{UiIcon, icon_text_button, paint_icon};
 
 /// Shared layer for guided presentation. Workbench menus and window controls
@@ -39,6 +40,17 @@ pub const GUIDED_OVERLAY_ORDER: egui::Order = egui::Order::Middle;
 /// surfaces prevents a later scrim paint from dimming their content; application
 /// menus and window controls remain above both layers in `Foreground`.
 pub const GUIDED_SCRIM_ORDER: egui::Order = egui::Order::Background;
+
+/// Optional host restriction for the persistent mission-objectives checklist.
+///
+/// `None` keeps objectives available in every perspective. Tutorial hints,
+/// action buttons, coach tours, spotlights, and recovery surfaces are separate
+/// teaching presentation and do not use this gate.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GuidedObjectivesVisibility {
+    /// Perspective that may display the mission checklist, when restricted.
+    pub visible_in_perspective: Option<PerspectiveId>,
+}
 
 /// Persistent guided HUD + spotlight state. Always present (headless too) so
 /// the commands never panic on a missing resource; only the draw is ui-gated.
@@ -492,10 +504,20 @@ fn register_guided_navigation(app: &mut App) {
 fn draw_guided_hud(
     mut egui_ctx: EguiContexts,
     hud: Res<GuidedOverlay>,
+    objectives_visibility: Res<GuidedObjectivesVisibility>,
+    snapshot: Option<Res<WorkbenchSnapshot>>,
     theme: Option<Res<lunco_theme::Theme>>,
     mut commands: Commands,
 ) {
-    if hud.hint.is_empty() && hud.objectives.is_empty() && hud.actions.is_empty() {
+    let objectives_visible = objectives_visibility
+        .visible_in_perspective
+        .is_none_or(|required| {
+            snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.active_perspective() == Some(required))
+        });
+    let show_objectives = objectives_visible && !hud.objectives.is_empty();
+    if !show_objectives && hud.hint.is_empty() && hud.actions.is_empty() {
         return;
     }
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
@@ -520,7 +542,7 @@ fn draw_guided_hud(
                 .stroke(egui::Stroke::new(1.0, accent.linear_multiply(0.6)))
                 .inner_margin(egui::Margin::symmetric(12, 10))
                 .show(ui, |ui| {
-                    if !hud.objectives.is_empty() {
+                    if show_objectives {
                         ui.label(
                             egui::RichText::new("OBJECTIVES")
                                 .color(accent)
@@ -544,7 +566,7 @@ fn draw_guided_hud(
                         }
                     }
                     if !hud.hint.is_empty() {
-                        if !hud.objectives.is_empty() {
+                        if show_objectives {
                             ui.add_space(6.0);
                             ui.separator();
                             ui.add_space(4.0);
@@ -552,7 +574,7 @@ fn draw_guided_hud(
                         ui.label(egui::RichText::new(&hud.hint).color(theme.tokens.text));
                     }
                     if !hud.actions.is_empty() {
-                        if !hud.hint.is_empty() || !hud.objectives.is_empty() {
+                        if !hud.hint.is_empty() || show_objectives {
                             ui.add_space(8.0);
                             ui.separator();
                             ui.add_space(6.0);
@@ -1410,6 +1432,7 @@ pub struct GuidedOverlayPlugin;
 impl Plugin for GuidedOverlayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GuidedOverlay>()
+            .init_resource::<GuidedObjectivesVisibility>()
             .add_observer(clear_twin_overlay_on_close)
             .add_observer(clear_overlay_on_scene_transition);
         register_all_commands(app);
@@ -1425,9 +1448,9 @@ impl Plugin for GuidedOverlayPlugin {
             .mark_client_local::<SetTourStep>()
             .mark_client_local::<ClearTour>()
             .mark_client_local::<ClearGuidedOverlay>();
-        // The persistent objectives card is view-independent: it remains
-        // visible when the user changes perspective. Spotlight/tour content
-        // follows the authored track perspective and its anchors are view-local.
+        // The host may restrict mission objectives by perspective. Hints and
+        // authored actions stay available to tutorials in every perspective,
+        // as do spotlight, tour, and recovery surfaces.
         app.add_systems(
             EguiPrimaryContextPass,
             (
