@@ -15,7 +15,9 @@
 //! `GridPos − GridPos` is the one legal way to build a lever arm.
 
 use bevy::math::{DQuat, DVec3};
-use lunco_spatial::coords::{GridPos, GridRot, VehicleFrame};
+#[cfg(test)]
+use lunco_spatial::coords::VehicleFrame;
+use lunco_spatial::coords::{GridPos, GridRot};
 
 /// World pose of a wheel hub in the grid-absolute physics frame, reconstructed
 /// from the chassis body pose and the wheel's chassis-local transform.
@@ -41,14 +43,19 @@ pub fn wheel_hub_pose(
 /// the wheel's chassis-local (including steering) attitude.  The render tree is
 /// deliberately not an input: BigSpace may rebase that tree without changing
 /// the physical orientation of the body.
+/// The axle supplies right; steering-axis cross axle supplies forward. Parallel
+/// axes cannot describe a rolling/steering wheel and have no travel basis.
 #[inline]
-pub fn wheel_heading(chassis_rot: GridRot, wheel_local_rot: DQuat) -> (DVec3, DVec3) {
+pub fn wheel_heading(
+    chassis_rot: GridRot,
+    wheel_local_rot: DQuat,
+    axle: DVec3,
+    steering_axis: DVec3,
+) -> Option<(DVec3, DVec3)> {
     let wheel_rot = chassis_rot.0 * wheel_local_rot;
-    let wheel_frame = GridRot(wheel_rot);
-    (
-        VehicleFrame::forward(wheel_frame),
-        VehicleFrame::right(wheel_frame),
-    )
+    let right = axle.try_normalize()?;
+    let forward = steering_axis.cross(right).try_normalize()?;
+    Some((wheel_rot * forward, wheel_rot * right))
 }
 
 /// Linear velocity of a point on a rigid body: `v + ω × r`, where `r` is
@@ -141,8 +148,40 @@ mod tests {
         // incorrectly leave it in the renderer's -Z direction.
         let site_rotation = DQuat::from_rotation_y(core::f64::consts::FRAC_PI_2);
         let chassis_rot = GridRot(site_rotation);
-        let (forward, right) = wheel_heading(chassis_rot, DQuat::IDENTITY);
+        let (forward, right) =
+            wheel_heading(chassis_rot, DQuat::IDENTITY, DVec3::X, DVec3::Y).unwrap();
         approx(forward, DVec3::NEG_X);
         approx(right, VehicleFrame::right(chassis_rot));
+    }
+
+    #[test]
+    fn wheel_heading_follows_authored_axle_and_steering_axes() {
+        let (forward, right) = wheel_heading(
+            GridRot(DQuat::IDENTITY),
+            DQuat::IDENTITY,
+            DVec3::Z,
+            DVec3::Y,
+        )
+        .unwrap();
+        approx(forward, DVec3::X);
+        approx(right, DVec3::Z);
+        assert!(
+            wheel_heading(
+                GridRot(DQuat::IDENTITY),
+                DQuat::IDENTITY,
+                DVec3::Y,
+                DVec3::Y
+            )
+            .is_none()
+        );
+        assert!(
+            wheel_heading(
+                GridRot(DQuat::IDENTITY),
+                DQuat::IDENTITY,
+                DVec3::ZERO,
+                DVec3::Y
+            )
+            .is_none()
+        );
     }
 }
