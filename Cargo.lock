@@ -8264,6 +8264,7 @@ dependencies = [
  "big_space",
  "image",
  "js-sys",
+ "lunco-api",
  "lunco-api-contracts",
  "lunco-api-transport",
  "lunco-assets",

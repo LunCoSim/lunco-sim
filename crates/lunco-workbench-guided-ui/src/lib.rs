@@ -47,6 +47,9 @@ pub struct GuidedOverlay {
     /// Twin whose scenario currently owns this presentation, or `None` for an
     /// application/core presentation.
     pub owner_twin: Option<lunco_workspace::TwinId>,
+    /// Stable identity of the scenario that last authored the active coach
+    /// tour. The application host uses it to route Stop to the scenario owner.
+    pub owner_script: Option<lunco_core::GlobalEntityId>,
     /// One-line instruction shown at the top of the HUD card. Empty = hidden.
     pub hint: String,
     /// Pre-formatted objectives checklist block (one objective per line, with a
@@ -423,6 +426,8 @@ fn on_set_tour_step(
         title: cmd.title.clone(),
         body: cmd.body.clone(),
     });
+    let owner = lunco_scripting_bridge_core::current_self();
+    hud.owner_script = (owner != 0).then(|| lunco_core::GlobalEntityId::from_raw(owner));
     hud.reported_missing_anchor = None;
     hud.recovery = None;
 }
@@ -683,7 +688,7 @@ fn draw_guided_recovery(
                             ui,
                             UiIcon::Stop,
                             "Stop",
-                            "Stop the guided and clear its owned scene",
+                            "Stop this guided lesson and keep the current scene open",
                         )
                         .clicked()
                         {
@@ -1288,7 +1293,9 @@ fn draw_tour(
                                 }
                                 if ui
                                     .button(egui::RichText::new("Stop").color(muted))
-                                    .on_hover_text("Stop this guided and clear its scene")
+                                    .on_hover_text(
+                                        "Stop this guided lesson and keep the current scene open",
+                                    )
                                     .clicked()
                                 {
                                     stop = true;
@@ -1469,11 +1476,33 @@ mod tests {
     }
 
     #[test]
+    fn tour_step_records_the_authored_scenario_identity() {
+        let mut app = App::new();
+        app.add_plugins(GuidedOverlayPlugin);
+        let owner = lunco_core::GlobalEntityId::from_raw(91);
+        let _script = lunco_scripting_bridge_core::ScriptEntityScope::enter(owner.get());
+
+        app.world_mut().trigger(SetTourStep {
+            index: 0,
+            total: 1,
+            anchor: String::new(),
+            title: "Lesson".into(),
+            body: "Step".into(),
+        });
+
+        assert_eq!(
+            app.world().resource::<GuidedOverlay>().owner_script,
+            Some(owner)
+        );
+    }
+
+    #[test]
     fn closing_a_twin_clears_every_field_owned_by_that_twin_only() {
         let twin = lunco_workspace::TwinId::new(17);
         let other_twin = lunco_workspace::TwinId::new(23);
         let mut hud = GuidedOverlay {
             owner_twin: Some(twin),
+            owner_script: Some(lunco_core::GlobalEntityId::from_raw(17)),
             hint: "step one".into(),
             objectives: "objective".into(),
             action_tool: "lesson".into(),
@@ -1504,6 +1533,7 @@ mod tests {
         clear_overlay_for_twin(&mut hud, twin);
 
         assert_eq!(hud.owner_twin, None);
+        assert_eq!(hud.owner_script, None);
         assert!(hud.hint.is_empty());
         assert!(hud.objectives.is_empty());
         assert!(hud.action_tool.is_empty());

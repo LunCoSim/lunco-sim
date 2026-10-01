@@ -72,7 +72,15 @@ impl Panel for UsdViewportPanel {
             .resource::<UsdViewportState>()
             .and_then(UsdViewportState::focused_view_id)
         else {
-            ui.centered_and_justified(|ui| ui.label("No USD preview is open."));
+            ui.centered_and_justified(|ui| {
+                ui.vertical_centered(|ui| {
+                    ui.heading("No USD preview open");
+                    ui.label(
+                        "Select a USD file in Twin Browser or Files to open an isolated preview here.",
+                    );
+                    ui.label("This does not replace the live scene in View.");
+                });
+            });
             return;
         };
         render_preview_view(ui, ctx, view, true);

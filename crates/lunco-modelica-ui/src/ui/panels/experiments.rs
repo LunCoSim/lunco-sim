@@ -1565,15 +1565,28 @@ fn render_experiments_plot_inner(
     // render an empty plot widget plus any live overlays so the
     // Graphs tab never collapses to a blank panel.
     let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc_ctx(ctx) else {
-        // No doc resolved yet — draw just the doc badge. Action
-        // buttons (New / Dup / Fit / CSV) live in the Graphs panel's
-        // shared header, rendered above this body in every state.
         let col_muted = ctx
             .resource_expect::<lunco_theme::Theme>()
             .tokens
             .text_subdued;
+        if extras.is_empty() {
+            ui.centered_and_justified(|ui| {
+                ui.vertical_centered(|ui| {
+                    ui.heading("No Modelica model selected");
+                    ui.label("Open a model to browse variables and plot its results.");
+                    if ui.button("Browse models").clicked() {
+                        ctx.trigger(lunco_workbench_core::commands::FocusPanel {
+                            id: crate::ui::panels::welcome::WELCOME_PANEL_ID
+                                .as_str()
+                                .to_owned(),
+                        });
+                    }
+                });
+            });
+            return ExpPlotSummary::default();
+        }
         ui.label(
-            egui::RichText::new("(no model)  ·  0 vars")
+            egui::RichText::new("No Modelica model selected · live telemetry is shown below")
                 .color(col_muted)
                 .small(),
         );

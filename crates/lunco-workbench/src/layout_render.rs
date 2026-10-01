@@ -1190,6 +1190,8 @@ pub(super) fn render_layout(
             || viewport::layout_contains_panel(layout, VIEWPORT_PANEL_ID);
         if viewport_visible {
             let mut activate = None;
+            let card_width = (ctx.viewport_rect().width() - theme.spacing.window_padding * 4.0)
+                .clamp(0.0, 560.0);
             egui::Area::new(egui::Id::new("lunco_viewport_empty_placeholder"))
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
                 .interactable(!actions.is_empty())
@@ -1209,13 +1211,24 @@ pub(super) fn render_layout(
                                 theme.spacing.window_padding.round() as i8
                             ))
                             .show(ui, |ui| {
-                                ui.set_width(460.0);
-                                ui.heading(message);
+                                ui.set_width(card_width);
+                                ui.heading(
+                                    egui::RichText::new(message).text_style(
+                                        lunco_theme::TypographyRole::Title.text_style(),
+                                    ),
+                                );
                                 if let Some(guidance) = guidance {
-                                    ui.label(guidance);
+                                    ui.label(egui::RichText::new(guidance).text_style(
+                                        lunco_theme::TypographyRole::Body.text_style(),
+                                    ));
                                 }
-                                ui.add_space(theme.spacing.item_spacing);
+                                ui.add_space(theme.spacing.item_spacing * 2.0);
                                 ui.vertical(|ui| {
+                                    let action_height = ui
+                                        .spacing()
+                                        .interact_size
+                                        .y
+                                        .max(theme.spacing.titlebar_control_size.y);
                                     for (index, action) in actions.iter().enumerate() {
                                         let button = egui::Button::new(action.label.as_str())
                                             .corner_radius(theme.rounding.button);
@@ -1228,10 +1241,7 @@ pub(super) fn render_layout(
                                         };
                                         if ui
                                             .add_sized(
-                                                [
-                                                    ui.available_width(),
-                                                    ui.spacing().interact_size.y,
-                                                ],
+                                                [ui.available_width(), action_height],
                                                 button,
                                             )
                                             .clicked()
