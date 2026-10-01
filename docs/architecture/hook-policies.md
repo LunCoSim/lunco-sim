@@ -377,15 +377,17 @@ cycle; the `RuntimeCycleSet::Presentation` labels do not create a separate
 schedule or cadence. The production hook-policy test checks off-cycle
 rejection. `test_camera_presentation_owner.rhai` reads the active camera
 through `ReadExposures`; `test_camera_avatar_fallback.rhai`,
-`test_camera_first_fallback.rhai`, and `test_camera_explicit_selection.rhai`
-verify fallback and explicit-selection priority in the windowed application.
+`test_camera_transient_avatar.rhai`, and `test_camera_explicit_selection.rhai`
+verify avatar availability and explicit-selection priority in the windowed application.
 
 With no CameraTrack or explicit operator/director selection, the shipped
 `camera.default_presentation` policy prefers the unique `LocalEmbodiment`
 camera, then the first authored camera under the active scene root in stable
-USD-path order. It requests generated framing only when the standalone host
-asks for it and no authored camera is available. Rust validates and realizes
-the closed result.
+USD-path order. Rust validates and realizes the closed `avatar`, `first`, or
+`none` result. Independently, `camera.scene_avatar` supplies a scene-owned
+transient avatar and typed controls when no authored avatar exists; its
+Application/Presentation/Preparation invocation never changes director or
+operator ownership. See [the view contract](17-view-and-intent.md).
 
 The runtime UI recording-contract selector invokes `runtime.ui.recording` as
 `Application/Ui/Preparation` with the `Time<Real>` Application clock. It runs
@@ -451,7 +453,7 @@ let hooks = list_hooks();
 let result = invoke_hook("camera.default_presentation", [#{
     local_avatar_camera_count: 1,
     camera_track_count: 0,
-    host_requests_generated: false,
+    authored_camera_count: 1,
 }]);
 ```
 

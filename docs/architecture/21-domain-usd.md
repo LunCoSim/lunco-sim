@@ -906,14 +906,16 @@ complete inactive Bevy `Camera3d` pipeline (see [`17-view-and-intent.md §6`](17
 - **Initial presentation:** a `CameraTrack` or explicit operator/director
   selection takes priority. Otherwise the active-root `camera.default_presentation`
   Rhai policy prefers the unique `LocalEmbodiment` camera, then the first
-  authored camera in stable USD-path order. A standalone window host retains
-  generated framing when the active root has no authored camera. Rust validates
-  and realizes the policy result; generated framing is one render-free
-  `SceneCamera` plus one unscoped directional light under the active
-  `UsdSceneRoot`, created only after projected bounds are finite. The pair is
-  removed on authored/operator takeover or `SceneTeardown`. Missing, faulting,
-  or invalid policy results remain structured diagnostics; headless hosts can
-  leave convenience framing disabled. One camera-contract finding set owns
+  authored camera in stable USD-path order. Independently, the windowed
+  `camera.scene_avatar` Rhai policy provisions a transient local avatar in
+  every active scene that lacks an authored one. The shared camera owner
+  validates its controls and creates the rig under the scene Grid without a
+  `UsdPrimPath` or a document operation. Saving preserves the authored scene;
+  camera switches preserve the transient avatar, and authored-avatar takeover
+  or `SceneTeardown` removes it. Finite geometry supplies framing; empty scenes
+  use the explicit host framing radius. Missing, faulting, or invalid policy
+  results remain structured diagnostics. Headless hosts leave provisioning
+  disabled. One camera-contract finding set owns
   readiness and severity; `RuntimeDiagnostics` and Recent Events project that
   set. An unresolved director key is a warning while a valid operator camera
   owns the viewport, and becomes an error when director control resumes.

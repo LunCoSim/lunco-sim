@@ -191,3 +191,23 @@ responsibilities.
 
 Report the owner-side declaration, manifest/source files, reflected signature,
 failure semantics, focused checks, and the production Rhai test evidence.
+
+## Scene avatar availability
+
+`lunco-camera-core` declares `camera.scene_avatar(ctx: Map) -> Map` independently
+of camera selection. The windowed camera owner calls it in
+Application/Presentation/Preparation on scene/projection/policy changes. The
+application policy returns `create: bool` and, for creation, `bindings` containing
+`[intent, port, f64 factor]` rows. Rust validates the shared control vocabulary,
+installs the scene-owned transient rig, and reports invalid results through the
+camera contract. The rig has no USD prim identity and does not enter saved
+layers. Keep director/operator selection independent of avatar availability;
+reuse an authored avatar and retire transient rigs at scene teardown.
+
+Verify both avatar-free and authored-avatar cases with
+[`scene_avatar_presence.rhai`](../../assets/scenarios/tests/scene_avatar_presence.rhai)
+in an owned windowed production session, supplying its exact `doc_id` and
+`authored_avatar_path` (unit for a transient avatar). The scenario saves an
+ignored artifact and compares all document layers. The production
+[`test_hook_policies.rhai`](../../assets/scripting/tests/test_hook_policies.rhai)
+covers declaration and off-cycle rejection.

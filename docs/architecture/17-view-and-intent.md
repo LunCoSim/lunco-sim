@@ -232,12 +232,35 @@ explicit operator/director selection keep priority. When neither exists, the
 camera adapter considers candidates under the active scene root and asks the
 `camera.default_presentation` Rhai policy to prefer the unique
 `LocalEmbodiment` camera, then the first authored camera in stable USD-path
-order. Rust validates and realizes that closed decision. A standalone window
-host retains generated framing when the active scene has no authored camera;
-the generated camera and directional light frame finite projected bounds and
-are removed when authored presentation takes ownership or the scene tears
-down. Missing, faulting, or invalid policy results remain structured camera
-diagnostics. Failed explicit requests never fall through to another camera.
+order. Rust validates and realizes that closed decision.
+
+The windowed host independently asks `camera.scene_avatar(ctx: Map) -> Map`
+for avatar availability. The application Rhai policy supplies a transient local
+avatar when the active scene has none, including scenes with authored cameras
+or a director track. Its result contains `create: bool` and, when creating,
+`bindings: Array<Array>` of `[intent, port, f64 factor]`. The camera owner
+validates those entries through the shared control vocabulary and installs
+`ControlBinding` and `InputPorts`; the avatar owner realizes free-flight input
+and collision-aware movement. Calls use Application/Presentation/Preparation
+and the presentation clock. Headless hosts leave provisioning disabled.
+
+The rig is a child of the active scene Grid, with a derived scene-avatar
+identity and no `UsdPrimPath`. It never edits a USD document or journals a prim,
+so `SaveDocument` and `SaveAsDocument` preserve an avatar-free authored scene.
+An authored avatar is reused unchanged. A transient avatar remains available
+across camera switches and is removed on authored-avatar takeover or scene
+teardown. Placement frames finite projected geometry; a scene with no geometry
+uses the explicit `empty_scene_framing_radius` setting around its root origin.
+Invalid geometry, settings, or policy results produce camera diagnostics rather
+than substitute poses. Provisioning is change-gated; avatar movement does not
+reopen it. Convenience lighting is supplied only for scenes without authored
+cameras, tracks, or an unscoped directional light.
+
+The production `scene_avatar_presence.rhai` scenario checks both authored and
+transient cases, saves a test artifact, and compares the document layers.
+`test_hook_policies.rhai` checks declaration and off-cycle rejection. Missing,
+faulting, or invalid policies remain structured camera diagnostics. Failed
+explicit camera requests never fall through to another camera.
 While a valid operator camera owns the viewport, unresolved director-track keys
 are dormant warnings; returning control with `ResumeCameraDirector` makes them
 active contract errors again.

@@ -9,7 +9,7 @@
 //! - the switch here rebinds the viewport's active camera;
 //! - the workbench sets visibility + rect from its layout perspective.
 //!
-//! This lives in `lunco-usd-bevy-camera` (avatar-free, present in every windowed
+//! This lives in `lunco-usd-bevy-camera` (without avatar runtime dependencies, present in every windowed
 //! binary) so switching works in a static/headless world with no avatar and no
 //! input. Camera selection is an intent-level operation: a [`SceneCamera`] can
 //! be selected before a render host has attached its [`RenderTarget`] (as in a
@@ -30,9 +30,10 @@
 use bevy::camera::{Exposure, RenderTarget, Viewport, primitives::Aabb};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_camera_core::DEFAULT_PRESENTATION_HOOK;
+use lunco_camera_core::{DEFAULT_PRESENTATION_HOOK, SCENE_AVATAR_HOOK};
+use lunco_control_core::ControlBinding;
 use lunco_core::{Command, on_command};
-use lunco_embodiment_core::roles::{LocalEmbodiment, TheLocalEmbodiment};
+use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment, TheLocalEmbodiment};
 use lunco_hooks::HookValue;
 use lunco_render::SceneCamera;
 use lunco_spatial::{OriginAnchor, WorldGrid};
@@ -106,16 +107,7 @@ pub struct CameraSelectionStatus {
 #[derive(Event, Clone, Copy, Debug, Default)]
 pub struct CameraSelectionStatusChanged;
 
-/// Hook seam for the application-level initial presentation decision.
-///
-/// The camera package supplies only derived USD/ECS facts and realizes the
-/// closed decision returned by the policy. The application policy may select
-/// an authored camera by stable USD-path order; Rust resolves that choice from
-/// active-root candidates. The interactive application registers the Rhai
-/// implementation from `assets/scripting/policy`; headless hosts can leave
-/// the convenience policy absent and retain an explicit no-camera state.
-
-/// Marks the camera generated for an explicit standalone-assembly presentation.
+/// Marks the transient avatar camera supplied to a viewed scene.
 ///
 /// This is intentionally separate from [`UsdPrimPath`]: the camera is a
 /// presentation projection of the mounted assembly, not authored USD content.
@@ -134,12 +126,12 @@ pub struct StandalonePresentationLight;
 /// so they retain the authored camera contract and never create render-only
 /// scene content. The generated entities are children of the active
 /// [`lunco_usd_bevy_scene::UsdSceneRoot`] and are therefore reclaimed with that Twin scene;
-/// [`reset_standalone_presentation`] also clears them at the explicit teardown
+/// [`reset_camera_selection`] also clears them at the explicit teardown
 /// boundary before a replacement scene is admitted.
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub struct StandalonePresentationState {
-    /// Whether the current host requests a generated presentation when an
-    /// authored camera-track/LocalEmbodiment presentation is absent.
+    /// Whether the host requests a transient avatar when the active scene
+    /// has no authored local avatar.
     pub enabled: bool,
     /// Active scene root that owns the generated presentation, if any.
     pub root: Option<Entity>,
@@ -150,9 +142,9 @@ pub struct StandalonePresentationState {
     /// The owner is waiting for projection or for deferred entity insertion.
     pub pending: bool,
     /// A terminal presentation reason for the active root, if generation is
-    /// impossible (for example, the assembly has no renderable bounds).
+    /// rejected (for example, renderable bounds are non-finite).
     pub error: Option<String>,
-    /// Hook-registry generation used for the last default-presentation
+    /// Hook-registry generation used for the last avatar-presence
     /// decision. A policy replacement reopens the decision without polling
     /// the hook on every frame.
     pub policy_generation: u64,
@@ -165,6 +157,8 @@ pub struct StandalonePresentationState {
 pub struct StandalonePresentationSettings {
     /// Multiplier applied to the distance needed to fit the bounding sphere.
     pub framing_margin: f32,
+    /// Framing radius used only for a scene with no renderable geometry.
+    pub empty_scene_framing_radius: f32,
     /// Camera position direction from the framed assembly center.
     pub camera_direction: Vec3,
     /// Light position direction from the framed assembly center.
@@ -185,6 +179,7 @@ impl Default for StandalonePresentationSettings {
     fn default() -> Self {
         Self {
             framing_margin: 1.35,
+            empty_scene_framing_radius: 1.0,
             camera_direction: Vec3::new(1.0, 0.65, 1.0),
             light_direction: Vec3::new(-1.0, 1.5, 1.0),
             light_illuminance: 128_000.0,
@@ -197,6 +192,12 @@ impl Default for StandalonePresentationSettings {
 
 impl StandalonePresentationSettings {
     fn validate(&self) -> Result<(), String> {
+        if !self.empty_scene_framing_radius.is_finite() || self.empty_scene_framing_radius <= 0.0 {
+            return Err(
+                "standalone presentation empty_scene_framing_radius must be finite and positive"
+                    .into(),
+            );
+        }
         if !(self.framing_margin.is_finite() && self.framing_margin >= 1.0) {
             return Err(
                 "standalone presentation framing_margin must be finite and at least 1.0"
@@ -246,7 +247,6 @@ enum DefaultPresentationAction {
     None,
     Embodiment,
     FirstAuthored,
-    Generated,
 }
 
 /// Consult the application presentation policy over facts already derived by
@@ -254,17 +254,12 @@ enum DefaultPresentationAction {
 /// an absent hook, a fault, or any other value is an explicit presentation
 /// error, never a request to use a guessed camera.
 fn default_presentation_action(
-    host_requests_generated: bool,
     authored_camera_count: usize,
     camera_track_count: usize,
     local_avatar_camera_count: usize,
     runtime_context: lunco_core::RuntimeExecutionContext,
 ) -> Result<DefaultPresentationAction, String> {
     let context = HookValue::map([
-        (
-            "host_requests_generated",
-            HookValue::Bool(host_requests_generated),
-        ),
         (
             "authored_camera_count",
             HookValue::Int(authored_camera_count as i64),
@@ -295,12 +290,11 @@ fn default_presentation_action(
         Some("none") => Ok(DefaultPresentationAction::None),
         Some("avatar") => Ok(DefaultPresentationAction::Embodiment),
         Some("first") => Ok(DefaultPresentationAction::FirstAuthored),
-        Some("generated") => Ok(DefaultPresentationAction::Generated),
         Some(other) => Err(format!(
             "camera default-presentation policy '{DEFAULT_PRESENTATION_HOOK}' returned unsupported action '{other}'"
         )),
         None => Err(format!(
-            "camera default-presentation policy '{DEFAULT_PRESENTATION_HOOK}' must return 'none', 'avatar', 'first', or 'generated'"
+            "camera default-presentation policy '{DEFAULT_PRESENTATION_HOOK}' must return 'none', 'avatar', or 'first'"
         )),
     }
 }
@@ -1134,11 +1128,7 @@ pub fn camera_selection_status_changed(
         || !removed_tracks.is_empty()
 }
 
-/// Keep a windowed standalone USD assembly presentable when it has no authored
-/// camera track or LocalEmbodiment camera. This is an explicit host policy, not a
-/// fallback in the camera reconciler: the generated camera and light are
-/// parented below the active USD scene root and are removed at the scene
-/// boundary or as soon as an authored presentation takes ownership.
+/// Derived scene facts used to provision a transient avatar without writing USD.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct StandalonePresentationQueries<'w, 's> {
     scene_roots: Query<'w, 's, (), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
@@ -1156,12 +1146,7 @@ pub(crate) struct StandalonePresentationQueries<'w, 's> {
     >,
     bounds: Query<'w, 's, (Entity, &'static Aabb, &'static GlobalTransform)>,
     tracks: Query<'w, 's, Entity, With<crate::camera_track::CameraTrack>>,
-    authored_cameras: Query<
-        'w,
-        's,
-        (Entity, &'static UsdPrimPath),
-        (With<SceneCamera>, Without<StandalonePresentationCamera>),
-    >,
+    authored_cameras: Query<'w, 's, Entity, (With<SceneCamera>, With<UsdPrimPath>)>,
     avatar_cameras: Query<
         'w,
         's,
@@ -1181,10 +1166,60 @@ pub(crate) struct StandalonePresentationQueries<'w, 's> {
         Option<&'static bevy::camera::visibility::RenderLayers>,
         With<DirectionalLight>,
     >,
+    root_identities: Query<
+        'w,
+        's,
+        &'static lunco_core::GlobalEntityId,
+        With<lunco_usd_bevy_scene::UsdSceneRoot>,
+    >,
     root_transforms:
         Query<'w, 's, &'static GlobalTransform, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
 }
 
+/// Reconcile avatar availability only at scene/projection/policy boundaries.
+/// Avatar movement does not invalidate this provisioning pass.
+pub(crate) fn scene_avatar_inputs_changed(
+    mount: Res<lunco_core::SceneMountState>,
+    settings: Res<StandalonePresentationSettings>,
+    presentation: Res<StandalonePresentationState>,
+    added: Query<
+        Entity,
+        Or<(
+            Added<SceneCamera>,
+            Added<LocalEmbodiment>,
+            Added<lunco_usd_bevy_scene::UsdSceneProjected>,
+            Added<Aabb>,
+            Added<lunco_core::GlobalEntityId>,
+            Added<crate::camera_track::CameraTrack>,
+        )>,
+    >,
+    mut removed_cameras: RemovedComponents<SceneCamera>,
+    mut removed_avatars: RemovedComponents<LocalEmbodiment>,
+    mut removed_geometry: RemovedComponents<lunco_usd_bevy_scene::UsdSceneGeometryPending>,
+    mut removed_roots: RemovedComponents<lunco_usd_bevy_scene::UsdSceneRoot>,
+    mut generation: Local<Option<u64>>,
+) -> bool {
+    let policy_changed =
+        generation.replace(lunco_hooks::generation()) != Some(lunco_hooks::generation());
+    let cameras = removed_cameras.read().next().is_some();
+    let avatars = removed_avatars.read().next().is_some();
+    let geometry = removed_geometry.read().next().is_some();
+    let roots = removed_roots.read().next().is_some();
+    policy_changed
+        || mount.is_changed()
+        || settings.is_changed()
+        || presentation.is_changed()
+        || presentation.pending
+        || !added.is_empty()
+        || cameras
+        || avatars
+        || geometry
+        || roots
+}
+
+/// Apply the application avatar policy using the shared scene-owned camera rig.
+/// An authored avatar remains its USD owner's responsibility. Transient rigs
+/// survive director/operator camera switches and are reclaimed with the scene.
 pub(crate) fn ensure_standalone_presentation(
     time: Res<Time<Real>>,
     mount: Res<lunco_core::SceneMountState>,
@@ -1244,28 +1279,6 @@ pub(crate) fn ensure_standalone_presentation(
         });
     }
 
-    // An explicit operator/director/policy selection is a terminal takeover of
-    // the convenience presentation for this root. Retire the generated pair
-    // before the next selection reconciliation and retain the processed root;
-    // otherwise the generated policy could recreate its old camera on a later
-    // update and steal the viewport back.
-    if selection.requested.is_some() && selection.owner != CameraSelectionOwner::Generated {
-        despawn_generated_presentation(
-            &generated_entities,
-            &mut selection,
-            &mut viewport,
-            &mut commands,
-        );
-        let enabled = presentation.enabled;
-        presentation.set_if_neq(StandalonePresentationState {
-            enabled,
-            root: Some(root),
-            policy_generation: lunco_hooks::generation(),
-            ..default()
-        });
-        return;
-    }
-
     let authored_track = queries.tracks.iter().any(|entity| {
         entity_belongs_to_root(
             entity,
@@ -1284,7 +1297,7 @@ pub(crate) fn ensure_standalone_presentation(
             &queries.entities,
         )
     });
-    if authored_track || authored_avatar {
+    if authored_avatar {
         despawn_generated_presentation(
             &generated_entities,
             &mut selection,
@@ -1361,156 +1374,14 @@ pub(crate) fn ensure_standalone_presentation(
     }
 
     let policy_generation = lunco_hooks::generation();
-    let authored_cameras: Vec<(Entity, String)> = queries
-        .authored_cameras
-        .iter()
-        .filter(|(entity, _)| {
-            entity_belongs_to_root(
-                *entity,
-                root,
-                &queries.scene_roots,
-                &queries.child_of,
-                &queries.entities,
-            )
-        })
-        .map(|(entity, prim)| (entity, prim.path.clone()))
-        .collect();
-    let authored_camera_count = authored_cameras.len();
-    let camera_track_count = queries
-        .tracks
-        .iter()
-        .filter(|entity| {
-            entity_belongs_to_root(
-                *entity,
-                root,
-                &queries.scene_roots,
-                &queries.child_of,
-                &queries.entities,
-            )
-        })
-        .count();
-    let local_avatar_camera_count = queries
-        .avatar_cameras
-        .iter()
-        .filter(|entity| {
-            entity_belongs_to_root(
-                *entity,
-                root,
-                &queries.scene_roots,
-                &queries.child_of,
-                &queries.entities,
-            )
-        })
-        .count();
     if presentation.root == Some(root)
         && !presentation.pending
         && presentation.camera.is_none()
         && presentation.policy_generation == policy_generation
-        && presentation
-            .error
-            .as_deref()
-            .is_none_or(|error| error.starts_with("[camera-policy]"))
+        && !settings.is_changed()
     {
         return;
     }
-    let action = match default_presentation_action(
-        presentation.enabled,
-        authored_camera_count,
-        camera_track_count,
-        local_avatar_camera_count,
-        presentation_runtime_context(&time),
-    ) {
-        Ok(action) => action,
-        Err(error) => {
-            despawn_generated_presentation(
-                &generated_entities,
-                &mut selection,
-                &mut viewport,
-                &mut commands,
-            );
-            let message = format!("[camera-policy] {error}");
-            let enabled = presentation.enabled;
-            presentation.set_if_neq(StandalonePresentationState {
-                enabled,
-                root: Some(root),
-                policy_generation,
-                error: Some(message.clone()),
-                ..default()
-            });
-            error!("[camera] {message}");
-            return;
-        }
-    };
-    if action == DefaultPresentationAction::None {
-        despawn_generated_presentation(
-            &generated_entities,
-            &mut selection,
-            &mut viewport,
-            &mut commands,
-        );
-        let enabled = presentation.enabled;
-        presentation.set_if_neq(StandalonePresentationState {
-            enabled,
-            root: Some(root),
-            policy_generation,
-            ..default()
-        });
-        return;
-    }
-    if action == DefaultPresentationAction::Embodiment {
-        despawn_generated_presentation(
-            &generated_entities,
-            &mut selection,
-            &mut viewport,
-            &mut commands,
-        );
-        let message =
-            "[camera-policy] policy selected avatar presentation, but no valid LocalEmbodiment camera is available"
-                .to_string();
-        let enabled = presentation.enabled;
-        presentation.set_if_neq(StandalonePresentationState {
-            enabled,
-            root: Some(root),
-            policy_generation,
-            error: Some(message.clone()),
-            ..default()
-        });
-        error!("[camera] {message}");
-        return;
-    }
-    if action == DefaultPresentationAction::FirstAuthored {
-        let Some(camera) = first_authored_camera(authored_cameras.iter().cloned()) else {
-            let message =
-                "[camera-policy] policy selected the first authored camera, but the active scene has none"
-                    .to_string();
-            let enabled = presentation.enabled;
-            presentation.set_if_neq(StandalonePresentationState {
-                enabled,
-                root: Some(root),
-                policy_generation,
-                error: Some(message.clone()),
-                ..default()
-            });
-            error!("[camera] {message}");
-            return;
-        };
-        despawn_generated_presentation(
-            &generated_entities,
-            &mut selection,
-            &mut viewport,
-            &mut commands,
-        );
-        let enabled = presentation.enabled;
-        presentation.set_if_neq(StandalonePresentationState {
-            enabled,
-            root: Some(root),
-            policy_generation,
-            ..default()
-        });
-        commands.trigger(ActivateCamera::policy(camera));
-        return;
-    }
-
     let existing_camera = queries
         .generated_cameras
         .iter()
@@ -1542,7 +1413,56 @@ pub(crate) fn ensure_standalone_presentation(
         .iter()
         .any(|layers| layers.is_none());
 
+    if let Some(camera) =
+        existing_camera.filter(|_| presentation.policy_generation == policy_generation)
+    {
+        let should_activate = presentation.pending;
+        if presentation.pending {
+            presentation.pending = false;
+        }
+        if should_activate && selection.requested.is_none() && !authored_track {
+            commands.trigger(ActivateCamera::generated(camera));
+        }
+        return;
+    }
+    let decision = lunco_hooks::invoke_with_context(
+        SCENE_AVATAR_HOOK,
+        &[HookValue::map([(
+            "local_avatar_camera_count",
+            HookValue::Int(0),
+        )])],
+        presentation_runtime_context(&time),
+    )
+    .ok_or_else(|| format!("avatar policy '{SCENE_AVATAR_HOOK}' is not registered"))
+    .and_then(|result| result.map_err(|error| error.to_string()))
+    .and_then(parse_scene_avatar_decision);
+    let binding = match decision {
+        Ok(Some(binding)) => binding,
+        result => {
+            despawn_generated_presentation(
+                &generated_entities,
+                &mut selection,
+                &mut viewport,
+                &mut commands,
+            );
+            let error = result.err().map(|error| format!("[camera-policy] {error}"));
+            if let Some(message) = &error {
+                error!("[camera] {message}");
+            }
+            let enabled = presentation.enabled;
+            presentation.set_if_neq(StandalonePresentationState {
+                enabled,
+                root: Some(root),
+                policy_generation,
+                error,
+                ..default()
+            });
+            return;
+        }
+    };
+    let inputs = lunco_port_core::InputPorts::new(&binding.ports().collect::<Vec<_>>());
     if let Some(camera) = existing_camera {
+        commands.entity(camera).insert((binding, inputs));
         let was_known = presentation.camera == Some(camera);
         let should_activate = presentation.pending || !was_known;
         let enabled = presentation.enabled;
@@ -1554,41 +1474,74 @@ pub(crate) fn ensure_standalone_presentation(
             policy_generation,
             ..default()
         });
-        if should_activate {
+        if should_activate && selection.requested.is_none() && !authored_track {
             commands.trigger(ActivateCamera::generated(camera));
         }
         return;
     }
 
-    let Some((min, max)) = standalone_presentation_bounds(
+    let framing = standalone_presentation_bounds(
         root,
         &queries.scene_roots,
         &queries.child_of,
         &queries.entities,
         &queries.root_transforms,
         &queries.bounds,
-    ) else {
-        let message =
-            "standalone USD assembly has no finite renderable bounds for generated presentation"
-                .to_string();
-        if presentation.error.as_deref() != Some(message.as_str()) {
+    );
+    let (center, radius) = match framing {
+        Ok(Some((min, max))) => ((min + max) * 0.5, ((max - min) * 0.5).length()),
+        // An empty scene has no geometry to frame. This is its explicit host
+        // placement contract, never a substitute for invalid bounds.
+        Ok(None) => (Vec3::ZERO, settings.empty_scene_framing_radius),
+        Err(message) => {
             let enabled = presentation.enabled;
             presentation.set_if_neq(StandalonePresentationState {
                 enabled,
                 root: Some(root),
+                policy_generation,
                 error: Some(message.clone()),
                 ..default()
             });
             error!("[camera] {message}");
+            return;
         }
+    };
+    let (camera_transform, light_transform, projection) =
+        standalone_presentation_pose(center, radius, &settings);
+    if !camera_transform.translation.is_finite()
+        || !light_transform.translation.is_finite()
+        || !camera_transform.rotation.is_finite()
+        || !light_transform.rotation.is_finite()
+    {
+        let message = "scene avatar framing exceeds the finite camera range".to_string();
+        let enabled = presentation.enabled;
+        presentation.set_if_neq(StandalonePresentationState {
+            enabled,
+            root: Some(root),
+            policy_generation,
+            error: Some(message.clone()),
+            ..default()
+        });
+        error!("[camera] {message}");
+        return;
+    }
+    let Ok(root_identity) = queries.root_identities.get(root) else {
+        presentation.pending = true;
         return;
     };
-
-    let (camera_transform, light_transform, projection) =
-        standalone_presentation_pose(min, max, &settings);
     let camera = commands
         .spawn((
             StandalonePresentationCamera,
+            (
+                Embodiment,
+                LocalEmbodiment,
+                binding,
+                inputs,
+                lunco_core::Provenance::Derived {
+                    parent: root_identity.get(),
+                    role: "scene-avatar".into(),
+                },
+            ),
             SceneCamera::agx(),
             Exposure {
                 ev100: settings.camera_exposure_ev100,
@@ -1606,10 +1559,19 @@ pub(crate) fn ensure_standalone_presentation(
             ViewVisibility::default(),
             CellCoord::default(),
             ChildOf(root),
-            Name::new("LunCo standalone presentation"),
+            Name::new("Avatar"),
         ))
         .id();
-    let light = if unscoped_directional_light {
+    let authored_camera = queries.authored_cameras.iter().any(|entity| {
+        entity_belongs_to_root(
+            entity,
+            root,
+            &queries.scene_roots,
+            &queries.child_of,
+            &queries.entities,
+        )
+    });
+    let light = if unscoped_directional_light || authored_camera || authored_track {
         None
     } else {
         Some(
@@ -1645,6 +1607,46 @@ pub(crate) fn ensure_standalone_presentation(
         policy_generation,
         ..default()
     });
+}
+
+fn parse_scene_avatar_decision(value: HookValue) -> Result<Option<ControlBinding>, String> {
+    let Some(HookValue::Bool(create)) = value.get("create") else {
+        return Err("avatar policy must return a boolean create field".into());
+    };
+    if !*create {
+        return Ok(None);
+    }
+    let Some(HookValue::Array(rows)) = value.get("bindings") else {
+        return Err("avatar policy must supply control bindings".into());
+    };
+    let mut entries = Vec::with_capacity(rows.len());
+    for row in rows {
+        let HookValue::Array(fields) = row else {
+            return Err("avatar control binding must be [intent, port, factor]".into());
+        };
+        if fields.len() != 3 {
+            return Err("avatar control binding must be [intent, port, factor]".into());
+        }
+        let intent = fields[0]
+            .as_str()
+            .ok_or_else(|| "avatar control intent must be a string".to_string())?;
+        let port = fields[1]
+            .as_str()
+            .ok_or_else(|| "avatar control port must be a string".to_string())?;
+        let HookValue::Float(factor) = fields[2] else {
+            return Err("avatar control factor must be an f64".into());
+        };
+        if !factor.is_finite() {
+            return Err("avatar control factor must be finite".into());
+        }
+        if lunco_control_core::parse_user_intent(intent).is_none() || port.trim().is_empty() {
+            return Err("avatar policy supplied an invalid control binding".into());
+        }
+        entries.push((intent.to_string(), port.to_string(), factor));
+    }
+    ControlBinding::from_intent_entries(&entries)
+        .map(Some)
+        .ok_or_else(|| "avatar policy supplied no control bindings".into())
 }
 
 fn entity_belongs_to_root(
@@ -1689,9 +1691,14 @@ fn standalone_presentation_bounds(
     q_entities: &Query<Entity>,
     q_root_transforms: &Query<&GlobalTransform, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     q_bounds: &Query<(Entity, &Aabb, &GlobalTransform)>,
-) -> Option<(Vec3, Vec3)> {
-    let root_transform = q_root_transforms.get(root).ok()?;
+) -> Result<Option<(Vec3, Vec3)>, String> {
+    let root_transform = q_root_transforms
+        .get(root)
+        .map_err(|_| "scene root has no transform for avatar placement".to_string())?;
     let root_from_world = root_transform.affine().inverse();
+    if !root_from_world.is_finite() {
+        return Err("scene root has an invalid transform for avatar placement".into());
+    }
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     let mut found = false;
@@ -1704,7 +1711,7 @@ fn standalone_presentation_bounds(
             || !aabb.half_extents.is_finite()
             || !transform.affine().is_finite()
         {
-            return None;
+            return Err("scene has non-finite renderable bounds for avatar placement".into());
         }
         let half = aabb.half_extents.abs();
         let center = aabb.center;
@@ -1715,7 +1722,9 @@ fn standalone_presentation_bounds(
                     let world = transform.affine().transform_point3a(corner);
                     let local: Vec3 = root_from_world.transform_point3a(world).into();
                     if !local.is_finite() {
-                        return None;
+                        return Err(
+                            "scene has non-finite renderable bounds for avatar placement".into(),
+                        );
                     }
                     min = min.min(local);
                     max = max.max(local);
@@ -1724,16 +1733,17 @@ fn standalone_presentation_bounds(
             }
         }
     }
-    (found && (max - min).length_squared() > 0.0).then_some((min, max))
+    if found && (!(max - min).length_squared().is_finite() || (max - min).length_squared() <= 0.0) {
+        return Err("scene has degenerate renderable bounds for avatar placement".into());
+    }
+    Ok(found.then_some((min, max)))
 }
 
 fn standalone_presentation_pose(
-    min: Vec3,
-    max: Vec3,
+    center: Vec3,
+    radius: f32,
     settings: &StandalonePresentationSettings,
 ) -> (Transform, Transform, Projection) {
-    let center = (min + max) * 0.5;
-    let radius = ((max - min) * 0.5).length();
     let camera_direction = settings.camera_direction.normalize();
     let fov = std::f32::consts::FRAC_PI_4;
     let tan_half_fov = (fov * 0.5).tan();
@@ -1900,8 +1910,8 @@ pub(crate) fn camera_contract_inputs_changed(
 }
 
 /// Validate the window presentation contract after USD camera-track plans are
-/// derived. An accepted standalone presentation is handled before the
-/// authored structural scan. Duplicate tracks, absent cameras, unresolved
+/// derived. Transient avatar cameras participate without a USD identity.
+/// Duplicate tracks, absent cameras, unresolved
 /// names, and duplicate active-root tracks are errors owned by the camera
 /// domain. Additive roots do not participate in the single viewport contract.
 #[derive(bevy::ecs::system::SystemParam)]
@@ -1911,15 +1921,8 @@ pub(crate) struct AuthoredAvatarSelection<'w, 's> {
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct AuthoredPresentationQueries<'w, 's> {
+pub(crate) struct AuthoredPresentationQueries<'w> {
     time: Res<'w, Time<Real>>,
-    generated_cameras: Query<'w, 's, Entity, With<StandalonePresentationCamera>>,
-    directional_lights: Query<
-        'w,
-        's,
-        Option<&'static bevy::camera::visibility::RenderLayers>,
-        With<DirectionalLight>,
-    >,
 }
 
 pub(crate) fn validate_authored_camera_contract(
@@ -1941,7 +1944,7 @@ pub(crate) fn validate_authored_camera_contract(
         ),
         With<crate::camera_track::CameraTrack>,
     >,
-    cameras: Query<(Entity, &Name, &UsdPrimPath, Has<LocalEmbodiment>), With<SceneCamera>>,
+    cameras: Query<(Entity, &Name, Option<&UsdPrimPath>, Has<LocalEmbodiment>), With<SceneCamera>>,
     presentation_queries: AuthoredPresentationQueries,
     selection: Res<ViewportCameraSelection>,
     avatar_selection: AuthoredAvatarSelection,
@@ -2032,38 +2035,19 @@ pub(crate) fn validate_authored_camera_contract(
             );
             return;
         }
-        let generated_ready = presentation
-            .camera
-            .is_some_and(|camera| presentation_queries.generated_cameras.contains(camera))
-            && (presentation.light.is_some()
-                || presentation_queries
-                    .directional_lights
-                    .iter()
-                    .any(|layers| layers.is_none()));
-        if generated_ready {
-            publish_camera_contract_status(
-                &mut contract,
-                &mut diagnostics,
-                &mut status,
-                &mut commands,
-                true,
-                Vec::new(),
-            );
-            return;
-        }
     }
 
     let active_root = active_root.expect("active root was checked above");
-    let mut camera_candidates: Vec<(Entity, String, String, bool)> = Vec::new();
+    let mut camera_candidates: Vec<(Entity, String, Option<String>, bool)> = Vec::new();
     let mut user_camera_selected = false;
     for (entity, name, prim, local_avatar) in &cameras {
         if entity_belongs_to_root(entity, active_root, &q_scene_root, &q_child_of, &q_entities) {
             user_camera_selected |= selection.owner() == CameraSelectionOwner::User
-                && selection.matches_requested(entity, Some(prim));
+                && selection.matches_requested(entity, prim);
             camera_candidates.push((
                 entity,
                 name.as_str().to_string(),
-                prim.path.clone(),
+                prim.map(|prim| prim.path.clone()),
                 local_avatar,
             ));
         }
@@ -2118,8 +2102,10 @@ pub(crate) fn validate_authored_camera_contract(
             ));
         } else {
             match default_presentation_action(
-                false,
-                camera_candidates.len(),
+                camera_candidates
+                    .iter()
+                    .filter(|(_, _, path, _)| path.is_some())
+                    .count(),
                 0,
                 local_avatar_names.len(),
                 presentation_runtime_context(&presentation_queries.time),
@@ -2152,9 +2138,10 @@ pub(crate) fn validate_authored_camera_contract(
                     }
                 }
                 Ok(DefaultPresentationAction::FirstAuthored) => {
-                    let authored_cameras = camera_candidates
-                        .iter()
-                        .map(|(entity, _, path, _)| (*entity, path.clone()));
+                    let authored_cameras =
+                        camera_candidates.iter().filter_map(|(entity, _, path, _)| {
+                            path.clone().map(|path| (*entity, path))
+                        });
                     if let Some(camera) = first_authored_camera(authored_cameras) {
                         commands.trigger(ActivateCamera::policy(camera));
                     } else {
@@ -2169,11 +2156,6 @@ pub(crate) fn validate_authored_camera_contract(
                     lunco_core::DiagnosticSeverity::Error,
                     "window-presentation",
                     "[camera-contract] the default presentation policy selected no initial camera",
-                )),
-                Ok(DefaultPresentationAction::Generated) => findings.push(camera_contract_finding(
-                    lunco_core::DiagnosticSeverity::Error,
-                    "window-presentation",
-                    "[camera-policy] the default presentation policy selected generated framing for an authored scene",
                 )),
                 Err(error) => findings.push(camera_contract_finding(
                     lunco_core::DiagnosticSeverity::Error,
@@ -2366,8 +2348,113 @@ mod tests {
             Ok(HookValue::str(if avatar_count == 1 {
                 "avatar"
             } else {
-                "generated"
+                "first"
             }))
+        }
+    }
+
+    #[derive(Resource, Default)]
+    struct AvatarProvisionGateRuns(u32);
+
+    fn count_avatar_provision_gate(mut runs: ResMut<AvatarProvisionGateRuns>) {
+        runs.0 += 1;
+    }
+
+    #[test]
+    fn scene_avatar_gate_ignores_settled_camera_movement() {
+        let mut app = standalone_test_app();
+        standalone_root_with_bounds(&mut app);
+        app.init_resource::<AvatarProvisionGateRuns>().add_systems(
+            Update,
+            count_avatar_provision_gate.run_if(scene_avatar_inputs_changed),
+        );
+        for _ in 0..4 {
+            app.update();
+        }
+        let before = app.world().resource::<AvatarProvisionGateRuns>().0;
+        let avatar = app
+            .world()
+            .resource::<StandalonePresentationState>()
+            .camera
+            .unwrap();
+        app.world_mut()
+            .get_mut::<Transform>(avatar)
+            .unwrap()
+            .translation
+            .x += 1.0;
+        app.update();
+        assert_eq!(app.world().resource::<AvatarProvisionGateRuns>().0, before);
+        app.world_mut()
+            .resource_mut::<StandalonePresentationState>()
+            .enabled = false;
+        app.update();
+        assert!(app.world().resource::<AvatarProvisionGateRuns>().0 > before);
+    }
+
+    #[test]
+    fn scene_avatar_decision_validates_typed_controls_without_coercion() {
+        let result = |create, rows| {
+            parse_scene_avatar_decision(HookValue::map([
+                ("create", create),
+                ("bindings", HookValue::Array(rows)),
+            ]))
+        };
+        let binding = |intent, factor| {
+            HookValue::Array(vec![
+                HookValue::str(intent),
+                HookValue::str("forward"),
+                factor,
+            ])
+        };
+        assert!(result(HookValue::Bool(false), vec![]).unwrap().is_none());
+        assert!(
+            result(
+                HookValue::Bool(true),
+                vec![binding("forward", HookValue::Float(1.0))]
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert!(result(HookValue::Int(1), vec![]).is_err());
+        assert!(
+            result(
+                HookValue::Bool(true),
+                vec![binding("forward", HookValue::Int(1))]
+            )
+            .is_err()
+        );
+        assert!(result(HookValue::Bool(true), vec![]).is_err());
+        assert!(
+            result(
+                HookValue::Bool(true),
+                vec![binding("invalid", HookValue::Float(1.0))]
+            )
+            .is_err()
+        );
+        assert!(
+            result(
+                HookValue::Bool(true),
+                vec![binding("forward", HookValue::Float(f64::NAN))]
+            )
+            .is_err()
+        );
+    }
+
+    struct TestAvatarPresencePolicy;
+    impl lunco_hooks::ScriptHook for TestAvatarPresencePolicy {
+        fn invoke(&self, invocation: &lunco_hooks::HookInvocation<'_>) -> lunco_hooks::HookResult {
+            lunco_hooks::ScriptHook::invoke(&TestPresentationPolicy, invocation)?;
+            Ok(HookValue::map([
+                ("create", HookValue::Bool(true)),
+                (
+                    "bindings",
+                    HookValue::Array(vec![HookValue::Array(vec![
+                        HookValue::str("forward"),
+                        HookValue::str("forward"),
+                        HookValue::Float(1.0),
+                    ])]),
+                ),
+            ]))
         }
     }
 
@@ -2379,6 +2466,12 @@ mod tests {
                 backend: "test".into(),
                 deterministic: true,
                 hook: std::sync::Arc::new(TestPresentationPolicy),
+            });
+            lunco_hooks::register(lunco_hooks::RegisteredHook {
+                id: SCENE_AVATAR_HOOK.into(),
+                backend: "test".into(),
+                deterministic: false,
+                hook: std::sync::Arc::new(TestAvatarPresencePolicy),
             });
         });
     }
@@ -2411,6 +2504,7 @@ mod tests {
             .world_mut()
             .spawn((
                 lunco_usd_bevy_scene::UsdSceneRoot,
+                lunco_core::GlobalEntityId::from_raw(42),
                 lunco_usd_bevy_scene::UsdSceneProjected,
                 Transform::default(),
                 GlobalTransform::default(),
@@ -2460,12 +2554,13 @@ mod tests {
     }
 
     #[test]
-    fn standalone_presentation_reports_missing_bounds_without_faking_a_camera() {
+    fn empty_scene_uses_explicit_avatar_framing() {
         let mut app = standalone_test_app();
         let root = app
             .world_mut()
             .spawn((
                 lunco_usd_bevy_scene::UsdSceneRoot,
+                lunco_core::GlobalEntityId::from_raw(42),
                 lunco_usd_bevy_scene::UsdSceneProjected,
                 Transform::default(),
                 GlobalTransform::default(),
@@ -2478,14 +2573,9 @@ mod tests {
         app.update();
 
         let state = app.world().resource::<StandalonePresentationState>();
-        assert!(state.camera.is_none());
-        assert!(!state.pending);
-        assert_eq!(
-            state.error.as_deref(),
-            Some(
-                "standalone USD assembly has no finite renderable bounds for generated presentation"
-            )
-        );
+        let avatar = state.camera.expect("empty scene has an avatar");
+        assert!(app.world().get::<LocalEmbodiment>(avatar).is_some());
+        assert!(state.error.is_none());
     }
 
     #[test]
@@ -2515,7 +2605,7 @@ mod tests {
     }
 
     #[test]
-    fn authored_initial_presentation_suppresses_generation() {
+    fn authored_director_keeps_a_transient_avatar_available() {
         let mut app = standalone_test_app();
         let (root, _visual) = standalone_root_with_bounds(&mut app);
         app.world_mut()
@@ -2523,16 +2613,14 @@ mod tests {
 
         app.update();
 
+        app.update();
         let state = app.world().resource::<StandalonePresentationState>();
-        assert!(state.camera.is_none());
-        assert!(state.light.is_none());
-        assert!(!state.pending);
-        assert!(
-            app.world_mut()
-                .query_filtered::<Entity, With<StandalonePresentationCamera>>()
-                .iter(app.world())
-                .next()
-                .is_none()
+        let avatar = state.camera.expect("director scene has a transient avatar");
+        assert!(app.world().get::<LocalEmbodiment>(avatar).is_some());
+        assert!(app.world().get::<UsdPrimPath>(avatar).is_none());
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().owner(),
+            CameraSelectionOwner::None
         );
     }
 
@@ -2556,17 +2644,10 @@ mod tests {
         app.update();
         app.update();
 
-        assert!(app.world().get_entity(generated).is_err());
+        assert!(app.world().get::<LocalEmbodiment>(generated).is_some());
         let selection = app.world().resource::<ViewportCameraSelection>();
         assert_eq!(selection.owner(), CameraSelectionOwner::User);
         assert_eq!(selection.requested, Some(RequestedCamera::Entity(explicit)));
-        assert!(
-            app.world_mut()
-                .query_filtered::<Entity, With<StandalonePresentationCamera>>()
-                .iter(app.world())
-                .next()
-                .is_none()
-        );
     }
 
     #[test]
@@ -3142,6 +3223,7 @@ mod tests {
             .world_mut()
             .spawn((
                 lunco_usd_bevy_scene::UsdSceneRoot,
+                lunco_core::GlobalEntityId::from_raw(42),
                 lunco_usd_bevy_scene::UsdSceneProjected,
             ))
             .id();

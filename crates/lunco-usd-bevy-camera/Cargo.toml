@@ -6,6 +6,8 @@ license.workspace = true
 description = "Render-free USD camera, path, selection, and presentation contracts for Bevy"
 
 [dependencies]
+lunco-control-core = { path = "../lunco-control-core" }
+lunco-port-core = { path = "../lunco-port-core" }
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_window", "keyboard"] }

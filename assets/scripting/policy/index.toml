@@ -101,6 +101,11 @@ entry = "runtime_ui_recording"
 skip_when_hook_unavailable = true
 
 [[policies]]
+hook = "camera.scene_avatar"
+source = "camera_presentation.rhai"
+entry = "scene_avatar"
+
+[[policies]]
 hook = "camera.default_presentation"
 source = "camera_presentation.rhai"
 entry = "default_presentation"

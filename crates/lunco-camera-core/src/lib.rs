@@ -209,15 +209,29 @@ pub fn replace_camera_diagnostic(
 /// Hook seam for an application's initial presentation decision.
 ///
 /// Camera runtimes supply derived facts and realize the policy's closed
-/// decision; the application chooses whether convenience framing is wanted.
+/// decision; the application chooses the initial viewport owner.
 pub const DEFAULT_PRESENTATION_HOOK: &str = "camera.default_presentation";
 
 lunco_hooks::declare_hook! {
     id: DEFAULT_PRESENTATION_HOOK,
     owner: "lunco-camera-core",
-    description: "Choose the initial camera fallback or standalone framing action from projected scene facts.",
+    description: "Choose the initial avatar or authored camera presentation from projected scene facts.",
     signature: [ctx: Map],
     output: String,
+    deterministic: false,
+    required: false,
+    installable: true,
+}
+
+/// Application policy for supplying a transient local avatar to a viewed scene.
+pub const SCENE_AVATAR_HOOK: &str = "camera.scene_avatar";
+
+lunco_hooks::declare_hook! {
+    id: SCENE_AVATAR_HOOK,
+    owner: "lunco-camera-core",
+    description: "Decide whether a windowed scene needs a transient local avatar, independently of viewport selection.",
+    signature: [ctx: Map],
+    output: Map,
     deterministic: false,
     required: false,
     installable: true,

@@ -32,6 +32,18 @@ checks.push(t_true(camera.parameters.len() == 1
 checks.push(t_true(camera.output == "string",
     "hook output type is reflected"));
 
+let scene_avatar = ();
+for hook in hooks {
+    if hook.id == "camera.scene_avatar" { scene_avatar = hook; }
+}
+checks.push(t_true(scene_avatar != () && scene_avatar.declared == true
+        && scene_avatar.output == "map" && scene_avatar.installable == true,
+    "scene avatar provisioning exposes a typed application policy"));
+let avatar_off_cycle = invoke_hook("camera.scene_avatar", [#{ local_avatar_camera_count: 0 }]);
+checks.push(t_true(avatar_off_cycle.ok == false && avatar_off_cycle.status == "fault"
+        && avatar_off_cycle.error.contains("Application/Presentation/Preparation"),
+    "scene avatar provisioning rejects calls outside its presentation owner"));
+
 let escape_policy_hook = ();
 for hook in hooks {
     if hook.id == "physics.body_escape" { escape_policy_hook = hook; }
@@ -230,7 +242,7 @@ checks.push(t_true(partial_scene_admission.ok == true
 let camera_call = invoke_hook("camera.default_presentation", [#{
     local_avatar_camera_count: 1,
     camera_track_count: 0,
-    host_requests_generated: false,
+    authored_camera_count: 1,
 }]);
 checks.push(t_true(camera_call.ok == false && camera_call.status == "fault"
         && camera_call.error.contains("Application/Presentation/Preparation"),

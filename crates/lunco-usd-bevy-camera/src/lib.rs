@@ -85,6 +85,7 @@ impl Plugin for UsdCameraPlugin {
                     camera_mount::resolve_camera_mounts,
                     camera_path::resolve_camera_paths,
                     camera_switch::ensure_standalone_presentation
+                        .run_if(camera_switch::scene_avatar_inputs_changed)
                         .in_set(lunco_core::RuntimeCycleSet::Presentation),
                     camera_track::bind_camera_tracks_to_preview,
                     camera_track::clear_camera_track_plans_on_stage_reload.run_if(

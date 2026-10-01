@@ -128,11 +128,12 @@ validates the requested role, pose, projection, look-at, and standard
 `LunCoCameraAPI`. Omitted intrinsics use only the defaults defined by the USD
 camera schema. The window host's convenience choice is a separate
 `camera.default_presentation` policy over derived facts; return exactly
-`avatar`, `first`, `generated`, or `none`. With no CameraTrack or explicit
+`avatar`, `first`, or `none`. With no CameraTrack or explicit
 operator/director selection, the shipped policy prefers the unique
 `LocalEmbodiment` camera, then the first active-root camera in stable USD-path
-order. It requests generated framing only when the standalone host asks for it
-and no authored camera is available. Missing, faulting, or invalid policy or
+order. Independently, `camera.scene_avatar` supplies a transient local avatar
+with policy-authored controls when the viewed scene lacks an authored avatar.
+The rig never edits a USD layer and remains available across camera switches. Missing, faulting, or invalid policy or
 camera-contract results remain structured diagnostics; the runtime does not
 repair malformed authored values. The camera owner keeps one finding set for
 the viewport contract and projects it to `RuntimeDiagnostics` and Recent Events.
