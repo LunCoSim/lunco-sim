@@ -96,3 +96,12 @@ Raw evidence: `target/trail-resize-test.log`,
 These are bounded visual footprints, not persisted terrain deformation.
 Publication can lag by worker/render admission; it does not wait for another
 half metre of travel. Generic GPU budget errors remain visible at their owner.
+
+Integration retained main `54ee05182`, including the authored vessel camera
+focus-height change. The combined production build passed, followed by a single
+owned headful pass of all 15 contact and eight route assertions. Long-path and
+final rover captures were inspected again. API command documentation regenerated
+from this settled runtime schema without changes. Evidence:
+`target/trail-kilometre-integrated-build.log`,
+`target/trail-kilometre-integrated-gate-output.log`,
+`target/trail-long-command-docs.log`. API 48134 is closed.
