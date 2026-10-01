@@ -449,8 +449,10 @@ points. Width is measured in the terrain-local horizontal plane.
 
 The visual contract is covered by
 [`assets/scenes/tests/waypoint_visual.usda`](../../assets/scenes/tests/waypoint_visual.usda)
-and its Rhai observer; DEM surface publication and missing-coverage rejection
-are covered by `route_surface_annotation.rhai` attached to an existing route.
+and its Rhai observer; DEM surface publication, a five-kilometre presentation
+path and missing-coverage rejection are covered by `route_surface_annotation.rhai`
+attached to an existing route. Its supplied terrain must cover a 40 m circle
+around the first waypoint and a connector 300 m away along positive X/Z.
 Real Avian trigger arrival and route resume are covered
 by [`route_progress.usda`](../../assets/scenes/tests/route_progress.usda); the
 windowed pointer/menu path is covered by

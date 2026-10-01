@@ -1566,6 +1566,11 @@ fn scene_tool_context(
     {
         let mut hits = Vec::new();
         for (entity, annotation) in annotations {
+            // Only USD-backed curves are authoring targets. Wheel histories
+            // carry no prim identity and must not enter the distance scan.
+            let (Ok(id), Ok(prim)) = (q_ids.get(entity), q_prim.get(entity)) else {
+                continue;
+            };
             if !images.published.get(&annotation.terrain).is_some_and(|p| {
                 p.error.is_none()
                     && p.image.is_some()
@@ -1577,9 +1582,7 @@ fn scene_tool_context(
                 continue;
             };
             let distance = annotation.distance(local);
-            if distance <= annotation.width_m * 0.5
-                && let (Ok(id), Ok(prim)) = (q_ids.get(entity), q_prim.get(entity))
-            {
+            if distance <= annotation.width_m * 0.5 {
                 hits.push((distance, id.get(), entity, prim));
             }
         }

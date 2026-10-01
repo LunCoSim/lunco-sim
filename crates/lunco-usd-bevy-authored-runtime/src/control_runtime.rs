@@ -12,7 +12,7 @@ use crate::program_runtime::{
 };
 use bevy::asset::Assets;
 use bevy::prelude::{Add, ChildOf, Commands, Component, Entity, On, Query, With, Without, World};
-use lunco_camera_core::{CameraFollow, parse_camera_follow};
+use lunco_camera_core::{CameraFollow, CameraFollowHeight, parse_camera_follow};
 use lunco_control_core::ControlBinding;
 use lunco_port_core::InputPorts;
 use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath, UsdSceneProjected};
@@ -26,6 +26,7 @@ struct AuthoredControlSurface {
     binding: ControlBinding,
     inputs: InputPorts,
     follow: Option<CameraFollow>,
+    focus_height: Option<CameraFollowHeight>,
 }
 
 /// Marks projected USD owners whose authored runtime surfaces have not yet
@@ -86,10 +87,15 @@ fn read_control_surface<R: UsdRead>(
     let follow = reader
         .text(&controls, "lunco:cameraFollow")
         .and_then(|token| parse_camera_follow(&token));
+    let focus_height = reader
+        .real(&controls, "lunco:cameraFollowHeight")
+        .filter(|height| height.is_finite() && (*height as f32).is_finite())
+        .map(|height| CameraFollowHeight(height as f32));
     Some(AuthoredControlSurface {
         binding,
         inputs,
         follow,
+        focus_height,
     })
 }
 
@@ -148,9 +154,13 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
         owner
             .remove::<ControlBinding>()
             .remove::<InputPorts>()
-            .remove::<CameraFollow>();
+            .remove::<CameraFollow>()
+            .remove::<CameraFollowHeight>();
         if let Some(surface) = surface {
             owner.insert((surface.binding, surface.inputs));
+            if let Some(height) = surface.focus_height {
+                owner.insert(height);
+            }
             if let Some(follow) = surface.follow {
                 owner.insert(follow);
             }

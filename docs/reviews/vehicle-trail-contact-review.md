@@ -2,102 +2,106 @@
 
 Reviewed 2026-10-01 in `codex/lunar-soil`.
 
-The contact sampler and sparse terrain annotation renderer own this change.
-Avian/mobility provide solved contacts, suspension geometry and wheel dimensions;
-`VehicleTrailPlugin` records bounded, disconnected physics-frame history. DEM
-collider support resolves through the existing `ColliderTileOf` contract. The
-shared terrain fragment renderer owns the ground footprint, including its width
-edges, rather than a sampled mesh fitted to the ground. Ordinary static supports
-keep their contact-plane ribbons. The canonical contract is in
+## Ownership and contract
+
+Avian/mobility supply solved contact, suspension geometry and tire dimensions.
+`VehicleTrailPlugin` records disconnected physics-frame history after wheel
+ray results in `FixedPostUpdate`. The sampler uses physics heading without
+visual wheel spin and requires compressed, load-bearing static support.
+`ColliderTileOf` maps streamed colliders to their DEM owner. Airborne, inverted
+and unsupported contacts end the stroke; landing starts a separate stroke.
+Ordinary authored static supports retain solved contact-plane ribbons.
+
+`VehicleTrailSettings.max_points_per_wheel` defaults to 32768: approximately
+16 km at the unchanged half-metre sampling spacing. A moving endpoint renders
+sub-spacing motion without recording points every tick. Only the oldest points
+retire at that configured bound. Invalid bounds stop recording with an owner
+warning. Width is the realized tire width; paused width edits invalidate its
+presentation. Frame changes and `SceneTeardown` retire histories and visuals.
+
+`lunco-terrain-surface::annotations` owns ground footprints. It reduces each
+continuous stroke in blocks of at most 64 legs, with centreline error bounded
+by one percent of the half-width, preserving turns and contact breaks. Source
+segment arrays are immutable and shared with queued/worker snapshots.
+
+The index preserves every retained segment. A 32-by-32 root grid subdivides
+crowded cells into four children, to depth 12. A fragment walks one child per
+level and evaluates at most 64 references at its leaf. Generic spatial math
+extends the existing annotation owner; terrain LOD coordinates do not own this
+annotation lookup. Default allocation bounds are 262144 segments, 65536 nodes
+and 1048576 references. Root references are bounded before allocation grows.
+Density/depth, segment, node, reference and precision overflow fail explicitly.
+There is no alternate mesh path or silent segment retirement for DEM tracks.
+
+At most two workers prepare indexes. Immutable CPU state stays f64; checked
+narrowing happens once at the RGBA32Float GPU image boundary. The 256-wide image
+stays within 8192 rows, including geometric capacity growth. Image capacity
+grows in powers of two and stays until its publication generation retires.
+Continuous revisions coalesce and retain the current image. Source topology,
+snapshot revisions, settings and shader changes fence stale results.
+
+`lunco-render-bevy::shader_look` tracks image descriptors and refreshes dependent
+material bind groups when a resize replaces the GPU texture. Equal-descriptor
+content uploads retain the binding and readiness. All custom-material texture
+roles share one dependency reader. Authoring hit resolution excludes wheel
+histories before distance scans because they have no USD prim identity.
+
+Hook review: these are generic continuous contact, geometry, spatial lookup and
+render-resource lifecycle mechanisms. Inputs are existing typed engine facts;
+outputs are bounded history, annotations and GPU bindings. The shared visual
+plugin serves the viewport and recorder. No tutorial policy, authored USD field,
+new terrain query model or interpreted contact loop is introduced. Authored
+Rhai scenarios own behavioral verdicts. The canonical lifecycle is in
 [USD-driven visuals](../architecture/50-usd-driven-visuals.md#motion-trails-are-bounded-physics-history).
 
-Contact admission runs after current wheel rays in `FixedPostUpdate`, uses the
-physics heading without visual wheel spin, and requires real compressed,
-load-bearing, static support. Airborne, inverted and unsupported contacts end a
-stroke; landing does not join it to the previous stroke. A moving endpoint makes
-sub-spacing motion visible without appending history every tick. Full track
-width is the realized physical tire width. Paused width edits invalidate
-presentation without requiring a physics tick.
+## Verification
 
-Ownership/hook review: these are generic continuous contact, geometry and
-presentation mechanisms. Their inputs are existing typed physics facts, their
-outputs are bounded render history and annotations, and they are installed in
-the shared viewport/recorder visual plugin. They do not add a scenario rule,
-terrain query model, USD schema, document writer or interpreted per-contact
-loop. Missing contact ends recording; malformed annotation data and unsupported
-shaders report the existing terminal publication error. Frame/scene teardown
-retires the disposable owner entities.
+- Production `cargo build -j 4 -p lunco-luncosim --bin luncosim` passes.
+- Three filtered history tests pass with production feature unification:
+  moving endpoints/contact breaks, bounded/frame-reset history, and retaining
+  both ends and all 10001 half-metre samples of a 5 km lane.
+- Five annotation tests pass: sparse long lines, invalid/overcrowded rejection,
+  dense-cell subdivision retaining all segments, bounded reduction preserving
+  turns/gaps, and eight curved 5 km lanes. The last fixture verifies sampled
+  oldest/middle/current coverage through the actual GPU texture ABI.
+- Eight curved 5 km lanes prepare in 23.78 ms on a worker and produce 3.39 MiB
+  before capacity padding. Eight straight 1024-leg histories reduce to 128 GPU
+  segments, 48 KiB and 244.76 microseconds per preparation. These fixture timings
+  measure worker preparation, not FPS. No additional ground samples are used.
+- The focused binder test passes: resizing refreshes dependent materials;
+  equal-descriptor content publication does not rebind them.
+- On the production binary, the exact Summer Space School
+  `traverse_apollo15.usda` contact gate passes 15 checks after 30 simulation
+  seconds and at least 20 metres of ground travel, then verifies real airborne,
+  roof and disconnected upright-landing behavior. All eight physical/render
+  tire widths are approximately 0.30 m.
+- The route gate passes eight checks, including all 2002 legs of a 5 km loop
+  within the supplied DEM, missing-coverage failure and restoration of authored
+  route facts and writer state. The fixture uses a 40 m circle around the first
+  waypoint and an outer connector 300 m away, within this scene's terrain.
+- `target/trail-long-path.png` was inspected headfully: the loop and connector
+  follow terrain without gaps. A separate 45-observation drive measured 50.49 m;
+  `target/trail-long.png` shows continuous wheel-width tracks reaching the rover.
+  The long-path renderer fixture does not claim kilometres of physical driving.
+- Owned High-quality API 48134 sessions exited through `Exit`; the port closed.
+  External Twin scene source hashes remained unchanged. Other sessions were
+  left alone. Skill validation and `git diff --check` pass.
 
-Streaming annotation sources contain independent segments. The worker reduces
-contiguous blocks of at most 64 legs, bounding worst-case simplification work
-and preserving turns and contact breaks within one percent of the half-width.
-Snapshot sources remain complete. Streaming admission interleaves the newest
-legs across sources and stops at budget pressure, retiring older history rather
-than introducing holes inside the admitted recent stroke. Candidate growth is
-bounded before index allocation. The default shader work remains at most 64
-segments per cell and 4096 total. A stable image asset identity permits continuous
-uploads without restarting terrain material readiness. The render binder tracks
-image descriptors and marks dependent materials for bind-group preparation when
-a resize replaces the GPU texture. Equal-descriptor content updates retain the
-existing GPU texture and bind group. All declared custom-material image roles
-share one dependency reader. This lifecycle mechanism belongs in
-`lunco-render-bevy::shader_look`, rather than in route or wheel policy. Source topology,
-snapshot revisions, settings and shader changes still fence publication;
-continuous revisions coalesce within that generation.
+Raw evidence: `target/trail-resize-test.log`,
+`target/trail-long-history-test.log`, `target/trail-long-index-test.log`,
+`target/trail-kilometre-build.log`, `target/trail-kilometre-gate-output.log`,
+`target/trail-kilometre-route-output.log`, `target/trail-long-observations.json`,
+`target/trail-long.png` and `target/trail-long-path.png`.
 
-Verification and evidence:
+These are bounded visual footprints, not persisted terrain deformation.
+Publication can lag by worker/render admission; it does not wait for another
+half metre of travel. Generic GPU budget errors remain visible at their owner.
 
-- `cargo build -j 4 -p lunco-luncosim --bin luncosim` passed.
-- Two filtered trail-history tests passed with production feature unification
-  (`cargo test -j 4 -p lunco-luncosim-edit-ui -p lunco-luncosim --lib ui::trail::tests`):
-  moving-endpoint/contact-break behavior and bounded/frame-reset history.
-- Four focused `lunco-terrain-surface` annotation tests passed: sparse long
-  stroke, invalid/overcrowded snapshot rejection, snapshot/live-head priority
-  under pressure, and bounded streaming reduction with bends and gaps.
-- Eight straight 1024-leg histories reduced from 8192 source legs to 128 GPU
-  segments and a 48 KiB image. One 100-preparation diagnostic averaged
-  257.852 microseconds per index build. This is worker preparation evidence
-  for that fixture, not an FPS measurement or the curved-path worst case.
-- The production `vehicle_trail_contact.rhai` gate passed 15 checks in the
-  exact Summer Space School `traverse_apollo15.usda` scene: grounded motion,
-  0.30 m physical/render widths for all eight wheels, sub-spacing endpoint
-  updates, terrain publication, airborne rejection without history growth,
-  actual inverted landing without wheel-track growth, and disconnected
-  upright landing.
-- In that same session, `route_surface_annotation.rhai` passed six checks,
-  including missing-coverage failure and restoration while retained tracks
-  share the terrain annotation owner.
-- Owned API 48134, High quality, 1280-by-720. Headful captures were inspected
-  for grounded tracks, airborne motion, roof landing and the separate landing
-  stroke. Raw evidence: `target/trail-gate.log`,
-  `target/trail-gate-observations.json`, `target/trail-ground.png`,
-  `target/trail-air.png`, `target/trail-roof.png`,
-  `target/trail-landing.png`, `target/trail-integrated.png`, and
-  `target/trail-annotation-tests.log`. The external Twin scene source hash
-  was unchanged. The owned session exited through API `Exit`, and its port
-  closed. Other active simulators were left alone.
-
-The rendering product has bounded history; GPU budget pressure can shorten its
-oldest retained portion. This is footprint presentation, not tire deformation
-or persisted terrain state. Continuous publication can lag by worker/render
-admission; it no longer waits for another half metre of vehicle travel.
-
-Integration retained main `d21f193f3`, including its authored axle/steering,
-HUD, filtered terrain-detail and shadow changes. The integrated production
-build passed, and the final owned High-quality session passed both the
-15-check trail gate and six-check route gate. Runtime command documentation
-was regenerated from the settled integrated schema without changes.
-
-Sustained-render verification: the binder descriptor-change regression test
-passed. The production trail gate now drives for 30 simulation seconds and
-requires at least 20 metres of ground travel before its airborne/roof/landing
-checks; all 15 checks passed, as did the six route checks. A separate 45-observation
-headful drive measured 50.49 metres from its first to last observation. Its
-`target/trail-long.png` capture shows continuous tracks reaching both wheel
-lanes, instead of a frozen short prefix. The final integrated capture was also
-inspected. Both owned API 48134 sessions exited through `Exit`.
-Evidence: `target/trail-resize-test.log`, `target/trail-resize-final-build.log`,
-`target/trail-resize-gate-output.log`, `target/trail-long-observations.json`.
-No extra terrain sampling, history points, fragment budget or per-frame material
-rebuild was introduced: dependency scanning/rebinding runs on image descriptor
-changes, while equal-descriptor uploads preserve the binding.
+Integration retained main `54ee05182`, including the authored vessel camera
+focus-height change. The combined production build passed, followed by a single
+owned headful pass of all 15 contact and eight route assertions. Long-path and
+final rover captures were inspected again. API command documentation regenerated
+from this settled runtime schema without changes. Evidence:
+`target/trail-kilometre-integrated-build.log`,
+`target/trail-kilometre-integrated-gate-output.log`,
+`target/trail-long-command-docs.log`. API 48134 is closed.

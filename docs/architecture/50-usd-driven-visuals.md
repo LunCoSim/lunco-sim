@@ -52,9 +52,10 @@ Fewer than two points removes the presentation immediately.
 curve entity carries its terrain identity, source revision, independent segments,
 width and colour. At most two background jobs build spatially indexed stroke
 records per terrain. The RGBA32Float image is shared by every terrain tile;
-32-by-32 bins limit a fragment to nearby segments, with explicit segment and
-cell budgets. Snapshot density overflow or insufficient GPU precision fails
-visibly; bounded streaming history retires its oldest legs before admission.
+A 32-by-32 root grid subdivides crowded cells into four children, to depth 12.
+A fragment walks one child per level and evaluates at most 64 nearby segments.
+Every retained source segment is indexed; local density does not retire history.
+Explicit segment, node, reference, depth or precision overflow fails visibly.
 Source removal withdraws its publication; stale worker results cannot return
 it. Elevation edits, CDLOD morphs, seam stitching and camera movement need no
 annotation rebuild because the terrain's own fragments consume the strokes.
@@ -116,7 +117,10 @@ support owner, and reject an inverted carrier. Streamed collider tiles resolve
 through `ColliderTileOf` to their DEM owner, so tile replacement does not split
 one ground stroke. Ordinary authored static ramps retain their own support.
 
-Each wheel retains at most 1024 contact points. A fixed anchor and moving
+`VehicleTrailSettings.max_points_per_wheel` defaults to 32768 points (about
+16 km at the unchanged half-metre spacing). Its valid range is 2..=32768;
+an invalid budget stops recording with an owner diagnostic. Only the oldest
+points retire at the configured history bound. A fixed anchor and moving
 endpoint display travel below the half-metre history spacing without adding
 points every tick. Loss of contact or a change of support starts a new stroke;
 there is no interpolation between takeoff and landing. Frame changes start new
@@ -133,19 +137,24 @@ samples. Non-DEM static supports use solved contact-plane triangle strips;
 terrain tracks never acquire an independent mesh. Neither product edits USD,
 alters physics, or models terrain deformation.
 
-The annotation owner admits complete snapshot sources before streaming history.
+The annotation owner indexes complete snapshot and retained streaming history.
 It simplifies each continuous ground stroke in blocks of at most 64 legs,
 with centreline error bounded by one percent of the half-width; turns and gaps
-are retained. It interleaves reduced streaming legs newest-first across sources,
-retiring the older history suffix on segment or per-cell budget pressure.
-This bounds CPU/GPU work without evicting routes or monopolizing admission with one wheel lane.
-Immutable preparation stays on the bounded worker pool. Continuous source
+are retained. Spatial subdivision preserves long history under local density.
+Default global bounds are 262144 segments, 65536 nodes and 1048576 references;
+these bound allocation without increasing the 64-segment fragment leaf budget.
+The encoded 256-wide image and geometric capacity growth stay within 8192 rows.
+Immutable source arrays are shared with queued/worker snapshots, avoiding
+history copies during admission. Pointer authoring excludes non-USD wheel
+history before scanning curve distances. Immutable index preparation stays
+on the bounded worker pool. Continuous source
 revision changes retain the last image and coalesce the next snapshot within
 one publication generation, allowing completed builds to display while the
 head keeps moving. Successive images update one persistent texture identity,
 so material readiness does not restart on every frame. The render binder refreshes
 dependent material bind groups when an image descriptor changes: resizing keeps
-the asset identity but replaces the GPU texture. Ordinary content uploads reuse
+the asset identity but replaces the GPU texture. Texture capacity grows geometrically
+and never shrinks within a publication generation. Ordinary content uploads reuse
 the existing binding. Producers precede the
 typed `SurfaceAnnotationSet::Prepare` admission boundary. Added/removed sources,
 snapshot revisions, shader interfaces and settings advance the generation and fence old work. Precision violations

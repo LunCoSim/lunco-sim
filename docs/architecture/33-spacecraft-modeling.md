@@ -425,3 +425,10 @@ Rocker-bogie fidelity needs G4+G5+G2.
 - Wheel physics: `crates/lunco-mobility/src/lib.rs` (raycast), `wheel_spin.rs`
 - Model binding (USD→cosim): `crates/lunco-usd-sim-cosim/src/lib.rs`
 - Engine models: `assets/models/RocketEngine.mo`, `AnnotatedRocketStage.mo`, `Balloon.mo`
+
+A vessel control profile may author `double lunco:cameraFollowHeight` on
+its `Controls` prim. The generic projection supplies the subject camera's
+existing vertical focus offset in metres along surface up. Both orbit position
+and collision probe start at that raised focus; control/collision exclusions
+remain owned by the vessel. Omission preserves the selected follow mode's
+existing default. Use the payload/interface datum for a lander deck focus.
