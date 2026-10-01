@@ -1,3 +1,4 @@
+//!@capability lunco.surface-annotations.v1
 //! Dedicated streamed-terrain diagnostic material.
 //!
 //! This file is selected by the terrain diagnostic tool. It is deliberately a
@@ -31,6 +32,11 @@
 //!@default morph_start  1.0e20
 //!@default morph_end    1.0e21
 //!@default stitch_edges 0,0,0,0
+
+#import lunco::terrain::{surface_annotation_color, terrain_detail_position}
+@group(#{MATERIAL_BIND_GROUP}) @binding(16)
+var surface_annotations: texture_2d<f32>;
+
 struct Material {
     mode:         f32,
     opacity:      f32,
@@ -40,6 +46,7 @@ struct Material {
     morph_start:  f32,
     morph_end:    f32,
     stitch_edges: vec4<f32>,
+    terrain_half_extent: f32,
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> material: Material;
@@ -119,5 +126,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     }
     let shade = 0.45 + 0.55 * clamp(n.y, 0.0, 1.0);
     let neutral = vec3<f32>(0.5, 0.5, 0.5) * shade;
-    return vec4<f32>(mix(neutral, colour * shade, material.opacity), 1.0);
+    var result = vec4<f32>(mix(neutral, colour * shade, material.opacity), 1.0);
+#ifdef VERTEX_UVS_A
+    result = surface_annotation_color(surface_annotations, terrain_detail_position(in.uv, material.terrain_half_extent).xz, result);
+#endif
+    return result;
 }

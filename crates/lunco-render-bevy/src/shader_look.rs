@@ -121,6 +121,7 @@ fn shader_material(look: &ShaderLook, asset_server: &AssetServer) -> ShaderMater
             TextureLayer::ShadowCache => &mut m.shadow_cache,
             TextureLayer::ContinuationAlbedo => &mut m.continuation_albedo_map,
             TextureLayer::ContinuationSurface => &mut m.continuation_surface_map,
+            TextureLayer::SurfaceAnnotations => &mut m.surface_annotations,
         };
         *slot = Some(image.clone());
     }
@@ -197,6 +198,7 @@ impl ShaderSourceCache {
                         .and_then(lunco_materials::dyn_params::shader_interface_identifier)
                         .map(str::to_owned),
                     source_valid,
+                    capabilities: source.map(lunco_materials::dyn_params::shader_capabilities).unwrap_or_default(),
                     defaults: schema
                         .as_ref()
                         .map(|schema| {
@@ -356,6 +358,7 @@ fn textures_match(m: &ShaderMaterial, look: &ShaderLook) -> bool {
         ShadowCache,
         ContinuationAlbedo,
         ContinuationSurface,
+        SurfaceAnnotations,
     ]
     .iter()
     .all(|layer| {
@@ -368,6 +371,7 @@ fn textures_match(m: &ShaderMaterial, look: &ShaderLook) -> bool {
             ShadowCache => &m.shadow_cache,
             ContinuationAlbedo => &m.continuation_albedo_map,
             ContinuationSurface => &m.continuation_surface_map,
+            SurfaceAnnotations => &m.surface_annotations,
         };
         slot.as_ref().map(Handle::id) == look.textures.get(layer).map(Handle::id)
     })
@@ -810,7 +814,7 @@ fn authored_shader_image_mip_mode(layer: TextureLayer) -> Option<Rgba8MipMode> {
         }
         TextureLayer::Surface | TextureLayer::ContinuationSurface => Some(Rgba8MipMode::Linear),
         TextureLayer::Normal => Some(Rgba8MipMode::Normal),
-        TextureLayer::Height | TextureLayer::ShadowCache => None,
+        TextureLayer::Height | TextureLayer::ShadowCache | TextureLayer::SurfaceAnnotations => None,
     }
 }
 
@@ -1165,6 +1169,7 @@ fn reflect_shader_look_source_interfaces(
                         shader: pending.shader.clone(),
                         identifier: None,
                         source_valid: false,
+                        capabilities: Default::default(),
                         defaults: Default::default(),
                     },
                     ShaderLookSourceHandle {
@@ -1245,6 +1250,7 @@ fn invalidate_shader_look_ready(
                 material_asset.shadow_cache.as_ref(),
                 material_asset.continuation_albedo_map.as_ref(),
                 material_asset.continuation_surface_map.as_ref(),
+                material_asset.surface_annotations.as_ref(),
             ]
             .into_iter()
             .flatten()
@@ -1325,6 +1331,7 @@ fn material_texture_dependencies_ready(material: &ShaderMaterial, images: &Asset
         material.shadow_cache.as_ref(),
         material.continuation_albedo_map.as_ref(),
         material.continuation_surface_map.as_ref(),
+        material.surface_annotations.as_ref(),
     ]
     .into_iter()
     .flatten()

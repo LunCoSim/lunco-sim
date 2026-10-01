@@ -217,8 +217,10 @@ fault owner. Do not run a whole-stage topology traversal synchronously in
 
 For route-edit latency, record four separate spans: the bounded Rhai input
 hook, the durable route `ApplyUsdOps` and its one incremental projection,
-reference-marker admission, and `UpdateUsdCurveView`'s mesh worker/commit.
-Ribbon mesh preparation is presentation-only and must not issue another
+reference-marker admission, and `UpdateUsdCurveView`'s stroke preparation and
+terrain annotation-image publication. Fragment lookup uses bounded spatial bins;
+verify idle camera/terrain changes do not rebuild the stroke index.
+Ribbon presentation preparation is presentation-only and must not issue another
 `ApplyUsdTransientOps`, change document generation, or run inside the fixed
 scenario event that observes a projected route. Compare the UI hook and fixed
 tick against frame/physics budgets; a fast worker result does not excuse a

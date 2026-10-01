@@ -601,7 +601,7 @@ fn refresh_route_view(me, state, snapshot) {
     state.safe_stopped = false;
     let result = waypoint_editor::update_ribbon_view(doc, state.route_path, read.points);
     // The ribbon is a disposable presentation view. It must never prevent a
-    // valid authored program from starting or advancing when terrain sampling
+    // valid authored program from starting or advancing when surface preparation
     // or transient rendering is still settling.
     let presentation_ready = result != () && result.ok == true;
     if !presentation_ready {

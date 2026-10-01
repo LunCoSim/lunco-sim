@@ -405,3 +405,42 @@ fn bump_layer(
     }
     return normalize(perturbed);
 }
+
+// Sparse terrain-local stroke index. Header, cell lists and f64->f32 validation
+// are owned by lunco-terrain-surface::annotations; camera/LOD never rebake it.
+fn annotation_texel(data: texture_2d<f32>, index: u32) -> vec4<f32> {
+    return textureLoad(data, vec2<i32>(i32(index % 256u), i32(index / 256u)), 0);
+}
+
+fn surface_annotation_color(data: texture_2d<f32>, p: vec2<f32>, base: vec4<f32>) -> vec4<f32> {
+    // Derivatives precede nonuniform bounds/cell branches. The stroke remains
+    // antialiased at grazing angles and when its physical width is subpixel.
+    let footprint = fwidth(p);
+    if (textureDimensions(data).x != 256u) { return base; }
+    let bounds = annotation_texel(data, 0u);
+    if (any(p < bounds.xy - footprint) || any(p > bounds.zw + footprint)) { return base; }
+    let header = annotation_texel(data, 1u);
+    let grid = u32(header.x);
+    let normalized = clamp((p - bounds.xy) / (bounds.zw - bounds.xy), vec2<f32>(0.0), vec2<f32>(1.0));
+    let cell_xy = min(vec2<u32>(normalized * f32(grid)), vec2<u32>(grid - 1u));
+    let cell = annotation_texel(data, 2u + cell_xy.y * grid + cell_xy.x);
+    var tint = vec4<f32>(0.0);
+    for (var i = 0u; i < u32(cell.y); i += 1u) {
+        let segment = u32(annotation_texel(data, u32(cell.x) + i).x);
+        let record = u32(header.z) + segment * 3u;
+        let endpoints = annotation_texel(data, record);
+        let delta = endpoints.zw - endpoints.xy;
+        let t = clamp(dot(p - endpoints.xy, delta) / dot(delta, delta), 0.0, 1.0);
+        let dist = length(p - endpoints.xy - delta * t);
+        let radius = annotation_texel(data, record + 1u).x;
+        let right = abs(vec2<f32>(-delta.y, delta.x) / length(delta));
+        let aa = max(dot(right, footprint) * 0.5, 0.00001);
+        let coverage = clamp((radius - dist + aa) / (2.0 * aa), 0.0, 1.0)
+            - clamp((-radius - dist + aa) / (2.0 * aa), 0.0, 1.0);
+        let color = annotation_texel(data, record + 2u);
+        let alpha = coverage * color.a;
+        // A joint is one stroke, not several overlapping transparent quads.
+        if (alpha >= tint.a) { tint = vec4<f32>(color.rgb, alpha); }
+    }
+    return vec4<f32>(mix(base.rgb, tint.rgb, tint.a), base.a);
+}
