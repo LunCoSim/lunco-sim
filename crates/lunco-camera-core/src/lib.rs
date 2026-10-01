@@ -288,6 +288,12 @@ pub enum CameraFollow {
     Chase,
 }
 
+/// Authored focus height along the followed subject's local surface up.
+/// Changes presentation only; control and collision ownership stay on the subject.
+#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
+#[reflect(Component)]
+pub struct CameraFollowHeight(pub f32);
+
 /// Parse the authored `lunco:cameraFollow` token.
 pub fn parse_camera_follow(s: &str) -> Option<CameraFollow> {
     match s.trim().to_ascii_lowercase().as_str() {

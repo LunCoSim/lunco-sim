@@ -149,9 +149,9 @@ pub(crate) fn spring_arm_system(
             DVec3::Y * arm.vertical_offset as f64
         };
         let desired_pos = target_pos + offset + vertical_offset;
-        let ray_origin = target_pos;
-        let ray_dir = (desired_pos - target_pos).normalize_or(DVec3::Y);
-        let ray_len = desired_pos.distance(target_pos);
+        let ray_origin = target_pos + vertical_offset;
+        let ray_dir = (desired_pos - ray_origin).normalize_or(DVec3::Y);
+        let ray_len = desired_pos.distance(ray_origin);
         let castable = ray_origin.is_finite() && ray_len.is_finite();
         let hit = match &spatial_query {
             Some(spatial_query) if castable => {
@@ -179,7 +179,7 @@ pub(crate) fn spring_arm_system(
         else {
             continue;
         };
-        let current_len = current_pos.distance(target_pos);
+        let current_len = current_pos.distance(ray_origin);
         let final_len = resolve_camera_arm_length(
             current_len,
             target_len,
@@ -188,7 +188,7 @@ pub(crate) fn spring_arm_system(
             damping,
             dt,
         );
-        let final_pos = target_pos + ray_dir * final_len;
+        let final_pos = ray_origin + ray_dir * final_len;
 
         let (new_cell, new_tf) =
             local_pose_to_grid_storage(grid, final_pos, tf.rotation.as_dquat());
