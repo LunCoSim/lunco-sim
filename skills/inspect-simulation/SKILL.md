@@ -189,3 +189,9 @@ curl -s -X POST http://127.0.0.1:4101/api/commands -H 'Content-Type: application
 - **Wrong port?** The canonical API port is **4101**; set `LUNCO_API_PORT=4101` if the MCP tools miss.
 - **Don't restart to "get clean state"** — read the running instance; see the ⚠️ in [`test-via-api`](../test-via-api/SKILL.md).
 - **One-shot vs series:** `read_ports` samples once (call again for fresh values); use `watch_ports` for a time-series — don't sleep-loop `read_ports`.
+
+For continuously updated wheel tracks, pair `InspectVehicleTrail` history and
+publication reads with screenshots after sustained movement past a waypoint.
+CPU publication alone cannot establish that a resized annotation image reached
+the material's GPU binding. The render binder owns descriptor-change rebinding;
+ordinary content uploads must preserve readiness.

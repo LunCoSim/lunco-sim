@@ -143,7 +143,10 @@ Immutable preparation stays on the bounded worker pool. Continuous source
 revision changes retain the last image and coalesce the next snapshot within
 one publication generation, allowing completed builds to display while the
 head keeps moving. Successive images update one persistent texture identity,
-so material readiness does not restart on every frame. Producers precede the
+so material readiness does not restart on every frame. The render binder refreshes
+dependent material bind groups when an image descriptor changes: resizing keeps
+the asset identity but replaces the GPU texture. Ordinary content uploads reuse
+the existing binding. Producers precede the
 typed `SurfaceAnnotationSet::Prepare` admission boundary. Added/removed sources,
 snapshot revisions, shader interfaces and settings advance the generation and fence old work. Precision violations
 and malformed inputs remain explicit owner errors.

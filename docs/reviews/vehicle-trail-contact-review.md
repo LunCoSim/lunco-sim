@@ -35,8 +35,13 @@ Snapshot sources remain complete. Streaming admission interleaves the newest
 legs across sources and stops at budget pressure, retiring older history rather
 than introducing holes inside the admitted recent stroke. Candidate growth is
 bounded before index allocation. The default shader work remains at most 64
-segments per cell and 4096 total. A stable texture identity permits continuous
-uploads without restarting terrain material readiness. Source topology,
+segments per cell and 4096 total. A stable image asset identity permits continuous
+uploads without restarting terrain material readiness. The render binder tracks
+image descriptors and marks dependent materials for bind-group preparation when
+a resize replaces the GPU texture. Equal-descriptor content updates retain the
+existing GPU texture and bind group. All declared custom-material image roles
+share one dependency reader. This lifecycle mechanism belongs in
+`lunco-render-bevy::shader_look`, rather than in route or wheel policy. Source topology,
 snapshot revisions, settings and shader changes still fence publication;
 continuous revisions coalesce within that generation.
 
@@ -82,3 +87,17 @@ HUD, filtered terrain-detail and shadow changes. The integrated production
 build passed, and the final owned High-quality session passed both the
 15-check trail gate and six-check route gate. Runtime command documentation
 was regenerated from the settled integrated schema without changes.
+
+Sustained-render verification: the binder descriptor-change regression test
+passed. The production trail gate now drives for 30 simulation seconds and
+requires at least 20 metres of ground travel before its airborne/roof/landing
+checks; all 15 checks passed, as did the six route checks. A separate 45-observation
+headful drive measured 50.49 metres from its first to last observation. Its
+`target/trail-long.png` capture shows continuous tracks reaching both wheel
+lanes, instead of a frozen short prefix. The final integrated capture was also
+inspected. Both owned API 48134 sessions exited through `Exit`.
+Evidence: `target/trail-resize-test.log`, `target/trail-resize-final-build.log`,
+`target/trail-resize-gate-output.log`, `target/trail-long-observations.json`.
+No extra terrain sampling, history points, fragment budget or per-frame material
+rebuild was introduced: dependency scanning/rebinding runs on image descriptor
+changes, while equal-descriptor uploads preserve the binding.

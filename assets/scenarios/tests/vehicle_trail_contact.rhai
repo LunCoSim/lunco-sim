@@ -68,7 +68,7 @@ fn on_stop(me, ctx) {
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.t += dt(); this.total += dt();
-    if this.total > 45.0 {
+    if this.total > 75.0 {
         this.checks.push(t_true(false, "trail gate timed out in " + this.phase));
         this = finish(this); return;
     }
@@ -84,7 +84,7 @@ fn on_tick(me, ctx) {
     if this.phase == "drive" {
         if observe_continuity(trail, this.previous) { this.continuous = true; }
         this.previous = trail;
-        if this.t < 6.0 { return; }
+        if this.t < 30.0 { return; }
         let measured = 0;
         let widths_ok = true;
         let published = true;
@@ -100,7 +100,7 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(widths_ok, "rendered track width differs from the physical tire width"));
         this.checks.push(t_true(published, "ground tracks did not publish on terrain"));
         this.checks.push(t_true(this.continuous, "no moving endpoint was observed below history spacing"));
-        this.checks.push(t_moved(vlen(vsub(world_pos(this.rover), this.start)), 1.0, "grounded vehicle travel"));
+        this.checks.push(t_moved(vlen(vsub(world_pos(this.rover), this.start)), 20.0, "grounded vehicle travel past waypoint"));
         this.ground = world_pos(this.rover);
         this.rotation = world_rotation(this.rover);
         this.before_flight = trail;

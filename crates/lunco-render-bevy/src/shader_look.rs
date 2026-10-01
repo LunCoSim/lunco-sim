@@ -1026,7 +1026,11 @@ pub(crate) fn build(app: &mut App) {
     app.init_resource::<ShaderSourceCache>()
         .add_systems(
             PostUpdate,
-            invalidate_shader_source_cache.after(bevy::asset::AssetEventSystems),
+            (
+                invalidate_shader_source_cache,
+                refresh_resized_image_materials,
+            )
+                .after(bevy::asset::AssetEventSystems),
         )
         .init_resource::<ShaderLookCache>()
         .init_resource::<ShaderImageMipState>()
@@ -1198,6 +1202,53 @@ fn invalidate_shader_source_cache(
     }
 }
 
+/// Image content uploads reuse the GPU binding only while its descriptor stays
+/// unchanged. A resized image keeps its asset ID but receives a new GPU texture;
+/// dependent materials must rebuild their bind groups without hiding the mesh.
+fn refresh_resized_image_materials(
+    mut events: MessageReader<AssetEvent<Image>>,
+    images: Res<Assets<Image>>,
+    mut materials: ResMut<Assets<ShaderMaterial>>,
+    mut descriptors: Local<
+        HashMap<AssetId<Image>, bevy::render::render_resource::TextureDescriptor<'static>>,
+    >,
+) {
+    let mut resized = HashSet::new();
+    for event in events.read() {
+        match event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } => {
+                let Some(image) = images.get(*id) else {
+                    continue;
+                };
+                let previous = descriptors.insert(*id, image.texture_descriptor.clone());
+                if previous.as_ref() != Some(&image.texture_descriptor)
+                    && matches!(event, AssetEvent::Modified { .. })
+                {
+                    resized.insert(*id);
+                }
+            }
+            AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
+                descriptors.remove(id);
+            }
+            AssetEvent::LoadedWithDependencies { .. } => {}
+        }
+    }
+    if resized.is_empty() {
+        return;
+    }
+    let affected: Vec<_> = materials
+        .iter()
+        .filter_map(|(id, material)| {
+            material_texture_handles(material)
+                .any(|handle| resized.contains(&handle.id()))
+                .then_some(id)
+        })
+        .collect();
+    for id in affected {
+        let _ = materials.get_mut(id);
+    }
+}
+
 /// A shader hot reload invalidates the material layout that was previously
 /// proven ready. Keep the mesh hidden until reflection and material repacking
 /// have completed for the new source; otherwise a reload can expose a zeroed
@@ -1242,22 +1293,9 @@ fn invalidate_shader_look_ready(
             continue;
         };
         let shader_changed = changed_shaders.contains(&material_asset.shader.id());
-        let image_changed = changed_images.iter().any(|id| {
-            [
-                material_asset.height_map.as_ref(),
-                material_asset.albedo_map.as_ref(),
-                material_asset.mineral_map.as_ref(),
-                material_asset.surface_map.as_ref(),
-                material_asset.normal_map.as_ref(),
-                material_asset.shadow_cache.as_ref(),
-                material_asset.continuation_albedo_map.as_ref(),
-                material_asset.continuation_surface_map.as_ref(),
-                material_asset.surface_annotations.as_ref(),
-            ]
-            .into_iter()
-            .flatten()
-            .any(|handle| handle.id() == *id)
-        });
+        let image_changed = changed_images
+            .iter()
+            .any(|id| material_texture_handles(material_asset).any(|handle| handle.id() == *id));
         if shader_changed || image_changed {
             let mut entity = commands.entity(entity);
             if shader_changed {
@@ -1324,6 +1362,10 @@ fn material_is_render_ready(
 /// dependency invariant for every custom material, so terrain does not need a
 /// second visibility workaround.
 fn material_texture_dependencies_ready(material: &ShaderMaterial, images: &Assets<Image>) -> bool {
+    material_texture_handles(material).all(|handle| images.get(handle).is_some())
+}
+
+fn material_texture_handles(material: &ShaderMaterial) -> impl Iterator<Item = &Handle<Image>> {
     [
         material.height_map.as_ref(),
         material.albedo_map.as_ref(),
@@ -1337,7 +1379,6 @@ fn material_texture_dependencies_ready(material: &ShaderMaterial, images: &Asset
     ]
     .into_iter()
     .flatten()
-    .all(|handle| images.get(handle).is_some())
 }
 
 /// Promote a custom look only after its shader source and reflected material
@@ -1455,6 +1496,57 @@ mod tests {
             &schemas,
             &mut cache,
         ));
+    }
+
+    #[test]
+    fn resized_images_refresh_dependent_materials_without_content_rebinds() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Image>().init_asset::<ShaderMaterial>();
+        let image = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::default());
+        app.world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(ShaderMaterial {
+                surface_annotations: Some(image.clone()),
+                ..Default::default()
+            });
+        app.world_mut()
+            .write_message(AssetEvent::<Image>::Added { id: image.id() });
+        app.world_mut()
+            .run_system_cached(refresh_resized_image_materials)
+            .unwrap();
+        app.world_mut().clear_trackers();
+        app.world_mut()
+            .write_message(AssetEvent::<Image>::Modified { id: image.id() });
+        app.world_mut()
+            .run_system_cached(refresh_resized_image_materials)
+            .unwrap();
+        assert!(
+            !app.world()
+                .resource_ref::<Assets<ShaderMaterial>>()
+                .is_changed()
+        );
+        app.world_mut()
+            .resource_mut::<Assets<Image>>()
+            .get_mut(&image)
+            .unwrap()
+            .texture_descriptor
+            .size
+            .height += 1;
+        app.world_mut().clear_trackers();
+        app.world_mut()
+            .write_message(AssetEvent::<Image>::Modified { id: image.id() });
+        app.world_mut()
+            .run_system_cached(refresh_resized_image_materials)
+            .unwrap();
+        assert!(
+            app.world()
+                .resource_ref::<Assets<ShaderMaterial>>()
+                .is_changed()
+        );
     }
 
     #[test]
