@@ -1381,6 +1381,8 @@ pub struct WheelRaycast {
     /// raked steering head tilts this (e.g. `(0, cos θ, sin θ)`) so the front
     /// wheel steers about the fork axis, not vertical.
     pub heading_axis: DVec3,
+    /// Authored wheel-local cylinder axle (`UsdGeomCylinder.axis`).
+    pub axle_axis: DVec3,
     /// Fixed-step steering rotation consumed by wheel physics. The entity's
     /// `Transform` mirrors this value for presentation; physics never reads it
     /// back, since Avian interpolation may change that transform between ticks.
@@ -1424,6 +1426,7 @@ impl Default for WheelRaycast {
             tire_force: DVec3::ZERO,
             brake_torque_max: 0.0,
             heading_axis: DVec3::Y,
+            axle_axis: DVec3::ZERO,
             heading_rotation: DQuat::IDENTITY,
         }
     }
