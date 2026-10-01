@@ -74,7 +74,9 @@ segment count, projection kind, terrain binding count, local mesh visibility
 and terminal errors. Surface readiness includes publication of the current
 stroke image. The `route_surface_annotation.rhai` production GUI gate accepts
 an existing DEM route through `RunScenarioAsset` with an addressable scene
-`target` and explicit `doc_id`/`route_path` parameters, verifies sparse
+`target` and explicit `doc_id`/`route_path`/`view_owner` parameters. The gate
+pauses that scenario writer and restores its prior pause state on completion
+or teardown, so its disposable negative fixture has one writer. It verifies sparse
 publication and unchanged waypoints, checks missing-coverage rejection, and
 restores the disposable view. `route_interaction` covers the editing contract.
 

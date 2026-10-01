@@ -59,3 +59,13 @@ the on/off difference, so this comparison shows no measurable regression;
 concurrent workloads prevent an uncontended FPS claim. Raw samples are in
 `target/route-surface-frame-ab.json`. The owned sessions were closed through API
 `Exit`; no other simulator was controlled or stopped.
+
+Integration into current main preserves its asset-scoped shader source cache;
+annotation capabilities are part of that cached interface. The gate takes an
+explicit `view_owner`, pauses that source writer during its disposable negative
+fixture and verifies restoration of its original pause state. The merged
+production build and surface gate (six checks), updated interaction gate
+(36 checks), and skill catalogue pass. API documentation was regenerated from
+the merged binary's 247-command schema. Performance measurements above belong
+to the pre-integration commit `89e03c037` and were not repeated as merged-tree
+FPS acceptance.

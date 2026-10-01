@@ -1,17 +1,20 @@
 // Production GUI gate, attached to an addressable scene entity with RunScenarioAsset.
-// params: #{ doc_id: document_id, route_path: "/scene/route" }.
-// Mutates only its disposable view.
+// params: #{ doc_id: document_id, route_path: "/scene/route", view_owner: program_entity_id }.
+// Pause the explicit view writer while checking disposable publication; restore its pause state.
+// Leaves authored route facts unchanged.
 const TEST_KIND = "editor";
 import "lunco://scripting/tools/waypoint_editor" as waypoint_editor;
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["QueryUsdPrim", "QueryUsdPrims", "ResolveUsdTarget", "InspectUsdCurveView"],
+    #{ modelica_entities: [], entity_reads: [ctx.view_owner], entity_writes: [ctx.view_owner],
+       query_reads: ["QueryUsdPrim", "QueryUsdPrims", "ResolveUsdTarget", "InspectUsdCurveView", "ScriptInspect"],
        required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
     this.done = true;
+    this.view_owner = ();
+    if ctx.view_owner == () { throw "view_owner is required for exclusive presentation inspection"; }
     if ctx.route_path == () || ctx.doc_id == () { throw "doc_id and route_path are required"; }
     let owner = query("QueryUsdPrim", #{ doc_id: ctx.doc_id, path: ctx.route_path });
     if owner == () || owner.doc_id == () { throw "route document is unavailable: " + owner.to_string(); }
@@ -26,7 +29,27 @@ fn on_start(me, ctx) {
     this.checks = [];
     this.phase = 0;
     this.ticks = 0;
+    let writer = query("ScriptInspect", #{ target: ctx.view_owner });
+    if writer == () || writer.scripted != true { throw "view_owner has no live scenario"; }
+    this.owner_was_paused = writer.paused;
+    let paused = cmd("SetScenarioPaused", #{ target: ctx.view_owner, paused: true });
+    if paused.ok != true { throw "view_owner could not be paused"; }
+    this.view_owner = ctx.view_owner;
     this.done = false;
+}
+
+fn restore_view_owner(state) {
+    if state.view_owner != () {
+        let restored = cmd("SetScenarioPaused", #{ target: state.view_owner, paused: state.owner_was_paused });
+        if restored.ok != true { throw "view_owner pause state could not be restored"; }
+        state.view_owner = ();
+    }
+    state
+}
+
+fn on_stop(me, ctx) {
+    if this.view_owner != () { submit_view(this, this.points); }
+    this = restore_view_owner(this);
 }
 
 fn inspect_view(state) {
@@ -43,6 +66,8 @@ fn on_tick(me, ctx) {
     this.ticks += 1;
     if this.ticks > 3600 {
         this.checks.push(t_true(false, "surface annotation gate timed out"));
+        submit_view(this, this.points);
+        this = restore_view_owner(this);
         report_verdict(this.checks, "ROUTE SURFACE ANNOTATION", "ROUTE_SURFACE_ANNOTATION");
         this.done = true;
         return;
@@ -83,6 +108,14 @@ fn on_tick(me, ctx) {
             && to_int(view.result_segment_count) == this.points.len() - 1
             && view.applied_revision == view.requested_revision && to_int(view.surface_binding_count) > 0,
             "current surface publication restores the sparse route"));
+        this = restore_view_owner(this);
+        this.phase = 3;
+        return;
+    }
+    if this.phase == 3 {
+        let writer = query("ScriptInspect", #{ target: ctx.view_owner });
+        this.checks.push(t_true(writer != () && writer.paused == this.owner_was_paused,
+            "the explicit view writer retains its original pause state after the gate"));
         report_verdict(this.checks, "ROUTE SURFACE ANNOTATION", "ROUTE_SURFACE_ANNOTATION");
         this.done = true;
     }

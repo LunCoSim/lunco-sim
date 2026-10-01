@@ -140,7 +140,8 @@ For a DEM route, require `InspectUsdCurveView.projection = "terrain_surface"`,
 a positive `surface_binding_count`, and exactly one segment per authored leg;
 the separate mesh stays hidden. Right-click identity comes from a foreground
 terrain hit against the published stroke. Use `route_surface_annotation.rhai`
-through `RunScenarioAsset` for publication and missing-coverage evidence. The
+through `RunScenarioAsset` for publication and missing-coverage evidence; pass
+its explicit `view_owner` scenario so the gate can isolate and restore that writer. The
 next primary click commits a moved route point through the canonical
 `@runtime@` USD edit path, whose projected change updates the ribbon once. The
 `route_interaction` production gate verifies that Move selects and retains the
