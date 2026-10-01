@@ -17,6 +17,7 @@ impl Plugin for UsdAuthoredRuntimePlugin {
     fn build(&self, app: &mut App) {
         lunco_usd_bevy_core::program::install_modelica_network_membership_cache(app);
         app.register_type::<lunco_camera_core::CameraFollow>();
+        app.register_type::<lunco_camera_core::CameraFollowHeight>();
         app.add_observer(control_runtime::queue_authored_runtime_projection);
         app.add_systems(
             Update,
