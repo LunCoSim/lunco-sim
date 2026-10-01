@@ -46,6 +46,13 @@ temporarily removes and reinserts the resource, which marks it changed even
 when the closure only reads it. Scope a mutable borrow only around a real
 state transition; otherwise a steady Builder repaint can wake change-detection
 systems and full-scene reconciliation on the next Update.
+USD authored/composed text painting borrows `UsdViewportState` and its cached
+source strings. Check `usd_preview_render_layer_propagation` when diagnosing
+preview invalidation; report traversal cost separately from frame time. Opening
+several previews must not add bodies, colliders, or joints to the mounted scene.
+For SysML requirements rebuilds, inspect `sysml_requirements_rebuild` input
+flags. Domain notification publishers check `has_pending_events` before
+mutably draining their registry; an empty queue must not invalidate readers.
 The shell's steady `WorkbenchSnapshot` check compares borrowed dock and
 perspective iterators before materializing owned vectors; preserve that
 allocation-free stable path when changing layout publication.

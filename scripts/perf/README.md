@@ -37,3 +37,20 @@ interaction. Click context carries that same owner as `active_pointer_move`.
 Idle primary clicks perform no route queries. Active route placement resolves
 its explicit route and preview target; semantic add-point gestures may discover
 routes. This bound is independent of the model hierarchy size.
+
+## USD Editor tabs
+
+`usd_editor_tabs.py` owns a fresh production session and opens each exact source
+as an Editor preview. It matches `ListOpenDocuments` file origins to preview
+identities, waits for projection readiness, then samples each settled Visual
+tab and the final authored/composed text views. It records physics counts before
+and after, API state, frame samples, and a screenshot. It does not edit sources.
+
+```sh
+python3 scripts/perf/usd_editor_tabs.py --port 4749 --scene /absolute/scene.usda \
+  --file /absolute/first.usda --file /absolute/second.usda \
+  --output target/perf/editor-tabs
+```
+
+This Linux driver verifies the launched process through `/proc`. Record other
+running workloads and use a separate unprofiled run for product acceptance.

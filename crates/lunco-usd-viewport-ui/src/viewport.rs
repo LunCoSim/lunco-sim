@@ -469,49 +469,51 @@ fn render_preview_text(
     });
     ui.separator();
 
-    let _ = ctx.resource_scope::<UsdViewportState, _>(|_, state| {
-        let Some(view) = state.view(view_id) else {
-            ui.label("This preview view is no longer available.");
-            return;
-        };
-        let Some(session) = state.session(view.preview()) else {
-            ui.label("This preview session is no longer available.");
-            return;
-        };
-        let fresh = session.text.displayed_generation == Some(generation)
-            && session.text.requested_generation == Some(generation);
-        if !fresh {
-            if let Some(error) = &session.text.error {
-                ui.label(egui::RichText::new(error).weak());
-            } else if session.text.loading {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(egui::RichText::new("Loading USD text…").weak().italics());
-                });
-            } else {
-                ui.label(egui::RichText::new("USD text is not available yet.").weak());
-            }
-            return;
-        }
-        let text = match text_layer {
-            UsdPreviewTextLayer::Authored => session.text.authored.as_deref(),
-            UsdPreviewTextLayer::Composed => session.text.composed.as_deref(),
-        };
-        let Some(text) = text else {
-            ui.label(egui::RichText::new("USD text is not available yet.").weak());
-            return;
-        };
-        let mut text = text;
-        egui::ScrollArea::both()
-            .auto_shrink([false; 2])
-            .show(ui, |ui| {
-                ui.add(
-                    lunco_workbench_widgets::text_editor::code(&mut text)
-                        .desired_width(f32::INFINITY)
-                        .interactive(false),
-                );
+    let Some(state) = ctx.resource::<UsdViewportState>() else {
+        ui.label("The USD preview state is no longer available.");
+        return;
+    };
+    let Some(view) = state.view(view_id) else {
+        ui.label("This preview view is no longer available.");
+        return;
+    };
+    let Some(session) = state.session(view.preview()) else {
+        ui.label("This preview session is no longer available.");
+        return;
+    };
+    let fresh = session.text.displayed_generation == Some(generation)
+        && session.text.requested_generation == Some(generation);
+    if !fresh {
+        if let Some(error) = &session.text.error {
+            ui.label(egui::RichText::new(error).weak());
+        } else if session.text.loading {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(egui::RichText::new("Loading USD text…").weak().italics());
             });
-    });
+        } else {
+            ui.label(egui::RichText::new("USD text is not available yet.").weak());
+        }
+        return;
+    }
+    let text = match text_layer {
+        UsdPreviewTextLayer::Authored => session.text.authored.as_deref(),
+        UsdPreviewTextLayer::Composed => session.text.composed.as_deref(),
+    };
+    let Some(text) = text else {
+        ui.label(egui::RichText::new("USD text is not available yet.").weak());
+        return;
+    };
+    let mut text = text;
+    egui::ScrollArea::both()
+        .auto_shrink([false; 2])
+        .show(ui, |ui| {
+            ui.add(
+                lunco_workbench_widgets::text_editor::code(&mut text)
+                    .desired_width(f32::INFINITY)
+                    .interactive(false),
+            );
+        });
 }
 
 fn state_session_edit_target(state: &UsdViewportState, preview: UsdPreviewId) -> Option<&str> {
@@ -567,6 +569,67 @@ impl InstancePanel for UsdPreviewViewPanel {
                 kind: USD_PREVIEW_VIEW_PANEL_ID,
                 instance,
             });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunco_usd_document::document::LayerId;
+    use lunco_usd_viewport_core::{UsdPreviewSession, UsdPreviewView};
+
+    #[test]
+    fn preview_text_paint_preserves_resource_change_detection() {
+        let mut world = World::new();
+        let mut registry = DocumentRegistry::<UsdDocument>::default();
+        let doc = registry
+            .open_file("/tmp/preview_text_paint.usda", "#usda 1.0\n".to_string())
+            .0;
+        let generation = registry.host(doc).unwrap().generation();
+        world.insert_resource(registry);
+        let root = world.spawn_empty().id();
+        let preview = UsdPreviewId::for_document(doc);
+        let view_id = UsdPreviewViewId(1);
+        let mut session = UsdPreviewSession::new(
+            preview,
+            doc,
+            LayerId::root(),
+            root,
+            Handle::default(),
+            1,
+            view_id,
+        );
+        session.text.requested_generation = Some(generation);
+        session.text.displayed_generation = Some(generation);
+        session.text.authored = Some("#usda 1.0\n".to_string());
+        session.text.composed = Some("#usda 1.0\ndef Xform \"Composed\" {}\n".to_string());
+        let mut state = UsdViewportState::default();
+        state.insert(session);
+        assert!(
+            state
+                .insert_view(UsdPreviewView::new(view_id, preview, root, root, root))
+                .is_ok()
+        );
+        world.insert_resource(state);
+        world.clear_trackers();
+        let egui = egui::Context::default();
+        for layer in [UsdPreviewTextLayer::Authored, UsdPreviewTextLayer::Composed] {
+            let _ = egui.run_ui(egui::RawInput::default(), |ui| {
+                render_preview_text(
+                    ui,
+                    &mut PanelCtx::new(&mut world),
+                    view_id,
+                    Some(doc),
+                    layer,
+                );
+            });
+            assert!(
+                !world
+                    .get_resource_ref::<UsdViewportState>()
+                    .unwrap()
+                    .is_changed()
+            );
         }
     }
 }

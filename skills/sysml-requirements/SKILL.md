@@ -50,6 +50,11 @@ the canonical `SysmlDocument` at the declaration or diagnostic location.
 `SaveSysmlDocument` commands. The text editor is read-only when the document is
 not writable or its source revision conflicts with the open draft.
 
+The presentation model rebuilds when Twin, analysis, source-document, or
+evidence inputs change. Empty lifecycle queues are read before a mutable
+registry drain; idle publishing must not mark documents changed. Use
+`sysml_requirements_rebuild` input flags when profiling repeated rebuilds.
+
 The panel presents three independent status dimensions with separate filters:
 structured requirement evidence, linked scene-test execution, and model
 coverage (`require` criteria and resolved `verify` links). Requirement details

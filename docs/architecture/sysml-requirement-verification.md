@@ -76,6 +76,11 @@ uses the same four states; generic scene tests may continue to emit PASS/FAIL.
 Component observers should put clock/root/package facts in `metrics`; they
 must not copy requirement thresholds there.
 
+The requirements presentation model rebuilds after changes to its Twin,
+analysis, source-document registry, or evidence inputs. Idle document-event
+publishing must preserve registry change detection, so opening USD previews
+does not repeatedly reconstruct the SysML model on subsequent frames.
+
 The windowed **SysML Requirements** panel consumes inline check tables and
 bounded result events. It associates each retained check with its requirement,
 channel, verification, source revision, and simulation tick, then presents its

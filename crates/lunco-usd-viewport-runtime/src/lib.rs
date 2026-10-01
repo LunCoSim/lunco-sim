@@ -1211,6 +1211,11 @@ fn propagate_preview_render_layer(
     if !state.is_changed() && q_newly_parented.is_empty() {
         return;
     }
+    let _span = bevy::log::info_span!(
+        "usd_preview_render_layer_propagation",
+        previews = state.session_count()
+    )
+    .entered();
 
     for session in state.sessions() {
         let preview_layers = RenderLayers::layer(session.render_layer);

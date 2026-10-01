@@ -3205,17 +3205,16 @@ fn wire_usd_journal_handle(
 /// Each frame, drain the registry's pending-event rings into the
 /// canonical [`lunco_doc_bevy`] notification triggers.
 ///
-/// Mirrors the publish-events system in `lunco-modelica-core`. Cheap
-/// no-op when nothing is pending; gated implicitly by the
-/// `Vec::is_empty` checks inside `drain_pending`.
+/// Borrow the lifecycle rings before admitting a mutable drain so an idle
+/// frame preserves the registry’s change detection.
 fn drain_usd_pending_events(
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     mut commands: Commands,
 ) {
-    let pending = registry.drain_pending();
-    if pending.opened.is_empty() && pending.changed.is_empty() && pending.closed.is_empty() {
+    if !registry.has_pending_events() {
         return;
     }
+    let pending = registry.drain_pending();
     for doc in pending.opened {
         commands.trigger(DocumentOpened::local(doc));
     }

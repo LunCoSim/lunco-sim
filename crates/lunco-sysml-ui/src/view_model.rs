@@ -201,6 +201,15 @@ pub(crate) fn produce_sysml_requirements_view_model(
         return;
     }
     *initialized = true;
+    let _span = bevy::log::info_span!(
+        "sysml_requirements_rebuild",
+        workspace = workspace.as_ref().is_some_and(Res::is_changed),
+        roots = roots.as_ref().is_some_and(Res::is_changed),
+        analyses = analyses.as_ref().is_some_and(Res::is_changed),
+        documents = documents.as_ref().is_some_and(Res::is_changed),
+        evidence = evidence.as_ref().is_some_and(Res::is_changed),
+    )
+    .entered();
 
     let next = build_view_model(
         workspace.as_deref(),

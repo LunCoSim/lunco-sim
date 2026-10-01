@@ -43,7 +43,8 @@ so that before/after pair is not movement-rebuild evidence.
 The production editor `route_interaction` gate passes 36 checks, including
 native look, invalid raw-motion and subscription rejection, idle clicks, coalesced subscribed
 preview, stable preview document generation, placement, delete/undo, and ribbon
-states. `route_lifecycle` passes 125 checks. Both touched route tests use named
+states. `route_lifecycle` emits one PASS verdict with 110 checks after retaining
+the verdict helper’s returned state. Both touched route tests use named
 behavior-tree actions and sequencing.
 
 ## Remaining work
@@ -69,3 +70,7 @@ acceptance, but the repeated crossing times require owner attribution.
 The motion driver waits for observed native yaw after command admission, under
 its explicit deadline. A command receipt is not a controller-consumption
 barrier. Non-finite driver parameters fail before issuing input.
+
+The windowed lifecycle gate also reports that the shared test folder contains
+two Twin policy manifests. Its route verdict does not establish a valid Twin
+policy bootstrap for that folder; fixture policy isolation remains open.

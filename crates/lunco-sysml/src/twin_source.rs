@@ -317,6 +317,9 @@ pub(crate) fn drain_sysml_document_events(
     mut registry: ResMut<DocumentRegistry<SysmlDocument>>,
     mut commands: Commands,
 ) {
+    if !registry.has_pending_events() {
+        return;
+    }
     let pending = registry.drain_pending();
     for document in pending.opened {
         commands.trigger(DocumentOpened::local(document));
@@ -404,4 +407,66 @@ fn report_source_error(commands: &mut Commands, twin_name: &str, detail: impl In
     let message = format!("Twin `{twin_name}` SysML source load failed: {detail}");
     error!("[sysml] {message}");
     lunco_core::trigger_runtime_error(commands, SYSML_TWIN_SOURCE_LOAD_FAILED, message);
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn document_notifications_preserve_idle_change_detection() {
+        let mut app = App::new();
+        app.init_resource::<DocumentRegistry<SysmlDocument>>()
+            .add_systems(Update, drain_sysml_document_events);
+        app.update();
+        app.world_mut().clear_trackers();
+        app.update();
+        assert!(
+            !app.world()
+                .get_resource_ref::<DocumentRegistry<SysmlDocument>>()
+                .unwrap()
+                .is_changed()
+        );
+        let doc = app
+            .world_mut()
+            .resource_mut::<DocumentRegistry<SysmlDocument>>()
+            .open_file(
+                "/tmp/sysml_notification_change_detection.sysml",
+                "package Fixture {}".to_string(),
+            )
+            .0;
+        assert!(
+            app.world()
+                .resource::<DocumentRegistry<SysmlDocument>>()
+                .has_pending_events()
+        );
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<DocumentRegistry<SysmlDocument>>()
+                .has_pending_events()
+        );
+        app.world_mut().clear_trackers();
+        app.update();
+        assert!(
+            !app.world()
+                .get_resource_ref::<DocumentRegistry<SysmlDocument>>()
+                .unwrap()
+                .is_changed()
+        );
+        app.world_mut()
+            .resource_mut::<DocumentRegistry<SysmlDocument>>()
+            .remove_document(doc);
+        assert!(
+            app.world()
+                .resource::<DocumentRegistry<SysmlDocument>>()
+                .has_pending_events()
+        );
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<DocumentRegistry<SysmlDocument>>()
+                .has_pending_events()
+        );
+    }
 }
