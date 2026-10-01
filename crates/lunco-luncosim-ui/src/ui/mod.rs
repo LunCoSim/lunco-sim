@@ -257,6 +257,9 @@ impl Plugin for LunCoSimUiPlugin {
             .add_systems(lunco_core::SceneTeardown, reset_runtime_ui_dropdowns)
             .add_observer(reset_runtime_ui_dropdowns_on_twin_closed);
         dataset_provisioning::install(app);
+        app.insert_resource(lunco_workbench_guided_ui::GuidedObjectivesVisibility {
+            visible_in_perspective: Some(lunco_workbench_core::PerspectiveId("sandbox_view")),
+        });
         // `lunco_render_bevy::LuncoRenderPlugin` owns the wireframe pass used by
         // per-prim contour display. Keep it at the render boundary so this UI
         // composition does not install a duplicate Bevy plugin.

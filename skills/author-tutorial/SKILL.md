@@ -59,6 +59,10 @@ Use the shared prelude:
 - `input_binding(...)`/`input_hint(...)` for the controller-owned semantic
   labels.
 
+In LunCoSim, mission objectives are shown in View. Tutorial hints and actions
+remain visible in every perspective, as do spotlight and coach-step overlays;
+use those overlays to guide learners toward Builder or Editor panel anchors.
+
 Use `panel.center` for the viewport or central work area, a generic
 `panel.side_browser`, `panel.right_inspector`, or `panel.bottom` anchor for a
 whole dock, and `panel.<id>` for a specific panel. Choose an anchor published

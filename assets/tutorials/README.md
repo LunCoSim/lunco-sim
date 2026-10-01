@@ -65,6 +65,10 @@ Tutorial controls use semantic input bindings (`input_hint(...)`) and
 progression uses semantic commands or authoritative state. Do not hardcode
 physical keys or advance from a timer.
 
+In LunCoSim, mission objectives appear in View. Tutorial hints and actions
+remain visible in every perspective, as do spotlight captions and coach-step
+cards over authored Builder or Editor panel anchors.
+
 ## Test without rebuilding Rust
 
 Put runtime assertions in `assets/scenarios/tests/` and execute them through

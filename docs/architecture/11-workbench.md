@@ -267,7 +267,13 @@ the workbench's menu, status, inspector, and window-control boundaries without
 inventing per-window screen offsets. Non-interactive overlays do not become
 input owners; modal behavior belongs to the shared modal host.
 
-Tutorial presentation uses the optional
+The mission objective checklist uses the optional
+`lunco_workbench_guided_ui::GuidedObjectivesVisibility` host policy. LunCoSim
+restricts the checklist to the `sandbox_view` perspective; other hosts show it
+in every perspective by default. Tutorial hints, authored action buttons,
+spotlights, coach cards, and recovery surfaces remain available over Builder
+and Editor when a lesson targets those views. Their authored anchors still have
+to resolve in the active layout. Tutorial presentation uses the optional
 `lunco_workbench_guided_ui::GUIDED_OVERLAY_ORDER`
 (`egui::Order::Middle`) for its HUD, ring, coach/recovery card, and completion
 prompt. Its painter/input scrims use the shared
