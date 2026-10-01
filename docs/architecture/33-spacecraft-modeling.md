@@ -263,7 +263,10 @@ to `[RIGID_BODY_GROUP, REVOLUTE_JOINT_GROUP]` (`lunco-cosim/src/ports.rs`).
   motor. A drive with neither coefficient is
   a positioner, not a spring, and
   keeps the overdamped 3 Hz `SpringDamper` model. `maxForce` + targets are honored
-  throughout. Wheels are unaffected: their revolute joints
+  throughout. Native `angle` and `displacement` port commands enable the motor
+  and set its position target and zero velocity target, preserving its configured
+  motor model and force/torque limit, including an explicitly zero limit.
+  Wheels are unaffected: their revolute joints
   are built in `lunco-mobility`, not the authored-joint path, so the G6
   `drive:angular:maxForce` wheelie cannot recur here.
 - **Proof:** `assets/scenes/tests/prismatic_drive.usda` — a standard

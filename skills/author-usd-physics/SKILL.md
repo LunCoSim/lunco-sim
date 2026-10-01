@@ -26,6 +26,11 @@ schedule. Do not duplicate standard fields under `lunco:*`. Missing or invalid
 fields fail projection; they are never replaced by a target, force cap, or
 solver-resolution workaround.
 
+Native joint `angle` and `displacement` commands preserve the configured drive
+model and force/torque limit. They enable the motor and change its position
+target with zero target velocity; author drive gains and limits through the
+standard USD drive owner rather than through command-side tuning.
+
 Startup joint topology is prepared while the shared fixed clock is held. The
 BigSpace physics bridge seeds authored body poses in `PreUpdate`; USD joints
 are projected in `JointPreparation` during `Update`, after USD simulation
