@@ -38,9 +38,8 @@ const AA_CUT_PX: f32 = 5.0;
 const AA_RAMP_PX: f32 = 7.0;
 const BUMP_MAX_SLOPE: f32 = 0.65;
 
-/// Remap `x` from [lo, hi] to [0, 1], clamped. LINEAR on purpose — every terrain
-/// shader's bump strengths and albedo ramps are authored against this response,
-/// so a smoothstep here would quietly restyle every terrain material.
+/// Linear, clamped remap for authored colour layers. Relief applies its own
+/// smooth height remap in `layer_gradient` so its normal remains continuous.
 fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
     return saturate((x - lo) / (hi - lo));
 }
@@ -331,7 +330,9 @@ fn layer_height(p: vec3<f32>, scale: f32, octaves: i32, gain: f32, lo: f32, hi: 
 #endif
 }
 
-/// Value and gradient of one ramped FBM layer at terrain-stable position `p`.
+/// Value and gradient of a smooth, bounded FBM relief layer. The cubic height
+/// remap brings its slope continuously to zero at both clipping thresholds.
+/// Colour-only layers retain the linear `ramp`; relief needs a continuous normal.
 /// The gradient is with respect to the input position in inverse metres.
 fn layer_gradient(
     p: vec3<f32>, scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32,
@@ -347,11 +348,9 @@ fn layer_gradient(
     raw_height = sample.x;
     raw_gradient = sample.yzw * scale;
 #endif
-    let height = ramp(raw_height, lo, hi);
-    var gradient = vec3<f32>(0.0);
-    if (raw_height > lo && raw_height < hi) {
-        gradient = raw_gradient / (hi - lo);
-    }
+    let t = ramp(raw_height, lo, hi);
+    let height = t * t * (3.0 - 2.0 * t);
+    let gradient = raw_gradient * (6.0 * t * (1.0 - t) / (hi - lo));
     return vec4(height, gradient);
 }
 

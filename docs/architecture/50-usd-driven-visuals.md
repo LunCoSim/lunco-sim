@@ -215,6 +215,11 @@ sounds like: a colour belongs in a bound `Material`, where USD says it belongs, 
 
 ## Casting shadows — `primvars:doNotCastShadows`
 
+Terrain shadow production and filtered regolith detail follow the
+[terrain material contract](terrain-layered-rendering.md#shadow-ownership).
+Scatter boulders share meshes and a linear-reflectance `PbrLook`, and cast
+shadows to provide contact and scale cues.
+
 Alpha does not answer this question. A blended surface is still rasterised opaquely into
 the shadow map, so a translucent plume throws a hard shadow until told not to:
 

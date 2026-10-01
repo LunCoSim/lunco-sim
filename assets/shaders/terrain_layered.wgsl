@@ -6,13 +6,14 @@
 //! shadow march) is the **floor**: even where a layer map is low-res or absent
 //! the rover camera still sees real close-range detail. Larger procedural relief
 //! remains available for non-measured regolith, while measured DEM geometry owns
-//! its macro/mid/fine normal bands. On top of it ride UV-registered raster **layers**
+//! its landform normals. Footprint-filtered sub-metre clumps and grain remain
+//! shading detail on measured terrain. On top ride UV-registered raster **layers**
 //! (design `terrain-layered-pipeline-design.md`
 //! Part C.2), each blended by a reflected `weight_*` knob:
 //!
 //!   * albedo  (binding 2/3) — real colour raster (e.g. the NASA lunar mosaic
-//!     downloaded via `Assets.toml`); it owns colour variation at full weight,
-//!     while procedural colour is only the un-authored fallback.
+//!     downloaded via `Assets.toml`); it owns the colour frequencies it resolves.
+//!     Filtered sub-texel grain adds close detail around that colour's mean.
 //!   * mineral (binding 4/5) — classification/analysis OVERLAY (e.g. the LROC
 //!     slope map): composited UNLIT after lighting/shadowing, so it stays
 //!     readable in shadow (doc 18 §4 — overlays are data, not material).
@@ -20,12 +21,9 @@
 //!   * normal  (binding 8/9) — meso-scale normal (DEM-derived Sobel) perturbing
 //!     the procedural bump normal.
 //!
-//! A `weight_* = 0` layer contributes nothing, so this shader is identical to
-//! `regolith.wgsl` until the engine binds a map and raises its weight — the
-//! material can carry the slots with `None` (Bevy fallback image) and cost
-//! nothing. Maps are sampled by the planar UV the horizon bake establishes, so
-//! they only apply under `#ifdef VERTEX_UVS_A` (same guard as the shadow march);
-//! with no UVs the shader degrades to pure procedural.
+//! A `weight_* = 0` layer contributes nothing. Maps are sampled by the planar
+//! UV the horizon bake establishes, under `#ifdef VERTEX_UVS_A` (the shadow
+//! march uses the same guard); without UVs the material is procedural.
 //!
 //! Self-describing: the engine reflects `struct Material` (field → std140 offset)
 //! and the `//!@` annotations, so every `weight_*` is a free Inspector slider /
@@ -161,7 +159,7 @@ struct Material {
     hf_size:           vec2<f32>,  // engine-filled: heightfield extent (m)
     hf_res:            f32,  // engine-filled: heightfield resolution
     terrain_geometry_on: f32, // engine-filled: measured DEM owns relief
-    csm_far:           f32,  // engine-filled: CSM far bound (m); march fades in beyond
+    csm_far:           f32,  // engine-filled: native terrain shadow range; 0 = heightfield everywhere
     shadow_cache_on:   f32,  // engine-filled: 1 = sample pre-baked shadow cache, 0 = ray-march
     horizon_march_steps: f32, // engine-filled: configured live ray-march iterations
     map_texel_size_m:  f32,  // engine-filled: level-zero map spacing (m)
@@ -260,20 +258,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var fine_h = 0.5;
     var micro_h = 0.5;
     if (micro_fade > 0.0) {
-        detail_n = bump_layer(detail_n, detail_p, micro_scale, 1, 0.5, 0.45, 0.57, micro_bump * micro_fade, &micro_h);
+        detail_n = bump_layer(detail_n, detail_p, micro_scale, 1, 0.5, 0.1, 0.9, micro_bump * micro_fade, &micro_h);
     }
-    // A measured DEM already carries its macro/mid/fine relief in geometry.
-    // Repeating those bands in the fragment normal creates a second, view- and
-    // LOD-dependent surface and can turn grazing Sun response into false dark
-    // patches. Keep only the footprint-filtered micro grain on DEM terrain.
+    // Measured geometry owns landform relief. Sub-metre clumps and grain remain
+    // shading detail; the mid band is reserved for non-measured surfaces.
     if (mat.terrain_geometry_on < 0.5 && mid_fade > 0.0) {
         detail_n = bump_layer(detail_n, detail_p, mid_scale, 4, 0.55, 0.35, 0.65, mid_bump * mid_fade, &mid_h);
     }
-    if (mat.terrain_geometry_on < 0.5 && macro_fade > 0.0) {
-        detail_n = bump_layer(detail_n, detail_p, macro_scale, 5, 0.6, 0.34, 0.70, macro_bump * macro_fade, &macro_h);
+    if (macro_fade > 0.0) {
+        detail_n = bump_layer(detail_n, detail_p, macro_scale, 2, 0.6, 0.1, 0.9, macro_bump * macro_fade, &macro_h);
     }
-    if (mat.terrain_geometry_on < 0.5 && fine_fade > 0.0) {
-        detail_n = bump_layer(detail_n, detail_p, fine_scale, 3, 0.5, 0.45, 0.57, fine_bump * fine_fade, &fine_h);
+    if (fine_fade > 0.0) {
+        detail_n = bump_layer(detail_n, detail_p, fine_scale, 3, 0.5, 0.1, 0.9, fine_bump * fine_fade, &fine_h);
     }
 
     var n = detail_n;
@@ -281,10 +277,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     n = terrain_detail_normal_to_world(detail_n, in.instance_index);
 #endif
 
-    // Procedural colour is a fallback only. Once an authored orthophoto is
-    // active, adding this independent per-metre variation over it makes the
+    // Large-scale procedural colour is a fallback only. With an authored
+    // orthophoto, adding independent per-metre variation over it makes the
     // surface change between unrelated tones as the camera footprint and LOD
-    // change. The procedural normal and roughness layers remain independent.
+    // change. Sub-texel grain, normals, and roughness remain independent.
     if (procedural_albedo_weight > 0.0) {
         let dust_fade = aa_fade(0.008, pw);
         if (dust_fade > 0.0) {
@@ -297,7 +293,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
                 * procedural_albedo_weight;
     }
     let macro_rough = mix(0.5, macro_h, macro_fade);
-    var roughness = clamp(mix(macro_rough, 1.0, rough_mix), 0.05, 1.0);
+    var roughness = clamp(mat.roughness + (macro_rough - 0.5) * rough_mix, 0.05, 1.0);
 
     // ── Non-destructive raster layers (planar UV; weight 0 = no contribution).
     // Guarded by VERTEX_UVS_A: with no UVs we stay pure procedural.
@@ -373,32 +369,43 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
             clamp(mat.site_weight_ao, 0.0, 1.0) * site_material_weight,
         );
     }
-    // Normal: perturb the procedural WORLD normal toward the map's baked
-    // DEM-local ENU normal.  The mesh instance is the authoritative
-    // local->render transform (including the active BigSpace frame); treating
-    // the map bytes as world-space made a rotated terrain use a different light
-    // direction from its own geometry.
+    // The DEM map owns the landform band, independently of the grain band.
+    // Recover the detail's tangent slope around the geometric normal, then
+    // project it onto the selected landform normal. A full-weight DEM must not
+    // erase grain or inherit camera-dependent tile-normal interpolation.
     if (map_weight_normal > 0.0) {
         let n_baked = dem_normal_to_world(
             map_n.xyz, in.instance_index);
-        n = normalize(mix(n, n_baked, map_weight_normal));
+        let geometric_n = normalize(in.world_normal);
+        let detail_slope = geometric_n - n / max(dot(n, geometric_n), 1e-4);
+        let landform_n = normalize(mix(geometric_n, n_baked, map_weight_normal));
+        let landform_slope = detail_slope - landform_n * dot(detail_slope, landform_n);
+        n = normalize(landform_n - landform_slope);
     }
     // The derived normal's alpha carries the same DEM-anchored relief tone as
     // the streamed path. Authored normal maps intentionally do not supply it.
     albedo *= 1.0 + (map_n.a - 0.5) * (0.6 * map_weight_tone);
 #endif
 
-    // Procedural colour grain belongs to the procedural material. A measured
-    // orthophoto already owns the albedo frequencies it resolves; layering an
-    // unrelated noise field over it adds false colour and temporal shimmer.
-    if (micro_fade > 0.0 && micro_albedo > 0.0 && procedural_albedo_weight > 0.0) {
-        albedo *= 1.0 + (micro_h - 0.5) * micro_albedo * micro_fade;
+    // Resolved sub-texel grain modulates the material colour around its mean.
+    // The same stable position and footprint fade used for its normal prevent
+    // view-dependent speckle; broad colour remains owned by the orthophoto.
+    if (micro_fade > 0.0 && micro_albedo > 0.0) {
+        var grain_source_weight = 1.0;
+#ifdef VERTEX_UVS_A
+        let albedo_texel_m = mat.hf_size.x / f32(textureDimensions(albedo_tex).x);
+        grain_source_weight = mix(1.0,
+            smoothstep(1.0, 2.0, micro_scale * albedo_texel_m), authored_albedo_weight);
+#endif
+        albedo *= 1.0 + (micro_h - 0.5) * micro_albedo * micro_fade * grain_source_weight;
     }
 
     // Keep the high-frequency normal detail stable as it leaves the pixel
     // footprint. Its unresolved slope variance becomes GGX roughness instead
     // of vanishing at the anti-aliasing fade.
     roughness = filter_detail_roughness(roughness, micro_bump, micro_scale, micro_fade);
+    roughness = filter_detail_roughness(roughness, macro_bump, macro_scale, macro_fade);
+    roughness = filter_detail_roughness(roughness, fine_bump, fine_scale, fine_fade);
 
     var pbr_input = pbr_types::pbr_input_new();
     pbr_input.flags = mesh[in.instance_index].flags;

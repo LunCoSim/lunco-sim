@@ -373,25 +373,16 @@ fn bucket_radius_of(bucket: u32) -> f32 {
     ((bucket as f32 - 64.0) / 8.0).exp()
 }
 
-/// The ONE boulder look every rock — procedural or hand-placed — draws with.
-/// Exposed boulders are BRIGHTER than mature regolith (~0.2 vs ~0.12 albedo — fresh
-/// rock faces vs gardened dust). Near-black rocks with no cast shadow were literally
-/// invisible inside shadowed crater bowls ("invisible wall").
-///
-/// It is a `PbrLook` — appearance INTENT, not a material — so this crate names no
-/// material at all. `lunco-render-bevy` caches by `PbrLook::key()`, which means the
-/// thousands of rocks still resolve to ONE `StandardMaterial` and one bind group
-/// (the batching this scatter depends on), except that it can no longer be lost by
-/// forgetting to thread a shared handle through the loop.
+/// Shared boulder appearance uses linear reflectance, brighter than mature soil.
+/// The render owner caches this `PbrLook` by key, so scatter and placed rocks
+/// reuse one material and bind group while sharing the size-bucket meshes.
 fn rock_look() -> lunco_render::PbrLook {
     lunco_render::PbrLook {
-        base_color: Color::srgb(0.19, 0.19, 0.20).into(),
+        base_color: Color::linear_rgb(0.19, 0.19, 0.20).into(),
         perceptual_roughness: 1.0,
-        // Hundreds-to-thousands of scattered rocks: casting each into all 4 sun
-        // cascades every frame is a big chunk of the shadow pass. They still
-        // RECEIVE shadows; skip casting (their own tiny contact shadow isn't worth
-        // 4× re-submission of the whole field).
-        no_shadow_cast: true,
+        // Shared geometry and material keep the scatter batchable. Boulder
+        // shadows provide the contact and scale cues on low-sun terrain.
+        no_shadow_cast: false,
         ..Default::default()
     }
 }
