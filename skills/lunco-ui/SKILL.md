@@ -133,12 +133,18 @@ missing-host and unsupported-source rejection. Exercise the installed policy
 with `assets/scripting/tests/test_diagram_drop.rhai`.
 Use `connection_diagram_wiring.rhai` for composed sink authoring, undo and
 missing-target rejection in an owned document preview.
-The fixed Attached models toolbar opens exact program facets with
+The fixed Models toolbar opens exact program facets with
 `OpenConnectionNode.program_path`; an omitted program path retains normal
 double-click scope navigation. Show composed variants from cached source facts,
 never infer why a particular component is wired from its name. Program language
 badges use accents selected by Rhai and resolved through schematic theme roles.
 Verify these contracts with `connection_diagram_context.rhai`.
+Keep the Connections header compact: source/view and primary actions, then
+navigation, then a fixed-height selection summary. Place view files and schema
+options under View, composed variants under Details, and gesture/connection
+guidance under Help. Show acausal connectors as hollow diamonds with explicit
+labels and separate counts; zero causal outputs does not mean a physical model
+is disconnected. Show prim type and no authored ports for geometry/cameras.
 
 The Editor's `authoring_review` panel is the shared human-facing evidence
 surface for authored/runtime inspection. Its target chain must keep `selected`,

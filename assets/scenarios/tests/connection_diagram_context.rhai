@@ -67,6 +67,28 @@ fn on_tick(me, ctx) {
             if edge.kind == "Acausal" && (edge.source == ctx.battery_system + "/Battery" || edge.target == ctx.battery_system + "/Battery") { links += 1; }
         }
         this.checks.push(t_true(variant(diagram, "power") == "battery" && links == 4, "battery variant exposes its four authored motor connections"));
+        let torque_contract = false; let camera_contract = false; let flange_link = false;
+        for node in diagram.nodes {
+            if node.path == ctx.torque {
+                let inputs = 0; let outputs = 0; let connectors = 0;
+                for port in node.ports {
+                    if port.kind == "input" { inputs += 1; }
+                    if port.kind == "output" { outputs += 1; }
+                    if port.kind == "acausal" { connectors += 1; }
+                }
+                torque_contract = inputs == 1 && outputs == 0 && connectors == 1;
+            }
+            if node.path == ctx.camera {
+                let ports = 0;
+                for port in node.ports { if port.kind != "joint" { ports += 1; } }
+                camera_contract = ports == 0;
+            }
+        }
+        for edge in diagram.connections {
+            if edge.kind == "Acausal" && (edge.source == ctx.torque || edge.target == ctx.torque) { flange_link = true; }
+        }
+        this.checks.push(t_true(torque_contract && flange_link, "torque source has a causal command and a connected acausal flange, with no invented output"));
+        this.checks.push(t_true(camera_contract, "USD camera remains visible without invented signal ports"));
         this.result = cmd("OpenConnectionNode", #{ view_id: this.view, key: ctx.battery_system + "/Battery", program_path: "/AbsentProgram" });
         this.phase = 4; return;
     }

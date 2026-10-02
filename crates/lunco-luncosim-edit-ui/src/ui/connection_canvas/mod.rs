@@ -35,6 +35,7 @@ mod drop_assets;
 mod layout;
 mod navigation;
 mod projection;
+mod toolbar;
 mod view_files;
 mod visuals;
 pub use layout::{LayoutJobs, update_layouts};
@@ -1030,158 +1031,24 @@ impl Panel for UsdCanvasPanel {
             .and_then(|preview| viewport.and_then(|state| state.session(preview)))
             .is_some_and(UsdPreviewSession::projection_ready);
         ctx.resource_scope::<UsdCanvasState, ()>(|ctx, views| {
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut views.show_scene, true, "Active scene");
-                ui.selectable_value(&mut views.show_scene, false, "Editor document");
-            });
             let show_scene = views.show_scene;
             let preview = focused_preview;
             let state = if show_scene {
                 &mut views.scene
             } else {
-                let Some(preview) = preview else { ui.label("Choose a USD document in the Twin Browser."); return; };
+                let Some(preview) = preview else { toolbar::source_picker(ui, &mut views.show_scene); ui.label("Choose a USD document in the Twin Browser."); return; };
                 if !projection_ready { ui.label("The selected USD preview is settling."); return; }
                 let Some(state) = views.sessions.get_mut(&preview) else { ui.label("The document is being projected."); return; };
                 state
             };
-            if !state.built { ui.label("The loaded USD scene is being projected."); return; }
-            if let Some(host) = state.view_document.as_ref() {
-                let view_id = host.document().id().raw();
-                let mut requested_view = state.selected_view.clone();
-                ui.horizontal(|ui| {
-                    egui::ComboBox::from_id_salt(("connection_named_view", view_id)).selected_text(&requested_view).show_ui(ui, |ui| {
-                        for name in host.document().data().views.keys() { ui.selectable_value(&mut requested_view, name.clone(), name); }
-                    });
-                    if host.document().generation() != state.saved_view_generation { ui.label("Unsaved view"); }
-                });
-                if requested_view != state.selected_view {
-                    state.include_descendants = host.document().data().views[&requested_view].include_descendants;
-                    state.diagram_root = host.document().data().views[&requested_view].scope.clone();
-                    if !state.diagram_roots.contains(&state.diagram_root) {
-                        state.last_error = Some(format!("USD scope {} is unavailable; showing the source root", state.diagram_root));
-                        state.diagram_root = "/".into();
-                    }
-                    state.selected_view = requested_view;
-                    state.rebuild_view();
-                }
-                ui.collapsing("Layouts and view files", |ui| {
-                    ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut state.new_view_name).hint_text("New view name").desired_width(140.0));
-                    if ui.button("New view").clicked() { ctx.trigger(view_files::CreateConnectionView { view_id, name: state.new_view_name.clone(), scope: state.diagram_root.clone() }); }
-                    if ui.button("Undo layout").clicked() { ctx.trigger(view_files::UndoConnectionView { view_id, redo: false }); }
-                    if ui.button("Redo").clicked() { ctx.trigger(view_files::UndoConnectionView { view_id, redo: true }); }
-                    });
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut state.view_file_path).hint_text("Repository path to .lunco-view.toml").desired_width(320.0));
-                    if ui.button("Save views").clicked() { ctx.trigger(view_files::ConnectionViewFile { view_id, path: state.view_file_path.clone(), save: true, scope: state.diagram_root.clone(), include_descendants: state.include_descendants }); }
-                    if ui.button("Load views").clicked() { ctx.trigger(view_files::ConnectionViewFile { view_id, path: state.view_file_path.clone(), save: false, scope: state.diagram_root.clone(), include_descendants: state.include_descendants }); }
-                });
-                });
-            }
-
-            if show_scene { state.diagram_mode = true; }
-            ui.horizontal_wrapped(|ui| {
-                let title = state.source_uri.as_deref().and_then(|uri| uri.rsplit('/').next()).unwrap_or("USD topology");
-                ui.strong(title).on_hover_text(state.source_uri.as_deref().unwrap_or(""));
-                ui.label(format!("{} models · {} links", state.canvas.scene.node_count(), state.canvas.scene.edge_count()));
-                if ui.button("Fit").on_hover_text("Show the whole current system").clicked() { state.needs_fit = true; }
-                if ui.button("Auto arrange").on_hover_text("Reapply the authored layout policy; saved placements remain pinned").clicked() { state.rebuild_view(); }
-            });
-            if show_scene && ui.button("Edit connections").on_hover_text("Open this USD source for journaled port edits").clicked() {
-                if let Some(uri) = state.source_uri.as_ref() { ctx.trigger(lunco_usd_core::commands::OpenUsdSourceDocument { source: uri.clone() }); views.show_scene = false; return; }
-            }
-            let previous_mode = state.diagram_mode;
-            if !show_scene && !state.schema_roots.is_empty() {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut state.diagram_mode, true, "System diagram");
-                    ui.selectable_value(&mut state.diagram_mode, false, "Authored schema");
-                });
-            }
-            if previous_mode != state.diagram_mode { state.rebuild_view(); }
-            if let Some(scope) = state.source_nodes.iter().find(|node| node.path == state.diagram_root) {
-                match &scope.variants {
-                    Ok(variants) if !variants.is_empty() => {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.weak("USD variants:");
-                            for (name, selection) in variants {
-                                ui.label(format!("{name} = {selection}")).on_hover_text(&scope.path);
-                            }
-                        });
-                    }
-                    Err(error) => { ui.colored_label(lunco_theme::active(ui.ctx()).tokens.warning, format!("USD variants: {error}")); }
-                    _ => {}
-                }
-            }
-            if state.diagram_mode {
-                let mut requested = state.diagram_root.clone();
-                let mut went_back = false;
-                ui.horizontal_wrapped(|ui| {
-                    if ui.add_enabled(!state.navigation_history.is_empty(), egui::Button::new("← Back")).clicked() {
-                        if let Some(previous) = state.navigation_history.pop() { requested = previous; went_back = true; }
-                    }
-                    if ui.small_button("Scene").on_hover_text("Show the USD stage root").clicked() { requested = "/".into(); }
-                    let mut prefix = String::new();
-                    for segment in state.diagram_root.split('/').filter(|part| !part.is_empty()) {
-                        prefix.push('/'); prefix.push_str(segment);
-                        ui.label("›");
-                        if ui.selectable_label(prefix == state.diagram_root, segment).on_hover_text(&prefix).clicked() { requested = prefix.clone(); }
-                    }
-                    ui.menu_button("Find system…", |ui| {
-                        ui.add(egui::TextEdit::singleline(&mut state.scope_search).hint_text("Filter USD paths"));
-                        let needle = state.scope_search.to_lowercase();
-                        let choices: Vec<_> = state.diagram_roots.iter().filter(|path| needle.is_empty() || path.to_lowercase().contains(&needle)).collect();
-                        egui::ScrollArea::vertical().max_height(260.0).show_rows(ui, ui.text_style_height(&egui::TextStyle::Body), choices.len(), |ui, rows| {
-                            for i in rows { if ui.selectable_label(*choices[i] == requested, choices[i]).clicked() { requested = choices[i].clone(); ui.close(); } }
-                        });
-                    });
-                });
-                ui.horizontal_wrapped(|ui| {
-                    if ui.checkbox(&mut state.include_descendants, "Include nested models").on_hover_text("Show descendants together instead of navigating one system at a time").changed() { state.rebuild_view(); }
-                    ui.weak(if show_scene { "Drag to arrange · double-click a model to open it" } else { "Drag to arrange · drag between ports to connect" });
-                });
-                if requested != state.diagram_root {
-                    if !went_back { state.navigation_history.push(state.diagram_root.clone()); }
-                    state.diagram_root = requested;
-                    state.rebuild_view();
-                }
-            } else {
-            let mut requested_root = state.active_schema_root.clone().unwrap_or_default();
-            ui.horizontal(|ui| {
-                ui.label("System:");
-                egui::ComboBox::from_id_salt("usd_schema_root")
-                    .selected_text(
-                        requested_root
-                            .rsplit('/')
-                            .next()
-                            .filter(|leaf| !leaf.is_empty())
-                            .unwrap_or("Select a schema"),
-                    )
-                    .show_ui(ui, |ui| {
-                        for root in &state.schema_roots {
-                            let label = root
-                                .rsplit('/')
-                                .next()
-                                .filter(|leaf| !leaf.is_empty())
-                                .unwrap_or(root);
-                            ui.selectable_value(&mut requested_root, root.clone(), label)
-                                .on_hover_text(root);
-                        }
-                    });
-            });
-            if !requested_root.is_empty()
-                && state.active_schema_root.as_deref() != Some(requested_root.as_str())
-            {
-                state.active_schema_root = Some(requested_root);
-                state.rebuild_view();
-            }
-
-            if state.active_schema_root.is_none() {
-                ui.centered_and_justified(|ui| {
-                    ui.label("Select an authored schema to inspect its connections.");
-                });
+            if !state.built { toolbar::source_picker(ui, &mut views.show_scene); ui.label("The loaded USD scene is being projected."); return; }
+            if let Some(show_scene) = toolbar::render(ui, ctx, state, show_scene) {
+                views.show_scene = show_scene;
                 return;
             }
-
+            if !state.diagram_mode && state.active_schema_root.is_none() {
+                ui.label("Select an authored schema to inspect its connections.");
+                return;
             }
 
             if state.canvas.scene.node_count() == 0 {
@@ -1222,43 +1089,6 @@ impl Panel for UsdCanvasPanel {
                 state.needs_fit = false;
             }
 
-            ui.horizontal(|ui| {
-                let theme = lunco_theme::active(ui.ctx());
-                ui.colored_label(theme.schematic.wire_signal, "Causal (arrow)");
-                ui.colored_label(theme.schematic.wire_unknown, "Acausal (no arrow)");
-                ui.colored_label(theme.schematic.wire_mechanical, "Joint");
-                ui.separator();
-                ui.colored_label(lunco_theme::active(ui.ctx()).tokens.port_input, "input");
-                ui.colored_label(lunco_theme::active(ui.ctx()).tokens.port_output, "output");
-
-            });
-            // Keep one toolbar row so selecting a model does not move the canvas during a double-click.
-            ui.horizontal(|ui| {
-                let selected = state.canvas.selection.nodes().iter().next()
-                    .and_then(|id| state.canvas.scene.node(*id));
-                if let Some(node) = selected {
-                    let data = node.data.downcast_ref::<UsdPrimNodeData>();
-                    if let Some(data) = data.filter(|data| !data.programs.is_empty()) {
-                        ui.menu_button(format!("Attached models ({})", data.programs.len()), |ui| {
-                            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                                for program in &data.programs {
-                                    ui.label(format!("{} · {}", program.backend, program.path.rsplit('/').next().unwrap_or(&program.path)));
-                                    ui.weak(&program.source).on_hover_text(&program.path);
-                                    if let Some(issue) = &program.issue { ui.label(issue); }
-                                    if ui.add_enabled(program.issue.is_none(), egui::Button::new("Open model")).clicked() {
-                                        if let Some(host) = state.view_document.as_ref() {
-                                            ctx.trigger(navigation::OpenConnectionNode { view_id: host.document().id().raw(), key: data.view_key.clone(), program_path: Some(program.path.clone()) });
-                                        }
-                                        ui.close();
-                                    }
-                                    ui.separator();
-                                }
-                            });
-                        });
-                    } else { ui.weak("No attached models"); }
-                    ui.weak(&node.label);
-                } else { ui.weak("Select a prim to open its attached models"); }
-            });
             let (response, events) = state.canvas.ui(ui);
             state.canvas_rect = Some(lunco_canvas::Rect::from_min_max(lunco_canvas::Pos::new(response.rect.min.x, response.rect.min.y), lunco_canvas::Pos::new(response.rect.max.x, response.rect.max.y)));
             drop_assets::drop_ui(ui, &response, state, ctx);

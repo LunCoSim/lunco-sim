@@ -190,12 +190,26 @@ impl NodeVisual for UsdPrimNodeVisual {
                 "acausal" => theme.schematic.wire_unknown,
                 _ => t.node_border,
             };
-            painter.circle_filled(egui::pos2(p.x, p.y), r, col);
-            painter.circle_stroke(
-                egui::pos2(p.x, p.y),
-                r,
-                egui::Stroke::new(1.0, t.port_outline),
-            );
+            if port.kind.as_str() == "acausal" {
+                let center = egui::pos2(p.x, p.y);
+                painter.add(egui::Shape::convex_polygon(
+                    vec![
+                        center + egui::vec2(0.0, -r),
+                        center + egui::vec2(r, 0.0),
+                        center + egui::vec2(0.0, r),
+                        center + egui::vec2(-r, 0.0),
+                    ],
+                    fill,
+                    egui::Stroke::new(1.5, col),
+                ));
+            } else {
+                painter.circle_filled(egui::pos2(p.x, p.y), r, col);
+                painter.circle_stroke(
+                    egui::pos2(p.x, p.y),
+                    r,
+                    egui::Stroke::new(1.0, t.port_outline),
+                );
+            }
             if readable_rows {
                 let (anchor, offset) = if port.local_offset.x < node.rect.width() * 0.5 {
                     (egui::Align2::LEFT_CENTER, egui::vec2(9.0, 0.0))
@@ -213,11 +227,23 @@ impl NodeVisual for UsdPrimNodeVisual {
                 painter.clone().with_clip_rect(label_rect).text(
                     egui::pos2(p.x + offset.x, p.y + offset.y),
                     anchor,
-                    port.id
-                        .as_str()
-                        .split_once(':')
-                        .map(|(_, name)| name)
-                        .unwrap_or(port.id.as_str()),
+                    if port.kind.as_str() == "acausal" {
+                        format!(
+                            "{} · acausal",
+                            port.id
+                                .as_str()
+                                .split_once(':')
+                                .map(|(_, name)| name)
+                                .unwrap_or(port.id.as_str())
+                        )
+                    } else {
+                        port.id
+                            .as_str()
+                            .split_once(':')
+                            .map(|(_, name)| name)
+                            .unwrap_or(port.id.as_str())
+                            .to_string()
+                    },
                     port_font.clone(),
                     t.text_subdued,
                 );

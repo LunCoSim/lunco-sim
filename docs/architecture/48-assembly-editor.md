@@ -297,14 +297,21 @@ name convention, or ECS-only grouping state is introduced.
   `connection_diagram_views.rhai` covers navigation and invalid identities.
   Modelica `OpenFile` resolves registered asset URIs through `SchemeRegistry`
   on its existing worker, then reuses the file document and read-only ownership.
-  The persistent Attached models menu opens an exact program with
+  The persistent Models menu opens an exact program with
   `OpenConnectionNode.program_path`, including hidden descendants of a system.
   The owner validates that identity against its composed program facets;
   Rhai receives explicit node/program intent and selects the source editor.
   Selecting a card keeps a fixed toolbar row so double-click coordinates remain
   stable. Language badges and accents remain visible at overview zoom.
-  The current system's composed USD variant selections appear above navigation;
-  they explain configuration-dependent topology without inferring connections.
+  The compact header groups source/view, primary actions and Help in its first
+  row; breadcrumbs and Find occupy the second. Details exposes the exact source,
+  counts and composed variants. View contains descendant expansion, schema mode,
+  layout history and repository view files. The fixed selection row shows Models
+  and causal/acausal port counts, or the prim type and absence of authored ports.
+  Acausal connectors use hollow diamonds and explicit labels; they never imply
+  signal direction. Help explains navigation, authoring gestures and hierarchy
+  versus port wiring. Variant facts explain configuration-dependent topology
+  without inferring connections.
 - Library and Twin file rows carry a shared source drag identity. The Models
   palette carries its typed `ProgramAttachSpec`, preserving authored ports and
   `{host}` bindings. In a document diagram, drop USD onto empty space to add
