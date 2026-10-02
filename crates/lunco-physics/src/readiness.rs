@@ -264,6 +264,7 @@ mod tests {
     fn app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .init_resource::<lunco_core_runtime::SimTick>()
             .init_resource::<PhysicsHolds>()
             .init_resource::<Time<Physics>>()
             .add_plugins(ReadinessEffectPlugin);

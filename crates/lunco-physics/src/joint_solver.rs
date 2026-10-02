@@ -33,6 +33,10 @@ pub enum PhysicsJointSolvePass {
     Distance,
 }
 
+/// Ordered position-only sweeps after the single motor-integration pass.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct JointPositionSweep(u8);
+
 /// Runs after Avian's general warm-start pass and before XPBD constraints.
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct PhysicsJointWarmStart;
@@ -58,9 +62,22 @@ impl JointSolverOrder {
 
 trait OrderedJoint: Component {
     fn solver_entities(order: &JointSolverOrder) -> &[Entity];
+    fn set_motor_enabled(&mut self, _enabled: bool) -> Option<bool> {
+        None
+    }
 }
 
 macro_rules! ordered_joint {
+    ($joint:ty, $field:ident, motor) => {
+        impl OrderedJoint for $joint {
+            fn solver_entities(order: &JointSolverOrder) -> &[Entity] {
+                &order.$field
+            }
+            fn set_motor_enabled(&mut self, enabled: bool) -> Option<bool> {
+                Some(std::mem::replace(&mut self.motor.enabled, enabled))
+            }
+        }
+    };
     ($joint:ty, $field:ident) => {
         impl OrderedJoint for $joint {
             fn solver_entities(order: &JointSolverOrder) -> &[Entity] {
@@ -71,9 +88,9 @@ macro_rules! ordered_joint {
 }
 
 ordered_joint!(FixedJoint, fixed);
-ordered_joint!(RevoluteJoint, revolute);
+ordered_joint!(RevoluteJoint, revolute, motor);
 ordered_joint!(SphericalJoint, spherical);
-ordered_joint!(PrismaticJoint, prismatic);
+ordered_joint!(PrismaticJoint, prismatic, motor);
 ordered_joint!(DistanceJoint, distance);
 
 /// Replaces Avian's ECS-order-dependent XPBD joint loops with stable-key order.
@@ -113,27 +130,27 @@ impl Plugin for DeterministicJointSolverPlugin {
             )
             .add_systems(
                 SubstepSchedule,
-                stable_solve_xpbd_joint::<FixedJoint, FixedJointSolverData>
+                stable_solve_xpbd_joint::<FixedJoint, FixedJointSolverData, false>
                     .in_set(PhysicsJointSolvePass::Fixed),
             )
             .add_systems(
                 SubstepSchedule,
-                stable_solve_xpbd_joint::<RevoluteJoint, RevoluteJointSolverData>
+                stable_solve_xpbd_joint::<RevoluteJoint, RevoluteJointSolverData, false>
                     .in_set(PhysicsJointSolvePass::Revolute),
             )
             .add_systems(
                 SubstepSchedule,
-                stable_solve_xpbd_joint::<SphericalJoint, SphericalJointSolverData>
+                stable_solve_xpbd_joint::<SphericalJoint, SphericalJointSolverData, false>
                     .in_set(PhysicsJointSolvePass::Spherical),
             )
             .add_systems(
                 SubstepSchedule,
-                stable_solve_xpbd_joint::<PrismaticJoint, PrismaticJointSolverData>
+                stable_solve_xpbd_joint::<PrismaticJoint, PrismaticJointSolverData, false>
                     .in_set(PhysicsJointSolvePass::Prismatic),
             )
             .add_systems(
                 SubstepSchedule,
-                stable_solve_xpbd_joint::<DistanceJoint, DistanceJointSolverData>
+                stable_solve_xpbd_joint::<DistanceJoint, DistanceJointSolverData, false>
                     .in_set(PhysicsJointSolvePass::Distance),
             )
             .add_systems(
@@ -145,6 +162,31 @@ impl Plugin for DeterministicJointSolverPlugin {
                     .chain()
                     .in_set(PhysicsJointWarmStart),
             );
+        // Four total position passes close the high mass-ratio linkage while
+        // integrating its motors only once. Reverse sweeps propagate distal
+        // contact corrections back toward the supporting body.
+        for index in 0..3 {
+            let sweep = JointPositionSweep(index);
+            app.configure_sets(
+                SubstepSchedule,
+                sweep.in_set(XpbdSolverSystems::SolveUserConstraints),
+            );
+            if index > 0 {
+                app.configure_sets(SubstepSchedule, sweep.after(JointPositionSweep(index - 1)));
+            }
+            app.add_systems(
+                SubstepSchedule,
+                (
+                    stable_solve_xpbd_joint::<DistanceJoint, DistanceJointSolverData, true>,
+                    stable_solve_xpbd_joint::<PrismaticJoint, PrismaticJointSolverData, true>,
+                    stable_solve_xpbd_joint::<SphericalJoint, SphericalJointSolverData, true>,
+                    stable_solve_xpbd_joint::<RevoluteJoint, RevoluteJointSolverData, true>,
+                    stable_solve_xpbd_joint::<FixedJoint, FixedJointSolverData, true>,
+                )
+                    .chain()
+                    .in_set(sweep),
+            );
+        }
     }
 }
 
@@ -265,7 +307,7 @@ fn prepare_joint_solver_order(
     order.distance = distance_order.expect("validated distance joint order");
 }
 
-fn stable_solve_xpbd_joint<C, D>(
+fn stable_solve_xpbd_joint<C, D, const POSITION_ONLY: bool>(
     bodies: Query<(&mut SolverBody, &SolverBodyInertia), Without<RigidBodyDisabled>>,
     mut joints: Query<(&mut C, &mut D), (Without<RigidBody>, Without<JointDisabled>)>,
     order: Res<JointSolverOrder>,
@@ -315,12 +357,20 @@ fn stable_solve_xpbd_joint<C, D>(
             std::cmp::Ordering::Equal => {}
         }
 
+        let motor_enabled = if POSITION_ONLY {
+            joint.set_motor_enabled(false)
+        } else {
+            None
+        };
         joint.solve(
             [body1, body2],
             [inertia1, inertia2],
             &mut solver_data,
             delta_secs,
         );
+        if let Some(enabled) = motor_enabled {
+            joint.set_motor_enabled(enabled);
+        }
     }
 }
 

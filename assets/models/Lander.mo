@@ -190,6 +190,7 @@ model Lander
   Real settled_touchdown_target;
   Real engine_cutoff_latch(start = 0.0);
   Real propulsion_cutoff;
+  Real flight_handoff;
   Real predicate_band;
 
 initial equation
@@ -227,7 +228,11 @@ equation
   der(engine_cutoff_latch) = max(0.0,
     (1.0 - engine_cutoff_latch) * landing_engine_cutoff
       / max(0.001, spool_tau));
-  propulsion_cutoff = max(
+  // Landing inhibits belong to autonomous flight. Possession transfers the
+  // same airframe to the pilot, who may command another liftoff after landing.
+  // Fuel, power, valve/spool dynamics and thrust limits remain downstream.
+  flight_handoff = (1.0 - piloted) * max(0.0, min(1.0, landing_handoff));
+  propulsion_cutoff = (1.0 - piloted) * max(
     max(0.0, min(1.0, (engine_cutoff_latch - 0.5 + predicate_band)
       / predicate_band)),
     max(0.0, min(1.0, (landing_engine_cutoff - 0.5 + predicate_band)
@@ -247,12 +252,12 @@ equation
   // A qualified native contact is a hard propulsion boundary. It is applied
   // at the airframe command interface, so a stale filtered command cannot keep
   // either tank flowing for another spool time or after a suspension rebound.
-  // The accepted handoff is the final landed-state boundary and is included
-  // here so a late command cannot reopen the main engine after the event.
+  // The autonomous handoff closes the main engine after landing. Manual
+  // possession selects a new pilot-controlled flight without refilling tanks.
   throttle = noEvent(max(command_lower_bound,
     min(command_upper_bound, cmd_throttle
       * max(0.0, min(1.0, 1.0 - max(propulsion_cutoff,
-        max(0.0, min(1.0, landing_handoff))))))));
+        flight_handoff))))));
   // Pitch and roll are ATTITUDE requests, not direct torques. Convert the
   // normalized request to a physical tilt target and let the measured
   // attitude/rate loop below close the RCS torque loop.
@@ -261,7 +266,7 @@ equation
   command_torque_x = 0.0;
   command_torque_y = cmd_yaw * controller_inertia_yy * live_authority
     * max(0.0, min(1.0, 1.0 - max(propulsion_cutoff,
-      max(0.0, min(1.0, landing_handoff)))));
+      flight_handoff)));
   command_torque_z = 0.0;
 
   // Stabilization is expressed entirely in the body frame. AttitudeReference
@@ -290,11 +295,11 @@ equation
   // Main-engine cutoff and flight-control handoff are separate phases. A
   // qualified pad-contact cutoff closes the main engine. The first low-speed
   // contact removes the attitude target term but retains measured rate damping
-  // while the gear absorbs residual motion. The accepted handoff is the final
+  // while the gear absorbs residual motion. The autonomous handoff is the final
   // landed-state boundary: it removes every RCS torque request, including a
   // stale filtered command or a late Rhai write.
   attitude_authority = attitude_hold * max(0.0, min(1.0,
-    1.0 - max(0.0, min(1.0, landing_handoff))));
+    1.0 - flight_handoff));
   attitude_position_authority = max(0.0, min(1.0,
     1.0 - max(propulsion_cutoff, pad_contact_phase)));
   // Bound the requested torque at the controller/actuator boundary. Without
@@ -315,11 +320,11 @@ equation
         - hold_kd * hold_rate_z)));
 
   torque_x = (command_torque_x + hold_torque_x)
-    * max(0.0, min(1.0, 1.0 - max(0.0, min(1.0, landing_handoff))));
+    * max(0.0, min(1.0, 1.0 - flight_handoff));
   torque_y = (command_torque_y + hold_torque_y)
-    * max(0.0, min(1.0, 1.0 - max(0.0, min(1.0, landing_handoff))));
+    * max(0.0, min(1.0, 1.0 - flight_handoff));
   torque_z = (command_torque_z + hold_torque_z)
-    * max(0.0, min(1.0, 1.0 - max(0.0, min(1.0, landing_handoff))));
+    * max(0.0, min(1.0, 1.0 - flight_handoff));
 
   // A pad can touch while the hull still has lateral or downward speed. Keep
   // physical four-pad contact separate from settled touchdown so the flight
