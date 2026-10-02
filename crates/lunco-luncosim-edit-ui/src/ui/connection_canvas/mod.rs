@@ -32,6 +32,7 @@
 //! edits explicitly marked boundaries through the document command owner.
 
 mod drop_assets;
+mod inspection;
 mod layout;
 mod navigation;
 mod projection;
@@ -127,7 +128,10 @@ pub struct UsdCanvasSessionState {
     frame_request: Option<navigation::FrameTarget>,
     layout_revision: u64,
     layout_request: Option<lunco_hooks::HookValue>,
-    navigation_history: Vec<String>,
+    navigation_history: Vec<navigation::NavigationEntry>,
+    navigation_restore: Option<(lunco_canvas::Pos, f32)>,
+    details_open: bool,
+    inspection: inspection::ConnectionIndex,
     scope_search: String,
     /// Complete collected topology retained so changing the active authored
     /// schema root is a presentation operation, not a stage reload.
@@ -165,6 +169,12 @@ impl Default for UsdCanvasSessionState {
         // in one frame.  The connection view owns this scale policy because
         // it knows the scene is a document-sized graph, not a small sketch.
         canvas.viewport.config.zoom_min = 0.001;
+        canvas.tool = Box::new(lunco_canvas::DefaultTool::with_validator(
+            validate_connection,
+        ));
+        let mut edges = lunco_canvas::EdgesLayer::new(canvas.registry.clone());
+        edges.trace_selection = true;
+        canvas.layers[1] = Box::new(edges);
         Self {
             canvas,
             canvas_rect: None,
@@ -187,6 +197,9 @@ impl Default for UsdCanvasSessionState {
             layout_revision: 0,
             layout_request: None,
             navigation_history: Vec::new(),
+            navigation_restore: None,
+            details_open: true,
+            inspection: Default::default(),
             scope_search: String::new(),
             source_nodes: Vec::new(),
             source_wires: Vec::new(),
@@ -212,6 +225,8 @@ impl UsdCanvasSessionState {
         self.layout_revision = self.layout_revision.wrapping_add(1);
         self.layout_request = None;
         self.navigation_history.clear();
+        self.navigation_restore = None;
+        self.inspection = Default::default();
         self.scope_search.clear();
         self.source_root = None;
         self.source_uri = None;
@@ -256,6 +271,7 @@ impl UsdCanvasSessionState {
         layout::request(self);
         self.restore_placements();
         self.canvas.selection.clear();
+        self.inspection = Default::default();
         self.frame_request = self
             .canvas
             .scene
@@ -771,6 +787,9 @@ fn produce_usd_canvas_session(
         scene.node_count(),
         scene.edge_count()
     );
+    if state.built {
+        state.navigation_restore = Some((state.canvas.viewport.center, state.canvas.viewport.zoom));
+    }
     state.canvas.scene = scene;
     layout::request(state);
     state.restore_placements();
@@ -784,7 +803,12 @@ fn produce_usd_canvas_session(
     state.generation = generation;
     state.canonical_generation = Some(canonical_generation);
     if bounds.is_some() {
-        state.frame_request = Some(navigation::FrameTarget::System);
+        state.frame_request = Some(
+            state
+                .navigation_restore
+                .map(|(center, zoom)| navigation::FrameTarget::Viewport(center, zoom))
+                .unwrap_or(navigation::FrameTarget::System),
+        );
     }
 }
 
@@ -850,12 +874,14 @@ fn edge_sink(scene: &Scene, id: EdgeId) -> Option<EdgeSink> {
 
 /// Resolve causal direction or selected-system interface forwarding and author
 /// the exact sink property. Presentation identities never enter USD edits.
-fn connect_op(
+fn connection_endpoints<'a>(
     scene: &Scene,
-    from: &PortRef,
-    to: &PortRef,
-    edit_target: &LayerId,
-) -> Result<UsdOp, String> {
+    from: &'a PortRef,
+    to: &'a PortRef,
+) -> Result<(&'a PortRef, &'a PortRef), String> {
+    if from == to {
+        return Err("A port cannot connect to itself".into());
+    }
     let kind = |pr: &PortRef| -> Result<&str, String> {
         scene
             .node(pr.node)
@@ -894,16 +920,6 @@ fn connect_op(
             ));
         }
     };
-    let source_prim = scene
-        .node(source.node)
-        .and_then(|node| node.origin.clone())
-        .ok_or_else(|| format!("source node {:?} has no USD prim origin", source.node))?;
-    let sink_prim = scene
-        .node(sink.node)
-        .and_then(|node| node.origin.clone())
-        .ok_or_else(|| format!("sink node {:?} has no USD prim origin", sink.node))?;
-    let sink_conn = sink.port.as_str();
-    let source_conn = source.port.as_str();
     let property_type = |endpoint: &PortRef| {
         scene
             .node(endpoint.node)
@@ -921,6 +937,35 @@ fn connect_op(
     if source_type != sink_type {
         return Err(format!("cannot connect USD {source_type} to {sink_type}"));
     }
+    Ok((source, sink))
+}
+
+fn validate_connection(scene: &Scene, from: &PortRef, to: &PortRef) -> Result<(), String> {
+    connection_endpoints(scene, from, to).map(|_| ())
+}
+
+fn connect_op(
+    scene: &Scene,
+    from: &PortRef,
+    to: &PortRef,
+    edit_target: &LayerId,
+) -> Result<UsdOp, String> {
+    let (source, sink) = connection_endpoints(scene, from, to)?;
+    let source_prim = scene
+        .node(source.node)
+        .and_then(|node| node.origin.clone())
+        .ok_or_else(|| format!("source node {:?} has no USD prim origin", source.node))?;
+    let sink_prim = scene
+        .node(sink.node)
+        .and_then(|node| node.origin.clone())
+        .ok_or_else(|| format!("sink node {:?} has no USD prim origin", sink.node))?;
+    let sink_conn = sink.port.as_str();
+    let source_conn = source.port.as_str();
+    let sink_type = scene
+        .node(sink.node)
+        .and_then(|node| node.data.downcast_ref::<UsdPrimNodeData>())
+        .and_then(|data| data.port_types.get(sink_conn))
+        .ok_or("USD sink has no declared property type")?;
     let mut sources = scene
         .node(sink.node)
         .and_then(|node| node.data.downcast_ref::<UsdPrimNodeData>())
@@ -1078,27 +1123,42 @@ impl Panel for UsdCanvasPanel {
                 .edges()
                 .filter_map(|(id, _)| edge_sink(&state.canvas.scene, *id).map(|s| (*id, s)))
                 .collect() };
+            let full = ui.available_rect_before_wrap();
+            let gap = ui.spacing().item_spacing.x;
+            let side_width = ui.spacing().interact_size.x * 12.0;
+            let show_details = state.details_open && full.width() > side_width * 2.2;
+            let graph_rect = if show_details { egui::Rect::from_min_max(full.min, egui::pos2(full.max.x - side_width - gap, full.max.y)) } else { full };
             // Consume a pending frame-to-fit now that the real widget size is
             // known (the producer can only guess it).
             if let Some(target) = state.frame_request.take() {
                 let (bounds, natural_scale) = match target {
+                    navigation::FrameTarget::Viewport(center, zoom) => { state.canvas.viewport.snap_to(center, zoom); (None, false) },
                     navigation::FrameTarget::System => (state.canvas.scene.bounds(), false),
                     navigation::FrameTarget::Node(key) => (state.canvas.scene.nodes().find(|(_, node)| projection::diagram_key(node) == Some(key.as_str())).map(|(_, node)| node.rect), true),
                 };
                 if let Some(bounds) = bounds {
-                    let size = ui.available_size();
-                    let rect = lunco_canvas::Rect::from_min_max(lunco_canvas::Pos::new(0.0, 0.0), lunco_canvas::Pos::new(size.x.max(1.0), size.y.max(1.0)));
+                    let rect = lunco_canvas::Rect::from_min_max(lunco_canvas::Pos::new(0.0, 0.0), lunco_canvas::Pos::new(graph_rect.width().max(1.0), graph_rect.height().max(1.0)));
                     let (center, zoom) = state.canvas.viewport.fit_values(bounds, rect, 48.0);
                     // One diagram unit per UI point is the natural card scale.
                     state.canvas.viewport.snap_to(center, if natural_scale { zoom.min(1.0) } else { zoom });
-                } else {
-                    state.last_error = Some("Requested framing target is absent from the current view".into());
                 }
             }
 
-            let (response, events) = state.canvas.ui(ui);
+            state.inspection.refresh(&state.canvas.scene);
+            if show_details {
+                let side = egui::Rect::from_min_max(egui::pos2(graph_rect.max.x + gap, full.min.y), full.max);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(side), |ui| inspection::render(ui, ctx, state));
+            }
+            if state.details_open && !show_details {
+                let mut open = state.details_open;
+                egui::Window::new("Connection details").open(&mut open).default_width(side_width).show(ui.ctx(), |ui| inspection::render(ui, ctx, state));
+                state.details_open = open;
+            }
+            let (response, events) = ui.scope_builder(egui::UiBuilder::new().max_rect(graph_rect), |ui| state.canvas.ui(ui)).inner;
             state.canvas_rect = Some(lunco_canvas::Rect::from_min_max(lunco_canvas::Pos::new(response.rect.min.x, response.rect.min.y), lunco_canvas::Pos::new(response.rect.max.x, response.rect.max.y)));
             drop_assets::drop_ui(ui, &response, state, ctx);
+            inspection::connection_guidance(ui, &response, state);
+            response.context_menu(|ui| inspection::context_menu(ui, ctx, state));
             if events.is_empty() {
                 return;
             }
@@ -1117,6 +1177,12 @@ impl Panel for UsdCanvasPanel {
                             ctx.trigger(navigation::OpenConnectionNode { view_id: host.document().id().raw(), key: key.into(), program_path: None });
                         }
                     }
+                    SceneEvent::ConnectionRejected { reason } => { state.last_error = Some(reason.clone()); }
+                    SceneEvent::PortActivated { port } => {
+                        if let (Some(host), Some(key)) = (&state.view_document, state.canvas.scene.node(port.node).and_then(projection::diagram_key)) {
+                            ctx.trigger(navigation::SelectConnectionElement { view_id: host.document().id().raw(), key: key.into(), port: Some(port.port.as_str().to_string()), reveal: false });
+                        }
+                    }
                     SceneEvent::SelectionChanged(selection) => {
                         if let Some(path) = selection.nodes().iter().next()
                             .and_then(|id| state.canvas.scene.node(*id))
@@ -1133,7 +1199,7 @@ impl Panel for UsdCanvasPanel {
                     _ => {}
                 }
             }
-            if show_scene {
+            if show_scene || events.iter().any(|event| matches!(event, SceneEvent::ConnectionRejected { .. })) {
                 return;
             }
             let (Some(doc), Some(edit_target)) = (state.doc, state.edit_target.clone()) else {

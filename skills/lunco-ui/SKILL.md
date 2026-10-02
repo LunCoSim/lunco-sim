@@ -133,16 +133,32 @@ missing-host and unsupported-source rejection. Exercise the installed policy
 with `assets/scripting/tests/test_diagram_drop.rhai`.
 Use `connection_diagram_wiring.rhai` for composed sink authoring, undo and
 missing-target rejection in an owned document preview.
-The fixed Models toolbar opens exact program facets with
+The contextual Connections inspector opens exact program facets with
 `OpenConnectionNode.program_path`; an omitted program path retains normal
-double-click scope navigation. Show composed variants from cached source facts,
-never infer why a particular component is wired from its name. Program language
-badges use accents selected by Rhai and resolved through schematic theme roles.
-Verify these contracts with `connection_diagram_context.rhai`.
-Keep the Connections header compact: source/view and primary actions, then
-navigation, then a fixed-height selection summary. Place view files and schema
-options under View, composed variants under Details, and gesture/connection
-guidance under Help. Show acausal connectors as hollow diamonds with explicit
+policy-driven double-click navigation. Show USD path/type, ports, peers and
+Modelica/Rhai sources together beside the graph, using a floating panel on
+compact widths. `SelectConnectionElement` validates exact cards/ports and
+shares source-scoped scene/document selection. Selected nodes emphasize
+incident links; selected ports emphasize exact endpoint matches, and unrelated
+wires use shared disabled opacity. Use cached graph adjacency for peer rows.
+Find searches prims, ports and program sources; reveal may navigate to the
+exact hidden prim's parent. `NavigateConnectionDiagram` keeps view, scope,
+expansion and viewport history; Back restores them after layout completes.
+Verify tracing, navigation restoration and invalid identities with
+`connection_diagram_explore.rhai`. Keep the header to source/mode and primary
+actions, then navigation. Put named views, schema options and repository files
+under View, variants under Details, and gestures under Help. Show USD dirty
+state independently from view dirty state. Port dragging, click-to-connect
+and the inspector Connect to picker must share endpoint/type validation; valid
+targets show rings and invalid targets explain rejection before release. The
+shared canvas validator rejects before EdgeCreated; ApplyUsdOps owns admission
+and journaling. Distinct same-prim ports may author valid feedback.
+Composed edits preserve the viewport through asynchronous layout. Verify native
+dragging, undo and rejected directions with `connection_diagram_gestures.rhai`
+in a visible Connections document. Supply `doc_id`, exact `source`/`sink` view
+keys, `source_port`/`sink_port` and a same-direction `invalid_port` on the sink;
+place the two cards within the focused viewport before running the gate.
+Show acausal connectors as hollow diamonds with explicit
 labels and separate counts; zero causal outputs does not mean a physical model
 is disconnected. Show prim type and no authored ports for geometry/cameras.
 Use `FrameConnectionDiagram` for Focus/Fit over the current view key; the render

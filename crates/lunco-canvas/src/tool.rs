@@ -127,6 +127,11 @@ pub trait Tool: Send + Sync {
         None
     }
 
+    /// Exact origin of an active connection gesture, for host guidance.
+    fn connection_origin(&self) -> Option<PortRef> {
+        None
+    }
+
     /// Drop any in-flight gesture state (pressed-but-not-yet-dragging,
     /// in-flight node drag, in-flight edge connect, rubber-band).
     /// Called when the scene is wholesale-replaced under the tool's
@@ -323,8 +328,13 @@ enum PressTarget {
     Empty,
 }
 
+/// Domain validator shared by preview and commit.
+pub type ConnectionValidator = fn(&Scene, &PortRef, &PortRef) -> Result<(), String>;
+
 /// Built-in Modelica/graph-editor tool: select, drag, connect, delete.
 pub struct DefaultTool {
+    validator: Option<ConnectionValidator>,
+    snap_target: Option<Pos>,
     state: State,
     /// Tracks the last observed pointer position in world coords so
     /// the preview layer can render ghost edges / rubber-bands from
@@ -337,12 +347,46 @@ impl Default for DefaultTool {
     fn default() -> Self {
         Self {
             state: State::Idle,
+            validator: None,
+            snap_target: None,
             last_pointer_world: None,
         }
     }
 }
 
 impl Tool for DefaultTool {
+    fn connection_origin(&self) -> Option<PortRef> {
+        match &self.state {
+            State::ConnectingFromPort { from, .. } => Some(from.clone()),
+            _ => None,
+        }
+    }
+    fn tick(&mut self, ops: &mut CanvasOps, _dt: f32) {
+        self.snap_target = None;
+        if let State::ConnectingFromPort {
+            from,
+            pointer_world,
+            ..
+        } = &self.state
+        {
+            if let Some((node, NodeHitKind::Port(port))) =
+                ops.scene.hit_node(*pointer_world, PORT_HIT_RADIUS)
+            {
+                let to = PortRef { node, port };
+                if self
+                    .validator
+                    .is_none_or(|validate| validate(ops.scene, from, &to).is_ok())
+                {
+                    self.snap_target = ops.scene.node(node).and_then(|n| {
+                        n.ports
+                            .iter()
+                            .find(|p| p.id == to.port)
+                            .map(|p| p.world_pos(n.rect))
+                    });
+                }
+            }
+        }
+    }
     fn cancel_in_flight(&mut self) {
         self.state = State::Idle;
     }
@@ -556,7 +600,7 @@ impl Tool for DefaultTool {
                 from_world: *from_world,
                 bends: points.clone(),
                 to_world: *pointer_world,
-                snap_target: None,
+                snap_target: self.snap_target,
             }),
             State::RubberBand {
                 origin_world,
@@ -584,6 +628,25 @@ impl DefaultTool {
         Self::default()
     }
 
+    /// Install the owner validator; rejected gestures never emit EdgeCreated.
+    pub fn with_validator(validator: ConnectionValidator) -> Self {
+        Self {
+            validator: Some(validator),
+            ..Self::default()
+        }
+    }
+
+    fn commit_connection(&self, from: PortRef, to: PortRef, points: Vec<Pos>, ops: &mut CanvasOps) {
+        if let Some(validate) = self.validator {
+            if let Err(reason) = validate(ops.scene, &from, &to) {
+                ops.events.push(SceneEvent::ConnectionRejected { reason });
+                return;
+            }
+        }
+        ops.events
+            .push(SceneEvent::EdgeCreated { from, to, points });
+    }
+
     /// Handle a primary click while already in `ConnectingFromPort`
     /// state — implements Dymola/OMEdit click-to-bend during wire
     /// creation. Click on a different node's port = commit; click
@@ -609,13 +672,12 @@ impl DefaultTool {
                     // Clicked the source port again — cancel.
                     return;
                 }
-                if nid != from.node {
+                if nid != from.node || self.validator.is_some() {
                     let to = PortRef {
                         node: nid,
                         port: pid,
                     };
-                    ops.events
-                        .push(SceneEvent::EdgeCreated { from, to, points });
+                    self.commit_connection(from, to, points, ops);
                     return;
                 }
                 // Same-node port — keep drawing.
@@ -1158,6 +1220,8 @@ impl DefaultTool {
                         // append bends; a click on a target port
                         // commits the wire. Esc cancels. Read-only
                         // tabs bail (mirrors the drag path).
+                        ops.events
+                            .push(SceneEvent::PortActivated { port: from.clone() });
                         if ops.read_only {
                             return;
                         }
@@ -1258,19 +1322,21 @@ impl DefaultTool {
                 // body if close enough). Empty-space release cancels.
                 let target_node_and_port = match ops.scene.hit_node(world, PORT_HIT_RADIUS) {
                     Some((nid, NodeHitKind::Port(pid))) => Some((nid, pid)),
-                    Some((nid, NodeHitKind::Body)) => {
+                    Some((nid, NodeHitKind::Body)) if self.validator.is_none() => {
                         nearest_port_on_node(ops.scene, nid, world).map(|pid| (nid, pid))
                     }
+                    Some((_, NodeHitKind::Body)) => None,
                     None => None,
                 };
                 if let Some((target_node, target_port)) = target_node_and_port {
-                    if target_node != from.node {
+                    if target_node != from.node
+                        || (self.validator.is_some() && target_port != from.port)
+                    {
                         let to = PortRef {
                             node: target_node,
                             port: target_port,
                         };
-                        ops.events
-                            .push(SceneEvent::EdgeCreated { from, to, points });
+                        self.commit_connection(from, to, points, ops);
                     }
                 }
                 // Note: when release lands on pure empty space,

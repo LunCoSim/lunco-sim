@@ -12,6 +12,170 @@ const OPEN_HOOK: &str = "diagram.open.plan";
 pub(super) enum FrameTarget {
     System,
     Node(String),
+    Viewport(lunco_canvas::Pos, f32),
+}
+
+/// Transient navigation keeps view identity and viewport separate from authored USD.
+pub(super) struct NavigationEntry {
+    scope: String,
+    view: String,
+    descendants: bool,
+    center: lunco_canvas::Pos,
+    zoom: f32,
+}
+
+impl super::UsdCanvasSessionState {
+    pub(super) fn navigate(&mut self, scope: String) {
+        if self.diagram_root == scope {
+            return;
+        }
+        self.navigation_history.push(NavigationEntry {
+            scope: self.diagram_root.clone(),
+            view: self.selected_view.clone(),
+            descendants: self.include_descendants,
+            center: self.canvas.viewport.center,
+            zoom: self.canvas.viewport.zoom,
+        });
+        self.navigation_restore = None;
+        self.diagram_root = scope;
+        self.rebuild_view();
+    }
+}
+
+/// Navigate to a composed USD scope, or restore the previous view and viewport.
+#[Command(default)]
+pub struct NavigateConnectionDiagram {
+    pub view_id: u64,
+    pub scope: Option<String>,
+    pub back: bool,
+}
+
+#[on_command(NavigateConnectionDiagram)]
+fn navigate_diagram(
+    trigger: On<NavigateConnectionDiagram>,
+    mut views: ResMut<UsdCanvasState>,
+) -> Result<Ack, String> {
+    let cmd = trigger.event();
+    let state = state_for(&mut views, cmd.view_id)?;
+    if cmd.back {
+        if cmd.scope.is_some() {
+            return Err("Back cannot also specify a scope".into());
+        }
+        let entry = state.navigation_history.pop().ok_or("No previous system")?;
+        state.diagram_root = entry.scope;
+        state.selected_view = entry.view;
+        state.include_descendants = entry.descendants;
+        state.rebuild_view();
+        state.navigation_restore = Some((entry.center, entry.zoom));
+        state.frame_request = Some(FrameTarget::Viewport(entry.center, entry.zoom));
+    } else {
+        let scope = cmd.scope.as_ref().ok_or("Navigation needs a USD scope")?;
+        if !state.diagram_roots.contains(scope) {
+            return Err("Requested USD scope does not exist".into());
+        }
+        state.navigate(scope.clone());
+    }
+    state.last_error = None;
+    Ok(Ack::new(OpId::new()))
+}
+
+/// Select an exact card or authored port; reveal can navigate to a hidden prim's parent.
+#[Command(default)]
+pub struct SelectConnectionElement {
+    pub view_id: u64,
+    pub key: String,
+    pub port: Option<String>,
+    pub reveal: bool,
+}
+
+#[on_command(SelectConnectionElement)]
+fn select_element(
+    trigger: On<SelectConnectionElement>,
+    mut views: ResMut<UsdCanvasState>,
+    mut commands: Commands,
+) -> Result<Ack, String> {
+    let cmd = trigger.event();
+    let preview = views
+        .sessions
+        .iter()
+        .find(|(_, state)| {
+            state.view_document.as_ref().is_some_and(|host| {
+                use lunco_doc::Document;
+                host.document().id().raw() == cmd.view_id
+            })
+        })
+        .map(|(preview, _)| *preview);
+    let state = state_for(&mut views, cmd.view_id)?;
+    let source = state.source_nodes.iter().find(|node| node.path == cmd.key);
+    let visible = state
+        .canvas
+        .scene
+        .nodes()
+        .any(|(_, node)| super::projection::diagram_key(node) == Some(cmd.key.as_str()));
+    if !visible {
+        if !cmd.reveal {
+            return Err("Diagram card is absent from the current view".into());
+        }
+        let node = source.ok_or("USD prim is absent from the source")?;
+        if let Some(port) = &cmd.port {
+            if !node.port_types.contains_key(port) && !node.referenced_ports.contains(port) {
+                return Err("USD port is absent from the source".into());
+            }
+        }
+        let parent = cmd
+            .key
+            .rsplit_once('/')
+            .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
+            .ok_or("USD prim lacks a parent")?;
+        state.navigate(parent.into());
+    }
+    let (id, node) = state
+        .canvas
+        .scene
+        .nodes()
+        .find(|(_, node)| super::projection::diagram_key(node) == Some(cmd.key.as_str()))
+        .ok_or("Diagram card is absent from the current view")?;
+    let id = *id;
+    let origin = node.origin.clone();
+    if let Some(port) = &cmd.port {
+        if !node
+            .ports
+            .iter()
+            .any(|candidate| candidate.id.as_str() == port)
+        {
+            return Err("USD port is absent from the diagram card".into());
+        }
+        let endpoint = lunco_canvas::PortRef {
+            node: id,
+            port: lunco_canvas::PortId::new(port),
+        };
+        state.canvas.selection.set_port(endpoint);
+    } else {
+        state
+            .canvas
+            .selection
+            .set(lunco_canvas::SelectItem::Node(id));
+    }
+    if let Some(path) = origin {
+        if let Some(preview) = preview {
+            commands.trigger(crate::selection::SelectUsdPrim {
+                preview,
+                path,
+                extend: false,
+                toggle: false,
+            });
+        } else if let Some(target) = state.entities.get(&path) {
+            commands.trigger(lunco_scene_selection::SelectEntityTarget {
+                target: *target,
+                intent: lunco_scene_selection::SelectionIntent::Replace,
+            });
+        }
+    }
+    if cmd.reveal {
+        state.frame_request = Some(FrameTarget::Node(cmd.key.clone()));
+    }
+    state.last_error = None;
+    Ok(Ack::new(OpId::new()))
 }
 
 /// Frame the complete Connections system, or center a card at its natural scale.
@@ -153,9 +317,7 @@ fn open_node(
         match plan.get("action").and_then(HookValue::as_str) {
             Some("scope") => {
                 if path != state.diagram_root {
-                    state.navigation_history.push(state.diagram_root.clone());
-                    state.diagram_root = path;
-                    state.rebuild_view();
+                    state.navigate(path);
                 }
             }
             Some(action @ ("modelica" | "source")) => {
@@ -196,7 +358,7 @@ fn open_node(
     }
     result
 }
-register_commands!(open_node, frame_diagram);
+register_commands!(open_node, frame_diagram, navigate_diagram, select_element);
 pub(super) fn init(app: &mut App) {
     register_all_commands(app);
 }

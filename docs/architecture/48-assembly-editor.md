@@ -214,7 +214,7 @@ name convention, or ECS-only grouping state is introduced.
   path. Full admission traverses USD, including prims without ECS projections;
   scope views default to the scope node and its direct USD children.
   **Include nested models** adds internal prims and connections on demand.
-  Clickable breadcrumbs, Back, searchable **Find system**, and double-click
+  Clickable breadcrumbs, Back, searchable **Find**, and double-click
   navigate the composed USD ancestry. Declared unconnected ports remain visible. Causal links have
   arrows; acausal links and joints do not. Full property names distinguish
   input/output forwarding, and reciprocal acausal links render once. Missing
@@ -239,7 +239,7 @@ name convention, or ECS-only grouping state is introduced.
   clock or live-world access. One pending job per view document is revision
   fenced; stale results cannot replace navigation or a new source. Graph/scope
   and policy registry changes request work, never paint or continuous polling.
-  The shipped policy places system inputs left and outputs right around compact causal layers; indexed neighbor-order sweeps align branches, and disconnected hierarchy prims occupy a shelf below the connected graph.
+  The shipped policy places system inputs left and outputs right around causal layers with one graph-wide packing height; indexed neighbor-order sweeps align branches, and disconnected hierarchy prims occupy a shelf below the connected graph. Geometric interval coloring gives overlapping feedback routes independent lanes; disjoint spans reuse lanes.
   Saved placements apply afterward and wire routing refreshes. A missing or
   faulty policy warns visibly and retains the standard graph layout; corrupt
   optional view data does not interfere with scene loading. The application installs the policy when this feature owner is linked;
@@ -257,8 +257,10 @@ name convention, or ECS-only grouping state is introduced.
   or copied prim facts, and moving nodes never modifies authored USD. Independent
   views of the same source therefore cannot overwrite one another's layout.
   Logical source URIs are preferred for relocatable project definitions.
-- The main toolbar selects the source, named view, and USD scope; file and
-  layout-history controls live under **Layouts and view files**.
+- The two-row header keeps source/editing mode and primary actions above USD
+  navigation. Named views, files and layout history live under **View**.
+  Editing shows the exact source/edit target and USD dirty state independently
+  of the named layout's dirty marker.
   **New view** captures the current scope with independent automatic layout;
   the named-view selector restores its scope and placement. **Save views** saves
   all named definitions to the chosen repository path; **Load views** validates
@@ -297,22 +299,40 @@ name convention, or ECS-only grouping state is introduced.
   `connection_diagram_views.rhai` covers navigation and invalid identities.
   Modelica `OpenFile` resolves registered asset URIs through `SchemeRegistry`
   on its existing worker, then reuses the file document and read-only ownership.
-  The persistent Models menu opens an exact program with
+  The contextual Connections inspector opens exact programs with
   `OpenConnectionNode.program_path`, including hidden descendants of a system.
-  The owner validates that identity against its composed program facets;
-  Rhai receives explicit node/program intent and selects the source editor.
-  Selecting a card keeps a fixed toolbar row so double-click coordinates remain
-  stable. Language badges and accents remain visible at overview zoom.
-  The compact header groups source/view, primary actions and Help in its first
-  row; breadcrumbs and Find occupy the second. Details exposes the exact source,
-  counts and composed variants. View contains descendant expansion, schema mode,
-  layout history and repository view files. The fixed selection row shows Models
-  and causal/acausal port counts, or the prim type and absence of authored ports.
+  The owner validates identity against composed program facets; Rhai receives
+  explicit node/program intent and selects the source editor. The inspector
+  shows USD path/type, ports, connected peers, program sources and Focus/Enter
+  system actions beside the graph; compact widths use a floating details panel.
+  Selection does not change header height. Backend badges remain visible at
+  overview zoom. Details exposes source, counts and composed variants.
+  View contains descendant expansion, schema mode, layout history and view files.
+  `SelectConnectionElement` validates exact card/port identities and shares
+  source-scoped scene/document selection. Selected ports emphasize only their
+  incident links; selected nodes emphasize all their incident links, while
+  unrelated wires use shared disabled opacity. Cached graph adjacency serves
+  endpoint details without USD traversal in paint. Causal arrows and undirected
+  acausal/joint labels remain distinct. Find searches prims, ports and program
+  sources and reveals exact results, navigating hidden prims through composed
+  ancestry. `NavigateConnectionDiagram` validates scope and records view,
+  expansion and viewport; Back restores those facts after asynchronous layout.
+  Port dragging, click-to-connect and the inspector's Connect to picker share
+  the same USD endpoint/type validation. Valid drag targets show rings;
+  incompatible targets explain rejection before release. Rejected gestures emit
+  no authoring operation. The picker emits existing `ApplyUsdOps` directly;
+  topology admission, history and persistence remain document-owned. Distinct
+  ports on the same prim may connect when valid, preserving feedback semantics.
+  `connection_diagram_gestures.rhai` verifies native port dragging, viewport
+  preservation across authoring, undo and rejected directions. Composed edits
+  retain the exploration viewport while their asynchronous layout settles.
+  `connection_diagram_explore.rhai` verifies port tracing, Back recovery and
+  invalid identities through production commands and the diagram query.
   Acausal connectors use hollow diamonds and explicit labels; they never imply
   signal direction. Help explains navigation, authoring gestures and hierarchy
   versus port wiring. Variant facts explain configuration-dependent topology
   without inferring connections.
-  Selection offers Focus and Open without changing header height. Focus/Fit
+  Selection offers Focus and source/system actions without changing header height. Focus/Fit
   dispatch `FrameConnectionDiagram`: exact current view keys are validated,
   then the render boundary consumes a typed frame request through the shared
   canvas viewport. Focus uses at most natural card scale; Fit shows the complete

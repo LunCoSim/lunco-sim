@@ -10,14 +10,7 @@ fn program_accent(programs) {
     if backends.contains("Python") { return "record"; }
     "class"
 }
-fn pack_layer(nodes, start_x) {
-    let total = 0.0; let tallest = 0.0;
-    for node in nodes {
-        total += node.height + 48.0;
-        if node.height > tallest { tallest = node.height; }
-    }
-    let target = sqrt(total * 370.0 / 1.6);
-    if target < tallest + 48.0 { target = tallest + 48.0; }
+fn pack_layer(nodes, start_x, target) {
     let x = start_x; let y = 40.0; let width = 0.0; let positions = [];
     for node in nodes {
         if y > 40.0 && y + node.height > 40.0 + target {
@@ -116,9 +109,15 @@ fn layout_diagram(facts) {
     }
     ranks.sort();
     groups = align_layers(groups, ranks, facts.edges);
+    // Use one graph-wide column height. Independent per-rank packing widens
+    // short layers and collapses the entire system into an unreadable strip.
+    let area = 0.0; let tallest = 0.0;
+    for node in facts.nodes { area += (node.width + 100.0) * (node.height + 48.0); if node.height > tallest { tallest = node.height; } }
+    let target = sqrt(area / 1.6);
+    if target < tallest + 48.0 { target = tallest + 48.0; }
     let result = []; let x = 40.0; let bottom = 40.0;
     for rank in ranks {
-        let layer = pack_layer(groups[rank.to_string()], x);
+        let layer = pack_layer(groups[rank.to_string()], x, target);
         for i in 0..layer.positions.len() {
             let placement = layer.positions[i];
             let edge = placement.y + groups[rank.to_string()][i].height;
@@ -127,7 +126,10 @@ fn layout_diagram(facts) {
         result += layer.positions; x = layer.next_x;
     }
     if detached.len() > 0 {
-        let shelf = pack_layer(detached, 40.0);
+        let shelf_area = 0.0; let shelf_tallest = 0.0;
+        for node in detached { shelf_area += (node.width + 100.0) * (node.height + 48.0); if node.height > shelf_tallest { shelf_tallest = node.height; } }
+        let shelf_height = sqrt(shelf_area / 1.6); if shelf_height < shelf_tallest + 48.0 { shelf_height = shelf_tallest + 48.0; }
+        let shelf = pack_layer(detached, 40.0, shelf_height);
         for placement in shelf.positions { placement.y += bottom + 80.0; result.push(placement); }
     }
     result

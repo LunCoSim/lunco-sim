@@ -1628,7 +1628,7 @@ mod tests {
 
 /// Refresh unauthored wire geometry after automatic or saved layout changes.
 pub(super) fn route_edges(scene: &mut Scene) {
-    let mut lanes: HashMap<(lunco_canvas::NodeId, lunco_canvas::NodeId), usize> = HashMap::new();
+    let mut lanes: Vec<Vec<(f32, f32)>> = Vec::new();
     let routes: Vec<_> = scene
         .edges()
         .filter(|(_, edge)| {
@@ -1642,12 +1642,32 @@ pub(super) fn route_edges(scene: &mut Scene) {
             let (from, to) = scene.edge_endpoint_positions(edge)?;
             let source = scene.node(edge.from.node)?;
             let target = scene.node(edge.to.node)?;
-            let lane = lanes.entry((edge.from.node, edge.to.node)).or_default();
-            let offset = *lane as f32 * 12.0;
-            *lane += 1;
             let route = if to.x <= from.x || edge.from.node == edge.to.node {
                 // Feedback must clear the entire cards, not merely the port row.
-                let y = source.rect.min.y.min(target.rect.min.y) - 48.0 - offset;
+                let span = (
+                    source.rect.min.x.min(target.rect.min.x) - 24.0,
+                    source.rect.max.x.max(target.rect.max.x) + 24.0,
+                );
+                // Interval coloring gives overlapping feedback spans independent
+                // lanes while reusing lanes for disjoint spans.
+                let lane = lanes
+                    .iter()
+                    .position(|intervals| {
+                        intervals
+                            .iter()
+                            .all(|other| span.1 < other.0 || span.0 > other.1)
+                    })
+                    .unwrap_or(lanes.len());
+                if lane == lanes.len() {
+                    lanes.push(Vec::new());
+                }
+                lanes[lane].push(span);
+                let top = scene
+                    .nodes()
+                    .filter(|(_, node)| node.rect.max.x >= span.0 && node.rect.min.x <= span.1)
+                    .map(|(_, node)| node.rect.min.y)
+                    .fold(source.rect.min.y.min(target.rect.min.y), f32::min);
+                let y = top - 48.0 - lane as f32 * 12.0;
                 let stub = |node: &Node, pos: Pos| {
                     if pos.x < node.rect.center().x {
                         node.rect.min.x - 24.0

@@ -53,6 +53,10 @@ pub enum SceneEvent {
         to: PortRef,
         points: Vec<Pos>,
     },
+    /// A port was activated for inspection or click-to-connect.
+    PortActivated { port: PortRef },
+    /// Domain validation rejected a proposed edge before creation.
+    ConnectionRejected { reason: String },
     /// Existing edge was deleted (Delete key, context menu, etc.).
     EdgeDeleted { id: EdgeId },
     /// User finished editing an edge's polyline (drag of a corner or

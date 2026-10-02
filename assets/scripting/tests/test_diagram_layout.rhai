@@ -52,6 +52,11 @@ let branches = invoke_hook("diagram.layout", [#{ nodes: [
 let aligned = #{};
 if branches.ok { for placement in branches.value { aligned[placement.path] = placement.y; } }
 checks.push(t_true(branches.ok && aligned["/A1"] == aligned["/B2"] && aligned["/A2"] == aligned["/B1"], "neighbor ordering aligns parallel branches instead of crossing them"));
+let balanced_nodes = [];
+for rank in 0..5 { for row in 0..3 { balanced_nodes.push(#{ path: "/R" + rank + "/N" + row, role: "prim", width: 250.0, height: 274.0, rank: rank }); } }
+let balanced = invoke_hook("diagram.layout", [#{ nodes: balanced_nodes, edges: [], scope: "/" }]);
+let widths = #{}; if balanced.ok { for p in balanced.value { widths[p.x.to_string()] = true; } }
+checks.push(t_true(balanced.ok && widths.len() == 5, "parallel causal layers share a graph-wide height instead of widening independently"));
 let invalid = invoke_hook("diagram.layout", [#{ nodes: [#{ path: "/Broken" }], edges: [], scope: "/" }]);
 let styled = invoke_hook("diagram.layout", [#{ nodes: [
     #{ path: "/Model", role: "prim", programs: ["Modelica"], width: 250.0, height: 96.0, rank: 0 },

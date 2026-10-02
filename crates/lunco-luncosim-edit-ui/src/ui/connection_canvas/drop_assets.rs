@@ -251,10 +251,40 @@ pub(super) fn drop_ui(
             .dnd_hover_payload::<lunco_usd_core::program::ProgramAttachSpec>()
             .is_some()
     {
+        let target = ui
+            .input(|input| input.pointer.latest_pos())
+            .zip(state.canvas_rect)
+            .and_then(|(pointer, rect)| {
+                let position = state
+                    .canvas
+                    .viewport
+                    .screen_to_world(lunco_canvas::Pos::new(pointer.x, pointer.y), rect);
+                state
+                    .canvas
+                    .scene
+                    .hit_node(position, 0.0)
+                    .and_then(|(id, _)| state.canvas.scene.node(id))
+            });
+        if let (Some(node), Some(rect)) = (target, state.canvas_rect) {
+            let bounds = state.canvas.viewport.world_rect_to_screen(node.rect, rect);
+            let target_rect = egui::Rect::from_min_max(
+                egui::pos2(bounds.min.x, bounds.min.y),
+                egui::pos2(bounds.max.x, bounds.max.y),
+            );
+            ui.painter().rect_stroke(
+                target_rect,
+                ui.visuals().widgets.active.corner_radius,
+                egui::Stroke::new(
+                    2.0,
+                    lunco_theme::active(ui.ctx()).tokens.node_border_selected,
+                ),
+                egui::StrokeKind::Outside,
+            );
+        }
         response.clone().on_hover_text(if state.doc.is_some() {
-            "Drop USD to add a reference; drop Modelica or Rhai onto its owning prim."
+            format!("Target: {}\nDrop USD to add a reference; drop Modelica or Rhai onto its owning prim.", target.and_then(|node| node.origin.as_deref()).unwrap_or(&state.diagram_root))
         } else {
-            "Choose Edit connections before adding assets."
+            "Scene browsing: choose Edit connections before adding assets.".into()
         });
     }
     // Egui consumes the payload before attempting its downcast: inspect its type first.

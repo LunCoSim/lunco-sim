@@ -253,7 +253,15 @@ pub fn update_layouts(
                             }
                         }
                         state.restore_placements();
-                        state.frame_request = Some(super::navigation::FrameTarget::System);
+                        if let Some((center, zoom)) = state.navigation_restore.take() {
+                            state.frame_request =
+                                Some(super::navigation::FrameTarget::Viewport(center, zoom));
+                        } else if !matches!(
+                            state.frame_request,
+                            Some(super::navigation::FrameTarget::Node(_))
+                        ) {
+                            state.frame_request = Some(super::navigation::FrameTarget::System);
+                        }
                     }
                     Err(error) => {
                         warn!("[diagram-layout] {error}");

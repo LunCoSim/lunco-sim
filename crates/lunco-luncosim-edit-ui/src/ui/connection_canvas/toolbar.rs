@@ -1,5 +1,5 @@
 //! Compact navigation and contextual actions over the cached diagram facts.
-use super::{UsdCanvasSessionState, UsdPrimNodeData, navigation, view_files};
+use super::{UsdCanvasSessionState, navigation, view_files};
 use bevy_egui::egui;
 use lunco_doc::Document;
 use lunco_workbench_core::PanelCtx;
@@ -7,13 +7,13 @@ use lunco_workbench_core::PanelCtx;
 pub(super) fn source_picker(ui: &mut egui::Ui, show_scene: &mut bool) {
     egui::ComboBox::from_id_salt("connection_source")
         .selected_text(if *show_scene {
-            "Active scene"
+            "Scene · Browse"
         } else {
-            "Editor document"
+            "Document · Edit"
         })
         .show_ui(ui, |ui| {
-            ui.selectable_value(show_scene, true, "Active scene");
-            ui.selectable_value(show_scene, false, "Editor document");
+            ui.selectable_value(show_scene, true, "Scene · Browse");
+            ui.selectable_value(show_scene, false, "Document · Edit");
         });
 }
 
@@ -34,24 +34,21 @@ pub(super) fn render(
         source_picker(ui, &mut requested_source);
         if let Some(host) = state.view_document.as_ref() {
             let view_id = host.document().id().raw();
-            egui::ComboBox::from_id_salt(("connection_named_view", view_id))
-                .selected_text(format!(
-                    "{}{}",
-                    requested_view,
-                    if host.document().generation() != state.saved_view_generation {
-                        " *"
-                    } else {
-                        ""
-                    }
-                ))
-                .show_ui(ui, |ui| {
-                    for name in host.document().data().views.keys() {
-                        ui.selectable_value(&mut requested_view, name.clone(), name);
-                    }
-                })
-                .response
-                .on_hover_text("Named layout; * means unsaved view changes");
+            let dirty = host.document().generation() != state.saved_view_generation;
+            let names: Vec<_> = host.document().data().views.keys().cloned().collect();
             ui.menu_button("View", |ui| {
+                ui.label("Named layout (* = unsaved)");
+                egui::ComboBox::from_id_salt(("connection_named_view", view_id))
+                    .selected_text(format!(
+                        "{}{}",
+                        requested_view,
+                        if dirty { " *" } else { "" }
+                    ))
+                    .show_ui(ui, |ui| {
+                        for name in &names {
+                            ui.selectable_value(&mut requested_view, name.clone(), name);
+                        }
+                    });
                 if ui
                     .checkbox(&mut state.include_descendants, "Include nested prims")
                     .changed()
@@ -142,11 +139,34 @@ pub(super) fn render(
                 requested_source = false;
             }
         }
+        if !show_scene {
+            let dirty =
+                state
+                    .doc
+                    .and_then(|id| {
+                        ctx.resource::<lunco_doc_bevy::DocumentRegistry<
+                            lunco_usd_document::document::UsdDocument,
+                        >>()
+                        .and_then(|registry| registry.host(id))
+                    })
+                    .map(|host| host.document().is_dirty());
+            ui.label(if dirty == Some(true) {
+                "USD modified"
+            } else {
+                "Editing USD"
+            })
+            .on_hover_text(format!(
+                "Source: {}\nEdit target: {:?}",
+                state.source_uri.as_deref().unwrap_or(""),
+                state.edit_target
+            ));
+        }
+        ui.toggle_value(&mut state.details_open, "Inspector");
         ui.menu_button("Help", |ui| {
             ui.strong("Explore");
             ui.label("Double-click a system to see its child prims.");
             ui.label("Double-click a leaf model to open its editor.");
-            ui.label("Select a prim, then use Models to open an attached source.");
+            ui.label("Select a prim, then use the inspector to open an attached source.");
             ui.label("Use Back, breadcrumbs or Find to navigate.");
             ui.label("Select a prim and Focus to read its ports; Fit returns to the overview.");
             ui.separator();
@@ -200,8 +220,10 @@ pub(super) fn render(
     if previous_mode != state.diagram_mode {
         state.rebuild_view();
     }
-    let mut requested = state.diagram_root.clone();
-    let mut went_back = false;
+    let view_id = state
+        .view_document
+        .as_ref()
+        .map(|host| host.document().id().raw());
     ui.horizontal_wrapped(|ui| {
         if state.diagram_mode {
             if ui
@@ -211,76 +233,79 @@ pub(super) fn render(
                 )
                 .clicked()
             {
-                if let Some(previous) = state.navigation_history.pop() {
-                    requested = previous;
-                    went_back = true;
+                if let Some(view_id) = view_id {
+                    ctx.trigger(navigation::NavigateConnectionDiagram {
+                        view_id,
+                        scope: None,
+                        back: true,
+                    });
                 }
             }
-            if ui.button("Scene").on_hover_text("USD stage root").clicked() {
-                requested = "/".into();
-            }
-            let mut prefix = String::new();
-            for segment in state
+            let segments: Vec<_> = state
                 .diagram_root
                 .split('/')
                 .filter(|part| !part.is_empty())
-            {
+                .collect();
+            let compact = ui.available_width() < ui.spacing().interact_size.x * 25.0;
+            ui.menu_button("Scene /", |ui| {
+                if ui.button("Stage root").clicked() {
+                    if let Some(view_id) = view_id {
+                        ctx.trigger(navigation::NavigateConnectionDiagram {
+                            view_id,
+                            scope: Some("/".into()),
+                            back: false,
+                        });
+                    }
+                    ui.close();
+                }
+                let mut path = String::new();
+                for part in &segments {
+                    path.push('/');
+                    path.push_str(part);
+                    if ui.button(&path).clicked() {
+                        if let Some(view_id) = view_id {
+                            ctx.trigger(navigation::NavigateConnectionDiagram {
+                                view_id,
+                                scope: Some(path.clone()),
+                                back: false,
+                            });
+                        }
+                        ui.close();
+                    }
+                }
+            });
+            let mut prefix = String::new();
+            for (i, segment) in segments.iter().enumerate() {
                 prefix.push('/');
                 prefix.push_str(segment);
-                ui.weak("/");
+                if compact && i + 1 < segments.len() {
+                    continue;
+                }
                 if ui
-                    .selectable_label(prefix == state.diagram_root, segment)
+                    .selectable_label(prefix == state.diagram_root, *segment)
                     .on_hover_text(&prefix)
                     .clicked()
                 {
-                    requested = prefix.clone();
+                    if let Some(view_id) = view_id {
+                        ctx.trigger(navigation::NavigateConnectionDiagram {
+                            view_id,
+                            scope: Some(prefix.clone()),
+                            back: false,
+                        });
+                    }
+                }
+                if i + 1 < segments.len() {
+                    ui.weak("/");
                 }
             }
-            ui.menu_button("Find", |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.scope_search)
-                        .hint_text("Find system by USD path"),
-                );
-                let needle = state.scope_search.to_lowercase();
-                let choices: Vec<_> = state
-                    .diagram_roots
-                    .iter()
-                    .filter(|path| needle.is_empty() || path.to_lowercase().contains(&needle))
-                    .collect();
-                egui::ScrollArea::vertical().max_height(260.0).show_rows(
-                    ui,
-                    ui.text_style_height(&egui::TextStyle::Body),
-                    choices.len(),
-                    |ui, rows| {
-                        for i in rows {
-                            if ui
-                                .selectable_label(*choices[i] == requested, choices[i])
-                                .clicked()
-                            {
-                                requested = choices[i].clone();
-                                ui.close();
-                            }
-                        }
-                    },
-                );
-            });
+            ui.menu_button("Find", |ui| super::inspection::find(ui, ctx, state));
         } else {
             let mut root = state.active_schema_root.clone().unwrap_or_default();
             egui::ComboBox::from_id_salt("usd_schema_root")
-                .selected_text(
-                    root.rsplit('/')
-                        .next()
-                        .filter(|leaf| !leaf.is_empty())
-                        .unwrap_or("Select schema"),
-                )
+                .selected_text(&root)
                 .show_ui(ui, |ui| {
                     for path in &state.schema_roots {
-                        ui.selectable_value(
-                            &mut root,
-                            path.clone(),
-                            path.rsplit('/').next().unwrap_or(path),
-                        )
-                        .on_hover_text(path);
+                        ui.selectable_value(&mut root, path.clone(), path);
                     }
                 });
             if !root.is_empty() && state.active_schema_root.as_deref() != Some(root.as_str()) {
@@ -321,118 +346,6 @@ pub(super) fn render(
                 }
             }
         });
-    });
-    if requested != state.diagram_root {
-        if !went_back {
-            state.navigation_history.push(state.diagram_root.clone());
-        }
-        state.diagram_root = requested;
-        state.rebuild_view();
-    }
-    // One stable row keeps double-click coordinates unchanged by selection.
-    ui.horizontal(|ui| {
-        ui.set_min_height(ui.spacing().interact_size.y);
-        let selected = state
-            .canvas
-            .selection
-            .nodes()
-            .iter()
-            .next()
-            .and_then(|id| state.canvas.scene.node(*id));
-        if let Some(node) = selected {
-            ui.strong(&node.label)
-                .on_hover_text(node.origin.as_deref().unwrap_or(""));
-            if let Some(data) = node.data.downcast_ref::<UsdPrimNodeData>() {
-                if let Some(host) = &state.view_document {
-                    let view_id = host.document().id().raw();
-                    if ui
-                        .button("Focus")
-                        .on_hover_text("Center this prim at readable diagram scale")
-                        .clicked()
-                    {
-                        ctx.trigger(navigation::FrameConnectionDiagram {
-                            view_id,
-                            key: Some(data.view_key.clone()),
-                        });
-                    }
-                    if state.diagram_mode
-                        && ui
-                            .button("Open")
-                            .on_hover_text(
-                                "Open this prim's internals or attached model, like double-click",
-                            )
-                            .clicked()
-                    {
-                        ctx.trigger(navigation::OpenConnectionNode {
-                            view_id,
-                            key: data.view_key.clone(),
-                            program_path: None,
-                        });
-                    }
-                }
-                if !data.programs.is_empty() {
-                    ui.menu_button(format!("Models ({})", data.programs.len()), |ui| {
-                        egui::ScrollArea::vertical()
-                            .max_height(260.0)
-                            .show(ui, |ui| {
-                                for program in &data.programs {
-                                    ui.label(format!(
-                                        "{} · {}",
-                                        program.backend,
-                                        program.path.rsplit('/').next().unwrap_or(&program.path)
-                                    ));
-                                    ui.weak(&program.source).on_hover_text(&program.path);
-                                    if let Some(issue) = &program.issue {
-                                        ui.label(issue);
-                                    }
-                                    if ui
-                                        .add_enabled(
-                                            program.issue.is_none(),
-                                            egui::Button::new("Open model"),
-                                        )
-                                        .clicked()
-                                    {
-                                        if let Some(host) = &state.view_document {
-                                            ctx.trigger(navigation::OpenConnectionNode {
-                                                view_id: host.document().id().raw(),
-                                                key: data.view_key.clone(),
-                                                program_path: Some(program.path.clone()),
-                                            });
-                                        }
-                                        ui.close();
-                                    }
-                                    ui.separator();
-                                }
-                            });
-                    });
-                }
-                let count = |kind: &str| {
-                    node.ports
-                        .iter()
-                        .filter(|port| port.kind.as_str() == kind)
-                        .count()
-                };
-                let (inputs, outputs, connectors) =
-                    (count("input"), count("output"), count("acausal"));
-                ui.add(
-                    egui::Label::new(egui::RichText::new(if inputs + outputs + connectors == 0 {
-                        format!("{} · no authored ports", data.type_name)
-                    } else {
-                        format!("Inputs {inputs} · Outputs {outputs} · Acausal {connectors}")
-                    }))
-                    .truncate(),
-                );
-            }
-        } else {
-            ui.label(
-                egui::RichText::new(if show_scene {
-                    "Double-click to explore · select a prim for models and ports"
-                } else {
-                    "Drag ports to connect · drop sources to add · Help for navigation"
-                })
-                .weak(),
-            );
-        }
     });
     ui.separator();
     None

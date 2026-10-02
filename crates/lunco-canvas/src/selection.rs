@@ -14,7 +14,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::scene::{EdgeId, NodeId};
+use crate::scene::{EdgeId, NodeId, PortRef};
 
 /// Anything that can be selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -31,6 +31,7 @@ pub enum SelectItem {
 pub struct Selection {
     items: BTreeSet<SelectItem>,
     primary: Option<SelectItem>,
+    port: Option<PortRef>,
 }
 
 impl Selection {
@@ -38,11 +39,13 @@ impl Selection {
     pub fn clear(&mut self) {
         self.items.clear();
         self.primary = None;
+        self.port = None;
     }
 
     /// Replace with a single item (click-to-select behaviour).
     pub fn set(&mut self, item: SelectItem) {
         self.items.clear();
+        self.port = None;
         self.items.insert(item);
         self.primary = Some(item);
     }
@@ -52,6 +55,7 @@ impl Selection {
     /// updated — matching the "click to focus" behaviour users
     /// expect from explorer-style multi-select.
     pub fn add(&mut self, item: SelectItem) {
+        self.port = None;
         self.items.insert(item);
         self.primary = Some(item);
     }
@@ -61,6 +65,7 @@ impl Selection {
     /// is now empty) so the Inspector always has a target when any
     /// selection exists.
     pub fn remove(&mut self, item: SelectItem) -> bool {
+        self.port = None;
         let was_present = self.items.remove(&item);
         if self.primary == Some(item) {
             self.primary = self.items.iter().next().copied();
@@ -75,6 +80,17 @@ impl Selection {
         } else {
             self.add(item);
         }
+    }
+
+    /// Focus a port without selecting its wires for topology editing.
+    pub fn set_port(&mut self, port: PortRef) {
+        self.set(SelectItem::Node(port.node));
+        self.port = Some(port);
+    }
+
+    /// Exact focused port, independent from node/edge edit selection.
+    pub fn port(&self) -> Option<&PortRef> {
+        self.port.as_ref()
     }
 
     pub fn contains(&self, item: SelectItem) -> bool {
