@@ -49,6 +49,13 @@ one was not prepared for the current source. Import evaluation and top-level
 initialization remain at the serialized owner lifecycle boundary.
 `CompiledProgram` carries no per-instance state.
 
+A scene-scoped host with `ScenarioReloadPolicy::Retain` preserves its VM state
+and does not repeat top-level initialization or `on_start`. Its dependency plan
+is resolved again against each committed replacement generation before the next
+hook can run. Entity handles and required-input readiness belong to that
+generation; a waiting plan from an outgoing generation is discarded. Retaining
+a program never retains read/write authority over entities from an old scene.
+
 `CompiledProgram` includes the full AST, the imports-only hook AST when needed,
 the task AST, and the derived hook mask.
 

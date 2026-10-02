@@ -753,7 +753,7 @@ struct Fsm {
     /// source. A local script host has no GlobalEntityId, so `-1` would leak
     /// `u64::MAX` into emitted events.
     gid: i64,
-    /// Scene generation at which this scenario last entered `on_start`.
+    /// Scene generation of the latest compiled or activated dependency plan.
     scene_generation: u64,
     /// Stable Twin identity captured from the host's ownership marker. This is
     /// independent of scene generation and survives entity removal until its
@@ -787,6 +787,7 @@ enum ScenarioPass {
 }
 
 struct PendingScenarioDependencies {
+    scene_generation: u64,
     modelica_entities: Vec<Entity>,
     entity_reads: Vec<Entity>,
     entity_writes: Vec<Entity>,
@@ -2482,7 +2483,13 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     continue;
                 }
 
-                if st.compiled && !st.initialized {
+                if st.compiled && (!st.initialized || st.scene_generation != scene_generation) {
+                    // Retain keeps VM state, not references into the outgoing
+                    // scene. Rebind the access plan at the replacement boundary.
+                    if st.dependency_plan.as_ref().is_some_and(|plan|
+                        plan.scene_generation != scene_generation) {
+                        st.dependency_plan = None;
+                    }
                     if st.dependency_plan.is_none() {
                         let dependency_result = {
                             let _phase = bridge_core::ExecutionContextScope::enter(
@@ -2519,6 +2526,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                                 query_reads.sort_unstable();
                                 query_reads.dedup();
                                 Ok(PendingScenarioDependencies {
+                                    scene_generation,
                                     modelica_entities,
                                     entity_reads,
                                     entity_writes,
@@ -2581,8 +2589,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                             );
                             let _script_entity =
                                 bridge_core::ScriptEntityScope::enter(gid as u64);
-                            initialization_diag = runtime.initialize(entity, gid);
-                            st.initialized = true;
+                            if !st.initialized {
+                                initialization_diag = runtime.initialize(entity, gid);
+                                st.initialized = true;
+                            }
+                            st.scene_generation = scene_generation;
                         }
                         Ok(RequiredInputReadiness::Waiting { revision, reason }) => {
                             if let Some(plan) = st.dependency_plan.as_mut() {
@@ -3613,13 +3624,15 @@ mod tests {
     #[test]
     fn collector_latches_a_diagnostic_without_exiting_the_app() {
         let mut app = App::new();
-        app.init_resource::<super::ScenarioExecutionGate>()
+        app.add_plugins(lunco_telemetry_core::LunCoTelemetryCorePlugin)
+            .init_resource::<super::ScenarioExecutionGate>()
             .init_resource::<ScriptEventInbox>()
             .init_resource::<lunco_core::RuntimeDiagnostics>()
             .add_observer(super::collect_script_events);
 
         for index in 0..=SCRIPT_EVENT_INBOX_CAPACITY {
             app.world_mut().trigger(event(index));
+            app.world_mut().flush();
         }
 
         let inbox = app.world().resource::<ScriptEventInbox>();
@@ -3840,6 +3853,71 @@ mod lifecycle_readiness_tests {
             !world
                 .resource::<lunco_core_runtime::SimulationProgress>()
                 .is_held()
+        );
+    }
+
+    #[test]
+    fn retained_scenario_rebinds_dependencies_without_restarting() {
+        let mut world = World::new();
+        world.insert_resource(scene_coordinator_at_generation(1));
+        world.init_resource::<ScriptRegistry>();
+        world.init_resource::<DocumentDiagnostics>();
+        world.init_resource::<ScriptEventInbox>();
+        world.init_resource::<lunco_core_runtime::SimTick>();
+        world.init_resource::<lunco_core_runtime::SimulationProgress>();
+        world.init_resource::<lunco_core_runtime::SimulationBarrierParticipants>();
+        world.resource_mut::<ScriptRegistry>().insert_document(
+            DocumentId::new(81),
+            ScriptDocument::new(81, ScriptLanguage::Rhai, "scenario"),
+        );
+        let host = world
+            .spawn((
+                ScriptedModel {
+                    document_id: Some(81),
+                    language: Some(ScriptLanguage::Rhai),
+                    reload_policy: crate::doc::ScenarioReloadPolicy::Retain,
+                    ..Default::default()
+                },
+                crate::TwinOwnedScript {
+                    twin: lunco_workspace::TwinId::new(17),
+                    close_document: false,
+                },
+            ))
+            .id();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let plan_calls = Arc::new(Mutex::new(0));
+        world.insert_resource(ScenarioDriver::with_runtime(DependencyRuntime {
+            plan: ScenarioDependencyPlan {
+                query_reads: vec!["Before".into()],
+                ..Default::default()
+            },
+            calls: calls.clone(),
+            plan_calls: plan_calls.clone(),
+        }));
+        ScenarioDriver::<DependencyRuntime>::prepare_compiles(&mut world, ScriptLanguage::Rhai);
+        ScenarioDriver::<DependencyRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        assert_eq!(*plan_calls.lock().unwrap(), 1);
+        assert!(
+            world
+                .resource::<lunco_core_runtime::SimulationBarrierParticipants>()
+                .scenario_declares_query_read(host, "Before")
+        );
+
+        world.insert_resource(scene_coordinator_at_generation(2));
+        world
+            .resource_mut::<ScenarioDriver<DependencyRuntime>>()
+            .runtime
+            .plan
+            .query_reads = vec!["After".into()];
+        ScenarioDriver::<DependencyRuntime>::prepare_compiles(&mut world, ScriptLanguage::Rhai);
+        ScenarioDriver::<DependencyRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        assert_eq!(*plan_calls.lock().unwrap(), 2);
+        let participants = world.resource::<lunco_core_runtime::SimulationBarrierParticipants>();
+        assert!(participants.scenario_declares_query_read(host, "After"));
+        assert!(!participants.scenario_declares_query_read(host, "Before"));
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![RecordedCall::Start, RecordedCall::Tick, RecordedCall::Tick]
         );
     }
 
