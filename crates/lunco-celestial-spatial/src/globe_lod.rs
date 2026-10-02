@@ -69,6 +69,7 @@ impl GlobeLod {
     pub(crate) fn render_look(&self) -> ShaderLook {
         let mut look = self.look.clone();
         look.no_shadow_cast = true;
+        look.no_shadow_receive = true;
         look
     }
 }

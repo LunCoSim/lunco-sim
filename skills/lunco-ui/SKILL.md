@@ -482,3 +482,10 @@ observer in the relevant domain crate (see the `test-via-api` skill's
 crates/lunco-ui/           ← mechanisms (WidgetSystem, typed commands, 3D UI)
 crates/lunco-*/src/ui/     ← domain-specific panels
 ```
+
+Wheel-track history uses `VehicleTrailSettings.max_points_per_wheel` (default
+32768, about 16 km at half-metre spacing). Terrain annotations preserve retained
+history through adaptive spatial subdivision; they never shorten a lane because
+a root cell is crowded. Budget errors are terminal publication diagnostics.
+Validate long curved paths as well as live contact, and inspect actual GPU
+output after image capacity grows.

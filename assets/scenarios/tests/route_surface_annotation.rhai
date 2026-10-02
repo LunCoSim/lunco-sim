@@ -80,6 +80,31 @@ fn on_tick(me, ctx) {
             && to_int(view.result_segment_count) == this.points.len() - 1
             && to_int(view.surface_binding_count) > 0,
             "sparse route is painted on terrain while its independent mesh is hidden"));
+        // A five-kilometre closed path stays inside the supplied terrain while
+        // exercising dense spatial subdivision and the GPU node-walk ABI.
+        let centre = this.points[0];
+        let outer = [centre[0] + 300.0, centre[1], centre[2] + 300.0];
+        let long_path = [outer];
+        for i in 0..2001 {
+            let angle = to_float(i) * 6.283185307179586 / 100.0;
+            long_path.push([centre[0] + 40.0 * cos(angle), centre[1], centre[2] + 40.0 * sin(angle)]);
+        }
+        long_path.push(outer);
+        this.previous_revision = view.requested_revision;
+        this.checks.push(t_true(submit_view(this, long_path).ok, "long-path presentation accepted"));
+        this.phase = 4; return;
+    }
+    if this.phase == 4 {
+        if to_int(view.requested_revision) <= to_int(this.previous_revision) || view.state == "pending" { return; }
+        this.checks.push(t_true(view.state == "ready" && view.projection == "terrain_surface"
+            && to_int(view.result_segment_count) == 2002 && view.applied_revision == view.requested_revision,
+            "all five-kilometre path legs publish without density retirement"));
+        this.long_ready_tick = this.ticks;
+        print("[route-gate] long path published");
+        this.phase = 5; return;
+    }
+    if this.phase == 5 {
+        if this.ticks - this.long_ready_tick < 120 { return; }
         // A finite route outside the DEM must fail at its surface owner.
         let invalid = submit_view(this, [[1.0e12, 0.0, 1.0e12], [1.0e12 + 10.0, 0.0, 1.0e12]]);
         this.previous_revision = view.requested_revision;

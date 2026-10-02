@@ -23,9 +23,20 @@ use std::hash::{Hash, Hasher};
 
 /// Fixed history spacing; a separate moving endpoint renders sub-spacing motion.
 const TRAIL_SAMPLE_SPACING_M: f64 = 0.5;
-/// Approximately 512 m per lane. GPU admission can retire older streaming legs
-/// earlier when the shared spatial-index budget is full.
-const TRAIL_MAX_POINTS: usize = 1024;
+/// Presentation history budget, without increasing contact sampling density.
+#[derive(Resource)]
+pub struct VehicleTrailSettings {
+    /// Default retains about 16 km at the unchanged half-metre spacing.
+    /// Valid range 2..=32768; overflow retires only the oldest recorded points.
+    pub max_points_per_wheel: usize,
+}
+impl Default for VehicleTrailSettings {
+    fn default() -> Self {
+        Self {
+            max_points_per_wheel: 32768,
+        }
+    }
+}
 const TRAIL_SURFACE_CLEARANCE_M: f32 = 0.02;
 const TRAIL_MIN_SUPPORT_NORMAL_Y: f64 = 0.2;
 
@@ -79,6 +90,7 @@ impl VehicleTrailHistory {
         wheel: Entity,
         width: f64,
         mut contact: TrailContact,
+        max_points: usize,
     ) -> bool {
         if self.frame != Some(frame) {
             self.clear();
@@ -121,7 +133,7 @@ impl VehicleTrailHistory {
                 lane.points.push_back(contact);
             }
         }
-        while lane.points.len() > TRAIL_MAX_POINTS {
+        while lane.points.len() > max_points {
             lane.points.pop_front();
         }
         true
@@ -318,7 +330,8 @@ impl Plugin for VehicleTrailPlugin {
         app.world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
             .register(InspectVehicleTrailProvider);
-        app.init_resource::<TrailVisualProjection>()
+        app.init_resource::<VehicleTrailSettings>()
+            .init_resource::<TrailVisualProjection>()
             .init_resource::<TrailProjectionRebuildRequested>()
             .add_systems(lunco_core::SceneTeardown, clear_vehicle_trails)
             .add_systems(
@@ -354,6 +367,7 @@ pub(crate) fn ensure_vehicle_trail_history(
 
 pub(crate) fn sample_vehicle_trails(
     active_frame: Res<ActivePhysicsFrame>,
+    settings: Res<VehicleTrailSettings>,
     mut histories: Query<&mut VehicleTrailHistory, With<MobilityRoot>>,
     mut request: ResMut<TrailProjectionRebuildRequested>,
     roots: Query<(), With<MobilityRoot>>,
@@ -373,6 +387,18 @@ pub(crate) fn sample_vehicle_trails(
     tiles: Query<&ColliderTileOf>,
     terrains: Query<(), With<DemHeightField>>,
 ) {
+    if !(2..=32768).contains(&settings.max_points_per_wheel) {
+        if settings.is_changed() {
+            warn!("vehicle trail point budget must be between 2 and 32768; recording stopped");
+        }
+        for mut history in &mut histories {
+            if history.frame.is_some() {
+                history.clear();
+                request.pending = true;
+            }
+        }
+        return;
+    }
     let mut active_wheels = HashSet::new();
     let mut contacting = HashSet::new();
     let mut samples = Vec::new();
@@ -431,10 +457,13 @@ pub(crate) fn sample_vehicle_trails(
         }
         contacting.insert(wheel);
         if let Ok(mut history) = histories.get_mut(vehicle) {
-            if history
-                .bypass_change_detection()
-                .record(active_frame.0, wheel, width, contact)
-            {
+            if history.bypass_change_detection().record(
+                active_frame.0,
+                wheel,
+                width,
+                contact,
+                settings.max_points_per_wheel,
+            ) {
                 history.set_changed();
                 request.pending = true;
             }
@@ -690,7 +719,7 @@ pub(crate) fn sync_vehicle_trail_visuals(
                 let annotation = SurfaceCurveAnnotation {
                     terrain,
                     revision: signature,
-                    segments,
+                    segments: segments.into(),
                     streaming: true,
                     width_m: lane.width,
                     color: trail_look().base_color,
@@ -784,15 +813,15 @@ mod tests {
         let frame = Entity::PLACEHOLDER;
         let wheel = Entity::from_bits(7);
         for x in [0.0, 0.1, 0.2, 0.3] {
-            assert!(history.record(frame, wheel, 0.28, contact(x)));
+            assert!(history.record(frame, wheel, 0.28, contact(x), 32768));
         }
         assert_eq!(history.lanes[&wheel].points.len(), 2);
         assert_eq!(history.lanes[&wheel].points.back().unwrap().point.x, 0.3);
-        history.record(frame, wheel, 0.28, contact(0.6));
+        history.record(frame, wheel, 0.28, contact(0.6), 32768);
         assert_eq!(history.lanes[&wheel].points.len(), 3);
         history.lanes.get_mut(&wheel).unwrap().connected = false;
-        history.record(frame, wheel, 0.28, contact(20.0));
-        history.record(frame, wheel, 0.28, contact(20.1));
+        history.record(frame, wheel, 0.28, contact(20.0), 32768);
+        history.record(frame, wheel, 0.28, contact(20.1), 32768);
         let lane = &history.lanes[&wheel];
         assert_ne!(lane.points[2].stroke, lane.points[3].stroke);
         assert_eq!(lane.points[2].point.x, 0.6);
@@ -800,15 +829,34 @@ mod tests {
         assert_eq!(lane.points[4].point.x, 20.1);
     }
     #[test]
+    fn production_history_retains_multiple_kilometres_without_denser_sampling() {
+        let mut history = VehicleTrailHistory::default();
+        let wheel = Entity::from_bits(7);
+        let limit = VehicleTrailSettings::default().max_points_per_wheel;
+        for i in 0..=10000 {
+            history.record(
+                Entity::PLACEHOLDER,
+                wheel,
+                0.3,
+                contact(i as f64 * 0.5),
+                limit,
+            );
+        }
+        let lane = &history.lanes[&wheel];
+        assert_eq!(lane.points.front().unwrap().point.x, 0.0);
+        assert_eq!(lane.points.back().unwrap().point.x, 5000.0);
+        assert_eq!(lane.points.len(), 10001);
+    }
+    #[test]
     fn history_is_bounded_and_resets_at_frame_boundary() {
         let mut history = VehicleTrailHistory::default();
         let frame = Entity::PLACEHOLDER;
         let wheel = Entity::from_bits(7);
-        for i in 0..TRAIL_MAX_POINTS + 10 {
-            history.record(frame, wheel, 0.4, contact(i as f64));
+        for i in 0..110 {
+            history.record(frame, wheel, 0.4, contact(i as f64), 100);
         }
-        assert_eq!(history.lanes[&wheel].points.len(), TRAIL_MAX_POINTS);
-        history.record(Entity::from_bits(8), wheel, 0.4, contact(0.0));
+        assert_eq!(history.lanes[&wheel].points.len(), 100);
+        history.record(Entity::from_bits(8), wheel, 0.4, contact(0.0), 100);
         assert_eq!(history.lanes[&wheel].points.len(), 1);
     }
 }

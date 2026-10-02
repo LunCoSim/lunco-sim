@@ -35,7 +35,7 @@ use crate::look_cache::{CachedLook, LookCache, sweep_look_cache};
 use crate::shader_material::{ShaderMaterial, build_shader_material, wgsl_source};
 use bevy::asset::AssetId;
 use bevy::image::{ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
-use bevy::light::NotShadowCaster;
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
@@ -443,20 +443,24 @@ fn bind_added_skybox_shader_look(
     bind_shader_render_components(e, handle, look, true, &asset_server, &mut commands);
 }
 
-/// Mirror [`ShaderLook::no_shadow_cast`] onto the entity as `NotShadowCaster`.
+/// Mirror the shader look's independent cast and receive intent onto Bevy markers.
 ///
-/// `NotShadowCaster` is `bevy_light`, which is render-FREE — but it is applied
+/// Both markers belong to render-free `bevy_light`, but they are applied
 /// *here*, in the only crate that binds materials, so the render-free half of the
 /// graph states the intent and never names the flag.
 ///
 /// The shader look is the exclusive appearance owner, so this is a full
-/// reconciliation: clearing the authored opt-out must remove a stale derived
-/// `NotShadowCaster` marker as well as setting it when requested.
+/// reconciliation: clearing an opt-out removes its stale derived marker.
 fn apply_shadow_intent(commands: &mut Commands, e: Entity, look: &ShaderLook) {
     if look.no_shadow_cast {
         commands.entity(e).try_insert(NotShadowCaster);
     } else {
         commands.entity(e).try_remove::<NotShadowCaster>();
+    }
+    if look.no_shadow_receive {
+        commands.entity(e).try_insert(NotShadowReceiver);
+    } else {
+        commands.entity(e).try_remove::<NotShadowReceiver>();
     }
 }
 
@@ -1428,6 +1432,39 @@ mod tests {
         app.init_asset::<Image>();
         build(&mut app);
         app
+    }
+
+    #[test]
+    fn shadow_receiver_intent_reconciles_independently_of_casting() {
+        let mut app = App::new();
+        app.add_systems(
+            Update,
+            |mut commands: Commands, looks: Query<(Entity, &ShaderLook)>| {
+                for (entity, look) in &looks {
+                    apply_shadow_intent(&mut commands, entity, look);
+                }
+            },
+        );
+        let terrain = app.world_mut().spawn(ShaderLook::new("surface.wgsl")).id();
+        let mut shell_look = ShaderLook::new("surface.wgsl");
+        shell_look.no_shadow_cast = true;
+        shell_look.no_shadow_receive = true;
+        assert_eq!(shell_look.key(), ShaderLook::new("surface.wgsl").key());
+        let shell = app.world_mut().spawn(shell_look).id();
+        app.update();
+        assert!(app.world().entity(shell).contains::<NotShadowReceiver>());
+        assert!(app.world().entity(shell).contains::<NotShadowCaster>());
+        assert!(!app.world().entity(terrain).contains::<NotShadowReceiver>());
+        assert!(!app.world().entity(terrain).contains::<NotShadowCaster>());
+
+        app.world_mut()
+            .entity_mut(shell)
+            .get_mut::<ShaderLook>()
+            .unwrap()
+            .no_shadow_receive = false;
+        app.update();
+        assert!(!app.world().entity(shell).contains::<NotShadowReceiver>());
+        assert!(app.world().entity(shell).contains::<NotShadowCaster>());
     }
 
     #[test]
