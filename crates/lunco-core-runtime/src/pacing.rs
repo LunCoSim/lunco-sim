@@ -499,6 +499,8 @@ pub enum SimulationProgressOwner {
     UsdDocumentProjection,
     /// Preparation and replacement of an authored dependent USD stage.
     UsdDependentStageProjection,
+    /// Discovery of the mounted USD stage's Modelica domain roots.
+    UsdDomainDiscovery,
     /// Preparation of an authored USD Modelica domain network.
     UsdDomainProjection,
     /// Preparation of current USD simulation topology facts.
@@ -583,6 +585,14 @@ impl SimulationProgressKey {
         Self {
             owner: SimulationProgressOwner::UsdDomainProjection,
             operation_id: root.to_bits(),
+        }
+    }
+
+    /// The domain owner has one discovery queue for the current mounted scene.
+    pub const fn usd_domain_discovery() -> Self {
+        Self {
+            owner: SimulationProgressOwner::UsdDomainDiscovery,
+            operation_id: 0,
         }
     }
 

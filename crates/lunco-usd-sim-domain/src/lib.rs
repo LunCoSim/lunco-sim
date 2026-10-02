@@ -169,6 +169,7 @@ fn clear_pending_domain_projection(entity: Entity, pending: bool, commands: &mut
 /// compilation has its own progress owner and keeps the shared clock held
 /// until the participant is ready to run.
 pub fn reconcile_domain_projection_progress(
+    candidates: Res<PendingDomainProjectionCandidates>,
     pending: Query<
         (Entity, Option<&lunco_cosim_core::SimComponent>),
         With<DomainNetworkProjectionPending>,
@@ -177,6 +178,18 @@ pub fn reconcile_domain_projection_progress(
     mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
     mut commands: Commands,
 ) {
+    // Batched discovery can reach a network root several frames after its USD
+    // entity appears. Keep admission closed until every candidate has been
+    // classified and its per-network preparation hold has been acquired.
+    let key = lunco_core_runtime::SimulationProgressKey::usd_domain_discovery();
+    if candidates.initial_discovery
+        || !candidates.discovery.is_empty()
+        || !candidates.waiting_for_stage.is_empty()
+    {
+        progress.acquire(key, "Discover USD Modelica domain roots");
+    } else {
+        progress.release(key);
+    }
     for (entity, component) in &pending {
         if component.is_some() {
             progress
@@ -2832,6 +2845,39 @@ pub fn resolve_member_classes(
 mod tests {
     use super::*;
     use lunco_usd_bevy_stage::canonical::CanonicalStage;
+
+    #[test]
+    fn discovery_holds_admission_until_batched_roots_are_classified() {
+        let mut app = App::new();
+        app.init_resource::<PendingDomainProjectionCandidates>()
+            .init_resource::<lunco_core_runtime::SimulationProgress>()
+            .add_systems(Update, reconcile_domain_projection_progress);
+        let key = lunco_core_runtime::SimulationProgressKey::usd_domain_discovery();
+        let root = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<PendingDomainProjectionCandidates>()
+            .discovery.insert(root);
+        app.update();
+        assert!(app.world().resource::<lunco_core_runtime::SimulationProgress>()
+            .blockers().any(|blocker| blocker.key == key));
+        {
+            let mut candidates = app.world_mut().resource_mut::<PendingDomainProjectionCandidates>();
+            candidates.initial_discovery = false;
+            candidates.take_discovery_batch(1);
+        }
+        let network_key = lunco_core_runtime::SimulationProgressKey::usd_domain_projection(root);
+        app.world_mut().resource_mut::<lunco_core_runtime::SimulationProgress>()
+            .acquire(network_key, "Prepare discovered network");
+        app.update();
+        let progress = app.world().resource::<lunco_core_runtime::SimulationProgress>();
+        assert!(!progress.blockers().any(|blocker| blocker.key == key));
+        assert!(progress.blockers().any(|blocker| blocker.key == network_key));
+        // A replacement scene must acquire the discovery hold again.
+        app.world_mut().resource_mut::<PendingDomainProjectionCandidates>().reset_for_scene();
+        app.update();
+        assert!(app.world().resource::<lunco_core_runtime::SimulationProgress>()
+            .blockers().any(|blocker| blocker.key == key));
+    }
 
     fn synthesis_test_context() -> lunco_core::RuntimeExecutionContext {
         lunco_core::RuntimeExecutionContext {

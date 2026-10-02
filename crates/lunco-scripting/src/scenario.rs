@@ -1920,6 +1920,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                             | lunco_core_runtime::SimulationProgressOwner::SceneReferences
                             | lunco_core_runtime::SimulationProgressOwner::UsdSimulationTopology
                             | lunco_core_runtime::SimulationProgressOwner::UsdDomainProjection
+                            | lunco_core_runtime::SimulationProgressOwner::UsdDomainDiscovery
                             | lunco_core_runtime::SimulationProgressOwner::TerrainPreparation
                             | lunco_core_runtime::SimulationProgressOwner::DocumentPreparation
                             | lunco_core_runtime::SimulationProgressOwner::TwinPolicyPreparation
