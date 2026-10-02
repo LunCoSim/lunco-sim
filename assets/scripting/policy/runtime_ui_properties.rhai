@@ -44,9 +44,17 @@ fn status_color(status) {
     "var(--accent-color)"
 }
 
-fn vector_text(value) {
+// Display precision only: native physics and telemetry facts remain f64.
+fn number_text(value, scale) {
+    if type_of(value) != "f64" && type_of(value) != "i64" { return value.to_string(); }
+    if scale == 1.0 { return value.to_float().round().to_int().to_string(); }
+    ((value.to_float() * scale).round() / scale).to_string()
+}
+
+fn vector_text(value, scale) {
     if value == () || value.len != 3 { return "—"; }
-    value[0].to_string() + ", " + value[1].to_string() + ", " + value[2].to_string()
+    number_text(value[0], scale) + ", " + number_text(value[1], scale)
+        + ", " + number_text(value[2], scale)
 }
 
 fn telemetry_text(values) {
@@ -55,17 +63,24 @@ fn telemetry_text(values) {
     for value in values {
         if result != "" { result += " | "; }
         let unit = if value.unit == () || value.unit == "" { "" } else { " " + value.unit };
-        result += value.label + " " + value.value.to_string() + unit;
+        result += value.label + " " + number_text(value.value, 100.0) + unit;
     }
     result
 }
 
 fn participant_text(values) {
     if values.len == 0 { return "no simulation participants"; }
-    let result = "";
+    let counts = #{};
     for value in values {
-        if result != "" { result += " | "; }
-        result += value.model + ":" + status_label(value.status);
+        let label = status_label(value.status);
+        counts[label] = if counts[label] == () { 1 } else { counts[label] + 1 };
+    }
+    let result = "";
+    for label in ["RUNNING", "COMPILING", "PAUSED", "ERROR", "READY", "UNAVAILABLE"] {
+        if counts[label] != () {
+            if result != "" { result += " | "; }
+            result += counts[label].to_string() + " " + label;
+        }
     }
     result
 }
@@ -136,9 +151,11 @@ fn runtime_ui_properties(facts) {
     result.status_color = if facts.available { status_color(facts.status) } else { "var(--muted-color)" };
     result.runtime_status = runtime_status_label(facts);
     result.owner = facts.control_owner;
-    result.speed = vector_text(facts.velocity);
-    result.position = vector_text(facts.position);
-    result.angular_velocity = vector_text(facts.angular_velocity);
+    result.speed = vector_text(facts.velocity, 100.0) + " m/s";
+    result.position = vector_text(facts.position, 1.0) + " m";
+    result.angular_velocity = if facts.angular_velocity == () || facts.angular_velocity.len != 3 {
+        "—"
+    } else { number_text(vlen(facts.angular_velocity), 1000.0) + " rad/s" };
     result.telemetry_summary = telemetry_text(facts.telemetry);
     result.simulation_summary = participant_text(facts.participants);
     result.scope = if facts.scope == () || facts.scope == "" { "NO PROGRAM SCOPE" } else { facts.scope };

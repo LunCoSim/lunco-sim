@@ -105,7 +105,8 @@
 
 #compact-control-motion-grid {
   display: flex;
-  column-gap: 10px;
+  flex-direction: column;
+  row-gap: 3px;
   min-width: 0px;
 }
 
@@ -114,7 +115,7 @@
   display: flex;
   align-items: baseline;
   column-gap: 5px;
-  width: 50%;
+  width: 100%;
   min-width: 0px;
 }
 
