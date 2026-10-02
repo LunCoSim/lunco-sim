@@ -8061,6 +8061,7 @@ dependencies = [
  "lunco-workbench-core",
  "lunco-workbench-help-ui",
  "lunco-workbench-perf-ui",
+ "lunco-workbench-runtime-ui",
  "lunco-workbench-widgets",
  "lunco-workspace",
  "openusd",

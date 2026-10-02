@@ -31,6 +31,7 @@ lunco-workbench = { path = "../lunco-workbench" }
 lunco-workbench-perf-ui = { path = "../lunco-workbench-perf-ui" }
 lunco-workbench-browser = { path = "../lunco-workbench-browser" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-workbench-runtime-ui = { path = "../lunco-workbench-runtime-ui" }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
 lunco-workbench-help-ui = { path = "../lunco-workbench-help-ui" }
 lunco-canvas = { path = "../lunco-canvas", features = ["ui"] }

@@ -45,6 +45,19 @@ use lunco_usd_bevy_scene::billboard::{
 };
 use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 
+/// Split a paint region around one higher UI rectangle, preserving partial
+/// labels at panel edges without painting any text over the retained surface.
+fn subtract_cover(rect: egui::Rect, cover: egui::Rect) -> Vec<egui::Rect> {
+    let cut = rect.intersect(cover);
+    if !cut.is_positive() { return vec![rect]; }
+    [
+        egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, cut.min.y)),
+        egui::Rect::from_min_max(egui::pos2(rect.min.x, cut.max.y), rect.max),
+        egui::Rect::from_min_max(egui::pos2(rect.min.x, cut.min.y), egui::pos2(cut.min.x, cut.max.y)),
+        egui::Rect::from_min_max(egui::pos2(cut.max.x, cut.min.y), egui::pos2(rect.max.x, cut.max.y)),
+    ].into_iter().filter(|part| part.is_positive()).collect()
+}
+
 const BILLBOARD_MAX_WIDTH: f32 = 220.0;
 const BILLBOARD_LABEL_GAP: f32 = 12.0;
 const BILLBOARD_BACKDROP_PADDING: egui::Vec2 = egui::vec2(5.0, 3.0);
@@ -83,6 +96,12 @@ pub fn draw_billboard_overlay(
     surface_pose: lunco_celestial_spatial_core::SurfacePoseQuery,
     scene_viewport: Res<lunco_viewport_core::SceneViewport>,
     panel_rects: Option<Res<PanelRects>>,
+    retained_surfaces: Query<(
+        &lunco_workbench_runtime_ui::RuntimeUiSurface,
+        &ComputedNode,
+        &UiGlobalTransform,
+        &InheritedVisibility,
+    )>,
     mut egui_ctx: bevy_egui::EguiContexts,
     theme: Option<Res<lunco_theme::Theme>>,
 ) {
@@ -236,19 +255,33 @@ pub fn draw_billboard_overlay(
             .then_with(|| b.entity.to_bits().cmp(&a.entity.to_bits()))
     });
 
+    // egui chrome stays above retained HUDs, so its entire render pass also
+    // sits above Bevy UI. Exclude the visible HUD rectangles from the lowest
+    // label paint layer rather than moving HUDs above menus and dialogs.
+    let occluders: Vec<_> = retained_surfaces.iter()
+        .filter(|(surface, _, _, visibility)| visibility.get() && surface.occludes_scene_labels())
+        .filter_map(|(_, node, transform, _)| lunco_workbench_runtime_ui::runtime_ui_input_rect(node, transform))
+        .collect();
     for label in placed {
-        let backdrop = theme.tokens.overlay_backdrop;
-        painter.rect_filled(
-            label.bg,
-            3.0,
-            egui::Color32::from_rgba_unmultiplied(
-                backdrop.r(),
-                backdrop.g(),
-                backdrop.b(),
-                (f32::from(backdrop.a()) * label.fade) as u8,
-            ),
-        );
-        painter.galley(label.top_left, label.galley, label.color);
+        let mut visible = vec![label.bg.intersect(clip_rect)];
+        for cover in &occluders {
+            visible = visible.into_iter().flat_map(|rect| subtract_cover(rect, *cover)).collect();
+        }
+        for visible_rect in visible {
+            let painter = painter.with_clip_rect(visible_rect);
+            let backdrop = theme.tokens.overlay_backdrop;
+            painter.rect_filled(
+                label.bg,
+                3.0,
+                egui::Color32::from_rgba_unmultiplied(
+                    backdrop.r(),
+                    backdrop.g(),
+                    backdrop.b(),
+                    (f32::from(backdrop.a()) * label.fade) as u8,
+                ),
+            );
+            painter.galley(label.top_left, label.galley.clone(), label.color);
+        }
     }
 }
 
@@ -308,6 +341,20 @@ fn place_label(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn retained_hud_clips_labels_without_losing_uncovered_pixels() {
+        let label = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 60.0));
+        let hud = egui::Rect::from_min_max(egui::pos2(20.0, 10.0), egui::pos2(70.0, 50.0));
+        let parts = super::subtract_cover(label, hud);
+        assert_eq!(parts.len(), 4);
+        assert!(parts.iter().all(|part| !part.intersect(hud).is_positive()));
+        let area: f32 = parts.iter().map(|part| part.width() * part.height()).sum();
+        assert_eq!(area, label.width() * label.height() - hud.width() * hud.height());
+        assert!(super::subtract_cover(label, label).is_empty());
+        let outside = label.translate(egui::vec2(200.0, 0.0));
+        assert_eq!(super::subtract_cover(label, outside), vec![label]);
+    }
+
     use super::{place_label, render_anchor};
     use bevy::prelude::*;
     use bevy_egui::egui;

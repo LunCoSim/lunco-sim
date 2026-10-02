@@ -799,6 +799,12 @@ pub struct RuntimeUiSurface {
 }
 
 impl RuntimeUiSurface {
+    /// Whether this retained surface covers scene labels in its layout rectangle.
+    /// Viewport roots are transparent full-window containers; only their visible
+    /// controls cover labels, not the container itself.
+    pub fn occludes_scene_labels(&self) -> bool {
+        !matches!(self.placement, RuntimeUiPlacement::Viewport)
+    }
     fn from_definition(
         definition: &RuntimeUiSurfaceDefinition,
         template: Handle<HtmlTemplate>,
@@ -2407,7 +2413,9 @@ fn is_descendant_of_runtime_surface(
     }
 }
 
-fn runtime_ui_input_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> Option<egui::Rect> {
+/// Computed node bounds in logical window coordinates, shared by input and
+/// scene-label occlusion so DPI and retained layout use the same geometry.
+pub fn runtime_ui_input_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> Option<egui::Rect> {
     if node.is_empty() || !node.inverse_scale_factor.is_finite() || node.inverse_scale_factor <= 0.0
     {
         return None;
