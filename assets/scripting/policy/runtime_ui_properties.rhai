@@ -155,7 +155,9 @@ fn runtime_ui_properties(facts) {
     result.position = vector_text(facts.position, 1.0) + " m";
     result.angular_velocity = if facts.angular_velocity == () || facts.angular_velocity.len != 3 {
         "—"
-    } else { number_text(vlen(facts.angular_velocity), 1000.0) + " rad/s" };
+    } else { number_text(sqrt(facts.angular_velocity[0]*facts.angular_velocity[0]
+        + facts.angular_velocity[1]*facts.angular_velocity[1]
+        + facts.angular_velocity[2]*facts.angular_velocity[2]), 1000.0) + " rad/s" };
     result.telemetry_summary = telemetry_text(facts.telemetry);
     result.simulation_summary = participant_text(facts.participants);
     result.scope = if facts.scope == () || facts.scope == "" { "NO PROGRAM SCOPE" } else { facts.scope };
