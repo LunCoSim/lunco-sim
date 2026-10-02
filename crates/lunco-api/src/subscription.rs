@@ -246,7 +246,7 @@ pub fn sampled_param_observer(
 
 /// Observer for telemetry events.
 pub fn telemetry_event_observer(
-    trigger: On<lunco_telemetry_core::TelemetryEvent>,
+    trigger: On<lunco_telemetry_core::StampedTelemetryEvent>,
     mut subscriptions: ResMut<TelemetrySubscriptions>,
     mut commands: Commands,
 ) {

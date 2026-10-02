@@ -7,6 +7,11 @@ use rhai::{Engine, ImmutableString};
 /// keeps its exact, case-sensitive semantics for names and identity keys.
 pub fn register_string_functions(engine: &mut Engine) {
     engine
+        // Source revisions and other opaque unsigned identities must retain
+        // all 64 bits when rendered; Rhai otherwise prints the type name.
+        .register_fn("to_string", |value: u64| -> ImmutableString {
+            value.to_string().into()
+        })
         .register_fn(
             "to_lowercase",
             |value: ImmutableString| -> ImmutableString { value.to_lowercase().into() },
@@ -27,6 +32,21 @@ pub fn register_string_functions(engine: &mut Engine) {
 mod tests {
     use super::register_string_functions;
     use rhai::{Engine, ImmutableString};
+
+    #[test]
+    fn unsigned_identity_formatting_preserves_all_bits() {
+        let mut engine = Engine::new();
+        register_string_functions(&mut engine);
+        let mut scope = rhai::Scope::new();
+        scope.push("revision", u64::MAX);
+        assert_eq!(
+            engine
+                .eval_with_scope::<ImmutableString>(&mut scope, "revision.to_string()")
+                .unwrap()
+                .as_str(),
+            "18446744073709551615"
+        );
+    }
 
     #[test]
     fn string_helpers_are_unicode_aware_and_do_not_change_identity_equality() {

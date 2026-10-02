@@ -4,7 +4,7 @@
 
 use bevy::prelude::*;
 
-use crate::telemetry::{SampledParameter, TelemetryEvent};
+use crate::telemetry::SampledParameter;
 
 /// Plugin that registers logging observers.
 pub struct LunCoLogPlugin;
@@ -16,7 +16,7 @@ impl Plugin for LunCoLogPlugin {
     }
 }
 
-fn log_telemetry_events(trigger: On<TelemetryEvent>) {
+fn log_telemetry_events(trigger: On<crate::StampedTelemetryEvent>) {
     let evt = trigger.event();
     // `cmd:*` and `key:*` are MECHANICAL events: every command the API/UI runs and
     // every key the player taps is republished on this bus so scenarios can

@@ -2033,7 +2033,9 @@ mod tests {
     }
 
     fn world_at_epoch(interval_s: f64) -> World {
-        let mut world = World::new();
+        let mut app = App::new();
+        app.add_plugins(lunco_telemetry_core::LunCoTelemetryCorePlugin);
+        let mut world = std::mem::take(app.world_mut());
         world.insert_resource(lunco_time::CelestialTime {
             epoch_jd: 2_451_545.0,
             ..Default::default()
@@ -2695,17 +2697,19 @@ mod tests {
 
     fn watch_events(world: &mut World) {
         world.init_resource::<SeenEvents>();
-        world.add_observer(|ev: On<TelemetryEvent>, mut seen: ResMut<SeenEvents>| {
-            let data = match &ev.data {
-                TelemetryValue::String(s) => s.clone(),
-                TelemetryValue::F64(v) => v.to_string(),
-                TelemetryValue::I64(v) => v.to_string(),
-                TelemetryValue::U64(v) => v.to_string(),
-                TelemetryValue::Bool(v) => v.to_string(),
-                TelemetryValue::Array(_) | TelemetryValue::Map(_) => String::new(),
-            };
-            seen.0.push((ev.name.clone(), data));
-        });
+        world.add_observer(
+            |ev: On<lunco_telemetry_core::StampedTelemetryEvent>, mut seen: ResMut<SeenEvents>| {
+                let data = match &ev.data {
+                    TelemetryValue::String(s) => s.clone(),
+                    TelemetryValue::F64(v) => v.to_string(),
+                    TelemetryValue::I64(v) => v.to_string(),
+                    TelemetryValue::U64(v) => v.to_string(),
+                    TelemetryValue::Bool(v) => v.to_string(),
+                    TelemetryValue::Array(_) | TelemetryValue::Map(_) => String::new(),
+                };
+                seen.0.push((ev.name.clone(), data));
+            },
+        );
     }
 
     /// AOS/LOS must fire on TRANSITIONS only. A consumer that subscribes to

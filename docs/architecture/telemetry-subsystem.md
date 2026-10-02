@@ -193,6 +193,14 @@ settings, retention, and query/history integration. The dependency direction is
 deliberate: `lunco-core` emits generic facts and does not depend on telemetry;
 the telemetry crates consume those facts.
 
+Discrete producers emit `TelemetryEvent`. The telemetry owner stamps a copy
+and dispatches `StampedTelemetryEvent`, whose payload cannot be constructed by
+subscribers. Rust observers subscribe to that stamped boundary; Rhai and API
+consumers still receive the same telemetry payload. This two-stage dispatch
+ensures that subscribers registered before the telemetry plugin also see the
+authoritative clock. Sibling Bevy observers have no registration-order contract,
+so a mutating stamp observer on the subscriber event cannot establish it.
+
 Every event and continuous sample is stamped at the shared `SimTick` boundary
 from `MissionClock`. `timestamp` is the derived TDB epoch for calendar labels;
 `sim_secs` is the precise plotting/differencing timebase and `sim_tick` is the

@@ -12,7 +12,7 @@ use lunco_sysml_ast::{
     SysmlRequirementConstraintKind, SysmlRequirementRecord,
 };
 use lunco_sysml_ir::VerificationVerdict;
-use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
+use lunco_telemetry_core::TelemetryValue;
 use lunco_twin::Twin;
 use lunco_workspace::{TwinClosed, TwinId, WorkspaceResource};
 
@@ -962,7 +962,7 @@ fn line_for_offset(source: &str, offset: u32) -> usize {
 
 /// Captures inline and streamed structured checks for the active Twin.
 pub(crate) fn capture_verification_evidence(
-    trigger: On<TelemetryEvent>,
+    trigger: On<lunco_telemetry_core::StampedTelemetryEvent>,
     workspace: Option<Res<WorkspaceResource>>,
     mut evidence: ResMut<SysmlVerificationEvidence>,
 ) {

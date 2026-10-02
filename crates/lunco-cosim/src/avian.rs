@@ -1288,11 +1288,9 @@ pub fn apply_pending_forces(
         ));
         command.value = 0.0;
     }
-    scratch.force.sort_by(|a, b| {
-        a.0.cmp(&b.0)
-            .then_with(|| a.1.cmp(&b.1))
-            .then_with(|| a.2.cmp(&b.2))
-    });
+    scratch
+        .force
+        .sort_unstable_by_key(|entry| (entry.0, entry.1, entry.2));
 
     scratch.torque.clear();
     for (entity, actuator, mut command, gid, name) in actuator_commands.p1().iter_mut() {
@@ -1306,6 +1304,10 @@ pub fn apply_pending_forces(
         ));
         command.value = 0.0;
     }
+
+    scratch
+        .torque
+        .sort_unstable_by_key(|entry| (entry.0, entry.1, entry.2));
 
     // A held physics clock does not consume Avian's force accumulator. The
     // commands were cleared above so a command sampled during loading or a

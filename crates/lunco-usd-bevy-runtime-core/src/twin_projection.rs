@@ -6584,7 +6584,7 @@ mod tests {
     struct ProjectedDocumentEvents(Vec<lunco_telemetry_core::TelemetryValue>);
 
     fn capture_projected_document_event(
-        event: On<lunco_telemetry_core::TelemetryEvent>,
+        event: On<lunco_telemetry_core::StampedTelemetryEvent>,
         mut events: ResMut<ProjectedDocumentEvents>,
     ) {
         if event.event().name == "usd.document.projected" {
@@ -6598,6 +6598,7 @@ mod tests {
         use lunco_core_runtime::pacing::{SimulationProgressKey, SimulationProgressOwner};
 
         let mut app = App::new();
+        app.add_plugins(lunco_telemetry_core::LunCoTelemetryCorePlugin);
         app.init_resource::<crate::live_consume::PendingStageProjections>()
             .init_resource::<PendingRefSpawns>()
             .init_resource::<PendingInstanceProjections>()

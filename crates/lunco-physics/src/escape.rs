@@ -976,6 +976,7 @@ mod tests {
     #[test]
     fn an_escape_emits_one_identified_telemetry_event() {
         let mut app = App::new();
+        app.add_plugins(lunco_telemetry_core::LunCoTelemetryCorePlugin);
         app.add_plugins(MinimalPlugins);
         app.insert_resource(WorldBounds::Some {
             min: Vector::splat(-100.0),
@@ -991,9 +992,10 @@ mod tests {
         });
         app.init_resource::<SeenTelemetry>();
         app.add_observer(
-            |trigger: On<TelemetryEvent>, mut seen: ResMut<SeenTelemetry>| {
+            |trigger: On<lunco_telemetry_core::StampedTelemetryEvent>,
+             mut seen: ResMut<SeenTelemetry>| {
                 if trigger.event().name == "physics-body-escaped" {
-                    seen.0.push(trigger.event().clone());
+                    seen.0.push((**trigger.event()).clone());
                 }
             },
         );

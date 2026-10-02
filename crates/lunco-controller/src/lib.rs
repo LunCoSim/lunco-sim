@@ -2549,17 +2549,18 @@ mod tests {
     }
 
     fn observe_control_telemetry(
-        trigger: On<lunco_telemetry_core::TelemetryEvent>,
+        trigger: On<lunco_telemetry_core::StampedTelemetryEvent>,
         mut observed: ResMut<SemanticEdgeObserved>,
     ) {
         if matches!(trigger.event().name.as_str(), "intent.edge" | "intent.hold") {
-            observed.telemetry.push(trigger.event().clone());
+            observed.telemetry.push((**trigger.event()).clone());
         }
     }
 
     #[test]
     fn semantic_edge_is_atomic_target_scoped_and_script_visible() {
         let mut app = App::new();
+        app.add_plugins(lunco_telemetry_core::LunCoTelemetryCorePlugin);
         app.init_resource::<lunco_core::CommandResults>()
             .init_resource::<lunco_core::ActiveCommandId>()
             .init_resource::<lunco_control_core::CausalTrace>()

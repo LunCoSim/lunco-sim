@@ -874,7 +874,7 @@ struct StartupSceneGuard {
 /// non-zero exit. Disarms on success (scene produced `UsdPrimPath` entities) so
 /// runtime loads are safe.
 fn startup_twin_scan_failguard(
-    trigger: On<lunco_telemetry_core::TelemetryEvent>,
+    trigger: On<lunco_telemetry_core::StampedTelemetryEvent>,
     guard: Option<Res<StartupSceneGuard>>,
     mut commands: Commands,
 ) {

@@ -215,7 +215,6 @@ pub fn apply_jointed_tire_forces(
             };
 
             let mut contacts = Vec::new();
-            let mut total_normal_force = 0.0;
             for pair in collisions.collisions_with(wheel) {
                 let wheel_is_body1 = pair.body1 == Some(wheel);
                 let wheel_is_body2 = pair.body2 == Some(wheel);
@@ -262,7 +261,6 @@ pub fn apply_jointed_tire_forces(
                             - other_velocity_at(other, wheel_state.position);
                         let v_long = contact_velocity.dot(forward);
                         let v_lat = contact_velocity.dot(right);
-                        total_normal_force += normal_force;
                         contacts.push(TireContact {
                             point: point.point,
                             normal_force,
@@ -274,6 +272,35 @@ pub fn apply_jointed_tire_forces(
                     }
                 }
             }
+            // Collision graph insertion order depends on collider admission.
+            // Sort the complete physical contact tuple before summing loads or
+            // applying forces to the shared wheel body.
+            contacts.sort_by(|a, b| {
+                let values = |c: &TireContact| {
+                    [
+                        c.point.x,
+                        c.point.y,
+                        c.point.z,
+                        c.forward.x,
+                        c.forward.y,
+                        c.forward.z,
+                        c.right.x,
+                        c.right.y,
+                        c.right.z,
+                        c.normal_force,
+                        c.v_long,
+                        c.v_lat,
+                    ]
+                };
+                values(a)
+                    .into_iter()
+                    .zip(values(b))
+                    .map(|(a, b)| a.total_cmp(&b))
+                    .find(|order| !order.is_eq())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let total_normal_force = contacts.iter().map(|c| c.normal_force).sum::<f64>();
+
             if total_normal_force <= 0.0 || contacts.is_empty() {
                 continue;
             }

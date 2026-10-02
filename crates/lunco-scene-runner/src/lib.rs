@@ -160,7 +160,7 @@ use lunco_cosim_core::UsdSourcedCosim;
 use lunco_luncosim_simulation::LunCoSimHeadlessPlugin;
 use lunco_modelica_runtime::ModelicaModel;
 use lunco_sysml_ir::VerificationVerdict;
-use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
+use lunco_telemetry_core::TelemetryValue;
 use lunco_usd_document::document::UsdDocument;
 use lunco_usd_sim_cosim::PendingModelicaSource;
 use serde::Deserialize;
@@ -686,7 +686,10 @@ fn parse_verdict_payload(payload: &TelemetryValue) -> Option<(VerificationVerdic
     Some((verdict, details))
 }
 
-fn capture_verification_evidence(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
+fn capture_verification_evidence(
+    trigger: On<lunco_telemetry_core::StampedTelemetryEvent>,
+    mut verdict: ResMut<Verdict>,
+) {
     if verdict.verification.is_none() {
         return;
     }
@@ -1216,7 +1219,10 @@ struct ExpectedSceneLoadFailures {
 }
 
 /// `expect_fault(port)` in rhai lands here.
-fn catch_expected_fault(trigger: On<TelemetryEvent>, mut expected: ResMut<ExpectedFaults>) {
+fn catch_expected_fault(
+    trigger: On<lunco_telemetry_core::StampedTelemetryEvent>,
+    mut expected: ResMut<ExpectedFaults>,
+) {
     let evt = trigger.event();
     if evt.name != "EXPECT_FAULT" {
         return;
@@ -1229,7 +1235,7 @@ fn catch_expected_fault(trigger: On<TelemetryEvent>, mut expected: ResMut<Expect
 
 /// `expect_runtime_fault(kind)` in rhai lands here.
 fn catch_expected_runtime_fault(
-    trigger: On<TelemetryEvent>,
+    trigger: On<lunco_telemetry_core::StampedTelemetryEvent>,
     mut expected: ResMut<ExpectedRuntimeFaults>,
 ) {
     let evt = trigger.event();
@@ -1245,7 +1251,7 @@ fn catch_expected_runtime_fault(
 /// `expect_scene_load_failure(path, detail_contains)` in Rhai declares the
 /// exact LoadScene transaction whose failed terminal edge the runner must see.
 fn catch_expected_scene_load_failure(
-    trigger: On<TelemetryEvent>,
+    trigger: On<lunco_telemetry_core::StampedTelemetryEvent>,
     mut state: ResMut<ExpectedSceneLoadFailures>,
 ) {
     let event = trigger.event();
@@ -1343,7 +1349,10 @@ fn capture_scene_load_failed(
     );
 }
 
-fn catch_verdict(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
+fn catch_verdict(
+    trigger: On<lunco_telemetry_core::StampedTelemetryEvent>,
+    mut verdict: ResMut<Verdict>,
+) {
     if verdict.result.is_some() {
         return; // The first authored verdict is final for this run.
     }

@@ -851,7 +851,7 @@ pub const TELEMETRY_SOURCE: &str = "Telemetry";
 /// the history and the bar, so they remain available to Console and API
 /// subscribers through the telemetry stream itself.
 pub fn surface_error_telemetry(
-    trigger: On<lunco_telemetry_core::TelemetryEvent>,
+    trigger: On<lunco_telemetry_core::StampedTelemetryEvent>,
     mut bus: ResMut<StatusBus>,
 ) {
     use lunco_telemetry_core::{Severity, TelemetryValue};
@@ -921,7 +921,10 @@ mod tests {
         use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
         let mut app = App::new();
-        app.add_plugins(StatusBusPlugin);
+        app.add_plugins((
+            lunco_telemetry_core::LunCoTelemetryCorePlugin,
+            StatusBusPlugin,
+        ));
         app.world_mut().trigger(TelemetryEvent {
             name: "DEM_BUILD_FAILED".to_string(),
             source: 42,
@@ -934,6 +937,7 @@ mod tests {
             sim_tick: 0,
         });
 
+        app.world_mut().flush();
         let bus = app.world().resource::<StatusBus>();
         let event = bus
             .history()
@@ -950,7 +954,10 @@ mod tests {
         use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
         let mut app = App::new();
-        app.add_plugins(StatusBusPlugin);
+        app.add_plugins((
+            lunco_telemetry_core::LunCoTelemetryCorePlugin,
+            StatusBusPlugin,
+        ));
         app.world_mut().trigger(TelemetryEvent {
             name: "PHYSICS_INITIALIZATION_PAUSED".to_string(),
             source: 0,
@@ -963,6 +970,7 @@ mod tests {
             sim_tick: 0,
         });
 
+        app.world_mut().flush();
         let bus = app.world().resource::<StatusBus>();
         let event = bus
             .history()
@@ -1033,7 +1041,10 @@ mod tests {
         use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
         let mut app = App::new();
-        app.add_plugins(StatusBusPlugin);
+        app.add_plugins((
+            lunco_telemetry_core::LunCoTelemetryCorePlugin,
+            StatusBusPlugin,
+        ));
         for severity in [Severity::Debug, Severity::Info] {
             app.world_mut().trigger(TelemetryEvent {
                 name: "ZONE_ENTER".to_string(),
@@ -1046,6 +1057,7 @@ mod tests {
             });
         }
 
+        app.world_mut().flush();
         let bus = app.world().resource::<StatusBus>();
         assert_eq!(
             bus.history().count(),
@@ -1154,7 +1166,10 @@ mod tests {
     #[test]
     fn active_twin_close_winds_down_live_status_without_erasing_history() {
         let mut app = App::new();
-        app.add_plugins(StatusBusPlugin);
+        app.add_plugins((
+            lunco_telemetry_core::LunCoTelemetryCorePlugin,
+            StatusBusPlugin,
+        ));
         {
             let mut bus = app.world_mut().resource_mut::<StatusBus>();
             bus.push("session", StatusLevel::Info, "kept audit event");
@@ -1167,6 +1182,7 @@ mod tests {
             was_active: true,
         });
 
+        app.world_mut().flush();
         let bus = app.world().resource::<StatusBus>();
         assert!(!bus.is_busy(BusyScope::Global));
         assert!(bus.last_outcome(BusyScope::Global).is_none());

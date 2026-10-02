@@ -4,7 +4,7 @@
 //! consumers, scripting, and the sampling engine. Sampling policy and retained
 //! history remain in `lunco-telemetry`.
 
-use bevy::prelude::{App, Commands, On, Plugin, Res, warn_once};
+use bevy::prelude::{App, Commands, On, Plugin, warn_once};
 
 pub mod telemetry;
 pub use telemetry::*;
@@ -20,10 +20,6 @@ pub struct LunCoTelemetryCorePlugin;
 impl Plugin for LunCoTelemetryCorePlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(stamp_telemetry_event)
-            // Stamp every producer's event at the shared simulation boundary
-            // before API, status, logging, or scripting observers consume it.
-            // Producers may run in Update, FixedUpdate, or an observer; the
-            // event still carries one authoritative SimTick/MissionClock pair.
             .add_plugins(LunCoLogPlugin)
             .add_observer(project_command_occurrence)
             .add_observer(project_runtime_error)
@@ -36,24 +32,37 @@ impl Plugin for LunCoTelemetryCorePlugin {
     }
 }
 
-fn stamp_telemetry_event(
-    mut trigger: On<TelemetryEvent>,
-    tick: Option<Res<lunco_core_runtime::SimTick>>,
-    mission_clock: Option<Res<lunco_time::MissionClock>>,
-) {
-    let (Some(tick), Some(mission_clock)) = (tick, mission_clock) else {
-        return;
-    };
-    let epoch_jd = mission_clock.epoch_jd(tick.0);
-    let sim_secs = mission_clock.sim_secs(tick.0);
-    if !epoch_jd.is_finite() || !sim_secs.is_finite() {
-        warn_once!("telemetry: event clock is non-finite; event rejected");
-        return;
+/// Subscriber event. Only the telemetry boundary can construct it, so no
+/// consumer can observe a producer's placeholder timestamps.
+#[derive(bevy::prelude::Event, Debug)]
+pub struct StampedTelemetryEvent(TelemetryEvent);
+
+impl std::ops::Deref for StampedTelemetryEvent {
+    type Target = TelemetryEvent;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
-    let event = trigger.event_mut();
-    event.timestamp = epoch_jd;
-    event.sim_secs = sim_secs;
-    event.sim_tick = tick.0;
+}
+
+fn stamp_telemetry_event(
+    trigger: On<TelemetryEvent>,
+    tick: Option<bevy::prelude::Res<lunco_core_runtime::SimTick>>,
+    clock: Option<bevy::prelude::Res<lunco_time::MissionClock>>,
+    mut commands: Commands,
+) {
+    let mut event = trigger.event().clone();
+    if let (Some(tick), Some(clock)) = (tick, clock) {
+        let epoch = clock.epoch_jd(tick.0);
+        let seconds = clock.sim_secs(tick.0);
+        if !epoch.is_finite() || !seconds.is_finite() {
+            warn_once!("telemetry: event clock is non-finite; event rejected");
+            return;
+        }
+        event.timestamp = epoch;
+        event.sim_secs = seconds;
+        event.sim_tick = tick.0;
+    }
+    commands.trigger(StampedTelemetryEvent(event));
 }
 
 fn project_command_occurrence(trigger: On<lunco_core::CommandOccurred>, mut commands: Commands) {
@@ -93,8 +102,8 @@ mod tests {
     #[derive(Resource, Default)]
     struct Seen(Vec<TelemetryEvent>);
 
-    fn capture_event(trigger: On<TelemetryEvent>, mut seen: ResMut<Seen>) {
-        seen.0.push(trigger.event().clone());
+    fn capture_event(trigger: On<StampedTelemetryEvent>, mut seen: ResMut<Seen>) {
+        seen.0.push((**trigger.event()).clone());
     }
 
     #[test]
@@ -130,9 +139,9 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(lunco_core_runtime::SimTick(17))
             .insert_resource(lunco_time::MissionClock::anchored(2_451_545.25, 0))
-            .add_plugins(LunCoTelemetryCorePlugin)
             .init_resource::<Seen>()
-            .add_observer(capture_event);
+            .add_observer(capture_event)
+            .add_plugins(LunCoTelemetryCorePlugin);
 
         app.world_mut().trigger(TelemetryEvent {
             name: "sim.edge".into(),

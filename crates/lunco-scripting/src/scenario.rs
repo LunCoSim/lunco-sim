@@ -3508,7 +3508,7 @@ fn compare_telemetry_values(
 /// fired on the client; host-authoritative events reach them only when explicitly
 /// replicated.
 pub fn collect_script_events(
-    trigger: On<TelemetryEvent>,
+    trigger: On<lunco_telemetry_core::StampedTelemetryEvent>,
     gate: Res<ScenarioExecutionGate>,
     mut inbox: ResMut<ScriptEventInbox>,
     diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
