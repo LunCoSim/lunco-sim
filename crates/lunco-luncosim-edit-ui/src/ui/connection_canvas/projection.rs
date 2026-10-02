@@ -67,12 +67,40 @@ pub(crate) enum WireKind {
 /// factory downcasts it.
 #[derive(Clone, Debug)]
 pub(crate) struct UsdPrimNodeData {
+    pub programs: Vec<ProgramFacet>,
     pub type_name: String,
     /// Applies `PhysicsRigidBodyAPI` — drawn with the body accent.
     pub is_body: bool,
     /// USD property types used by the document authoring boundary.
     pub port_types: BTreeMap<String, String>,
     pub port_sources: BTreeMap<String, Vec<String>>,
+    /// Stable presentation identity; origin remains the exact USD prim.
+    pub view_key: String,
+    pub boundary: Option<BoundaryRole>,
+}
+
+/// The selected system's property groups, presented as interface terminals.
+/// These describe USD direction, not a guessed runtime provider.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) enum BoundaryRole {
+    Inputs,
+    Outputs,
+    Connectors,
+}
+impl BoundaryRole {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Inputs => "inputs",
+            Self::Outputs => "outputs",
+            Self::Connectors => "connectors",
+        }
+    }
+}
+
+pub(super) fn diagram_key(node: &Node) -> Option<&str> {
+    node.data
+        .downcast_ref::<UsdPrimNodeData>()
+        .map(|data| data.view_key.as_str())
 }
 
 /// Typed payload carried in `Edge.data` for `"usd.wire"` edges.
@@ -84,6 +112,9 @@ pub(crate) struct UsdWireData {
 /// A prim read out of the stage, before layout.
 #[derive(Clone, Debug)]
 pub(crate) struct PrimNode {
+    pub programs: Vec<ProgramFacet>,
+    pub usd_origin: Option<String>,
+    pub boundary: Option<BoundaryRole>,
     pub path: String,
     /// Standard USD `ui:displayName`, when authored; the path leaf is the
     /// deterministic fallback for assets that do not provide one.
@@ -112,8 +143,17 @@ pub(crate) struct PrimNode {
     pub port_types: BTreeMap<String, String>,
 }
 
+/// Resolved authored program facts; this never starts an executor or reads source bytes.
+#[derive(Clone, Debug, Hash)]
+pub(crate) struct ProgramFacet {
+    pub path: String,
+    pub backend: String,
+    pub source: String,
+    pub issue: Option<String>,
+}
+
 /// A link read out of the stage, before resolution against the node set.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash)]
 pub(crate) struct Wire {
     pub kind: WireKind,
     /// Prim whose authored relation produced this wire. This keeps incremental
@@ -248,7 +288,32 @@ pub(crate) fn collect_prim(view: &StageView<'_>, path: &str) -> Option<PrimProje
         }
     }
 
+    let programs = if view.has_api_schema(&p, "LunCoProgramAPI") {
+        use lunco_usd_bevy_core::program::{ProgramSource, resolve_program};
+        vec![match resolve_program(view, &p) {
+            Ok(program) => ProgramFacet {
+                path: path.into(),
+                backend: format!("{:?}", program.backend),
+                source: match program.source {
+                    ProgramSource::Id(id) | ProgramSource::Asset(id) => id,
+                    ProgramSource::Code(_) => "Inline source".into(),
+                },
+                issue: None,
+            },
+            Err(issue) => ProgramFacet {
+                path: path.into(),
+                backend: "Invalid program".into(),
+                source: issue.property,
+                issue: Some(issue.message),
+            },
+        }]
+    } else {
+        Vec::new()
+    };
     let node = PrimNode {
+        programs,
+        usd_origin: None,
+        boundary: None,
         path: path.to_string(),
         display_name,
         type_name,
@@ -404,7 +469,11 @@ pub(crate) fn project_diagram(
     root: &str,
     include_descendants: bool,
 ) -> (Vec<PrimNode>, Vec<Wire>) {
-    let nodes: Vec<_> = nodes
+    let programs: Vec<_> = nodes
+        .iter()
+        .flat_map(|node| node.programs.iter().cloned())
+        .collect();
+    let mut nodes: Vec<_> = nodes
         .iter()
         .filter(|node| {
             let parent = node
@@ -416,9 +485,34 @@ pub(crate) fn project_diagram(
         })
         .cloned()
         .collect();
+    // Attribute hidden program descendants to their nearest displayed USD ancestor.
+    let visible: HashMap<_, _> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, node)| (node.path.clone(), i))
+        .collect();
+    for node in nodes.iter_mut() {
+        node.programs.clear();
+    }
+    for program in programs {
+        let mut ancestor = program.path.as_str();
+        loop {
+            if let Some(index) = visible.get(ancestor) {
+                nodes[*index].programs.push(program);
+                break;
+            }
+            let Some((parent, _)) = ancestor.rsplit_once('/') else {
+                break;
+            };
+            if parent.is_empty() {
+                break;
+            }
+            ancestor = parent;
+        }
+    }
     let paths: BTreeSet<_> = nodes.iter().map(|node| node.path.as_str()).collect();
     let mut physical = BTreeSet::new();
-    let wires = wires
+    let mut wires: Vec<Wire> = wires
         .iter()
         .filter(|wire| {
             if !paths.contains(wire.source_path.as_str())
@@ -436,6 +530,98 @@ pub(crate) fn project_diagram(
         })
         .cloned()
         .collect();
+    // The selected system is an interface, rather than a second copy of its
+    // children. Separate input/output terminals retain exact property names.
+    if let Some(index) = nodes.iter().position(|node| node.path == root) {
+        let system = nodes.remove(index);
+        let mut boundaries = BTreeMap::new();
+        for role in [
+            BoundaryRole::Inputs,
+            BoundaryRole::Outputs,
+            BoundaryRole::Connectors,
+        ] {
+            let prefix = format!("{}:", role.name());
+            let has_ports = match role {
+                BoundaryRole::Inputs => !system.inputs.is_empty(),
+                BoundaryRole::Outputs => !system.outputs.is_empty(),
+                BoundaryRole::Connectors => !system.connectors.is_empty(),
+            } || system
+                .referenced_ports
+                .iter()
+                .any(|port| port.starts_with(&prefix));
+            if !has_ports {
+                continue;
+            }
+            let mut terminal = system.clone();
+            terminal.path = format!("{root}#{}", role.name());
+            terminal.usd_origin = Some(root.into());
+            terminal.boundary = Some(role);
+            terminal.display_name = Some(format!(
+                "{} · {}",
+                system
+                    .display_name
+                    .as_deref()
+                    .unwrap_or_else(|| root.rsplit('/').next().unwrap_or(root)),
+                role.name()
+            ));
+            terminal.programs.clear();
+            terminal.is_body = false;
+            terminal.type_name = "System interface".into();
+            if role != BoundaryRole::Inputs {
+                terminal.inputs.clear();
+            }
+            if role != BoundaryRole::Outputs {
+                terminal.outputs.clear();
+            }
+            if role != BoundaryRole::Connectors {
+                terminal.connectors.clear();
+            }
+            terminal
+                .referenced_ports
+                .retain(|port| port.starts_with(&prefix));
+            terminal
+                .port_types
+                .retain(|port, _| port.starts_with(&prefix));
+            terminal
+                .port_sources
+                .retain(|port, _| port.starts_with(&prefix));
+            boundaries.insert(prefix, terminal.path.clone());
+            nodes.push(terminal);
+        }
+        // A system may itself run a program or participate in a joint. Retain
+        // its structural card for those facts, without duplicating its ports.
+        if (boundaries.is_empty() && nodes.is_empty())
+            || !system.programs.is_empty()
+            || wires.iter().any(|wire| {
+                wire.kind == WireKind::Joint
+                    && (wire.source_path == root || wire.target_path == root)
+            })
+        {
+            let mut host = system;
+            host.inputs.clear();
+            host.outputs.clear();
+            host.connectors.clear();
+            host.referenced_ports.clear();
+            nodes.push(host);
+        }
+        for wire in &mut wires {
+            if wire.kind == WireKind::Joint {
+                continue;
+            }
+            for (path, property) in [
+                (&mut wire.source_path, &wire.source_conn),
+                (&mut wire.target_path, &wire.target_conn),
+            ] {
+                if path == root {
+                    if let Some((prefix, _)) = property.split_once(':') {
+                        if let Some(key) = boundaries.get(&format!("{prefix}:")) {
+                            *path = key.clone();
+                        }
+                    }
+                }
+            }
+        }
+    }
     (nodes, wires)
 }
 
@@ -568,7 +754,14 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
         for (k, name) in ins.iter().enumerate() {
             ports.push(Port {
                 id: PortId::new(format!("inputs:{name}")),
-                local_offset: Pos::new(0.0, port_y(k, ins.len(), node_heights[i])),
+                local_offset: Pos::new(
+                    if node.boundary == Some(BoundaryRole::Inputs) {
+                        NODE_W
+                    } else {
+                        0.0
+                    },
+                    port_y(k, ins.len(), node_heights[i]),
+                ),
                 kind: "input".into(),
             });
         }
@@ -576,7 +769,14 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
         for (k, name) in outs.iter().enumerate() {
             ports.push(Port {
                 id: PortId::new(format!("outputs:{name}")),
-                local_offset: Pos::new(NODE_W, port_y(k, outs.len(), node_heights[i])),
+                local_offset: Pos::new(
+                    if node.boundary == Some(BoundaryRole::Outputs) {
+                        0.0
+                    } else {
+                        NODE_W
+                    },
+                    port_y(k, outs.len(), node_heights[i]),
+                ),
                 kind: "output".into(),
             });
         }
@@ -621,15 +821,18 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
             rect,
             kind: NODE_KIND.into(),
             data: Arc::new(UsdPrimNodeData {
+                programs: node.programs.clone(),
                 type_name: node.type_name.clone(),
                 is_body: node.is_body,
                 port_types: node.port_types.clone(),
 
                 port_sources: node.port_sources.clone(),
+                view_key: node.path.clone(),
+                boundary: node.boundary,
             }),
             ports,
             label: node.display_name.clone().unwrap_or(leaf),
-            origin: Some(node.path.clone()),
+            origin: Some(node.usd_origin.as_ref().unwrap_or(&node.path).clone()),
             resizable: false,
             visual_rect: None,
         });
@@ -648,7 +851,7 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
             let port = node.ports.iter().find(|port| port.id.as_str() == name)?;
             Some(port.world_pos(node.rect))
         };
-        let (Some(from_world), Some(to_world)) = (
+        let (Some(_), Some(_)) = (
             endpoint(node_ids[s], source_port),
             endpoint(node_ids[t], target_port),
         ) else {
@@ -670,29 +873,17 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
             kind: EDGE_KIND.into(),
             data: Arc::new(UsdWireData { kind: w.kind }),
             origin: None,
-            waypoints: if w.kind != WireKind::Joint {
-                orthogonal_waypoints(from_world, to_world)
-            } else {
-                Vec::new()
-            },
+            waypoints: Vec::new(),
             waypoints_authored: false,
         });
     }
 
+    route_edges(&mut scene);
     scene
 }
 
-/// Route a signal with two orthogonal segments. The midpoint is deterministic
-/// from the endpoints, so the graph stays stable across rebuilds and can still
-/// be edited by the canvas later. Reverse-direction edges use an outside lane
-/// to keep feedback from being mistaken for forward dataflow.
+/// Route forward dataflow through the gap between endpoint columns.
 fn orthogonal_waypoints(from: Pos, to: Pos) -> Vec<Pos> {
-    if to.x <= from.x {
-        // Feedback travels above the cards, where it cannot be mistaken for a
-        // forward command or cross the port labels inside the graph.
-        let lane_y = from.y.min(to.y) - 48.0;
-        return vec![Pos::new(from.x, lane_y), Pos::new(to.x, lane_y)];
-    }
     let mid_x = from.x + (to.x - from.x) * 0.5;
     vec![Pos::new(mid_x, from.y), Pos::new(mid_x, to.y)]
 }
@@ -849,10 +1040,13 @@ mod tests {
         );
         let mut invalid = scene.clone();
         invalid.node_mut(edge.to.node).unwrap().data = Arc::new(UsdPrimNodeData {
+            programs: Vec::new(),
             type_name: "Xform".into(),
             is_body: false,
             port_types: BTreeMap::from([("inputs:in".into(), "float".into())]),
             port_sources: Default::default(),
+            view_key: "/Sink".into(),
+            boundary: None,
         });
         assert!(connect_op(&invalid, &edge.from, &edge.to, &LayerId::root()).is_err());
     }
@@ -894,7 +1088,12 @@ mod tests {
         assert_eq!(build_scene(nodes, wires).node_count(), 0);
         assert_eq!(
             super::super::diagram_roots(&[prim("/Assembly/Sub/Controller", &["in"], &[], false)]),
-            BTreeSet::from(["/".into(), "/Assembly".into(), "/Assembly/Sub".into()])
+            BTreeSet::from([
+                "/".into(),
+                "/Assembly".into(),
+                "/Assembly/Sub".into(),
+                "/Assembly/Sub/Controller".into()
+            ])
         );
         let mut forwarding = dataflow("/A", "x", "/A/B", "x");
         forwarding.source_conn = "inputs:x".into();
@@ -927,6 +1126,9 @@ mod tests {
 
     fn prim(path: &str, ins: &[&str], outs: &[&str], is_body: bool) -> PrimNode {
         PrimNode {
+            programs: Vec::new(),
+            usd_origin: None,
+            boundary: None,
             path: path.to_string(),
             display_name: None,
             type_name: "Xform".to_string(),
@@ -981,6 +1183,109 @@ mod tests {
     fn body_without_connectors_is_kept() {
         let scene = build_scene(vec![prim("/Chassis", &[], &[], true)], vec![]);
         assert_eq!(scene.node_count(), 1);
+    }
+
+    #[test]
+    fn diagram_preserves_feedback_and_exposes_system_boundaries() {
+        let (empty, links) =
+            project_diagram(&[prim("/Empty", &[], &[], false)], &[], "/Empty", false);
+        assert_eq!(
+            build_scene(empty, links).node_count(),
+            1,
+            "empty systems retain an authoring target"
+        );
+        let nodes = vec![
+            prim("/System", &[], &[], false),
+            prim("/System/Rover", &["control"], &["position"], true),
+            prim(
+                "/System/Rover/Controller",
+                &["position", "control"],
+                &["drive"],
+                false,
+            ),
+        ];
+        let mut wires = vec![
+            dataflow("/System/Rover", "position", "/System/Rover", "control"),
+            dataflow(
+                "/System/Rover",
+                "position",
+                "/System/Rover/Controller",
+                "position",
+            ),
+        ];
+        let mut input_forward = dataflow(
+            "/System/Rover",
+            "control",
+            "/System/Rover/Controller",
+            "control",
+        );
+        input_forward.source_conn = "inputs:control".into();
+        wires.push(input_forward);
+        let mut output_forward = dataflow(
+            "/System/Rover/Controller",
+            "drive",
+            "/System/Rover",
+            "position",
+        );
+        output_forward.target_conn = "outputs:position".into();
+        wires.push(output_forward);
+        let (overview, links) = project_diagram(&nodes, &wires, "/System", false);
+        assert_eq!(links.len(), 1, "feedback remains an edge in the overview");
+        assert_eq!(build_scene(overview, links).edge_count(), 1);
+        let (detail, links) = project_diagram(&nodes, &wires, "/System/Rover", false);
+        assert_eq!(
+            links.len(),
+            4,
+            "drilling preserves both authored connections"
+        );
+        assert!(unresolved_links(&detail, &links).is_empty());
+        let scene = build_scene(detail, links);
+        assert_eq!(scene.edge_count(), 4);
+        let boundary: Vec<_> = scene
+            .nodes()
+            .filter(|(_, n)| n.origin.as_deref() == Some("/System/Rover"))
+            .collect();
+        assert_eq!(boundary.len(), 2);
+        assert_ne!(diagram_key(boundary[0].1), diagram_key(boundary[1].1));
+        for (_, edge) in scene.edges() {
+            assert_ne!(edge.from.node, edge.to.node);
+        }
+        use super::super::{build_ops, connect_op};
+        use lunco_usd_document::document::{LayerId, UsdOp};
+        for (_, edge) in scene.edges() {
+            let op = connect_op(&scene, &edge.from, &edge.to, &LayerId::root()).unwrap();
+            assert!(
+                matches!(op, UsdOp::SetConnection { path, sources, .. } if !path.contains('#') && sources.iter().all(|source| !source.contains('#')))
+            );
+        }
+        let terminal = boundary[0].0;
+        assert!(
+            build_ops(
+                &scene,
+                &HashMap::new(),
+                &HashMap::new(),
+                &[lunco_canvas::SceneEvent::NodeDeleted {
+                    id: *terminal,
+                    orphaned_edges: Vec::new()
+                }],
+                &LayerId::root()
+            )
+            .is_err()
+        );
+        let overview = build_scene(
+            vec![prim("/Rover", &["control"], &["position"], true)],
+            vec![dataflow("/Rover", "position", "/Rover", "control")],
+        );
+        let (_, edge) = overview.edges().next().unwrap();
+        let card = overview.node(edge.from.node).unwrap();
+        assert!(
+            edge.waypoints[1].y < card.rect.min.y && edge.waypoints[2].y < card.rect.min.y,
+            "feedback clears the complete card"
+        );
+        let mut invalid = wires.clone();
+        invalid[0].source_conn = "outputs:absent".into();
+        let (detail, links) = project_diagram(&nodes, &invalid, "/System/Rover", false);
+        assert_eq!(unresolved_links(&detail, &links).len(), 1);
     }
 
     #[test]
@@ -1283,6 +1588,7 @@ mod tests {
 
 /// Refresh unauthored wire geometry after automatic or saved layout changes.
 pub(super) fn route_edges(scene: &mut Scene) {
+    let mut lanes: HashMap<(lunco_canvas::NodeId, lunco_canvas::NodeId), usize> = HashMap::new();
     let routes: Vec<_> = scene
         .edges()
         .filter(|(_, edge)| {
@@ -1293,9 +1599,34 @@ pub(super) fn route_edges(scene: &mut Scene) {
                     .is_some_and(|data| data.kind != WireKind::Joint)
         })
         .filter_map(|(id, edge)| {
-            scene
-                .edge_endpoint_positions(edge)
-                .map(|(from, to)| (*id, orthogonal_waypoints(from, to)))
+            let (from, to) = scene.edge_endpoint_positions(edge)?;
+            let source = scene.node(edge.from.node)?;
+            let target = scene.node(edge.to.node)?;
+            let lane = lanes.entry((edge.from.node, edge.to.node)).or_default();
+            let offset = *lane as f32 * 12.0;
+            *lane += 1;
+            let route = if to.x <= from.x || edge.from.node == edge.to.node {
+                // Feedback must clear the entire cards, not merely the port row.
+                let y = source.rect.min.y.min(target.rect.min.y) - 48.0 - offset;
+                let stub = |node: &Node, pos: Pos| {
+                    if pos.x < node.rect.center().x {
+                        node.rect.min.x - 24.0
+                    } else {
+                        node.rect.max.x + 24.0
+                    }
+                };
+                let sx = stub(source, from);
+                let tx = stub(target, to);
+                vec![
+                    Pos::new(sx, from.y),
+                    Pos::new(sx, y),
+                    Pos::new(tx, y),
+                    Pos::new(tx, to.y),
+                ]
+            } else {
+                orthogonal_waypoints(from, to)
+            };
+            Some((*id, route))
         })
         .collect();
     for (id, route) in routes {

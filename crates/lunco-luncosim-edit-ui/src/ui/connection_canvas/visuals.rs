@@ -13,6 +13,7 @@ use super::projection::{UsdPrimNodeData, UsdWireData, WireKind};
 pub(crate) struct UsdPrimNodeVisual {
     pub type_name: String,
     pub is_body: bool,
+    pub is_boundary: bool,
 }
 
 impl NodeVisual for UsdPrimNodeVisual {
@@ -104,16 +105,18 @@ impl NodeVisual for UsdPrimNodeVisual {
                 egui::Stroke::new(1.0, t.port_outline),
             );
             if readable_rows {
-                let (anchor, offset) = if port.kind.as_str() != "output" {
+                let (anchor, offset) = if port.local_offset.x < node.rect.width() * 0.5 {
                     (egui::Align2::LEFT_CENTER, egui::vec2(9.0, 0.0))
                 } else {
                     (egui::Align2::RIGHT_CENTER, egui::vec2(-9.0, 0.0))
                 };
                 let mut label_rect = rect.intersect(ctx.ui.clip_rect());
-                if port.kind.as_str() == "output" {
-                    label_rect.min.x = rect.center().x;
-                } else {
-                    label_rect.max.x = rect.center().x;
+                if !self.is_boundary {
+                    if port.local_offset.x >= node.rect.width() * 0.5 {
+                        label_rect.min.x = rect.center().x;
+                    } else {
+                        label_rect.max.x = rect.center().x;
+                    }
                 }
                 painter.clone().with_clip_rect(label_rect).text(
                     egui::pos2(p.x + offset.x, p.y + offset.y),
@@ -198,9 +201,20 @@ impl EdgeVisual for UsdWireVisual {
 
 /// Build the concrete node visual from the typed payload (registry factory).
 pub(crate) fn node_visual(data: &UsdPrimNodeData) -> UsdPrimNodeVisual {
+    let backends: std::collections::BTreeSet<_> = data
+        .programs
+        .iter()
+        .map(|program| program.backend.as_str())
+        .collect();
+    let features = backends.into_iter().collect::<Vec<_>>().join(" · ");
     UsdPrimNodeVisual {
-        type_name: data.type_name.clone(),
+        type_name: if features.is_empty() {
+            data.type_name.clone()
+        } else {
+            format!("{} · {features}", data.type_name)
+        },
         is_body: data.is_body,
+        is_boundary: data.boundary.is_some(),
     }
 }
 

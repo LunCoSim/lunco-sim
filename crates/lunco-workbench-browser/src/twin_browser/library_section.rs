@@ -203,7 +203,11 @@ fn render_dir(
             let width = ui.available_width();
             lunco_workbench_widgets::tree::selectable_label(ui, false, label, width)
         })
-        .inner;
+        .inner
+        .interact(egui::Sense::click_and_drag());
+        response.dnd_set_drag_payload(lunco_workbench_core::source::SourceDragPayload {
+            source: lunco_assets_core::engine_asset_uri(&asset.asset_path),
+        });
         if response.clicked() {
             *clicked = Some(asset.asset_path.clone());
         }

@@ -7,6 +7,7 @@ description = "LunCoSim's egui panels for in-scene editing"
 
 [dependencies]
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-mesh = { path = "../lunco-usd-bevy-mesh" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }

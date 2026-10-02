@@ -229,14 +229,14 @@ name convention, or ECS-only grouping state is introduced.
   source/target paths to the shared Recent events bus, outside the diagram.
 - Layout policy is `assets/scripting/policy/diagram_layout.rhai`, installed by
   the application policy manifest at `diagram.layout`. The Connections owner
-  supplies immutable node paths, dimensions, causal ranks, edge facts and scope;
+  supplies immutable view keys, typed interface roles, dimensions, causal ranks, edge facts and scope;
   policy returns one finite `f64` x/y placement per node. Rust validates exact
   identities, completeness and rendering range before applying the result.
   The worker inherits Application/Visualization/Preparation with no simulation
   clock or live-world access. One pending job per view document is revision
   fenced; stale results cannot replace navigation or a new source. Graph/scope
   and policy registry changes request work, never paint or continuous polling.
-  The shipped policy balances causal layers into compact landscape blocks.
+  The shipped policy places system inputs left and outputs right around compact causal layers; indexed neighbor-order sweeps align branches, and disconnected hierarchy prims occupy a shelf below the connected graph.
   Saved placements apply afterward and wire routing refreshes. A missing or
   faulty policy warns visibly and retains the standard graph layout; corrupt
   optional view data does not interfere with scene loading. The application installs the policy when this feature owner is linked;
@@ -267,6 +267,54 @@ name convention, or ECS-only grouping state is introduced.
   `Canvas.movable_layout` enables arrangement in read-only scene inspection.
   `InspectConnectionDiagram` exposes the actual source, named definitions,
   displayed nodes/ports, and their logical screen coordinates for automation.
+  Same-prim feedback remains a causal edge in overview. Drilling into a system
+  presents its USD `inputs:`, `outputs:` and `connectors:` as separate interface
+  terminals alongside child prims. Forwarding and feedback retain every property
+  identity; terminal cards do not claim a runtime provider. Each card has a
+  stable view key (`/Prim#inputs`, `/Prim#outputs`, `/Prim#connectors` for
+  terminals), while its origin stays `/Prim`. Placement and Rhai layout use view
+  keys; selection and authoring use USD origins. Terminals cannot delete their
+  system. Dragging supports input-to-input and output-to-output forwarding at
+  these boundaries, as well as ordinary causal and acausal connections.
+  `InspectConnectionDiagram` exposes node `key` and `role` alongside `path`.
+  Feedback routes clear the complete endpoint cards and parallel feedback uses
+  separate lanes. `connections[]` reports exact origins, keys and properties.
+  Cards expose authored program facets through the shared composed-USD program
+  resolver, including backend, source and invalid-source diagnostics. Hidden
+  program children appear on their nearest displayed ancestor; drilling into
+  that ancestor exposes the program prim itself.
+- Double-click dispatches `OpenConnectionNode` through `diagram.open.plan`.
+  The owner supplies the exact origin, child availability and own attached
+  program facts. Installed Rhai chooses USD scope for systems, Modelica schema
+  for leaf Modelica programs, or source for Rhai/Python. Rust validates the
+  selected source and delegates to existing document owners. Missing policy,
+  invalid metadata and missing cards reject visibly. Navigation inherits
+  Application/Visualization/Preparation with no simulation clock and runs only
+  on a gesture. `test_diagram_drop.rhai` covers production policy decisions;
+  `connection_diagram_views.rhai` covers navigation and invalid identities.
+  Modelica `OpenFile` resolves registered asset URIs through `SchemeRegistry`
+  on its existing worker, then reuses the file document and read-only ownership.
+- Library and Twin file rows carry a shared source drag identity. The Models
+  palette carries its typed `ProgramAttachSpec`, preserving authored ports and
+  `{host}` bindings. In a document diagram, drop USD onto empty space to add
+  a reference under the current scope, or onto a prim to add its child. Drop
+  Modelica/Rhai onto a prim to attach a program. Native file drops use the same
+  command; multiple native files reject visibly rather than discarding entries.
+  `DropConnectionAsset` forwards the source batch to `ApplyUsdOps` and
+  reports its terminal journal result; placement is written to the named view
+  only after source success. Preview composition remains inert until explicit
+  scene admission. Browser source drops do not infer ports from program text.
+- Drop-policy review: `lunco-luncosim-edit-ui` owns `diagram.drop.plan`, with
+  immutable source, scope, target and composed paths as inputs. Its typed Map
+  selects reference/program, parent and a unique identifier. Application policy
+  installation binds `diagram_drop.rhai`; it runs on an explicit UI gesture,
+  never a frame poll. Missing/invalid policy rejects the command. Rust validates
+  the plan and delegates the atomic edit to the USD document owner. Production
+  coverage is `test_diagram_drop.rhai` and `connection_diagram_authoring.rhai`.
+  `connection_diagram_views.rhai` checks boundary feedback, independent terminal
+  placement and invalid identities through the production API.
+  `connection_diagram_wiring.rhai` verifies referenced sink edits, composed
+  topology, undo and rejection of missing composed targets.
 - Document Diagram and **Authored schema** permit mouse port connections through
   typed journaled USD operations. Writes retain declared property types and
   existing connection lists; deleting a link removes only that link, including
@@ -421,7 +469,7 @@ The existing implementation provides the substrate the perspective composes:
 | Mount section | Read socket/plug contracts and offer snap or attach actions |
 | Behaviour editor | Edit a program's authored source through the scripting command path |
 | Component attach | Reference an asset, place it, and author the joint as one typed command |
-| Program attach | Discover `.mo`/`.py` sources and lower source, ports, defaults, and wires through `AttachProgram` |
+| Program attach | Discover `.mo`/`.py`/`.rhai` sources and lower source, ports, defaults, and wires through `AttachProgram`; drag onto Connections with `DropConnectionAsset` |
 
 The perspective must remain a composition of these surfaces. The Editor
 perspective opens with the USD prim tree in the upper-left pane so the authored
@@ -512,7 +560,8 @@ Typed command results are the operation's evidence boundary:
 `applied`, `rejected`, `failed`, or `pending`. A caller that receives
 `pending` polls `command_result(id)` before deciding whether the edit
 finished. `SetConnection` may create the sink attribute in the selected
-layer, but every source must resolve to a composed property of the requested
+layer, including an over opinion on a referenced descendant. The sink prim
+must exist in the document's loaded composition; every source must resolve to a composed property of the requested
 type (or to an exact projected runtime port). Missing prims, malformed source
 paths, type mismatches, and unavailable runtime endpoints are terminal errors,
 not silently dropped graph edges.

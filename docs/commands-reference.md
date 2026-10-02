@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**252 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**254 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -24,7 +24,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Scene editing & authoring**
 
 - [`lunco-luncosim-edit-core`](#lunco-luncosim-edit-core) (1 command)
-- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (15 commands)
+- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (17 commands)
 - [`lunco-scene-commands`](#lunco-scene-commands) (5 commands)
 
 **USD / scenes**
@@ -201,9 +201,24 @@ actually call, with the fields the deserializer actually accepts. See the
 | `name` | `String` |   |
 | `scope` | `String` |   |
 
+#### `DropConnectionAsset`
+
+ Add a referenced USD asset or source-backed program through the bound USD document.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/drop_assets.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `source` | `String` |   |
+| `program` | `Option < lunco_usd_core :: program :: ProgramAttachSpec >` |  Optional Models-palette contract; browser source drops have no inferred ports. |
+| `target_path` | `Option < String >` |   |
+| `x` | `f64` |   |
+| `y` | `f64` |   |
+
 #### `MoveConnectionViewNode`
 
- Place a composed source node in one named view without modifying USD.
+ Place a diagram card by its stable view key without modifying USD.
 
 - *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/view_files.rs`
 
@@ -211,9 +226,20 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `view_id` | `u64` |   |
 | `view` | `String` |   |
-| `path` | `String` |   |
+| `path` | `String` |  InspectConnectionDiagram node key; boundary keys include their interface role. |
 | `x` | `f64` |   |
 | `y` | `f64` |   |
+
+#### `OpenConnectionNode`
+
+ Open a diagram card's USD internals or attached source according to authored policy.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/navigation.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `key` | `String` |  Stable node key returned by InspectConnectionDiagram. |
 
 #### `ReleaseDiagnosticVisual`
 
@@ -1226,7 +1252,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `path` | `String` |  Filesystem path or URI (`bundled://`, `mem://`). Empty triggers  the picker (workbench only). |
+| `path` | `String` |  Filesystem path or registered asset URI, including `bundled://` and `mem://`. Empty triggers  the picker (workbench only). |
 
 #### `RedoDocument`
 
@@ -3890,7 +3916,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 252 commands from the runtime schema; scanned 971 .rs files for docs (0 parse failure(s) skipped).
+<!-- 254 commands from the runtime schema; scanned 973 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

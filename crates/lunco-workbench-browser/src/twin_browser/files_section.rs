@@ -659,7 +659,11 @@ fn render_dir(
                 let width = ui.available_width();
                 lunco_workbench_widgets::tree::selectable_label(ui, false, label.as_str(), width)
             })
-            .inner;
+            .inner
+            .interact(egui::Sense::click_and_drag());
+            r.dnd_set_drag_payload(lunco_workbench_core::source::SourceDragPayload {
+                source: abs.to_string_lossy().replace('\\', "/"),
+            });
             if r.double_clicked() {
                 state
                     .clicks

@@ -876,16 +876,40 @@ pub fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let path_for_task = path_buf.clone();
+            let schemes = world
+                .get_resource::<lunco_assets_core::SchemeRegistry>()
+                .cloned();
             let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-                lunco_modelica_runtime::source_asset::read_text_sync(&path_for_task)
+                // Resolve registered source identities on the worker through
+                // the same asset owner used by USD and the source browser.
+                let resolved = if path.contains("://") {
+                    schemes
+                        .ok_or_else(|| "Modelica asset scheme registry is unavailable".to_string())
+                        .and_then(|schemes| {
+                            schemes.local_path(&path).map_err(|error| error.to_string())
+                        })
+                        .and_then(|path| {
+                            path.ok_or_else(|| {
+                                "Modelica source has no registered local asset path".to_string()
+                            })
+                        })
+                } else {
+                    Ok(path_for_task.clone())
+                };
+                match resolved {
+                    Ok(path) => OpenFileResult {
+                        read_result: lunco_modelica_runtime::source_asset::read_text_sync(&path),
+                        path,
+                    },
+                    Err(error) => OpenFileResult {
+                        path: path_for_task,
+                        read_result: Err(error),
+                    },
+                }
             });
             bevy::tasks::AsyncComputeTaskPool::get()
                 .spawn(async move {
-                    let read_result = task.await;
-                    let _ = open_file_result_tx().send(OpenFileResult {
-                        path: path_buf,
-                        read_result,
-                    });
+                    let _ = open_file_result_tx().send(task.await);
                 })
                 .detach();
         }

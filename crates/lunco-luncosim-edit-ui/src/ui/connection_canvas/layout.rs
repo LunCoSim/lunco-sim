@@ -37,7 +37,17 @@ pub(super) fn request(state: &mut UsdCanvasSessionState) {
             HookValue::map([
                 (
                     "path",
-                    HookValue::str(node.origin.as_deref().unwrap_or_default()),
+                    HookValue::str(super::projection::diagram_key(node).unwrap_or_default()),
+                ),
+                (
+                    "role",
+                    HookValue::str(
+                        node.data
+                            .downcast_ref::<super::UsdPrimNodeData>()
+                            .and_then(|data| data.boundary)
+                            .map(|role| role.name())
+                            .unwrap_or("prim"),
+                    ),
                 ),
                 ("width", HookValue::Float(f64::from(node.rect.width()))),
                 ("height", HookValue::Float(f64::from(node.rect.height()))),
@@ -57,8 +67,8 @@ pub(super) fn request(state: &mut UsdCanvasSessionState) {
         .scene
         .edges()
         .filter_map(|(_, edge)| {
-            let source = state.canvas.scene.node(edge.from.node)?.origin.as_deref()?;
-            let target = state.canvas.scene.node(edge.to.node)?.origin.as_deref()?;
+            let source = super::projection::diagram_key(state.canvas.scene.node(edge.from.node)?)?;
+            let target = super::projection::diagram_key(state.canvas.scene.node(edge.to.node)?)?;
             let kind = edge.data.downcast_ref::<super::UsdWireData>()?.kind;
             Some(HookValue::map([
                 ("source", HookValue::str(source)),
@@ -160,8 +170,8 @@ pub fn update_layouts(
                         let ids: Vec<_> = state.canvas.scene.nodes().map(|(id, _)| *id).collect();
                         for id in ids {
                             if let Some(node) = state.canvas.scene.node_mut(id) {
-                                if let Some((x, y)) =
-                                    node.origin.as_ref().and_then(|path| placements.get(path))
+                                if let Some((x, y)) = super::projection::diagram_key(node)
+                                    .and_then(|path| placements.get(path))
                                 {
                                     // Validated explicit narrowing at the canvas rendering boundary.
                                     node.rect = lunco_canvas::Rect::from_min_size(

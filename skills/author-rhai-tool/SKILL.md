@@ -216,6 +216,12 @@ keeps the workflow in Rhai while reusing the existing typed USD owners:
   typed USD ops for references, terrain, cameras, and initial state, plus
   explicit hand-offs for `waypoint_editor` routes and
   `assembly_edit::attach_program` programs.
+- Connections source drops use the same typed program lowering and USD journal.
+  `diagram.drop.plan` chooses parent/name from immutable source facts; its Rhai
+  policy never reads source bytes or authors USD directly. Models-palette drag
+  contracts retain explicitly declared ports. Browser `.mo`/`.rhai` drops do
+  not infer ports; inspect `InspectConnectionDiagram` program facets and then
+  author their port contract through the document tools.
 - `port_graph(doc, root, edit_target)` discovers standard USD
   `inputs:`/`outputs:`/`connectors:` endpoints and composed connections.
   `wiring_plan(doc, edit_target, root, connections, parent_generation)`

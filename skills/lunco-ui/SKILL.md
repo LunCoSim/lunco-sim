@@ -88,10 +88,15 @@ availability and types; the diagram does not admit connections to simulation.
 Publish endpoint
 failures with exact identities in Recent events, not in the diagram toolbar.
 Use `diagram.layout` for authored Rhai layout policy over immutable graph
-facts. Run it on bounded workers with source/scope revision fencing and the
+facts, including independent view keys and typed interface roles. Run it on bounded workers with source/scope revision fencing and the
 Application/Visualization/Preparation context; validate complete finite
 placements before rendering and apply saved placements afterward. Breadcrumbs,
-Back, searchable Find system, and double-click share cached USD ancestry.
+Back and searchable Find system share cached USD ancestry. Double-click uses
+`OpenConnectionNode` and `diagram.open.plan`: systems open USD child topology,
+leaf Modelica programs use the existing schema editor, and Rhai/Python use
+source. Navigation must preserve exact source identity and reject missing cards.
+Modelica `OpenFile` resolves registered asset URIs on its worker through
+`SchemeRegistry`, preserving the document owner and read-only library state.
 Exercise the installed policy with `assets/scripting/tests/test_diagram_layout.rhai`.
 Persist named scopes and layouts in separate `.lunco-view.toml` project
 artifacts using `lunco-doc::diagram_view` / `DocumentHost`, through typed view
@@ -105,8 +110,27 @@ unrelated links, and Save/Undo stay source-document-owned. Layout Undo/Redo
 belongs to the view document. `Canvas.movable_layout` permits node arrangement
 in read-only scene views. Consume `InspectConnectionDiagram` for exact source,
 view IDs, layouts, rendered ports, and logical screen coordinates. Verify scene
+inspection preserves same-prim feedback as edges. Drilling into a system
+shows input/output/acausal interface terminals and child prims. `nodes[].key`
+is the independent placement identity; `nodes[].path` stays the exact USD
+prim for authoring and selection. `nodes[].role` identifies boundary terminals;
+never infer runtime ownership from port names. `connections[]` retains exact
+USD endpoints alongside their presentation keys. Verify input/input and
+output/output boundary forwarding and rejection of terminal deletion. Verify
 navigation, independent named layouts, file roundtrip, and mouse gestures in an
 owned production API session, plus pure document/projector/interpreter tests.
+Drag Library/Twin sources into a document diagram: USD becomes a reference;
+Modelica/Rhai must land on an existing host prim. Models-palette drags retain
+their typed authored port contract. Inspect `nodes[].programs` for backend,
+source and resolver issues, including hidden children attributed to their
+nearest visible ancestor. Drop naming/routing belongs to `diagram.drop.plan`
+in `assets/scripting/policy/diagram_drop.rhai`; Rust validates its typed plan
+and uses the existing journal batch. Verify terminal outcomes and placement
+after source success with `connection_diagram_authoring.rhai`, including
+missing-host and unsupported-source rejection. Exercise the installed policy
+with `assets/scripting/tests/test_diagram_drop.rhai`.
+Use `connection_diagram_wiring.rhai` for composed sink authoring, undo and
+missing-target rejection in an owned document preview.
 
 The Editor's `authoring_review` panel is the shared human-facing evidence
 surface for authored/runtime inspection. Its target chain must keep `selected`,

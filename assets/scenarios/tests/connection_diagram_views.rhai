@@ -7,7 +7,7 @@ fn simulation_dependencies(me, ctx) {
 }
 fn on_start(me, ctx) {
     this.expect_runtime_ports = ctx.expect_runtime_ports == true;
-    this.phase = 0; this.elapsed = 0.0; this.done = false; this.checks = [];
+    this.open_request = (); this.phase = 0; this.elapsed = 0.0; this.done = false; this.checks = [];
     cmd("ActivatePerspective", #{ id: "editor" });
     cmd("FocusPanel", #{ id: "usd_connection_canvas" });
 }
@@ -32,11 +32,34 @@ fn on_tick(me, ctx) {
     }
     if this.phase == 0 {
         if diagram.nodes.len() == 0 { return; }
-        if ctx.expected_scope != () && diagram.scope != ctx.expected_scope { return; }
+        if ctx.expected_scope != () && diagram.scope != ctx.expected_scope {
+            if ctx.open_key != () && this.open_request == () {
+                this.open_request = cmd("OpenConnectionNode", #{ view_id: diagram.view_id, key: ctx.open_key });
+            }
+            return;
+        }
         if this.expect_runtime_ports && !diagram.unresolved_links.is_empty() { return; }
         this.checks.push(t_true(diagram.unresolved_links.len() == 0, "referenced USD interfaces resolve through authored and runtime owners"));
         this.id = diagram.view_id;
-        this.path = diagram.nodes[0].path;
+        this.path = diagram.nodes[0].key;
+        if ctx.expected_boundary_feedback != () {
+            let inputs = (); let outputs = (); let feedback = 0;
+            for node in diagram.nodes {
+                if node.path == ctx.expected_scope && node.role == "inputs" { inputs = node; this.path = node.key; }
+                if node.path == ctx.expected_scope && node.role == "outputs" { outputs = node; }
+            }
+            this.checks.push(t_true(inputs != () && outputs != () && inputs.key != outputs.key, "system interfaces have independent presentation identities"));
+            let exact = true;
+            for link in diagram.connections {
+                if link.source == ctx.expected_scope && link.target == ctx.expected_scope {
+                    feedback += 1;
+                    if link.source_key == link.target_key { exact = false; }
+                }
+                if link.source.contains("#") || link.target.contains("#") { exact = false; }
+            }
+            this.checks.push(t_true(feedback.to_string() == ctx.expected_boundary_feedback.to_string() && exact, "authored same-prim feedback resolves through boundary terminals with exact USD origins"));
+            this.checks.push(t_true(diagram.connection_count.to_string() == ctx.expected_connections.to_string(), "all scoped authored links remain rendered"));
+        }
         this.source = diagram.source;
         this.checks.push(t_true(diagram.active_scene && diagram.source != (), "default diagram belongs to loaded USD scene"));
         cmd("CreateConnectionView", #{ view_id: this.id, name: "Diagram contract", scope: diagram.scope });
@@ -52,7 +75,7 @@ fn on_tick(me, ctx) {
         if view.positions.len() == 0 { return; }
         this.checks.push(t_true(view.positions[0].x == 10.0 && view.positions[0].y == 20.0, "view stores requested placement"));
         let displayed = ();
-        for node in diagram.nodes { if node.path == this.path { displayed = node; } }
+        for node in diagram.nodes { if node.key == this.path { displayed = node; } }
         this.checks.push(t_true(displayed != () && displayed.x == 10.0 && displayed.y == 20.0, "typed placement updates the displayed node"));
         this.checks.push(t_true(definition(diagram, "Overview").positions.len() == 0, "other named view retains independent automatic layout"));
         this.rejection = cmd("MoveConnectionViewNode", #{ view_id: this.id, view: "Diagram contract", path: "/AbsentDiagramPrim", x: 1.0, y: 2.0 });
@@ -64,6 +87,13 @@ fn on_tick(me, ctx) {
         if result.status == "pending" { return; }
         this.checks.push(t_true(result.status == "failed" || result.status == "rejected", "missing source node rejects without crashing"));
         this.checks.push(t_true(diagram.source == this.source && definition(diagram, "Diagram contract").positions.len() == 1, "rejection preserves source and valid layout"));
+        this.rejection = cmd("OpenConnectionNode", #{ view_id: this.id, key: "/AbsentDiagramCard" });
+        this.phase = 31; return;
+    }
+    if this.phase == 31 {
+        let result = command_result(this.rejection.id);
+        if result.status == "pending" { return; }
+        this.checks.push(t_true(result.status == "failed" || result.status == "rejected", "missing diagram card rejects navigation without crashing"));
         cmd("UndoConnectionView", #{ view_id: this.id, redo: false });
         this.phase = 4; return;
     }

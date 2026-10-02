@@ -14,11 +14,12 @@ pub struct CreateConnectionView {
     pub name: String,
     pub scope: String,
 }
-/// Place a composed source node in one named view without modifying USD.
+/// Place a diagram card by its stable view key without modifying USD.
 #[Command(default)]
 pub struct MoveConnectionViewNode {
     pub view_id: u64,
     pub view: String,
+    /// InspectConnectionDiagram node key; boundary keys include their interface role.
     pub path: String,
     pub x: f64,
     pub y: f64,
@@ -39,7 +40,10 @@ pub struct ConnectionViewFile {
     pub include_descendants: bool,
 }
 
-fn state_for(views: &mut UsdCanvasState, id: u64) -> Result<&mut UsdCanvasSessionState, String> {
+pub(super) fn state_for(
+    views: &mut UsdCanvasState,
+    id: u64,
+) -> Result<&mut UsdCanvasSessionState, String> {
     std::iter::once(&mut views.scene)
         .chain(views.sessions.values_mut())
         .find(|state| {
@@ -97,8 +101,13 @@ fn move_node(
     let cmd = trigger.event();
     let state = state_for(&mut views, cmd.view_id)?;
     let result = (|| {
-        if !state.source_prim_paths.contains(&cmd.path) {
-            return Err("Moved node is absent from the composed USD source".into());
+        if !state
+            .canvas
+            .scene
+            .nodes()
+            .any(|(_, node)| super::projection::diagram_key(node) == Some(cmd.path.as_str()))
+        {
+            return Err("Moved node is absent from the current diagram".into());
         }
         if cmd.x.abs() > f64::from(f32::MAX) || cmd.y.abs() > f64::from(f32::MAX) {
             return Err("Position exceeds the canvas rendering range".into());
@@ -576,6 +585,8 @@ pub fn poll_view_files(
 
 register_commands!(create_view, move_node, undo_view, view_file);
 pub fn init_view_commands(app: &mut App) {
+    super::drop_assets::init(app);
+    super::navigation::init(app);
     register_all_commands(app);
     app.init_resource::<PendingViewFiles>();
     app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
@@ -590,7 +601,7 @@ impl lunco_api::queries::ApiQueryProvider for InspectConnectionDiagram {
         "InspectConnectionDiagram"
     }
     fn schema(&self) -> lunco_api_core::ApiQuerySchema {
-        lunco_api_core::ApiQuerySchema { name: self.name().into(), description: Some("Inspect the active Connections source, named view definitions, and rendered node/port coordinates".into()), parameters: Some(Vec::new()), exactly_one_of: Vec::new(), response: Some("{ built, active_scene, source, view_id, view, scope, definitions:[{name,scope,include_descendants,positions:[{path,x,y}]}], nodes:[{path,label,x,y,screen_x,screen_y,ports:[{name,kind,x,y,screen_x,screen_y}]}], connection_count, unresolved_links, error }".into()) }
+        lunco_api_core::ApiQuerySchema { name: self.name().into(), description: Some("Inspect the active Connections source, named views, system interfaces, program facets and rendered node/port coordinates".into()), parameters: Some(Vec::new()), exactly_one_of: Vec::new(), response: Some("{ built, active_scene, source, view_id, view, scope, definitions:[{name,scope,include_descendants,positions:[{path,x,y}]}], nodes:[{path,key,role,label,x,y,screen_x,screen_y,ports:[{name,kind,x,y,screen_x,screen_y}],programs:[{path,backend,source,issue}]}], connections:[{source,source_key,source_port,target,target_key,target_port,kind}], connection_count, unresolved_links, error }".into()) }
     }
     fn execute(
         &self,
@@ -622,14 +633,22 @@ impl lunco_api::queries::ApiQueryProvider for InspectConnectionDiagram {
                 api_value!({ "name": port.id.as_str(), "kind": port.kind.as_str(), "x": pos.x, "y": pos.y, "screen_x": screen.map(|p| p.x), "screen_y": screen.map(|p| p.y) })
             }).collect();
             let screen = state.canvas_rect.map(|rect| state.canvas.viewport.world_to_screen(node.rect.center(), rect));
-            api_value!({ "path": node.origin.clone(), "label": node.label.clone(), "x": node.rect.min.x, "y": node.rect.min.y, "screen_x": screen.map(|p| p.x), "screen_y": screen.map(|p| p.y), "ports": ports })
+            let programs: Vec<_> = node.data.downcast_ref::<super::projection::UsdPrimNodeData>()
+                .map(|data| data.programs.iter().map(|program| api_value!({ "path": program.path.clone(), "backend": program.backend.clone(), "source": program.source.clone(), "issue": program.issue.clone() })).collect()).unwrap_or_default();
+            api_value!({ "path": node.origin.clone(), "label": node.label.clone(), "x": node.rect.min.x, "y": node.rect.min.y, "screen_x": screen.map(|p| p.x), "screen_y": screen.map(|p| p.y), "ports": ports, "key": super::projection::diagram_key(node), "role": node.data.downcast_ref::<super::projection::UsdPrimNodeData>().and_then(|data| data.boundary).map(|role| role.name()).unwrap_or("prim"), "programs": programs })
+        }).collect();
+        let connections: Vec<_> = state.canvas.scene.edges().filter_map(|(_, edge)| {
+            let source = state.canvas.scene.node(edge.from.node)?;
+            let target = state.canvas.scene.node(edge.to.node)?;
+            let kind = edge.data.downcast_ref::<super::projection::UsdWireData>()?.kind;
+            Some(api_value!({ "source": source.origin.clone(), "source_key": super::projection::diagram_key(source), "source_port": edge.from.port.as_str(), "target": target.origin.clone(), "target_key": super::projection::diagram_key(target), "target_port": edge.to.port.as_str(), "kind": format!("{kind:?}") }))
         }).collect();
         let definitions: Vec<_> = state.view_document.as_ref().map(|host| host.document().data().views.iter().map(|(name, definition)| {
             let positions: Vec<_> = definition.positions.iter().map(|(path, pos)| api_value!({ "path": path, "x": pos.x, "y": pos.y })).collect();
             api_value!({ "name": name, "scope": definition.scope.clone(), "include_descendants": definition.include_descendants, "positions": positions })
         }).collect()).unwrap_or_default();
         Ok(Some(
-            api_value!({ "built": state.built, "active_scene": views.show_scene, "source": state.source_uri.clone(), "view_id": state.view_document.as_ref().map(|host| host.document().id().raw()), "view": state.selected_view.clone(), "scope": state.diagram_root.clone(), "definitions": definitions, "nodes": nodes, "connection_count": state.canvas.scene.edge_count(), "unresolved_links": state.unresolved_links.clone(), "error": state.last_error.clone() }),
+            api_value!({ "built": state.built, "active_scene": views.show_scene, "source": state.source_uri.clone(), "view_id": state.view_document.as_ref().map(|host| host.document().id().raw()), "view": state.selected_view.clone(), "scope": state.diagram_root.clone(), "definitions": definitions, "nodes": nodes, "connections": connections, "connection_count": state.canvas.scene.edge_count(), "unresolved_links": state.unresolved_links.clone(), "error": state.last_error.clone() }),
         ))
     }
 }

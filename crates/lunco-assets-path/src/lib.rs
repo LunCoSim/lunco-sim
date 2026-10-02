@@ -154,9 +154,7 @@ pub fn canonicalize(asset_path: &str, anchor: &str) -> String {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_default();
-    let resolved = normalize(&base.join(&asset_path))
-        .to_string_lossy()
-        .into_owned();
+    let resolved = slashed(normalize(&base.join(&asset_path)));
     match scheme {
         Some(s) => uri(s, &resolved),
         None => resolved,
@@ -177,7 +175,7 @@ pub fn canonicalize_root(reference: &str) -> String {
         return reference;
     }
     let rel = reference.strip_prefix('/').unwrap_or(&reference);
-    normalize(Path::new(rel)).to_string_lossy().into_owned()
+    slashed(normalize(Path::new(rel)))
 }
 
 /// Split `scheme://rest` into its two halves, or `None` for a bare reference.

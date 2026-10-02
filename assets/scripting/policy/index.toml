@@ -11,6 +11,13 @@ kind = "lunco.policy.v1"
 scope = "application"
 
 [[policies]]
+hook = "diagram.drop.plan"
+source = "diagram_drop.rhai"
+entry = "plan_diagram_drop"
+deterministic = true
+skip_when_hook_unavailable = true
+
+[[policies]]
 hook = "diagram.layout"
 source = "diagram_layout.rhai"
 entry = "layout_diagram"
@@ -188,3 +195,10 @@ hook = "lint.twin"
 source = "lint_twin.rhai"
 entry = "lint_twin"
 deterministic = true
+
+[[policies]]
+hook = "diagram.open.plan"
+source = "diagram_drop.rhai"
+entry = "open_diagram"
+deterministic = true
+skip_when_hook_unavailable = true

@@ -31,7 +31,9 @@
 //! full USD topology with cached hierarchy navigation; Authored schema mode
 //! edits explicitly marked boundaries through the document command owner.
 
+mod drop_assets;
 mod layout;
+mod navigation;
 mod projection;
 mod view_files;
 mod visuals;
@@ -73,6 +75,7 @@ fn build_registry() -> VisualRegistry {
         None => visuals::UsdPrimNodeVisual {
             type_name: String::new(),
             is_body: false,
+            is_boundary: false,
         },
     });
     reg.register_edge_kind(EDGE_KIND, |data: &lunco_canvas::NodeData| match data
@@ -267,7 +270,7 @@ impl UsdCanvasSessionState {
             let Some(node) = self.canvas.scene.node_mut(id) else {
                 continue;
             };
-            if let Some(path) = &node.origin {
+            if let Some(path) = projection::diagram_key(node) {
                 if let Some(pos) = placements.get(path) {
                     if pos.x.abs() > f64::from(f32::MAX) || pos.y.abs() > f64::from(f32::MAX) {
                         self.last_error = Some(format!(
@@ -344,6 +347,9 @@ fn topology_hash(nodes: &[projection::PrimNode], wires: &[projection::Wire]) -> 
         n.port_types.hash(&mut h);
 
         n.port_sources.hash(&mut h);
+        n.programs.hash(&mut h);
+        n.usd_origin.hash(&mut h);
+        n.boundary.hash(&mut h);
         n.referenced_ports.hash(&mut h);
     }
     for w in wires {
@@ -391,10 +397,11 @@ fn path_is_within(path: &str, root: &str) -> bool {
 }
 
 /// Build subsystem choices from graph participants and their USD ancestry.
-/// A scope exists only when it contains a participant below its own boundary.
+/// Every composed prim can expose its own interface schema or child topology.
 fn diagram_roots(nodes: &[PrimNode]) -> BTreeSet<String> {
     let mut roots = BTreeSet::from(["/".to_string()]);
     for node in nodes {
+        roots.insert(node.path.clone());
         let mut path = node.path.as_str();
         while let Some((parent, _)) = path.rsplit_once('/') {
             if parent.is_empty() {
@@ -833,8 +840,8 @@ fn edge_sink(scene: &Scene, id: EdgeId) -> Option<EdgeSink> {
     Some(EdgeSink { endpoints })
 }
 
-/// Classify an `EdgeCreated`'s two endpoints into (source-output, sink-input)
-/// by port kind, then author the sink's `inputs:<c>.connect`.
+/// Resolve causal direction or selected-system interface forwarding and author
+/// the exact sink property. Presentation identities never enter USD edits.
 fn connect_op(
     scene: &Scene,
     from: &PortRef,
@@ -853,10 +860,26 @@ fn connect_op(
     };
     let from_kind = kind(from)?;
     let to_kind = kind(to)?;
+    let boundary = |pr: &PortRef| {
+        scene
+            .node(pr.node)
+            .and_then(|node| node.data.downcast_ref::<UsdPrimNodeData>())
+            .and_then(|data| data.boundary)
+    };
     let (source, sink) = match (from_kind, to_kind) {
         ("output", "input") => (from, to),
         ("input", "output") => (to, from),
         ("acausal", "acausal") => (from, to),
+        ("input", "input") if boundary(from) == Some(projection::BoundaryRole::Inputs) => {
+            (from, to)
+        }
+        ("input", "input") if boundary(to) == Some(projection::BoundaryRole::Inputs) => (to, from),
+        ("output", "output") if boundary(to) == Some(projection::BoundaryRole::Outputs) => {
+            (from, to)
+        }
+        ("output", "output") if boundary(from) == Some(projection::BoundaryRole::Outputs) => {
+            (to, from)
+        }
         _ => {
             return Err(format!(
                 "cannot connect `{from_kind}` to `{to_kind}`; use an output/input pair or two acausal connectors"
@@ -955,6 +978,8 @@ fn build_ops(
                         edit_target: edit_target.clone(),
                         path: path.clone(),
                     });
+                } else {
+                    return Err("System interface terminals cannot be deleted; edit the USD properties instead".into());
                 }
             }
             _ => {}
@@ -1157,7 +1182,7 @@ impl Panel for UsdCanvasPanel {
                 .canvas
                 .scene
                 .nodes()
-                .filter_map(|(id, n)| n.origin.clone().map(|o| (*id, o)))
+                .filter_map(|(id, n)| n.data.downcast_ref::<UsdPrimNodeData>().filter(|data| data.boundary.is_none()).and_then(|_| n.origin.clone()).map(|o| (*id, o)))
                 .collect() };
             let edge_sinks: HashMap<EdgeId, EdgeSink> = if show_scene { HashMap::new() } else { state
                 .canvas
@@ -1190,26 +1215,44 @@ impl Panel for UsdCanvasPanel {
                 ui.colored_label(lunco_theme::active(ui.ctx()).tokens.port_output, "output");
 
             });
+            if let Some(node) = state.canvas.selection.nodes().iter().next()
+                .and_then(|id| state.canvas.scene.node(*id)) {
+                if let Some(data) = node.data.downcast_ref::<UsdPrimNodeData>() {
+                    if !data.programs.is_empty() {
+                        egui::CollapsingHeader::new(format!("{} · attached programs", node.label))
+                            .id_salt(("connection_programs", node.origin.as_deref()))
+                            .show(ui, |ui| {
+                                egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+                                for program in &data.programs {
+                                    ui.label(format!("{} · {}", program.backend, program.path));
+                                    ui.label(&program.source);
+                                    if let Some(issue) = &program.issue { ui.label(issue); }
+                                }
+                                });
+                            });
+                    }
+
+                }
+            }
             let (response, events) = state.canvas.ui(ui);
             state.canvas_rect = Some(lunco_canvas::Rect::from_min_max(lunco_canvas::Pos::new(response.rect.min.x, response.rect.min.y), lunco_canvas::Pos::new(response.rect.max.x, response.rect.max.y)));
+            drop_assets::drop_ui(ui, &response, state, ctx);
             if events.is_empty() {
                 return;
             }
-            let mut drill = None;
+
             for event in &events {
                 match event {
                     SceneEvent::NodeMoved { id, new_min, .. } => {
-                        if let Some(path) = state.canvas.scene.node(*id).and_then(|node| node.origin.clone()) {
+                        if let Some(path) = state.canvas.scene.node(*id).and_then(projection::diagram_key).map(str::to_string) {
                             if let Some(host) = state.view_document.as_ref() {
                                 ctx.trigger(view_files::MoveConnectionViewNode { view_id: host.document().id().raw(), view: state.selected_view.clone(), path, x: f64::from(new_min.x), y: f64::from(new_min.y) });
                             }
                         }
                     }
                     SceneEvent::NodeDoubleClicked { id } if state.diagram_mode => {
-                        if let Some(path) = state.canvas.scene.node(*id).and_then(|node| node.origin.clone()) {
-                            if state.diagram_roots.contains(&path) && path != state.diagram_root {
-                                drill = Some(path);
-                            }
+                        if let (Some(key), Some(host)) = (state.canvas.scene.node(*id).and_then(projection::diagram_key), state.view_document.as_ref()) {
+                            ctx.trigger(navigation::OpenConnectionNode { view_id: host.document().id().raw(), key: key.into() });
                         }
                     }
                     SceneEvent::SelectionChanged(selection) => {
@@ -1227,12 +1270,6 @@ impl Panel for UsdCanvasPanel {
                     }
                     _ => {}
                 }
-            }
-            if let Some(path) = drill {
-                state.navigation_history.push(state.diagram_root.clone());
-                state.diagram_root = path;
-                state.rebuild_view();
-                return;
             }
             if show_scene {
                 return;

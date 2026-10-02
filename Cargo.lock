@@ -8046,6 +8046,7 @@ dependencies = [
  "lunco-time",
  "lunco-tools",
  "lunco-usd-bevy-camera",
+ "lunco-usd-bevy-core",
  "lunco-usd-bevy-mesh",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",
@@ -10904,6 +10905,7 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "egui",
+ "lunco-assets-core",
  "lunco-assets-runtime",
  "lunco-doc",
  "lunco-doc-bevy",
