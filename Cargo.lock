@@ -8019,6 +8019,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-embodiment-core",
+ "lunco-hooks",
  "lunco-input-core",
  "lunco-interaction-core",
  "lunco-luncosim-edit-core",
@@ -8037,6 +8038,8 @@ dependencies = [
  "lunco-scripting-rhai-runtime",
  "lunco-settings",
  "lunco-spatial",
+ "lunco-status-core",
+ "lunco-storage",
  "lunco-telemetry-core",
  "lunco-terrain-surface",
  "lunco-theme",
@@ -8065,6 +8068,7 @@ dependencies = [
  "lunco-workspace",
  "openusd",
  "serde",
+ "toml 1.1.2+spec-1.1.0",
 ]
 
 [[package]]

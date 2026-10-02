@@ -50,8 +50,8 @@ use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_bevy_stage::{StageView, UsdRead, UsdStageAsset};
 use lunco_usd_core::commands::{
     ApplyUsdOp, ApplyUsdOps, ApplyUsdTransientOps, AttachComponent, AttachProgram,
-    CommitUsdProposal, CreateUsdProposal, DetachComponent, ReviewUsdProposal, USD_DOCUMENT_KIND,
-    UsdDocumentReady, UsdProposalReviewAction, is_usd_path,
+    CommitUsdProposal, CreateUsdProposal, DetachComponent, OpenUsdSourceDocument,
+    ReviewUsdProposal, USD_DOCUMENT_KIND, UsdDocumentReady, UsdProposalReviewAction, is_usd_path,
 };
 use lunco_usd_core::edit_session::{
     UsdEditSessions, UsdProposalId, UsdProposalState, validate_proposal,
@@ -316,6 +316,7 @@ register_commands!(
     on_set_dome_light,
     on_new_document,
     on_open_file_for_usd,
+    on_open_usd_source_document,
     on_save_document,
     on_save_as_document,
 );
@@ -340,7 +341,8 @@ struct PendingUsdLoad {
     /// cancels its pending reads before they can create a stale document or
     /// focus a preview for a replaced workspace.
     twin_root: Option<PathBuf>,
-    task: Task<Result<PreparedUsdSource, String>>,
+    task: Task<Result<(PathBuf, PreparedUsdSource), String>>,
+    command_id: Option<u64>,
 }
 
 #[derive(Resource, Default)]
@@ -395,6 +397,76 @@ fn on_open_file_for_usd(trigger: On<OpenFile>, mut commands: Commands) {
     });
 }
 
+/// Resolve through the shared asset owner on a worker, then use the document
+/// owner's single file-preparation and lifecycle path.
+#[on_command(OpenUsdSourceDocument)]
+fn on_open_usd_source_document(
+    trigger: On<OpenUsdSourceDocument>,
+    resolver: Res<lunco_assets_core::SchemeRegistry>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    mut pending: ResMut<PendingUsdLoads>,
+    command: Res<ActiveCommandId>,
+    mut results: ResMut<CommandResults>,
+) {
+    let queued = (|| -> Result<(), String> {
+        let source = trigger.event().source.clone();
+        if !is_usd_path(&source) {
+            return Err("Choose an exact USD source".into());
+        }
+        let twin_root = lunco_assets_core::parse_twin_uri(&source).and_then(|(name, _)| {
+            roots
+                .as_ref()
+                .and_then(|roots| roots.root_for(name).ok().flatten())
+        });
+        if lunco_assets_core::parse_twin_uri(&source).is_some() && twin_root.is_none() {
+            return Err("The source Twin is not mounted".into());
+        }
+        let resolver = resolver.clone();
+        let key = PathBuf::from(&source);
+        if pending.tasks.iter().any(|task| task.path == key) {
+            return Err("This USD source is already opening".into());
+        }
+        let task = AsyncComputeTaskPool::get().spawn(async move {
+            let path = if lunco_assets_core::has_scheme(&source) {
+                resolver
+                    .local_path(&source)
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| format!("USD source has no editable local file: {source}"))?
+            } else {
+                PathBuf::from(source)
+            };
+            prepare_usd_file(path).await
+        });
+        pending.tasks.push(PendingUsdLoad {
+            path: key,
+            twin_root,
+            task,
+            command_id: command.get(),
+        });
+        if let Some(id) = command.get() {
+            results.insert(id, lunco_core::CommandOutcome::Pending);
+        }
+        Ok(())
+    })();
+    if let Err(error) = queued {
+        warn!("[UsdOpenSource] {error}");
+        if let Some(id) = command.get() {
+            results.record(id, Err(error));
+        }
+    }
+}
+
+async fn prepare_usd_file(path: PathBuf) -> Result<(PathBuf, PreparedUsdSource), String> {
+    let storage = lunco_storage::FileStorage::new();
+    let bytes = storage
+        .read(&lunco_storage::StorageHandle::File(path.clone()))
+        .await
+        .map_err(|error| format!("failed to read {}: {error:?}", path.display()))?;
+    let source = String::from_utf8(bytes)
+        .map_err(|error| format!("invalid UTF-8 in {}: {error}", path.display()))?;
+    Ok((path, PreparedUsdSource::parse(source)))
+}
+
 /// Spawn the async file-read for `abs_path` and queue the result in
 /// [`PendingUsdLoads`]. Callers should have already established that the
 /// path looks like a USD file. Shared by the [`OpenFile`] observer and
@@ -411,22 +483,7 @@ pub fn spawn_usd_load(world: &mut World, abs_path: PathBuf, twin_root: Option<Pa
     }
     let pool = AsyncComputeTaskPool::get();
     let path_for_task = abs_path.clone();
-    let task = pool.spawn(async move {
-        // Read through the storage abstraction — `std::fs` is clippy-banned
-        // in domain crates and absent on wasm; `lunco-storage` owns it.
-        // `FileStorage`'s read future wraps synchronous fs, so awaiting on
-        // the task thread parks no reactor.
-        let storage = lunco_storage::FileStorage::new();
-        let handle = lunco_storage::StorageHandle::File(path_for_task.clone());
-        match storage.read(&handle).await {
-            Ok(bytes) => {
-                let source = String::from_utf8(bytes)
-                    .map_err(|e| format!("invalid UTF-8 in {}: {e}", path_for_task.display()))?;
-                Ok(PreparedUsdSource::parse(source))
-            }
-            Err(e) => Err(format!("failed to read {}: {e:?}", path_for_task.display())),
-        }
-    });
+    let task = pool.spawn(async move { prepare_usd_file(path_for_task).await });
     world
         .resource_mut::<PendingUsdLoads>()
         .tasks
@@ -434,6 +491,7 @@ pub fn spawn_usd_load(world: &mut World, abs_path: PathBuf, twin_root: Option<Pa
             path: abs_path,
             twin_root,
             task,
+            command_id: None,
         });
 }
 
@@ -443,10 +501,24 @@ pub fn spawn_usd_load(world: &mut World, abs_path: PathBuf, twin_root: Option<Pa
 fn cancel_pending_usd_loads_on_twin_closed(
     trigger: On<TwinClosed>,
     mut pending: ResMut<PendingUsdLoads>,
+    mut results: ResMut<CommandResults>,
 ) {
     let closed_root = &trigger.event().root;
     pending.tasks.retain(|load| {
-        !pending_load_belongs_to_closed_twin(load.twin_root.as_deref(), &load.path, closed_root)
+        let keep = !pending_load_belongs_to_closed_twin(
+            load.twin_root.as_deref(),
+            &load.path,
+            closed_root,
+        );
+        if !keep {
+            if let Some(id) = load.command_id {
+                results.record(
+                    id,
+                    Err("USD source Twin closed before its document opened".into()),
+                );
+            }
+        }
+        keep
     });
 }
 
@@ -477,8 +549,12 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
             None => still_pending.push(load),
             Some(Err(err)) => {
                 bevy::log::warn!("[UsdOpenFile] {}", err);
+                if let Some(id) = load.command_id {
+                    world.resource_mut::<CommandResults>().record(id, Err(err));
+                }
             }
-            Some(Ok(prepared)) => {
+            Some(Ok((path, prepared))) => {
+                load.path = path;
                 // Idempotent re-open: the registry owns one document per file and
                 // decides whether the freshly parsed source can replace its base.
                 let (doc, outcome) = world
@@ -511,6 +587,18 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
                     OpenOutcome::Allocated => {}
                 }
                 world.trigger(UsdDocumentReady { doc, outcome });
+                if let Some(id) = load.command_id {
+                    world.resource_mut::<CommandResults>().record(
+                        id,
+                        Ok(Ack::with_data(
+                            OpId::new(),
+                            lunco_api_core::ApiValue::map([(
+                                "doc_id",
+                                lunco_api_core::ApiValue::UInt(doc.raw()),
+                            )]),
+                        )),
+                    );
+                }
             }
         }
     }

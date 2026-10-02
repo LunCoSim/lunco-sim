@@ -747,6 +747,13 @@ impl Plugin for SceneEditUiPlugin {
         // runs only while the canvas panel is visible; stage path batches then
         // keep unrelated authored changes from rebuilding the graph.
         app.init_resource::<connection_canvas::UsdCanvasState>();
+        connection_canvas::init_view_commands(app);
+        app.init_resource::<connection_canvas::LayoutJobs>();
+        app.add_systems(Update, connection_canvas::update_layouts);
+        app.add_systems(
+            Update,
+            connection_canvas::poll_view_files.run_if(connection_canvas::view_files_pending),
+        );
         app.add_view_model(
             connection_canvas::produce_usd_canvas,
             connection_canvas::editor_canvas_changed,

@@ -199,6 +199,90 @@ name convention, or ECS-only grouping state is introduced.
   A canvas layout is committed only if the graph's visible topology or
   presentation facts changed. Stage replacement and first admission retain the
   full projection path.
+- Connections defaults to **Active scene**, bound to `SceneMountState.active_root`.
+  Initial view admission waits for that mount's projected USD root identity;
+  a pending empty path cannot become a saved scope.
+  Editor preview focus never replaces the loaded scene's diagram. **Editor
+  document** explicitly selects the focused preview; **Edit connections** opens
+  the exact root-layer URI through `OpenUsdSourceDocument` for document authoring.
+  Its document owner resolves registered schemes on a worker and reuses the
+  existing file-read/parser/registry lifecycle without replacing the scene.
+  Scene inspection selects entity targets from its mount-scoped index;
+  document inspection uses preview-scoped `SelectUsdPrim`. Closing/replacing
+  either owner retires its graph and temporary placements.
+- Both inputs share one composed-USD projector and incremental stage-change
+  path. Full admission traverses USD, including prims without ECS projections;
+  scope views default to the scope node and its direct USD children.
+  **Include nested models** adds internal prims and connections on demand.
+  Clickable breadcrumbs, Back, searchable **Find system**, and double-click
+  navigate the composed USD ancestry. Declared unconnected ports remain visible. Causal links have
+  arrows; acausal links and joints do not. Full property names distinguish
+  input/output forwarding, and reciprocal acausal links render once. Missing
+  interfaces are not fabricated. USD may reference runtime-provided outputs
+  such as position, yaw and piloted state. The composed USD reader recognizes
+  their provider schemas and retains exact referenced property identities even
+  in inert document previews. Source revisions refresh these references;
+  neither view requires duplicate authored attributes or Modelica compilation.
+  Runtime validation still owns endpoint availability and types; displaying an
+  authored interface reference does not admit it to simulation.
+  Missing/unrecognized interfaces publish their exact
+  source/target paths to the shared Recent events bus, outside the diagram.
+- Layout policy is `assets/scripting/policy/diagram_layout.rhai`, installed by
+  the application policy manifest at `diagram.layout`. The Connections owner
+  supplies immutable node paths, dimensions, causal ranks, edge facts and scope;
+  policy returns one finite `f64` x/y placement per node. Rust validates exact
+  identities, completeness and rendering range before applying the result.
+  The worker inherits Application/Visualization/Preparation with no simulation
+  clock or live-world access. One pending job per view document is revision
+  fenced; stale results cannot replace navigation or a new source. Graph/scope
+  and policy registry changes request work, never paint or continuous polling.
+  The shipped policy balances causal layers into compact landscape blocks.
+  Saved placements apply afterward and wire routing refreshes. A missing or
+  faulty policy warns visibly and retains the standard graph layout; corrupt
+  optional view data does not interfere with scene loading. The application installs the policy when this feature owner is linked;
+  absent/failed policy registration remains a visible presentation diagnostic.
+  `test_diagram_layout.rhai` exercises the installed policy and bad input facts.
+- Named diagram definitions are separate `.lunco-view.toml` project documents.
+  `lunco-doc::diagram_view` owns their typed source binding, named scopes, and
+  per-view expansion and `f64` node positions, with `DocumentHost` undo/redo. The Connections
+  adapter owns TOML persistence through `lunco-storage` on bounded workers;
+  missing/corrupt files recover valid sections and entries with visible warnings;
+  unusable scopes/positions use root inspection and automatic layout. Unsupported
+  versions or mismatched source bindings use the loaded USD's automatic diagram.
+  Duplicate file ownership and stale load results reject visibly. View files
+  can be committed alongside the scene. They never contain ports, connections,
+  or copied prim facts, and moving nodes never modifies authored USD. Independent
+  views of the same source therefore cannot overwrite one another's layout.
+  Logical source URIs are preferred for relocatable project definitions.
+- The main toolbar selects the source, named view, and USD scope; file and
+  layout-history controls live under **Layouts and view files**.
+  **New view** captures the current scope with independent automatic layout;
+  the named-view selector restores its scope and placement. **Save views** saves
+  all named definitions to the chosen repository path; **Load views** validates
+  and replaces the view document. Layout Undo/Redo is separate from source USD
+  Undo/Redo. Ports and edges refresh dynamically from the source revision. Missing
+  authored scopes warn and show the loaded source root so inspection remains
+  usable; their intended scope stays in the file. Removed-node placements remain in the definition and can resolve again
+  if that source identity returns. Pan and zoom remain session presentation state.
+  `Canvas.movable_layout` enables arrangement in read-only scene inspection.
+  `InspectConnectionDiagram` exposes the actual source, named definitions,
+  displayed nodes/ports, and their logical screen coordinates for automation.
+- Document Diagram and **Authored schema** permit mouse port connections through
+  typed journaled USD operations. Writes retain declared property types and
+  existing connection lists; deleting a link removes only that link, including
+  reciprocal acausal opinions. Authored schema applies explicit registered
+  presentation markers over the same source facts. Neither view requires
+  Modelica compilation. Document edits affect its preview; save and scene reload
+  explicitly admit those changes to simulation.
+- Ownership review: `lunco-doc::diagram_view` owns view definitions and their
+  reversible edits; `lunco-usd-document` owns topology and its journal; the Connections producer owns cached presentation facts;
+  `lunco-canvas` owns gesture handling. Selection and topology application stay
+  at their existing typed owners. These are generic UI projections and gestures,
+  with layout choice authored through `diagram.layout`. Pure
+  projector and canvas interpreter tests cover hierarchy, mixed connection kinds,
+  missing endpoints, large cyclic/chain graphs, and read-only layout gestures;
+  the production API session verifies the active-scene/document UX.
+
 - The primary `UsdPreviewView` is also an instance-backed workbench tab. The
   `OpenUsdPreview`, `FocusUsdPreview`, and `FocusUsdPreviewView` boundaries
   foreground that exact tab; replacing or closing a session closes its view
@@ -1256,9 +1340,8 @@ document/path identity tuple.
 
 ## Remaining design work
 
-1. Keep canvas layout as an authored decision only if layout persistence is
-   required; otherwise keep it UI-local. Do not journal every drag frame by
-   default.
+1. Keep source topology and named view definitions in their respective document
+   journals. Record node placement on gesture completion, not every drag frame.
 2. Keep per-document `DocumentHost` undo authoritative for `Ctrl+Z`. Reserve
    the twin journal's broader undo manager for a separate future twin-wide or
    cross-author command; never wire both to one undo verb.

@@ -160,6 +160,7 @@ mod tests {
             revision: 0,
             state: CompileState::Error,
             diagnostics: vec![Diagnostic::error("parse failed", Some(4), None)],
+            sources: Default::default(),
         };
 
         assert_eq!(

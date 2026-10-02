@@ -13,6 +13,13 @@ use lunco_core::Command;
 use lunco_doc::{DocumentId, OpenOutcome};
 use lunco_usd_document::document::UsdOp;
 
+/// Open an addressable USD source as an editable document without loading a scene.
+#[Command(default)]
+pub struct OpenUsdSourceDocument {
+    /// Exact registered asset URI or native file path.
+    pub source: String,
+}
+
 /// Apply one [`UsdOp`] to a document through the typed command bus.
 ///
 /// The `lunco-usd-commands` runtime observes this command and routes it through the

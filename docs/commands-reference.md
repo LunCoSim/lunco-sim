@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**247 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**252 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -24,7 +24,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Scene editing & authoring**
 
 - [`lunco-luncosim-edit-core`](#lunco-luncosim-edit-core) (1 command)
-- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (11 commands)
+- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (15 commands)
 - [`lunco-scene-commands`](#lunco-scene-commands) (5 commands)
 
 **USD / scenes**
@@ -110,7 +110,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-telemetry`](#lunco-telemetry) (1 command)
 - [`lunco-usd-bevy-camera`](#lunco-usd-bevy-camera) (5 commands)
 - [`lunco-usd-bevy-runtime-core`](#lunco-usd-bevy-runtime-core) (5 commands)
-- [`lunco-usd-core`](#lunco-usd-core) (9 commands)
+- [`lunco-usd-core`](#lunco-usd-core) (10 commands)
 - [`lunco-usd-viewport-core`](#lunco-usd-viewport-core) (18 commands)
 - [`lunco-viz`](#lunco-viz) (1 command)
 - [`lunco-workbench-core`](#lunco-workbench-core) (9 commands)
@@ -174,6 +174,46 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `doc_id` | `u64` |  USD document whose pointer movement should stop reaching a hook. |
 | `interaction_id` | `String` |  Identity supplied when the active interaction subscribed. |
+
+#### `ConnectionViewFile`
+
+ Save or load named views asynchronously; damaged optional layouts recover with warnings.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/view_files.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `path` | `String` |   |
+| `save` | `bool` |   |
+| `scope` | `String` |   |
+| `include_descendants` | `bool` |   |
+
+#### `CreateConnectionView`
+
+ Create an independent named scope and layout in the bound diagram view document.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/view_files.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `name` | `String` |   |
+| `scope` | `String` |   |
+
+#### `MoveConnectionViewNode`
+
+ Place a composed source node in one named view without modifying USD.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/view_files.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `view` | `String` |   |
+| `path` | `String` |   |
+| `x` | `f64` |   |
+| `y` | `f64` |   |
 
 #### `ReleaseDiagnosticVisual`
 
@@ -269,6 +309,17 @@ actually call, with the fields the deserializer actually accepts. See the
 | `doc_id` | `u64` |  USD document which owns the view-layer prim. |
 | `entity_id` | `u64` |  Stable API identity of the projected preview prim. |
 | `translation` | `[f64 ; 3]` |  Target translation in the active physics frame. |
+
+#### `UndoConnectionView`
+
+ Undo or redo a view-document edit independently of source-document history.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/view_files.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `redo` | `bool` |   |
 
 #### `UpdateDiagnosticVisual`
 
@@ -3179,6 +3230,16 @@ actually call, with the fields the deserializer actually accepts. See the
 | `doc_id` | `DocumentId` |  Target document. |
 | `spec` | `crate :: attach :: DetachSpec` |  Exact component attachment to remove. |
 
+#### `OpenUsdSourceDocument`
+
+ Open an addressable USD source as an editable document without loading a scene.
+
+- *defined in:* `crates/lunco-usd-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `source` | `String` |  Exact registered asset URI or native file path. |
+
 #### `ReviewUsdProposal`
 
  Change review state without applying any USD operation.
@@ -3829,7 +3890,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 247 commands from the runtime schema; scanned 968 .rs files for docs (0 parse failure(s) skipped).
+<!-- 252 commands from the runtime schema; scanned 971 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

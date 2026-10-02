@@ -1,7 +1,7 @@
 //! Node + edge visuals for the USD connection canvas.
 //!
 //! Deliberately minimal — a titled card with input dots on the left and output
-//! dots on the right, and a straight coloured wire. No SVG icons, no animation:
+//! dots on the right, acausal connector dots, and an orthogonal coloured wire. No SVG icons, no animation:
 //! this canvas is about topology (what's wired to what), not iconography.
 
 use bevy_egui::egui;
@@ -51,16 +51,21 @@ impl NodeVisual for UsdPrimNodeVisual {
         // Titles live in a fixed header. Placing them at the card midpoint made
         // a tall multi-port node draw its title over the authored port names.
         // The header stays clear regardless of how many ports the contract has.
-        if rect.height() > 22.0 {
-            painter.text(
-                egui::pos2(rect.center().x, rect.min.y + 12.0),
+        if rect.height() > 12.0 {
+            let card_painter = painter
+                .clone()
+                .with_clip_rect(rect.intersect(ctx.ui.clip_rect()));
+            let mut font = lunco_theme::TypographyRole::Label.font_id(ctx.ui.style().as_ref());
+            font.size *= ctx.viewport.zoom.clamp(0.65, 1.0);
+            card_painter.text(
+                egui::pos2(rect.center().x, rect.min.y + 6.0),
                 egui::Align2::CENTER_TOP,
                 &node.label,
-                lunco_theme::TypographyRole::Label.font_id(ctx.ui.style().as_ref()),
+                font,
                 t.text,
             );
-            if !self.type_name.is_empty() && rect.height() > 40.0 {
-                painter.text(
+            if !self.type_name.is_empty() && rect.height() > 40.0 && ctx.viewport.zoom >= 1.0 {
+                card_painter.text(
                     egui::pos2(rect.center().x, rect.min.y + 29.0),
                     egui::Align2::CENTER_TOP,
                     &self.type_name,
@@ -74,6 +79,8 @@ impl NodeVisual for UsdPrimNodeVisual {
         // the USD `inputs:`/`outputs:` leaf, so the picture explains the real
         // signal contract instead of asking the viewer to decode dots.
         let zoom = ctx.viewport.zoom;
+        let port_font = lunco_theme::TypographyRole::DenseData.font_id(ctx.ui.style().as_ref());
+        let readable_rows = super::projection::PORT_ROW_H * zoom >= port_font.size * 1.25;
         let r = (4.0 * zoom).clamp(2.5, 6.0);
         for port in &node.ports {
             if port.id.as_str().starts_with('~') {
@@ -87,6 +94,7 @@ impl NodeVisual for UsdPrimNodeVisual {
             let col = match port.kind.as_str() {
                 "input" => t.port_input,
                 "output" => t.port_output,
+                "acausal" => theme.schematic.wire_unknown,
                 _ => t.node_border,
             };
             painter.circle_filled(egui::pos2(p.x, p.y), r, col);
@@ -95,17 +103,27 @@ impl NodeVisual for UsdPrimNodeVisual {
                 r,
                 egui::Stroke::new(1.0, t.port_outline),
             );
-            if zoom >= 0.32 {
-                let (anchor, offset) = if port.kind.as_str() == "input" {
+            if readable_rows {
+                let (anchor, offset) = if port.kind.as_str() != "output" {
                     (egui::Align2::LEFT_CENTER, egui::vec2(9.0, 0.0))
                 } else {
                     (egui::Align2::RIGHT_CENTER, egui::vec2(-9.0, 0.0))
                 };
-                painter.text(
+                let mut label_rect = rect.intersect(ctx.ui.clip_rect());
+                if port.kind.as_str() == "output" {
+                    label_rect.min.x = rect.center().x;
+                } else {
+                    label_rect.max.x = rect.center().x;
+                }
+                painter.clone().with_clip_rect(label_rect).text(
                     egui::pos2(p.x + offset.x, p.y + offset.y),
                     anchor,
-                    port.id.as_str(),
-                    lunco_theme::TypographyRole::DenseData.font_id(ctx.ui.style().as_ref()),
+                    port.id
+                        .as_str()
+                        .split_once(':')
+                        .map(|(_, name)| name)
+                        .unwrap_or(port.id.as_str()),
+                    port_font.clone(),
                     t.text_subdued,
                 );
             }
@@ -133,10 +151,11 @@ impl EdgeVisual for UsdWireVisual {
     ) {
         let theme = lunco_theme::active(ctx.ui.ctx());
         // Wire-by-domain is exactly what `SchematicTokens` models for Modelica;
-        // USD dataflow is a signal connection and a joint is a mechanical one,
-        // so they read in the same colours as their schematic counterparts.
+        // Causal dataflow uses signal colour, joints use mechanical colour,
+        // and unclassified acausal networks use the shared neutral wire token.
         let base = match self.kind {
             WireKind::Dataflow => theme.schematic.wire_signal,
+            WireKind::Acausal => theme.schematic.wire_unknown,
             WireKind::Joint => theme.schematic.wire_mechanical,
         };
         let col = if selected {
@@ -163,7 +182,7 @@ impl EdgeVisual for UsdWireVisual {
         let b = points[points.len() - 1];
         let dir = b - a;
         let len = dir.length();
-        if len > 1.0 {
+        if self.kind == WireKind::Dataflow && len > 1.0 {
             let d = dir / len;
             let n = egui::vec2(-d.y, d.x);
             let tip = b - d * 8.0;

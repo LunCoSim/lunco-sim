@@ -69,11 +69,13 @@ pub struct Canvas {
     last_pointer_screen: Option<Pos>,
 
     /// When `true`, the active tool must not mutate the scene —
-    /// no drag-to-move, no drag-to-connect, no Delete. Pan / zoom /
-    /// selection still work. Set per-frame by the embedding app
+    /// no drag-to-connect or Delete. Node movement requires `movable_layout`;
+    /// pan / zoom / selection still work. Set per-frame by the embedding app
     /// (e.g. `canvas_diagram.rs` flips it based on
     /// the active document's read-only state).
     pub read_only: bool,
+    /// Allow presentation-only node movement while topology stays read-only.
+    pub movable_layout: bool,
 
     /// Optional drag-to-grid snap. When `Some`, the default tool
     /// quantises every in-flight drag translation to multiples of
@@ -117,6 +119,7 @@ impl Canvas {
             registry,
             last_pointer_screen: None,
             read_only: false,
+            movable_layout: false,
             snap: None,
             show_edges: true,
             input_events: SmallVec::new(),
@@ -425,6 +428,7 @@ impl Canvas {
                     viewport: &mut self.viewport,
                     events: &mut events,
                     read_only: self.read_only,
+                    movable_layout: self.movable_layout,
                     snap: self.snap,
                     show_edges: self.show_edges,
                 };
@@ -445,6 +449,7 @@ impl Canvas {
                 viewport: &mut self.viewport,
                 events: &mut events,
                 read_only: self.read_only,
+                movable_layout: self.movable_layout,
                 snap: self.snap,
                 show_edges: self.show_edges,
             };

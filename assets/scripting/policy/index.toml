@@ -10,6 +10,13 @@
 kind = "lunco.policy.v1"
 scope = "application"
 
+[[policies]]
+hook = "diagram.layout"
+source = "diagram_layout.rhai"
+entry = "layout_diagram"
+deterministic = true
+skip_when_hook_unavailable = true
+
 [startup]
 source = "startup.rhai"
 entry = "install_policies"

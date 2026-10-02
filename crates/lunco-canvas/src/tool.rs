@@ -66,12 +66,13 @@ pub struct CanvasOps<'a> {
     pub selection: &'a mut Selection,
     pub viewport: &'a mut Viewport,
     pub events: &'a mut Vec<SceneEvent>,
-    /// When `true`, tools must not mutate `scene` — no drag-to-move,
-    /// no drag-to-connect, no delete-on-key. Pan/zoom/selection
-    /// stay fine (those mutate `viewport` / `selection`, not the
-    /// authored scene). Surfaced as a [`crate::Canvas::read_only`] field
+    /// When `true`, tools must not change topology. Node movement requires
+    /// `movable_layout`; pan/zoom/selection stay available.
+    /// Surfaced as a [`crate::Canvas::read_only`] field
     /// that the embedding app flips per tab (e.g. source-library tabs).
     pub read_only: bool,
+    /// Node placement belongs to the embedding view rather than domain topology.
+    pub movable_layout: bool,
     /// Optional drag-to-grid snap. When `Some`, the default tool
     /// quantises in-flight drag translations to multiples of `step`
     /// world units — user sees icons click into alignment *during*
@@ -839,12 +840,8 @@ impl DefaultTool {
                         ops.events
                             .push(SceneEvent::SelectionChanged(ops.selection.clone()));
                     }
-                    // Read-only tab: refuse to enter the drag state.
-                    // The user can still click to select, but any
-                    // drag motion falls back to rubber-band selection
-                    // below. Prevents authored scene mutation at the
-                    // source, not via after-the-fact snap-back.
-                    if ops.read_only {
+                    // Presentation views may move nodes without editing topology.
+                    if ops.read_only && !ops.movable_layout {
                         self.state = State::Idle;
                         return;
                     }
@@ -1674,6 +1671,7 @@ mod tests {
                 viewport,
                 events,
                 read_only: false,
+                movable_layout: false,
                 snap: None,
                 show_edges,
             };
@@ -1797,6 +1795,79 @@ mod tests {
         assert!(!ev.iter().any(|e| matches!(e, SceneEvent::NodeMoved { .. })));
         // But the click did select.
         assert!(sel.contains(SelectItem::Node(NodeId(0))));
+    }
+
+    #[test]
+    fn read_only_layout_moves_nodes_but_blocks_topology_edits() {
+        let (mut tool, mut scene, mut selection, mut viewport, mut events) = env();
+        for input in [
+            down(Pos::new(20.0, 15.0), false, false),
+            mv(Pos::new(70.0, 45.0)),
+            mv(Pos::new(80.0, 55.0)),
+            up(Pos::new(80.0, 55.0)),
+        ] {
+            tool.handle(
+                &input,
+                &mut CanvasOps {
+                    scene: &mut scene,
+                    selection: &mut selection,
+                    viewport: &mut viewport,
+                    events: &mut events,
+                    read_only: true,
+                    movable_layout: true,
+                    snap: None,
+                    show_edges: true,
+                },
+            );
+        }
+        assert_eq!(
+            scene.node(NodeId(0)).unwrap().rect.min,
+            Pos::new(60.0, 40.0)
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, SceneEvent::NodeMoved { .. }))
+        );
+        let count = scene.node_count();
+        let input = InputEvent::Key {
+            name: "Delete",
+            modifiers: Modifiers::default(),
+        };
+        tool.handle(
+            &input,
+            &mut CanvasOps {
+                scene: &mut scene,
+                selection: &mut selection,
+                viewport: &mut viewport,
+                events: &mut events,
+                read_only: true,
+                movable_layout: true,
+                snap: None,
+                show_edges: true,
+            },
+        );
+        assert_eq!(scene.node_count(), count);
+        for input in [
+            down(Pos::new(100.0, 55.0), false, false),
+            mv(Pos::new(100.0, 15.0)),
+            up(Pos::new(100.0, 15.0)),
+        ] {
+            tool.handle(
+                &input,
+                &mut CanvasOps {
+                    scene: &mut scene,
+                    selection: &mut selection,
+                    viewport: &mut viewport,
+                    events: &mut events,
+                    read_only: true,
+                    movable_layout: true,
+                    snap: None,
+                    show_edges: true,
+                },
+            );
+        }
+        assert_eq!(scene.edge_count(), 0);
     }
 
     #[test]

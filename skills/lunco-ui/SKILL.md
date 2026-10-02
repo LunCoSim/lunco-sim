@@ -70,6 +70,44 @@ Large inspection surfaces must virtualize their fixed-height browser rows and re
 only for expanded/visible bodies; the normal sample path reads those values
 through the registry rather than rerunning backend list/metadata callbacks.
 
+For USD topology, extend the existing Connections projector in
+`crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/`. Default to the active
+`SceneMountState` mount; Editor document focus is an explicit alternate source.
+Read composed USD, including prims without ECS projections, independently of
+Modelica compilation. Cache facts and consume stage deltas, never traverse in
+paint. Start at the loaded root with direct hierarchy children; use cached
+USD ancestry for drill-in and explicit descendant expansion. Preserve full property identities; causal edges have
+arrows, acausal/joint edges do not. Never fabricate missing interfaces.
+Scene selection uses mount-scoped entity targets, documents use `SelectUsdPrim`.
+Use `Edit connections` / `OpenUsdSourceDocument` to establish the document
+boundary without replacing the scene. The USD document owner resolves the exact
+registered source on a worker and reuses its file-preparation lifecycle.
+Use the composed USD reader's runtime-provider schema contract to display exact
+authored interface references before runtime projection. Runtime owners validate
+availability and types; the diagram does not admit connections to simulation.
+Publish endpoint
+failures with exact identities in Recent events, not in the diagram toolbar.
+Use `diagram.layout` for authored Rhai layout policy over immutable graph
+facts. Run it on bounded workers with source/scope revision fencing and the
+Application/Visualization/Preparation context; validate complete finite
+placements before rendering and apply saved placements afterward. Breadcrumbs,
+Back, searchable Find system, and double-click share cached USD ancestry.
+Exercise the installed policy with `assets/scripting/tests/test_diagram_layout.rhai`.
+Persist named scopes and layouts in separate `.lunco-view.toml` project
+artifacts using `lunco-doc::diagram_view` / `DocumentHost`, through typed view
+commands. Each view has independent placement; USD files only own topology.
+`Save views` / `Load views` use bounded asynchronous `lunco-storage` work and
+recover valid entries from missing/corrupted optional view files with warnings
+and automatic layout. Different sources or unsupported versions use the loaded
+USD automatic view; duplicate file owners and stale loads reject.
+Mouse port connections use journaled `ApplyUsdOps`, retain declared types and
+unrelated links, and Save/Undo stay source-document-owned. Layout Undo/Redo
+belongs to the view document. `Canvas.movable_layout` permits node arrangement
+in read-only scene views. Consume `InspectConnectionDiagram` for exact source,
+view IDs, layouts, rendered ports, and logical screen coordinates. Verify scene
+navigation, independent named layouts, file roundtrip, and mouse gestures in an
+owned production API session, plus pure document/projector/interpreter tests.
+
 The Editor's `authoring_review` panel is the shared human-facing evidence
 surface for authored/runtime inspection. Its target chain must keep `selected`,
 `controlled`, and the active camera target as separate rows; do not collapse
