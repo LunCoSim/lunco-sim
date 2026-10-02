@@ -601,7 +601,7 @@ impl lunco_api::queries::ApiQueryProvider for InspectConnectionDiagram {
         "InspectConnectionDiagram"
     }
     fn schema(&self) -> lunco_api_core::ApiQuerySchema {
-        lunco_api_core::ApiQuerySchema { name: self.name().into(), description: Some("Inspect the active Connections source, named views, system interfaces, program facets and rendered node/port coordinates".into()), parameters: Some(Vec::new()), exactly_one_of: Vec::new(), response: Some("{ built, active_scene, source, view_id, view, scope, variants:[{name,selection}], variant_error, definitions:[{name,scope,include_descendants,positions:[{path,x,y}]}], nodes:[{path,key,role,accent,label,x,y,screen_x,screen_y,ports:[{name,kind,x,y,screen_x,screen_y}],programs:[{path,backend,source,issue}]}], connections:[{source,source_key,source_port,target,target_key,target_port,kind}], connection_count, unresolved_links, error }".into()) }
+        lunco_api_core::ApiQuerySchema { name: self.name().into(), description: Some("Inspect the active Connections source, named views, system interfaces, program facets and rendered node/port coordinates".into()), parameters: Some(Vec::new()), exactly_one_of: Vec::new(), response: Some("{ built, active_scene, source, view_id, view, scope, viewport:{center_x,center_y,zoom}, variants:[{name,selection}], variant_error, definitions:[{name,scope,include_descendants,positions:[{path,x,y}]}], nodes:[{path,key,role,accent,label,x,y,width,height,screen_x,screen_y,ports:[{name,kind,x,y,screen_x,screen_y}],programs:[{path,backend,source,issue}]}], connections:[{source,source_key,source_port,target,target_key,target_port,kind}], connection_count, unresolved_links, error }".into()) }
     }
     fn execute(
         &self,
@@ -649,7 +649,7 @@ impl lunco_api::queries::ApiQueryProvider for InspectConnectionDiagram {
             let screen = state.canvas_rect.map(|rect| state.canvas.viewport.world_to_screen(node.rect.center(), rect));
             let programs: Vec<_> = node.data.downcast_ref::<super::projection::UsdPrimNodeData>()
                 .map(|data| data.programs.iter().map(|program| api_value!({ "path": program.path.clone(), "backend": program.backend.clone(), "source": program.source.clone(), "issue": program.issue.clone() })).collect()).unwrap_or_default();
-            api_value!({ "path": node.origin.clone(), "label": node.label.clone(), "x": node.rect.min.x, "y": node.rect.min.y, "screen_x": screen.map(|p| p.x), "screen_y": screen.map(|p| p.y), "ports": ports, "key": super::projection::diagram_key(node), "role": node.data.downcast_ref::<super::projection::UsdPrimNodeData>().and_then(|data| data.boundary).map(|role| role.name()).unwrap_or("prim"), "programs": programs, "accent": node.data.downcast_ref::<super::projection::UsdPrimNodeData>().and_then(|data| data.accent).map(|accent| accent.name()) })
+            api_value!({ "path": node.origin.clone(), "label": node.label.clone(), "x": node.rect.min.x, "y": node.rect.min.y, "width": node.rect.width(), "height": node.rect.height(), "screen_x": screen.map(|p| p.x), "screen_y": screen.map(|p| p.y), "ports": ports, "key": super::projection::diagram_key(node), "role": node.data.downcast_ref::<super::projection::UsdPrimNodeData>().and_then(|data| data.boundary).map(|role| role.name()).unwrap_or("prim"), "programs": programs, "accent": node.data.downcast_ref::<super::projection::UsdPrimNodeData>().and_then(|data| data.accent).map(|accent| accent.name()) })
         }).collect();
         let connections: Vec<_> = state.canvas.scene.edges().filter_map(|(_, edge)| {
             let source = state.canvas.scene.node(edge.from.node)?;
@@ -662,7 +662,7 @@ impl lunco_api::queries::ApiQueryProvider for InspectConnectionDiagram {
             api_value!({ "name": name, "scope": definition.scope.clone(), "include_descendants": definition.include_descendants, "positions": positions })
         }).collect()).unwrap_or_default();
         Ok(Some(
-            api_value!({ "built": state.built, "active_scene": views.show_scene, "source": state.source_uri.clone(), "view_id": state.view_document.as_ref().map(|host| host.document().id().raw()), "view": state.selected_view.clone(), "scope": state.diagram_root.clone(), "variants": variants, "variant_error": variant_error, "definitions": definitions, "nodes": nodes, "connections": connections, "connection_count": state.canvas.scene.edge_count(), "unresolved_links": state.unresolved_links.clone(), "error": state.last_error.clone() }),
+            api_value!({ "viewport": { "center_x": state.canvas.viewport.center.x, "center_y": state.canvas.viewport.center.y, "zoom": state.canvas.viewport.zoom }, "built": state.built, "active_scene": views.show_scene, "source": state.source_uri.clone(), "view_id": state.view_document.as_ref().map(|host| host.document().id().raw()), "view": state.selected_view.clone(), "scope": state.diagram_root.clone(), "variants": variants, "variant_error": variant_error, "definitions": definitions, "nodes": nodes, "connections": connections, "connection_count": state.canvas.scene.edge_count(), "unresolved_links": state.unresolved_links.clone(), "error": state.last_error.clone() }),
         ))
     }
 }

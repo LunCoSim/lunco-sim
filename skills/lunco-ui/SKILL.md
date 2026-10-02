@@ -145,6 +145,12 @@ options under View, composed variants under Details, and gesture/connection
 guidance under Help. Show acausal connectors as hollow diamonds with explicit
 labels and separate counts; zero causal outputs does not mean a physical model
 is disconnected. Show prim type and no authored ports for geometry/cameras.
+Use `FrameConnectionDiagram` for Focus/Fit over the current view key; the render
+boundary consumes its request through the shared viewport. Focus preserves
+scope and topology and fits at most natural scale. Open uses the existing
+double-click command. Verify exact card centering, complete-system fit and
+missing-card rejection with `connection_diagram_focus.rhai`; inspect viewport
+and node dimensions through the existing diagram query.
 
 The Editor's `authoring_review` panel is the shared human-facing evidence
 surface for authored/runtime inspection. Its target chain must keep `selected`,

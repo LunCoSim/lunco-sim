@@ -253,7 +253,7 @@ pub fn update_layouts(
                             }
                         }
                         state.restore_placements();
-                        state.needs_fit = true;
+                        state.frame_request = Some(super::navigation::FrameTarget::System);
                     }
                     Err(error) => {
                         warn!("[diagram-layout] {error}");

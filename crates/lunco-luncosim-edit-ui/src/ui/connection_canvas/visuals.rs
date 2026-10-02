@@ -1,7 +1,7 @@
 //! Node + edge visuals for the USD connection canvas.
 //!
 //! Deliberately minimal — a titled card with input dots on the left and output
-//! dots on the right, acausal connector dots, and an orthogonal coloured wire. No SVG icons, no animation:
+//! dots on the right, acausal connector diamonds, and an orthogonal coloured wire. No SVG icons, no animation:
 //! this canvas is about topology (what's wired to what), not iconography.
 
 use bevy_egui::egui;
@@ -77,7 +77,7 @@ impl NodeVisual for UsdPrimNodeVisual {
                 let badge = egui::Rect::from_min_size(
                     egui::pos2(
                         rect.center().x - size.x * 0.5,
-                        rect.min.y + (29.0 * ctx.viewport.zoom).max(18.0),
+                        rect.min.y + 29.0_f32.min((rect.height() - 14.0).max(18.0)),
                     ),
                     size,
                 );
@@ -93,9 +93,8 @@ impl NodeVisual for UsdPrimNodeVisual {
             }
         }
 
-        // Titles live in a fixed header. Placing them at the card midpoint made
-        // a tall multi-port node draw its title over the authored port names.
-        // The header stays clear regardless of how many ports the contract has.
+        // Titles and backend badges share a fixed screen-space header above
+        // the authored port rows, including on tall multi-port cards.
         if rect.height() > 12.0 {
             let card_painter = painter
                 .clone()
@@ -168,9 +167,8 @@ impl NodeVisual for UsdPrimNodeVisual {
             }
         }
 
-        // Ports — a coloured dot and the authored connector name. The name is
-        // the USD `inputs:`/`outputs:` leaf, so the picture explains the real
-        // signal contract instead of asking the viewer to decode dots.
+        // Causal ports use circles; acausal connectors use hollow diamonds.
+        // Labels retain the authored USD property leaf and connector kind.
         let zoom = ctx.viewport.zoom;
         let port_font = lunco_theme::TypographyRole::DenseData.font_id(ctx.ui.style().as_ref());
         let readable_rows = super::projection::PORT_ROW_H * zoom >= port_font.size * 1.25;

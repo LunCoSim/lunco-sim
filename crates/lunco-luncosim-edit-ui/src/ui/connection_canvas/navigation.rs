@@ -8,6 +8,45 @@ use lunco_hooks::{
 };
 
 const OPEN_HOOK: &str = "diagram.open.plan";
+/// Pending framing resolves against the current graph at the rendering boundary.
+pub(super) enum FrameTarget {
+    System,
+    Node(String),
+}
+
+/// Frame the complete Connections system, or center a card at its natural scale.
+#[Command(default)]
+pub struct FrameConnectionDiagram {
+    pub view_id: u64,
+    /// Exact current view key; omitted fits the complete system.
+    pub key: Option<String>,
+}
+
+#[on_command(FrameConnectionDiagram)]
+fn frame_diagram(
+    trigger: On<FrameConnectionDiagram>,
+    mut views: ResMut<UsdCanvasState>,
+) -> Result<Ack, String> {
+    let cmd = trigger.event();
+    let state = state_for(&mut views, cmd.view_id)?;
+    if let Some(key) = &cmd.key {
+        if !state
+            .canvas
+            .scene
+            .nodes()
+            .any(|(_, node)| super::projection::diagram_key(node) == Some(key.as_str()))
+        {
+            let error = "Diagram card is absent from the current view";
+            state.last_error = Some(error.into());
+            return Err(error.into());
+        }
+        state.frame_request = Some(FrameTarget::Node(key.clone()));
+    } else {
+        state.frame_request = Some(FrameTarget::System);
+    }
+    state.last_error = None;
+    Ok(Ack::new(OpId::new()))
+}
 lunco_hooks::declare_hook! {
     id: OPEN_HOOK,
     owner: "lunco-luncosim-edit-ui",
@@ -157,7 +196,7 @@ fn open_node(
     }
     result
 }
-register_commands!(open_node);
+register_commands!(open_node, frame_diagram);
 pub(super) fn init(app: &mut App) {
     register_all_commands(app);
 }

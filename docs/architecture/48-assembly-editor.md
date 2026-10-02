@@ -312,6 +312,14 @@ name convention, or ECS-only grouping state is introduced.
   signal direction. Help explains navigation, authoring gestures and hierarchy
   versus port wiring. Variant facts explain configuration-dependent topology
   without inferring connections.
+  Selection offers Focus and Open without changing header height. Focus/Fit
+  dispatch `FrameConnectionDiagram`: exact current view keys are validated,
+  then the render boundary consumes a typed frame request through the shared
+  canvas viewport. Focus uses at most natural card scale; Fit shows the complete
+  system. Framing does not change source topology, scope, selection or saved
+  placements. Missing cards reject without moving the viewport. The inspection
+  query exposes viewport and card dimensions for production verification in
+  `connection_diagram_focus.rhai`. Open shares the double-click policy path.
 - Library and Twin file rows carry a shared source drag identity. The Models
   palette carries its typed `ProgramAttachSpec`, preserving authored ports and
   `{host}` bindings. In a document diagram, drop USD onto empty space to add

@@ -124,7 +124,7 @@ pub struct UsdCanvasSessionState {
     /// Frame-to-fit request. Set by the producer on a stage swap; consumed by
     /// the panel's first render, which alone knows the real widget size (the
     /// producer only has a nominal guess).
-    needs_fit: bool,
+    frame_request: Option<navigation::FrameTarget>,
     layout_revision: u64,
     layout_request: Option<lunco_hooks::HookValue>,
     navigation_history: Vec<String>,
@@ -183,7 +183,7 @@ impl Default for UsdCanvasSessionState {
             canonical_generation: None,
             topo_hash: 0,
             built: false,
-            needs_fit: false,
+            frame_request: None,
             layout_revision: 0,
             layout_request: None,
             navigation_history: Vec::new(),
@@ -231,7 +231,7 @@ impl UsdCanvasSessionState {
         self.canonical_generation = None;
         self.topo_hash = 0;
         self.built = false;
-        self.needs_fit = false;
+        self.frame_request = None;
         self.source_nodes.clear();
         self.source_wires.clear();
         self.source_prim_paths.clear();
@@ -256,7 +256,11 @@ impl UsdCanvasSessionState {
         layout::request(self);
         self.restore_placements();
         self.canvas.selection.clear();
-        self.needs_fit = self.canvas.scene.bounds().is_some();
+        self.frame_request = self
+            .canvas
+            .scene
+            .bounds()
+            .map(|_| navigation::FrameTarget::System);
     }
 
     fn restore_placements(&mut self) {
@@ -780,7 +784,7 @@ fn produce_usd_canvas_session(
     state.generation = generation;
     state.canonical_generation = Some(canonical_generation);
     if bounds.is_some() {
-        state.needs_fit = true;
+        state.frame_request = Some(navigation::FrameTarget::System);
     }
 }
 
@@ -1076,17 +1080,20 @@ impl Panel for UsdCanvasPanel {
                 .collect() };
             // Consume a pending frame-to-fit now that the real widget size is
             // known (the producer can only guess it).
-            if state.needs_fit {
-                if let Some(b) = state.canvas.scene.bounds() {
+            if let Some(target) = state.frame_request.take() {
+                let (bounds, natural_scale) = match target {
+                    navigation::FrameTarget::System => (state.canvas.scene.bounds(), false),
+                    navigation::FrameTarget::Node(key) => (state.canvas.scene.nodes().find(|(_, node)| projection::diagram_key(node) == Some(key.as_str())).map(|(_, node)| node.rect), true),
+                };
+                if let Some(bounds) = bounds {
                     let size = ui.available_size();
-                    let rect = lunco_canvas::Rect::from_min_max(
-                        lunco_canvas::Pos::new(0.0, 0.0),
-                        lunco_canvas::Pos::new(size.x.max(1.0), size.y.max(1.0)),
-                    );
-                    let (c, z) = state.canvas.viewport.fit_values(b, rect, 48.0);
-                    state.canvas.viewport.snap_to(c, z);
+                    let rect = lunco_canvas::Rect::from_min_max(lunco_canvas::Pos::new(0.0, 0.0), lunco_canvas::Pos::new(size.x.max(1.0), size.y.max(1.0)));
+                    let (center, zoom) = state.canvas.viewport.fit_values(bounds, rect, 48.0);
+                    // One diagram unit per UI point is the natural card scale.
+                    state.canvas.viewport.snap_to(center, if natural_scale { zoom.min(1.0) } else { zoom });
+                } else {
+                    state.last_error = Some("Requested framing target is absent from the current view".into());
                 }
-                state.needs_fit = false;
             }
 
             let (response, events) = state.canvas.ui(ui);

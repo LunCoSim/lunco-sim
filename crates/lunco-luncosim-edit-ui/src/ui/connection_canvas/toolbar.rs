@@ -115,7 +115,12 @@ pub(super) fn render(
             .on_hover_text("Show this entire system")
             .clicked()
         {
-            state.needs_fit = true;
+            if let Some(host) = &state.view_document {
+                ctx.trigger(navigation::FrameConnectionDiagram {
+                    view_id: host.document().id().raw(),
+                    key: None,
+                });
+            }
         }
         if ui
             .button("Arrange")
@@ -143,6 +148,7 @@ pub(super) fn render(
             ui.label("Double-click a leaf model to open its editor.");
             ui.label("Select a prim, then use Models to open an attached source.");
             ui.label("Use Back, breadcrumbs or Find to navigate.");
+            ui.label("Select a prim and Focus to read its ports; Fit returns to the overview.");
             ui.separator();
             ui.strong("Arrange and author");
             ui.label("Drag nodes to arrange; scroll to zoom; right-drag to pan.");
@@ -337,6 +343,33 @@ pub(super) fn render(
             ui.strong(&node.label)
                 .on_hover_text(node.origin.as_deref().unwrap_or(""));
             if let Some(data) = node.data.downcast_ref::<UsdPrimNodeData>() {
+                if let Some(host) = &state.view_document {
+                    let view_id = host.document().id().raw();
+                    if ui
+                        .button("Focus")
+                        .on_hover_text("Center this prim at readable diagram scale")
+                        .clicked()
+                    {
+                        ctx.trigger(navigation::FrameConnectionDiagram {
+                            view_id,
+                            key: Some(data.view_key.clone()),
+                        });
+                    }
+                    if state.diagram_mode
+                        && ui
+                            .button("Open")
+                            .on_hover_text(
+                                "Open this prim's internals or attached model, like double-click",
+                            )
+                            .clicked()
+                    {
+                        ctx.trigger(navigation::OpenConnectionNode {
+                            view_id,
+                            key: data.view_key.clone(),
+                            program_path: None,
+                        });
+                    }
+                }
                 if !data.programs.is_empty() {
                     ui.menu_button(format!("Models ({})", data.programs.len()), |ui| {
                         egui::ScrollArea::vertical()
