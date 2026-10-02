@@ -20,7 +20,13 @@ lunco_hooks::declare_hook! {
     installable: true,
 }
 
-type Placements = BTreeMap<String, (f64, f64)>;
+struct Placement {
+    x: f64,
+    y: f64,
+    label: Option<String>,
+    accent: Option<super::projection::DiagramAccent>,
+}
+type Placements = BTreeMap<String, Placement>;
 #[derive(Resource, Default)]
 pub struct LayoutJobs {
     jobs: HashMap<u64, (u64, Task<Result<Placements, String>>)>,
@@ -50,6 +56,20 @@ pub(super) fn request(state: &mut UsdCanvasSessionState) {
                     ),
                 ),
                 ("width", HookValue::Float(f64::from(node.rect.width()))),
+                (
+                    "programs",
+                    HookValue::Array(
+                        node.data
+                            .downcast_ref::<super::UsdPrimNodeData>()
+                            .map(|data| {
+                                data.programs
+                                    .iter()
+                                    .map(|program| HookValue::str(&program.backend))
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    ),
+                ),
                 ("height", HookValue::Float(f64::from(node.rect.height()))),
                 (
                     "rank",
@@ -121,12 +141,47 @@ fn evaluate(facts: HookValue) -> Result<Placements, String> {
             .get("y")
             .and_then(HookValue::as_f64)
             .ok_or("Placement lacks y")?;
+        let label = entry
+            .get("label")
+            .map(|value| {
+                let label = value.as_str().ok_or("Placement label must be text")?;
+                if label.trim().is_empty() || label.len() > 256 {
+                    return Err("Placement label is empty or too long");
+                }
+                Ok(label.to_string())
+            })
+            .transpose()?;
+        let accent = entry
+            .get("accent")
+            .map(|value| {
+                use super::projection::DiagramAccent;
+                match value.as_str() {
+                    Some("model") => Ok(DiagramAccent::Model),
+                    Some("block") => Ok(DiagramAccent::Block),
+                    Some("record") => Ok(DiagramAccent::Record),
+                    Some("package") => Ok(DiagramAccent::Package),
+                    Some("class") => Ok(DiagramAccent::Class),
+                    Some("warning") => Ok(DiagramAccent::Warning),
+                    _ => Err("Placement accent is not a schematic theme role"),
+                }
+            })
+            .transpose()?;
         if !expected.contains(path)
             || !x.is_finite()
             || !y.is_finite()
             || x.abs() > f64::from(f32::MAX)
             || y.abs() > f64::from(f32::MAX)
-            || placements.insert(path.into(), (x, y)).is_some()
+            || placements
+                .insert(
+                    path.into(),
+                    Placement {
+                        x,
+                        y,
+                        label,
+                        accent,
+                    },
+                )
+                .is_some()
         {
             return Err("Layout contains an unknown/duplicate path or invalid coordinates".into());
         }
@@ -170,15 +225,30 @@ pub fn update_layouts(
                         let ids: Vec<_> = state.canvas.scene.nodes().map(|(id, _)| *id).collect();
                         for id in ids {
                             if let Some(node) = state.canvas.scene.node_mut(id) {
-                                if let Some((x, y)) = super::projection::diagram_key(node)
+                                if let Some(placement) = super::projection::diagram_key(node)
                                     .and_then(|path| placements.get(path))
                                 {
                                     // Validated explicit narrowing at the canvas rendering boundary.
                                     node.rect = lunco_canvas::Rect::from_min_size(
-                                        lunco_canvas::Pos::new(*x as f32, *y as f32),
+                                        lunco_canvas::Pos::new(
+                                            placement.x as f32,
+                                            placement.y as f32,
+                                        ),
                                         node.rect.width(),
                                         node.rect.height(),
                                     );
+                                    if let Some(label) = &placement.label {
+                                        node.label.clone_from(label);
+                                    }
+                                    if let Some(accent) = placement.accent {
+                                        if let Some(data) =
+                                            node.data.downcast_ref::<super::UsdPrimNodeData>()
+                                        {
+                                            let mut data = data.clone();
+                                            data.accent = Some(accent);
+                                            node.data = std::sync::Arc::new(data);
+                                        }
+                                    }
                                 }
                             }
                         }

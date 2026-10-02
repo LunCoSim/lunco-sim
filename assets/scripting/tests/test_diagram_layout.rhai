@@ -29,6 +29,10 @@ let boundaries = invoke_hook("diagram.layout", [#{ nodes: [
 ], edges: [], scope: "/System" }]);
 checks.push(t_true(boundaries.ok, "system interface roles are admitted"));
 if boundaries.ok {
+    let labels = #{}; for placement in boundaries.value { labels[placement.path] = placement.label; }
+    checks.push(t_true(labels["/System#inputs"] == "System inputs" && labels["/System#outputs"] == "System outputs", "authored policy names system interface boundaries"));
+}
+if boundaries.ok {
     let p = boundaries.value;
     checks.push(t_true(p[0].path == "/System#inputs" && p[0].x < p[1].x && p[1].x < p[2].x && p[2].path == "/System#outputs", "authored policy places input and output boundaries around models"));
 }
@@ -49,6 +53,17 @@ let aligned = #{};
 if branches.ok { for placement in branches.value { aligned[placement.path] = placement.y; } }
 checks.push(t_true(branches.ok && aligned["/A1"] == aligned["/B2"] && aligned["/A2"] == aligned["/B1"], "neighbor ordering aligns parallel branches instead of crossing them"));
 let invalid = invoke_hook("diagram.layout", [#{ nodes: [#{ path: "/Broken" }], edges: [], scope: "/" }]);
+let styled = invoke_hook("diagram.layout", [#{ nodes: [
+    #{ path: "/Model", role: "prim", programs: ["Modelica"], width: 250.0, height: 96.0, rank: 0 },
+    #{ path: "/Script", role: "prim", programs: ["Rhai"], width: 250.0, height: 96.0, rank: 0 },
+    #{ path: "/Python", role: "prim", programs: ["Python"], width: 250.0, height: 96.0, rank: 0 },
+    #{ path: "/Mixed", role: "prim", programs: ["Modelica", "Rhai"], width: 250.0, height: 96.0, rank: 0 },
+    #{ path: "/Invalid", role: "prim", programs: ["Invalid program"], width: 250.0, height: 96.0, rank: 0 }
+], edges: [], scope: "/" }]);
+let accents = #{};
+if styled.ok { for placement in styled.value { accents[placement.path] = placement.accent; } }
+checks.push(t_true(styled.ok && accents["/Model"] == "model" && accents["/Script"] == "block" && accents["/Python"] == "record", "language styles are authored schematic theme roles"));
+checks.push(t_true(styled.ok && accents["/Mixed"] == "package" && accents["/Invalid"] == "warning", "mixed and invalid programs remain distinguishable"));
 checks.push(t_true(!invalid.ok, "bad layout facts fail visibly"));
 report_verdict(checks, "DIAGRAM LAYOUT", "DIAGRAM_LAYOUT");
 

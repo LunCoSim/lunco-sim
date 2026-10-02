@@ -12,6 +12,8 @@ use super::projection::{UsdPrimNodeData, UsdWireData, WireKind};
 /// Card visual for a `"usd.prim"` node.
 pub(crate) struct UsdPrimNodeVisual {
     pub type_name: String,
+    pub programs: String,
+    pub accent: Option<super::projection::DiagramAccent>,
     pub is_body: bool,
     pub is_boundary: bool,
 }
@@ -28,6 +30,16 @@ impl NodeVisual for UsdPrimNodeVisual {
         let painter = ctx.ui.painter().clone().with_clip_rect(ctx.ui.clip_rect());
         let theme = lunco_theme::active(ctx.ui.ctx());
         let t = &theme.tokens;
+        use super::projection::DiagramAccent;
+        let program_color = match self.accent {
+            Some(DiagramAccent::Model) => theme.schematic.class_model_badge,
+            Some(DiagramAccent::Block) => theme.schematic.class_block_badge,
+            Some(DiagramAccent::Record) => theme.schematic.class_record_badge,
+            Some(DiagramAccent::Package) => theme.schematic.class_package_badge,
+            Some(DiagramAccent::Class) => theme.schematic.class_class_badge,
+            Some(DiagramAccent::Warning) => t.warning,
+            None => t.node_border,
+        };
 
         let fill = if selected {
             t.node_card_selected
@@ -48,6 +60,38 @@ impl NodeVisual for UsdPrimNodeVisual {
             egui::Stroke::new(if selected { 2.0 } else { 1.0 }, stroke_col),
             egui::StrokeKind::Outside,
         );
+        if !self.programs.is_empty() {
+            painter.line_segment(
+                [rect.left_top(), rect.right_top()],
+                egui::Stroke::new(2.0, program_color),
+            );
+            if rect.height() > 28.0 && rect.width() > 46.0 {
+                let mut font =
+                    lunco_theme::TypographyRole::Caption.font_id(ctx.ui.style().as_ref());
+                font.size *= ctx.viewport.zoom.clamp(0.65, 1.0);
+                let galley = painter.layout_no_wrap(self.programs.clone(), font, program_color);
+                let size = egui::vec2(
+                    (galley.size().x + 12.0).min(rect.width() - 12.0),
+                    galley.size().y + 4.0,
+                );
+                let badge = egui::Rect::from_min_size(
+                    egui::pos2(
+                        rect.center().x - size.x * 0.5,
+                        rect.min.y + (29.0 * ctx.viewport.zoom).max(18.0),
+                    ),
+                    size,
+                );
+                painter.rect_filled(badge, 3.0, program_color.gamma_multiply(0.18));
+                painter
+                    .clone()
+                    .with_clip_rect(badge.intersect(ctx.ui.clip_rect()))
+                    .galley(
+                        egui::pos2(badge.center().x - galley.size().x * 0.5, badge.min.y + 2.0),
+                        galley,
+                        program_color,
+                    );
+            }
+        }
 
         // Titles live in a fixed header. Placing them at the card midpoint made
         // a tall multi-port node draw its title over the authored port names.
@@ -65,14 +109,62 @@ impl NodeVisual for UsdPrimNodeVisual {
                 font,
                 t.text,
             );
-            if !self.type_name.is_empty() && rect.height() > 40.0 && ctx.viewport.zoom >= 1.0 {
-                card_painter.text(
-                    egui::pos2(rect.center().x, rect.min.y + 29.0),
-                    egui::Align2::CENTER_TOP,
-                    &self.type_name,
-                    lunco_theme::TypographyRole::Caption.font_id(ctx.ui.style().as_ref()),
-                    t.text_subdued,
+            if rect.height() > 40.0 && ctx.viewport.zoom >= 1.0 {
+                let caption = lunco_theme::TypographyRole::Caption.font_id(ctx.ui.style().as_ref());
+                if node.ports.iter().any(|port| port.kind.as_str() == "input") {
+                    let side = if self.is_boundary {
+                        egui::Align2::RIGHT_TOP
+                    } else {
+                        egui::Align2::LEFT_TOP
+                    };
+                    let x = if self.is_boundary {
+                        rect.max.x - 9.0
+                    } else {
+                        rect.min.x + 9.0
+                    };
+                    card_painter.text(
+                        egui::pos2(x, rect.min.y + 29.0),
+                        side,
+                        "IN",
+                        caption.clone(),
+                        t.port_input,
+                    );
+                }
+                if node.ports.iter().any(|port| port.kind.as_str() == "output") {
+                    let side = if self.is_boundary {
+                        egui::Align2::LEFT_TOP
+                    } else {
+                        egui::Align2::RIGHT_TOP
+                    };
+                    let x = if self.is_boundary {
+                        rect.min.x + 9.0
+                    } else {
+                        rect.max.x - 9.0
+                    };
+                    card_painter.text(
+                        egui::pos2(x, rect.min.y + 29.0),
+                        side,
+                        "OUT",
+                        caption.clone(),
+                        t.port_output,
+                    );
+                }
+                let caption_rect = egui::Rect::from_min_max(
+                    egui::pos2(rect.min.x + 38.0, rect.min.y),
+                    egui::pos2(rect.max.x - 38.0, rect.max.y),
                 );
+                if self.programs.is_empty() {
+                    card_painter
+                        .clone()
+                        .with_clip_rect(caption_rect.intersect(ctx.ui.clip_rect()))
+                        .text(
+                            egui::pos2(rect.center().x, rect.min.y + 29.0),
+                            egui::Align2::CENTER_TOP,
+                            &self.type_name,
+                            lunco_theme::TypographyRole::Caption.font_id(ctx.ui.style().as_ref()),
+                            t.text_subdued,
+                        );
+                }
             }
         }
 
@@ -208,11 +300,9 @@ pub(crate) fn node_visual(data: &UsdPrimNodeData) -> UsdPrimNodeVisual {
         .collect();
     let features = backends.into_iter().collect::<Vec<_>>().join(" · ");
     UsdPrimNodeVisual {
-        type_name: if features.is_empty() {
-            data.type_name.clone()
-        } else {
-            format!("{} · {features}", data.type_name)
-        },
+        type_name: data.type_name.clone(),
+        programs: features,
+        accent: data.accent,
         is_body: data.is_body,
         is_boundary: data.boundary.is_some(),
     }

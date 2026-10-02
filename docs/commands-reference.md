@@ -240,6 +240,7 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `view_id` | `u64` |   |
 | `key` | `String` |  Stable node key returned by InspectConnectionDiagram. |
+| `program_path` | `Option < String >` |  Exact attached program prim to open; omitted opens the card's topology or own model. |
 
 #### `ReleaseDiagnosticVisual`
 

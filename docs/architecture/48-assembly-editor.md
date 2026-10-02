@@ -229,9 +229,12 @@ name convention, or ECS-only grouping state is introduced.
   source/target paths to the shared Recent events bus, outside the diagram.
 - Layout policy is `assets/scripting/policy/diagram_layout.rhai`, installed by
   the application policy manifest at `diagram.layout`. The Connections owner
-  supplies immutable view keys, typed interface roles, dimensions, causal ranks, edge facts and scope;
-  policy returns one finite `f64` x/y placement per node. Rust validates exact
-  identities, completeness and rendering range before applying the result.
+  supplies immutable view keys, typed interface roles, program backends,
+  dimensions, causal ranks, edge facts and scope; policy returns one finite
+  `f64` x/y placement per node, with optional display label and schematic accent
+  role. Rust validates exact identities, completeness, rendering range, bounded
+  nonempty labels and known theme roles before applying the result. Labels and
+  accents affect only the view; source names and program facts remain intact.
   The worker inherits Application/Visualization/Preparation with no simulation
   clock or live-world access. One pending job per view document is revision
   fenced; stale results cannot replace navigation or a new source. Graph/scope
@@ -294,6 +297,14 @@ name convention, or ECS-only grouping state is introduced.
   `connection_diagram_views.rhai` covers navigation and invalid identities.
   Modelica `OpenFile` resolves registered asset URIs through `SchemeRegistry`
   on its existing worker, then reuses the file document and read-only ownership.
+  The persistent Attached models menu opens an exact program with
+  `OpenConnectionNode.program_path`, including hidden descendants of a system.
+  The owner validates that identity against its composed program facets;
+  Rhai receives explicit node/program intent and selects the source editor.
+  Selecting a card keeps a fixed toolbar row so double-click coordinates remain
+  stable. Language badges and accents remain visible at overview zoom.
+  The current system's composed USD variant selections appear above navigation;
+  they explain configuration-dependent topology without inferring connections.
 - Library and Twin file rows carry a shared source drag identity. The Models
   palette carries its typed `ProgramAttachSpec`, preserving authored ports and
   `{host}` bindings. In a document diagram, drop USD onto empty space to add
@@ -315,6 +326,9 @@ name convention, or ECS-only grouping state is introduced.
   placement and invalid identities through the production API.
   `connection_diagram_wiring.rhai` verifies referenced sink edits, composed
   topology, undo and rejection of missing composed targets.
+  `connection_diagram_context.rhai` verifies variant-dependent wiring, causal
+  port sides, consumed labels/colors, attached Modelica opening and missing
+  program rejection.
 - Document Diagram and **Authored schema** permit mouse port connections through
   typed journaled USD operations. Writes retain declared property types and
   existing connection lists; deleting a link removes only that link, including

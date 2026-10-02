@@ -15,6 +15,8 @@ let unsupported = invoke_hook("diagram.drop.plan", [#{ source: "notes.txt", scop
 checks.push(t_true(unsupported.ok && unsupported.value.error != (), "unsupported source rejects visibly"));
 let system = invoke_hook("diagram.open.plan", [#{ path: "/System", has_children: true, programs: [] }]);
 checks.push(t_true(system.ok && system.value.action == "scope", "systems open their USD topology"));
+let attached = invoke_hook("diagram.open.plan", [#{ intent: "program", path: "/System", has_children: true, programs: [#{ valid: true, backend: "Modelica", source: "lunco://models/Model.mo" }] }]);
+checks.push(t_true(attached.ok && attached.value.action == "modelica", "explicit attached-model action opens its editor inside a larger USD system"));
 let model = invoke_hook("diagram.open.plan", [#{ path: "/Model", has_children: false, programs: [#{ valid: true, backend: "Modelica", source: "lunco://models/Model.mo" }] }]);
 checks.push(t_true(model.ok && model.value.action == "modelica" && model.value.source == "lunco://models/Model.mo", "leaf models retain their exact source identity"));
 let script = invoke_hook("diagram.open.plan", [#{ path: "/Script", has_children: false, programs: [#{ valid: true, backend: "Rhai", source: "control.rhai" }] }]);

@@ -68,6 +68,7 @@ pub(crate) enum WireKind {
 #[derive(Clone, Debug)]
 pub(crate) struct UsdPrimNodeData {
     pub programs: Vec<ProgramFacet>,
+    pub accent: Option<DiagramAccent>,
     pub type_name: String,
     /// Applies `PhysicsRigidBodyAPI` — drawn with the body accent.
     pub is_body: bool,
@@ -77,6 +78,29 @@ pub(crate) struct UsdPrimNodeData {
     /// Stable presentation identity; origin remains the exact USD prim.
     pub view_key: String,
     pub boundary: Option<BoundaryRole>,
+}
+
+/// Presentation roles resolved through the existing schematic theme tokens.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum DiagramAccent {
+    Model,
+    Block,
+    Record,
+    Package,
+    Class,
+    Warning,
+}
+impl DiagramAccent {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Model => "model",
+            Self::Block => "block",
+            Self::Record => "record",
+            Self::Package => "package",
+            Self::Class => "class",
+            Self::Warning => "warning",
+        }
+    }
 }
 
 /// The selected system's property groups, presented as interface terminals.
@@ -113,6 +137,7 @@ pub(crate) struct UsdWireData {
 #[derive(Clone, Debug)]
 pub(crate) struct PrimNode {
     pub programs: Vec<ProgramFacet>,
+    pub variants: Result<BTreeMap<String, String>, String>,
     pub usd_origin: Option<String>,
     pub boundary: Option<BoundaryRole>,
     pub path: String,
@@ -312,6 +337,18 @@ pub(crate) fn collect_prim(view: &StageView<'_>, path: &str) -> Option<PrimProje
     };
     let node = PrimNode {
         programs,
+        variants: view
+            .stage()
+            .prim(p.clone())
+            .variant_sets()
+            .get_all_variant_selections()
+            .map(|selections| {
+                selections
+                    .into_iter()
+                    .map(|(name, selection)| (name.to_string(), selection.to_string()))
+                    .collect()
+            })
+            .map_err(|error| error.to_string()),
         usd_origin: None,
         boundary: None,
         path: path.to_string(),
@@ -822,6 +859,7 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
             kind: NODE_KIND.into(),
             data: Arc::new(UsdPrimNodeData {
                 programs: node.programs.clone(),
+                accent: None,
                 type_name: node.type_name.clone(),
                 is_body: node.is_body,
                 port_types: node.port_types.clone(),
@@ -1041,6 +1079,7 @@ mod tests {
         let mut invalid = scene.clone();
         invalid.node_mut(edge.to.node).unwrap().data = Arc::new(UsdPrimNodeData {
             programs: Vec::new(),
+            accent: None,
             type_name: "Xform".into(),
             is_body: false,
             port_types: BTreeMap::from([("inputs:in".into(), "float".into())]),
@@ -1127,6 +1166,7 @@ mod tests {
     fn prim(path: &str, ins: &[&str], outs: &[&str], is_body: bool) -> PrimNode {
         PrimNode {
             programs: Vec::new(),
+            variants: Ok(BTreeMap::new()),
             usd_origin: None,
             boundary: None,
             path: path.to_string(),

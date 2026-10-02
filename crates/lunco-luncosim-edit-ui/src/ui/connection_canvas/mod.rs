@@ -74,6 +74,8 @@ fn build_registry() -> VisualRegistry {
         Some(d) => visuals::node_visual(d),
         None => visuals::UsdPrimNodeVisual {
             type_name: String::new(),
+            programs: String::new(),
+            accent: None,
             is_body: false,
             is_boundary: false,
         },
@@ -348,6 +350,7 @@ fn topology_hash(nodes: &[projection::PrimNode], wires: &[projection::Wire]) -> 
 
         n.port_sources.hash(&mut h);
         n.programs.hash(&mut h);
+        n.variants.hash(&mut h);
         n.usd_origin.hash(&mut h);
         n.boundary.hash(&mut h);
         n.referenced_ports.hash(&mut h);
@@ -1095,6 +1098,20 @@ impl Panel for UsdCanvasPanel {
                 });
             }
             if previous_mode != state.diagram_mode { state.rebuild_view(); }
+            if let Some(scope) = state.source_nodes.iter().find(|node| node.path == state.diagram_root) {
+                match &scope.variants {
+                    Ok(variants) if !variants.is_empty() => {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.weak("USD variants:");
+                            for (name, selection) in variants {
+                                ui.label(format!("{name} = {selection}")).on_hover_text(&scope.path);
+                            }
+                        });
+                    }
+                    Err(error) => { ui.colored_label(lunco_theme::active(ui.ctx()).tokens.warning, format!("USD variants: {error}")); }
+                    _ => {}
+                }
+            }
             if state.diagram_mode {
                 let mut requested = state.diagram_root.clone();
                 let mut went_back = false;
@@ -1215,25 +1232,33 @@ impl Panel for UsdCanvasPanel {
                 ui.colored_label(lunco_theme::active(ui.ctx()).tokens.port_output, "output");
 
             });
-            if let Some(node) = state.canvas.selection.nodes().iter().next()
-                .and_then(|id| state.canvas.scene.node(*id)) {
-                if let Some(data) = node.data.downcast_ref::<UsdPrimNodeData>() {
-                    if !data.programs.is_empty() {
-                        egui::CollapsingHeader::new(format!("{} · attached programs", node.label))
-                            .id_salt(("connection_programs", node.origin.as_deref()))
-                            .show(ui, |ui| {
-                                egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+            // Keep one toolbar row so selecting a model does not move the canvas during a double-click.
+            ui.horizontal(|ui| {
+                let selected = state.canvas.selection.nodes().iter().next()
+                    .and_then(|id| state.canvas.scene.node(*id));
+                if let Some(node) = selected {
+                    let data = node.data.downcast_ref::<UsdPrimNodeData>();
+                    if let Some(data) = data.filter(|data| !data.programs.is_empty()) {
+                        ui.menu_button(format!("Attached models ({})", data.programs.len()), |ui| {
+                            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
                                 for program in &data.programs {
-                                    ui.label(format!("{} · {}", program.backend, program.path));
-                                    ui.label(&program.source);
+                                    ui.label(format!("{} · {}", program.backend, program.path.rsplit('/').next().unwrap_or(&program.path)));
+                                    ui.weak(&program.source).on_hover_text(&program.path);
                                     if let Some(issue) = &program.issue { ui.label(issue); }
+                                    if ui.add_enabled(program.issue.is_none(), egui::Button::new("Open model")).clicked() {
+                                        if let Some(host) = state.view_document.as_ref() {
+                                            ctx.trigger(navigation::OpenConnectionNode { view_id: host.document().id().raw(), key: data.view_key.clone(), program_path: Some(program.path.clone()) });
+                                        }
+                                        ui.close();
+                                    }
+                                    ui.separator();
                                 }
-                                });
                             });
-                    }
-
-                }
-            }
+                        });
+                    } else { ui.weak("No attached models"); }
+                    ui.weak(&node.label);
+                } else { ui.weak("Select a prim to open its attached models"); }
+            });
             let (response, events) = state.canvas.ui(ui);
             state.canvas_rect = Some(lunco_canvas::Rect::from_min_max(lunco_canvas::Pos::new(response.rect.min.x, response.rect.min.y), lunco_canvas::Pos::new(response.rect.max.x, response.rect.max.y)));
             drop_assets::drop_ui(ui, &response, state, ctx);
@@ -1252,7 +1277,7 @@ impl Panel for UsdCanvasPanel {
                     }
                     SceneEvent::NodeDoubleClicked { id } if state.diagram_mode => {
                         if let (Some(key), Some(host)) = (state.canvas.scene.node(*id).and_then(projection::diagram_key), state.view_document.as_ref()) {
-                            ctx.trigger(navigation::OpenConnectionNode { view_id: host.document().id().raw(), key: key.into() });
+                            ctx.trigger(navigation::OpenConnectionNode { view_id: host.document().id().raw(), key: key.into(), program_path: None });
                         }
                     }
                     SceneEvent::SelectionChanged(selection) => {

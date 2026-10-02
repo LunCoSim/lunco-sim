@@ -90,7 +90,9 @@ failures with exact identities in Recent events, not in the diagram toolbar.
 Use `diagram.layout` for authored Rhai layout policy over immutable graph
 facts, including independent view keys and typed interface roles. Run it on bounded workers with source/scope revision fencing and the
 Application/Visualization/Preparation context; validate complete finite
-placements before rendering and apply saved placements afterward. Breadcrumbs,
+placements before rendering and apply saved placements afterward. The policy
+may return a bounded display label and schematic accent role; consume both in
+the view without modifying USD identities. Breadcrumbs,
 Back and searchable Find system share cached USD ancestry. Double-click uses
 `OpenConnectionNode` and `diagram.open.plan`: systems open USD child topology,
 leaf Modelica programs use the existing schema editor, and Rhai/Python use
@@ -131,6 +133,12 @@ missing-host and unsupported-source rejection. Exercise the installed policy
 with `assets/scripting/tests/test_diagram_drop.rhai`.
 Use `connection_diagram_wiring.rhai` for composed sink authoring, undo and
 missing-target rejection in an owned document preview.
+The fixed Attached models toolbar opens exact program facets with
+`OpenConnectionNode.program_path`; an omitted program path retains normal
+double-click scope navigation. Show composed variants from cached source facts,
+never infer why a particular component is wired from its name. Program language
+badges use accents selected by Rhai and resolved through schematic theme roles.
+Verify these contracts with `connection_diagram_context.rhai`.
 
 The Editor's `authoring_review` panel is the shared human-facing evidence
 surface for authored/runtime inspection. Its target chain must keep `selected`,

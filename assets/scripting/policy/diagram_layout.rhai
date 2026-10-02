@@ -1,4 +1,15 @@
 // Pure presentation policy over immutable USD graph facts; no scene writes.
+fn program_accent(programs) {
+    if programs == () || programs.len() == 0 { return ""; }
+    let backends = #{};
+    for backend in programs { backends[backend] = true; }
+    if backends.contains("Invalid program") { return "warning"; }
+    if backends.len() > 1 { return "package"; }
+    if backends.contains("Modelica") { return "model"; }
+    if backends.contains("Rhai") { return "block"; }
+    if backends.contains("Python") { return "record"; }
+    "class"
+}
 fn pack_layer(nodes, start_x) {
     let total = 0.0; let tallest = 0.0;
     for node in nodes {
@@ -12,7 +23,13 @@ fn pack_layer(nodes, start_x) {
         if y > 40.0 && y + node.height > 40.0 + target {
             x += width + 100.0; y = 40.0; width = 0.0;
         }
-        positions.push(#{ path: node.path, x: x, y: y });
+        let placement = #{ path: node.path, x: x, y: y };
+        if node.role == "inputs" { placement.label = "System inputs"; }
+        if node.role == "outputs" { placement.label = "System outputs"; }
+        if node.role == "connectors" { placement.label = "System connectors"; }
+        let accent = program_accent(node.programs);
+        if accent != "" { placement.accent = accent; }
+        positions.push(placement);
         y += node.height + 48.0;
         if node.width > width { width = node.width; }
     }

@@ -21,6 +21,8 @@ pub struct OpenConnectionNode {
     pub view_id: u64,
     /// Stable node key returned by InspectConnectionDiagram.
     pub key: String,
+    /// Exact attached program prim to open; omitted opens the card's topology or own model.
+    pub program_path: Option<String>,
 }
 
 #[on_command(OpenConnectionNode)]
@@ -47,13 +49,35 @@ fn open_node(
             .data
             .downcast_ref::<UsdPrimNodeData>()
             .ok_or("Diagram card has no typed USD facts")?;
-        let programs = data.programs.clone();
+        let selected_path = cmd.program_path.as_deref().unwrap_or(&path);
+        if cmd.program_path.is_some()
+            && !data
+                .programs
+                .iter()
+                .any(|program| program.path == selected_path)
+        {
+            return Err("Selected program is absent from the diagram card".into());
+        }
+        let programs: Vec<_> = data
+            .programs
+            .iter()
+            .filter(|program| program.path == selected_path)
+            .cloned()
+            .collect();
         let has_children = state.source_nodes.iter().any(|node| {
             node.path
                 .strip_prefix(&path)
                 .is_some_and(|tail| tail.starts_with('/'))
         });
         let facts = HookValue::map([
+            (
+                "intent",
+                HookValue::str(if cmd.program_path.is_some() {
+                    "program"
+                } else {
+                    "node"
+                }),
+            ),
             ("path", HookValue::str(&path)),
             ("has_children", HookValue::Bool(has_children)),
             (
@@ -61,7 +85,6 @@ fn open_node(
                 HookValue::Array(
                     programs
                         .iter()
-                        .filter(|program| program.path == path)
                         .map(|program| {
                             HookValue::map([
                                 ("source", HookValue::str(&program.source)),
@@ -103,9 +126,7 @@ fn open_node(
                     .ok_or("Navigation plan lacks source")?;
                 let program = programs
                     .iter()
-                    .find(|program| {
-                        program.path == path && program.source == source && program.issue.is_none()
-                    })
+                    .find(|program| program.source == source && program.issue.is_none())
                     .ok_or("Navigation plan selected an unavailable attached source")?;
                 if action == "modelica" {
                     if program.backend != "Modelica" {

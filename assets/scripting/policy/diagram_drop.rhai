@@ -30,11 +30,12 @@ fn plan_diagram_drop(facts) {
 
 // A system's child topology remains USD-owned; leaf programs use their editor.
 fn open_diagram(facts) {
-    if facts.has_children { return #{ action: "scope" }; }
+    if facts.intent != "program" && facts.has_children { return #{ action: "scope" }; }
     for program in facts.programs {
         if !program.valid { return #{ error: "Attached program has invalid source metadata" }; }
         if program.backend == "Modelica" { return #{ action: "modelica", source: program.source }; }
         if program.backend == "Rhai" || program.backend == "Python" { return #{ action: "source", source: program.source }; }
     }
+    if facts.intent == "program" { return #{ error: "The selected backend has no source editor" }; }
     #{ action: "scope" }
 }
