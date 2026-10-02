@@ -776,7 +776,6 @@ fn orbit_system(
             Without<CameraPoseLock>,
         ),
     >,
-    q_world_grid: Query<Entity, With<lunco_spatial::WorldGrid>>,
     frame_index: Res<lunco_celestial_spatial_core::ReferenceFrameIndex>,
     terrain_frame: terrain_handoff::TerrainHandoffFrame,
     q_bodies: Query<(Entity, &CelestialBody)>,
@@ -792,9 +791,6 @@ fn orbit_system(
         return;
     }
 
-    let Ok(root_grid) = q_world_grid.single() else {
-        return;
-    };
     let q_grids = &terrain_frame.grids;
     let q_parents = &terrain_frame.parents;
     let q_spatial = &terrain_frame.spatial;
@@ -835,7 +831,13 @@ fn orbit_system(
             };
             entity
         } else {
-            root_grid
+            let Some((grid, _)) =
+                lunco_spatial::coords::ancestor_grid(orbit.target, q_parents, q_grids)
+            else {
+                warn!("ORBIT: target has no spatial Grid; refusing an ambiguous camera frame");
+                continue;
+            };
+            grid
         };
         let Ok(orbit_grid_ref) = q_grids.get(orbit_grid) else {
             continue;
@@ -1256,6 +1258,70 @@ mod tests {
             actual_in_inertial.abs_diff_eq(expected_in_inertial, 1e-3),
             "inertial-grid orbit pose differs: expected {expected_in_inertial:?}, got {actual_in_inertial:?}"
         );
+    }
+
+    #[test]
+    fn vehicle_orbit_preserves_site_up_in_a_rotated_grid() {
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .init_resource::<Time<Real>>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<CameraDefaults>()
+            .init_resource::<CameraInputSettings>()
+            .init_resource::<lunco_celestial_spatial_core::ReferenceFrameIndex>()
+            .add_systems(Update, orbit_system);
+        let root = app
+            .world_mut()
+            .spawn((
+                lunco_spatial::WorldGrid,
+                lunco_spatial::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+            ))
+            .id();
+        let site = app
+            .world_mut()
+            .spawn((
+                lunco_spatial::WorldGridConfig::default().grid(),
+                CellCoord::new(50_000_000, 0, 0),
+                Transform::from_rotation(Quat::from_rotation_z(2.0)),
+                ChildOf(root),
+            ))
+            .id();
+        let target = app
+            .world_mut()
+            .spawn((
+                CellCoord::ZERO,
+                Transform::from_xyz(2.0, 3.0, 4.0),
+                ChildOf(site),
+            ))
+            .id();
+        let rotation = Quat::from_euler(EulerRot::YXZ, 0.3, -0.2, 0.0);
+        let expected = Vec3::new(2.0, 3.0, 4.0) + rotation * Vec3::Z * 20.0;
+        let avatar = app
+            .world_mut()
+            .spawn((
+                Embodiment,
+                LocalEmbodiment,
+                CellCoord::ZERO,
+                Transform::from_translation(expected),
+                ChildOf(site),
+                OrbitCamera {
+                    target,
+                    distance: 20.0,
+                    yaw: 0.3,
+                    pitch: -0.2,
+                    damping: None,
+                    vertical_offset: 0.0,
+                },
+                CameraZoomInput::default(),
+            ))
+            .id();
+        app.update();
+        assert_eq!(app.world().get::<ChildOf>(avatar).unwrap().parent(), site);
+        let pose = app.world().get::<Transform>(avatar).unwrap();
+        assert!(pose.translation.abs_diff_eq(expected, 1e-5));
+        assert!(pose.rotation.abs_diff_eq(rotation, 1e-6));
     }
 
     #[test]

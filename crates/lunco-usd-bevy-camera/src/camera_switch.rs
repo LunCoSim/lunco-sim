@@ -1128,9 +1128,43 @@ pub fn camera_selection_status_changed(
         || !removed_tracks.is_empty()
 }
 
+/// Scene identity survives camera reparenting into an orbital or physics Grid.
+/// Spatial ancestry remains useful for unowned entities, but cannot determine
+/// membership for cameras whose mode owns their spatial parent.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct CameraSceneOwnership<'w, 's> {
+    prims: Query<'w, 's, &'static UsdPrimPath>,
+    provenance: Query<'w, 's, &'static lunco_core::Provenance>,
+    identities: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
+}
+
+impl CameraSceneOwnership<'_, '_> {
+    fn belongs_to(&self, entity: Entity, root: Entity) -> Option<bool> {
+        if let Ok(prim) = self.prims.get(entity) {
+            return Some(self.prims.get(root).is_ok_and(|owner| {
+                prim.stage_handle.id() == owner.stage_handle.id()
+                    && (prim.path == owner.path
+                        || prim
+                            .path
+                            .strip_prefix(&owner.path)
+                            .is_some_and(|suffix| suffix.starts_with('/')))
+            }));
+        }
+        if let Ok(lunco_core::Provenance::Derived { parent, .. }) = self.provenance.get(entity) {
+            return Some(
+                self.identities
+                    .get(root)
+                    .is_ok_and(|id| id.get() == *parent),
+            );
+        }
+        None
+    }
+}
+
 /// Derived scene facts used to provision a transient avatar without writing USD.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct StandalonePresentationQueries<'w, 's> {
+    ownership: CameraSceneOwnership<'w, 's>,
     scene_roots: Query<'w, 's, (), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     synced_roots: Query<'w, 's, (), With<lunco_usd_bevy_scene::UsdSceneProjected>>,
     child_of: Query<'w, 's, &'static ChildOf>,
@@ -1289,13 +1323,18 @@ pub(crate) fn ensure_standalone_presentation(
         )
     });
     let authored_avatar = queries.avatar_cameras.iter().any(|entity| {
-        entity_belongs_to_root(
-            entity,
-            root,
-            &queries.scene_roots,
-            &queries.child_of,
-            &queries.entities,
-        )
+        queries
+            .ownership
+            .belongs_to(entity, root)
+            .unwrap_or_else(|| {
+                entity_belongs_to_root(
+                    entity,
+                    root,
+                    &queries.scene_roots,
+                    &queries.child_of,
+                    &queries.entities,
+                )
+            })
     });
     if authored_avatar {
         despawn_generated_presentation(
@@ -1386,27 +1425,37 @@ pub(crate) fn ensure_standalone_presentation(
         .generated_cameras
         .iter()
         .find_map(|(entity, _child)| {
-            entity_belongs_to_root(
-                entity,
-                root,
-                &queries.scene_roots,
-                &queries.child_of,
-                &queries.entities,
-            )
-            .then_some(entity)
+            queries
+                .ownership
+                .belongs_to(entity, root)
+                .unwrap_or_else(|| {
+                    entity_belongs_to_root(
+                        entity,
+                        root,
+                        &queries.scene_roots,
+                        &queries.child_of,
+                        &queries.entities,
+                    )
+                })
+                .then_some(entity)
         });
     let existing_light = queries
         .generated_lights
         .iter()
         .find_map(|(entity, _child)| {
-            entity_belongs_to_root(
-                entity,
-                root,
-                &queries.scene_roots,
-                &queries.child_of,
-                &queries.entities,
-            )
-            .then_some(entity)
+            queries
+                .ownership
+                .belongs_to(entity, root)
+                .unwrap_or_else(|| {
+                    entity_belongs_to_root(
+                        entity,
+                        root,
+                        &queries.scene_roots,
+                        &queries.child_of,
+                        &queries.entities,
+                    )
+                })
+                .then_some(entity)
         });
     let unscoped_directional_light = queries
         .directional_lights
@@ -1563,13 +1612,18 @@ pub(crate) fn ensure_standalone_presentation(
         ))
         .id();
     let authored_camera = queries.authored_cameras.iter().any(|entity| {
-        entity_belongs_to_root(
-            entity,
-            root,
-            &queries.scene_roots,
-            &queries.child_of,
-            &queries.entities,
-        )
+        queries
+            .ownership
+            .belongs_to(entity, root)
+            .unwrap_or_else(|| {
+                entity_belongs_to_root(
+                    entity,
+                    root,
+                    &queries.scene_roots,
+                    &queries.child_of,
+                    &queries.entities,
+                )
+            })
     });
     let light = if unscoped_directional_light || authored_camera || authored_track {
         None
@@ -1916,6 +1970,7 @@ pub(crate) fn camera_contract_inputs_changed(
 /// domain. Additive roots do not participate in the single viewport contract.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct AuthoredAvatarSelection<'w, 's> {
+    ownership: CameraSceneOwnership<'w, 's>,
     local_avatar: Res<'w, TheLocalEmbodiment>,
     retiring: Query<'w, 's, (), With<lunco_render::CameraRetiring>>,
 }
@@ -2041,7 +2096,13 @@ pub(crate) fn validate_authored_camera_contract(
     let mut camera_candidates: Vec<(Entity, String, Option<String>, bool)> = Vec::new();
     let mut user_camera_selected = false;
     for (entity, name, prim, local_avatar) in &cameras {
-        if entity_belongs_to_root(entity, active_root, &q_scene_root, &q_child_of, &q_entities) {
+        if avatar_selection
+            .ownership
+            .belongs_to(entity, active_root)
+            .unwrap_or_else(|| {
+                entity_belongs_to_root(entity, active_root, &q_scene_root, &q_child_of, &q_entities)
+            })
+        {
             user_camera_selected |= selection.owner() == CameraSelectionOwner::User
                 && selection.matches_requested(entity, prim);
             camera_candidates.push((
@@ -2551,6 +2612,68 @@ mod tests {
         assert!(transform.translation.is_finite());
         assert!(transform.translation.length() > 1.0);
         assert!(app.world().get::<DirectionalLight>(light).is_some());
+    }
+
+    #[test]
+    fn authored_avatar_survives_reparenting_outside_scene_hierarchy() {
+        let mut app = standalone_test_app();
+        let (root, _) = standalone_root_with_bounds(&mut app);
+        app.world_mut().entity_mut(root).insert(UsdPrimPath {
+            path: "/Scene".into(),
+            ..default()
+        });
+        let world_grid = app.world_mut().spawn_empty().id();
+        let camera = app
+            .world_mut()
+            .spawn((
+                SceneCamera::default(),
+                LocalEmbodiment,
+                Name::new("Operator"),
+                UsdPrimPath {
+                    path: "/Scene/Operator".into(),
+                    ..default()
+                },
+                ChildOf(world_grid),
+            ))
+            .id();
+
+        app.update();
+        app.update();
+
+        assert_eq!(app.world().resource::<TheLocalEmbodiment>().0, Some(camera));
+        assert!(
+            app.world()
+                .resource::<StandalonePresentationState>()
+                .camera
+                .is_none()
+        );
+        assert!(app.world().get::<LocalEmbodiment>(camera).is_some());
+    }
+
+    #[test]
+    fn generated_avatar_survives_reparenting_outside_scene_hierarchy() {
+        let mut app = standalone_test_app();
+        standalone_root_with_bounds(&mut app);
+        app.update();
+        app.update();
+        let camera = app
+            .world()
+            .resource::<StandalonePresentationState>()
+            .camera
+            .unwrap();
+        let world_grid = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .entity_mut(camera)
+            .insert(ChildOf(world_grid));
+
+        app.update();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<StandalonePresentationState>().camera,
+            Some(camera)
+        );
+        assert_eq!(app.world().resource::<TheLocalEmbodiment>().0, Some(camera));
     }
 
     #[test]
@@ -3223,6 +3346,10 @@ mod tests {
             .world_mut()
             .spawn((
                 lunco_usd_bevy_scene::UsdSceneRoot,
+                UsdPrimPath {
+                    path: "/Scene".into(),
+                    ..default()
+                },
                 lunco_core::GlobalEntityId::from_raw(42),
                 lunco_usd_bevy_scene::UsdSceneProjected,
             ))
