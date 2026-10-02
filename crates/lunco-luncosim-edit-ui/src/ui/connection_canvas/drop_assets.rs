@@ -337,6 +337,17 @@ pub(super) fn drop_ui(
         .canvas
         .viewport
         .screen_to_world(lunco_canvas::Pos::new(pointer.x, pointer.y), rect);
+    if state
+        .canvas
+        .scene
+        .hit_node(position, 0.0)
+        .and_then(|(id, _)| state.canvas.scene.node(id))
+        .and_then(|node| node.data.downcast_ref::<super::UsdPrimNodeData>())
+        .is_some_and(|data| data.group_id.is_some())
+    {
+        state.last_error = Some("Expand the group and drop onto an exact USD prim".into());
+        return;
+    }
     let target_path = state
         .canvas
         .scene

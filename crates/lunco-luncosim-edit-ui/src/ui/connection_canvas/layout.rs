@@ -27,9 +27,14 @@ struct Placement {
     accent: Option<super::projection::DiagramAccent>,
 }
 type Placements = BTreeMap<String, Placement>;
+struct LayoutResult {
+    placements: Placements,
+    groups: Vec<super::groups::Group>,
+    warnings: Vec<String>,
+}
 #[derive(Resource, Default)]
 pub struct LayoutJobs {
-    jobs: HashMap<u64, (u64, Task<Result<Placements, String>>)>,
+    jobs: HashMap<u64, (u64, Task<Result<LayoutResult, String>>)>,
     hook_generation: u64,
 }
 
@@ -56,6 +61,59 @@ pub(super) fn request(state: &mut UsdCanvasSessionState) {
                     ),
                 ),
                 ("width", HookValue::Float(f64::from(node.rect.width()))),
+                (
+                    "type_name",
+                    HookValue::str(
+                        node.data
+                            .downcast_ref::<super::UsdPrimNodeData>()
+                            .map(|d| d.type_name.as_str())
+                            .unwrap_or(""),
+                    ),
+                ),
+                (
+                    "program_facts",
+                    HookValue::Array(
+                        node.data
+                            .downcast_ref::<super::UsdPrimNodeData>()
+                            .map(|d| {
+                                d.programs
+                                    .iter()
+                                    .map(|p| {
+                                        HookValue::map([
+                                            ("backend", HookValue::str(&p.backend)),
+                                            ("source", HookValue::str(&p.source)),
+                                        ])
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    ),
+                ),
+                (
+                    "ports",
+                    HookValue::Array(
+                        node.ports
+                            .iter()
+                            .filter(|p| !p.id.as_str().starts_with('~'))
+                            .map(|p| {
+                                HookValue::map([
+                                    ("name", HookValue::str(p.id.as_str())),
+                                    ("kind", HookValue::str(p.kind.as_str())),
+                                    (
+                                        "type_name",
+                                        HookValue::str(
+                                            node.data
+                                                .downcast_ref::<super::UsdPrimNodeData>()
+                                                .and_then(|d| d.port_types.get(p.id.as_str()))
+                                                .map(String::as_str)
+                                                .unwrap_or(""),
+                                        ),
+                                    ),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
                 (
                     "programs",
                     HookValue::Array(
@@ -94,17 +152,81 @@ pub(super) fn request(state: &mut UsdCanvasSessionState) {
                 ("source", HookValue::str(source)),
                 ("target", HookValue::str(target)),
                 ("kind", HookValue::str(format!("{kind:?}"))),
+                ("source_port", HookValue::str(edge.from.port.as_str())),
+                ("target_port", HookValue::str(edge.to.port.as_str())),
             ]))
         })
         .collect();
+    let view = state
+        .view_document
+        .as_ref()
+        .and_then(|host| host.document().data().views.get(&state.selected_view));
+    let manual: Vec<_> = view
+        .map(|v| {
+            v.groups
+                .iter()
+                .map(|(id, g)| {
+                    HookValue::map([
+                        ("id", HookValue::str(id)),
+                        ("label", HookValue::str(&g.label)),
+                        (
+                            "members",
+                            HookValue::Array(g.members.iter().map(HookValue::str).collect()),
+                        ),
+                    ])
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut collections = Vec::new();
+    for node in &state.source_nodes {
+        for (name, members) in &node.collections {
+            match members {
+                Ok(members) => collections.push(HookValue::map([
+                    (
+                        "id",
+                        HookValue::str(format!("collection:{}.{}", node.path, name)),
+                    ),
+                    ("label", HookValue::str(name)),
+                    (
+                        "members",
+                        HookValue::Array(members.iter().map(HookValue::str).collect()),
+                    ),
+                ])),
+                Err(error) => {
+                    state.last_error = Some(format!("USD collection {}:{name}: {error}", node.path))
+                }
+            }
+        }
+    }
     state.layout_request = Some(HookValue::map([
         ("nodes", HookValue::Array(nodes)),
         ("edges", HookValue::Array(edges)),
         ("scope", HookValue::str(&state.diagram_root)),
+        ("collections", HookValue::Array(collections)),
+        ("manual_groups", HookValue::Array(manual)),
+        (
+            "grouping",
+            HookValue::Bool(view.map(|v| v.grouping).unwrap_or(true)),
+        ),
+        (
+            "collapsed_groups",
+            HookValue::Array(
+                view.map(|v| v.collapsed_groups.iter().map(HookValue::str).collect())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (
+            "excluded_groups",
+            HookValue::Array(
+                view.map(|v| v.excluded_groups.iter().map(HookValue::str).collect())
+                    .unwrap_or_default(),
+            ),
+        ),
     ]));
 }
 
-fn evaluate(facts: HookValue) -> Result<Placements, String> {
+fn evaluate(mut facts: HookValue) -> Result<LayoutResult, String> {
     let context = RuntimeExecutionContext {
         route: Some(RuntimeRoute::application(RuntimeCycle::Visualization)),
         phase: RuntimePhase::Preparation,
@@ -114,6 +236,28 @@ fn evaluate(facts: HookValue) -> Result<Placements, String> {
         sequence: None,
         producer: None,
     };
+    let (groups, warnings) = super::groups::evaluate(&facts, context.clone());
+    if let HookValue::Map(map) = &mut facts {
+        map.push((
+            "groups".into(),
+            HookValue::Array(
+                groups
+                    .iter()
+                    .map(|g| {
+                        HookValue::map([
+                            ("id", HookValue::str(&g.id)),
+                            ("label", HookValue::str(&g.label)),
+                            ("collapsed", HookValue::Bool(g.collapsed)),
+                            (
+                                "members",
+                                HookValue::Array(g.members.iter().map(HookValue::str).collect()),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ));
+    }
     let result = lunco_hooks::invoke_with_context(LAYOUT_HOOK, &[facts.clone()], context)
         .ok_or("Diagram layout policy is unavailable")?
         .map_err(|error| error.to_string())?;
@@ -189,7 +333,11 @@ fn evaluate(facts: HookValue) -> Result<Placements, String> {
     if placements.len() != expected.len() {
         return Err("Layout policy omitted source nodes".into());
     }
-    Ok(placements)
+    Ok(LayoutResult {
+        placements,
+        groups,
+        warnings,
+    })
 }
 
 pub fn update_layouts(
@@ -221,7 +369,15 @@ pub fn update_layouts(
             pending.jobs.remove(&id);
             if state.layout_revision == revision {
                 match result {
-                    Ok(placements) => {
+                    Ok(result) => {
+                        if let Some(full) = state.expanded_scene.take() {
+                            state.canvas.scene = full;
+                        }
+                        state.group_plan = result.groups;
+                        if !result.warnings.is_empty() {
+                            state.last_error = Some(result.warnings.join("\n"));
+                        }
+                        let placements = result.placements;
                         let ids: Vec<_> = state.canvas.scene.nodes().map(|(id, _)| *id).collect();
                         for id in ids {
                             if let Some(node) = state.canvas.scene.node_mut(id) {

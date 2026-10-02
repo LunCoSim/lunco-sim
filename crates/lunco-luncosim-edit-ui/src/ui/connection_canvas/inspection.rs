@@ -44,18 +44,9 @@ pub(super) fn selected_node(state: &UsdCanvasSessionState) -> Option<NodeId> {
 }
 
 fn endpoint_label(state: &UsdCanvasSessionState, port: &PortRef) -> String {
-    state
-        .canvas
-        .scene
-        .node(port.node)
-        .map(|node| {
-            format!(
-                "{}.{}",
-                node.origin.as_deref().unwrap_or(&node.label),
-                port.port.as_str()
-            )
-        })
-        .unwrap_or_else(|| port.port.as_str().to_string())
+    super::groups::endpoint(&state.canvas.scene, port)
+        .map(|(node, name)| format!("{}.{name}", node.origin.as_deref().unwrap_or(&node.label)))
+        .unwrap_or_else(|_| port.port.as_str().to_string())
 }
 
 fn reveal(
@@ -65,20 +56,18 @@ fn reveal(
     endpoint: &PortRef,
 ) {
     if ui.button("Go to").clicked() {
-        if let (Some(host), Some(key)) = (
+        if let (Some(host), Ok((node, name))) = (
             &state.view_document,
-            state
-                .canvas
-                .scene
-                .node(endpoint.node)
-                .and_then(projection::diagram_key),
+            super::groups::endpoint(&state.canvas.scene, endpoint),
         ) {
-            ctx.trigger(navigation::SelectConnectionElement {
-                view_id: host.document().id().raw(),
-                key: key.into(),
-                port: Some(endpoint.port.as_str().to_string()),
-                reveal: true,
-            });
+            if let Some(key) = projection::diagram_key(node) {
+                ctx.trigger(navigation::SelectConnectionElement {
+                    view_id: host.document().id().raw(),
+                    key: key.into(),
+                    port: Some(name.into()),
+                    reveal: true,
+                });
+            }
         }
     }
 }
@@ -113,6 +102,19 @@ pub(super) fn render(ui: &mut egui::Ui, ctx: &mut PanelCtx, state: &mut UsdCanva
             let Some(node) = state.canvas.scene.node(id) else { return; };
             let Some(data) = node.data.downcast_ref::<UsdPrimNodeData>() else { return; };
             ui.strong(&node.label);
+            if let Some(group_id) = &data.group_id {
+                if let Some(group) = state.group_plan.iter().find(|g| &g.id == group_id) {
+                    ui.label(format!("{} members · {} internal links · {} feedback links",group.members.len(),group.internal_links,group.feedback_links));
+                    ui.horizontal(|ui| {if ui.button("Expand group").clicked() {ctx.trigger(super::groups::SetConnectionGroupCollapsed {view_id,group_id:group_id.clone(),collapsed:false});} if ui.button("Ungroup").clicked() {ctx.trigger(super::groups::RemoveConnectionGroup {view_id,group_id:group_id.clone()});}});
+                    ui.strong("Members");
+                    for member in &group.members {if ui.button(member).clicked() {ctx.trigger(navigation::SelectConnectionElement {view_id,key:member.clone(),port:None,reveal:true});}}
+                    ui.separator();
+                    ui.label("External ports retain their exact USD endpoints. Expand to add connections to other member ports.");
+                    for port in &node.ports {ui.label(endpoint_label(state,&PortRef {node:id,port:port.id.clone()}));}
+                    for edge in state.inspection.edges(id) {wire(ui,ctx,state,*edge);}
+                }
+                return;
+            }
             ui.label(node.origin.as_deref().unwrap_or(""));
             ui.label(&data.type_name);
             ui.horizontal_wrapped(|ui| {

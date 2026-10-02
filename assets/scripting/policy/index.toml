@@ -11,6 +11,13 @@ kind = "lunco.policy.v1"
 scope = "application"
 
 [[policies]]
+hook = "diagram.group.plan"
+source = "diagram_groups.rhai"
+entry = "plan_diagram_groups"
+deterministic = true
+skip_when_hook_unavailable = true
+
+[[policies]]
 hook = "diagram.drop.plan"
 source = "diagram_drop.rhai"
 entry = "plan_diagram_drop"

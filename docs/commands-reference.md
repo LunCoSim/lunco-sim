@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**257 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**262 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -24,7 +24,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Scene editing & authoring**
 
 - [`lunco-luncosim-edit-core`](#lunco-luncosim-edit-core) (1 command)
-- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (20 commands)
+- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (25 commands)
 - [`lunco-scene-commands`](#lunco-scene-commands) (5 commands)
 
 **USD / scenes**
@@ -227,6 +227,19 @@ actually call, with the fields the deserializer actually accepts. See the
 | `view_id` | `u64` |   |
 | `key` | `Option < String >` |  Exact current view key; omitted fits the complete system. |
 
+#### `MoveConnectionGroup`
+
+ Move all member placements in one reversible view-document transaction.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/groups.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `group_id` | `String` |   |
+| `dx` | `f64` |   |
+| `dy` | `f64` |   |
+
 #### `MoveConnectionViewNode`
 
  Place a diagram card by its stable view key without modifying USD.
@@ -274,6 +287,17 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `lease` | `u64` |  Opaque handle returned by `AcquireDiagnosticVisual`. |
+
+#### `RemoveConnectionGroup`
+
+ Remove a manual group, or suppress one policy-generated group in this view.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/groups.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `group_id` | `String` |   |
 
 #### `SelectConnectionElement`
 
@@ -328,6 +352,42 @@ actually call, with the fields the deserializer actually accepts. See the
 | `path` | `String` |  Absolute composed USD prim path within that preview's stage. |
 | `extend` | `bool` |   |
 | `toggle` | `bool` |   |
+
+#### `SetConnectionGroup`
+
+ Author a manual view group; the document validates disjoint membership.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/groups.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `group_id` | `String` |   |
+| `label` | `String` |   |
+| `members` | `Vec < String >` |   |
+
+#### `SetConnectionGroupCollapsed`
+
+ Persist disclosure independently for this named view.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/groups.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `group_id` | `String` |   |
+| `collapsed` | `bool` |   |
+
+#### `SetConnectionGrouping`
+
+ Enable or disable automatic and manual group presentation for one view.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/groups.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `enabled` | `bool` |   |
 
 #### `SetDiagnosticLayers`
 
@@ -3953,7 +4013,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 257 commands from the runtime schema; scanned 975 .rs files for docs (0 parse failure(s) skipped).
+<!-- 262 commands from the runtime schema; scanned 976 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

@@ -100,6 +100,18 @@ source. Navigation must preserve exact source identity and reject missing cards.
 Modelica `OpenFile` resolves registered asset URIs on its worker through
 `SchemeRegistry`, preserving the document owner and read-only library state.
 Exercise the installed policy with `assets/scripting/tests/test_diagram_layout.rhai`.
+Use `diagram.group.plan` for optional Rhai grouping over immutable program-source,
+typed-port, topology and standard CollectionAPI facts; Rust validates and renders
+its disjoint partition on the existing layout worker. Expanded frames and collapsed
+summary cards preserve full USD topology. Resolve summary ports to their exact
+original endpoint before authoring or inspecting a connection. Use the typed
+`SetConnectionGroup`, `SetConnectionGroupCollapsed`, `RemoveConnectionGroup`,
+`MoveConnectionGroup` and `SetConnectionGrouping` commands; group movement is one
+journaled edit for all member placements. Manual membership, disclosure, exclusions
+and the grouping switch belong to each existing named view. Salvage usable groups
+and placements independently when an optional view file is damaged. Verify installed
+policies through `assets/scripting/tests/test_diagram_groups.rhai` as well as the
+layout gate; exercise collapse/expand, movement and rejection in the production API.
 Persist named scopes and layouts in separate `.lunco-view.toml` project
 artifacts using `lunco-doc::diagram_view` / `DocumentHost`, through typed view
 commands. Each view has independent placement; USD files only own topology.

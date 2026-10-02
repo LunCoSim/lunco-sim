@@ -106,6 +106,19 @@ fn select_element(
         })
         .map(|(preview, _)| *preview);
     let state = state_for(&mut views, cmd.view_id)?;
+    if cmd.reveal {
+        if let Some(id) = state
+            .group_plan
+            .iter()
+            .find(|g| g.collapsed && g.members.contains(&cmd.key))
+            .map(|g| g.id.clone())
+        {
+            super::groups::edit(state, |view| {
+                view.collapsed_groups.remove(&id);
+                Ok(())
+            })?;
+        }
+    }
     let source = state.source_nodes.iter().find(|node| node.path == cmd.key);
     let visible = state
         .canvas
@@ -236,6 +249,17 @@ fn open_node(
 ) -> Result<Ack, String> {
     let cmd = trigger.event();
     let state = state_for(&mut views, cmd.view_id)?;
+    if let Some(id) = state
+        .group_plan
+        .iter()
+        .find(|g| g.key() == cmd.key)
+        .map(|g| g.id.clone())
+    {
+        return super::groups::edit(state, |view| {
+            view.collapsed_groups.remove(&id);
+            Ok(())
+        });
+    }
     let result = (|| -> Result<Ack, String> {
         let node = state
             .canvas

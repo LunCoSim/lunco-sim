@@ -1403,6 +1403,43 @@ component-subtree removal through the same one-change-set boundary. It never
 guesses a joint from a component name and never silently deletes external
 Modelica/electrical/data links. Undo restores the complete topology.
 
+## Diagram grouping
+
+Connections groups are view projections over composed USD, owned by
+`lunco-luncosim-edit-ui::connection_canvas`. The optional Application policy
+`diagram.group.plan` receives immutable component types, attached program source
+identities, exact typed ports, topology and standard `Usd.CollectionAPI` membership.
+It returns disjoint `{id, label, members}` groups. The installed
+`diagram_groups.rhai` prioritizes collections, repeated connected branches, then
+identical component families; shared buses and explicit system terminals remain
+outside inferred branches. Rust validates the partition and consumes it through
+the existing bounded, revision-fenced layout worker. Policy errors are reported
+in Recent events; usable manual groups survive and other cards use normal layout.
+Closing/replacing a source discards its group projection with the owning session.
+
+Expanded groups have frames and draggable headers. Double-clicking a frame
+collapses it; double-clicking a summary expands it. Prim double-click retains
+USD system/source navigation. The Groups menu supports manual grouping of selected
+prims, disclosure, ungrouping and disabling grouping in the current named view.
+Group moves persist every member placement in one undoable view-document edit.
+Collapsed summary ports each retain one exact original USD endpoint: authoring,
+disconnect and endpoint inspection resolve that identity before generating USD
+operations. Internal and self connections remain in the full graph and contribute
+to the summary counts. Expand a group to connect an additional member port or drop
+an asset onto an exact prim. The diagram query reports the full topology and the
+number of rendered edges separately.
+
+Existing `.lunco-view.toml` documents persist independent manual membership,
+collapsed/excluded group identities and the grouping switch per named view.
+Automatic membership stays derived from topology and Rhai policy. Corrupt group
+entries are skipped with warnings while usable placements and other groups are
+retained; absent optional group fields mean enabled grouping with no overrides.
+No grouping metadata or layout is written into USD. Production policy verification
+is `assets/scripting/tests/test_diagram_groups.rhai`;
+`assets/scenarios/tests/diagram_groups.rhai` verifies live disclosure, full link
+counts, group displacement, missing-member rejection and undo. The persistence adapter's
+focused test covers partial corruption and round-trip recovery.
+
 ## Measurement and review evidence
 
 Human review does not need a vehicle-specific measurement component or a Rust

@@ -2,13 +2,21 @@
 
 use crate::{Document, DocumentError, DocumentId, DocumentOp};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiagramPosition {
     pub x: f64,
     pub y: f64,
+}
+
+/// Explicit view-only membership. Automatic membership stays policy-derived.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagramGroup {
+    pub label: String,
+    pub members: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -19,6 +27,31 @@ pub struct DiagramView {
     pub include_descendants: bool,
     #[serde(default)]
     pub positions: BTreeMap<String, DiagramPosition>,
+    #[serde(default = "grouping_enabled")]
+    pub grouping: bool,
+    #[serde(default)]
+    pub groups: BTreeMap<String, DiagramGroup>,
+    #[serde(default)]
+    pub collapsed_groups: BTreeSet<String>,
+    #[serde(default)]
+    pub excluded_groups: BTreeSet<String>,
+}
+
+fn grouping_enabled() -> bool {
+    true
+}
+impl Default for DiagramView {
+    fn default() -> Self {
+        Self {
+            scope: "/".into(),
+            include_descendants: false,
+            positions: Default::default(),
+            grouping: true,
+            groups: Default::default(),
+            collapsed_groups: Default::default(),
+            excluded_groups: Default::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -43,6 +76,25 @@ impl DiagramViews {
         for (name, view) in &self.views {
             if name.trim().is_empty() || view.scope.trim().is_empty() {
                 return Err(invalid("View name and scope must be nonempty"));
+            }
+            let mut members = BTreeSet::new();
+            for (id, group) in &view.groups {
+                if id.trim().is_empty()
+                    || group.label.trim().is_empty()
+                    || group.label.len() > 256
+                    || group.members.len() < 2
+                {
+                    return Err(invalid(
+                        "Groups need an identity, label and at least two members",
+                    ));
+                }
+                for member in &group.members {
+                    if !member.starts_with('/') || !members.insert(member) {
+                        return Err(invalid(
+                            "Groups require distinct source paths and non-overlapping membership",
+                        ));
+                    }
+                }
             }
             for (path, position) in &view.positions {
                 if path.trim().is_empty() || !position.x.is_finite() || !position.y.is_finite() {
@@ -90,6 +142,7 @@ impl DiagramViewDocument {
                         scope: "/".into(),
                         include_descendants: false,
                         positions: BTreeMap::new(),
+                        ..Default::default()
                     },
                 )]),
             },
@@ -188,6 +241,7 @@ mod tests {
                 scope: "/Power".into(),
                 include_descendants: false,
                 positions: Default::default(),
+                ..Default::default()
             }),
         }))
         .unwrap();

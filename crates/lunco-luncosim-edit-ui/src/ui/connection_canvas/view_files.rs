@@ -80,6 +80,7 @@ fn create_view(
                     scope: cmd.scope.clone(),
                     include_descendants: false,
                     positions: Default::default(),
+                    ..Default::default()
                 }),
             }))
             .map_err(|error| error.to_string())?;
@@ -279,6 +280,7 @@ fn read_views(text: &str, source: &str) -> (DiagramViews, Vec<String>) {
                     .and_then(toml::Value::as_bool)
                     .unwrap_or(false),
                 positions: Default::default(),
+                ..Default::default()
             };
             if let Some(positions) = table.get("positions").and_then(toml::Value::as_table) {
                 for (path, value) in positions {
@@ -309,6 +311,68 @@ fn read_views(text: &str, source: &str) -> (DiagramViews, Vec<String>) {
                 warnings.push(format!(
                     "View {name} has invalid placements; using automatic layout"
                 ));
+            }
+            if let Some(value) = table.get("grouping") {
+                if let Some(enabled) = value.as_bool() {
+                    view.grouping = enabled;
+                } else {
+                    warnings.push(format!(
+                        "View {name} has invalid grouping; automatic grouping applies"
+                    ));
+                }
+            }
+            for (field, target) in [
+                ("collapsed_groups", &mut view.collapsed_groups),
+                ("excluded_groups", &mut view.excluded_groups),
+            ] {
+                if let Some(value) = table.get(field) {
+                    if let Some(values) = value.as_array() {
+                        for value in values {
+                            if let Some(id) = value.as_str().filter(|id| !id.trim().is_empty()) {
+                                target.insert(id.into());
+                            } else {
+                                warnings.push(format!("View {name} has invalid {field} entry"));
+                            }
+                        }
+                    } else {
+                        warnings.push(format!("View {name} has invalid {field}"));
+                    }
+                }
+            }
+            if let Some(value) = table.get("groups") {
+                if let Some(groups) = value.as_table() {
+                    for (id, value) in groups {
+                        match value
+                            .clone()
+                            .try_into::<lunco_doc::diagram_view::DiagramGroup>()
+                        {
+                            Ok(group) => {
+                                let mut candidate = view.clone();
+                                candidate.groups.insert(id.clone(), group);
+                                let document = DiagramViews {
+                                    version: 1,
+                                    source: source.into(),
+                                    views: std::collections::BTreeMap::from([(
+                                        name.clone(),
+                                        candidate.clone(),
+                                    )]),
+                                };
+                                if document.validate().is_ok() {
+                                    view = candidate;
+                                } else {
+                                    warnings.push(format!(
+                                        "Skipped invalid or overlapping group {name}:{id}"
+                                    ));
+                                }
+                            }
+                            Err(error) => {
+                                warnings.push(format!("Skipped damaged group {name}:{id}: {error}"))
+                            }
+                        }
+                    }
+                } else {
+                    warnings.push(format!("View {name} has invalid groups"));
+                }
             }
             data.views.insert(name.clone(), view);
         }
@@ -358,6 +422,19 @@ mod tests {
         assert!(!warnings.is_empty());
         assert!(!data.views["Main"].positions.contains_key("/A"));
         assert_eq!(data.views["Main"].positions["/B"].y, 3.0);
+        let (groups, warnings) = read_views(
+            "version=1\nsource='scene'\n[views.Main]\nscope='/'\ngrouping=false\ncollapsed_groups=['valid', 123]\n[views.Main.groups.valid]\nlabel='Motors'\nmembers=['/A','/B']\n[views.Main.groups.broken]\nlabel=42\nmembers=['/C','/D']\n[views.Main.positions.'/A']\nx=1.0\ny=2.0",
+            "scene",
+        );
+        assert!(!warnings.is_empty());
+        assert!(!groups.views["Main"].grouping);
+        assert_eq!(groups.views["Main"].groups.len(), 1);
+        assert!(groups.views["Main"].collapsed_groups.contains("valid"));
+        assert_eq!(groups.views["Main"].positions["/A"].y, 2.0);
+        groups.validate().unwrap();
+        let (roundtrip, warnings) = read_views(&toml::to_string_pretty(&groups).unwrap(), "scene");
+        assert!(warnings.is_empty());
+        assert_eq!(roundtrip, groups);
         let exported = toml::to_string_pretty(&data).unwrap();
         let (roundtrip, warnings) = read_views(&exported, "scene");
         assert!(warnings.is_empty());
@@ -587,6 +664,7 @@ register_commands!(create_view, move_node, undo_view, view_file);
 pub fn init_view_commands(app: &mut App) {
     super::drop_assets::init(app);
     super::navigation::init(app);
+    super::groups::init(app);
     register_all_commands(app);
     app.init_resource::<PendingViewFiles>();
     app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
@@ -601,7 +679,7 @@ impl lunco_api::queries::ApiQueryProvider for InspectConnectionDiagram {
         "InspectConnectionDiagram"
     }
     fn schema(&self) -> lunco_api_core::ApiQuerySchema {
-        lunco_api_core::ApiQuerySchema { name: self.name().into(), description: Some("Inspect the active Connections source, named views, system interfaces, program facets and rendered node/port coordinates".into()), parameters: Some(Vec::new()), exactly_one_of: Vec::new(), response: Some("{ built, active_scene, source, view_id, view, scope, viewport:{center_x,center_y,zoom}, variants:[{name,selection}], variant_error, definitions:[{name,scope,include_descendants,positions:[{path,x,y}]}], nodes:[{path,key,role,accent,label,x,y,width,height,screen_x,screen_y,ports:[{name,kind,x,y,screen_x,screen_y}],programs:[{path,backend,source,issue}]}], connections:[{source,source_key,source_port,target,target_key,target_port,kind,emphasized}], selection:{key,port,connection_count}, editing, edit_target, connection_count, unresolved_links, error }".into()) }
+        lunco_api_core::ApiQuerySchema { name: self.name().into(), description: Some("Inspect the active Connections source, named views, system interfaces, program facets and rendered node/port coordinates".into()), parameters: Some(Vec::new()), exactly_one_of: Vec::new(), response: Some("{ built, active_scene, source, view_id, view, scope, viewport:{center_x,center_y,zoom}, variants:[{name,selection}], variant_error, definitions:[{name,scope,include_descendants,positions:[{path,x,y}]}], groups:[{id,label,key,members,collapsed,internal_links,feedback_links}], nodes:[{path,key,role,accent,label,x,y,width,height,screen_x,screen_y,ports:[{name,kind,x,y,screen_x,screen_y}],programs:[{path,backend,source,issue}]}], connections:[{source,source_key,source_port,target,target_key,target_port,kind,emphasized}], selection:{key,port,connection_count}, editing, edit_target, connection_count, rendered_connection_count, unresolved_links, error }".into()) }
     }
     fn execute(
         &self,
@@ -673,18 +751,20 @@ impl lunco_api::queries::ApiQueryProvider for InspectConnectionDiagram {
                 .map(|data| data.programs.iter().map(|program| api_value!({ "path": program.path.clone(), "backend": program.backend.clone(), "source": program.source.clone(), "issue": program.issue.clone() })).collect()).unwrap_or_default();
             api_value!({ "path": node.origin.clone(), "label": node.label.clone(), "x": node.rect.min.x, "y": node.rect.min.y, "width": node.rect.width(), "height": node.rect.height(), "screen_x": screen.map(|p| p.x), "screen_y": screen.map(|p| p.y), "ports": ports, "key": super::projection::diagram_key(node), "role": node.data.downcast_ref::<super::projection::UsdPrimNodeData>().and_then(|data| data.boundary).map(|role| role.name()).unwrap_or("prim"), "programs": programs, "accent": node.data.downcast_ref::<super::projection::UsdPrimNodeData>().and_then(|data| data.accent).map(|accent| accent.name()) })
         }).collect();
-        let connections: Vec<_> = state.canvas.scene.edges().filter_map(|(id, edge)| {
-            let source = state.canvas.scene.node(edge.from.node)?;
-            let target = state.canvas.scene.node(edge.to.node)?;
+        let full = state.expanded_scene.as_ref().unwrap_or(&state.canvas.scene);
+        let groups: Vec<_> = state.group_plan.iter().map(|group| api_value!({"id":group.id.clone(),"label":group.label.clone(),"key":group.key(),"members":group.members.iter().collect::<Vec<_>>(),"collapsed":group.collapsed,"internal_links":group.internal_links,"feedback_links":group.feedback_links})).collect();
+        let connections: Vec<_> = full.edges().filter_map(|(id, edge)| {
+            let source = full.node(edge.from.node)?;
+            let target = full.node(edge.to.node)?;
             let kind = edge.data.downcast_ref::<super::projection::UsdWireData>()?.kind;
-            Some(api_value!({ "source": source.origin.clone(), "source_key": super::projection::diagram_key(source), "source_port": edge.from.port.as_str(), "target": target.origin.clone(), "target_key": super::projection::diagram_key(target), "target_port": edge.to.port.as_str(), "kind": format!("{kind:?}"), "emphasized": selected_edges.contains(id) }))
+            Some(api_value!({ "source": source.origin.clone(), "source_key": super::projection::diagram_key(source), "source_port": edge.from.port.as_str(), "target": target.origin.clone(), "target_key": super::projection::diagram_key(target), "target_port": edge.to.port.as_str(), "kind": format!("{kind:?}"), "emphasized": selected_edges.contains(id), "visible":state.canvas.scene.edge(*id).is_some() }))
         }).collect();
         let definitions: Vec<_> = state.view_document.as_ref().map(|host| host.document().data().views.iter().map(|(name, definition)| {
             let positions: Vec<_> = definition.positions.iter().map(|(path, pos)| api_value!({ "path": path, "x": pos.x, "y": pos.y })).collect();
             api_value!({ "name": name, "scope": definition.scope.clone(), "include_descendants": definition.include_descendants, "positions": positions })
         }).collect()).unwrap_or_default();
         Ok(Some(
-            api_value!({ "viewport": { "center_x": state.canvas.viewport.center.x, "center_y": state.canvas.viewport.center.y, "zoom": state.canvas.viewport.zoom }, "built": state.built, "active_scene": views.show_scene, "source": state.source_uri.clone(), "view_id": state.view_document.as_ref().map(|host| host.document().id().raw()), "view": state.selected_view.clone(), "scope": state.diagram_root.clone(), "variants": variants, "variant_error": variant_error, "definitions": definitions, "nodes": nodes, "connections": connections, "selection": { "key": selected_key, "port": state.canvas.selection.port().map(|port| port.port.as_str()), "connection_count": selected_edges.len() }, "editing": state.doc.is_some(), "edit_target": state.edit_target.as_ref().map(|target| format!("{target:?}")), "connection_count": state.canvas.scene.edge_count(), "unresolved_links": state.unresolved_links.clone(), "error": state.last_error.clone() }),
+            api_value!({ "viewport": { "center_x": state.canvas.viewport.center.x, "center_y": state.canvas.viewport.center.y, "zoom": state.canvas.viewport.zoom }, "built": state.built, "active_scene": views.show_scene, "source": state.source_uri.clone(), "view_id": state.view_document.as_ref().map(|host| host.document().id().raw()), "view": state.selected_view.clone(), "scope": state.diagram_root.clone(), "variants": variants, "variant_error": variant_error, "definitions": definitions, "groups":groups,"nodes": nodes, "connections": connections, "selection": { "key": selected_key, "port": state.canvas.selection.port().map(|port| port.port.as_str()), "connection_count": selected_edges.len() }, "editing": state.doc.is_some(), "edit_target": state.edit_target.as_ref().map(|target| format!("{target:?}")), "connection_count": full.edge_count(),"rendered_connection_count":state.canvas.scene.edge_count(), "unresolved_links": state.unresolved_links.clone(), "error": state.last_error.clone() }),
         ))
     }
 }

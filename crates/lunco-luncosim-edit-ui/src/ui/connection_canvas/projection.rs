@@ -67,6 +67,8 @@ pub(crate) enum WireKind {
 /// factory downcasts it.
 #[derive(Clone, Debug)]
 pub(crate) struct UsdPrimNodeData {
+    pub group_id: Option<String>,
+    pub group_ports: BTreeMap<String, super::groups::GroupEndpoint>,
     pub programs: Vec<ProgramFacet>,
     pub accent: Option<DiagramAccent>,
     pub type_name: String,
@@ -136,6 +138,7 @@ pub(crate) struct UsdWireData {
 /// A prim read out of the stage, before layout.
 #[derive(Clone, Debug)]
 pub(crate) struct PrimNode {
+    pub collections: BTreeMap<String, Result<Vec<String>, String>>,
     pub programs: Vec<ProgramFacet>,
     pub variants: Result<BTreeMap<String, String>, String>,
     pub usd_origin: Option<String>,
@@ -336,6 +339,19 @@ pub(crate) fn collect_prim(view: &StageView<'_>, path: &str) -> Option<PrimProje
         Vec::new()
     };
     let node = PrimNode {
+        collections: view
+            .api_schemas(&p)
+            .into_iter()
+            .filter_map(|schema| {
+                let name = schema.strip_prefix("CollectionAPI:")?;
+                Some((
+                    name.to_string(),
+                    view.collection_members(&p, name)
+                        .map(|paths| paths.into_iter().map(|p| p.to_string()).collect())
+                        .map_err(|error| error.to_string()),
+                ))
+            })
+            .collect(),
         programs,
         variants: view
             .stage()
@@ -858,6 +874,8 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
             rect,
             kind: NODE_KIND.into(),
             data: Arc::new(UsdPrimNodeData {
+                group_id: None,
+                group_ports: Default::default(),
                 programs: node.programs.clone(),
                 accent: None,
                 type_name: node.type_name.clone(),
@@ -1078,6 +1096,8 @@ mod tests {
         );
         let mut invalid = scene.clone();
         invalid.node_mut(edge.to.node).unwrap().data = Arc::new(UsdPrimNodeData {
+            group_id: None,
+            group_ports: Default::default(),
             programs: Vec::new(),
             accent: None,
             type_name: "Xform".into(),
@@ -1165,6 +1185,7 @@ mod tests {
 
     fn prim(path: &str, ins: &[&str], outs: &[&str], is_body: bool) -> PrimNode {
         PrimNode {
+            collections: Default::default(),
             programs: Vec::new(),
             variants: Ok(BTreeMap::new()),
             usd_origin: None,

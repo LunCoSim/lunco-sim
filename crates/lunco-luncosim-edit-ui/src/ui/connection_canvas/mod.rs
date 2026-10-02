@@ -32,6 +32,7 @@
 //! edits explicitly marked boundaries through the document command owner.
 
 mod drop_assets;
+mod groups;
 mod inspection;
 mod layout;
 mod navigation;
@@ -132,6 +133,8 @@ pub struct UsdCanvasSessionState {
     navigation_restore: Option<(lunco_canvas::Pos, f32)>,
     details_open: bool,
     inspection: inspection::ConnectionIndex,
+    expanded_scene: Option<Scene>,
+    group_plan: Vec<groups::Group>,
     scope_search: String,
     /// Complete collected topology retained so changing the active authored
     /// schema root is a presentation operation, not a stage reload.
@@ -200,6 +203,8 @@ impl Default for UsdCanvasSessionState {
             navigation_restore: None,
             details_open: true,
             inspection: Default::default(),
+            expanded_scene: None,
+            group_plan: Vec::new(),
             scope_search: String::new(),
             source_nodes: Vec::new(),
             source_wires: Vec::new(),
@@ -227,6 +232,8 @@ impl UsdCanvasSessionState {
         self.navigation_history.clear();
         self.navigation_restore = None;
         self.inspection = Default::default();
+        self.expanded_scene = None;
+        self.group_plan.clear();
         self.scope_search.clear();
         self.source_root = None;
         self.source_uri = None;
@@ -264,6 +271,8 @@ impl UsdCanvasSessionState {
 
     /// Reproject cached facts after explicit navigation; never reread USD in paint.
     fn rebuild_view(&mut self) {
+        self.expanded_scene = None;
+        self.group_plan.clear();
         let (nodes, wires) = self.project_view();
         self.topo_hash = topology_hash(&nodes, &wires);
         self.unresolved_links = projection::unresolved_links(&nodes, &wires);
@@ -280,6 +289,9 @@ impl UsdCanvasSessionState {
     }
 
     fn restore_placements(&mut self) {
+        if let Some(full) = self.expanded_scene.take() {
+            self.canvas.scene = full;
+        }
         let Some(definition) = self
             .view_document
             .as_ref()
@@ -312,6 +324,7 @@ impl UsdCanvasSessionState {
             }
         }
         projection::route_edges(&mut self.canvas.scene);
+        groups::project(self);
     }
 
     fn project_view(&self) -> (Vec<PrimNode>, Vec<Wire>) {
@@ -371,6 +384,7 @@ fn topology_hash(nodes: &[projection::PrimNode], wires: &[projection::Wire]) -> 
 
         n.port_sources.hash(&mut h);
         n.programs.hash(&mut h);
+        n.collections.hash(&mut h);
         n.variants.hash(&mut h);
         n.usd_origin.hash(&mut h);
         n.boundary.hash(&mut h);
@@ -607,6 +621,7 @@ fn produce_usd_canvas_session(
                 scope: state.diagram_root.clone(),
                 include_descendants: false,
                 positions: Default::default(),
+                ..Default::default()
             };
             if let Err(error) = host.apply(lunco_doc::Mutation::local(
                 lunco_doc::diagram_view::DiagramViewOp::SetView {
@@ -790,6 +805,8 @@ fn produce_usd_canvas_session(
     if state.built {
         state.navigation_restore = Some((state.canvas.viewport.center, state.canvas.viewport.zoom));
     }
+    state.expanded_scene = None;
+    state.group_plan.clear();
     state.canvas.scene = scene;
     layout::request(state);
     state.restore_placements();
@@ -846,24 +863,20 @@ fn edge_sink(scene: &Scene, id: EdgeId) -> Option<EdgeSink> {
     }
     let mut endpoints = Vec::new();
     for (sink, source) in [(&edge.to, &edge.from), (&edge.from, &edge.to)] {
-        let sink_node = scene.node(sink.node)?;
-        let source_node = scene.node(source.node)?;
+        let (sink_node, sink_port) = groups::endpoint(scene, sink).ok()?;
+        let (source_node, source_port) = groups::endpoint(scene, source).ok()?;
         let data = sink_node.data.downcast_ref::<UsdPrimNodeData>()?;
-        let source_path = format!(
-            "{}.{}",
-            source_node.origin.as_deref()?,
-            source.port.as_str()
-        );
+        let source_path = format!("{}.{}", source_node.origin.as_deref()?, source_port);
         let sources = data
             .port_sources
-            .get(sink.port.as_str())
+            .get(sink_port)
             .cloned()
             .unwrap_or_default();
         if sources.contains(&source_path) {
             endpoints.push((
                 sink_node.origin.clone()?,
-                sink.port.as_str().into(),
-                data.port_types.get(sink.port.as_str())?.clone(),
+                sink_port.into(),
+                data.port_types.get(sink_port)?.clone(),
                 sources,
                 source_path,
             ));
@@ -882,15 +895,13 @@ fn connection_endpoints<'a>(
     if from == to {
         return Err("A port cannot connect to itself".into());
     }
-    let kind = |pr: &PortRef| -> Result<&str, String> {
-        scene
-            .node(pr.node)
-            .ok_or_else(|| format!("connection endpoint node {:?} no longer exists", pr.node))?
-            .ports
+    let kind = |pr: &PortRef| -> Result<String, String> {
+        let (node, name) = groups::endpoint(scene, pr)?;
+        node.ports
             .iter()
-            .find(|p| p.id == pr.port)
-            .map(|p| p.kind.as_str())
-            .ok_or_else(|| format!("connection endpoint port `{:?}` no longer exists", pr.port))
+            .find(|p| p.id.as_str() == name)
+            .map(|p| p.kind.as_str().to_string())
+            .ok_or_else(|| format!("Connection port {name} is absent"))
     };
     let from_kind = kind(from)?;
     let to_kind = kind(to)?;
@@ -900,7 +911,7 @@ fn connection_endpoints<'a>(
             .and_then(|node| node.data.downcast_ref::<UsdPrimNodeData>())
             .and_then(|data| data.boundary)
     };
-    let (source, sink) = match (from_kind, to_kind) {
+    let (source, sink) = match (from_kind.as_str(), to_kind.as_str()) {
         ("output", "input") => (from, to),
         ("input", "output") => (to, from),
         ("acausal", "acausal") => (from, to),
@@ -920,17 +931,13 @@ fn connection_endpoints<'a>(
             ));
         }
     };
-    let property_type = |endpoint: &PortRef| {
-        scene
-            .node(endpoint.node)
-            .and_then(|node| node.data.downcast_ref::<UsdPrimNodeData>())
-            .and_then(|node| node.port_types.get(endpoint.port.as_str()))
-            .ok_or_else(|| {
-                format!(
-                    "USD port {} has no declared property type",
-                    endpoint.port.as_str()
-                )
-            })
+    let property_type = |endpoint: &PortRef| -> Result<String, String> {
+        let (node, port) = groups::endpoint(scene, endpoint)?;
+        node.data
+            .downcast_ref::<UsdPrimNodeData>()
+            .and_then(|data| data.port_types.get(port))
+            .cloned()
+            .ok_or_else(|| format!("USD port {port} has no declared property type"))
     };
     let source_type = property_type(source)?;
     let sink_type = property_type(sink)?;
@@ -951,25 +958,27 @@ fn connect_op(
     edit_target: &LayerId,
 ) -> Result<UsdOp, String> {
     let (source, sink) = connection_endpoints(scene, from, to)?;
-    let source_prim = scene
-        .node(source.node)
-        .and_then(|node| node.origin.clone())
-        .ok_or_else(|| format!("source node {:?} has no USD prim origin", source.node))?;
-    let sink_prim = scene
-        .node(sink.node)
-        .and_then(|node| node.origin.clone())
-        .ok_or_else(|| format!("sink node {:?} has no USD prim origin", sink.node))?;
-    let sink_conn = sink.port.as_str();
-    let source_conn = source.port.as_str();
-    let sink_type = scene
-        .node(sink.node)
-        .and_then(|node| node.data.downcast_ref::<UsdPrimNodeData>())
-        .and_then(|data| data.port_types.get(sink_conn))
+    let (source_node, source_conn) = groups::endpoint(scene, source)?;
+    let (sink_node, sink_conn) = groups::endpoint(scene, sink)?;
+    let source_prim = source_node
+        .origin
+        .as_ref()
+        .ok_or("Source card has no USD origin")?;
+    let sink_prim = sink_node
+        .origin
+        .clone()
+        .ok_or("Sink card has no USD origin")?;
+    let data = sink_node
+        .data
+        .downcast_ref::<UsdPrimNodeData>()
+        .ok_or("Sink has no typed USD facts")?;
+    let sink_type = data
+        .port_types
+        .get(sink_conn)
         .ok_or("USD sink has no declared property type")?;
-    let mut sources = scene
-        .node(sink.node)
-        .and_then(|node| node.data.downcast_ref::<UsdPrimNodeData>())
-        .and_then(|data| data.port_sources.get(sink_conn))
+    let mut sources = data
+        .port_sources
+        .get(sink_conn)
         .cloned()
         .unwrap_or_default();
     let source = format!("{source_prim}.{source_conn}");
@@ -1156,6 +1165,7 @@ impl Panel for UsdCanvasPanel {
             }
             let (response, events) = ui.scope_builder(egui::UiBuilder::new().max_rect(graph_rect), |ui| state.canvas.ui(ui)).inner;
             state.canvas_rect = Some(lunco_canvas::Rect::from_min_max(lunco_canvas::Pos::new(response.rect.min.x, response.rect.min.y), lunco_canvas::Pos::new(response.rect.max.x, response.rect.max.y)));
+            groups::frames(ui, ctx, state, graph_rect);
             drop_assets::drop_ui(ui, &response, state, ctx);
             inspection::connection_guidance(ui, &response, state);
             response.context_menu(|ui| inspection::context_menu(ui, ctx, state));
@@ -1166,6 +1176,12 @@ impl Panel for UsdCanvasPanel {
             for event in &events {
                 match event {
                     SceneEvent::NodeMoved { id, new_min, .. } => {
+                        if let Some(group_id) = state.canvas.scene.node(*id).and_then(|n| n.data.downcast_ref::<UsdPrimNodeData>()).and_then(|data| data.group_id.as_ref()) {
+                            if let (Some(group), Some(host)) = (state.group_plan.iter().find(|g| &g.id == group_id), state.view_document.as_ref()) {
+                                if let Some(rect) = group.rect { ctx.trigger(groups::MoveConnectionGroup { view_id:host.document().id().raw(),group_id:group_id.clone(),dx:f64::from(new_min.x-rect.min.x),dy:f64::from(new_min.y-rect.min.y) }); }
+                            }
+                            continue;
+                        }
                         if let Some(path) = state.canvas.scene.node(*id).and_then(projection::diagram_key).map(str::to_string) {
                             if let Some(host) = state.view_document.as_ref() {
                                 ctx.trigger(view_files::MoveConnectionViewNode { view_id: host.document().id().raw(), view: state.selected_view.clone(), path, x: f64::from(new_min.x), y: f64::from(new_min.y) });

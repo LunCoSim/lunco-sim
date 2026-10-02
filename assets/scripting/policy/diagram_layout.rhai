@@ -1,3 +1,4 @@
+fn quotient_edge(source,target,kind) {#{source:source,target:target,kind:kind}}
 // Pure presentation policy over immutable USD graph facts; no scene writes.
 fn program_accent(programs) {
     if programs == () || programs.len() == 0 { return ""; }
@@ -93,7 +94,7 @@ fn align_layers(groups, ranks, edges) {
 }
 // Balance each causal layer into compact columns. Disconnected models remain
 // visible, and real port contracts determine row heights.
-fn layout_diagram(facts) {
+fn layout_flat_diagram(facts) {
     let groups = #{}; let ranks = []; let detached = []; let linked = #{};
     for edge in facts.edges { linked[edge.source] = true; linked[edge.target] = true; }
     for node in facts.nodes {
@@ -131,6 +132,57 @@ fn layout_diagram(facts) {
         let shelf_height = sqrt(shelf_area / 1.6); if shelf_height < shelf_tallest + 48.0 { shelf_height = shelf_tallest + 48.0; }
         let shelf = pack_layer(detached, 40.0, shelf_height);
         for placement in shelf.positions { placement.y += bottom + 80.0; result.push(placement); }
+    }
+    result
+}
+
+fn group_bounds(placements,nodes) {
+    let sizes=#{};for node in nodes {sizes[node.path]=node;}
+    let right=0.0;let bottom=0.0;
+    for p in placements {let node=sizes[p.path];let x=p.x+node.width;let y=p.y+node.height;if x>right {right=x;}if y>bottom {bottom=y;}}
+    #{right:right,bottom:bottom}
+}
+fn member_of(path,id,membership) {membership.contains(path) && membership[path]==id}
+fn group_graph(group,facts,membership) {
+    let nodes=[];let edges=[];let external=#{};let rank=1000000;
+    for node in facts.nodes {
+        if !member_of(node.path,group.id,membership) {continue;}
+        nodes.push(node);if node.rank<rank {rank=node.rank;}
+    }
+    for edge in facts.edges {
+        let from=member_of(edge.source,group.id,membership);let to=member_of(edge.target,group.id,membership);
+        if from && to {edges.push(edge);}
+        if from && !to {let key=edge.source+"."+edge.source_port;external[key]=true;}
+        if to && !from {let key=edge.target+"."+edge.target_port;external[key]=true;}
+    }
+    #{nodes:nodes,edges:edges,external:external,rank:rank}
+}
+// Pack group interiors first, then their quotient graph. Collapsed summaries
+// reserve only their external endpoint rows; every original member is placed.
+fn layout_diagram(facts) {
+    if !facts.contains("groups") || facts.groups.len() == 0 { return layout_flat_diagram(facts); }
+    let membership = #{}; let local = #{}; let quotient = []; let result = [];
+    for group in facts.groups { for path in group.members { membership[path] = group.id; } }
+    for group in facts.groups {
+        let graph=group_graph(group,facts,membership);let nodes=graph.nodes;let edges=graph.edges;let external=graph.external;let rank=graph.rank;
+        let placements = layout_flat_diagram(#{nodes:nodes,edges:edges,scope:facts.scope});
+        let bounds=group_bounds(placements,nodes);
+        local[group.id] = placements;
+        let width = bounds.right + 24.0; let height = bounds.bottom + 24.0;
+        if group.collapsed { width = 250.0; height = 70.0 + external.len() * 19.0; if height < 96.0 { height = 96.0; } }
+        quotient.push(#{path:group.id,role:"prim",programs:[],rank:rank,width:width,height:height});
+    }
+    for node in facts.nodes { if !membership.contains(node.path) { quotient.push(node); } }
+    let edges = [];
+    for edge in facts.edges {
+        let source = edge.source; let target = edge.target;
+        if membership.contains(source) { source = membership[source]; } if membership.contains(target) { target = membership[target]; }
+        if source == target {continue;}edges.push(quotient_edge(source,target,edge.kind));
+    }
+    let outer = layout_flat_diagram(#{nodes:quotient,edges:edges,scope:facts.scope});
+    for placement in outer {
+        if !local.contains(placement.path) {result.push(placement);continue;}
+        for member in local[placement.path] {member.x+=placement.x;member.y+=placement.y+24.0;result.push(member);}
     }
     result
 }

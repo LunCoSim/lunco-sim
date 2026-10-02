@@ -36,6 +36,79 @@ pub(super) fn render(
             let view_id = host.document().id().raw();
             let dirty = host.document().generation() != state.saved_view_generation;
             let names: Vec<_> = host.document().data().views.keys().cloned().collect();
+            ui.menu_button("Groups", |ui| {
+                let mut enabled = host
+                    .document()
+                    .data()
+                    .views
+                    .get(&state.selected_view)
+                    .is_none_or(|v| v.grouping);
+                if ui
+                    .checkbox(&mut enabled, "Group similar components")
+                    .changed()
+                {
+                    ctx.trigger(super::groups::SetConnectionGrouping { view_id, enabled });
+                }
+                let members: Vec<_> = state
+                    .canvas
+                    .selection
+                    .nodes()
+                    .iter()
+                    .filter_map(|id| state.canvas.scene.node(*id))
+                    .filter_map(|n| {
+                        n.data
+                            .downcast_ref::<super::UsdPrimNodeData>()
+                            .filter(|d| d.group_id.is_none() && d.boundary.is_none())
+                            .and_then(|_| super::projection::diagram_key(n))
+                    })
+                    .map(str::to_string)
+                    .collect();
+                if ui
+                    .add_enabled(
+                        members.len() >= 2,
+                        egui::Button::new("Group selected prims"),
+                    )
+                    .clicked()
+                {
+                    ctx.trigger(super::groups::SetConnectionGroup {
+                        view_id,
+                        group_id: String::new(),
+                        label: "Selection".into(),
+                        members,
+                    });
+                    ui.close();
+                }
+                for group in &state.group_plan {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{} · {}", group.label, group.members.len()));
+                        if ui
+                            .button(if group.collapsed {
+                                "Expand"
+                            } else {
+                                "Collapse"
+                            })
+                            .clicked()
+                        {
+                            ctx.trigger(super::groups::SetConnectionGroupCollapsed {
+                                view_id,
+                                group_id: group.id.clone(),
+                                collapsed: !group.collapsed,
+                            });
+                            ui.close();
+                        }
+                        if ui.button("Ungroup").clicked() {
+                            ctx.trigger(super::groups::RemoveConnectionGroup {
+                                view_id,
+                                group_id: group.id.clone(),
+                            });
+                            ui.close();
+                        }
+                    });
+                }
+                if state.group_plan.is_empty() {
+                    ui.label("No repeated components in this scope");
+                }
+            });
             ui.menu_button("View", |ui| {
                 ui.label("Named layout (* = unsaved)");
                 egui::ComboBox::from_id_salt(("connection_named_view", view_id))
@@ -140,16 +213,15 @@ pub(super) fn render(
             }
         }
         if !show_scene {
-            let dirty =
-                state
-                    .doc
-                    .and_then(|id| {
-                        ctx.resource::<lunco_doc_bevy::DocumentRegistry<
+            let dirty = state
+                .doc
+                .and_then(|id| {
+                    ctx.resource::<lunco_doc_bevy::DocumentRegistry<
                             lunco_usd_document::document::UsdDocument,
                         >>()
                         .and_then(|registry| registry.host(id))
-                    })
-                    .map(|host| host.document().is_dirty());
+                })
+                .map(|host| host.document().is_dirty());
             ui.label(if dirty == Some(true) {
                 "USD modified"
             } else {
