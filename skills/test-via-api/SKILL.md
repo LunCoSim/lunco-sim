@@ -51,6 +51,25 @@ render log. Do not relaunch the app just to pick up a shader edit.
 
 ## Tutorial and Rhai iteration
 
+For Twin lifecycle regressions, open an editor document in Twin A, replace it
+with Twin B, and inspect `ListOpenDocuments` plus USD preview state. No old
+document ID or preview may survive; repeat `OpenTwin` on B to verify fresh
+admission. A rejected Twin path must preserve the current documents. Twin
+replacement closes loose/library editor documents as well as root-owned files;
+`RestartScene` preserves editable documents and tests a different lifecycle.
+Pending editor and workspace-restore work must not recreate old tabs after
+replacement. Modelica `CloseDocument` is owned by the headless core, so exercise
+scratch-document closure in both headless and windowed hosts.
+
+The maintained document-close scene gate is
+`scenes/tests/twin_session_retirement/twin_session_retirement.usda` with verdict
+channel `TWIN_DOCUMENT_CLOSE`. Run it through `$LUNCOSIM_BIN test`. The windowed
+switch/reopen/rejected-candidate gate is
+`python scripts/api/test_twin_session_retirement.py`; set `LUNCOSIM_BIN` and
+an explicit free `LUNCOSIM_API_PORT`. Its assertions are authored in
+`assets/scenarios/tests/twin_session_retirement.rhai`, and its process wrapper
+verifies API `Exit` and port release.
+
 Tutorial behavior is authored in `assets/tutorials/**/*.rhai` and should be
 tested through its production scene gate in `assets/scenes/tests/` with the
 observer in `assets/scenarios/tests/`. After editing either Rhai file, rerun

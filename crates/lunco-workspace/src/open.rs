@@ -492,25 +492,33 @@ pub enum TwinOpenMode {
 /// Shared by the replace-semantics openers ([`OpenTwin`], [`OpenFolder`], and
 /// USD's `OpenFile`-on-a-scene adapter), so "replacing the workspace" means
 /// the same thing everywhere.
-fn close_all_open_folders(
-    workspace: &mut WorkspaceResource,
-    commands: &mut Commands,
-    log_tag: &str,
-) {
+fn close_all_open_folders(world: &mut World, log_tag: &str) {
+    let workspace = world.resource::<WorkspaceResource>();
     let ids: Vec<crate::TwinId> = workspace.twins().map(|(id, _)| id).collect();
     for id in ids {
+        let workspace = world.resource::<WorkspaceResource>();
         let Some(root) = workspace.twin(id).map(|twin| twin.root.clone()) else {
             continue;
         };
         let was_active = workspace.active_twin == Some(id);
-        workspace.close_twin(id);
-        commands.trigger(TwinClosed {
+        world.resource_mut::<WorkspaceResource>().close_twin(id);
+        world.trigger(TwinClosed {
             twin: id,
             root,
             was_active,
         });
+        world.flush();
         info!("[{log_tag}] closed pre-existing Twin {:?}", id);
     }
+    // Replacement also retires loose files and shared-library editor sessions.
+    // Their source caches are application-owned; their open documents are not.
+    let docs = world
+        .resource::<WorkspaceResource>()
+        .documents()
+        .iter()
+        .map(|entry| entry.id)
+        .collect();
+    crate::session::close_documents(world, docs);
 }
 
 /// In-flight folder scans. [`TwinMode::open`] walks the filesystem
@@ -592,11 +600,7 @@ pub fn spawn_twin_scan(
 
 /// Poll each in-flight folder scan. Ready scans add their Twin to the Workspace
 /// and fire [`TwinAdded`]; in-flight ones are kept for the next frame.
-pub fn drain_pending_twin_opens(
-    mut pending: ResMut<PendingTwinOpens>,
-    mut workspace: ResMut<WorkspaceResource>,
-    mut commands: Commands,
-) {
+pub fn drain_pending_twin_opens(mut pending: ResMut<PendingTwinOpens>, mut commands: Commands) {
     use bevy::tasks::futures_lite::future;
     if pending.tasks.is_empty() {
         return;
@@ -612,19 +616,21 @@ pub fn drain_pending_twin_opens(
                 if let Some(rel) = &entry.scene {
                     twin.set_default_scene(rel.clone());
                 }
-                if entry.mode == TwinOpenMode::Replace {
-                    close_all_open_folders(&mut workspace, &mut commands, &entry.log_tag);
-                }
-                let twin_id = workspace.add_twin(twin);
-                commands.trigger(TwinAdded { twin: twin_id });
-                match &entry.scene {
-                    Some(rel) => info!(
-                        "[{}] opened {} @ `{rel}`",
-                        entry.log_tag,
-                        entry.path.display()
-                    ),
-                    None => info!("[{}] opened {}", entry.log_tag, entry.path.display()),
-                }
+                commands.queue(move |world: &mut World| {
+                    if entry.mode == TwinOpenMode::Replace {
+                        close_all_open_folders(world, &entry.log_tag);
+                    }
+                    let twin_id = world.resource_mut::<WorkspaceResource>().add_twin(twin);
+                    world.trigger(TwinAdded { twin: twin_id });
+                    match &entry.scene {
+                        Some(rel) => info!(
+                            "[{}] opened {} @ `{rel}`",
+                            entry.log_tag,
+                            entry.path.display()
+                        ),
+                        None => info!("[{}] opened {}", entry.log_tag, entry.path.display()),
+                    }
+                });
             }
             Some(Ok(TwinMode::Orphan(_))) => {
                 warn!(
@@ -677,6 +683,84 @@ register_commands!(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_drains_teardown_before_twin_added() {
+        #[derive(Resource, Default)]
+        struct TeardownFinished(bool);
+        let old = tempfile::tempdir().unwrap();
+        let new = tempfile::tempdir().unwrap();
+        let old_twin = match create_twin(old.path(), "old").unwrap() {
+            TwinMode::Twin(twin) => twin,
+            _ => unreachable!(),
+        };
+        let new_twin = match create_twin(new.path(), "new").unwrap() {
+            TwinMode::Twin(twin) => twin,
+            _ => unreachable!(),
+        };
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(crate::WorkspacePlugin)
+            .init_resource::<TeardownFinished>()
+            .add_observer(
+                |_: On<TwinClosed>, workspace: Res<WorkspaceResource>, mut commands: Commands| {
+                    assert_eq!(workspace.twins().count(), 0);
+                    commands.queue(|world: &mut World| {
+                        world.resource_mut::<TeardownFinished>().0 = true;
+                    });
+                },
+            )
+            .add_observer(
+                |_: On<TwinAdded>,
+                 workspace: Res<WorkspaceResource>,
+                 finished: Res<TeardownFinished>| {
+                    assert!(finished.0, "deferred teardown must finish before TwinAdded");
+                    assert!(
+                        workspace.documents().is_empty(),
+                        "old documents must be gone before TwinAdded"
+                    );
+                },
+            );
+        app.world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .add_twin(old_twin);
+        for (raw, path) in [
+            (1, old.path().join("model.mo")),
+            (2, std::path::PathBuf::from("library/package.mo")),
+        ] {
+            app.world_mut()
+                .resource_mut::<WorkspaceResource>()
+                .add_document(crate::DocumentEntry {
+                    id: crate::DocumentId::new(raw),
+                    kind: crate::DocumentKindId::new("test"),
+                    origin: crate::DocumentOrigin::writable_file(path),
+                    context_twin: None,
+                    title: "old".into(),
+                    dirty: false,
+                });
+        }
+        let task = AsyncComputeTaskPool::get().spawn(async move { Ok(TwinMode::Twin(new_twin)) });
+        app.world_mut()
+            .resource_mut::<PendingTwinOpens>()
+            .tasks
+            .push(TwinOpenTask {
+                task,
+                path: new.path().to_path_buf(),
+                log_tag: "test".into(),
+                scene: None,
+                mode: TwinOpenMode::Replace,
+            });
+        for _ in 0..1000 {
+            app.update();
+            if app.world().resource::<PendingTwinOpens>().tasks.is_empty() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        let workspace = app.world().resource::<WorkspaceResource>();
+        assert_eq!(workspace.twins().next().unwrap().1.root, new.path());
+        assert!(workspace.documents().is_empty());
+    }
 
     #[test]
     fn create_twin_writes_manifest_and_can_be_reopened() {

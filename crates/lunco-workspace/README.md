@@ -42,6 +42,12 @@ Some(rover_id)`; on Save into `rover-twin/models/`, path ownership
 takes over and the pin becomes irrelevant. One code path, no
 ceremonial moves.
 
+Workspace replacement closes all resident documents through their domain
+`CloseDocument` handlers, drains outgoing `TwinClosed` cleanup, and only then
+publishes `TwinAdded`. A failed candidate scan preserves the current workspace.
+Individual Twin closure closes its root-owned documents and context-pinned
+drafts. Shared application caches and registrations outlive editor sessions.
+
 ## Types
 
 - **`Workspace`** — root session type. Methods: `add_twin`,

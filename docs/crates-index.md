@@ -1228,6 +1228,11 @@ asset tooling, command-line hosts, and the compiler's own tests all call this
 same package directly.
 
 **`lunco-modelica-core`**
+
+Owns Modelica `CloseDocument` in every host: linked execution entities and the
+document registry are retired together, including during workspace replacement.
+The UI owns only tab, canvas, and unfinished editor-preparation cleanup.
+
 Modelica document/runtime host. It consumes the headless `ModelicaDocument`
 contract from `lunco-modelica-document`, owns Bevy lifecycle synchronization and
 engine resources, and composes the compiler and source-library capabilities. Its

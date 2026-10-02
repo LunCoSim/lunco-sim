@@ -90,6 +90,16 @@ generation, so its final `on_stop` still routes to the outgoing Twin after the
 workspace has switched. Pending asset and compiler work is canceled or fenced
 at that same owner boundary.
 
+Workspace replacement drains these handlers before `TwinAdded`. The workspace
+owner dispatches `CloseDocument` for outgoing editor documents, then removes
+their metadata. USD previews snapshot document ownership at the close edge,
+before deferred registry removal. Modelica core owns document closure and
+linked-entity retirement in both headless and UI hosts; the UI cancels unfinished
+editor preparations, and file reads carry their dispatch-time Twin identity.
+Pending workspace restore is canceled at that same Twin edge. Replacement
+also closes loose and library editor documents without deleting shared source
+caches. Closing a non-active Twin does not clear the active simulation scene.
+
 Core and application scripts keep their own owner scope and stable generation
 across Twin scene transitions. Scene teardown clears the old guided presentation
 but only closes programs explicitly marked as scene-owned; Twin teardown only

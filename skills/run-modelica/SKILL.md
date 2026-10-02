@@ -184,6 +184,14 @@ of the Rumoca session; do not treat a nonzero parsed count as readiness.
 The registry marks each root as Application- or Twin-owned. Twin root IDs include
 the stable Twin ID. `TwinClosed` removes only that Twin's source sets and queues
 ordered unloads to the Rumoca actor; other Twin and application roots remain.
+
+Twin closure also retires its open Modelica documents through the core
+`CloseDocument` owner, including linked execution entities. Workspace replacement
+closes every editor document before `TwinAdded`; unfinished UI preparations are
+canceled and file-read completions are fenced by their captured Twin identity.
+Reopening the same Twin starts fresh. `RestartScene` leaves editable documents
+resident while rebuilding their scene-owned execution.
+
 Operation IDs fence an in-flight file read from installing a source set after
 its owner closes. If the worker has not created its channel yet, pending unloads
 stay queued and are sent before a later Twin load. A disconnected channel is a

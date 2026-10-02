@@ -344,10 +344,9 @@ fn derive_title_from_doc(doc: &lunco_modelica_document::ModelicaDocument) -> Str
 
 /// Retire Modelica tabs and transient selection state when their Twin closes.
 ///
-/// The document registry intentionally keeps file documents available as loose
-/// documents, but those documents must not remain in the active Twin's editor
-/// surface. Modelica tabs are therefore closed at the Twin lifecycle edge;
-/// the user can explicitly reopen a loose file later.
+/// Workspace teardown closes domain documents through `CloseDocument`.
+/// This owner also cancels editor preparation that has not installed a
+/// document yet, so late results cannot recreate the outgoing Twin's tabs.
 fn clear_modelica_state_on_twin_closed(
     trigger: On<lunco_workspace::TwinClosed>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
@@ -355,6 +354,7 @@ fn clear_modelica_state_on_twin_closed(
     mut canvas: Option<ResMut<panels::canvas_diagram::CanvasDiagramState>>,
     mut rename: Option<ResMut<browser_section::DocRenameState>>,
     mut workbench: Option<ResMut<WorkbenchState>>,
+    mut openings: Option<ResMut<document_openings::DocumentOpenings>>,
     mut commands: Commands,
 ) {
     let Some(workspace) = workspace else {
@@ -399,6 +399,9 @@ fn clear_modelica_state_on_twin_closed(
     }
 
     if event.was_active {
+        if let Some(openings) = openings.as_mut() {
+            openings.in_flight.clear();
+        }
         if let Some(state) = workbench.as_mut() {
             state.selected_entity = None;
             state.editor_buffer.clear();

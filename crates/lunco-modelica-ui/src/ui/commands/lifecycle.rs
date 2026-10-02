@@ -853,6 +853,9 @@ pub fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
         }
 
         let path_buf = std::path::PathBuf::from(&path);
+        let owner_twin = world
+            .get_resource::<lunco_workspace::WorkspaceResource>()
+            .and_then(|workspace| workspace.active_twin);
 
         // wasm has no filesystem: the web file picker already read the
         // chosen file's text browser-side and stashed it under its
@@ -866,6 +869,7 @@ pub fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
             let _ = open_file_result_tx().send(OpenFileResult {
                 path: path_buf,
                 read_result,
+                owner_twin,
             });
         }
 
@@ -900,10 +904,12 @@ pub fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
                     Ok(path) => OpenFileResult {
                         read_result: lunco_modelica_runtime::source_asset::read_text_sync(&path),
                         path,
+                        owner_twin,
                     },
                     Err(error) => OpenFileResult {
                         path: path_for_task,
                         read_result: Err(error),
+                        owner_twin,
                     },
                 }
             });
@@ -930,6 +936,8 @@ fn open_file_result_tx() -> &'static std::sync::mpsc::Sender<OpenFileResult> {
 struct OpenFileResult {
     path: std::path::PathBuf,
     read_result: Result<String, String>,
+    /// Workspace owner captured before dispatch, never inferred on completion.
+    owner_twin: Option<lunco_workspace::TwinId>,
 }
 
 static OPEN_FILE_RESULT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<OpenFileResult>> =
@@ -951,6 +959,16 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
         rx.try_iter().collect()
     };
     for result in pending {
+        let active_twin = world
+            .get_resource::<lunco_workspace::WorkspaceResource>()
+            .and_then(|workspace| workspace.active_twin);
+        if result.owner_twin != active_twin {
+            bevy::log::warn!(
+                "[OpenFile] {} discarded: workspace changed during read",
+                result.path.display()
+            );
+            continue;
+        }
         let path = result.path;
         let read_only_library = lunco_assets_runtime::library::owns_filesystem_path(&path);
         let source = match result.read_result {
@@ -1084,31 +1102,6 @@ pub fn on_open(trigger: On<Open>, mut commands: Commands) {
     }
 
     commands.trigger(OpenFile { path: uri });
-}
-
-#[on_command(CloseDocument)]
-pub fn on_close_document(
-    trigger: On<CloseDocument>,
-    mut registry: ResMut<ModelicaDocuments>,
-    mut commands: Commands,
-) {
-    let doc = trigger.event().doc_id;
-    if registry.host(doc).is_none() {
-        return;
-    }
-    // Despawn any `ModelicaModel` entity backing this doc *before*
-    // dropping the document. The despawn fires `RemovedComponents`,
-    // which `cleanup_removed_simulators` picks up to purge the doc's
-    // signal histories + plot bindings from the SignalRegistry /
-    // VisualizationRegistry — otherwise stale variables (der(C2.v),
-    // …) linger in the Graphs X/Y picker after the doc is closed.
-    // That system is entity-scoped only; dropping the document is this
-    // observer's job, because only an explicit close means the user is
-    // done with the source (a scene reload despawns these entities too).
-    for entity in registry.entities_linked_to(doc) {
-        commands.entity(entity).try_despawn();
-    }
-    registry.remove_document(doc);
 }
 
 pub fn on_document_closed_cleanup(

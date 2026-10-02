@@ -44,9 +44,8 @@ pub struct SetEmptyViewportReason {
     pub reason: String,
 }
 
-/// Workspace replacement owns the scene boundary. Closing the old Twin must
-/// clear its mounted USD scene immediately, even when the replacement Twin's
-/// asynchronous folder scan later fails or takes a long time.
+/// Closing the active Twin requests mounted-scene teardown through the scene
+/// coordinator. Closing an inactive Twin must not clear the active Twin's scene.
 pub(crate) fn clear_scene_on_twin_closed(
     trigger: On<TwinClosed>,
     mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
@@ -62,7 +61,9 @@ pub(crate) fn clear_scene_on_twin_closed(
     for doc in backed.release_root(&root) {
         registry.remove(doc);
     }
-    commands.trigger(ClearScene {});
+    if trigger.event().was_active {
+        commands.trigger(ClearScene {});
+    }
 }
 
 /// Open one scene selected by the active Twin loading policy. The command

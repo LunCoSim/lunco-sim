@@ -58,7 +58,7 @@ def get_json(port: int, path: str, timeout_s: float = REQUEST_TIMEOUT_S) -> dict
     try:
         with urlopen(f"http://127.0.0.1:{port}{path}", timeout=timeout_s) as response:
             return _json_response(response)
-    except (HTTPError, URLError, TimeoutError) as error:
+    except (HTTPError, URLError, TimeoutError, ConnectionError) as error:
         raise RuntimeError(f"API GET {path} failed on port {port}: {error}") from error
 
 
