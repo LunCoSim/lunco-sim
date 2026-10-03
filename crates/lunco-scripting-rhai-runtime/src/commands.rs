@@ -556,7 +556,18 @@ fn on_run_scenario_asset(
             .iter()
             .find(|(_, host)| host.0 == owner.twin)
             .map(|(entity, _)| entity)
-            .unwrap_or_else(|| commands.spawn((TwinScenarioHost(owner.twin), owner)).id()),
+            .unwrap_or_else(|| {
+                // The session identity owner admits this runtime host before
+                // scenario execution. Its identity lets declared simulation
+                // reads resolve the calling actor through the API registry.
+                commands
+                    .spawn((
+                        TwinScenarioHost(owner.twin),
+                        owner,
+                        lunco_core::Provenance::Authoritative,
+                    ))
+                    .id()
+            }),
         (None, None) => resolve_scenario_target(None, &entities, &world_root)?,
     };
     let handle = asset_server.load::<lunco_scripting_rhai_world::source_asset::RhaiSource>(path);

@@ -358,6 +358,13 @@ policy runtimes also remain outside the scenario driver's Twin teardown.
 `on_stop` uses the stored outgoing Twin ID before its source document and asset
 handles are released. Twin tutorial assets use isolated hosts, preventing their
 replacement from stopping an application scenario on `WorldRoot`.
+An isolated host created by `RunScenarioAsset` carries
+`Provenance::Authoritative`. The session identity-admission owner assigns its
+global identity, and the API registry indexes it before declared simulation
+reads execute. A Twin ownership marker alone is not an actor identity: without
+the admitted identity, the Rhai `me` sentinel is zero and physics access cannot
+resolve the calling scenario. Retaining a scenario across replacement retains
+that host identity while rebinding its scene dependencies.
 
 Systems declare their cycle and read that cycle's clock. A synchronous helper,
 Rhai function, or nested registered hook inherits the caller's context. An
