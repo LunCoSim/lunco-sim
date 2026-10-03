@@ -780,7 +780,7 @@ fn query_document_id(
         if synced_generation != generation {
             let stage_id = twin_stage_id_for_document(world, doc);
             let stage_mounted =
-                stage_id.is_some_and(|stage| is_mounted_document_stage(world, stage));
+                stage_id.is_some_and(|stage| is_mounted_document_stage(world, doc, stage));
             let applied_stage_generation = stage_id.and_then(|stage| {
                 stage_mounted.then(|| {
                     world
@@ -812,12 +812,25 @@ fn can_read_applied_stage_generation(
     stage_mounted && applied_stage_generation == Some(document_generation)
 }
 
-fn is_mounted_document_stage(world: &World, stage: bevy::asset::AssetId<UsdStageAsset>) -> bool {
+fn is_mounted_document_stage(
+    world: &World,
+    document: DocumentId,
+    stage: bevy::asset::AssetId<UsdStageAsset>,
+) -> bool {
     let canonical_stage_exists = world
         .get_non_send::<CanonicalStages>()
         .is_some_and(|stages| stages.get(stage).is_some());
     if !canonical_stage_exists {
         return false;
+    }
+    // Standalone Editor previews render their document's canonical stage
+    // directly, without a simulation scene root. A current preview lease is
+    // an explicit owner; merely retaining a cached stage is not.
+    if world
+        .get_resource::<DocBackedTwinScenes>()
+        .is_some_and(|scenes| scenes.has_preview_lease(document))
+    {
+        return true;
     }
     let Some(mut roots) = QueryState::<(Entity, &UsdPrimPath), With<UsdSceneRoot>>::try_new(world)
     else {
@@ -1205,11 +1218,9 @@ fn execute_query_paths(
             "QueryUsdPrim: live scene ownership is unavailable",
         ));
     };
-    let mut document_stages = HashSet::new();
     let mut live_stages = HashSet::new();
     for (entity, path) in live_roots.iter(world) {
         let stage = path.stage_handle.id();
-        document_stages.insert(stage);
         if !lunco_usd_bevy_scene::is_preview_only_entity(world, entity) {
             live_stages.insert(stage);
         }
@@ -1237,12 +1248,11 @@ fn execute_query_paths(
     let document_stage = doc.and_then(|document| twin_stage_id_for_document(world, document));
     let query_stage = document_stage.or_else(|| doc.is_none().then_some(live_stage).flatten());
     let query_stage_is_mounted = query_stage.is_some_and(|stage| {
-        let has_root = if doc.is_some() {
-            document_stages.contains(&stage)
-        } else {
-            live_stages.contains(&stage)
+        let has_owner = match doc {
+            Some(document) => is_mounted_document_stage(world, document, stage),
+            None => live_stages.contains(&stage),
         };
-        has_root
+        has_owner
             && world
                 .get_non_send::<CanonicalStages>()
                 .is_some_and(|stages| stages.get(stage).is_some())

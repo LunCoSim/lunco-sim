@@ -431,6 +431,9 @@ Pass the exact document id as the first argument to every stage-reading helper,
 then the explicit manifest. Use `()` only for a mounted live-scene audit, never
 to select the focused preview. `QueryUsdPrim` rejects closed, unmapped, and stale
 document projections; wait for the document projection before auditing it.
+Standalone previews own their canonical stage through the explicit document's
+preview lease; they do not need a simulation scene root. Geometry bounds and
+material reads must follow the ready document generation after an edit.
 Inspect its structured reports for topology,
 mount reciprocity, joint frames, rigid-body/joint coverage, and
 mass/inertia/collider coverage before proposing an edit. Its `explode_plan`

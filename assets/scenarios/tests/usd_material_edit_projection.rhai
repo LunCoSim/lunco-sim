@@ -3,6 +3,7 @@
 const TEST_KIND = "editor";
 const ROOT = "/UsdMaterialEditProjection";
 const SHADER = ROOT + "/World/MyMaterial/PbrShader";
+const GEOMETRY = ROOT + "/World/MeshWithMaterial";
 const PREVIEW = 15991;
 const SECOND_VIEW = 15992;
 
@@ -61,9 +62,22 @@ fn shader_matches(doc, red, green, blue, roughness) {
     matches
 }
 
+// Read geometry through the same public provider as the authoring tools. A
+// ready standalone preview must use its edited stage rather than its recipe.
+fn geometry_matches(doc, expected_x, expected_half_x) {
+    let prim = query("QueryUsdPrim", #{doc_id: doc, path: GEOMETRY,
+        attrs: [], geometry_bounds: true});
+    if prim == () || prim.ok == false || prim.geometry_bounds == () { return false; }
+    let bounds = prim.geometry_bounds;
+    abs(bounds.center[0] - expected_x) < 0.000001
+        && abs(bounds.half_extents[0] - expected_half_x) < 0.000001
+        && abs(bounds.center[1]) < 0.000001
+        && abs(bounds.center[2]) < 0.000001
+}
+
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["InspectUsdDocument", "ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
+       query_reads: ["InspectUsdDocument", "InspectUsdViewport", "ListOpenDocuments", "QueryUsdPrim", "SyncUsdDocument"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -222,11 +236,19 @@ fn on_tick(me, ctx) {
             finish(this, false, "fixture did not expose its authored USD material values");
             return;
         }
+        if !geometry_matches(this.doc, 0.0, 1.0) {
+            finish(this, false, "fixture geometry did not match its initial preview");
+            return;
+        }
         let edit = assembly_edit::batch(this.doc, "Change material appearance", [
             #{ SetAttribute: #{ edit_target: "@root@", path: SHADER,
                 name: "inputs:diffuseColor", type_name: "color3f", value: "(0.0, 0.0, 1.0)" } },
             #{ SetAttribute: #{ edit_target: "@root@", path: SHADER,
                 name: "inputs:roughness", type_name: "float", value: "0.1" } },
+            #{ SetTranslate: #{ edit_target: "@root@", path: GEOMETRY,
+                value: [3.0, 0.0, 0.0] } },
+            #{ SetScale: #{ edit_target: "@root@", path: GEOMETRY,
+                value: [2.0, 1.0, 1.0] } },
         ], this.generation);
         if edit == () || edit.id == () || edit.ok == false {
             finish(this, false, "public USD edit command rejected the material change");
@@ -260,6 +282,11 @@ fn on_tick(me, ctx) {
             finish(this, false, "USD edit did not update the authored material query and preview generation");
             return;
         }
+        if !geometry_matches(this.doc, 3.0, 2.0)
+            || geometry_matches(this.doc, 0.0, 1.0) {
+            finish(this, false, "ready preview query returned geometry from the immutable recipe");
+            return;
+        }
         let restore = cmd("ApplyUsdOp", #{
             doc_id: this.doc,
             parent_gen: this.generation,
@@ -280,8 +307,12 @@ fn on_tick(me, ctx) {
             finish(this, false, "whole-source replacement did not restore the original USD material");
             return;
         }
+        if !geometry_matches(this.doc, 0.0, 1.0) {
+            finish(this, false, "whole-source replacement did not restore preview geometry");
+            return;
+        }
         assembly_edit::preview_close(PREVIEW);
         assembly_edit::close_document(this.doc);
-        finish(this, true, "authored USD material edits and whole-source replacement advanced the production preview");
+        finish(this, true, "material and geometry queries follow standalone preview edits and source replacement");
     }
 }

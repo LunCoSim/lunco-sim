@@ -913,7 +913,12 @@ selects the mounted live scene. `QueryUsdPrim { doc_id, path, ... }` resolves th
 document through `DocBackedTwinScenes` and rejects closed, unmapped, or stale
 document projections. Queries without `doc_id` require one mounted live stage;
 preview copies and detached cached stages cannot satisfy them. Preview focus
-does not select a query's document. It reads explicit composed paths and
+does not select a query's document. An explicit document query reads the live
+canonical stage owned by its Editor preview lease, even when that standalone
+preview has no simulation scene root. Material, transform and geometry-bound
+reads therefore follow the same projected document generation. A cached stage
+without a scene root or preview lease is not a live owner. It reads explicit
+composed paths and
 returns each prim's composed `active` state plus structured reports for
 topology/relationship expectations, reciprocal
 mount metadata, joint bodies/axes/optional authored frames, rigid-body/joint
