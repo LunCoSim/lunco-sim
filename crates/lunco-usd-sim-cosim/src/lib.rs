@@ -2617,6 +2617,10 @@ impl Plugin for UsdSimCosimPlugin {
                     .before(PropagateCosimSet::Propagate),
                 sync::sync_modelica_inputs
                     .after(ApplyForcesCosimSet::ApplyForces)
+                    // Rhai's admitted SetPorts commands belong to this input
+                    // snapshot. Copy them after script execution and before
+                    // dispatch; an unordered copy can delay them one solver step.
+                    .after(lunco_scripting::ScriptingSet)
                     .before(ModelicaSet::SpawnRequests),
                 // Modelica `when` bridge: edge-detect on fresh outputs, after they sync.
                 sync::fire_connected_events

@@ -5,7 +5,15 @@
 // remain in the same path used by a real authored scene.
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path("/RocketEngineObservables/Engine")], entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }
+    #{ modelica_entities: [find_path("/RocketEngineObservables/Engine")], entity_reads: [], entity_writes: [],
+       query_reads: ["ReadModelicaStepSamples"], required_inputs: [] }
+}
+
+fn accepted_step(engine) {
+    let record = query("ReadModelicaStepSamples", #{targets: [#{api_id: engine,
+        input_names: ["throttle"], output_names: ["thrust"]}]});
+    if record == () || record.entities == () || record.entities.len() != 1 { return (); }
+    record.entities[0].sample
 }
 
 fn on_start(me, ctx) {
@@ -21,6 +29,8 @@ fn on_start(me, ctx) {
     this.p_chamber = ();
     this.isp = ();
     this.command_ok = false;
+    this.command_step = ();
+    this.first_command_step = ();
 }
 
 fn on_tick(me, ctx) {
@@ -37,6 +47,7 @@ fn on_tick(me, ctx) {
     if this.phase == 0 {
         if this.elapsed < 1.0 { return; }
         this.idle_mass = get(this.engine, "m_prop");
+        this.command_step = accepted_step(this.engine);
         let command = cmd("SetPorts", #{
             target: this.engine,
             writes: [["throttle", 1.0]],
@@ -47,6 +58,14 @@ fn on_tick(me, ctx) {
         return;
     }
 
+    // Read the first accepted solver advance after the Rhai command. Eventual
+    // thrust alone cannot detect a schedule that consumes the command late.
+    if this.first_command_step == () && this.command_step != () {
+        let sample = accepted_step(this.engine);
+        if sample != () && sample.step_id > this.command_step.step_id {
+            this.first_command_step = sample;
+        }
+    }
     if this.elapsed < 2.0 { return; }
     this.burn_mass = get(this.engine, "m_prop");
     this.impulse = get(this.engine, "impulse");
@@ -57,6 +76,11 @@ fn on_tick(me, ctx) {
 
     let failures = [];
     failures.push(t_true(this.command_ok, "throttle command was rejected"));
+    failures.push(t_true(this.command_step != () && this.first_command_step != ()
+        && this.first_command_step.input_time_s == this.command_step.output_time_s
+        && this.first_command_step.sampled_inputs.throttle == 1.0,
+        "first solver advance after SetPorts did not consume throttle=1: "
+        + this.first_command_step));
     failures.push(t_present(this.idle_mass, "initial propellant output"));
     failures.push(t_present(this.burn_mass, "burn propellant output"));
     failures.push(t_present(this.impulse, "total impulse output"));

@@ -13,6 +13,14 @@
 > [`../../crates/lunco-modelica-ui/`](../../crates/lunco-modelica-ui/) and
 > [`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md).
 
+USD co-simulation samples the solver input buffer after the fixed-step script
+transaction, including admitted `SetPorts` commands, and before Modelica step
+dispatch. The copy is explicitly ordered after `ScriptingSet`; eventual
+positive thrust is insufficient to verify this boundary. The production
+`rocket_engine_observables` gate checks the first accepted solver advance after
+a Rhai throttle command using its captured input vector and adjacent solver
+timestamps. Script output wires retain their separate one-tick exchange delay.
+
 ## Contents
 
 - [1. Scope](#1-scope)
