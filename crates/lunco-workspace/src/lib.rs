@@ -70,15 +70,22 @@ pub fn document_belongs_to_twin_root(
     twin: TwinId,
     root: &std::path::Path,
 ) -> bool {
-    entry.origin.canonical_path().is_some_and(|path| {
-        path.strip_prefix(root).is_ok()
-            || path
-                .canonicalize()
-                .ok()
-                .zip(root.canonicalize().ok())
-                .is_some_and(|(path, root)| path.strip_prefix(root).is_ok())
-    }) || matches!(entry.origin, DocumentOrigin::Untitled { .. })
-        && entry.context_twin == Some(twin)
+    entry
+        .origin
+        .canonical_path()
+        .is_some_and(|path| path_belongs_to_twin_root(path, root))
+        || matches!(entry.origin, DocumentOrigin::Untitled { .. })
+            && entry.context_twin == Some(twin)
+}
+
+/// Determine filesystem ownership using the same path rule as document scope.
+pub fn path_belongs_to_twin_root(path: &std::path::Path, root: &std::path::Path) -> bool {
+    path.strip_prefix(root).is_ok()
+        || path
+            .canonicalize()
+            .ok()
+            .zip(root.canonicalize().ok())
+            .is_some_and(|(path, root)| path.strip_prefix(root).is_ok())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

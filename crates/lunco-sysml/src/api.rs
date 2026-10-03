@@ -13,8 +13,8 @@ use lunco_command_contracts::Ack;
 use lunco_core::{Command, on_command, register_commands};
 use lunco_doc::{Document, DocumentId, FileBacked, OpenOutcome};
 use lunco_doc_bevy::{
-    DocumentRegistry, DocumentSaved, NewDocument, OpenFile, RedoDocument, SaveAsDocument,
-    SaveDocument, UndoDocument,
+    CloseDocument, DocumentRegistry, DocumentSaved, NewDocument, OpenFile, RedoDocument,
+    SaveAsDocument, SaveDocument, UndoDocument,
 };
 use lunco_storage::Storage;
 
@@ -76,10 +76,12 @@ struct PendingSysmlOpens {
 
 struct PendingSysmlOpen {
     path: std::path::PathBuf,
+    owner_twin: Option<lunco_workspace::TwinId>,
     task: bevy::tasks::Task<Result<String, String>>,
 }
 
 register_commands!(
+    on_close_sysml_document,
     on_open_sysml_file,
     on_new_sysml_document,
     on_apply_sysml_ops,
@@ -99,6 +101,7 @@ impl Plugin for SysmlApiPlugin {
             lunco_api::ApiQueryRegistryPlugin,
         );
         app.init_resource::<PendingSysmlOpens>()
+            .add_observer(cancel_pending_sysml_opens)
             .add_systems(Update, drain_pending_sysml_opens);
         app.world_mut()
             .resource_mut::<ApiQueryRegistry>()
@@ -109,7 +112,11 @@ impl Plugin for SysmlApiPlugin {
 /// Route a filesystem `.sysml`/`.kerml` open through the async storage path.
 /// Other URI schemes and extensions belong to their owning domain observers.
 #[on_command(OpenFile)]
-fn on_open_sysml_file(trigger: On<OpenFile>, mut pending: ResMut<PendingSysmlOpens>) {
+fn on_open_sysml_file(
+    trigger: On<OpenFile>,
+    mut pending: ResMut<PendingSysmlOpens>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+) {
     let raw = trigger.event().path.trim();
     let path = raw.strip_prefix("file://").unwrap_or(raw);
     let extension = std::path::Path::new(path)
@@ -136,7 +143,33 @@ fn on_open_sysml_file(trigger: On<OpenFile>, mut pending: ResMut<PendingSysmlOpe
         String::from_utf8(bytes)
             .map_err(|error| format!("invalid UTF-8 in {}: {error}", task_path.display()))
     });
-    pending.tasks.push(PendingSysmlOpen { path, task });
+    pending.tasks.push(PendingSysmlOpen {
+        path,
+        task,
+        owner_twin: workspace
+            .as_ref()
+            .and_then(|workspace| workspace.active_twin),
+    });
+}
+
+#[on_command(CloseDocument)]
+fn on_close_sysml_document(
+    trigger: On<CloseDocument>,
+    mut registry: ResMut<DocumentRegistry<SysmlDocument>>,
+) {
+    registry.remove_document(trigger.event().doc_id);
+}
+
+/// Drop dispatched reads at their originating Twin's retirement edge.
+fn cancel_pending_sysml_opens(
+    trigger: On<lunco_workspace::TwinClosed>,
+    mut pending: ResMut<PendingSysmlOpens>,
+) {
+    let event = trigger.event();
+    pending.tasks.retain(|load| {
+        load.owner_twin != Some(event.twin)
+            && !lunco_workspace::path_belongs_to_twin_root(&load.path, &event.root)
+    });
 }
 
 /// Finish pending source reads on the ECS thread and let the registry decide
@@ -144,6 +177,7 @@ fn on_open_sysml_file(trigger: On<OpenFile>, mut pending: ResMut<PendingSysmlOpe
 fn drain_pending_sysml_opens(
     mut pending: ResMut<PendingSysmlOpens>,
     mut registry: ResMut<DocumentRegistry<SysmlDocument>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
 ) {
     if pending.tasks.is_empty() {
         return;
@@ -151,6 +185,19 @@ fn drain_pending_sysml_opens(
     let tasks = std::mem::take(&mut pending.tasks);
     let mut waiting = Vec::new();
     for mut load in tasks {
+        let owner_live = match (load.owner_twin, workspace.as_deref()) {
+            (Some(owner), Some(workspace)) => workspace.twin(owner).is_some(),
+            (None, Some(workspace)) => workspace.active_twin.is_none(),
+            (None, None) => true,
+            (Some(_), None) => false,
+        };
+        if !owner_live {
+            warn!(
+                "[sysml] discarded {}: opening workspace retired",
+                load.path.display()
+            );
+            continue;
+        }
         match bevy::tasks::futures_lite::future::block_on(
             bevy::tasks::futures_lite::future::poll_once(&mut load.task),
         ) {
@@ -518,5 +565,62 @@ impl ApiQueryProvider for InspectSysmlDocumentProvider {
             "semantic_errors": semantic_errors,
             "analysis_error": analysis_error,
         })))
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_retirement_tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_retirement_cancels_only_owned_reads() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<PendingSysmlOpens>()
+            .add_observer(cancel_pending_sysml_opens);
+        let closed = lunco_workspace::TwinId::new(1);
+        let foreign = lunco_workspace::TwinId::new(2);
+        for (path, owner_twin) in [
+            ("retired/source.sysml", Some(foreign)),
+            ("library/source.sysml", Some(closed)),
+            ("other/source.sysml", Some(foreign)),
+        ] {
+            let task = bevy::tasks::AsyncComputeTaskPool::get()
+                .spawn(async { std::future::pending::<Result<String, String>>().await });
+            app.world_mut()
+                .resource_mut::<PendingSysmlOpens>()
+                .tasks
+                .push(PendingSysmlOpen {
+                    path: path.into(),
+                    owner_twin,
+                    task,
+                });
+        }
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: closed,
+            root: "retired".into(),
+            was_active: true,
+        });
+        app.world_mut().flush();
+        let pending = app.world().resource::<PendingSysmlOpens>();
+        assert_eq!(pending.tasks.len(), 1);
+        assert_eq!(
+            pending.tasks[0].path,
+            std::path::Path::new("other/source.sysml")
+        );
+        // A completion without a still-mounted owner must also be rejected,
+        // even when no close observer was installed when it was dispatched.
+        app.init_resource::<lunco_workspace::WorkspaceResource>()
+            .init_resource::<DocumentRegistry<SysmlDocument>>()
+            .add_systems(Update, drain_pending_sysml_opens);
+        app.update();
+        assert!(app.world().resource::<PendingSysmlOpens>().tasks.is_empty());
+        assert_eq!(
+            app.world()
+                .resource::<DocumentRegistry<SysmlDocument>>()
+                .ids()
+                .count(),
+            0
+        );
     }
 }

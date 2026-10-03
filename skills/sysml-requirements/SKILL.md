@@ -55,6 +55,11 @@ evidence inputs change. Empty lifecycle queues are read before a mutable
 registry drain; idle publishing must not mark documents changed. Use
 `sysml_requirements_rebuild` input flags when profiling repeated rebuilds.
 
+`CloseDocument` retires the SysML registry document and its shared lifecycle
+state, including dirty drafts. Twin replacement dispatches that command for
+every resident SysML document. Pending filesystem opens carry
+their dispatch-time Twin identity and cannot install after that Twin closes.
+
 The panel presents three independent status dimensions with separate filters:
 structured requirement evidence, linked scene-test execution, and model
 coverage (`require` criteria and resolved `verify` links). Requirement details

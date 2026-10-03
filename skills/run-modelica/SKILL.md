@@ -189,6 +189,8 @@ Twin closure also retires its open Modelica documents through the core
 `CloseDocument` owner, including linked execution entities. Workspace replacement
 closes every editor document before `TwinAdded`; unfinished UI preparations are
 canceled and file-read completions are fenced by their captured Twin identity.
+Individual document closure also cancels parse preparation, save-close
+continuations, and document-owned modals before retiring the editor state.
 Reopening the same Twin starts fresh. `RestartScene` leaves editable documents
 resident while rebuilding their scene-owned execution.
 

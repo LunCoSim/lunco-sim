@@ -76,9 +76,13 @@ def main() -> None:
         execute(session, "CreateScratchModelicaDocument", name="TwinRetirementScratch",
                 source="model TwinRetirementScratch Real x; equation x = 1; end TwinRetirementScratch;")
         wait_for(session, lambda: any(doc["kind"] == "modelica" for doc in documents(session)), "Modelica scratch")
+        execute(session, "NewDocument", kind="sysml")
+        wait_for(session, lambda: any(doc["kind"] == "sysml" for doc in documents(session)), "dirty SysML draft")
+        sysml_ids = [doc["doc_id"] for doc in documents(session) if doc["kind"] == "sysml"]
         ids_a = [doc["doc_id"] for doc in documents(session)]
         ids_b = open_twin(session, TWIN_B, ids_a)
         verdict("verify_editor_retirement", ids_a, ids_b)
+        verdict("verify_sysml_retirement", sysml_ids)
 
         # Same-path reopening is a fresh session, even when no scene path changes.
         ids_reload = open_twin(session, TWIN_B, ids_b)

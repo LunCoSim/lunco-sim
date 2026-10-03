@@ -51,14 +51,31 @@ fn verify_session_preserved(ids) {
     report_verdict(checks, "Rejected Twin replacement", "TWIN_SESSION_PRESERVED")
 }
 
+fn sysml_registry_retired(id) {
+    let inspection = query("InspectSysmlDocument", #{ doc_id: id });
+    inspection != () && inspection.ok == false && inspection.status == "not_found"
+        && inspection.error.contains("SysML document") && inspection.error.contains("is not open")
+}
+
+fn verify_sysml_retirement(ids) {
+    if ids.is_empty() { throw "SysML retirement requires a document"; }
+    let checks = [];
+    for id in ids {
+        checks.push(t_true(sysml_registry_retired(id), "SysML domain registry released its retired document"));
+    }
+    report_verdict(checks, "SysML registry retirement", "TWIN_SYSML_RETIREMENT")
+}
+
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ListOpenDocuments"], required_inputs: [] }
+       query_reads: ["ListOpenDocuments", "InspectSysmlDocument"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
     this.done = false;
     this.checks = [];
+    this.sysml = ();
+    cmd("NewDocument", #{ kind: "sysml" });
     let created = modelica_editor::new_scratch(
         "model RetirementProbe Real x; equation x = 1; end RetirementProbe;",
         "RetirementProbe");
@@ -68,20 +85,31 @@ fn on_start(me, ctx) {
     this.doc = created.doc_id;
 }
 
-fn ready_to_close(me) { document_present(this.doc) }
+fn ready_to_close(me) {
+    if !document_present(this.doc) { return false; }
+    for doc in query("ListOpenDocuments").open_documents {
+        if doc.kind == "sysml" { this.sysml = doc.doc_id; }
+    }
+    this.sysml != ()
+}
 
 fn close_probe(me) {
     this.checks.push(t_true(document_present(this.doc), "scratch document opened"));
     cmd("CloseDocument", #{ doc_id: this.doc });
+    cmd("CloseDocument", #{ doc_id: this.sysml });
 }
 
-fn probe_retired(me) { !document_present(this.doc) }
+fn probe_retired(me) { !document_present(this.doc) && !document_present(this.sysml) }
 
 fn finish_probe(me) {
     this.checks.push(t_true(!document_present(this.doc),
         "generic CloseDocument retires the headless Modelica document"));
     // Closing a retired ID must be harmless and cannot recreate its registry.
     cmd("CloseDocument", #{ doc_id: this.doc });
+    cmd("CloseDocument", #{ doc_id: this.sysml });
+    this.checks.push(t_true(!document_present(this.sysml),
+        "generic CloseDocument retires dirty SysML documents and repeated close is harmless"));
+    this.checks.push(t_true(sysml_registry_retired(this.sysml), "closed SysML document is absent from its domain registry"));
     this.checks.push(t_true(!document_present(this.doc), "repeated close remains retired"));
     this.done = true;
     report_verdict(this.checks, "Twin document close", "TWIN_DOCUMENT_CLOSE");

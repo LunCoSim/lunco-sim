@@ -13,7 +13,7 @@ use bevy::asset::{AssetEvent, AssetLoadFailedEvent, AssetServer, Assets, Handle}
 use bevy::prelude::*;
 
 use lunco_assets_core::twin_uri;
-use lunco_doc::{DocumentId, FileBacked, OpenOutcome};
+use lunco_doc::{FileBacked, OpenOutcome};
 use lunco_doc_bevy::{
     DocumentChanged, DocumentClosed, DocumentOpened, DocumentRegistry, DocumentSaved,
 };
@@ -37,15 +37,12 @@ struct PendingSysmlSource {
 /// Event-driven source/document state for mounted Twins.
 ///
 /// `items` stays pending until the asset pipeline emits a terminal signal.
-/// `owned_documents` records only clean documents allocated by this automatic
-/// loader; a document already opened by a user is never claimed or discarded
-/// by Twin teardown.
+/// Document retirement belongs to the shared `CloseDocument` owner.
 #[derive(Resource, Default)]
 pub struct PendingSysmlSources {
     items: Vec<PendingSysmlSource>,
     ready: HashSet<bevy::asset::AssetId<SysmlSource>>,
     failed: HashMap<bevy::asset::AssetId<SysmlSource>, String>,
-    owned_documents: HashMap<DocumentId, PathBuf>,
 }
 
 impl PendingSysmlSources {
@@ -266,50 +263,18 @@ pub(crate) fn drain_pending_sysml_sources(
                     item.twin_name, item.relative_path
                 );
             }
-            OpenOutcome::Allocated => {
-                pending
-                    .owned_documents
-                    .insert(document, item.twin_root.clone());
-            }
-            OpenOutcome::Refreshed => {}
+            OpenOutcome::Allocated | OpenOutcome::Refreshed => {}
         }
     }
     pending.items = still_pending;
 }
 
-/// Close clean documents allocated by the Twin source loader when that Twin
-/// closes. Dirty documents remain available as loose user work.
+/// Release pending Twin source handles; document closure has one domain owner.
 pub(crate) fn release_twin_sysml_sources(
     trigger: On<TwinClosed>,
     mut pending: ResMut<PendingSysmlSources>,
-    mut registry: ResMut<DocumentRegistry<SysmlDocument>>,
 ) {
-    let root = &trigger.event().root;
-    pending.release_root(root);
-    let owned: Vec<_> = pending
-        .owned_documents
-        .iter()
-        .filter(|(_, document_root)| lunco_doc::same_file(document_root, root))
-        .map(|(document, _)| *document)
-        .collect();
-    for document in owned {
-        let remove = registry
-            .host(document)
-            .map(|host| !host.document().is_dirty())
-            .unwrap_or(true);
-        if remove {
-            registry.remove(document);
-            pending.owned_documents.remove(&document);
-        } else {
-            warn!(
-                "[sysml] retaining dirty Twin-owned document {:?} after Twin close",
-                document
-            );
-            // The user now owns this loose document. Do not retain an automatic
-            // lease that could delete it later if it becomes clean.
-            pending.owned_documents.remove(&document);
-        }
-    }
+    pending.release_root(&trigger.event().root);
 }
 
 /// Drain the SysML registry's lifecycle ring into the shared document events.

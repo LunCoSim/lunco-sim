@@ -100,6 +100,14 @@ Pending workspace restore is canceled at that same Twin edge. Replacement
 also closes loose and library editor documents without deleting shared source
 caches. Closing a non-active Twin does not clear the active simulation scene.
 
+SysML document closure uses the same domain command for clean files and dirty
+drafts; its Twin source loader owns only pending asset handles. Filesystem reads
+capture their originating Twin and are canceled or rejected after retirement.
+Modelica document closure cancels parse preparations, save-close continuations,
+and document-owned modals before dropping editor state. Source text tabs and
+queued filesystem opens use the workspace path-ownership predicate, including
+files opened directly by path without an explicit Twin origin.
+
 Core and application scripts keep their own owner scope and stable generation
 across Twin scene transitions. Scene teardown clears the old guided presentation
 but only closes programs explicitly marked as scene-owned; Twin teardown only

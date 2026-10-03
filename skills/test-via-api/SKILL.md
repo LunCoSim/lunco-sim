@@ -63,8 +63,10 @@ scratch-document closure in both headless and windowed hosts.
 
 The maintained document-close scene gate is
 `scenes/tests/twin_session_retirement/twin_session_retirement.usda` with verdict
-channel `TWIN_DOCUMENT_CLOSE`. Run it through `$LUNCOSIM_BIN test`. The windowed
-switch/reopen/rejected-candidate gate is
+channel `TWIN_DOCUMENT_CLOSE`. Run it through `$LUNCOSIM_BIN test`. The
+gate covers dirty SysML drafts as well as Modelica scratch documents; assert
+actual domain retirement rather than only removal from workspace metadata.
+The windowed switch/reopen/rejected-candidate gate is
 `python scripts/api/test_twin_session_retirement.py`; set `LUNCOSIM_BIN` and
 an explicit free `LUNCOSIM_API_PORT`. Its assertions are authored in
 `assets/scenarios/tests/twin_session_retirement.rhai`, and its process wrapper
