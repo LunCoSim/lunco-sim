@@ -321,7 +321,11 @@ equation
 
   torque_x = (command_torque_x + hold_torque_x)
     * max(0.0, min(1.0, 1.0 - flight_handoff));
-  torque_y = (command_torque_y + hold_torque_y)
+  // The pilot yaw request shares the physical attitude-actuator envelope.
+  // Without this bound it can bypass the stabilizer limit and ask the bounded
+  // allocator to trade unwanted translation for an impossible torque.
+  torque_y = max(-max(0.0, hold_torque_limit_nm), min(
+    max(0.0, hold_torque_limit_nm), command_torque_y + hold_torque_y))
     * max(0.0, min(1.0, 1.0 - flight_handoff));
   torque_z = (command_torque_z + hold_torque_z)
     * max(0.0, min(1.0, 1.0 - flight_handoff));
