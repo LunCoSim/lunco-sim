@@ -127,7 +127,7 @@ model Lander
   input Real attitude_deadband_rad = 0.01
     "Attitude error below which the stabilizer requests no RCS torque";
   input Real rate_deadband_rad_s = 0.02
-    "Body-rate below which the stabilizer requests no RCS torque";
+    "Requested rate deadband, capped below the settled-touchdown rate tolerance";
 
   // Generic actuator demands. `throttle` is a normalized command for the
   // main-engine valve network. Torque is a body-frame request consumed by the
@@ -154,6 +154,8 @@ model Lander
   Real filter_throttle(start = 0.0);
   Real filter_pitch(start = 0.0);
   Real filter_roll(start = 0.0);
+  Real effective_rate_deadband_rad_s
+    "Rate damping remains active inside the touchdown qualification envelope";
   Real filter_yaw(start = 0.0);
   Real cmd_throttle;
   Real cmd_pitch;
@@ -285,12 +287,18 @@ equation
   hold_error_z = attitude_error_z * noEvent(max(0.0,
     1.0 - attitude_deadband_rad
       / noEvent(max(1.0e-9, abs(attitude_error_z)))));
+  // The rate controller must be able to enter its own touchdown envelope.
+  // A larger damping deadband leaves a residual spin that can prevent engine
+  // cutoff indefinitely. Retain half the authored settled-rate tolerance as
+  // control margin; this does not relax any contact acceptance predicate.
+  effective_rate_deadband_rad_s = max(0.0, min(rate_deadband_rad_s,
+    0.5 * touchdown_angular_speed_rad_s));
   hold_rate_x = gyro_x * noEvent(max(0.0,
-    1.0 - rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_x)))));
+    1.0 - effective_rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_x)))));
   hold_rate_y = gyro_y * noEvent(max(0.0,
-    1.0 - rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_y)))));
+    1.0 - effective_rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_y)))));
   hold_rate_z = gyro_z * noEvent(max(0.0,
-    1.0 - rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_z)))));
+    1.0 - effective_rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_z)))));
 
   // Main-engine cutoff and flight-control handoff are separate phases. A
   // qualified pad-contact cutoff closes the main engine. The first low-speed
