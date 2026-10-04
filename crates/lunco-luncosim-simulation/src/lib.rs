@@ -568,6 +568,10 @@ impl Plugin for LunCoSimSimulationPlugin {
             // observers + wire-type registrations the host needs stay live.
             .add_plugins(LunCoControllerPlugin)
             .add_plugins(LunCoAvatarPlugin)
+            // Camera bindings and focus/return transactions are logical rig
+            // state, independent of a render Camera. Keep them available to
+            // semantic-control clients and headless production regressions.
+            .add_plugins(lunco_avatar_camera::AvatarCelestialCameraPlugin)
             .add_systems(Startup, setup_luncosim)
             // Cosim pipeline ordering: worker responses land in Update; the
             // fixed loop then propagates, applies, and dispatches the next

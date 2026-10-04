@@ -50,6 +50,7 @@ lunco-usd-terrain = { path = "../lunco-usd-terrain" }
 lunco-time = { path = "../lunco-time" }
 lunco-scene-commands = { path = "../lunco-scene-commands" }
 lunco-scene-camera = { path = "../lunco-scene-camera" }
+lunco-avatar-camera = { path = "../lunco-avatar-camera" }
 lunco-scene-selection = { path = "../lunco-scene-selection" }
 lunco-scene-validation = { path = "../lunco-scene-validation" }
 lunco-assets-datasets = { workspace = true }

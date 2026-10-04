@@ -9,7 +9,8 @@ const GRAVITY_Y = -1.62;
 const GRAVITY_TOLERANCE = 0.05;
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path(ROOT + "/Lander")], entity_reads: [], entity_writes: [],
+    #{ modelica_entities: [find_path(ROOT + "/Lander")],
+       entity_reads: [find_path(ROOT + "/Avatar"), find_path(ROOT + "/Lander/Environment")], entity_writes: [],
        query_reads: ["SceneCameraAudit"], required_inputs: [] }
 }
 
@@ -98,7 +99,7 @@ fn on_start(me, ctx) {
     // the existing control surface through that mode. This catches accidental
     // camera→control coupling without adding a second physics path.
     let focused = cmd("FocusTarget", #{ target: this.lander });
-    this.orbit_entered = focused.ok && component_present(this.avatar, "OrbitCamera");
+    this.focus_requested = focused.ok;
 }
 
 fn on_tick(me, ctx) {
@@ -108,6 +109,10 @@ fn on_tick(me, ctx) {
     this.elapsed = 0.0;
 
     if this.phase == 0 {
+        // Commands are queued transactions. Observe realization on a later
+        // tick rather than treating an acknowledgement as immediate state.
+        this.orbit_entered = this.focus_requested && component_present(this.avatar, "OrbitCamera")
+            && !component_present(this.avatar, "SpringArmCamera");
         if !send("forward", true, this.lander) {
             this.done = true;
             report_verdict(["forward intent was rejected"], "LANDER CONTROLS", "LANDER_CONTROLS");
@@ -137,13 +142,16 @@ fn on_tick(me, ctx) {
         send("yaw_left", false, this.lander);
         send("thrust", false, this.lander);
         this.phase = 4;
+    } else if this.phase == 4 {
+        let returned = cmd("ReturnFromOrbit", #{ camera: this.avatar });
+        this.return_requested = returned.ok;
+        this.phase = 5;
     } else {
         let released_pitch = input_port(this.lander, "pitch");
         let released_roll = input_port(this.lander, "roll");
         let released_yaw = input_port(this.lander, "yaw");
         let released_throttle = input_port(this.lander, "external_throttle");
-        let returned = cmd("ReturnFromOrbit", #{ target: this.avatar });
-        this.returned_to_follow = returned.ok && component_present(this.avatar, "SpringArmCamera")
+        this.returned_to_follow = this.return_requested && component_present(this.avatar, "SpringArmCamera")
             && !component_present(this.avatar, "OrbitCamera");
         let pose = query("QueryEntity", #{ id: this.lander });
         let gravity_y = output_port(this.environment, "gravity_y");

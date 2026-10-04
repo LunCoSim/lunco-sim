@@ -8215,6 +8215,7 @@ dependencies = [
  "lunco-assets-datasets",
  "lunco-assets-runtime",
  "lunco-avatar",
+ "lunco-avatar-camera",
  "lunco-celestial-ephemeris",
  "lunco-celestial-spatial",
  "lunco-controller",

@@ -4,11 +4,13 @@ use bevy::prelude::App;
 
 /// Install camera adapters needed by a rendered presentation surface.
 pub(crate) fn install_camera_realizations(app: &mut App) {
-    app.add_plugins((
-        lunco_camera_runtime::CameraRuntimePlugin,
-        lunco_camera_celestial::CelestialSurfaceCameraPlugin,
-        lunco_avatar_camera::AvatarCelestialCameraPlugin,
-    ));
+    if !app.is_plugin_added::<lunco_camera_runtime::CameraRuntimePlugin>() {
+        app.add_plugins(lunco_camera_runtime::CameraRuntimePlugin);
+    }
+    if !app.is_plugin_added::<lunco_avatar_camera::AvatarCelestialCameraPlugin>() {
+        app.add_plugins(lunco_avatar_camera::AvatarCelestialCameraPlugin);
+    }
+    app.add_plugins(lunco_camera_celestial::CelestialSurfaceCameraPlugin);
 }
 
 /// Install the interactive avatar input projection at the application edge.
