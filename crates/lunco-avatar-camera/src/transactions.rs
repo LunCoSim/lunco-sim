@@ -6,7 +6,6 @@
 use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
-use leafwing_input_manager::prelude::*;
 use lunco_avatar_camera_core::{
     CurrentRegionArrival, OrbitCameraTransition, OrbitReturnBehavior, OrbitUserInput,
     OrbitViewHistory, OrbitViewReturn, RadialArrival,
@@ -16,11 +15,9 @@ use lunco_camera_core::{
     OrbitCamera, ReturnFromOrbit, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
 };
 use lunco_celestial::CelestialBody;
-use lunco_control_core::{IntentAnalogState, UserIntent};
 use lunco_core::on_command;
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_environment::GravityBody;
-use lunco_input_core::InputBindingsSettings;
 use lunco_spatial::attach::migrate_to_grid;
 
 fn local_avatar_state_error(requested: Option<Entity>) -> String {
@@ -575,13 +572,7 @@ fn resolve_declared_body(
 pub(crate) fn avatar_init_system(
     mut commands: Commands,
     q_avatar: Query<
-        (
-            Entity,
-            &Transform,
-            Option<&OrbitViewHistory>,
-            Option<&InputMap<UserIntent>>,
-            Option<&ActionState<UserIntent>>,
-        ),
+        (Entity, &Transform, Option<&OrbitViewHistory>),
         (
             With<Embodiment>,
             With<LocalEmbodiment>,
@@ -607,9 +598,8 @@ pub(crate) fn avatar_init_system(
             With<lunco_render::SceneCamera>,
         ),
     >,
-    bindings: Res<InputBindingsSettings>,
 ) {
-    for (entity, tf, history, input_map, action_state) in q_avatar.iter() {
+    for (entity, tf, history) in q_avatar.iter() {
         if history.is_none() {
             commands
                 .entity(entity)
@@ -620,36 +610,16 @@ pub(crate) fn avatar_init_system(
         // presentation profile, exposure, and initial look-at transform. The
         // avatar owner adds only the generic interactive movement substrate;
         // Rhai selects richer behavior through typed camera commands.
-        let resolved_input_map = if input_map.is_none() {
-            match bindings.input_map() {
-                Ok(input_map) => Some(input_map),
-                Err(error) => {
-                    error!(
-                        "avatar {entity:?} has invalid input bindings; refusing interactive initialization: {error}"
-                    );
-                    continue;
-                }
-            }
-        } else {
-            None
-        };
         let mut avatar = commands.entity(entity);
         let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
         avatar.try_insert((
             AdaptiveNearPlane,
-            IntentAnalogState::default(),
             FreeFlightCamera {
                 yaw,
                 pitch,
                 damping: None,
             },
         ));
-        if let Some(input_map) = resolved_input_map {
-            avatar.try_insert(input_map);
-        }
-        if action_state.is_none() {
-            avatar.try_insert(ActionState::<UserIntent>::default());
-        }
     }
     for entity in q_proj.iter() {
         commands.entity(entity).try_insert(AdaptiveNearPlane);
@@ -1170,7 +1140,6 @@ mod tests {
 #[test]
 fn avatar_init_does_not_reinsert_freeflight_over_surface_camera() {
     let mut app = App::new();
-    app.init_resource::<InputBindingsSettings>();
     app.add_systems(Update, avatar_init_system);
 
     let avatar = app

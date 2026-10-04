@@ -43,7 +43,7 @@ use bevy::input::{
 };
 use bevy::prelude::*;
 use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent};
-use leafwing_input_manager::prelude::ActionState;
+use leafwing_input_manager::prelude::{ActionState, InputMap};
 use lunco_command_contracts::{Ack, OpId, Reject};
 use lunco_control_core::ControlLink;
 use lunco_control_core::{
@@ -1363,6 +1363,47 @@ register_commands!(
 /// Plugin for managing vessel input and command translation.
 pub struct LunCoControllerPlugin;
 
+// Semantic control state belongs to the controller even when the host has no
+// render projection. Camera realization must not decide whether a pilot exists.
+fn initialize_local_controller(
+    trigger: On<Add, lunco_embodiment_core::roles::LocalEmbodiment>,
+    mut commands: Commands,
+    settings: Res<InputBindingsSettings>,
+    state: Query<(
+        Option<&ActionState<UserIntent>>,
+        Option<&InputMap<UserIntent>>,
+        Option<&lunco_control_core::IntentAnalogState>,
+    )>,
+) {
+    let Ok((action, map, analog)) = state.get(trigger.entity) else {
+        return;
+    };
+    let input_map = if map.is_none() {
+        match settings.input_map() {
+            Ok(map) => Some(map),
+            Err(error) => {
+                error!(
+                    "local controller {:?} has invalid input bindings: {error}",
+                    trigger.entity
+                );
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    let mut controller = commands.entity(trigger.entity);
+    if action.is_none() {
+        controller.try_insert(ActionState::<UserIntent>::default());
+    }
+    if let Some(map) = input_map {
+        controller.try_insert(map);
+    }
+    if analog.is_none() {
+        controller.try_insert(lunco_control_core::IntentAnalogState::default());
+    }
+}
+
 /// Clear controller state that names scene entities. A released intent or
 /// control-path blackout must not be applied to a replacement scene that reuses
 /// the same entity slot or global id.
@@ -1396,6 +1437,7 @@ impl Plugin for LunCoControllerPlugin {
             app.add_plugins(lunco_input_core::InputBindingsPlugin);
         }
         app.init_resource::<SimulatedIntents>();
+        app.add_observer(initialize_local_controller);
         app.add_message::<PendingWindowInput>();
         lunco_core::MarkClientLocalExt::mark_client_local::<InjectWindowInput>(app);
         app.init_resource::<lunco_core_session::CommandPolicyRegistry>();

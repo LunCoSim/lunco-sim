@@ -546,12 +546,30 @@ impl TwinPolicySetInputs {
 
 /// Snapshot policy-manifest candidate paths from the already-indexed Twin.
 pub fn twin_policy_set_inputs(twin: &lunco_twin::Twin) -> TwinPolicySetInputs {
+    // A folder Twin can contain other complete Twins. Their manifests and
+    // policies belong to those containers, not to the mounted parent scope.
+    // Use the indexed boundaries rather than opening files on the live thread.
+    let child_roots: Vec<_> = twin
+        .files()
+        .iter()
+        .filter(|entry| {
+            entry.relative_path.file_name()
+                == Some(std::ffi::OsStr::new(lunco_twin::MANIFEST_FILENAME))
+        })
+        .filter_map(|entry| entry.relative_path.parent())
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .collect();
     TwinPolicySetInputs {
         root: twin.root.clone(),
         candidate_paths: twin
             .files()
             .iter()
             .filter(|entry| is_indexed_policy_candidate_path(&entry.relative_path))
+            .filter(|entry| {
+                !child_roots
+                    .iter()
+                    .any(|root| entry.relative_path.starts_with(root))
+            })
             .map(|entry| entry.relative_path.clone())
             .collect(),
     }
@@ -616,6 +634,54 @@ pub fn twin_policy_set(inputs: TwinPolicySetInputs) -> Result<Option<LoadedPolic
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mounted_folder_does_not_install_nested_twins_policies() {
+        let open = |path: &Path| match lunco_twin::TwinMode::open(path).unwrap() {
+            lunco_twin::TwinMode::Folder(twin) | lunco_twin::TwinMode::Twin(twin) => twin,
+            lunco_twin::TwinMode::Orphan(_) => panic!("fixture must be a folder"),
+        };
+        let folder = tempfile::tempdir().unwrap();
+        for name in ["first", "second"] {
+            let child = folder.path().join(name);
+            std::fs::create_dir_all(child.join("policy")).unwrap();
+            std::fs::write(
+                child.join("twin.toml"),
+                "name = \"child\"\nversion = \"0.1.0\"\n",
+            )
+            .unwrap();
+            std::fs::write(
+                child.join("policy/index.toml"),
+                "kind = \"lunco.policy.v1\"\nscope = \"twin\"\n",
+            )
+            .unwrap();
+        }
+        let parent = open(folder.path());
+        assert!(
+            twin_policy_set(twin_policy_set_inputs(&parent))
+                .unwrap()
+                .is_none()
+        );
+
+        std::fs::create_dir(folder.path().join("policy")).unwrap();
+        std::fs::write(
+            folder.path().join("policy/index.toml"),
+            "kind = \"lunco.policy.v1\"\nscope = \"twin\"\n",
+        )
+        .unwrap();
+        let parent = open(folder.path());
+        assert!(
+            twin_policy_set(twin_policy_set_inputs(&parent))
+                .unwrap()
+                .is_some()
+        );
+        let child = open(&folder.path().join("first"));
+        assert!(
+            twin_policy_set(twin_policy_set_inputs(&child))
+                .unwrap()
+                .is_some()
+        );
+    }
 
     const FEATURE_OPTIONAL_POLICY: &str = r#"
 kind = "lunco.policy.v1"
