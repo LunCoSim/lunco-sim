@@ -130,7 +130,8 @@ impl AssetLoader for UsdLoader {
         let roots = self.roots.clone();
         let root_asset_path = anchor_of(load_context.path());
 
-        let fetched = fetch_layer_closure(load_context, &root_asset_path, bytes).await?;
+        let fetched =
+            fetch_layer_closure(load_context, &root_asset_path, bytes, roots.as_ref()).await?;
         let FetchedStageClosure {
             recipe,
             source_dependencies,

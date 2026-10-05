@@ -35,6 +35,9 @@ pub struct UsdInstanceProjection {
     /// The prepared source asset retained for as long as this instance is live.
     /// Sibling instances can then reuse its loaded recipe and immutable plan.
     pub source_asset: Handle<UsdStageAsset>,
+    /// Exact admitted composition identity and closure retained with the live
+    /// instance. The transport asset may use a different USD root identity.
+    pub reference_recipe: Arc<lunco_usd_compose::recipe::StageRecipe>,
     /// An instance-scoped view over the source asset's shared prepared plan.
     pub plan: Arc<UsdStageProjectionPlan>,
     /// Exact authored asset identity, retained for promotion into the live
@@ -53,6 +56,7 @@ impl UsdInstanceProjection {
     /// Build one prepared projection for a referenced instance.
     pub fn new(
         source_asset: Handle<UsdStageAsset>,
+        reference_recipe: Arc<lunco_usd_compose::recipe::StageRecipe>,
         plan: Arc<UsdStageProjectionPlan>,
         asset_path: impl Into<String>,
         reference_prim_path: Option<String>,
@@ -61,6 +65,7 @@ impl UsdInstanceProjection {
         Self {
             root: None,
             source_asset,
+            reference_recipe,
             plan,
             asset_path: asset_path.into(),
             reference_prim_path,

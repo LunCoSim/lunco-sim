@@ -1020,15 +1020,21 @@ and `lunco-usd-prim-tree-ui` owns the reusable prim tree.
 - Live structural reconciliation resolves `(stage, prim path)` through the
   `UsdPrimPath` lifecycle index. Insert and removal observers keep the index
   current, including duplicate preview paths; scene edits no longer scan every
-  live prim once for each changed path. A referenced spawn merges an immutable
-  `StageRecipe` closure once per asset revision. Warm instances reuse its weak
-  recipe identity, while a newly loaded revision still refreshes changed layer
-  bytes. The asset handle on each live instance owns the recipe lifetime; the
-  canonical stage's identity cache does not retain unloaded assets. Cold source
+  live prim once for each changed path. A referenced spawn merges its immutable
+  `StageRecipe` through the canonical stage's weak recipe-identity cache. Reuse
+  of the same admitted recipe avoids another closure scan, while a new recipe
+  revision refreshes changed layer bytes. Each live instance retains its
+  canonical reference recipe and real source asset handle; the canonical
+  stage's identity cache does not retain unloaded assets. Cold source
   preparation remains asynchronous, and only the affected instance is admitted
   at the ordered live-stage boundary. Its prepared read view shares the
   immutable source snapshot and stores only the instance namespace and root
   overrides, so creating the view does not copy the asset's prim tree.
+  Native file-URI references prepare confined typed addresses and reanchored
+  recipes on the existing bounded reference worker lane. The canonical recipe
+  keeps the authored file identity, while the handle keeps the Twin transport
+  identity. Exact stage, source, operation and mount checks precede ordered
+  publication; reference/document holds remain until admitted projection.
   Raw-file runtime spawns check candidate identities through the same
   lifecycle-maintained `ApiEntityRegistry` used by public entity lookup; queued
   spawn identities use a hash set. Neither path scans all live IDs or queued

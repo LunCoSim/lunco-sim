@@ -123,7 +123,16 @@ worker transport for this path is not installed, so the owner reports that
 boundary visibly. The live USD stage stays with its thread-affine owner.
 Referenced stage closures follow the same event boundary before a reference is
 authored onto the live stage. Each instance shares the prepared source snapshot
-and carries only its namespace, root identity, and root overrides; descendants
+and owns its admitted canonical recipe alongside the real source handle. Native
+file-URI references prepare confined typed addresses and `StageRecipe::reanchor`
+composition on the shared bounded reference lane, used by incremental spawns
+and coarse rebuilds. Preserve authored layer bytes and absolute identifiers;
+never inject transport aliases into the resolver. Publication rechecks exact
+stage lifetime/generation, source, operation, live mount and loaded source
+revision; worker panics become terminal completion errors. Current reference
+and document-projection holds remain through ordered projection, and replaced
+requests cannot consume outgoing completions. Each instance carries only its
+namespace, root identity, and root overrides; descendants
 reuse that view through the same queue. The entity reader invalidates that
 prepared source when the canonical stage generation changes, so authored
 overrides are always read from the live composed stage. Do not add frame-count

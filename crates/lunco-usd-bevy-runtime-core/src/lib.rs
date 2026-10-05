@@ -18,6 +18,7 @@ use bevy::prelude::{App, IntoScheduleConfigs, Plugin};
 
 mod live_consume;
 mod native_assets;
+mod native_references;
 pub mod scene;
 mod scene_runtime;
 mod schema_assets;

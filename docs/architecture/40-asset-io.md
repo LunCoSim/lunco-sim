@@ -51,6 +51,10 @@ see [native admission and revision ownership](55-scene-addressing-and-roots.md#n
 USD entry, preview, schema and composition readers use `load_asset_path` and
 retain its typed address through loading. Logical filename characters are data;
 Bevy subasset labels are supplied separately with `with_label`.
+Native USD dependency reads prepare their typed Twin addresses on the loader's
+I/O worker. Live reference admission uses the existing bounded reference lane;
+the composition owner reanchors the fetched recipe to its authored canonical
+identity before publication, while the real source handle retains hot reload.
 
 The Windows job in `.github/workflows/nightly.yml` runs nine exact native-path
 regressions after the desktop release build, using that release profile and

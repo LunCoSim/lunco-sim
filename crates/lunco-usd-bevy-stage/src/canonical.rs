@@ -1676,6 +1676,7 @@ mod recipe_tests {
         stages.insert(handle.id(), canonical);
         let projection = crate::UsdInstanceProjection::new(
             bevy::asset::Handle::default(),
+            Arc::new(referenced.clone()),
             Arc::new(UsdStageProjectionPlan::from_recipe(&referenced).expect("prepare reference")),
             "lunco://test/reference.usda",
             None,

@@ -483,7 +483,7 @@ struct RefSpawn {
     /// the loaded asset's default prim.
     reference_prim_path: Option<String>,
     /// In-flight load of the referenced asset (its loader fetches the closure).
-    ref_handle: Handle<UsdStageAsset>,
+    ref_handle: Option<Handle<UsdStageAsset>>,
     /// A SetTranslate may follow AddPrim in the same edit burst. Keep it until
     /// the reference closure is installed; otherwise the edit arrives before
     /// the prim exists on the live stage and the new prim stays at origin.
@@ -519,6 +519,7 @@ struct RefSpawn {
 /// Populated by [`sync_twin_overlays`], drained by [`drain_ref_spawns`].
 #[derive(Resource, Default)]
 pub(crate) struct PendingRefSpawns {
+    pub(crate) native: crate::native_references::NativeReferencePreparations,
     items: Vec<RefSpawn>,
     ready: HashSet<AssetId<UsdStageAsset>>,
     failed: HashMap<AssetId<UsdStageAsset>, String>,
@@ -527,7 +528,7 @@ pub(crate) struct PendingRefSpawns {
     /// Strong handles held while a coarse document rebuild waits for a newly
     /// referenced closure. Without this retention the load becomes `Unused`
     /// before the async loader can publish its prepared asset.
-    retained_assets: HashMap<String, Handle<UsdStageAsset>>,
+    retained_assets: HashMap<(AssetId<UsdStageAsset>, String), Handle<UsdStageAsset>>,
 }
 
 /// One coalesced authoritative document-projection operation per document.
@@ -713,8 +714,8 @@ impl PendingRefSpawns {
     }
 
     fn push(&mut self, item: RefSpawn, ready: bool) {
-        if ready {
-            self.ready.insert(item.ref_handle.id());
+        if ready && let Some(handle) = &item.ref_handle {
+            self.ready.insert(handle.id());
         }
         self.items.push(item);
     }
@@ -725,6 +726,15 @@ impl PendingRefSpawns {
         prim_path: &str,
     ) -> Vec<SimulationProgressKey> {
         let mut released = Vec::new();
+        let retired = self
+            .items
+            .iter()
+            .filter(|item| item.scene_id == scene_id && item.prim_path == prim_path)
+            .map(|item| item.asset_path.clone())
+            .collect::<Vec<_>>();
+        for reference in retired {
+            self.native.retire_input(scene_id, &reference);
+        }
         self.items.retain(|item| {
             let keep = !(item.scene_id == scene_id && item.prim_path == prim_path);
             if !keep && !item.failure_reported {
@@ -751,13 +761,23 @@ impl PendingRefSpawns {
     }
 
     fn mark_ready(&mut self, id: AssetId<UsdStageAsset>) {
-        if self.items.iter().any(|item| item.ref_handle.id() == id) {
+        self.native.mark_asset(id);
+        if self.items.iter().any(|item| {
+            item.ref_handle
+                .as_ref()
+                .is_some_and(|handle| handle.id() == id)
+        }) {
             self.ready.insert(id);
         }
     }
 
     fn mark_failed(&mut self, id: AssetId<UsdStageAsset>, error: String) {
-        if self.items.iter().any(|item| item.ref_handle.id() == id) {
+        self.native.mark_failed(id, &error);
+        if self.items.iter().any(|item| {
+            item.ref_handle
+                .as_ref()
+                .is_some_and(|handle| handle.id() == id)
+        }) {
             self.failed.insert(id, error);
         }
     }
@@ -810,7 +830,10 @@ fn classify_reference_asset_state(
 /// consumed before this operation is queued, so the current store and load
 /// state determine its initial readiness or failure.
 fn enqueue_reference_spawn(world: &mut World, mut item: RefSpawn) {
-    let id = item.ref_handle.id();
+    let Some(id) = item.ref_handle.as_ref().map(Handle::id) else {
+        world.resource_mut::<PendingRefSpawns>().push(item, false);
+        return;
+    };
     let state = reference_asset_state(world, id);
     let asset_ready = matches!(&state, ReferenceAssetState::Prepared);
     item.asset_ready = asset_ready;
@@ -901,7 +924,7 @@ fn set_pending_reference_active(world: &mut World, index: usize, active: bool) {
         item.active = active;
         (
             item.progress_key,
-            item.ref_handle.id(),
+            item.ref_handle.as_ref().map(Handle::id),
             item.held,
             item.asset_ready,
             item.failure.clone(),
@@ -954,10 +977,12 @@ fn set_pending_reference_active(world: &mut World, index: usize, active: bool) {
     }
     if changed {
         let mut pending = world.resource_mut::<PendingRefSpawns>();
-        if asset_ready {
+        if asset_ready && let Some(asset_id) = asset_id {
             pending.ready.insert(asset_id);
         }
-        if let Some(error) = &failure {
+        if let Some(error) = &failure
+            && let Some(asset_id) = asset_id
+        {
             pending.failed.insert(asset_id, error.clone());
         }
     }
@@ -974,6 +999,17 @@ fn set_pending_reference_active(world: &mut World, index: usize, active: bool) {
 }
 
 fn cancel_pending_reference(world: &mut World, index: usize) {
+    let retired = world
+        .resource::<PendingRefSpawns>()
+        .items
+        .get(index)
+        .map(|item| (item.scene_id, item.asset_path.clone()));
+    if let Some((scene, reference)) = retired {
+        world
+            .resource_mut::<PendingRefSpawns>()
+            .native
+            .retire_input(scene, &reference);
+    }
     let (key, held) = {
         let mut pending = world.resource_mut::<PendingRefSpawns>();
         let Some(item) = pending.items.get_mut(index) else {
@@ -1150,6 +1186,7 @@ pub(crate) fn reset_scene_projection_state(
     if let Some(pending) = pending_native_paths.as_deref_mut() {
         pending.clear(admission.as_deref_mut(), progress.as_deref_mut());
     }
+    pending_refs.native.clear(admission.as_deref_mut());
     pending_refs.items.clear();
     pending_refs.ready.clear();
     pending_refs.failed.clear();
@@ -1236,8 +1273,16 @@ pub(crate) fn mark_pending_ref_spawns(
     }
 }
 
-pub(crate) fn pending_ref_spawns_ready(pending: Res<PendingRefSpawns>) -> bool {
+pub(crate) fn pending_ref_spawns_ready(
+    pending: Res<PendingRefSpawns>,
+    admission: Option<Res<AsyncWorkAdmission>>,
+) -> bool {
     pending.has_terminal_asset_event()
+        || pending.native.needs_work(
+            admission
+                .as_ref()
+                .map_or(0, |admission| admission.capacity_revision()),
+        )
 }
 
 /// Publish non-fatal USD closure misses for the stage identities that are
@@ -2135,7 +2180,11 @@ fn refresh_dependent_stage_assets(
                             .iter()
                             .any(|path| path == &item.prim_path)
                 })
-                .map(|item| (item.ref_handle.id(), item.ref_handle.clone()))
+                .filter_map(|item| {
+                    item.ref_handle
+                        .as_ref()
+                        .map(|handle| (handle.id(), handle.clone()))
+                })
                 .collect::<HashMap<_, _>>()
         })
         .unwrap_or_default();
@@ -4489,7 +4538,7 @@ fn spawn_prim_op(
         return;
     };
 
-    let ref_path = {
+    let reference_id = {
         let Some(cs) = world
             .get_non_send::<CanonicalStages>()
             .and_then(|s| s.get(scene_id))
@@ -4518,19 +4567,33 @@ fn spawn_prim_op(
         };
         cs.canonical_reference_id(&asset_path)
             .map_err(|error| error.to_string())
-            .and_then(|ref_id| {
+    };
+    let ref_handle = reference_id.and_then(|ref_id| {
+        if crate::native_references::is_native(&ref_id) {
+            crate::native_references::reference(world, scene_id, &ref_id)
+                .map(|prepared| prepared.map(|prepared| prepared.handle))
+        } else {
+            let path = {
+                let prepared = world
+                    .get_non_send::<CanonicalStages>()
+                    .and_then(|stages| stages.get(scene_id))
+                    .and_then(|stage| stage.native_asset_paths());
                 lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
                     world.resource::<AssetServer>(),
                     scene_id,
                     &ref_id,
                     world.get_resource::<TwinRoots>(),
-                    cs.native_asset_paths(),
+                    prepared,
                 )
                 .map_err(|error| error.to_string())
-            })
-    };
-    let ref_path = match ref_path {
-        Ok(path) => path,
+            }?;
+            Ok(Some(
+                world.resource::<AssetServer>().load::<UsdStageAsset>(path),
+            ))
+        }
+    });
+    let ref_handle = match ref_handle {
+        Ok(handle) => handle,
         Err(error) => {
             let detail = format!("invalid USD reference identifier: {error}");
             let mut item = failed_ref_spawn(
@@ -4555,9 +4618,6 @@ fn spawn_prim_op(
             return;
         }
     };
-    let ref_handle = world
-        .resource::<AssetServer>()
-        .load::<UsdStageAsset>(ref_path);
     let reason = format!("Preparing USD reference {prim_path} from `{asset_path}`");
     let held = acquire_reference_progress(world, progress_key, scene_id, reason);
     enqueue_reference_spawn(
@@ -4598,7 +4658,7 @@ fn failed_ref_spawn(
         type_name,
         asset_path: asset_path.to_owned(),
         reference_prim_path,
-        ref_handle: Handle::default(),
+        ref_handle: None,
         translate: None,
         deferred_ops: Vec::new(),
         active: true,
@@ -4958,6 +5018,7 @@ fn ensure_reference_layers_for_rebuild(
     }
 
     let mut extra = HashMap::new();
+    let mut admitted_native = Vec::new();
     for asset_path in references {
         let reference_id = {
             let Some(cs) = world
@@ -4985,10 +5046,32 @@ fn ensure_reference_layers_for_rebuild(
         if present {
             continue;
         }
+        if crate::native_references::is_native(&reference_id) {
+            match crate::native_references::reference(world, scene_id, &reference_id) {
+                Ok(Some(prepared)) => {
+                    extra.extend(prepared.recipe.bytes.clone());
+                    world
+                        .resource_mut::<PendingRefSpawns>()
+                        .retained_assets
+                        .insert((scene_id, reference_id.clone()), prepared.handle);
+                    admitted_native.push(reference_id);
+                }
+                Ok(None) => return false,
+                Err(error) => {
+                    report_stage_projection_reset_failure(
+                        world,
+                        scene_id,
+                        format!("native USD rebuild reference {asset_path:?} failed: {error}"),
+                    );
+                    return false;
+                }
+            }
+            continue;
+        }
         let handle = if let Some(handle) = world
             .resource::<PendingRefSpawns>()
             .retained_assets
-            .get(&reference_id)
+            .get(&(scene_id, reference_id.clone()))
             .cloned()
         {
             handle
@@ -5021,7 +5104,7 @@ fn ensure_reference_layers_for_rebuild(
             world
                 .resource_mut::<PendingRefSpawns>()
                 .retained_assets
-                .insert(reference_id.clone(), handle.clone());
+                .insert((scene_id, reference_id.clone()), handle.clone());
             handle
         };
         let Some(asset) = world.resource::<Assets<UsdStageAsset>>().get(handle.id()) else {
@@ -5044,7 +5127,17 @@ fn ensure_reference_layers_for_rebuild(
     let Some(cs) = stages.get_mut(scene_id) else {
         return false;
     };
-    cs.add_layer_bytes(extra)
+    let admitted = cs.add_layer_bytes(extra);
+    drop(stages);
+    if admitted {
+        for reference in admitted_native {
+            world
+                .resource_mut::<PendingRefSpawns>()
+                .native
+                .retire_input(scene_id, &reference);
+        }
+    }
+    admitted
 }
 
 /// Complete referenced spawns whose asset closure has finished loading. The
@@ -5054,6 +5147,7 @@ fn ensure_reference_layers_for_rebuild(
 /// when a later edit requires live-stage ownership.
 pub(crate) fn drain_ref_spawns(world: &mut World) {
     use lunco_usd_bevy_stage::canonical::CanonicalStages;
+    crate::native_references::advance(world);
     if world.resource::<PendingRefSpawns>().items.is_empty() {
         return;
     }
@@ -5078,11 +5172,46 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             deactivate_reference_progress(world, &mut item);
             continue;
         }
+        let mut prepared_native = None;
+        let mut native_reference = false;
+        if item.failure.is_none() {
+            let reference_id = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|stages| stages.get(item.scene_id))
+                .map(|stage| {
+                    stage
+                        .canonical_reference_id(&item.asset_path)
+                        .map_err(|error| error.to_string())
+                });
+            match reference_id {
+                Some(Ok(reference_id)) if crate::native_references::is_native(&reference_id) => {
+                    native_reference = true;
+                    match crate::native_references::reference(world, item.scene_id, &reference_id) {
+                        Ok(Some(prepared)) => {
+                            item.ref_handle = Some(prepared.handle.clone());
+                            item.asset_ready = true;
+                            prepared_native = Some(prepared);
+                        }
+                        Ok(None) => item.asset_ready = false,
+                        Err(error) => item.failure = Some(error),
+                    }
+                }
+                Some(Err(error)) => item.failure = Some(error),
+                None if crate::native_references::is_native(&item.asset_path) => {
+                    item.failure = Some("the owning native reference stage is unavailable".into());
+                }
+                _ => {}
+            }
+        }
+        let asset_id = item.ref_handle.as_ref().map(Handle::id);
+        let ready_event = asset_id.is_some_and(|id| ready.contains(&id))
+            && (!native_reference || prepared_native.is_some());
+        let failed_event = asset_id.and_then(|id| failed.get(&id));
         if !item.active {
-            if ready.contains(&item.ref_handle.id()) {
+            if ready_event {
                 item.asset_ready = true;
             }
-            if let Some(error) = failed.get(&item.ref_handle.id()) {
+            if let Some(error) = failed_event {
                 item.failure = Some(error.clone());
             }
             deactivate_reference_progress(world, &mut item);
@@ -5094,13 +5223,10 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
         if commit_order.must_defer(
             item.scene_id,
             authoritative,
-            item.failure.is_some()
-                || failed.contains_key(&item.ref_handle.id())
-                || item.asset_ready
-                || ready.contains(&item.ref_handle.id()),
+            item.failure.is_some() || failed_event.is_some() || item.asset_ready || ready_event,
         ) {
-            item.asset_ready |= ready.contains(&item.ref_handle.id());
-            if let Some(error) = failed.get(&item.ref_handle.id()) {
+            item.asset_ready |= ready_event;
+            if let Some(error) = failed_event {
                 item.failure = Some(error.clone());
             }
             still.push(item);
@@ -5114,22 +5240,36 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             still.push(item);
             continue;
         }
-        if let Some(error) = failed.get(&item.ref_handle.id()) {
+        if let Some(error) = failed_event {
             fail_reference_spawn(world, &mut item, error.clone());
             item.failure = Some(error.clone());
             commit_order.block_successors(item.scene_id, authoritative);
             still.push(item);
             continue;
         }
-        if !item.asset_ready && !ready.contains(&item.ref_handle.id()) {
+        if !item.asset_ready && !ready_event {
             still.push(item);
             continue;
         }
+        if native_reference && prepared_native.is_none() {
+            still.push(item);
+            continue;
+        }
+        let Some(ref_handle) = item.ref_handle.as_ref().cloned() else {
+            fail_reference_spawn(
+                world,
+                &mut item,
+                "a ready reference has no admitted source asset".into(),
+            );
+            commit_order.block_successors(item.scene_id, authoritative);
+            still.push(item);
+            continue;
+        };
         item.asset_ready = true;
         let dependent_plan_state = world
             .resource::<PendingDependentStageRefreshes>()
             .by_stage
-            .get(&item.ref_handle.id())
+            .get(&ref_handle.id())
             .map(|pending| pending.plan_failure.clone());
         match dependent_plan_state {
             Some(Some(error)) => {
@@ -5150,10 +5290,15 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             }
             None => {}
         }
-        let recipe = world
-            .resource::<Assets<UsdStageAsset>>()
-            .get(item.ref_handle.id())
-            .and_then(|a| a.recipe.clone());
+        let recipe = prepared_native
+            .as_ref()
+            .map(|prepared| Arc::clone(&prepared.recipe))
+            .or_else(|| {
+                world
+                    .resource::<Assets<UsdStageAsset>>()
+                    .get(ref_handle.id())
+                    .and_then(|a| a.recipe.clone())
+            });
         let Some(recipe) = recipe else {
             fail_reference_spawn(
                 world,
@@ -5197,10 +5342,16 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                 continue;
             }
         }
-        let Some(asset) = world
-            .resource::<Assets<UsdStageAsset>>()
-            .get(item.ref_handle.id())
-        else {
+        let source_plan = prepared_native
+            .as_ref()
+            .map(|prepared| Arc::clone(&prepared.plan))
+            .or_else(|| {
+                world
+                    .resource::<Assets<UsdStageAsset>>()
+                    .get(ref_handle.id())
+                    .map(|asset| Arc::clone(&asset.projection_plan))
+            });
+        let Some(source_plan) = source_plan else {
             fail_reference_spawn(
                 world,
                 &mut item,
@@ -5212,7 +5363,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
         };
         let mut plan = match {
             let _span = bevy::log::info_span!("usd_reference_instance_plan_remap").entered();
-            asset.projection_plan.for_instance(&item.prim_path)
+            source_plan.for_instance(&item.prim_path)
         } {
             Ok(plan) => plan,
             Err(error) => {
@@ -5370,7 +5521,8 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                 .iter()
                 .any(|op| !deferred_op_is_represented_by_instance_plan(op, &item.prim_path));
         let projection = UsdInstanceProjection::new(
-            item.ref_handle.clone(),
+            ref_handle,
+            Arc::clone(&recipe),
             Arc::new(plan),
             item.asset_path.clone(),
             item.reference_prim_path.clone(),
@@ -5392,10 +5544,29 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                 layer_count = recipe.bytes.len(),
             )
             .entered();
+            let prepared_paths = prepared_native
+                .as_ref()
+                .and_then(|prepared| prepared.plan.native_asset_paths_snapshot());
             match world.get_non_send_mut::<CanonicalStages>() {
                 Some(mut stages) => match stages.get_mut(item.scene_id) {
                     Some(cs) => {
-                        if !cs.add_layer_recipe(&recipe) {
+                        let preparation = if let Some(paths) = prepared_paths {
+                            let mut paths_for_stage = cs
+                                .cached_native_asset_paths()
+                                .map(|current| current.as_ref().clone())
+                                .unwrap_or_else(|| paths.as_ref().clone());
+                            paths_for_stage
+                                .merge(paths.as_ref().clone())
+                                .map(|()| cs.set_native_asset_paths(Arc::new(paths_for_stage)))
+                                .map_err(|error| error.to_string())
+                        } else {
+                            Ok(())
+                        };
+                        if let Err(error) = preparation {
+                            Some(Err(format!(
+                                "native reference preparation owner mismatch: {error}"
+                            )))
+                        } else if !cs.add_layer_recipe(&recipe) {
                             Some(Err(
                                 "the owning stage cannot accept referenced layer bytes".to_owned()
                             ))
@@ -5491,6 +5662,12 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             projection,
             item.progress_key,
         );
+        if native_reference {
+            world
+                .resource_mut::<PendingRefSpawns>()
+                .native
+                .retire_input(item.scene_id, &item.asset_path);
+        }
         // Replay child-owned metadata and relationships only after the
         // referenced root exists on the live stage. The document already owns
         // the complete ordered intent; this is just its delayed live-stage
@@ -5718,6 +5895,7 @@ mod tests {
             .expect("remap source plan");
         let mut projection = UsdInstanceProjection::new(
             Handle::default(),
+            Arc::clone(&reference_recipe),
             Arc::new(plan),
             "reference.usda",
             None,
@@ -6433,7 +6611,7 @@ mod tests {
             type_name: Some("Xform".to_owned()),
             asset_path: asset_path.to_owned(),
             reference_prim_path: None,
-            ref_handle,
+            ref_handle: Some(ref_handle),
             translate: None,
             deferred_ops: Vec::new(),
             active: true,
@@ -6647,7 +6825,7 @@ mod tests {
                 type_name: Some("Xform".to_owned()),
                 asset_path: "vehicle.usda".to_owned(),
                 reference_prim_path: None,
-                ref_handle: reference_handle,
+                ref_handle: Some(reference_handle),
                 translate: None,
                 deferred_ops: Vec::new(),
                 active: true,
@@ -6774,7 +6952,7 @@ mod tests {
                 type_name: Some("Xform".into()),
                 asset_path: "lunco://markers/route_point.usda".into(),
                 reference_prim_path: None,
-                ref_handle: Handle::default(),
+                ref_handle: None,
                 translate: Some([1.0, 2.0, 3.0]),
                 deferred_ops: Vec::new(),
                 active: true,
@@ -6814,6 +6992,10 @@ mod tests {
                 PendingInstanceProjection {
                     projection: UsdInstanceProjection::new(
                         Handle::default(),
+                        Arc::new(lunco_usd_compose::recipe::StageRecipe::from_source(
+                            "reference.usda",
+                            TINY,
+                        )),
                         Arc::new(UsdStageProjectionPlan::default()),
                         "",
                         None,
@@ -6868,7 +7050,7 @@ mod tests {
                 type_name: Some("Xform".into()),
                 asset_path: "lunco://vessels/rover.usda".into(),
                 reference_prim_path: None,
-                ref_handle: Handle::default(),
+                ref_handle: None,
                 translate: None,
                 deferred_ops: Vec::new(),
                 active: true,
@@ -7003,7 +7185,7 @@ mod tests {
                     type_name: Some("Xform".to_owned()),
                     asset_path: asset_path.to_owned(),
                     reference_prim_path: None,
-                    ref_handle,
+                    ref_handle: Some(ref_handle),
                     translate: None,
                     deferred_ops: Vec::new(),
                     active: true,

@@ -153,6 +153,73 @@ impl std::fmt::Display for StageContentClosureError {
 impl std::error::Error for StageContentClosureError {}
 
 impl StageRecipe {
+    /// Assemble this fetched closure under a new USD root identity. The source
+    /// transport remains outside the recipe: relative composition arcs are
+    /// interpreted under both layer anchors by the shared USD dependency
+    /// reader, and explicit absolute identifiers keep their authored identity.
+    /// No alias identifiers or rewritten layer bytes are retained.
+    pub fn reanchor(&self, root_id: &str) -> anyhow::Result<Self> {
+        let root_id = crate::canonicalize_at(root_id, None)?;
+        let limits = StageClosureLimits::default();
+        let mut total_bytes = 0_usize;
+        let mut output = Self::new(root_id.clone(), HashMap::new());
+        let mut frontier =
+            std::collections::VecDeque::from([(self.root_id.clone(), root_id, 0_usize)]);
+        let mut seen = std::collections::HashSet::new();
+        while let Some((source_id, target_id, depth)) = frontier.pop_front() {
+            if !seen.insert((source_id.clone(), target_id.clone())) {
+                continue;
+            }
+            let raw = self.bytes.get(&source_id).ok_or_else(|| {
+                anyhow::anyhow!("USD closure root `{source_id}` has no fetched content")
+            })?;
+            if let Some(previous) = output.bytes.get(&target_id) {
+                anyhow::ensure!(
+                    previous == raw,
+                    "USD reanchored layers disagree at `{target_id}`"
+                );
+            } else {
+                total_bytes = total_bytes.checked_add(raw.len()).ok_or_else(|| {
+                    anyhow::anyhow!("USD reanchored closure byte count overflowed")
+                })?;
+                crate::check_stage_closure_limits(
+                    &limits,
+                    output.bytes.len() + 1,
+                    depth,
+                    0,
+                    total_bytes,
+                )?;
+                output.bytes.insert(target_id.clone(), raw.clone());
+            }
+            let source_children = crate::child_layer_ids(&source_id, raw)?;
+            let target_children = crate::child_layer_ids(&target_id, raw)?;
+            crate::check_stage_closure_limits(
+                &limits,
+                output.bytes.len(),
+                depth,
+                target_children.len(),
+                total_bytes,
+            )?;
+            anyhow::ensure!(
+                source_children.len() == target_children.len(),
+                "USD reanchoring changed composition dependency classification"
+            );
+            for (source_child, target_child) in source_children.into_iter().zip(target_children) {
+                if self.bytes.contains_key(&source_child) {
+                    frontier.push_back((source_child, target_child, depth + 1));
+                } else {
+                    output
+                        .dependency_diagnostics
+                        .push(StageDependencyDiagnostic::missing(
+                            target_id.clone(),
+                            target_child,
+                        ));
+                }
+            }
+        }
+        Ok(output)
+    }
+
     /// Build a recipe from a root and its successfully fetched layer bytes.
     pub fn new(root_id: impl Into<String>, bytes: HashMap<String, Vec<u8>>) -> Self {
         Self {
@@ -217,6 +284,127 @@ impl StageRecipe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reanchor_composes_nested_arcs_and_preserves_authored_asset_values() {
+        let transport_root = "twin://fixture/models/root.usda";
+        let absolute = "lunco://library/shared.usda";
+        let root = br#"#usda 1.0
+(
+    defaultPrim = "Asset"
+    subLayers = [@parts/child.usda@, @lunco://library/shared.usda@]
+)
+def Xform "Asset" {}
+"#;
+        let child = br#"#usda 1.0
+(
+    subLayers = [@grand.usda@]
+)
+over "Asset" {
+    custom asset texture = @images/paint #%.png@
+}
+"#;
+        let grand = b"#usda 1.0\nover \"Asset\" { custom string nested = \"composed\" }\n";
+        let absolute_bytes = b"#usda 1.0\nover \"Asset\" { custom string shared = \"absolute\" }\n";
+        let recipe = StageRecipe::new(
+            transport_root,
+            HashMap::from([
+                (transport_root.to_owned(), root.to_vec()),
+                (
+                    "twin://fixture/models/parts/child.usda".to_owned(),
+                    child.to_vec(),
+                ),
+                (
+                    "twin://fixture/models/parts/grand.usda".to_owned(),
+                    grand.to_vec(),
+                ),
+                (absolute.to_owned(), absolute_bytes.to_vec()),
+            ]),
+        );
+        let native_root = std::env::temp_dir()
+            .join("generic recipe # %")
+            .join("root.usda");
+        let native_root = lunco_storage::file_path_to_uri(&native_root).expect("native root URI");
+        for anchor in [transport_root, native_root.as_str()] {
+            let prepared = recipe.reanchor(anchor).expect("reanchor fetched closure");
+            assert_eq!(prepared.root_id, anchor);
+            assert_eq!(prepared.bytes.len(), 4);
+            assert!(prepared.bytes.contains_key(absolute));
+            let child_id = crate::child_layer_ids(anchor, root).unwrap()[0].clone();
+            let grand_id = crate::child_layer_ids(&child_id, child).unwrap()[0].clone();
+            assert_eq!(prepared.bytes[&child_id], child);
+            assert_eq!(prepared.bytes[&grand_id], grand);
+            if anchor != transport_root {
+                assert!(!prepared.bytes.contains_key(transport_root));
+            }
+            let resolver = crate::LuncoUsdResolver::new(prepared.bytes).expect("valid resolver");
+            let stage = openusd::usd::Stage::builder()
+                .resolver(resolver)
+                .open(anchor)
+                .expect("compose closure");
+            let prim = stage.prim(openusd::sdf::Path::new("/Asset").unwrap());
+            assert_eq!(
+                prim.attribute("nested").get::<String>().unwrap().as_deref(),
+                Some("composed")
+            );
+            assert_eq!(
+                prim.attribute("shared").get::<String>().unwrap().as_deref(),
+                Some("absolute")
+            );
+            let attribute = prim.attribute("texture");
+            let value = attribute
+                .get::<openusd::sdf::Value>()
+                .unwrap()
+                .unwrap()
+                .try_as_asset_path()
+                .expect("asset value");
+            assert_eq!(value.as_str(), "images/paint #%.png");
+            let stack = attribute.property_stack().unwrap();
+            assert_eq!(stack[0].0, child_id);
+            let image_id = crate::canonicalize_at(
+                value.as_str(),
+                Some(&openusd::ar::ResolvedPath::new(&stack[0].0)),
+            )
+            .unwrap();
+            if anchor == transport_root {
+                assert_eq!(image_id, "twin://fixture/models/parts/images/paint #%.png");
+            } else {
+                assert_eq!(
+                    lunco_storage::file_uri_to_path(&image_id).unwrap().unwrap(),
+                    lunco_storage::file_uri_to_path(anchor)
+                        .unwrap()
+                        .unwrap()
+                        .parent()
+                        .unwrap()
+                        .join("parts/images/paint #%.png")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reanchor_retains_missing_arcs_and_rejects_invalid_roots() {
+        let recipe = StageRecipe::from_source(
+            "twin://fixture/root.usda",
+            "#usda 1.0\n( subLayers = [@missing.usda@] )\ndef Scope \"Root\" {}\n",
+        );
+        let root = lunco_storage::file_path_to_uri(&std::env::temp_dir().join("generic root.usda"))
+            .unwrap();
+        let prepared = recipe.reanchor(&root).unwrap();
+        assert_eq!(prepared.dependency_diagnostics.len(), 1);
+        assert_eq!(prepared.dependency_diagnostics[0].referring_layer, root);
+        assert!(
+            prepared.dependency_diagnostics[0]
+                .dependency
+                .starts_with("file:")
+        );
+        assert!(recipe.reanchor("file:///invalid%00.usda").is_err());
+        assert!(
+            StageRecipe::new("missing.usda", HashMap::new())
+                .reanchor(&root)
+                .is_err()
+        );
+    }
 
     #[test]
     fn content_closure_is_stable_and_addresses_every_layer() {

@@ -9253,6 +9253,7 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",
  "lunco-usd-bevy-twin",
+ "lunco-usd-compose",
  "lunco-usd-document",
  "openusd",
 ]

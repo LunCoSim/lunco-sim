@@ -66,12 +66,14 @@ pub async fn fetch_layer_closure(
     load_context: &mut LoadContext<'_>,
     root_asset_path: &str,
     root_bytes: Vec<u8>,
+    roots: Option<&lunco_assets_core::TwinRoots>,
 ) -> Result<FetchedStageClosure> {
     fetch_layer_closure_with_limits(
         load_context,
         root_asset_path,
         root_bytes,
         StageClosureLimits::default(),
+        roots,
     )
     .await
 }
@@ -88,12 +90,14 @@ pub async fn fetch_layer_closure_with_limits(
     root_asset_path: &str,
     root_bytes: Vec<u8>,
     limits: StageClosureLimits,
+    roots: Option<&lunco_assets_core::TwinRoots>,
 ) -> Result<FetchedStageClosure> {
     ensure!(
         limits.max_parallel_reads > 0,
         "USD layer closure parallel read limit must be greater than zero"
     );
     let root_id = lunco_usd_compose::canonicalize_at(root_asset_path, None)?;
+    let origin = load_context.path().clone().into_owned();
     check_stage_closure_limits(&limits, 1, 0, 0, root_bytes.len())?;
 
     // 1. Pre-fetch BFS — keyed by the SAME canonical id the resolver will use.
@@ -136,7 +140,16 @@ pub async fn fetch_layer_closure_with_limits(
                 check_stage_closure_limits(&limits, seen.len(), child_depth, 0, total_bytes)?;
                 // The asset owner reconstructs source and filesystem path
                 // separately, preserving literal filename characters as data.
-                let child_path = lunco_assets_core::asset_path::load_asset_path(&child_id, None, None, None)
+                // AssetLoader executes on the I/O pool. Keep native lookup at
+                // that boundary, while the recipe retains the authored USD id.
+                let prepared = child_id.starts_with("file:").then(|| {
+                    lunco_assets_core::asset_path::PreparedAssetPaths::prepare_on_worker(
+                        [child_id.clone()],
+                        Some(origin.clone()),
+                        roots,
+                    )
+                });
+                let child_path = lunco_assets_core::asset_path::load_asset_path(&child_id, Some(&origin), roots, prepared.as_ref())
                     .map_err(|error| anyhow!("USD dependency `{child_id}` referenced by `{id}` has an invalid load address: {error}"))?;
                 requests.push((
                     id.clone(),
