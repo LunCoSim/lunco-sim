@@ -8,7 +8,7 @@
 //! Currently implements gravity, solar-direction inputs, lunar lighting, and
 //! horizon self-shadowing. See the README for ownership and extension guidance.
 
-use avian3d::prelude::{ConstantLinearAcceleration, RigidBody};
+use avian3d::prelude::{ConstantLinearAcceleration, Position, RigidBody};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
@@ -162,7 +162,8 @@ fn update_local_gravity_for_entity(
     commands: &mut Commands,
     updates: &mut Vec<(Entity, LocalGravity)>,
     gravity: &Gravity,
-    frame_rotation: Option<DQuat>,
+    active_frame: Option<Entity>,
+    native_position: Option<&Position>,
     entity: Entity,
     gravity_body: Option<Ref<GravityBody>>,
     existing: Option<&LocalGravity>,
@@ -189,9 +190,21 @@ fn update_local_gravity_for_entity(
                 clear_unresolved_local_gravity(commands, entity, existing);
                 return;
             };
-            let Some((entity_world, _)) =
-                lunco_spatial::coords::world_pose(entity, q_parents, q_grids, q_spatial).ok()
-            else {
+            // Native Position is already in the admitted physics frame. Do
+            // not feed render interpolation or f32 writeback into gravity.
+            let entity_position = match (active_frame, native_position) {
+                (Some(_), Some(position)) => Some(position.0),
+                (Some(frame), None) => lunco_spatial::coords::pose_in_grid(
+                    entity, frame, q_parents, q_grids, q_spatial,
+                )
+                .map(|(p, _)| p),
+                (None, _) => {
+                    lunco_spatial::coords::world_pose(entity, q_parents, q_grids, q_spatial)
+                        .ok()
+                        .map(|(p, _)| p.0)
+                }
+            };
+            let Some(entity_position) = entity_position else {
                 clear_unresolved_local_gravity(commands, entity, existing);
                 return;
             };
@@ -199,28 +212,36 @@ fn update_local_gravity_for_entity(
                 .get(&body_link.body_entity)
                 .copied()
                 .or_else(|| {
-                    let (body_world, body_rotation) = lunco_spatial::coords::world_pose(
-                        body_link.body_entity,
-                        q_parents,
-                        q_grids,
-                        q_spatial,
-                    )
-                    .ok()?;
-                    let pose = (body_world, body_rotation.0);
+                    let pose = match active_frame {
+                        Some(frame) => lunco_spatial::coords::pose_in_grid(
+                            body_link.body_entity,
+                            frame,
+                            q_parents,
+                            q_grids,
+                            q_spatial,
+                        )
+                        .map(|(p, r)| (GridPos(p), r)),
+                        None => lunco_spatial::coords::world_pose(
+                            body_link.body_entity,
+                            q_parents,
+                            q_grids,
+                            q_spatial,
+                        )
+                        .ok()
+                        .map(|(p, r)| (p, r.0)),
+                    }?;
                     body_pose_cache.insert(body_link.body_entity, pose);
                     Some(pose)
                 });
-            let Some((body_world, body_rotation)) = body_pose else {
+            let Some((body_position, body_rotation)) = body_pose else {
                 clear_unresolved_local_gravity(commands, entity, existing);
                 return;
             };
-            let relative_body = body_rotation.inverse() * (entity_world - body_world);
-            let acceleration = provider.model.acceleration(relative_body);
-            let g_world = body_rotation * acceleration;
-            // Surface gravity is evaluated in the celestial body's
-            // body-fixed frame and therefore needs the one explicit
-            // conversion into the active Avian frame.
-            frame_rotation.map_or(g_world, |rotation| rotation.inverse() * g_world)
+            // Relative-grid composition stops at the shared ancestor. Its
+            // astronomical translation and render-time rotation cannot alter
+            // a local body's force or introduce cancellation noise.
+            let relative_body = body_rotation.inverse() * (entity_position - body_position.0);
+            body_rotation * provider.model.acceleration(relative_body)
         }
     };
     // Don't re-insert (and re-trigger) when the value is unchanged — e.g. a
@@ -252,6 +273,7 @@ pub fn compute_local_gravity(
                 With<Transform>,
                 Or<(
                     Changed<Transform>,
+                    Changed<Position>,
                     Changed<GravityBody>,
                     Without<LocalGravity>,
                 )>,
@@ -262,6 +284,7 @@ pub fn compute_local_gravity(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    q_native_positions: Query<&Position, With<RigidBody>>,
     mut body_pose_cache: Local<HashMap<Entity, (GridPos, DQuat)>>,
 ) {
     // The field is entity-local, so a quiet frame must visit only entities
@@ -285,22 +308,15 @@ pub fn compute_local_gravity(
     // Several moving consumers can share one gravity body. Its world pose is
     // stable for this read-only system pass, so resolve it once per provider.
     body_pose_cache.clear();
-    let frame_rotation = matches!(gravity.as_ref(), Gravity::Surface)
-        .then(|| {
-            active_frame.as_deref().and_then(|frame| {
-                lunco_spatial::coords::world_pose(frame.0, &q_parents, &q_grids, &q_spatial)
-                    .ok()
-                    .map(|(_, rotation)| rotation.0)
-            })
-        })
-        .flatten();
+    let frame = active_frame.as_deref().map(|frame| frame.0);
     if global_invalidation {
         for (entity, gravity_body, existing) in q_entities.p1().iter() {
             update_local_gravity_for_entity(
                 &mut commands,
                 &mut updates,
                 gravity.as_ref(),
-                frame_rotation,
+                frame,
+                q_native_positions.get(entity).ok(),
                 entity,
                 gravity_body,
                 existing,
@@ -317,7 +333,8 @@ pub fn compute_local_gravity(
                 &mut commands,
                 &mut updates,
                 gravity.as_ref(),
-                frame_rotation,
+                frame,
+                q_native_positions.get(entity).ok(),
                 entity,
                 gravity_body,
                 existing,
@@ -949,6 +966,90 @@ mod tests {
         assert_eq!(
             validated_shadow_ranges(0.1, 40.0, 1500.0, None, Some(3000.0)),
             Some((40.0, 3000.0))
+        );
+    }
+
+    #[test]
+    fn native_surface_gravity_ignores_render_pose_and_astronomical_ancestors() {
+        struct Radial;
+        impl GravityModel for Radial {
+            fn acceleration(&self, p: DVec3) -> DVec3 {
+                -p.normalize() * 1.62
+            }
+        }
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, TransformPlugin));
+        app.insert_resource(Gravity::surface());
+        app.add_systems(Update, compute_local_gravity);
+        let world = app
+            .world_mut()
+            .spawn((
+                Grid::new(1.0e6, 0.0),
+                Transform::from_xyz(1.0e8, 2.0e8, -3.0e8),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let planet = app
+            .world_mut()
+            .spawn((
+                Grid::new(1.0e6, 0.0),
+                Transform::default(),
+                GlobalTransform::default(),
+                ChildOf(world),
+                GravityProvider {
+                    model: Box::new(Radial),
+                },
+            ))
+            .id();
+        let frame = app
+            .world_mut()
+            .spawn((
+                Grid::new(1000.0, 0.0),
+                Transform::from_xyz(0.0, 1000.0, 0.0),
+                GlobalTransform::default(),
+                ChildOf(planet),
+            ))
+            .id();
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
+        let position = DVec3::new(0.125, 20.0, 0.25);
+        let body = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Position(position),
+                Transform::from_xyz(0.5, 40.0, 0.7),
+                GlobalTransform::default(),
+                ChildOf(frame),
+                GravityBody {
+                    body_entity: planet,
+                },
+            ))
+            .id();
+        app.update();
+        let actual = app.world().get::<LocalGravity>(body).unwrap().0;
+        let expected = -(position + DVec3::Y * 1000.0).normalize() * 1.62;
+        assert_eq!(
+            actual, expected,
+            "gravity consumed the rendered pose rather than native Position"
+        );
+        app.world_mut()
+            .get_mut::<Transform>(body)
+            .unwrap()
+            .translation = Vec3::new(-9.0, 50.0, 8.0);
+        *app.world_mut().get_mut::<Transform>(world).unwrap() =
+            Transform::from_xyz(-2.0e8, 4.0e8, 1.0e8).with_rotation(Quat::from_rotation_z(0.8));
+        app.update();
+        assert_eq!(
+            app.world().get::<LocalGravity>(body).unwrap().0,
+            expected,
+            "presentation or an ancestor above the gravity body changed local gravity"
+        );
+        app.world_mut().get_mut::<Position>(body).unwrap().0.x += 1.0;
+        app.update();
+        assert_ne!(
+            app.world().get::<LocalGravity>(body).unwrap().0,
+            expected,
+            "native movement did not invalidate gravity without a render write"
         );
     }
 

@@ -381,6 +381,15 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
             )
                 .run_if(physics_backend_state_ready),
         );
+        // BVH proxy visitation chooses either collider as the first endpoint.
+        // Canonical USD identity must choose that role before Parry creates
+        // its oriented manifold/cache, rather than swapping solved contacts.
+        app.add_systems(
+            PhysicsSchedule,
+            canonicalize_usd_contact_pairs
+                .after(PhysicsStepSystems::BroadPhase)
+                .before(PhysicsStepSystems::NarrowPhase),
+        );
         // The escape diagnostic owns Avian's Writeback set. Keep the bridge's
         // Transform writer in its own ordered set after that diagnostic: both
         // publish the same scene-scoped fault/hold resources, and leaving them
@@ -1809,6 +1818,43 @@ fn ancestor_path(e: Entity, q_parents: &Query<&ChildOf>, path: &mut Vec<Entity>)
     }
 }
 
+/// Orient newly discovered authored collider pairs by their composed source
+/// identity. The graph is undirected; both its edge and pair must agree about
+/// endpoint roles before narrow phase generates normals and cache entries.
+/// Native/generated colliders retain their backend-owned identity/order.
+fn canonicalize_usd_contact_pairs(
+    mut contacts: ResMut<ContactGraph>,
+    identities: Query<&UsdPrimPath>,
+) {
+    let reversed = contacts
+        .iter_active()
+        .filter_map(|pair| {
+            if !pair.manifolds.is_empty() {
+                return None;
+            }
+            let left = identities.get(pair.collider1).ok()?;
+            let right = identities.get(pair.collider2).ok()?;
+            // Full composed paths distinguish descendants and instances in one
+            // stage. Asset paths disambiguate independent authored stages without
+            // relying on process-local Handle or Entity allocation.
+            let order = left.path.cmp(&right.path).then_with(|| {
+                left.stage_handle
+                    .path()
+                    .map(ToString::to_string)
+                    .cmp(&right.stage_handle.path().map(ToString::to_string))
+            });
+            order.is_gt().then_some(pair.contact_id)
+        })
+        .collect::<Vec<_>>();
+    for id in reversed {
+        let (edge, pair) = contacts.get_mut_by_id(id).expect("active contact exists");
+        std::mem::swap(&mut edge.collider1, &mut edge.collider2);
+        std::mem::swap(&mut edge.body1, &mut edge.body2);
+        std::mem::swap(&mut pair.collider1, &mut pair.collider2);
+        std::mem::swap(&mut pair.body1, &mut pair.body2);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Round-trip proof of the bridge math at astronomical magnitude + with a
@@ -1819,6 +1865,98 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::system::SystemState;
     use lunco_spatial::coords::world_pose;
+
+    #[test]
+    fn reversed_bvh_discovery_has_the_same_native_contact_trajectory() {
+        fn trial(reverse: bool) -> Vec<(DVec3, DQuat, DVec3, DVec3)> {
+            let mut app = App::new();
+            app.add_plugins((
+                MinimalPlugins,
+                AssetPlugin::default(),
+                bevy::transform::TransformPlugin,
+                PhysicsPlugins::default(),
+            ));
+            app.init_asset::<Mesh>();
+            app.insert_resource(Gravity::ZERO);
+            app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f64(1.0 / 60.0),
+            ));
+            app.add_systems(
+                PhysicsSchedule,
+                canonicalize_usd_contact_pairs
+                    .after(PhysicsStepSystems::BroadPhase)
+                    .before(PhysicsStepSystems::NarrowPhase),
+            );
+            let a = app
+                .world_mut()
+                .spawn((
+                    RigidBody::Dynamic,
+                    Collider::cuboid(1.2, 0.7, 0.9),
+                    Position(DVec3::ZERO),
+                    Rotation(DQuat::from_rotation_y(0.17)),
+                    Transform::default(),
+                    UsdPrimPath {
+                        stage_handle: default(),
+                        path: "/A".into(),
+                    },
+                ))
+                .id();
+            let b = app
+                .world_mut()
+                .spawn((
+                    RigidBody::Dynamic,
+                    Collider::cuboid(0.8, 0.6, 1.1),
+                    Position(DVec3::new(0.78, 0.01, 0.02)),
+                    Rotation(DQuat::from_rotation_x(0.031)),
+                    Transform::default(),
+                    UsdPrimPath {
+                        stage_handle: default(),
+                        path: "/B".into(),
+                    },
+                ))
+                .id();
+            let (first, second) = if reverse { (b, a) } else { (a, b) };
+            let mut edge = avian3d::collision::contact_types::ContactEdge::new(first, second);
+            edge.body1 = Some(first);
+            edge.body2 = Some(second);
+            app.world_mut()
+                .resource_mut::<ContactGraph>()
+                .add_edge_with(edge, |pair| {
+                    pair.body1 = Some(first);
+                    pair.body2 = Some(second);
+                    pair.flags.set(
+                        avian3d::collision::contact_types::ContactPairFlags::GENERATE_CONSTRAINTS,
+                        true,
+                    );
+                });
+            app.finish();
+            app.cleanup();
+            let mut samples = Vec::new();
+            for _ in 0..40 {
+                app.update();
+                for e in [a, b] {
+                    let w = app.world();
+                    samples.push((
+                        w.get::<Position>(e).unwrap().0,
+                        w.get::<Rotation>(e).unwrap().0,
+                        w.get::<LinearVelocity>(e).unwrap().0,
+                        w.get::<AngularVelocity>(e).unwrap().0,
+                    ));
+                }
+            }
+            assert!(
+                samples.iter().any(|s| s.2.length() > 0.0),
+                "native contact solver must run"
+            );
+            samples
+        }
+        for (index, (left, right)) in trial(false).iter().zip(trial(true)).enumerate() {
+            assert_eq!(
+                *left, right,
+                "contact endpoint roles changed native body sample {index}"
+            );
+        }
+    }
 
     #[test]
     fn pose_refresh_preserves_the_seated_quaternion_hemisphere() {
