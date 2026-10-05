@@ -4,6 +4,7 @@ use bevy::prelude::World;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_modelica_core::sim_default::ResourceRead;
+use lunco_modelica_core::sim_target::RunBoundsError;
 use lunco_modelica_document::ModelicaDocument;
 
 /// Read the `experiment(...)` annotation bounds for a model from live document
@@ -12,10 +13,14 @@ pub fn bounds_from_annotation_in<R: ResourceRead>(
     ctx: &R,
     doc: DocumentId,
     model_ref: &lunco_experiments::ModelRef,
-) -> Option<lunco_experiments::RunBounds> {
-    let registry = ctx.read_resource::<DocumentRegistry<ModelicaDocument>>()?;
-    let host = registry.host(doc)?;
-    let class = host
+) -> Result<Option<lunco_experiments::RunBounds>, RunBoundsError> {
+    let Some(registry) = ctx.read_resource::<DocumentRegistry<ModelicaDocument>>() else {
+        return Ok(None);
+    };
+    let Some(host) = registry.host(doc) else {
+        return Ok(None);
+    };
+    let Some(class) = host
         .document()
         .index()
         .classes
@@ -26,8 +31,13 @@ pub fn bounds_from_annotation_in<R: ResourceRead>(
                 .classes
                 .values()
                 .find(|c| c.name == model_ref.0)
-        })?;
-    let experiment = class.experiment.as_ref()?;
+        })
+    else {
+        return Ok(None);
+    };
+    let Some(experiment) = class.experiment.as_ref() else {
+        return Ok(None);
+    };
     lunco_modelica_core::sim_target::bounds_from_experiment(experiment)
 }
 
@@ -36,7 +46,7 @@ pub fn bounds_from_annotation(
     world: &World,
     doc: DocumentId,
     model_ref: &lunco_experiments::ModelRef,
-) -> Option<lunco_experiments::RunBounds> {
+) -> Result<Option<lunco_experiments::RunBounds>, RunBoundsError> {
     bounds_from_annotation_in(world, doc, model_ref)
 }
 
@@ -47,7 +57,7 @@ pub fn resolve_setup_bounds_in<R: ResourceRead>(
     ctx: &R,
     doc: DocumentId,
     model_ref: &lunco_experiments::ModelRef,
-) -> lunco_experiments::RunBounds {
+) -> Result<lunco_experiments::RunBounds, RunBoundsError> {
     let draft = ctx
         .read_resource::<crate::runner::ExperimentDrafts>()
         .and_then(|drafts| {
@@ -55,8 +65,13 @@ pub fn resolve_setup_bounds_in<R: ResourceRead>(
                 .get(doc, model_ref)
                 .and_then(|draft| draft.bounds_override.clone())
         });
-    let annotation = bounds_from_annotation_in(ctx, doc, model_ref);
-    lunco_modelica_core::sim_target::resolve_bounds(draft, annotation)
+    if let Some(draft) = draft {
+        return Ok(draft);
+    }
+    let annotation = bounds_from_annotation_in(ctx, doc, model_ref)?;
+    Ok(lunco_modelica_core::sim_target::resolve_bounds(
+        None, annotation,
+    ))
 }
 
 /// `&World` reader for [`resolve_setup_bounds_in`].
@@ -64,6 +79,6 @@ pub fn resolve_setup_bounds(
     world: &World,
     doc: DocumentId,
     model_ref: &lunco_experiments::ModelRef,
-) -> lunco_experiments::RunBounds {
+) -> Result<lunco_experiments::RunBounds, RunBoundsError> {
     resolve_setup_bounds_in(world, doc, model_ref)
 }

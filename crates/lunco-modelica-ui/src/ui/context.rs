@@ -44,7 +44,7 @@ pub fn resolve_setup_bounds(
     ctx: &PanelCtx,
     doc: DocumentId,
     model_ref: &lunco_experiments::ModelRef,
-) -> lunco_experiments::RunBounds {
+) -> Result<lunco_experiments::RunBounds, lunco_modelica_core::sim_target::RunBoundsError> {
     let resources = PanelResources(ctx);
     resolve_setup_bounds_in(&resources, doc, model_ref)
 }
@@ -53,7 +53,7 @@ pub fn bounds_from_annotation(
     ctx: &PanelCtx,
     doc: DocumentId,
     model_ref: &lunco_experiments::ModelRef,
-) -> Option<lunco_experiments::RunBounds> {
+) -> Result<Option<lunco_experiments::RunBounds>, lunco_modelica_core::sim_target::RunBoundsError> {
     lunco_modelica_runner::run_bounds::bounds_from_annotation_in(
         &PanelResources(ctx),
         doc,

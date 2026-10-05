@@ -462,39 +462,44 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
         use lunco_experiments::ModelRef;
         use lunco_modelica_runner::{bounds_from_annotation, resolve_setup_bounds};
 
-        let classes: Vec<ApiValue> = class_list
-            .into_iter()
-            .map(|(name, has_ann)| {
-                let mref = ModelRef(name.clone());
-                let annotation = bounds_from_annotation(world, doc_id, &mref);
-                let resolved = resolve_setup_bounds(world, doc_id, &mref);
-                // Mirror `resolve_setup_bounds` exactly. Keep the provenance
-                // label beside the canonical resolver until the API can return
-                // its typed result directly.
-                let has_draft = world
-                    .get_resource::<lunco_modelica_runner::ExperimentDrafts>()
-                    .and_then(|d| {
-                        d.get(doc_id, &mref)
-                            .and_then(|dr| dr.bounds_override.clone())
-                    })
-                    .is_some();
-                let source = if has_draft {
-                    "draft_override"
-                } else if annotation.is_some() {
-                    "annotation"
-                } else {
-                    "fallback_1s"
-                };
-                api_value!({
-                    "class": name,
-                    "has_experiment_annotation": has_ann,
-                    "annotation_bounds": annotation.as_ref().map(bounds_api_value),
-                    "resolved_bounds": bounds_api_value(&resolved),
-                    "source": source,
+        let classes: Result<Vec<ApiValue>, lunco_modelica_core::sim_target::RunBoundsError> =
+            class_list
+                .into_iter()
+                .map(|(name, has_ann)| {
+                    let mref = ModelRef(name.clone());
+                    let annotation = bounds_from_annotation(world, doc_id, &mref)?;
+                    let resolved = resolve_setup_bounds(world, doc_id, &mref)?;
+                    // Mirror `resolve_setup_bounds` exactly. Keep the provenance
+                    // label beside the canonical resolver until the API can return
+                    // its typed result directly.
+                    let has_draft = world
+                        .get_resource::<lunco_modelica_runner::ExperimentDrafts>()
+                        .and_then(|d| {
+                            d.get(doc_id, &mref)
+                                .and_then(|dr| dr.bounds_override.clone())
+                        })
+                        .is_some();
+                    let source = if has_draft {
+                        "draft_override"
+                    } else if annotation.is_some() {
+                        "annotation"
+                    } else {
+                        "fallback_1s"
+                    };
+                    Ok(api_value!({
+                        "class": name,
+                        "has_experiment_annotation": has_ann,
+                        "annotation_bounds": annotation.as_ref().map(bounds_api_value),
+                        "resolved_bounds": bounds_api_value(&resolved),
+                        "source": source,
+                    }))
                 })
-            })
-            .collect();
+                .collect();
 
+        let classes = match classes {
+            Ok(classes) => classes,
+            Err(error) => return query_error(ApiErrorCode::CommandRejected, error.to_string()),
+        };
         let count = classes.len();
         query_ok(api_value!({
             "doc_id": doc_id.raw(),

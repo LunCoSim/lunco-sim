@@ -56,7 +56,17 @@ pub(crate) fn on_fast_run_setup_requested(
         let model_ref = crate::sim_default::default_simulation_class(world, doc)
             .map(lunco_experiments::ModelRef);
         if let Some(model_ref) = model_ref {
-            let bounds = resolve_setup_bounds(world, doc, &model_ref);
+            let bounds = match resolve_setup_bounds(world, doc, &model_ref) {
+                Ok(bounds) => bounds,
+                Err(error) => {
+                    bevy::log::warn!("[FastRun] {error}");
+                    world.commands().trigger(lunco_core::RuntimeError {
+                        name: "experiment-admission-failed".to_owned(),
+                        message: error.to_string(),
+                    });
+                    return;
+                }
+            };
             let overrides_count = world
                 .get_resource::<lunco_modelica_runner::ExperimentDrafts>()
                 .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.len()))
@@ -721,99 +731,6 @@ fn render_unified_toolbar(
         // The whole setup-resolution path is owned by the typed observer and
         // only fires on a click.
         ctx.trigger(FastRunSetupRequested { doc });
-        /*// Drilled-in pin → tier-ranked simulation root (shared precedence,
-            // so the Fast Run popup never disagrees with the Experiments Setup
-            // form about which class is the default runnable system).
-            let model_ref = crate::sim_default::default_simulation_class(world, doc)
-                .map(lunco_experiments::ModelRef);
-            if let Some(model_ref) = model_ref {
-                // Canvas ⏩ always opens the setup modal — one predictable
-                // behaviour regardless of whether the Experiments panel happens
-                // to be open. (The modal is the only bounds/class surface when
-                // the panel is closed; keeping it unconditional avoids a hidden
-                // mode switch on the same button.)
-                // Same resolver the Experiments-tab Setup uses, so the two
-                // surfaces always agree (draft → current AST
-                // annotation → fallback).
-                let bounds = resolve_setup_bounds(world, doc, &model_ref);
-                let overrides_count = world
-                    .get_resource::<lunco_modelica_runner::ExperimentDrafts>()
-                    .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.len()))
-                    .unwrap_or(0);
-                // Inputs from the parsed AST of the resolved model class — no
-                // source scan (WP-8 / CQ-205).
-                let detected = world
-                    .get_resource::<ModelicaDocuments>()
-                    .and_then(|r| r.host(doc))
-                    .and_then(|h| {
-                        lunco_modelica_ast::ast_extract::find_class_by_short_name(
-                            h.document().syntax().ast(),
-                            lunco_modelica_ast::ast_extract::short_name(&model_ref.0),
-                        )
-                    .map(lunco_modelica_runner::detect_top_level_inputs)
-                    })
-                    .unwrap_or_default();
-                let prefilled = world
-                    .get_resource::<lunco_modelica_runner::ExperimentDrafts>()
-                    .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.inputs.clone()))
-                    .unwrap_or_default();
-                let inputs: Vec<crate::ui::commands::FastRunInput> = detected
-                    .into_iter()
-                    .map(|d| {
-                        let value_text = prefilled
-                            .get(&lunco_experiments::ParamPath(d.name.clone()))
-                            .map(|v| match v {
-                                lunco_experiments::ParamValue::Real(x) => format!("{x}"),
-                                lunco_experiments::ParamValue::Int(x) => format!("{x}"),
-                                lunco_experiments::ParamValue::Bool(b) => {
-                                    if *b {
-                                        "true".into()
-                                    } else {
-                                        "false".into()
-                                    }
-                                }
-                                lunco_experiments::ParamValue::String(s) => s.clone(),
-                                lunco_experiments::ParamValue::Enum(s) => s.clone(),
-                                lunco_experiments::ParamValue::RealArray(_) => "(array)".into(),
-                            })
-                            .unwrap_or_default();
-                        crate::ui::commands::FastRunInput {
-                            name: d.name,
-                            type_name: d.type_name,
-                            value_text,
-                        }
-                    })
-                    .collect();
-                let candidates = world
-                    .get_resource::<ModelicaDocuments>()
-                    .and_then(|r| r.host(doc))
-                    .map(|h| h.document().index().simulation_candidates())
-                    .unwrap_or_default();
-                if let Some(mut setup) =
-                    world.get_resource_mut::<crate::ui::commands::FastRunSetupState>()
-                {
-                    setup.0 = Some(crate::ui::commands::FastRunSetupEntry {
-                        doc,
-                        model_ref,
-                        candidates,
-                        bounds,
-                        overrides_count,
-                        inputs,
-                    });
-                }
-            } else {
-                world.trigger(crate::ui::commands::FastRunActiveModel {
-                    doc,
-                    class: None,
-                    t_end: None,
-                    dt: None,
-                    n_intervals: None,
-                    tolerance: None,
-                    solver: None,
-                    h0: None,
-                });
-            }
-        });*/
     }
     if compile_clicked {
         ctx.trigger(crate::ui::commands::CompileModel {

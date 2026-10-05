@@ -188,6 +188,27 @@ pub enum RunUpdate {
 
 Fast Runs use the bounded scheduler and `experiments.max_parallel` setting described in [Parallel execution](#parallel-execution).
 
+### Bounds admission
+
+`lunco-modelica-core::sim_target::validate_run_bounds` validates the output
+grid before UI/API registration, scheduler admission, or solver allocation.
+The horizon must be finite and strictly increasing, and explicit `dt`,
+`tolerance`, and `h0` must be finite and positive. Explicit interval counts
+must be positive and at most the existing `SAMPLE_CAP` of 200,000 intervals
+(200,001 inclusive points). An interval must advance time at the requested
+endpoints. The browser's derived internal solver cadence passes the same
+advancement guard before stepping. Invalid or over-limit requests return the owning diagnostic; the
+runner never substitutes or enlarges an explicit interval.
+
+The current AST annotation reader is fallible. `Interval=0` means omitted
+spacing; other invalid values fail visibly. A used `NumberOfIntervals` must
+be a finite positive integer within the same limit. An explicit annotation
+`Interval` takes precedence, so an unused count is ignored. Absent spacing
+uses the Modelica default of 500 intervals. `RunExperiment` returns rejection
+without inserting an experiment, and direct runner callers receive a terminal
+`Failed` update. The shared native/wasm execution boundary validates again
+before invoking the solver.
+
 ## Web Worker protocol
 
 `lunica_worker.rs` consumes the immutable admitted source through the transport-owned envelope:

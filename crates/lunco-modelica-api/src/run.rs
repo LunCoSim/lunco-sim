@@ -46,17 +46,6 @@ fn on_run_modelica_solve(
     if request.class.trim().is_empty() {
         return Err("RunModelicaSolve requires an explicit Modelica class".into());
     }
-    if !request.t_start.is_finite()
-        || !request.t_end.is_finite()
-        || request.t_end <= request.t_start
-        || !request.dt.is_finite()
-        || request.dt <= 0.0
-    {
-        return Err(
-            "RunModelicaSolve requires finite increasing bounds and a positive output interval"
-                .into(),
-        );
-    }
     if request.label.trim().is_empty() {
         return Err("RunModelicaSolve requires a non-empty run label".into());
     }
@@ -132,6 +121,8 @@ fn on_run_modelica_solve(
         h0: None,
         runtime: Default::default(),
     };
+    lunco_modelica_core::sim_target::validate_run_bounds(&bounds)
+        .map_err(|error| error.to_string())?;
     let experiment_id = experiments.insert_new(
         twin_id,
         model_ref,

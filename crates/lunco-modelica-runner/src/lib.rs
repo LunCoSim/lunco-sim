@@ -23,7 +23,7 @@ pub use runner::pump_wasm_forwarders;
 pub use runner::{
     DEFAULT_TOLERANCE, DetectedInput, DetectedParam, ExperimentDraft, ExperimentDrafts,
     ExperimentSettings, ExperimentSource, ExperimentSources, ModelSource, ModelicaRunner,
-    PendingHandles, PlaybackEntities, RunSink, apply_experiment_settings,
+    PendingHandles, PlaybackEntities, RunConfigurationError, RunSink, apply_experiment_settings,
     apply_value_bindings_to_dae, detect_top_level_inputs, detect_top_level_literal_parameters,
     drain_pending_handles, drive_run, stepper_options_from_bounds,
 };

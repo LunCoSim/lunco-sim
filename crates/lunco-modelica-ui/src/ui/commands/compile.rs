@@ -1020,8 +1020,8 @@ fn param_map_from_mods(
 /// any UI draft (command wins), inserts the experiment, and dispatches it.
 ///
 /// `label`, when set, replaces the auto-generated "Run N" name so sweep rows
-/// are identifiable in `ListRuns`. Returns the new experiment id, or `None`
-/// when dispatch can't proceed (no doc, ambiguous class → picker, etc.).
+/// are identifiable in `ListRuns`. Rejection returns the owning diagnostic before
+/// experiment registration or worker admission.
 fn dispatch_experiment(
     world: &mut World,
     raw: DocumentId,
@@ -1036,12 +1036,11 @@ fn dispatch_experiment(
     >,
     cmd_bounds: BoundsOverride,
     label: Option<String>,
-) -> Option<lunco_experiments::ExperimentId> {
+) -> Result<lunco_experiments::ExperimentId, String> {
     use lunco_experiments::ExperimentRunner;
-    {
+    let result = (|| {
         let Some(doc) = resolve_doc_or_active(world, raw) else {
-            bevy::log::warn!("[dispatch_experiment] no active document");
-            return None;
+            return Err("no active Modelica document".to_owned());
         };
         let attribution = match lunco_modelica_runner::ExperimentSource::for_document(
             doc,
@@ -1050,13 +1049,7 @@ fn dispatch_experiment(
                 .map(|workspace| &workspace.0),
         ) {
             Ok(source) => source,
-            Err(message) => {
-                world.commands().trigger(lunco_core::RuntimeError {
-                    name: "experiment-admission-failed".to_owned(),
-                    message,
-                });
-                return None;
-            }
+            Err(message) => return Err(message),
         };
 
         // Resolve source + target class. Mirrors `on_compile_model`
@@ -1069,8 +1062,7 @@ fn dispatch_experiment(
             let host = match registry.host(doc) {
                 Some(h) => h,
                 None => {
-                    bevy::log::warn!("[dispatch_experiment] doc {} not in registry", doc.raw());
-                    return None;
+                    return Err(format!("Modelica document {doc} is not open"));
                 }
             };
             let document = host.document();
@@ -1116,11 +1108,10 @@ fn dispatch_experiment(
             Some(req) => match crate::sim_target::resolve_requested_class(&req, &candidates) {
                 Ok(qualified) => qualified,
                 Err(e) => {
-                    bevy::log::warn!(
-                        "[dispatch_experiment] class `{req}` {e}. Candidates: [{}]",
+                    return Err(format!(
+                        "class `{req}` {e}; candidates: [{}]",
                         candidates.join(", ")
-                    );
-                    return None;
+                    ));
                 }
             },
             None => {
@@ -1136,16 +1127,12 @@ fn dispatch_experiment(
                             });
                         }
                     }
-                    return None;
+                    return Err("choose an explicit Modelica class before running".to_owned());
                 }
                 match crate::sim_default::default_simulation_class(world, doc) {
                     Some(c) => c,
                     None => {
-                        bevy::log::warn!(
-                            "[dispatch_experiment] doc {} has no compilable top-level class",
-                            doc.raw()
-                        );
-                        return None;
+                        return Err(format!("Modelica document {doc} has no simulatable class"));
                     }
                 }
             }
@@ -1193,7 +1180,7 @@ fn dispatch_experiment(
             world.get_resource::<lunco_core_session::NetworkRole>(),
             Some(lunco_core_session::NetworkRole::Client)
         ) {
-            return None;
+            return Err("Fast Runs execute on the authoritative host".to_owned());
         }
 
         let model_ref = lunco_experiments::ModelRef(model_name.clone());
@@ -1204,8 +1191,7 @@ fn dispatch_experiment(
         {
             Some(r) => r.clone(),
             None => {
-                bevy::log::error!("[dispatch_experiment] runner resource missing");
-                return None;
+                return Err("Modelica runner is not installed".to_owned());
             }
         };
         let source_snapshot = lunco_modelica_runner::ModelSource {
@@ -1219,7 +1205,8 @@ fn dispatch_experiment(
         // Bounds use the current document AST and draft through the shared
         // resolver, then apply explicit command overrides without a prior
         // interactive compile.
-        let mut bounds = resolve_setup_bounds(world, doc, &model_ref);
+        let mut bounds =
+            resolve_setup_bounds(world, doc, &model_ref).map_err(|error| error.to_string())?;
 
         // Parameter overrides / inputs from the draft, with command-supplied
         // values winning. Empty maps (the FastRunActiveModel path) = no-op.
@@ -1240,16 +1227,16 @@ fn dispatch_experiment(
         if let Some(t) = cmd_bounds.t_end {
             bounds.t_end = t;
         }
-        // `dt` (Interval) and `n_intervals` (NumberOfIntervals) are the two
-        // mutually-exclusive ways to set the output grid; setting one clears
-        // the other so the request is unambiguous.
+        // A command spacing choice replaces the other draft choice. When both
+        // command fields are supplied, the count wins but the interval stays
+        // present for validation so an invalid explicit value cannot be hidden.
         if let Some(d) = cmd_bounds.dt {
             bounds.dt = Some(d);
             bounds.n_intervals = None;
         }
         if let Some(n) = cmd_bounds.n_intervals {
             bounds.n_intervals = Some(n);
-            bounds.dt = None;
+            bounds.dt = cmd_bounds.dt;
         }
         if let Some(t) = cmd_bounds.tolerance {
             bounds.tolerance = Some(t);
@@ -1260,6 +1247,9 @@ fn dispatch_experiment(
         if let Some(h) = cmd_bounds.h0 {
             bounds.h0 = Some(h);
         }
+
+        lunco_modelica_core::sim_target::validate_run_bounds(&bounds)
+            .map_err(|error| error.to_string())?;
 
         // Insert experiment + dispatch run. Scope to the originating
         // doc so multi-tab workflows keep run histories separate
@@ -1282,8 +1272,7 @@ fn dispatch_experiment(
             .get(exp_id)
             .cloned();
         let Some(exp) = exp else {
-            bevy::log::error!("[dispatch_experiment] experiment vanished after insert");
-            return None;
+            return Err("new experiment disappeared before dispatch".to_owned());
         };
 
         // Journal the experiment *definition* (create) so the setup syncs across
@@ -1328,8 +1317,19 @@ fn dispatch_experiment(
                 model_name, exp.bounds.t_start, exp.bounds.t_end
             ));
         }
-        Some(exp_id)
+        Ok(exp_id)
+    })();
+    if let Err(message) = &result {
+        bevy::log::warn!("[dispatch_experiment] {message}");
+        world.commands().trigger(lunco_core::RuntimeError {
+            name: "experiment-admission-failed".to_owned(),
+            message: message.clone(),
+        });
+        if let Some(mut console) = world.get_resource_mut::<lunco_ui::log::LogBuffer>() {
+            console.error(format!("Run refused: {message}"));
+        }
     }
+    result
 }
 
 /// Report a run that was refused before dispatch, to the log AND the console.
@@ -1369,7 +1369,7 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
     commands.queue(move |world: &mut World| {
         // Active-model convenience: no command overrides — bounds come from
         // annotation/draft, parameters from the UI draft (if any).
-        dispatch_experiment(
+        let _ = dispatch_experiment(
             world,
             raw,
             explicit_class,
@@ -1548,11 +1548,7 @@ pub fn on_run_experiment(
                 ..cmd_bounds
             };
             let experiment_id =
-                dispatch_experiment(world, raw, explicit_class, overrides, inputs, bounds, label)
-                    .ok_or_else(|| {
-                    "RunExperiment could not dispatch; check the explicit document and class"
-                        .to_string()
-                })?;
+                dispatch_experiment(world, raw, explicit_class, overrides, inputs, bounds, label)?;
 
             Ok(Ack::with_data(
                 OpId::new(),
@@ -1599,7 +1595,7 @@ pub fn on_run_experiment(trigger: On<RunExperiment>, mut commands: Commands) {
         h0: ev.h0,
     };
     commands.queue(move |world: &mut World| {
-        dispatch_experiment(
+        let _ = dispatch_experiment(
             world,
             raw,
             explicit_class,

@@ -94,6 +94,10 @@ saved-document closing remains an Editor lifecycle operation.
 
 Fast Run bounds read the current document AST annotation after any explicit
 draft override, then use the documented one-second default if neither is present.
+Invalid annotation bounds return an error through the same resolver; they do
+not select the default. The shared bounds guard rejects invalid explicit
+inputs and grids beyond `SAMPLE_CAP` before solver allocation. See
+[`25-experiments.md`](25-experiments.md#bounds-admission) for the admission contract.
 Each admitted job receives its complete immutable `ModelSource`; sources and
 annotation defaults are never kept in class-name maps. Native compiled DAE
 snapshots include the runtime owner, are retired on its `TwinClosed`, and cannot

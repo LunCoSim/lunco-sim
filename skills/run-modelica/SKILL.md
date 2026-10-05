@@ -430,6 +430,19 @@ runtime input variables.
 - Omit any field to fall back to the model's `experiment(...)` annotation, then
   the backend default.
 
+Bounds admission rejects nonfinite or non-increasing horizons, nonpositive
+explicit `dt`, `tolerance`, or `h0`, and output grids exceeding 200,000
+intervals. `n_intervals` must be positive. Rejection returns the owning error
+without registering a run or changing the requested grid. A used authored
+`NumberOfIntervals` must also be a finite positive integer within that limit;
+only authored `Interval=0` has the documented omitted-spacing meaning.
+`QueryExperimentBounds` reports invalid annotation bounds as a query error.
+Production regression: attach
+`lunco://scenarios/tests/modelica_run_bounds_admission.rhai` with
+`RunScenarioAsset` to an addressable loaded scene root in an owned Modelica
+host. It checks rejected explicit and authored bounds leave no experiment
+rows, then requires a valid successor to complete.
+
 `FastRunActiveModel` is the same batch engine but reads bounds from the UI
 "Simulation Setup" draft instead of the command — prefer `RunExperiment` for
 scripted/agent runs so everything is explicit.

@@ -750,7 +750,13 @@ impl ExperimentsPanel {
         // setup surfaces never disagree (draft → AST `experiment(...)`
         // annotation → documented default). One canonical resolver,
         // generic over the read context — see `model_commands::resolve_setup_bounds_in`.
-        let mut bounds = crate::ui::context::resolve_setup_bounds(&*ctx, doc, &model_ref);
+        let mut bounds = match crate::ui::context::resolve_setup_bounds(&*ctx, doc, &model_ref) {
+            Ok(bounds) => bounds,
+            Err(error) => {
+                ui.colored_label(col_error, error.to_string());
+                return;
+            }
+        };
         let mut bounds_changed = false;
 
         // Inputs come from the parsed AST of the resolved model class —
@@ -842,7 +848,14 @@ impl ExperimentsPanel {
 
         // Annotation-default reference for "is this what the model
         // says?" tagging next to the bounds inputs.
-        let annotation_defaults = crate::ui::context::bounds_from_annotation(ctx, doc, &model_ref);
+        let annotation_defaults =
+            match crate::ui::context::bounds_from_annotation(ctx, doc, &model_ref) {
+                Ok(bounds) => bounds,
+                Err(error) => {
+                    ui.colored_label(col_error, error.to_string());
+                    return;
+                }
+            };
         let from_annotation = annotation_defaults.is_some();
 
         // Header row stays always visible — Run + Cancel + a tiny

@@ -358,6 +358,18 @@ impl ExperimentRunner for ModelicaRunner {
             }
         });
 
+        if let Err(error) = lunco_modelica_core::sim_target::validate_run_bounds(&exp.bounds) {
+            let _ = tx.send(RunUpdate::Failed {
+                error: error.to_string(),
+                partial: None,
+            });
+            return RunHandle {
+                run_id,
+                progress_rx: rx,
+                cancel: cancel_hook,
+            };
+        }
+
         // Enqueue the snapshotted job, then start as many as slots allow.
         // A queued run sits silent (no updates) until a slot frees — its
         // registry status stays `Pending`, which already reads as "queued"
@@ -917,6 +929,16 @@ pub fn drive_run(
         sink.emit(RunUpdate::Cancelled);
         return;
     }
+    let output_dt = match lunco_modelica_core::sim_target::validate_run_bounds(bounds) {
+        Ok(dt) => dt,
+        Err(error) => {
+            sink.emit(RunUpdate::Failed {
+                error: error.to_string(),
+                partial: None,
+            });
+            return;
+        }
+    };
     // Solver options (tolerance / family / initial step) — the SINGLE source
     // (`stepper_options_from_bounds`) both runtimes derive from. An incapable
     // authored solver fails the run here rather than per-step later.
@@ -924,7 +946,7 @@ pub fn drive_run(
         Ok(opts) => opts,
         Err(err) => {
             sink.emit(RunUpdate::Failed {
-                error: format!("solver selection failed: {err}"),
+                error: format!("run configuration failed: {err}"),
                 partial: None,
             });
             return;
@@ -942,12 +964,6 @@ pub fn drive_run(
             // it (and `run_batch_sim` decimates the event-flooded result back
             // to that grid).
             let mut batch_opts = stepper_opts;
-            let output_dt = lunco_modelica_core::sim_target::resolve_step_dt(
-                bounds.t_start,
-                bounds.t_end,
-                bounds.dt,
-                bounds.n_intervals,
-            );
             batch_opts.dt = Some(output_dt);
             bevy::log::info!(
                 "[runner] simulate begin (batch): t={}..{} output_dt={} (dt={:?} n_intervals={:?})",
@@ -1008,6 +1024,21 @@ fn run_batch_sim(
         return;
     }
 
+    let output_dt = match lunco_modelica_core::sim_target::resolve_step_dt(
+        opts.t_start,
+        opts.t_end,
+        opts.dt,
+        None,
+    ) {
+        Ok(dt) => dt,
+        Err(error) => {
+            sink.emit(RunUpdate::Failed {
+                error: error.to_string(),
+                partial: None,
+            });
+            return;
+        }
+    };
     let result = match rumoca_sim::simulate_with_diagnostics(dae, opts) {
         Ok(r) => r,
         Err(e) => {
@@ -1035,7 +1066,16 @@ fn run_batch_sim(
     // / sending: for each grid time keep the nearest available sample. Guarded
     // so the well-behaved exact-grid case (smooth models already return the
     // grid) is left untouched.
-    let keep = batch_keep_indices(&result.times, opts.t_start, opts.t_end, opts.dt);
+    let keep = match batch_keep_indices(&result.times, opts.t_start, opts.t_end, output_dt) {
+        Ok(keep) => keep,
+        Err(error) => {
+            sink.emit(RunUpdate::Failed {
+                error: error.to_string(),
+                partial: None,
+            });
+            return;
+        }
+    };
     let raw_samples = result.times.len();
     let (kept_times, gather): (Vec<f64>, Option<Vec<usize>>) = match &keep {
         Some(idx) => (
@@ -1098,28 +1138,25 @@ fn run_batch_sim(
 /// event/root crossing; for chattering models that's millions of points. For
 /// each grid time `t_start + k·dt` we keep the trajectory sample whose time is
 /// nearest (advancing a single monotonic cursor — O(n)), always keeping the
-/// first and last sample. Returns `None` (no decimation) when there's no usable
-/// `dt`, or when the trajectory is already at/under the grid size (the
+/// first and last sample. Invalid grids are rejected before integer conversion
+/// or allocation. Returns `None` when the trajectory is at/under the grid size (the
 /// well-behaved smooth-model case — leave it byte-for-byte untouched).
 fn batch_keep_indices(
     times: &[f64],
     t_start: f64,
     t_end: f64,
-    dt: Option<f64>,
-) -> Option<Vec<usize>> {
-    let dt = dt?;
-    if dt.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) || times.len() < 2 {
-        return None;
+    dt: f64,
+) -> Result<Option<Vec<usize>>, lunco_modelica_core::sim_target::RunBoundsError> {
+    let dt = lunco_modelica_core::sim_target::resolve_step_dt(t_start, t_end, Some(dt), None)?;
+    if times.len() < 2 {
+        return Ok(None);
     }
-    let span = (t_end - t_start).abs();
-    if span.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
-        return None;
-    }
+    let span = t_end - t_start;
     // +1 for the inclusive endpoint; small slack so we never over-decimate a
     // result that already sits on (or just above) the grid.
     let grid_n = (span / dt).round() as usize + 1;
     if times.len() <= grid_n.saturating_mul(2) {
-        return None;
+        return Ok(None);
     }
     let mut keep: Vec<usize> = Vec::with_capacity(grid_n + 1);
     let mut cursor = 0usize;
@@ -1140,7 +1177,7 @@ fn batch_keep_indices(
     if keep.last() != Some(&(n - 1)) {
         keep.push(n - 1);
     }
-    Some(keep)
+    Ok(Some(keep))
 }
 
 /// Cancellation + update sink for a stepping run. This is the ONE seam
@@ -1229,6 +1266,22 @@ impl RunSink for ChannelSink {
 /// `docs/architecture/28-modelica-realtime-physics.md` §2a.
 pub const DEFAULT_TOLERANCE: f64 = 1e-6;
 
+/// Offline run configuration rejection from its bounds or solver owner.
+#[derive(Debug)]
+pub enum RunConfigurationError {
+    Bounds(lunco_modelica_core::sim_target::RunBoundsError),
+    Solver(lunco_experiments::solver::SolverError),
+}
+
+impl std::fmt::Display for RunConfigurationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bounds(error) => std::fmt::Display::fmt(error, f),
+            Self::Solver(error) => std::fmt::Display::fmt(error, f),
+        }
+    }
+}
+
 /// The ONE place `SimOptions` is built for an offline/batch run — the app, the
 /// wasm worker, `modelica_run` and `modelica_tester` all come through here
 /// rather than hand-rolling options, so a policy change lands everywhere at once.
@@ -1255,8 +1308,10 @@ pub const DEFAULT_TOLERANCE: f64 = 1e-6;
 /// attributes to their choice.
 pub fn stepper_options_from_bounds(
     bounds: &RunBounds,
-) -> Result<rumoca_sim::SimOptions, lunco_experiments::solver::SolverError> {
+) -> Result<rumoca_sim::SimOptions, RunConfigurationError> {
     use lunco_experiments::solver;
+    lunco_modelica_core::sim_target::validate_run_bounds(bounds)
+        .map_err(RunConfigurationError::Bounds)?;
     lunco_modelica_solver::solver_backends::ensure_builtin_solvers();
 
     let request = solver::SolverRequest {
@@ -1278,8 +1333,9 @@ pub fn stepper_options_from_bounds(
         t_end: bounds.t_end,
     };
 
-    let spec = solver::resolve(&request)?;
+    let spec = solver::resolve(&request).map_err(RunConfigurationError::Solver)?;
     lunco_modelica_solver::solver_backends::rumoca_options(&spec, &params)
+        .map_err(RunConfigurationError::Solver)
 }
 
 /// Emit a `Failed` update carrying everything sampled so far as a partial
@@ -1329,12 +1385,16 @@ pub fn run_stepping_loop(
     sink: &mut impl RunSink,
 ) {
     let t_end = bounds.t_end;
-    let step_dt = lunco_modelica_core::sim_target::resolve_step_dt(
-        bounds.t_start,
-        t_end,
-        bounds.dt,
-        bounds.n_intervals,
-    );
+    let step_dt = match lunco_modelica_core::sim_target::validate_run_bounds(bounds) {
+        Ok(dt) => dt,
+        Err(error) => {
+            sink.emit(RunUpdate::Failed {
+                error: error.to_string(),
+                partial: None,
+            });
+            return;
+        }
+    };
 
     bevy::log::info!(
         "[sim] simulate begin: t={}..{} step_dt={}",
@@ -1387,6 +1447,18 @@ pub fn run_stepping_loop(
     };
     #[cfg(not(target_arch = "wasm32"))]
     let internal_dt = output_dt;
+    if let Err(error) = lunco_modelica_core::sim_target::resolve_step_dt(
+        bounds.t_start,
+        t_end,
+        Some(internal_dt),
+        None,
+    ) {
+        sink.emit(RunUpdate::Failed {
+            error: format!("internal solver cadence: {error}"),
+            partial: None,
+        });
+        return;
+    }
     // Next output-grid time we still owe a sample for.
     let mut next_output = bounds.t_start + output_dt;
 
@@ -2126,6 +2198,57 @@ mod tests {
             settled,
             "scheduler should drain to empty after all runs end"
         );
+    }
+
+    #[test]
+    fn invalid_bounds_fail_before_scheduler_or_solver_admission() {
+        let runner = ModelicaRunner::new();
+        let mut registry = ExperimentRegistry::new();
+        let mut exp = mint_exp(&mut registry, "BoundsProbe");
+        exp.bounds.dt = Some(1.0e-300);
+        let handle = runner.run_fast(&exp, test_source(&exp.model_ref.0));
+        let error = match handle
+            .progress_rx
+            .try_recv()
+            .expect("terminal admission failure")
+        {
+            RunUpdate::Failed {
+                error,
+                partial: None,
+            } => error,
+            update => panic!("unexpected admission update: {update:?}"),
+        };
+        assert!(error.contains("output grid"));
+        assert!(matches!(
+            handle.progress_rx.try_recv(),
+            Err(TryRecvError::Disconnected)
+        ));
+        assert_eq!(runner.queued_count(), 0);
+        assert_eq!(runner.in_flight_count(), 0);
+
+        struct Capture(Vec<RunUpdate>);
+        impl RunSink for Capture {
+            fn is_cancelled(&mut self) -> bool {
+                false
+            }
+            fn emit(&mut self, update: RunUpdate) {
+                self.0.push(update);
+            }
+        }
+        let mut sink = Capture(Vec::new());
+        drive_run(
+            &Dae::default(),
+            &exp.bounds,
+            web_time::Instant::now(),
+            &mut sink,
+        );
+        assert!(
+            matches!(&sink.0[..], [RunUpdate::Failed { error, partial: None }] if error.contains("output grid"))
+        );
+        assert!(matches!(
+            stepper_options_from_bounds(&exp.bounds),
+            Err(RunConfigurationError::Bounds(_))
+        ));
     }
 
     #[test]
