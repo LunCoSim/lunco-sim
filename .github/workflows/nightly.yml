@@ -238,6 +238,22 @@ jobs:
       - name: Build LunCoSim (desktop)
         run: ./scripts/build_native.sh luncosim --release --velopack --version "${{ needs.meta.outputs.version }}"
 
+      # Reuse the desktop release profile and target cache. Only these native
+      # storage/Twin/asset seams run; they need no GUI or Windows symlink privilege.
+      - name: Verify Windows native path contracts
+        if: matrix.platform == 'windows'
+        run: |
+          cargo test --release --locked -j 4 --lib \
+            -p lunco-storage -p lunco-twin -p lunco-assets-core \
+            -- --exact \
+            file_uri_tests::file_uris_preserve_native_paths_and_reject_invalid_addresses \
+            tests::open_uses_canonical_root_identity \
+            manifest::tests::native_plugin_paths_are_twin_relative_and_enabled_by_default \
+            asset_path::tests::native_load_paths_keep_filesystem_characters_and_separate_labels \
+            asset_path::tests::native_load_paths_reject_missing_retired_and_foreign_ownership \
+            asset_path::tests::windows_native_load_paths_normalize_verbatim_mount_roots \
+            lunco_source::tests::file_uri_reader_decodes_native_paths_and_rejects_invalid_input
+
       # ── Cross-compile (macOS x86_64 on Apple Silicon) ───────────────────
       # Only runs when the matrix entry sets `cross_target`. Adds the
       # rustup target, then runs build_native.sh again with --target so the
