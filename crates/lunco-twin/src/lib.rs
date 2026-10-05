@@ -267,8 +267,8 @@ impl TwinMode {
         })?;
         visited.insert(canonical_self.clone());
 
-        let manifest_path = path.join(MANIFEST_FILENAME);
-        let mut twin = Twin::index(path.to_path_buf())?;
+        let manifest_path = canonical_self.join(MANIFEST_FILENAME);
+        let mut twin = Twin::index(canonical_self)?;
 
         if manifest_path.is_file() {
             let manifest = TwinManifest::read(&manifest_path)?;
@@ -347,7 +347,7 @@ impl TwinMode {
                         path: child_root.clone(),
                         source,
                     })?;
-                if !canonical_child.starts_with(&canonical_self) {
+                if !canonical_child.starts_with(&twin.root) {
                     return Err(TwinError::PathOutsideRoot {
                         path: child_root,
                         root: twin.root,
@@ -1123,6 +1123,27 @@ mod tests {
                 assert_eq!(twin.file_references().count(), 1);
             }
             _ => panic!("expected Folder mode"),
+        }
+    }
+
+    #[test]
+    fn open_uses_canonical_root_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let expected = tmp.path().canonicalize().unwrap();
+        let TwinMode::Folder(twin) = TwinMode::open(&tmp.path().join(".")).unwrap() else {
+            panic!("expected Folder mode");
+        };
+        assert_eq!(twin.root, expected);
+
+        #[cfg(unix)]
+        {
+            let alias_parent = tempfile::tempdir().unwrap();
+            let alias = alias_parent.path().join("root-alias");
+            lunco_storage::create_directory_symlink_sync(tmp.path(), &alias).unwrap();
+            let TwinMode::Folder(twin) = TwinMode::open(&alias).unwrap() else {
+                panic!("expected Folder mode");
+            };
+            assert_eq!(twin.root, expected);
         }
     }
 

@@ -671,6 +671,11 @@ path ownership, and asset authority, then use the domain's asynchronous loader.
 Rust owns the filesystem and lifecycle mechanisms; Rhai owns content selection
 and load order.
 
+Native Twin roots are canonicalized before indexing and retained in that form
+for ownership checks. Documents and Twins therefore share the same filesystem
+identity, including Windows verbatim paths and roots reached through links;
+opening a document inside an open Twin does not replace that Twin.
+
 An absent optional content set is valid. For example, a Twin with no indexed
 SysML/KerML sources produces an informational lifecycle message and loads no
 SysML documents. An invalid path or rejected command remains visible at the
