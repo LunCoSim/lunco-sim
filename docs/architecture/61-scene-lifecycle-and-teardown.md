@@ -184,6 +184,10 @@ the `First` lifecycle phase; private lifecycle observers execute that admitted
 request, followed by an explicit deferred-command flush before normal projection
 schedules run. Public command handlers therefore have one role—submission—and
 contain no execution-mode marker, retry branch, or mid-frame mutation path.
+Invalid `LoadScene` addresses and a missing asset pipeline return terminal
+command rejections with a warning before admission; they never acknowledge a
+load that cannot run. Native filesystem paths and file URIs enter through
+`OpenFile`.
 
 Loading closes from the authoritative asset/structural-projection outcome in
 `Last`, after normal projection schedules have finished. Async CPU mesh builds

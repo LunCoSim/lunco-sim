@@ -973,21 +973,20 @@ pub fn spawn_usd_child_under_parent(
 /// `lunco://` for the shipped library and `twin://` for an opened Twin.
 /// Filesystem paths belong to `OpenFile` / startup root discovery and must not
 /// be reinterpreted here.
-pub fn validate_scene_address(path_in: &str) -> Option<String> {
+pub fn validate_scene_address(path_in: &str) -> Result<String, String> {
     let valid_lunco = lunco_assets_core::parse_lunco_uri(path_in)
         .is_some_and(lunco_assets_path::is_safe_relative_path);
     let valid_twin = lunco_assets_core::parse_twin_uri(path_in).is_some_and(|(name, rel)| {
         !name.is_empty() && lunco_assets_path::is_safe_relative_path(rel)
     });
     if valid_lunco || valid_twin {
-        return Some(path_in.to_string());
+        return Ok(path_in.to_string());
     }
 
-    warn!(
+    Err(format!(
         "[scene] `{path_in}` is not a root-qualified scene address — LoadScene takes \
          `lunco://…` or `twin://…`. Use OpenFile for a filesystem path."
-    );
-    None
+    ))
 }
 
 /// Spawn a USD scene root directly under the canonical `WorldGrid` entity.
@@ -1001,7 +1000,13 @@ pub fn spawn_scene_root_world(
     path_in: &str,
     root_prim_in: &str,
 ) -> Option<Entity> {
-    let asset_path = validate_scene_address(path_in)?;
+    let asset_path = match validate_scene_address(path_in) {
+        Ok(path) => path,
+        Err(error) => {
+            warn!("{error}");
+            return None;
+        }
+    };
     // File-backed source: the AssetServer reads + composes the on-disk
     // stage. The USD command runtime's E1 projection takes the other door
     // ([`spawn_scene_root_with_stage`]) to mount a document's *composed*
@@ -1600,23 +1605,26 @@ mod tests {
     fn scene_address_requires_a_registered_scheme_before_reload() {
         assert_eq!(
             validate_scene_address("lunco://scenes/luncosim/sandbox_scene.usda"),
-            Some("lunco://scenes/luncosim/sandbox_scene.usda".to_string())
+            Ok("lunco://scenes/luncosim/sandbox_scene.usda".to_string())
         );
         assert_eq!(
             validate_scene_address("twin://moonbase/scenes/sandbox_scene.usda"),
-            Some("twin://moonbase/scenes/sandbox_scene.usda".to_string())
+            Ok("twin://moonbase/scenes/sandbox_scene.usda".to_string())
         );
-        assert_eq!(
-            validate_scene_address("scenes/luncosim/sandbox_scene.usda"),
-            None
-        );
-        assert_eq!(
-            validate_scene_address("/workspace/assets/scenes/luncosim/sandbox_scene.usda"),
-            None
-        );
-        assert_eq!(validate_scene_address("lunco://"), None);
-        assert_eq!(validate_scene_address("lunco://../scene.usda"), None);
-        assert_eq!(validate_scene_address("twin:///scene.usda"), None);
+        for invalid in [
+            "scenes/scene.usda",
+            "/workspace/assets/scenes/scene.usda",
+            r"C:\Twins\scene.usda",
+            r"\\server\share\scene.usda",
+            "file:///scene.usda",
+            "lunco://",
+            "lunco://../scene.usda",
+            "twin:///scene.usda",
+        ] {
+            let error = validate_scene_address(invalid).unwrap_err();
+            assert!(error.contains("root-qualified scene address"));
+            assert!(error.contains("OpenFile"));
+        }
     }
 
     #[test]

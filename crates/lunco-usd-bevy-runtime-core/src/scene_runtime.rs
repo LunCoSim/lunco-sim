@@ -204,13 +204,16 @@ fn on_load_scene(
     asset_server: Option<Res<AssetServer>>,
     stages: Option<Res<Assets<UsdStageAsset>>>,
     mut coordinator: ResMut<lunco_core::SceneTransitionCoordinator>,
-) {
-    let (Some(_asset_server), Some(_stages)) = (asset_server, stages) else {
-        return;
-    };
-    let Some(path) = validate_scene_address(&trigger.event().path) else {
-        return;
-    };
+) -> Result<Ack, String> {
+    let path = validate_scene_address(&trigger.event().path).map_err(|error| {
+        warn!("{error}");
+        error
+    })?;
+    if asset_server.is_none() || stages.is_none() {
+        let error = "LoadScene requires the USD asset pipeline".to_string();
+        warn!("[load-scene] {error}");
+        return Err(error);
+    }
     let root_prim = resolve_root_prim(&path, &trigger.event().root_prim);
 
     let request = lunco_core::SceneTransitionRequest::load(path.clone(), root_prim);
@@ -231,6 +234,7 @@ fn on_load_scene(
             );
         }
     }
+    Ok(Ack::new(OpId::new()))
 }
 
 /// Execute the load request that won admission at the scene lifecycle boundary.
