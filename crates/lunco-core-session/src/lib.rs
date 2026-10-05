@@ -25,6 +25,8 @@ impl Plugin for LunCoCoreSessionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<NetworkRole>()
             .init_resource::<LocalSession>()
+            .init_resource::<ClientConnection>()
+            .init_resource::<ReplicatedScene>()
             .init_resource::<SyncApplyGuard>()
             .init_resource::<NetStatus>()
             .init_resource::<SessionRegistry>()

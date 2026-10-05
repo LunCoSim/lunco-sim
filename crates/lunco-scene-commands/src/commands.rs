@@ -798,23 +798,41 @@ fn commit_runtime_spawn(
 /// No-op on host/standalone (queue stays empty).
 pub fn apply_replicated_spawns(
     mut pending: ResMut<lunco_core_session::PendingReplicatedSpawns>,
+    connection: Res<lunco_core_session::ClientConnection>,
+    role: Res<lunco_core_session::NetworkRole>,
+    scene: Res<lunco_core_session::ReplicatedScene>,
     mut commands: Commands,
     catalog: Res<SpawnCatalog>,
     asset_server: Res<AssetServer>,
     active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
-    q_scene_root: Query<Entity, With<UsdSceneRoot>>,
+    q_scene_root: Query<(Entity, &UsdPrimPath), With<UsdSceneRoot>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
-    if pending.0.is_empty() {
+    if *role != lunco_core_session::NetworkRole::Client || connection.0.is_none() {
+        pending.clear();
+        return;
+    }
+    let Some(connection) = connection.0 else {
+        return;
+    };
+    pending.retain_connection(connection);
+    let Some(owner) = scene
+        .0
+        .as_ref()
+        .filter(|owner| owner.connection == connection)
+    else {
+        return;
+    };
+    if pending.is_empty() {
         return;
     }
     // Wait until the scene anchor exists (scene still loading) — keep the queue.
     // It is the only legal anchor, so there is nothing to do without it.
     let root_count = q_scene_root.iter().count();
-    let Some(scene_root) = q_scene_root.single().ok() else {
+    let Some((scene_root, prim)) = q_scene_root.single().ok() else {
         if let Some(mut diagnostics) = diagnostics {
             if root_count > 1 {
                 diagnostics.replace_producer(
@@ -835,12 +853,22 @@ pub fn apply_replicated_spawns(
         }
         return;
     };
+    let matches_mount = asset_server
+        .get_path(prim.stage_handle.id())
+        .is_some_and(|path| {
+            let uri = lunco_assets_core::asset_path::anchor_of(&path);
+            lunco_assets_core::parse_twin_uri(&uri)
+                .is_some_and(|(authority, _)| authority == owner.authority)
+        });
+    if !matches_mount {
+        return;
+    }
     if let Some(mut diagnostics) = diagnostics {
         diagnostics.replace_producer("scene-spawn", std::iter::empty());
     }
     // Drain in place — the loop body touches only `commands`/`catalog`/
     // `asset_server`, never `pending`.
-    for job in pending.0.drain(..) {
+    for job in pending.drain_for(owner) {
         let Some(entry) = catalog.get(&job.entry_id) else {
             warn!("REPL_SPAWN: unknown entry '{}'", job.entry_id);
             continue;

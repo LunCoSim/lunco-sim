@@ -119,16 +119,20 @@ impl Plugin for LunCoSimServicesPlugin {
 #[cfg(feature = "networking")]
 fn load_ready_scenario(
     role: Res<lunco_core_session::NetworkRole>,
+    connection: Res<lunco_core_session::ClientConnection>,
+    mut replica: ResMut<lunco_core_session::ReplicatedScene>,
+    mut mirror: ResMut<lunco_networking_sync::journal_plane::ReplicatedJournal>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     downloads: Res<lunco_networking_sync::scenario_sync::AssetDownloads>,
     // Downloaded scenarios use the same logical source identity as the host,
     // with a load authority assigned to this peer's mount lifetime.
     twins: Res<lunco_assets_core::twin_source::TwinRoots>,
     // Last scenario revision we triggered a load for — reload only on change.
-    mut last_loaded: Local<Option<[u8; 32]>>,
+    mut last_loaded: Local<Option<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>>,
     mut commands: Commands,
 ) {
-    if role.is_host() {
+    if !remote.is_live(*role, connection.0) {
         return;
     }
     let Some(m) = remote.manifest.as_ref() else {
@@ -137,12 +141,26 @@ fn load_ready_scenario(
     let Some(scene) = m.default_scene.as_deref() else {
         return; // scenario advertises no entry scene → nothing to auto-load
     };
-    if *last_loaded == Some(m.revision) || !downloads.all_cached(m) {
+    let (Some(connection), Some(host_twin)) = (connection.0, remote.host_twin) else {
+        return;
+    };
+    if last_loaded.as_ref() == Some(&*remote) || !downloads.all_cached(m) {
         return;
     }
     // Reuse the editable local mount when present, otherwise mount the cache.
     // Repeated admission within this lifetime returns the same load authority,
     // so LoadScene can recognize an already active or loading scene.
+    let owns_mount = match twins.mounted_name_for_logical(&m.name) {
+        Ok(existing) => existing.is_none(),
+        Err(error) => {
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                "scenario-twin-mount-failed",
+                error.to_string(),
+            );
+            return;
+        }
+    };
     let uri = match lunco_networking_sync::scenario_sync::mount_scenario_twin(
         &twins,
         &m.scenario_id,
@@ -159,12 +177,53 @@ fn load_ready_scenario(
             return;
         }
     };
+    let Some((authority, _)) = lunco_assets_core::parse_twin_uri(&uri) else {
+        lunco_core::trigger_runtime_error(
+            &mut commands,
+            "scenario-twin-mount-failed",
+            "mounted scenario has no Twin authority",
+        );
+        return;
+    };
+    let root = match twins.root_for(authority) {
+        Ok(Some(root)) => root,
+        Ok(None) => {
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                "scenario-twin-mount-failed",
+                "mounted scenario root is unavailable",
+            );
+            return;
+        }
+        Err(error) => {
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                "scenario-twin-mount-failed",
+                error.to_string(),
+            );
+            return;
+        }
+    };
+    if let Some(journal) = journal.as_ref() {
+        mirror.admit_local_tail(
+            lunco_core_session::ReplicationScope::Twin(host_twin),
+            connection,
+            journal,
+        );
+    }
+    replica.0 = Some(lunco_core_session::ReplicatedSceneOwner {
+        connection,
+        host_twin,
+        authority: authority.to_owned(),
+        root,
+        owns_mount,
+    });
     info!("[net] scenario fully cached; loading entry scene (read-only): {scene}");
     commands.trigger(LoadScene {
         path: uri,
         root_prim: String::new(),
     });
-    *last_loaded = Some(m.revision);
+    *last_loaded = Some(remote.clone());
 }
 
 /// Scenario distribution Layer B: replay peers' live authored edits onto the
@@ -208,6 +267,12 @@ fn load_ready_scenario(
 /// by the entry's peer-local `doc` id, which single-scene makes irrelevant.
 #[cfg(feature = "networking")]
 fn replay_scenario_journal(
+    facts: lunco_networking_sync::scope::SceneScopeFacts,
+    application: Res<lunco_networking_sync::scope::ApplicationJournalBinding>,
+    connection: Res<lunco_core_session::ClientConnection>,
+    scene: Res<lunco_core_session::ReplicatedScene>,
+    replicated_journal: Res<lunco_networking_sync::journal_plane::ReplicatedJournal>,
+    mut replay_owner: Local<Option<(lunco_core_session::ReplicationScope, Option<Entity>)>>,
     role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     // Host-side only (inserted by `setup_host`) — the manifest this host serves.
@@ -221,12 +286,37 @@ fn replay_scenario_journal(
     // The host's replay base, latched the first frame its manifest exists.
     mut host_base: Local<Option<Option<lunco_twin_journal::EntryId>>>,
 ) {
+    let scope = if role.is_host() {
+        facts.host_scene_scope()
+    } else {
+        facts.client_scope(connection.0, scene.0.as_ref(), remote.host_twin)
+    };
+    let Some(scope) = scope else {
+        return;
+    };
+    let owner = (scope, if role.is_host() { None } else { connection.0 });
+    let owner_changed = *replay_owner != Some(owner);
+    if owner_changed {
+        applied.clear();
+        *replay_owner = Some(owner);
+        *host_base = None;
+    }
+    let journal = if *role == lunco_core_session::NetworkRole::Client
+        && matches!(scope, lunco_core_session::ReplicationScope::Twin(_))
+    {
+        replicated_journal.for_owner(scope, connection.0)
+    } else {
+        journal.map(|journal| journal.clone())
+    };
     let Some(journal) = journal else {
         return;
     };
     // Base head: the state the on-disk files already reflect. The host reads it
     // off the manifest it built (deferring until that build lands); a client
     // bases on the downloaded snapshot's head, or waits if no scenario is loaded.
+    if role.is_host() && facts.host_journal_scope(&journal, &application) != Some(scope) {
+        return;
+    }
     let base: Option<lunco_twin_journal::EntryId> = if role.is_host() {
         if host_base.is_none() {
             let Some(scenario) = local_scenario.as_ref() else {
@@ -282,6 +372,12 @@ fn replay_scenario_journal(
 /// sufficient); with more than one open model it defers rather than misroute.
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_modelica(
+    facts: lunco_networking_sync::scope::SceneScopeFacts,
+    application: Res<lunco_networking_sync::scope::ApplicationJournalBinding>,
+    connection: Res<lunco_core_session::ClientConnection>,
+    scene: Res<lunco_core_session::ReplicatedScene>,
+    replicated_journal: Res<lunco_networking_sync::journal_plane::ReplicatedJournal>,
+    mut replay_owner: Local<Option<(lunco_core_session::ReplicationScope, Option<Entity>)>>,
     role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
@@ -292,9 +388,33 @@ fn replay_scenario_journal_modelica(
     // independent of the USD driver's applied-set).
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
 ) {
+    let scope = if role.is_host() {
+        facts.host_scene_scope()
+    } else {
+        facts.client_scope(connection.0, scene.0.as_ref(), remote.host_twin)
+    };
+    let Some(scope) = scope else {
+        return;
+    };
+    let owner = (scope, if role.is_host() { None } else { connection.0 });
+    let owner_changed = *replay_owner != Some(owner);
+    if owner_changed {
+        applied.clear();
+        *replay_owner = Some(owner);
+    }
+    let journal = if *role == lunco_core_session::NetworkRole::Client
+        && matches!(scope, lunco_core_session::ReplicationScope::Twin(_))
+    {
+        replicated_journal.for_owner(scope, connection.0)
+    } else {
+        journal.map(|journal| journal.clone())
+    };
     let (Some(journal), Some(mut registry)) = (journal, registry) else {
         return;
     };
+    if role.is_host() && facts.host_journal_scope(&journal, &application) != Some(scope) {
+        return;
+    }
     let base: Option<lunco_twin_journal::EntryId> = if role.is_host() {
         None
     } else {
@@ -332,15 +452,45 @@ fn replay_scenario_journal_modelica(
 /// — they ride the content/presence planes. No-ops when registry/journal absent.
 #[cfg(all(feature = "networking", feature = "experiments"))]
 fn replay_scenario_journal_experiment(
+    facts: lunco_networking_sync::scope::SceneScopeFacts,
+    application: Res<lunco_networking_sync::scope::ApplicationJournalBinding>,
+    connection: Res<lunco_core_session::ClientConnection>,
+    scene: Res<lunco_core_session::ReplicatedScene>,
+    replicated_journal: Res<lunco_networking_sync::journal_plane::ReplicatedJournal>,
+    mut replay_owner: Local<Option<(lunco_core_session::ReplicationScope, Option<Entity>)>>,
     role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
 ) {
+    let scope = if role.is_host() {
+        facts.host_scene_scope()
+    } else {
+        facts.client_scope(connection.0, scene.0.as_ref(), remote.host_twin)
+    };
+    let Some(scope) = scope else {
+        return;
+    };
+    let owner = (scope, if role.is_host() { None } else { connection.0 });
+    let owner_changed = *replay_owner != Some(owner);
+    if owner_changed {
+        applied.clear();
+        *replay_owner = Some(owner);
+    }
+    let journal = if *role == lunco_core_session::NetworkRole::Client
+        && matches!(scope, lunco_core_session::ReplicationScope::Twin(_))
+    {
+        replicated_journal.for_owner(scope, connection.0)
+    } else {
+        journal.map(|journal| journal.clone())
+    };
     let (Some(journal), Some(mut registry)) = (journal, registry) else {
         return;
     };
+    if role.is_host() && facts.host_journal_scope(&journal, &application) != Some(scope) {
+        return;
+    }
     let base: Option<lunco_twin_journal::EntryId> = if role.is_host() {
         None
     } else {
@@ -372,6 +522,12 @@ fn replay_scenario_journal_experiment(
 /// and simply no-ops (it still forwards the journal entry to GUI peers).
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_shader(
+    facts: lunco_networking_sync::scope::SceneScopeFacts,
+    application: Res<lunco_networking_sync::scope::ApplicationJournalBinding>,
+    connection: Res<lunco_core_session::ClientConnection>,
+    scene: Res<lunco_core_session::ReplicatedScene>,
+    replicated_journal: Res<lunco_networking_sync::journal_plane::ReplicatedJournal>,
+    mut replay_owner: Local<Option<(lunco_core_session::ReplicationScope, Option<Entity>)>>,
     role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
@@ -380,11 +536,35 @@ fn replay_scenario_journal_shader(
     shaders: Option<ResMut<Assets<bevy::shader::Shader>>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
 ) {
+    let scope = if role.is_host() {
+        facts.host_scene_scope()
+    } else {
+        facts.client_scope(connection.0, scene.0.as_ref(), remote.host_twin)
+    };
+    let Some(scope) = scope else {
+        return;
+    };
+    let owner = (scope, if role.is_host() { None } else { connection.0 });
+    let owner_changed = *replay_owner != Some(owner);
+    if owner_changed {
+        applied.clear();
+        *replay_owner = Some(owner);
+    }
+    let journal = if *role == lunco_core_session::NetworkRole::Client
+        && matches!(scope, lunco_core_session::ReplicationScope::Twin(_))
+    {
+        replicated_journal.for_owner(scope, connection.0)
+    } else {
+        journal.map(|journal| journal.clone())
+    };
     let (Some(journal), Some(mut registry), Some(asset_server), Some(mut shaders)) =
         (journal, registry, asset_server, shaders)
     else {
         return;
     };
+    if role.is_host() && facts.host_journal_scope(&journal, &application) != Some(scope) {
+        return;
+    }
     let base: Option<lunco_twin_journal::EntryId> = if role.is_host() {
         None
     } else {
@@ -431,15 +611,45 @@ fn replay_scenario_journal_shader(
 /// spec is a singleton). No-ops when the spec resource / journal are absent.
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_obstacle(
+    facts: lunco_networking_sync::scope::SceneScopeFacts,
+    application: Res<lunco_networking_sync::scope::ApplicationJournalBinding>,
+    connection: Res<lunco_core_session::ClientConnection>,
+    scene: Res<lunco_core_session::ReplicatedScene>,
+    replicated_journal: Res<lunco_networking_sync::journal_plane::ReplicatedJournal>,
+    mut replay_owner: Local<Option<(lunco_core_session::ReplicationScope, Option<Entity>)>>,
     role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     spec: Option<ResMut<lunco_obstacle_field::ObstacleFieldSpec>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
 ) {
+    let scope = if role.is_host() {
+        facts.host_scene_scope()
+    } else {
+        facts.client_scope(connection.0, scene.0.as_ref(), remote.host_twin)
+    };
+    let Some(scope) = scope else {
+        return;
+    };
+    let owner = (scope, if role.is_host() { None } else { connection.0 });
+    let owner_changed = *replay_owner != Some(owner);
+    if owner_changed {
+        applied.clear();
+        *replay_owner = Some(owner);
+    }
+    let journal = if *role == lunco_core_session::NetworkRole::Client
+        && matches!(scope, lunco_core_session::ReplicationScope::Twin(_))
+    {
+        replicated_journal.for_owner(scope, connection.0)
+    } else {
+        journal.map(|journal| journal.clone())
+    };
     let (Some(journal), Some(mut spec)) = (journal, spec) else {
         return;
     };
+    if role.is_host() && facts.host_journal_scope(&journal, &application) != Some(scope) {
+        return;
+    }
     let base: Option<lunco_twin_journal::EntryId> = if role.is_host() {
         None
     } else {

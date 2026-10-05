@@ -37,6 +37,7 @@ use lunco_command_contracts::SyncChannel;
 /// `serde_json::from_str`s it and feeds `Journal::append_remote` (merge).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JournalEntryMsg {
+    pub scope: crate::scope::WireSceneScope,
     /// `serde_json::to_string(&JournalEntry)`.
     pub json: String,
 }
@@ -148,16 +149,29 @@ pub fn stamp_local_journal_author(journal: Option<Res<JournalResource>>) {
 
 // ── Wire (de)serialization ──────────────────────────────────────────────────
 
-fn to_msg(entry: &JournalEntry) -> Option<JournalEntryMsg> {
+fn to_msg(
+    entry: &JournalEntry,
+    scope: lunco_core_session::ReplicationScope,
+) -> Option<JournalEntryMsg> {
     serde_json::to_string(entry)
         .ok()
-        .map(|json| JournalEntryMsg { json })
+        .map(|json| JournalEntryMsg {
+            scope: crate::scope::wire_scope(scope),
+            json,
+        })
 }
 
 /// All current journal entries as wire messages, in log order — the full replay
 /// a late joiner needs on connect (the server streams these to the new peer).
-pub fn full_journal_msgs(journal: &JournalResource) -> Vec<JournalEntryMsg> {
-    journal.with_read(|j| j.entries().filter_map(to_msg).collect())
+pub fn full_journal_msgs(
+    journal: &JournalResource,
+    scope: lunco_core_session::ReplicationScope,
+) -> Vec<JournalEntryMsg> {
+    journal.with_read(|j| {
+        j.entries()
+            .filter_map(|entry| to_msg(entry, scope))
+            .collect()
+    })
 }
 
 // ── Inbound apply (both roles) ────────────────────────────────────────────────
@@ -173,20 +187,146 @@ pub fn apply_inbound_entry(
     journal: &JournalResource,
     msg: &JournalEntryMsg,
     canonical_author: Option<AuthorId>,
-) {
-    match serde_json::from_str::<JournalEntry>(&msg.json) {
-        Ok(mut entry) => {
-            // A host binds every received entry to the connection that carried
-            // it. This prevents a peer from forging another author's EntryId
-            // and suppressing that author's own relay/replay path. Clients pass
-            // None because the host already canonicalized the entry.
-            if let Some(author) = canonical_author {
-                entry.id.author = author.clone();
-                entry.author.user = author.0;
-            }
-            journal.with_write(|j| j.append_remote(entry));
+    scope: lunco_core_session::ReplicationScope,
+) -> Option<EntryId> {
+    Some(merge_wire_entry(
+        journal,
+        decode_wire_entry(msg, scope)?,
+        canonical_author,
+    ))
+}
+
+fn decode_wire_entry(
+    msg: &JournalEntryMsg,
+    scope: lunco_core_session::ReplicationScope,
+) -> Option<JournalEntry> {
+    if crate::scope::internal_scope(msg.scope) != Some(scope) {
+        warn!("[journal-plane] rejected entry from a mismatched scene owner");
+        return None;
+    }
+    match serde_json::from_str(&msg.json) {
+        Ok(entry) => Some(entry),
+        Err(error) => {
+            warn!("[journal-plane] bad inbound entry: {error}");
+            None
         }
-        Err(e) => warn!("[journal-plane] bad inbound entry: {e}"),
+    }
+}
+fn merge_wire_entry(
+    journal: &JournalResource,
+    mut entry: JournalEntry,
+    canonical_author: Option<AuthorId>,
+) -> EntryId {
+    if let Some(author) = canonical_author {
+        entry.id.author = author.clone();
+        entry.author.user = author.0;
+        // The host's admitted journal owns storage identity; remote native
+        // roots are peer-local and never choose the host persistence target.
+        entry.twin = journal.with_read(|journal| journal.twin().clone());
+    }
+    let id = entry.id.clone();
+    journal.with_write(|journal| journal.append_remote(entry));
+    id
+}
+
+/// A remote Twin's merge state cannot share entry-ID slots with a different
+/// mounted Twin or the local persistent journal.
+#[derive(Resource, Default)]
+pub struct ReplicatedJournal {
+    mirror: Option<(
+        lunco_core_session::ReplicationScope,
+        Entity,
+        JournalResource,
+    )>,
+    local_tail: Option<(
+        lunco_core_session::ReplicationScope,
+        Entity,
+        lunco_twin_journal::TwinId,
+        usize,
+    )>,
+}
+impl ReplicatedJournal {
+    pub fn for_owner(
+        &self,
+        scope: lunco_core_session::ReplicationScope,
+        connection: Option<Entity>,
+    ) -> Option<JournalResource> {
+        let (owner, transport, journal) = self.mirror.as_ref()?;
+        (*owner == scope && Some(*transport) == connection).then(|| journal.clone())
+    }
+    pub fn admit_local_tail(
+        &mut self,
+        scope: lunco_core_session::ReplicationScope,
+        connection: Entity,
+        journal: &JournalResource,
+    ) {
+        let (identity, length) =
+            journal.with_read(|journal| (journal.twin().clone(), journal.len()));
+        self.local_tail = Some((scope, connection, identity, length));
+    }
+    pub fn local_tail_for(
+        &self,
+        scope: lunco_core_session::ReplicationScope,
+        connection: Option<Entity>,
+        journal: &JournalResource,
+    ) -> Option<usize> {
+        let (owner, transport, identity, cursor) = self.local_tail.as_ref()?;
+        (*owner == scope
+            && Some(*transport) == connection
+            && journal.with_read(|journal| journal.twin() == identity))
+        .then_some(*cursor)
+    }
+    pub fn retire(&mut self, scope: lunco_core_session::ReplicationScope) {
+        if self
+            .mirror
+            .as_ref()
+            .is_some_and(|(owner, _, _)| *owner == scope)
+        {
+            self.mirror = None;
+        }
+        if self
+            .local_tail
+            .as_ref()
+            .is_some_and(|(owner, _, _, _)| *owner == scope)
+        {
+            self.local_tail = None;
+        }
+    }
+    pub fn clear(&mut self) {
+        self.mirror = None;
+        self.local_tail = None;
+    }
+    pub fn apply(
+        &mut self,
+        msg: &JournalEntryMsg,
+        scope: lunco_core_session::ReplicationScope,
+        connection: Entity,
+        local_author: AuthorId,
+    ) -> Option<EntryId> {
+        Some(self.merge(
+            decode_wire_entry(msg, scope)?,
+            scope,
+            connection,
+            local_author,
+        ))
+    }
+    fn merge(
+        &mut self,
+        entry: JournalEntry,
+        scope: lunco_core_session::ReplicationScope,
+        connection: Entity,
+        local_author: AuthorId,
+    ) -> EntryId {
+        if self.for_owner(scope, Some(connection)).is_none() {
+            self.mirror = Some((
+                scope,
+                connection,
+                JournalResource::new(entry.twin.clone(), local_author.clone()),
+            ));
+        }
+        let journal = &self.mirror.as_ref().expect("mirror admitted above").2;
+        journal.with_write(|journal| journal.set_local_author(local_author));
+        merge_wire_entry(journal, entry, None)
     }
 }
 
@@ -209,9 +349,22 @@ pub fn apply_inbound_entry(
 /// Reliable `BulkData` lane (edit history, not per-tick state).
 pub fn broadcast_journal_entries(
     role: Res<NetworkRole>,
+    facts: crate::scope::SceneScopeFacts,
+    application: Res<crate::scope::ApplicationJournalBinding>,
+    connection: Res<lunco_core_session::ClientConnection>,
+    scene: Res<lunco_core_session::ReplicatedScene>,
+    remote: Res<crate::scenario_sync::RemoteScenarioManifest>,
     journal: Option<Res<JournalResource>>,
     mut outbox: ResMut<SyncOutbox>,
+    mut mirror: ResMut<ReplicatedJournal>,
     mut sent: Local<usize>,
+    mut sent_owner: Local<
+        Option<(
+            lunco_core_session::ReplicationScope,
+            Option<Entity>,
+            lunco_twin_journal::TwinId,
+        )>,
+    >,
 ) {
     if !role.is_networked() {
         return;
@@ -219,6 +372,44 @@ pub fn broadcast_journal_entries(
     let Some(journal) = journal else {
         return;
     };
+    let scope = if role.is_host() {
+        facts.host_journal_scope(&journal, &application)
+    } else {
+        facts.client_journal_scope(
+            connection.0,
+            scene.0.as_ref(),
+            remote.host_twin,
+            &journal,
+            &application,
+        )
+    };
+    let Some(scope) = scope else {
+        return;
+    };
+    let owner = (
+        scope,
+        connection.0,
+        journal.with_read(|journal| journal.twin().clone()),
+    );
+    if sent_owner.as_ref() != Some(&owner) {
+        // A downloaded scene shares the application journal resource. Its
+        // existing tail was not authored under this remote mount and must not
+        // be relabeled as new scene work. The host's bound journal and a
+        // scene-free Application journal retain their full replay semantics.
+        *sent = if !role.is_host() && matches!(scope, lunco_core_session::ReplicationScope::Twin(_))
+        {
+            let Some(cursor) = mirror.local_tail_for(scope, connection.0, &journal) else {
+                warn!(
+                    "[journal-plane] client local journal tail is not admitted to the live scene"
+                );
+                return;
+            };
+            cursor
+        } else {
+            0
+        };
+        *sent_owner = Some(owner);
+    }
     let is_host = role.is_host();
     let me = journal.local_author();
     journal.with_read(|j| {
@@ -235,7 +426,12 @@ pub fn broadcast_journal_entries(
             if !is_host && entry.id.author != me {
                 continue;
             }
-            if let Some(msg) = to_msg(entry) {
+            if let Some(msg) = to_msg(entry, scope) {
+                if !is_host && matches!(scope, lunco_core_session::ReplicationScope::Twin(_)) {
+                    if let Some(connection) = connection.0 {
+                        mirror.merge(entry.clone(), scope, connection, me.clone());
+                    }
+                }
                 outbox
                     .0
                     .push((SyncChannel::BulkData, SyncEnvelope::JournalEntry(msg)));
@@ -361,13 +557,17 @@ mod tests {
                 None,
             );
         });
-        let msg = full_journal_msgs(&source).pop().expect("source entry");
+        let msg = full_journal_msgs(&source, lunco_core_session::ReplicationScope::Application)
+            .pop()
+            .expect("source entry");
         let target = JournalResource::new(twin, AuthorId::new("host"));
         apply_inbound_entry(
             &target,
             &msg,
             Some(AuthorId::new("net-session-0000000000000007")),
-        );
+            lunco_core_session::ReplicationScope::Application,
+        )
+        .expect("valid canonical entry");
 
         target.with_read(|j| {
             let entry = j.entries().next().expect("canonical entry");
@@ -414,8 +614,14 @@ mod tests {
         };
         // The ferry: deliver every entry currently in `from` into `to` (merge).
         let deliver = |from: &JournalResource, to: &JournalResource| {
-            for msg in full_journal_msgs(from) {
-                apply_inbound_entry(to, &msg, None);
+            for msg in full_journal_msgs(from, lunco_core_session::ReplicationScope::Application) {
+                apply_inbound_entry(
+                    to,
+                    &msg,
+                    None,
+                    lunco_core_session::ReplicationScope::Application,
+                )
+                .expect("valid application entry");
             }
         };
 
@@ -526,12 +732,24 @@ mod tests {
 
         // …and a client edit arriving AFTER that head still replays.
         let client = JournalResource::new(twin, AuthorId::new("peer-client"));
-        for msg in full_journal_msgs(&saved) {
-            apply_inbound_entry(&client, &msg, None);
+        for msg in full_journal_msgs(&saved, lunco_core_session::ReplicationScope::Application) {
+            apply_inbound_entry(
+                &client,
+                &msg,
+                None,
+                lunco_core_session::ReplicationScope::Application,
+            )
+            .expect("valid application entry");
         }
         author_usd(&client, 3);
-        for msg in full_journal_msgs(&client) {
-            apply_inbound_entry(&saved, &msg, None);
+        for msg in full_journal_msgs(&client, lunco_core_session::ReplicationScope::Application) {
+            apply_inbound_entry(
+                &saved,
+                &msg,
+                None,
+                lunco_core_session::ReplicationScope::Application,
+            )
+            .expect("valid application entry");
         }
         assert_eq!(
             vals(&scene_ops_after(&saved, Some(&head), &me, &none)),
@@ -602,6 +820,134 @@ mod tests {
         assert_eq!(
             lam(&scene_ops_after(&journal, Some(&host(1)), &me, &done)),
             vec![4]
+        );
+    }
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use lunco_core_session::ReplicationScope;
+    #[test]
+    fn journal_entry_rejects_old_mount_and_application_without_mutating() {
+        let journal = JournalResource::new(
+            lunco_twin_journal::TwinId::new("generic"),
+            AuthorId::local(),
+        );
+        let old = ReplicationScope::Twin(lunco_workspace::TwinId::new(1));
+        let next = ReplicationScope::Twin(lunco_workspace::TwinId::new(2));
+        let msg = JournalEntryMsg {
+            scope: crate::scope::wire_scope(old),
+            json: "invalid-json".into(),
+        };
+        assert_eq!(apply_inbound_entry(&journal, &msg, None, next), None);
+        assert_eq!(
+            apply_inbound_entry(&journal, &msg, None, ReplicationScope::Application),
+            None
+        );
+        assert!(journal.with_read(|journal| journal.is_empty()));
+    }
+    fn source(twin: &str, value: i64) -> JournalResource {
+        let journal =
+            JournalResource::new(lunco_twin_journal::TwinId::new(twin), AuthorId::new("host"));
+        journal.with_write(|journal| {
+            journal.append_local(
+                lunco_twin_journal::AuthorTag {
+                    user: "host".into(),
+                    tool: "generic".into(),
+                },
+                lunco_doc::DocumentId::new(1),
+                EntryKind::Op {
+                    domain: DomainKind::Usd,
+                    op: serde_json::json!({"value":value}),
+                    inverse: serde_json::json!({}),
+                },
+                None,
+            );
+        });
+        journal
+    }
+    #[test]
+    fn mirror_isolates_same_entry_id_payloads_and_exact_connection() {
+        let mut world = World::new();
+        let connection = world.spawn_empty().id();
+        let replacement = world.spawn_empty().id();
+        let a = ReplicationScope::Twin(lunco_workspace::TwinId::new(1));
+        let b = ReplicationScope::Twin(lunco_workspace::TwinId::new(2));
+        let first = source("first", 1);
+        let next = source("next", 2);
+        let first_msg = full_journal_msgs(&first, a).pop().unwrap();
+        let next_msg = full_journal_msgs(&next, b).pop().unwrap();
+        let mut mirror = ReplicatedJournal::default();
+        let first_id = mirror
+            .apply(&first_msg, a, connection, AuthorId::new("client"))
+            .unwrap();
+        mirror.retire(a);
+        let next_id = mirror
+            .apply(&next_msg, b, connection, AuthorId::new("client"))
+            .unwrap();
+        assert_eq!(first_id, next_id);
+        assert!(mirror.for_owner(a, Some(connection)).is_none());
+        assert!(mirror.for_owner(b, Some(replacement)).is_none());
+        let journal = mirror.for_owner(b, Some(connection)).unwrap();
+        assert_eq!(
+            journal.with_read(|journal| match &journal.get(&next_id).unwrap().kind {
+                EntryKind::Op { op, .. } => op["value"].as_i64().unwrap(),
+                _ => panic!("op"),
+            }),
+            2
+        );
+        assert_eq!(first.with_read(|journal| journal.len()), 1);
+    }
+    #[test]
+    fn local_tail_is_pinned_before_scene_commands_and_mirrors_only_new_entries() {
+        let mut world = World::new();
+        let connection = world.spawn_empty().id();
+        let scope = ReplicationScope::Twin(lunco_workspace::TwinId::new(3));
+        let local = source("local", 1);
+        let mut mirror = ReplicatedJournal::default();
+        mirror.admit_local_tail(scope, connection, &local);
+        assert_eq!(
+            mirror.local_tail_for(scope, Some(connection), &local),
+            Some(1)
+        );
+        local.with_write(|journal| {
+            journal.append_local(
+                lunco_twin_journal::AuthorTag {
+                    user: "host".into(),
+                    tool: "generic".into(),
+                },
+                lunco_doc::DocumentId::new(1),
+                EntryKind::Op {
+                    domain: DomainKind::Usd,
+                    op: serde_json::json!({"value":2}),
+                    inverse: serde_json::json!({}),
+                },
+                None,
+            );
+        });
+        let cursor = mirror
+            .local_tail_for(scope, Some(connection), &local)
+            .unwrap();
+        let tail =
+            local.with_read(|journal| journal.entries().skip(cursor).cloned().collect::<Vec<_>>());
+        assert_eq!(tail.len(), 1);
+        let id = tail[0].id.clone();
+        mirror.merge(tail[0].clone(), scope, connection, local.local_author());
+        let current = mirror.for_owner(scope, Some(connection)).unwrap();
+        assert_eq!(current.with_read(|journal| journal.len()), 1);
+        assert_eq!(
+            current.with_read(|journal| match &journal.get(&id).unwrap().kind {
+                EntryKind::Op { op, .. } => op["value"].as_i64().unwrap(),
+                _ => panic!("op"),
+            }),
+            2
+        );
+        mirror.retire(scope);
+        assert!(
+            mirror
+                .local_tail_for(scope, Some(connection), &local)
+                .is_none()
         );
     }
 }

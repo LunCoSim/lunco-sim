@@ -42,12 +42,12 @@ use lunco_command_contracts::{Mutation, OpId, SessionId, SyncChannel};
 use lunco_core::GlobalEntityId;
 use lunco_core_runtime::SimTick;
 use lunco_core_session::{
-    AppliedInputSeq, LocalSession, NetReplicate, NetSpawn, NetworkRole, PendingReplicatedSpawns,
-    ReplicatedSpawn, SessionProfiles, SessionRegistry, SyncApplyGuard, authorize,
+    AppliedInputSeq, LocalSession, NetReplicate, NetSpawn, NetworkRole, ReplicatedSpawn,
+    SessionProfiles, SessionRegistry, SyncApplyGuard, authorize,
 };
 use lunco_doc::DocumentId;
 use lunco_embodiment_core::roles::{EmbodimentCorePlugin, LocalEmbodiment};
-use lunco_networking_core::session::{IncomingSnapshots, SnapshotSample};
+use lunco_networking_core::session::SnapshotSample;
 use lunco_spatial::ActivePhysicsFrame;
 
 use lunco_api::executor::{
@@ -160,6 +160,7 @@ pub fn decode_quat(packed: u32) -> Quat {
 /// A batch of changed transforms at a given sim tick (M2 state replication).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SnapshotMsg {
+    pub scope: crate::scope::WireSceneScope,
     pub tick: u64,
     /// Shared semantic frame for every entry in this batch. Concrete BigSpace
     /// precision grids are process-local and are never serialized.
@@ -213,6 +214,8 @@ fn snapshot_sample_in_active_frame(
 /// host-allocated id (M1 content-reconstruction).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SpawnReplicationMsg {
+    /// Catalog spawn admission belongs to one exact host Twin mount.
+    pub scope: crate::scope::WireSceneScope,
     pub gid: u64,
     pub entry_id: String,
     pub position: [f64; 3],
@@ -225,6 +228,7 @@ pub struct SpawnReplicationMsg {
 /// ghost proxy pinned at its last replicated pose on every client, forever.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DespawnReplicationMsg {
+    pub scope: crate::scope::WireSceneScope,
     pub gid: u64,
 }
 
@@ -244,7 +248,7 @@ pub struct DespawnReplicationMsg {
 ///
 /// The handshake is the host's first reliable message, so a mismatched peer is
 /// rejected before it can apply a single snapshot.
-pub const WIRE_VERSION: u32 = 4;
+pub const WIRE_VERSION: u32 = 5;
 
 /// Host → a freshly-connected client: the **wire version**, the **server-assigned**
 /// session id, the connection-bound journal author, and the current tick. The
@@ -278,6 +282,8 @@ pub struct HandshakeMsg {
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct InboundClientCtx<'w, 's> {
     time: Res<'w, Time>,
+    scope: crate::scope::SceneScopeFacts<'w, 's>,
+    application_journal: Res<'w, crate::scope::ApplicationJournalBinding>,
     command_policies: Res<'w, lunco_core_session::CommandPolicyRegistry>,
     // Host-side AOI view centers, updated from inbound `ViewCenter` reports (B4 Phase 1).
     // Bundled here (vs a top-level param) to keep `drain_sync_inbox` within Bevy's
@@ -286,12 +292,12 @@ pub struct InboundClientCtx<'w, 's> {
     // Client-side stash of the host's scenario manifest (filled by the
     // `ScenarioManifest` arm). Bundled here for the same 16-arg-limit reason;
     // host-side arms are no-ops.
-    remote_scenario: ResMut<'w, crate::scenario_sync::RemoteScenarioManifest>,
+    scenario: crate::scenario_sync::ClientScenarioLifecycle<'w>,
+    connection: Res<'w, lunco_core_session::ClientConnection>,
     // Phase-3 asset transfer queues (bundled for the same 16-arg reason). The
     // arms only enqueue; the actual work runs in `crate::scenario_sync` systems.
     // Client fills `incoming_chunks` (host arm is a no-op); host fills
     // `pending_asset_requests` (client arm is a no-op).
-    incoming_chunks: ResMut<'w, crate::scenario_sync::IncomingAssetChunks>,
     pending_asset_requests: ResMut<'w, crate::scenario_sync::PendingAssetRequests>,
     // Host fills this from clients' `AssetOffer`s (imported assets to redistribute);
     // client arm is a no-op.
@@ -319,6 +325,7 @@ pub struct InboundClientCtx<'w, 's> {
 /// change over the reliable CommandBus.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OwnershipMsg {
+    pub scope: crate::scope::WireSceneScope,
     /// `(gid, session)` pairs — the full current ownership table.
     pub entries: Vec<(u64, u64)>,
 }
@@ -608,6 +615,10 @@ pub enum SyncEnvelope {
     // its ownership/manifest frames. `replay_journal_chunks` (server.rs) meters
     // these out under a per-frame budget instead.
     JournalBatch(Vec<crate::journal_plane::JournalEntryMsg>),
+    /// Host mount ended; discard its client-side admission and pending work.
+    ScenarioWithdrawn {
+        mount_id: u64,
+    },
 }
 
 // ── Resources (the contract `lunco-networking` touches) ───────────────────────
@@ -620,7 +631,12 @@ pub struct SyncOutbox(pub Vec<(SyncChannel, SyncEnvelope)>);
 /// Incoming envelopes from the wire, each tagged with the sender's session
 /// (host uses this to attribute authority). Filled by `lunco-networking`.
 #[derive(Resource, Default)]
-pub struct SyncInbox(pub Vec<(SessionId, SyncEnvelope)>);
+pub struct SyncInbox {
+    /// Client transport that filled these entries. Host messages use their
+    /// authenticated sender SessionId and leave this client-only field absent.
+    pub connection: Option<Entity>,
+    pub entries: Vec<(SessionId, SyncEnvelope)>,
+}
 
 /// Tunable replication knobs (the user's "HZ + only-if-changed" ask).
 #[derive(Resource, Clone, Debug)]
@@ -679,6 +695,7 @@ impl Default for NetworkConfig {
 /// tick" delta for observability).
 #[derive(Resource, Default)]
 pub struct ReplicationState {
+    pub scope: Option<lunco_core_session::ReplicationScope>,
     /// Latest snapshot entry per live gid (overwritten every tick, pruned on despawn).
     pub entries: HashMap<u64, SnapshotEntry>,
     /// Semantic frame of `entries`. `None` means no valid physics-frame
@@ -1135,8 +1152,6 @@ pub fn drain_sync_inbox(
     mut local: ResMut<LocalSession>,
     mut ctx: InboundClientCtx,
     mut tick: ResMut<SimTick>,
-    mut pending_spawns: ResMut<PendingReplicatedSpawns>,
-    mut snapshots: ResMut<IncomingSnapshots>,
     mut registry: ResMut<SessionRegistry>,
     // Host gates tutor/student/perspective relays on the sender's role (same bar
     // as the other state-mutating commands) and binds their claimed session to the
@@ -1150,10 +1165,37 @@ pub fn drain_sync_inbox(
     // Resolves a replicated `Despawn`'s gid back to its local proxy entity (O(1)).
     entities: Res<ApiEntityRegistry>,
 ) {
-    if inbox.0.is_empty() {
+    if *role == NetworkRole::Standalone
+        || (*role == NetworkRole::Client
+            && (ctx.connection.0.is_none() || inbox.connection != ctx.connection.0))
+    {
+        inbox.entries.clear();
         return;
     }
-    let mut drained: Vec<(SessionId, SyncEnvelope)> = std::mem::take(&mut inbox.0);
+    if inbox.entries.is_empty() {
+        return;
+    }
+    let mut drained: Vec<(SessionId, SyncEnvelope)> = std::mem::take(&mut inbox.entries);
+    if *role == NetworkRole::Client && ctx.scenario.handshake.0 != ctx.connection.0 {
+        if !drained
+            .iter()
+            .any(|(_, envelope)| matches!(envelope, SyncEnvelope::Handshake(_)))
+        {
+            inbox.entries = drained;
+            return;
+        }
+        drained.sort_by_key(|(_, envelope)| {
+            if matches!(envelope, SyncEnvelope::Handshake(_)) {
+                0
+            } else {
+                1
+            }
+        });
+    }
+    if *role == NetworkRole::Client {
+        drained.splice(0..0, std::mem::take(&mut ctx.scenario.deferred.entries));
+        ctx.scenario.deferred.bytes = 0;
+    }
     // Order within a frame: possession/structural commands BEFORE control commands.
     // Only sort when a control command is actually present — otherwise every entry
     // keys to 0 (the common case: a batch of snapshots/cursors) and the sort is pure
@@ -1168,6 +1210,54 @@ pub fn drain_sync_inbox(
         });
     }
     for (sender, env) in drained {
+        let envelope_scope = match &env {
+            SyncEnvelope::Ownership(message) => Some(message.scope),
+            SyncEnvelope::JournalEntry(message) => Some(message.scope),
+            SyncEnvelope::JournalBatch(messages) => messages.first().map(|message| message.scope),
+            _ => None,
+        };
+        if *role == NetworkRole::Client {
+            if let Some(wire) = envelope_scope {
+                let current = ctx.scope.client_scope(
+                    ctx.connection.0,
+                    ctx.scenario.scene.0.as_ref(),
+                    ctx.scenario.remote.host_twin,
+                );
+                let owner = crate::scope::internal_scope(wire);
+                if owner.is_none() || owner != current {
+                    let pending = match (ctx.connection.0, owner) {
+                        (
+                            Some(connection),
+                            Some(lunco_core_session::ReplicationScope::Twin(twin)),
+                        ) => {
+                            !ctx.scenario.spawns.is_retired(connection, twin)
+                                && (ctx.scenario.remote.host_twin.is_none()
+                                    || ctx.scenario.remote.host_twin == Some(twin))
+                        }
+                        _ => false,
+                    };
+                    if pending {
+                        let bytes = crate::codec::serialize_env(&env)
+                            .map(|bytes| bytes.len())
+                            .unwrap_or(crate::codec::MAX_ENVELOPE_BYTES);
+                        if ctx.scenario.deferred.bytes.saturating_add(bytes)
+                            > crate::codec::MAX_ENVELOPE_BYTES
+                        {
+                            error!(
+                                "[net] deferred scene replay exceeds envelope budget; disconnecting"
+                            );
+                            commands.trigger(lunco_core_session::NetDisconnectRequest {});
+                        } else {
+                            ctx.scenario.deferred.bytes += bytes;
+                            ctx.scenario.deferred.entries.push((sender, env));
+                        }
+                    } else {
+                        warn!("[net] rejected scene message from a retired or mismatched owner");
+                    }
+                    continue;
+                }
+            }
+        }
         match env {
             SyncEnvelope::Command(m) => {
                 let wire_value: serde_json::Value = match serde_json::from_str(&m.payload.data) {
@@ -1206,6 +1296,14 @@ pub fn drain_sync_inbox(
                     continue;
                 }
                 // Adopt host simulation clock (keeps remote interpolation in sync).
+                let current = ctx.scope.client_scope(
+                    ctx.connection.0,
+                    ctx.scenario.scene.0.as_ref(),
+                    ctx.scenario.remote.host_twin,
+                );
+                if crate::scope::internal_scope(s.scope) != current || current.is_none() {
+                    continue;
+                }
                 let host_tick = s.tick;
                 if tick.0 < host_tick {
                     tick.0 = host_tick;
@@ -1232,11 +1330,14 @@ pub fn drain_sync_inbox(
                     continue;
                 };
                 for entry in s.entries {
-                    snapshots.0.push(snapshot_sample_in_active_frame(
-                        entry,
-                        s.tick,
-                        frame_transform,
-                    ));
+                    ctx.scenario
+                        .snapshots
+                        .0
+                        .push(snapshot_sample_in_active_frame(
+                            entry,
+                            s.tick,
+                            frame_transform,
+                        ));
                 }
             }
             SyncEnvelope::Spawn(spawn) => {
@@ -1258,12 +1359,26 @@ pub fn drain_sync_inbox(
                     );
                     continue;
                 }
-                pending_spawns.0.push(ReplicatedSpawn {
+                let Some(connection) = ctx.connection.0 else {
+                    continue;
+                };
+                let Some(lunco_core_session::ReplicationScope::Twin(host_twin)) =
+                    crate::scope::internal_scope(spawn.scope)
+                else {
+                    warn!("[net] Spawn rejected: catalog spawn requires a live host Twin owner");
+                    continue;
+                };
+                let admitted = ctx.scenario.spawns.admit(ReplicatedSpawn {
+                    connection,
+                    host_twin,
                     gid: spawn.gid,
                     entry_id: spawn.entry_id,
                     position: DVec3::from_array(spawn.position),
                     rotation: DQuat::from_array(spawn.rotation).normalize(),
                 });
+                if !admitted {
+                    warn!("[net] Spawn rejected: retired host Twin owner");
+                }
             }
             SyncEnvelope::Despawn(d) => {
                 // Authority: only the host removes entities; clients apply. The
@@ -1274,7 +1389,21 @@ pub fn drain_sync_inbox(
                     // Despawn that lands before `apply_replicated_spawns` instantiates
                     // the proxy would otherwise be a no-op below and leave a permanent
                     // ghost once the proxy is later created.
-                    pending_spawns.0.retain(|s| s.gid != d.gid);
+                    if let (
+                        Some(connection),
+                        Some(lunco_core_session::ReplicationScope::Twin(owner)),
+                    ) = (ctx.connection.0, crate::scope::internal_scope(d.scope))
+                    {
+                        ctx.scenario.spawns.cancel_for(connection, owner, d.gid);
+                    }
+                    let current = ctx.scope.client_scope(
+                        ctx.connection.0,
+                        ctx.scenario.scene.0.as_ref(),
+                        ctx.scenario.remote.host_twin,
+                    );
+                    if crate::scope::internal_scope(d.scope) != current || current.is_none() {
+                        continue;
+                    }
                     // O(1) gid→entity via the canonical registry (the same map the
                     // render path resolves), not a linear scan of every gid'd entity.
                     if let Some(proxy) = entities.resolve(&GlobalEntityId::from_raw(d.gid)) {
@@ -1300,8 +1429,9 @@ pub fn drain_sync_inbox(
                             h.wire_version, WIRE_VERSION
                         );
                         commands.trigger(lunco_core_session::NetDisconnectRequest {});
-                        continue;
+                        break;
                     }
+                    ctx.scenario.handshake.0 = ctx.connection.0;
                     local.0 = SessionId(h.session);
                     tick.0 = h.tick;
                     if let Some(journal) = ctx.journal.as_ref() {
@@ -1309,7 +1439,8 @@ pub fn drain_sync_inbox(
                         if let Err(e) = journal.rebind_local_author(author) {
                             error!("[journal-plane] could not rebind offline entries at join: {e}");
                             commands.trigger(lunco_core_session::NetDisconnectRequest {});
-                            continue;
+                            ctx.scenario.handshake.0 = None;
+                            break;
                         }
                     }
                     info!("[net] handshake accepted: assigned session={}", h.session);
@@ -1567,16 +1698,46 @@ pub fn drain_sync_inbox(
                     // `default_scene` / `name`. Keying only on `revision` would
                     // silently drop that swap and leave the client on the old
                     // scenario (Phase 4 would auto-load the wrong entry scene).
-                    let is_new = ctx.remote_scenario.manifest.as_ref() != Some(&m);
+                    let is_new = ctx.scenario.remote.manifest.as_ref() != Some(&m);
                     if is_new {
+                        let Some(connection) = ctx.connection.0 else {
+                            continue;
+                        };
+                        if m.mount_id == 0 {
+                            warn!("[net] manifest rejected: missing host Twin owner");
+                            continue;
+                        }
+                        if ctx
+                            .scenario
+                            .spawns
+                            .is_retired(connection, lunco_workspace::TwinId::new(m.mount_id))
+                        {
+                            warn!("[net] manifest rejected: retired host Twin owner");
+                            continue;
+                        }
                         info!(
                             "[net] scenario manifest received: {} assets, revision={:x?}",
                             m.assets.len(),
                             &incoming_rev[..4]
                         );
-                        ctx.remote_scenario.manifest = Some(m);
+                        ctx.scenario.replace_manifest(
+                            connection,
+                            lunco_workspace::TwinId::new(m.mount_id),
+                            m,
+                        );
                         // Phase 3 will emit AssetRequest for missing CIDs here.
                         // Phase 4 will trigger the scene load once assets land.
+                    }
+                }
+            }
+            SyncEnvelope::ScenarioWithdrawn { mount_id } => {
+                if *role == NetworkRole::Client {
+                    let owner = lunco_workspace::TwinId::new(mount_id);
+                    if let Some(connection) = ctx.connection.0 {
+                        ctx.scenario.spawns.retire(connection, owner);
+                    }
+                    if ctx.scenario.remote.host_twin == Some(owner) {
+                        ctx.scenario.withdraw();
                     }
                 }
             }
@@ -1593,7 +1754,7 @@ pub fn drain_sync_inbox(
                 // Client queues the chunk for `reassemble_asset_chunks`. The host
                 // never ingests inbound chunks (it's the sole byte source).
                 if !role.is_host() {
-                    ctx.incoming_chunks.0.push(chunk);
+                    ctx.scenario.incoming.0.push(chunk);
                 }
             }
             SyncEnvelope::AssetHave(_) => {
@@ -1662,7 +1823,34 @@ pub fn drain_sync_inbox(
                             sender,
                         ))
                     });
-                    crate::journal_plane::apply_inbound_entry(journal, &msg, author);
+                    if let Some(scope) = if role.is_host() {
+                        ctx.scope
+                            .host_journal_scope(journal, &ctx.application_journal)
+                    } else {
+                        ctx.scope.client_journal_scope(
+                            ctx.connection.0,
+                            ctx.scenario.scene.0.as_ref(),
+                            ctx.scenario.remote.host_twin,
+                            journal,
+                            &ctx.application_journal,
+                        )
+                    } {
+                        let admitted = if *role == NetworkRole::Client
+                            && matches!(scope, lunco_core_session::ReplicationScope::Twin(_))
+                        {
+                            ctx.connection.0.and_then(|connection| {
+                                ctx.scenario.journal.apply(
+                                    &msg,
+                                    scope,
+                                    connection,
+                                    journal.local_author(),
+                                )
+                            })
+                        } else {
+                            crate::journal_plane::apply_inbound_entry(journal, &msg, author, scope)
+                        };
+                        let _ = admitted;
+                    }
                 }
             }
             SyncEnvelope::RunStatus(msg) => {
@@ -1696,7 +1884,36 @@ pub fn drain_sync_inbox(
                                 crate::journal_plane::author_for_session(sender),
                             )
                         });
-                        crate::journal_plane::apply_inbound_entry(journal, msg, author);
+                        if let Some(scope) = if role.is_host() {
+                            ctx.scope
+                                .host_journal_scope(journal, &ctx.application_journal)
+                        } else {
+                            ctx.scope.client_journal_scope(
+                                ctx.connection.0,
+                                ctx.scenario.scene.0.as_ref(),
+                                ctx.scenario.remote.host_twin,
+                                journal,
+                                &ctx.application_journal,
+                            )
+                        } {
+                            let admitted = if *role == NetworkRole::Client
+                                && matches!(scope, lunco_core_session::ReplicationScope::Twin(_))
+                            {
+                                ctx.connection.0.and_then(|connection| {
+                                    ctx.scenario.journal.apply(
+                                        msg,
+                                        scope,
+                                        connection,
+                                        journal.local_author(),
+                                    )
+                                })
+                            } else {
+                                crate::journal_plane::apply_inbound_entry(
+                                    journal, msg, author, scope,
+                                )
+                            };
+                            let _ = admitted;
+                        }
                     }
                 }
             }
@@ -1706,9 +1923,15 @@ pub fn drain_sync_inbox(
 
 // ── State replication (host → clients) ────────────────────────────────────────
 
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct HostReplicationFacts<'w, 's> {
+    role: Res<'w, NetworkRole>,
+    scope: crate::scope::SceneScopeFacts<'w, 's>,
+}
+
 /// Host: at the configured HZ, emit a snapshot of changed networked transforms.
 pub fn gather_snapshot(
-    role: Res<NetworkRole>,
+    owner: HostReplicationFacts,
     config: Res<NetworkConfig>,
     time: Res<Time>,
     tick: Res<SimTick>,
@@ -1741,8 +1964,19 @@ pub fn gather_snapshot(
     // targeted wire send — `gather_snapshot` no longer touches `SyncOutbox`/`All`.
     mut repl: ResMut<ReplicationState>,
 ) {
-    if !role.is_host() {
+    if !owner.role.is_host() {
         return;
+    }
+    let Some(scope) = owner.scope.host_scene_scope() else {
+        repl.scope = None;
+        return;
+    };
+    if repl.scope != Some(scope) {
+        repl.entries.clear();
+        repl.spawn_info
+            .retain(|_, spawn| crate::scope::internal_scope(spawn.scope) == Some(scope));
+        last_sent.clear();
+        repl.scope = Some(scope);
     }
     *acc += time.delta_secs();
     let interval = 1.0 / config.replication_hz.max(1.0);
@@ -2116,17 +2350,22 @@ pub fn recompute_interest(
 /// player never reaches that player. `spawn_info` is the catalog the assembler reads;
 /// it's pruned to the live set by `gather_snapshot`.
 pub fn track_spawn_info(
-    role: Res<NetworkRole>,
+    owner: HostReplicationFacts,
     q: Query<(&GlobalEntityId, &NetSpawn), Added<GlobalEntityId>>,
     mut repl: ResMut<ReplicationState>,
 ) {
-    if !role.is_host() {
+    if !owner.role.is_host() {
         return;
     }
+    let Some(lunco_core_session::ReplicationScope::Twin(owner)) = owner.scope.host_scene_scope()
+    else {
+        return;
+    };
     for (gid, spawn) in q.iter() {
         repl.spawn_info.insert(
             gid.get(),
             SpawnReplicationMsg {
+                scope: crate::scope::wire_scope(lunco_core_session::ReplicationScope::Twin(owner)),
                 gid: gid.get(),
                 entry_id: spawn.entry_id.clone(),
                 position: spawn.position.to_array(),
@@ -2147,13 +2386,13 @@ pub fn track_spawn_info(
 /// the reliable `CommandBus` to **all** peers (a despawn must reach anyone holding
 /// the proxy, in- or out-of-interest), so a dropped despawn can't resurrect the ghost.
 pub fn broadcast_despawns(
-    role: Res<NetworkRole>,
+    owner: HostReplicationFacts,
     mut removed: RemovedComponents<GlobalEntityId>,
-    mut known: Local<HashMap<Entity, u64>>,
+    mut known: Local<HashMap<Entity, (lunco_core_session::ReplicationScope, u64)>>,
     q_added: Query<(Entity, &GlobalEntityId), Added<GlobalEntityId>>,
     mut outbox: ResMut<SyncOutbox>,
 ) {
-    if !role.is_host() {
+    if !owner.role.is_host() {
         return;
     }
     // Maintain the Entity→gid cache INCREMENTALLY (insert on spawn) rather than
@@ -2164,13 +2403,18 @@ pub fn broadcast_despawns(
     // self-contained (vs reusing ApiEntityRegistry) to avoid coupling to that
     // registry's removal-cleanup ordering.
     for (entity, gid) in q_added.iter() {
-        known.insert(entity, gid.get());
+        if let Some(scope) = owner.scope.host_scene_scope() {
+            known.insert(entity, (scope, gid.get()));
+        }
     }
     for entity in removed.read() {
-        if let Some(gid) = known.remove(&entity) {
+        if let Some((scope, gid)) = known.remove(&entity) {
             outbox.0.push((
                 SyncChannel::CommandBus,
-                SyncEnvelope::Despawn(DespawnReplicationMsg { gid }),
+                SyncEnvelope::Despawn(DespawnReplicationMsg {
+                    scope: crate::scope::wire_scope(scope),
+                    gid,
+                }),
             ));
         }
     }
@@ -3393,6 +3637,10 @@ impl Plugin for SyncPlugin {
             // `recompute_interest`, consumed by the server-side per-peer assembler)
             // + reported free-observer view centers (from inbound `ViewCenter`).
             .init_resource::<ReplicationState>()
+            .init_resource::<crate::scenario_sync::DeferredSceneMessages>()
+            .init_resource::<crate::journal_plane::ReplicatedJournal>()
+            .init_resource::<crate::scenario_sync::HandshakenConnection>()
+            .init_resource::<crate::scope::ApplicationJournalBinding>()
             .init_resource::<PeerInterest>()
             .init_resource::<ViewCenters>()
             // Scenario distribution: the client-side stash of the host's
@@ -3433,13 +3681,29 @@ impl Plugin for SyncPlugin {
             .init_resource::<SyncChannelRegistry>()
             .add_observer(apply_sync_command)
             .add_observer(on_update_profile_rbac)
-            .add_systems(Startup, (setup_host_rbac, validate_client_local_channels))
+            .add_observer(crate::scenario_sync::on_twin_closed_client)
+            .add_systems(
+                PreUpdate,
+                crate::scenario_sync::reconcile_client_scenario_owner,
+            )
+            .add_systems(
+                Startup,
+                (
+                    setup_host_rbac,
+                    validate_client_local_channels,
+                    crate::scope::bind_application_journal,
+                ),
+            )
             // Journal plane: stamp this peer's stable per-install journal author
             // (both roles) so edits are attributable + durable across reconnects.
             // Reactive: runs once the frame the JournalResource appears.
             .add_systems(
                 Update,
-                crate::journal_plane::stamp_local_journal_author
+                (
+                    crate::scope::bind_application_journal,
+                    crate::journal_plane::stamp_local_journal_author,
+                )
+                    .chain()
                     .run_if(resource_added::<lunco_doc_bevy::JournalResource>),
             )
             .add_systems(PreUpdate, block_bevy_inputs)
@@ -3565,6 +3829,7 @@ mod codec_roundtrip {
         let position_m = [384_400_000.125, -12_345.5, 3.0];
         let rot_packed = encode_quat(Quat::IDENTITY);
         let env = SyncEnvelope::Snapshot(SnapshotMsg {
+            scope: crate::scope::WireSceneScope::Application,
             tick: 42,
             frame: ReferenceFrame::BodyFixed {
                 body: lunco_celestial::ephemeris_id::MOON,
@@ -3599,6 +3864,7 @@ mod codec_roundtrip {
     fn f64_snapshot_position_is_exact_at_orbital_range() {
         let world = DVec3::new(3.667e8, -1.2e7, 2.5e5) + DVec3::new(123.456, -0.789, 987.654);
         let env = SyncEnvelope::Snapshot(SnapshotMsg {
+            scope: crate::scope::WireSceneScope::Application,
             tick: 1,
             frame: ReferenceFrame::BodyFixed {
                 body: lunco_celestial::ephemeris_id::MOON,
@@ -3681,6 +3947,7 @@ mod codec_roundtrip {
             last_input_seq: u32::MAX,
         };
         let bytes = serialize_env(&SyncEnvelope::Snapshot(SnapshotMsg {
+            scope: crate::scope::WireSceneScope::Application,
             tick: u64::MAX,
             frame: ReferenceFrame::BodyFixed {
                 body: lunco_celestial::ephemeris_id::MOON,
@@ -3735,7 +4002,10 @@ mod codec_roundtrip {
     #[test]
     fn despawn_envelope_roundtrips() {
         // B5: the despawn-replication envelope must survive the wire codec.
-        let env = SyncEnvelope::Despawn(DespawnReplicationMsg { gid: 0x00AB_CDEF });
+        let env = SyncEnvelope::Despawn(DespawnReplicationMsg {
+            scope: crate::scope::WireSceneScope::Application,
+            gid: 0x00AB_CDEF,
+        });
         let back = deserialize_env(&serialize_env(&env).expect("serialize")).expect("deserialize");
         match back {
             SyncEnvelope::Despawn(d) => assert_eq!(d.gid, 0x00AB_CDEF),
@@ -3767,7 +4037,10 @@ mod codec_roundtrip {
             "Handshake discriminant moved"
         );
         assert_eq!(
-            discriminant_of(&SyncEnvelope::Despawn(DespawnReplicationMsg { gid: 9 })),
+            discriminant_of(&SyncEnvelope::Despawn(DespawnReplicationMsg {
+                scope: crate::scope::WireSceneScope::Application,
+                gid: 9
+            })),
             11,
             "Despawn must not move (it is no longer last — see `JournalBatch`)"
         );
@@ -3882,6 +4155,7 @@ mod codec_roundtrip {
 
         let manifest =
             SyncEnvelope::ScenarioManifest(lunco_networking_scenario::ScenarioManifestMsg {
+                mount_id: 1,
                 scenario_id: [0u8; 16],
                 revision: [0u8; 32],
                 name: String::new(),
@@ -3930,6 +4204,7 @@ mod codec_roundtrip {
 
         assert_eq!(
             discriminant_of(&SyncEnvelope::JournalEntry(JournalEntryMsg {
+                scope: crate::scope::WireSceneScope::Application,
                 json: String::new()
             })),
             17,
@@ -3971,6 +4246,7 @@ mod codec_roundtrip {
             change_set: None,
         };
         let msg = JournalEntryMsg {
+            scope: crate::scope::WireSceneScope::Application,
             json: serde_json::to_string(&entry).unwrap(),
         };
         let bytes = serialize_env(&SyncEnvelope::JournalEntry(msg)).expect("serialize");
@@ -4012,6 +4288,7 @@ mod codec_roundtrip {
         ];
         let rev = scenario_revision(&assets);
         let env = SyncEnvelope::ScenarioManifest(ScenarioManifestMsg {
+            mount_id: 1,
             scenario_id: [0xAB; 16],
             revision: rev,
             name: "lunar_base".into(),

@@ -82,6 +82,7 @@ pub fn manifest_journal_head(
 /// transport-neutral message contract.
 #[derive(Resource, Default, Clone, Debug)]
 pub struct ScenarioManifestResource {
+    pub owner: Option<lunco_workspace::TwinId>,
     /// The current scenario manifest. `None` until the host opens a Twin/scene.
     pub manifest: Option<ScenarioManifestMsg>,
 }
@@ -90,10 +91,168 @@ pub struct ScenarioManifestResource {
 ///
 /// The manifest wire shape lives in [`lunco_networking_scenario`]. Keeping this
 /// resource here prevents the contract crate from depending on Bevy.
-#[derive(Resource, Default, Clone, Debug)]
+#[derive(Resource, Default, Clone, Debug, PartialEq)]
 pub struct RemoteScenarioManifest {
+    pub connection: Option<Entity>,
+    pub host_twin: Option<lunco_workspace::TwinId>,
     /// The most recent manifest the host pushed.
     pub manifest: Option<ScenarioManifestMsg>,
+}
+
+impl RemoteScenarioManifest {
+    pub fn is_live(&self, role: NetworkRole, connection: Option<Entity>) -> bool {
+        role == NetworkRole::Client
+            && connection.is_some()
+            && self.connection == connection
+            && self.host_twin.is_some()
+            && self.manifest.is_some()
+    }
+}
+
+/// One owner for client scenario admission and its asynchronous result channels.
+/// Replacing channels disconnects old senders, so retired work cannot publish
+/// into a newer download tally even if its cache write has already started.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ClientScenarioLifecycle<'w> {
+    pub remote: ResMut<'w, RemoteScenarioManifest>,
+    pub handshake: ResMut<'w, HandshakenConnection>,
+    downloads: ResMut<'w, AssetDownloads>,
+    persist: ResMut<'w, AssetPersist>,
+    probe: ResMut<'w, AssetCacheProbe>,
+    probe_state: ResMut<'w, CacheProbeState>,
+    fetch: ResMut<'w, crate::http_fetch::AssetHttpFetch>,
+    pub incoming: ResMut<'w, IncomingAssetChunks>,
+    status: ResMut<'w, ScenarioDownloadStatus>,
+    pub spawns: ResMut<'w, lunco_core_session::PendingReplicatedSpawns>,
+    pub scene: ResMut<'w, lunco_core_session::ReplicatedScene>,
+    pub snapshots: ResMut<'w, lunco_networking_core::session::IncomingSnapshots>,
+    prediction: lunco_networking_core::prediction::PredictionStateLifecycle<'w>,
+    pub deferred: ResMut<'w, DeferredSceneMessages>,
+    pub journal: ResMut<'w, crate::journal_plane::ReplicatedJournal>,
+    roots: Option<Res<'w, lunco_assets_core::TwinRoots>>,
+}
+
+impl ClientScenarioLifecycle<'_> {
+    fn reset_downloads(&mut self) {
+        *self.downloads = AssetDownloads::default();
+        *self.persist = AssetPersist::default();
+        *self.probe = AssetCacheProbe::default();
+        *self.probe_state = CacheProbeState::default();
+        *self.fetch = crate::http_fetch::AssetHttpFetch::default();
+        self.incoming.0.clear();
+        *self.status = ScenarioDownloadStatus::default();
+    }
+
+    fn clear_content(&mut self) {
+        self.snapshots.0.clear();
+        self.prediction.reset();
+        if let Some(scene) = self.scene.0.take() {
+            if scene.owns_mount {
+                match self.roots.as_ref() {
+                    Some(roots) => {
+                        if let Err(error) = roots.unregister_name(&scene.authority) {
+                            error!("[net] could not retire downloaded Twin mount: {error}");
+                        }
+                    }
+                    None => {
+                        error!("[net] cannot retire downloaded Twin mount without its asset owner")
+                    }
+                }
+            }
+        }
+        *self.remote = RemoteScenarioManifest::default();
+        self.reset_downloads();
+    }
+
+    pub(crate) fn withdraw(&mut self) {
+        if let (Some(connection), Some(owner)) = (self.remote.connection, self.remote.host_twin) {
+            self.spawns.retire(connection, owner);
+            self.journal
+                .retire(lunco_core_session::ReplicationScope::Twin(owner));
+            self.deferred
+                .entries
+                .retain(|(_, envelope)| match envelope {
+                    SyncEnvelope::Ownership(message) => {
+                        message.scope
+                            != crate::scope::wire_scope(lunco_core_session::ReplicationScope::Twin(
+                                owner,
+                            ))
+                    }
+                    SyncEnvelope::JournalEntry(message) => {
+                        message.scope
+                            != crate::scope::wire_scope(lunco_core_session::ReplicationScope::Twin(
+                                owner,
+                            ))
+                    }
+                    SyncEnvelope::JournalBatch(messages) => !messages.iter().any(|message| {
+                        message.scope
+                            == crate::scope::wire_scope(lunco_core_session::ReplicationScope::Twin(
+                                owner,
+                            ))
+                    }),
+                    _ => true,
+                });
+        }
+        if let Some(scene) = self.scene.0.as_ref() {
+            self.spawns.retire(scene.connection, scene.host_twin);
+        }
+        self.clear_content();
+    }
+
+    pub(crate) fn replace_manifest(
+        &mut self,
+        connection: Entity,
+        owner: lunco_workspace::TwinId,
+        manifest: ScenarioManifestMsg,
+    ) {
+        if self.remote.connection == Some(connection) && self.remote.host_twin == Some(owner) {
+            self.clear_content();
+        } else {
+            self.withdraw();
+        }
+        self.remote.connection = Some(connection);
+        self.remote.host_twin = Some(owner);
+        self.remote.manifest = Some(manifest);
+    }
+}
+
+pub(crate) fn reconcile_client_scenario_owner(
+    role: Res<NetworkRole>,
+    connection: Res<lunco_core_session::ClientConnection>,
+    mut state: ClientScenarioLifecycle,
+    mut inbox: ResMut<crate::sync::SyncInbox>,
+    mut outbox: ResMut<SyncOutbox>,
+) {
+    if role.is_changed()
+        || connection.is_changed()
+        || (state.remote.connection.is_some() && state.remote.connection != connection.0)
+    {
+        state.withdraw();
+        state.spawns.clear();
+        state.journal.clear();
+        state.handshake.0 = None;
+        *state.deferred = DeferredSceneMessages::default();
+        state.snapshots.0.clear();
+        inbox.entries.clear();
+        inbox.connection = connection.0;
+        if !role.is_host() {
+            outbox.0.clear();
+        }
+    }
+}
+
+pub(crate) fn on_twin_closed_client(
+    event: On<lunco_workspace::TwinClosed>,
+    mut state: ClientScenarioLifecycle,
+) {
+    if state
+        .scene
+        .0
+        .as_ref()
+        .is_some_and(|owner| owner.root == event.root)
+    {
+        state.withdraw();
+    }
 }
 
 // ── In-session chunk transfer: the FALLBACK bytes path ───────────────────────
@@ -494,11 +653,12 @@ fn hex16(b: &[u8; 16]) -> String {
 pub fn request_missing_assets(
     role: Res<NetworkRole>,
     remote: Res<RemoteScenarioManifest>,
+    connection: Res<lunco_core_session::ClientConnection>,
     probe_state: Res<CacheProbeState>,
     mut downloads: ResMut<AssetDownloads>,
     mut outbox: ResMut<SyncOutbox>,
 ) {
-    if role.is_host() {
+    if !remote.is_live(*role, connection.0) {
         return;
     }
     let Some(manifest) = remote.manifest.as_ref() else {
@@ -547,10 +707,11 @@ pub fn reassemble_asset_chunks(
     mut incoming: ResMut<IncomingAssetChunks>,
     mut downloads: ResMut<AssetDownloads>,
     remote: Res<RemoteScenarioManifest>,
+    connection: Res<lunco_core_session::ClientConnection>,
     persist: Res<AssetPersist>,
     mut rejected: Local<u32>,
 ) {
-    if role.is_host() || incoming.0.is_empty() {
+    if !remote.is_live(*role, connection.0) || incoming.0.is_empty() {
         return;
     }
     for ch in std::mem::take(&mut incoming.0) {
@@ -660,10 +821,12 @@ pub fn reassemble_asset_chunks(
 /// Client-only.
 pub fn drain_persist_results(
     role: Res<NetworkRole>,
+    remote: Res<RemoteScenarioManifest>,
+    connection: Res<lunco_core_session::ClientConnection>,
     persist: Res<AssetPersist>,
     mut downloads: ResMut<AssetDownloads>,
 ) {
-    if role.is_host() {
+    if !remote.is_live(*role, connection.0) {
         return;
     }
     while let Ok(outcome) = persist.rx.try_recv() {
@@ -755,11 +918,12 @@ async fn run_cache_probe(
 pub fn drive_cache_probe(
     role: Res<NetworkRole>,
     remote: Res<RemoteScenarioManifest>,
+    connection: Res<lunco_core_session::ClientConnection>,
     probe: Res<AssetCacheProbe>,
     mut state: ResMut<CacheProbeState>,
     mut downloads: ResMut<AssetDownloads>,
 ) {
-    if role.is_host() {
+    if !remote.is_live(*role, connection.0) {
         return;
     }
     if let Some(m) = remote.manifest.as_ref() {
@@ -798,11 +962,12 @@ pub fn drive_cache_probe(
 pub fn write_scenario_index(
     role: Res<NetworkRole>,
     remote: Res<RemoteScenarioManifest>,
+    connection: Res<lunco_core_session::ClientConnection>,
     downloads: Res<AssetDownloads>,
     mut registry: ResMut<CachedTwinsRegistry>,
     mut written: Local<Option<[u8; 32]>>,
 ) {
-    if role.is_host() {
+    if !remote.is_live(*role, connection.0) {
         return;
     }
     let Some(m) = remote.manifest.as_ref() else {
@@ -917,10 +1082,11 @@ pub fn refresh_cached_twins_registry(
 pub fn update_scenario_download_status(
     role: Res<NetworkRole>,
     remote: Res<RemoteScenarioManifest>,
+    connection: Res<lunco_core_session::ClientConnection>,
     downloads: Res<AssetDownloads>,
     mut status: ResMut<ScenarioDownloadStatus>,
 ) {
-    if role.is_host() {
+    if !remote.is_live(*role, connection.0) {
         return;
     }
     let Some(m) = remote.manifest.as_ref() else {
@@ -1158,10 +1324,16 @@ pub struct PromoteScenario {
 #[lunco_core::on_command(PromoteScenario)]
 fn on_promote_scenario(
     trigger: On<PromoteScenario>,
+    role: Res<NetworkRole>,
     remote: Res<RemoteScenarioManifest>,
+    connection: Res<lunco_core_session::ClientConnection>,
     mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
     mut commands: Commands,
 ) {
+    if !remote.is_live(*role, connection.0) {
+        warn!("[promote] no live scenario connection");
+        return;
+    }
     let folder = trigger.event().folder.clone();
     if folder.is_empty() {
         warn!("[promote] no target folder given (a GUI should present a folder picker first)");
@@ -1349,3 +1521,15 @@ mod tests {
         assert_ne!(Some(h2.finalize().as_slice()), expected.as_deref());
     }
 }
+
+/// Reliable document/ownership traffic waiting for its exact scene admission.
+/// Byte admission uses the transport's hard envelope budget.
+#[derive(Resource, Default)]
+pub(crate) struct DeferredSceneMessages {
+    pub entries: Vec<(SessionId, SyncEnvelope)>,
+    pub bytes: usize,
+}
+
+/// Connection whose version/author handshake has been admitted.
+#[derive(Resource, Default)]
+pub(crate) struct HandshakenConnection(pub Option<Entity>);

@@ -171,6 +171,8 @@ fn main() {
     // the full app provides it via the workspace plugin, absent here — seed an empty.
     app.init_resource::<lunco_workspace::WorkspaceResource>();
     app.init_resource::<MySession>();
+    // This harness owns Application replication: it has no active Twin or USD
+    // scene. The explicit wire scope must remain Application on both peers.
     // Journal plane: give both peers a `JournalResource` so the journal-sync
     // systems (`stamp_host_journal_author`, `broadcast_journal_entries`, the
     // inbound merge arm) are live. The host stamps author "host" at Startup; the

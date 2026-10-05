@@ -9,6 +9,7 @@
 pub mod http_fetch;
 pub mod journal_plane;
 pub mod scenario_sync;
+pub mod scope;
 pub mod sync;
 
 /// Whether the network synchronization schedule should be active for this

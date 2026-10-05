@@ -7,7 +7,7 @@ description: Configure, smoke-test, or deploy LunCoSim networking, the headless 
 
 Read [`crates/lunco-networking/DEPLOY.md`](../../crates/lunco-networking/DEPLOY.md),
 the networking [`README.md`](../../crates/lunco-networking/README.md), and the
-relevant synchronization contract before editing. `lunco-networking` owns
+[synchronization contract](../../crates/lunco-networking/SYNC_ARCHITECTURE.md#mounted-scene-and-connection-lifetime) before editing. `lunco-networking` owns
 transport/session behavior and `lunco-networking-sync` owns the transport-neutral
 replication runtime; the deployment guide owns service and TLS facts.
 
@@ -23,6 +23,16 @@ replication runtime; the deployment guide owns service and TLS facts.
 - Keep `--api` local unless the deployment contract explicitly requires a
   tunnel or authenticated remote boundary. Never expose the admin API merely
   to make WebTransport work.
+
+- Check exact transport and mount admission at both the wire producer and its
+  real scene/document consumer. Preserve typed `ReplicationScope` internally;
+  use the protocol adapter only at serialization. Application is valid only in
+  a scene-free world; missing Twin ownership must reject visibly.
+- For lifecycle work, cover old-mount rejection, same-source reopening, exact
+  connection replacement, deferred spawn/replay retirement, asynchronous result
+  cancellation, and prediction-buffer teardown at their generic owners. The
+  scene-free `net_smoke` harness covers Application traffic; it does not prove
+  Twin reload behavior. Use an owned host/client session for that acceptance.
 
 ## Production deployment
 

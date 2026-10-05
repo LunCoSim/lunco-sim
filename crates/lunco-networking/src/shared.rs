@@ -197,12 +197,12 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
                 let client_id = *client_id;
                 app.add_systems(
                     Startup,
-                    move |mut commands: Commands, mut status: ResMut<NetStatus>| {
+                    move |mut commands: Commands, mut status: ResMut<NetStatus>, mut connection: ResMut<lunco_core_session::ClientConnection>| {
                         // Empty digest ⇒ ambient source: env on native, URL `#hash`
                         // on wasm (the `?connect=host:port#digest` deep-link path).
                         // A construction failure lands on `NetStatus::last_error`
                         // (C4) — the app starts disconnected instead of panicking.
-                        crate::client::spawn_client(
+                        connection.0 = crate::client::spawn_client(
                             &mut commands,
                             &server,
                             client_id,

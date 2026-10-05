@@ -17,6 +17,67 @@ consistent — derivably, not feature-by-feature?**
 
 ---
 
+## Mounted scene and connection lifetime
+
+`lunco-core-session` owns `ReplicationScope::Application | Twin(TwinId)`, the
+exact client transport entity (`ClientConnection`), and the admitted remote
+scene (`ReplicatedScene`). The wire adapter serializes an explicit
+`Application | Twin { mount_id }` scope. A mount ID is the host's transient
+workspace Twin ID, independent of persistent UUID, content revision, mount-local
+asset authority, and stable entity provenance. Application replication requires
+that neither an active Twin nor a USD scene owns the world; it supports the
+scene-free `net_smoke` harness without inventing a Twin.
+
+Snapshots, ownership, despawns, catalog spawns, and journal entries retain the
+scope captured by their producer. Snapshot assembly checks its captured scope
+against the actual live USD root before sending. Despawn capture retains the
+owner alongside the entity ID. Clients accept scene mutation only from their
+exact current transport and the admitted host mount whose local asset authority
+matches the actual USD root. Catalog spawns wait for that root; retirement rejects
+late spawns and manifests for the same mount. A despawn cancels only matching
+owner work. Reliable journal and ownership envelopes may wait for their matching
+root under the codec's bounded byte budget; budget exhaustion disconnects visibly.
+The version handshake is admitted before any traffic is consumed on a connection.
+The positional wire contract is version 5.
+
+The host pins manifest preparation and connect-time journal replay to the admitted
+mount. Twin close, replacement, or role change withdraws the manifest, cancels
+preparation and asset jobs, clears the serving index, and sends `ScenarioWithdrawn`.
+A failed build cannot retain another mount's published manifest. On the client,
+Twin close, disconnect, connection replacement, or role change retires download
+admission and replaces all asynchronous result channels. Late completions cannot
+mount a scene or publish into the next download status. Downloaded mount aliases
+are retired by their owner; borrowed editable mounts remain workspace-owned.
+Verified cache bytes and the cached-Twin catalog are application resources.
+
+Client Twin merge uses a `ReplicatedJournal` isolated by exact mount and
+connection. Independent Twins may reuse journal EntryIds, so their slots cannot
+share the local persistent journal. Application traffic uses its explicitly bound
+application journal. The host canonicalizes admitted client entries to its own
+journal storage identity. The mirror's owner also governs later projection;
+there is one journal reader for each admitted scope and connection.
+`lunco-luncosim-services` validates the live root before projecting admitted
+entries into USD, Modelica, experiment, shader, or obstacle state. Applied-entry
+sets and the host replay base reset when their owner changes. A client starts
+its outgoing Twin tail before scene commands at admission rather than relabeling
+an existing application journal as the new remote mount. Newly authored tail
+entries merge into the same typed mirror before dispatch; Application offline
+replay and host-bound journal replay retain their normal semantics. Host Twin journal
+traffic requires the actual journal binding to match the active Twin root.
+Application journal identity is captured at resource admission in a scene-free
+world; closing a Twin cannot reclassify its retained journal as Application.
+Stable journal identity alone cannot admit work from a previous mount. Prediction owns the
+interpolation, rollback, assembly, playback, visual-lead, and divergence buffers;
+`PredictionStateLifecycle` clears these on scene teardown and remote owner
+retirement while preserving configuration.
+
+Verification uses generic protocol/queue/admission/teardown tests and the real
+host/client harness. Scene-free smoke success proves Application replication;
+Twin reload acceptance additionally needs an owned host/client pass with delayed
+old-mount traffic and same-source reopening. Desktop builds without the opt-in
+`networking` feature do not exercise this contract.
+
+
 ## 1. The four classifying axes
 
 Every datum answers four questions. The answers are mostly *forced* by what the

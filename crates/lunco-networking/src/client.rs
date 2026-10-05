@@ -10,7 +10,9 @@ use lightyear::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use lunco_command_contracts::{SessionId, SyncChannel};
-use lunco_core_session::{LocalSession, NetDisconnectRequest, NetStatus, NetworkRole};
+use lunco_core_session::{
+    ClientConnection, LocalSession, NetDisconnectRequest, NetStatus, NetworkRole,
+};
 
 use crate::protocol::{BulkChannel, CmdChannel, Frame, SnapChannel};
 use crate::shared::{PROTOCOL_ID, netcode_key};
@@ -212,6 +214,7 @@ fn on_join_server(
     mut role: ResMut<NetworkRole>,
     mut status: ResMut<NetStatus>,
     mut local: ResMut<LocalSession>,
+    mut connection: ResMut<ClientConnection>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
     // Drop any current connection first, then dial the new address.
@@ -219,20 +222,24 @@ fn on_join_server(
         commands.entity(e).try_despawn();
     }
     let address = crate::normalize_addr(&cmd.address);
-    if spawn_client(
+    connection.0 = None;
+    let entity = spawn_client(
         &mut commands,
         &address,
         crate::next_client_id(),
         &cmd.digest,
         &mut status,
-    )
-    .is_none()
-    {
+    );
+    let Some(entity) = entity else {
         // Construction failed — stay Standalone; the error is on
         // `NetStatus::last_error` for the Connect UI.
         status.endpoint = address;
+        *role = NetworkRole::Standalone;
+        status.role = NetworkRole::Standalone;
+        local.0 = SessionId::LOCAL;
         return;
-    }
+    };
+    connection.0 = Some(entity);
     // Standalone→Client: authority follows the role automatically
     // (`is_authoritative()` is now false), so a joined client stops minting ids —
     // no separate flag to flip in lock-step.
@@ -262,6 +269,7 @@ fn on_leave_server(
     mut role: ResMut<NetworkRole>,
     mut status: ResMut<NetStatus>,
     mut local: ResMut<LocalSession>,
+    mut connection: ResMut<ClientConnection>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
     for e in &existing {
@@ -269,6 +277,7 @@ fn on_leave_server(
     }
     // Back to single-player: `Standalone` is authoritative again, so the local
     // peer resumes minting ids automatically (mirrors the idle-local startup arm).
+    connection.0 = None;
     *role = NetworkRole::Standalone;
     status.role = NetworkRole::Standalone;
     status.connected = false;
@@ -334,13 +343,18 @@ fn update_client_netstatus(local: Res<LocalSession>, mut status: ResMut<NetStatu
 /// `update_client_netstatus` then keeps `NetStatus` consistent with the cleared
 /// `LocalSession` on subsequent frames.
 fn on_client_disconnected(
-    _trigger: On<Add, Disconnected>,
+    trigger: On<Add, Disconnected>,
     mut local: ResMut<LocalSession>,
+    mut connection: ResMut<ClientConnection>,
     mut status: ResMut<NetStatus>,
     holds: Option<Res<lunco_cosim_core::PortHolds>>,
     global_ids: Query<&lunco_core::GlobalEntityId>,
     mut commands: Commands,
 ) {
+    if connection.0 != Some(trigger.entity) {
+        return;
+    }
+    connection.0 = None;
     if let Some(holds) = holds {
         let mut stable_targets = Vec::new();
         let mut missing_id_targets = Vec::new();
@@ -431,12 +445,16 @@ pub(crate) fn sim_latency_conditioner() -> Option<RecvLinkConditioner> {
 /// Drain outgoing commands to the server on their declared channel.
 fn client_send_outbox(
     mut outbox: ResMut<SyncOutbox>,
-    mut q: Query<&mut MessageSender<Frame>, With<Client>>,
+    connection: Res<ClientConnection>,
+    mut q: Query<(Entity, &mut MessageSender<Frame>), (With<Client>, With<Connected>)>,
 ) {
     if outbox.0.is_empty() {
         return;
     }
-    let Some(mut sender) = q.iter_mut().next() else {
+    let Some((_, mut sender)) = q
+        .iter_mut()
+        .find(|(entity, _)| Some(*entity) == connection.0)
+    else {
         // No live Client sender (still connecting, or dropped before the role
         // reset lands): drop the queued commands instead of letting `capture_command`
         // grow the outbox unbounded while there's nothing to ferry them to.
@@ -459,15 +477,23 @@ fn client_send_outbox(
 /// Pull inbound frames (handshake, snapshots, spawn replication) into the inbox.
 /// Sender session is irrelevant on a client (everything is host-attributed).
 fn client_recv_inbox(
-    mut q: Query<&mut MessageReceiver<Frame>, With<Client>>,
+    connection: Res<ClientConnection>,
+    mut q: Query<(Entity, &mut MessageReceiver<Frame>), (With<Client>, With<Connected>)>,
     mut inbox: ResMut<SyncInbox>,
 ) {
-    let Some(mut receiver) = q.iter_mut().next() else {
+    let Some((entity, mut receiver)) = q
+        .iter_mut()
+        .find(|(entity, _)| Some(*entity) == connection.0)
+    else {
         return;
     };
     for frame in receiver.receive() {
         if let Some(env) = deserialize_env(&frame.0) {
-            inbox.0.push((SessionId(0), env));
+            if inbox.connection != Some(entity) {
+                inbox.entries.clear();
+            }
+            inbox.connection = Some(entity);
+            inbox.entries.push((SessionId::LOCAL, env));
         }
     }
 }

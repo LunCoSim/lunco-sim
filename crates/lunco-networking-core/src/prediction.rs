@@ -2345,6 +2345,48 @@ pub fn apply_net_replication(
     }
 }
 
+/// Prediction-owned state for a mounted scene or transport connection.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct PredictionStateLifecycle<'w> {
+    buffers: Option<ResMut<'w, InterpBuffers>>,
+    predicted: Option<ResMut<'w, PredictedStateLog>>,
+    assembly: Option<ResMut<'w, AssemblyHistory>>,
+    clock: Option<ResMut<'w, ProxyPlaybackClock>>,
+    visual: Option<ResMut<'w, VisualLeadState>>,
+    divergence: Option<ResMut<'w, crate::session::DivergenceStats>>,
+}
+impl PredictionStateLifecycle<'_> {
+    pub fn reset(&mut self) {
+        if let Some(value) = self.buffers.as_mut() {
+            value.0.clear();
+        }
+        if let Some(value) = self.predicted.as_mut() {
+            value.0.clear();
+        }
+        if let Some(value) = self.assembly.as_mut() {
+            value.0.clear();
+        }
+        if let Some(value) = self.clock.as_mut() {
+            **value = ProxyPlaybackClock::default();
+        }
+        if let Some(value) = self.visual.as_mut() {
+            value.0.clear();
+        }
+        if let Some(value) = self.divergence.as_mut() {
+            value.bodies.clear();
+        }
+    }
+}
+fn reset_prediction_scene(
+    mut state: PredictionStateLifecycle,
+    snapshots: Option<ResMut<crate::session::IncomingSnapshots>>,
+) {
+    state.reset();
+    if let Some(mut snapshots) = snapshots {
+        snapshots.0.clear();
+    }
+}
+
 /// Plugin that owns the client-netcode half of what `SpawnCommandPlugin` used to
 /// register: snapshot ingest + interpolation, kinematic proxy driving, owned-rover
 /// prediction / reconciliation / rollback, and correction smoothing.
@@ -2368,6 +2410,7 @@ impl Plugin for NetcodePredictionPlugin {
         // Render-lead visual prediction: live tunables + the per-gid eased
         // offsets they drive. Resources only — `SetVisualLead` itself is a
         // `#[Command]` like any other and comes in via `register_all_commands`.
+        app.add_systems(lunco_core::SceneTeardown, reset_prediction_scene);
         app.init_resource::<VisualLeadSettings>();
         app.init_resource::<VisualLeadState>();
         app.init_resource::<InterpBuffers>();
@@ -3489,6 +3532,45 @@ mod step1_curve_tests {
             (w.y - expected).abs() < 1e-4,
             "ω.y short-arc expected {expected}; got {}",
             w.y
+        );
+    }
+}
+
+#[cfg(test)]
+mod lifetime_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    #[test]
+    fn teardown_drops_gid_histories_and_preserves_settings() {
+        let mut world = World::new();
+        let mut buffers = InterpBuffers::default();
+        buffers.0.insert(7, VecDeque::new());
+        world.insert_resource(buffers);
+        let mut predicted = PredictedStateLog::default();
+        // Empty per-gid history still establishes a retained owner slot.
+        predicted.0.insert(7, BodyPredictionLog::default());
+        world.insert_resource(predicted);
+        world.init_resource::<AssemblyHistory>();
+        world.init_resource::<ProxyPlaybackClock>();
+        world.init_resource::<crate::session::IncomingSnapshots>();
+        let mut divergence = crate::session::DivergenceStats::default();
+        divergence.warn_m = 3.0;
+        divergence
+            .bodies
+            .insert(7, crate::session::BodyDivergence::default());
+        world.insert_resource(divergence);
+        world.run_system_once(reset_prediction_scene).unwrap();
+        assert!(world.resource::<InterpBuffers>().0.is_empty());
+        assert!(world.resource::<PredictedStateLog>().0.is_empty());
+        assert!(
+            world
+                .resource::<crate::session::DivergenceStats>()
+                .bodies
+                .is_empty()
+        );
+        assert_eq!(
+            world.resource::<crate::session::DivergenceStats>().warn_m,
+            3.0
         );
     }
 }

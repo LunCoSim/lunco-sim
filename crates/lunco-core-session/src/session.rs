@@ -546,12 +546,41 @@ pub struct NetSpawn {
     pub rotation: DQuat,
 }
 
+/// Lifetime that admits replicated scene and document state. Application is
+/// valid only for a world without an active Twin or scene.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ReplicationScope {
+    Application,
+    Twin(lunco_workspace::TwinId),
+}
+
+/// Exact ECS lifetime of the current client transport. Entity generations
+/// prevent a delayed disconnect from ending a replacement connection.
+#[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClientConnection(pub Option<Entity>);
+
+/// The remote Twin mount admitted to the local scene. The host's mount ID is
+/// an internal typed Twin ID; transport adapters serialize its raw value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReplicatedSceneOwner {
+    pub connection: Entity,
+    pub host_twin: lunco_workspace::TwinId,
+    pub authority: String,
+    pub root: std::path::PathBuf,
+    pub owns_mount: bool,
+}
+
+#[derive(Resource, Default, Clone, Debug)]
+pub struct ReplicatedScene(pub Option<ReplicatedSceneOwner>);
+
 /// One replicated spawn the host told us to instantiate locally, pinned to the
 /// host-allocated `gid` (M1 content-reconstruction: geometry loads locally,
 /// identity comes from the host). Filled by the wire layer on a client; drained
 /// by the spawn domain (`lunco-luncosim-edit-core`).
 #[derive(Clone, Debug)]
 pub struct ReplicatedSpawn {
+    pub connection: Entity,
+    pub host_twin: lunco_workspace::TwinId,
     pub gid: u64,
     pub entry_id: String,
     pub position: DVec3,
@@ -560,7 +589,53 @@ pub struct ReplicatedSpawn {
 
 /// Queue of [`ReplicatedSpawn`]s awaiting local instantiation on a client.
 #[derive(Resource, Default)]
-pub struct PendingReplicatedSpawns(pub Vec<ReplicatedSpawn>);
+pub struct PendingReplicatedSpawns {
+    jobs: Vec<ReplicatedSpawn>,
+    retired: std::collections::HashSet<(Entity, lunco_workspace::TwinId)>,
+}
+
+impl PendingReplicatedSpawns {
+    pub fn is_empty(&self) -> bool {
+        self.jobs.is_empty()
+    }
+    pub fn clear(&mut self) {
+        self.jobs.clear();
+        self.retired.clear();
+    }
+    pub fn retain_connection(&mut self, connection: Entity) {
+        self.jobs.retain(|job| job.connection == connection);
+        self.retired.retain(|(owner, _)| *owner == connection);
+    }
+    pub fn admit(&mut self, job: ReplicatedSpawn) -> bool {
+        if self.retired.contains(&(job.connection, job.host_twin)) {
+            return false;
+        }
+        self.jobs.push(job);
+        true
+    }
+    pub fn cancel_for(&mut self, connection: Entity, owner: lunco_workspace::TwinId, gid: u64) {
+        self.jobs
+            .retain(|job| job.connection != connection || job.host_twin != owner || job.gid != gid);
+    }
+    pub fn is_retired(&self, connection: Entity, owner: lunco_workspace::TwinId) -> bool {
+        self.retired.contains(&(connection, owner))
+    }
+    pub fn retire(&mut self, connection: Entity, host_twin: lunco_workspace::TwinId) {
+        self.retired.insert((connection, host_twin));
+        self.jobs
+            .retain(|job| job.connection != connection || job.host_twin != host_twin);
+    }
+    pub fn drain_for(&mut self, owner: &ReplicatedSceneOwner) -> Vec<ReplicatedSpawn> {
+        let (ready, waiting) =
+            std::mem::take(&mut self.jobs)
+                .into_iter()
+                .partition(|job: &ReplicatedSpawn| {
+                    job.connection == owner.connection && job.host_twin == owner.host_twin
+                });
+        self.jobs = waiting;
+        ready
+    }
+}
 
 /// One sampled vessel input, stamped with a dense per-vessel sequence number and
 /// the client `SimTick` it was sampled at. Buffered for client-prediction replay:
@@ -3796,5 +3871,71 @@ mod session_input_stream_tests {
         stream.clear().expect("failed capture can be cleared");
         stream.begin(2).expect("capture restarts after clear");
         assert!(stream.is_recording());
+    }
+}
+
+#[cfg(test)]
+mod replicated_spawn_ownership_tests {
+    use super::*;
+
+    fn job(connection: Entity, host_twin: lunco_workspace::TwinId, gid: u64) -> ReplicatedSpawn {
+        ReplicatedSpawn {
+            connection,
+            host_twin,
+            gid,
+            entry_id: "component".into(),
+            position: DVec3::ZERO,
+            rotation: DQuat::IDENTITY,
+        }
+    }
+
+    #[test]
+    fn queues_only_drain_for_their_live_connection_and_mount() {
+        let mut world = World::new();
+        let a = world.spawn_empty().id();
+        let b = world.spawn_empty().id();
+        let first = lunco_workspace::TwinId::new(1);
+        let next = lunco_workspace::TwinId::new(2);
+        let owner = ReplicatedSceneOwner {
+            connection: b,
+            host_twin: next,
+            authority: "mounted".into(),
+            root: std::path::PathBuf::new(),
+            owns_mount: false,
+        };
+        let mut queue = PendingReplicatedSpawns::default();
+        assert!(queue.admit(job(a, first, 11)));
+        assert!(queue.admit(job(b, first, 12)));
+        assert!(queue.admit(job(b, next, 13)));
+        queue.retain_connection(b);
+        queue.retire(b, first);
+        assert!(!queue.admit(job(b, first, 14)));
+        let ready = queue.drain_for(&owner);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].gid, 13);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn future_mount_waits_until_its_admitted_scene_exists() {
+        let mut world = World::new();
+        let connection = world.spawn_empty().id();
+        let first = lunco_workspace::TwinId::new(1);
+        let next = lunco_workspace::TwinId::new(2);
+        let mut owner = ReplicatedSceneOwner {
+            connection,
+            host_twin: first,
+            authority: "mounted".into(),
+            root: std::path::PathBuf::new(),
+            owns_mount: false,
+        };
+        let mut queue = PendingReplicatedSpawns::default();
+        assert!(queue.admit(job(connection, next, 1)));
+        assert!(queue.drain_for(&owner).is_empty());
+        assert!(!queue.is_empty());
+        owner.host_twin = next;
+        assert_eq!(queue.drain_for(&owner).len(), 1);
+        queue.clear();
+        assert!(queue.is_empty());
     }
 }

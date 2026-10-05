@@ -6,6 +6,7 @@ license.workspace = true
 description = "Always-on session, authority, prediction markers, and identity admission for LunCoSim"
 
 [dependencies]
+lunco-workspace = { path = "../lunco-workspace" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }

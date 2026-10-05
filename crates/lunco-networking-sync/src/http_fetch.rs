@@ -86,13 +86,14 @@ impl Default for AssetHttpFetch {
 pub fn fetch_missing_assets_http(
     role: Res<NetworkRole>,
     remote: Res<RemoteScenarioManifest>,
+    connection: Res<lunco_core_session::ClientConnection>,
     probe: Res<crate::scenario_sync::CacheProbeState>,
     mut downloads: ResMut<AssetDownloads>,
     mut fetch: ResMut<AssetHttpFetch>,
     persist: Res<AssetPersist>,
     settings: Res<lunco_settings::DownloadSettings>,
 ) {
-    if role.is_host() {
+    if !remote.is_live(*role, connection.0) {
         return;
     }
     let Some(manifest) = remote.manifest.as_ref() else {

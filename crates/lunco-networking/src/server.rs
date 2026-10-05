@@ -436,6 +436,8 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
     app.add_observer(on_server_connected);
     app.add_observer(on_server_disconnected);
     app.add_observer(on_twin_added_host);
+    app.add_observer(on_twin_closed_host);
+    app.add_systems(PreUpdate, reconcile_host_scenario_owner);
     // NOTE: these MUST stay in `Update` (the lightyear message ferry). Moving them
     // to `FixedUpdate` silently breaks the RELIABLE `CmdChannel` (client→host
     // AcquireControl/SpawnEntity never arrive) — lightyear's reliable flush is
@@ -502,13 +504,23 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
 /// Broadcast the authoritative ownership table to all clients whenever it
 /// changes (a claim or release). Reliable channel so the who-owns-what view
 /// stays consistent. Host-only (registered in `setup_host`).
-fn broadcast_ownership(registry: Res<SessionRegistry>, mut outbox: ResMut<SyncOutbox>) {
-    if !registry.is_changed() {
+fn broadcast_ownership(
+    registry: Res<SessionRegistry>,
+    facts: lunco_networking_sync::scope::SceneScopeFacts,
+    mut outbox: ResMut<SyncOutbox>,
+    mut last_scope: Local<Option<lunco_core_session::ReplicationScope>>,
+) {
+    let Some(scope) = facts.host_scene_scope() else {
+        return;
+    };
+    if !registry.is_changed() && *last_scope == Some(scope) {
         return;
     }
+    *last_scope = Some(scope);
     outbox.0.push((
         SyncChannel::CommandBus,
         SyncEnvelope::Ownership(OwnershipMsg {
+            scope: lunco_networking_sync::scope::wire_scope(scope),
             entries: registry.snapshot(),
         }),
     ));
@@ -536,8 +548,17 @@ fn broadcast_profiles(profiles: Res<SessionProfiles>, mut outbox: ResMut<SyncOut
 /// "scenario changed while clients were connected" path. Host-only.
 fn broadcast_scenario_manifest(
     scenario: Res<ScenarioManifestResource>,
+    workspace: Option<Res<WorkspaceResource>>,
     mut outbox: ResMut<SyncOutbox>,
 ) {
+    if scenario.owner.is_none()
+        || scenario.owner
+            != workspace
+                .as_ref()
+                .and_then(|workspace| workspace.active_twin)
+    {
+        return;
+    }
     // `is_changed` fires when `setup_luncosim` fills the resource (None→Some) and
     // when a reload swaps the manifest (revision bumps). Edge-detecting on the
     // resource avoids re-sending every frame.
@@ -605,6 +626,8 @@ fn server_send(
 fn on_server_connected(
     trigger: On<Add, Connected>,
     q_client: Query<&RemoteId, With<ClientOf>>,
+    facts: lunco_networking_sync::scope::SceneScopeFacts,
+    application: Res<lunco_networking_sync::scope::ApplicationJournalBinding>,
     registry: Res<SessionRegistry>,
     profiles: Res<SessionProfiles>,
     scenario: Option<Res<ScenarioManifestResource>>,
@@ -619,6 +642,7 @@ fn on_server_connected(
     let Ok(remote) = q_client.get(trigger.entity) else {
         return;
     };
+    let scope = facts.host_document_scope();
     let peer = remote.0;
     // Server-assigned identity: allocate a fresh, entropy-drawn SessionId for this
     // connection rather than trusting the client-chosen netcode id. `peer_to_session`
@@ -665,15 +689,18 @@ fn on_server_connected(
     );
     // Current ownership table, so the joiner immediately knows who owns what
     // (the periodic broadcast only fires on change).
-    server_send(
-        &mut sender,
-        server,
-        &target,
-        SyncChannel::CommandBus,
-        &SyncEnvelope::Ownership(OwnershipMsg {
-            entries: registry.snapshot(),
-        }),
-    );
+    if let Some(scope) = facts.host_scene_scope() {
+        server_send(
+            &mut sender,
+            server,
+            &target,
+            SyncChannel::CommandBus,
+            &SyncEnvelope::Ownership(OwnershipMsg {
+                scope: lunco_networking_sync::scope::wire_scope(scope),
+                entries: registry.snapshot(),
+            }),
+        );
+    }
     server_send(
         &mut sender,
         server,
@@ -691,6 +718,13 @@ fn on_server_connected(
     // resource.
     if let Some(scenario) = &scenario {
         if let Some(manifest) = &scenario.manifest {
+            if scope
+                != scenario
+                    .owner
+                    .map(lunco_core_session::ReplicationScope::Twin)
+            {
+                return;
+            }
             server_send(
                 &mut sender,
                 server,
@@ -714,7 +748,10 @@ fn on_server_connected(
     // handed to `replay_journal_chunks`, which ships them in batches under a
     // per-frame budget, behind the session-context frames above.
     if let Some(journal) = &journal {
-        let entries = lunco_networking_sync::journal_plane::full_journal_msgs(journal);
+        let Some(scope) = facts.host_journal_scope(journal, &application) else {
+            return;
+        };
+        let entries = lunco_networking_sync::journal_plane::full_journal_msgs(journal, scope);
         if !entries.is_empty() {
             info!(
                 "[net] queueing {} journal entries for replay to session {} \
@@ -724,6 +761,7 @@ fn on_server_connected(
             );
             replay.0.push_back(PeerJournalReplay {
                 peer,
+                scope,
                 remaining: entries.into(),
             });
         }
@@ -751,6 +789,7 @@ const JOURNAL_REPLAY_BUDGET: usize = 256;
 
 /// One connected peer's outstanding journal replay.
 struct PeerJournalReplay {
+    scope: lunco_core_session::ReplicationScope,
     peer: PeerId,
     remaining: std::collections::VecDeque<lunco_networking_sync::journal_plane::JournalEntryMsg>,
 }
@@ -765,10 +804,13 @@ struct PendingJournalReplay(std::collections::VecDeque<PeerJournalReplay>);
 /// this drains it. Runs in the same chained `Update` tuple as the other sends
 /// because it shares `ServerMultiMessageSender`.
 fn replay_journal_chunks(
+    facts: lunco_networking_sync::scope::SceneScopeFacts,
     mut replay: ResMut<PendingJournalReplay>,
     server: Single<&Server>,
     mut sender: ServerMultiMessageSender,
 ) {
+    let scope = facts.host_document_scope();
+    replay.0.retain(|pending| Some(pending.scope) == scope);
     if replay.0.is_empty() {
         return;
     }
@@ -820,6 +862,7 @@ mod journal_replay_tests {
     fn journal(n: usize) -> std::collections::VecDeque<JournalEntryMsg> {
         (0..n)
             .map(|i| JournalEntryMsg {
+                scope: lunco_networking_sync::scope::WireSceneScope::Application,
                 json: format!("{{\"i\":{i}}}"),
             })
             .collect()
@@ -989,6 +1032,7 @@ fn host_send_outbox(
 /// `ReplicationState.generation` advanced, so it diffs at most once per gather.
 /// Per-peer batches are chunked at `MAX_SNAPSHOT_ENTRIES` (single-fragment, L2).
 fn assemble_and_send_snapshots(
+    facts: lunco_networking_sync::scope::SceneScopeFacts,
     repl: Res<ReplicationState>,
     interest: Res<PeerInterest>,
     config: Res<NetworkConfig>,
@@ -997,6 +1041,7 @@ fn assemble_and_send_snapshots(
     server: Single<&Server>,
     mut sender: ServerMultiMessageSender,
     mut last_gen: Local<u64>,
+    mut last_scope: Local<Option<lunco_core_session::ReplicationScope>>,
     // Per-session digest of the last pose ([`lunco_networking_sync::sync::PoseDigest`] —
     // `(position_bits, rot_packed, last_input_seq)`) SENT to that peer per gid.
     // Diffed each assemble to decide what to send; out-of-interest gids are
@@ -1012,6 +1057,18 @@ fn assemble_and_send_snapshots(
     // body is spawned at most once per peer; pruned to the live set + connected peers.
     mut spawned: Local<std::collections::HashMap<SessionId, std::collections::HashSet<u64>>>,
 ) {
+    let Some(scope) = repl
+        .scope
+        .filter(|scope| facts.host_scene_scope() == Some(*scope))
+    else {
+        return;
+    };
+    if *last_scope != Some(scope) {
+        sent_last.clear();
+        spawned.clear();
+        *last_gen = 0;
+        *last_scope = Some(scope);
+    }
     // Early-out: only diff once per gather generation (skip frames with no new pose).
     // `0` is the never-gathered sentinel.
     if repl.generation == 0 || repl.generation == *last_gen {
@@ -1075,6 +1132,7 @@ fn assemble_and_send_snapshots(
                 &target,
                 config.snapshot_channel,
                 &SyncEnvelope::Snapshot(SnapshotMsg {
+                    scope: lunco_networking_sync::scope::wire_scope(scope),
                     tick: repl.tick,
                     frame,
                     entries: chunk.to_vec(),
@@ -1107,7 +1165,7 @@ fn host_recv_inbox(
         };
         for frame in receiver.receive() {
             if let Some(env) = deserialize_env(&frame.0) {
-                inbox.0.push((session, env));
+                inbox.entries.push((session, env));
             }
         }
     }
@@ -1125,6 +1183,7 @@ struct AssetDescriptor {
 /// Everything the off-thread manifest build needs, owned (no `&Twin` borrow) so
 /// it can cross the `AsyncComputeTaskPool` boundary.
 struct ScenarioBuildInput {
+    owner: lunco_workspace::TwinId,
     scenario_id: [u8; 16],
     name: String,
     default_scene: Option<String>,
@@ -1158,6 +1217,7 @@ use lunco_twin::is_runtime_state;
 /// parent/child walks). The blocking read + SHA-256 happens later in
 /// [`build_manifest_from_input`], off the main thread.
 fn collect_scenario_input(
+    owner: lunco_workspace::TwinId,
     twin: &Twin,
     journal_head: Option<lunco_twin_journal::EntryId>,
 ) -> Option<ScenarioBuildInput> {
@@ -1271,6 +1331,7 @@ fn collect_scenario_input(
     });
 
     Some(ScenarioBuildInput {
+        owner,
         scenario_id,
         name,
         default_scene,
@@ -1323,6 +1384,7 @@ type ScenarioBuildOutput = (ScenarioManifestMsg, Vec<(Vec<u8>, PathBuf)>);
 
 fn build_manifest_from_input(input: ScenarioBuildInput) -> Option<ScenarioBuildOutput> {
     let ScenarioBuildInput {
+        owner,
         scenario_id,
         name,
         default_scene,
@@ -1364,6 +1426,7 @@ fn build_manifest_from_input(input: ScenarioBuildInput) -> Option<ScenarioBuildO
         // `asset_base_url` is stamped at publish time (`drive_scenario_manifest`) —
         // this build is pure and knows nothing about how the host is reachable.
         ScenarioManifestMsg {
+            mount_id: owner.raw(),
             scenario_id,
             revision,
             name,
@@ -1387,17 +1450,99 @@ fn build_manifest_from_input(input: ScenarioBuildInput) -> Option<ScenarioBuildO
 /// [`drive_scenario_manifest`]. Host-only.
 #[derive(Resource, Default)]
 pub(crate) struct PendingScenarioManifest {
+    // Admission remains until withdrawal even if preparation fails: actor
+    // messages from this mount still need an explicit retirement on close.
+    owner: Option<lunco_workspace::TwinId>,
     task: Option<Task<Option<ScenarioBuildOutput>>>,
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+struct HostScenarioLifecycle<'w> {
+    pending: ResMut<'w, PendingScenarioManifest>,
+    replay: ResMut<'w, PendingJournalReplay>,
+    scenario: ResMut<'w, ScenarioManifestResource>,
+    paths: ResMut<'w, lunco_networking_sync::scenario_sync::HostAssetPaths>,
+    tasks: ResMut<'w, lunco_networking_sync::scenario_sync::AssetServeTasks>,
+    outbox: ResMut<'w, SyncOutbox>,
+    #[cfg(feature = "transport-http")]
+    http: Option<Res<'w, AssetHttpServer>>,
+}
+
+impl HostScenarioLifecycle<'_> {
+    fn withdraw(&mut self) {
+        let owner = self.scenario.owner.or(self.pending.owner);
+        self.replay.0.clear();
+        self.pending.task = None;
+        self.pending.owner = None;
+        self.scenario.owner = None;
+        self.scenario.manifest = None;
+        self.paths.0.clear();
+        self.tasks.0.clear();
+        self.outbox.0.retain(|(_, message)| {
+            !matches!(
+                message,
+                SyncEnvelope::ScenarioManifest(_)
+                    | SyncEnvelope::AssetChunk(_)
+                    | SyncEnvelope::JournalEntry(_)
+                    | SyncEnvelope::JournalBatch(_)
+                    | SyncEnvelope::Ownership(_)
+                    | SyncEnvelope::Snapshot(_)
+                    | SyncEnvelope::Spawn(_)
+                    | SyncEnvelope::Despawn(_)
+            )
+        });
+        #[cfg(feature = "transport-http")]
+        if let Some(http) = self.http.as_ref() {
+            http.publish(&[]);
+        }
+        if let Some(owner) = owner {
+            self.outbox.0.push((
+                SyncChannel::BulkData,
+                SyncEnvelope::ScenarioWithdrawn {
+                    mount_id: owner.raw(),
+                },
+            ));
+        }
+    }
+}
+
+fn on_twin_closed_host(event: On<lunco_workspace::TwinClosed>, mut state: HostScenarioLifecycle) {
+    if state.pending.owner == Some(event.twin) || state.scenario.owner == Some(event.twin) {
+        state.withdraw();
+    }
+}
+
+fn reconcile_host_scenario_owner(
+    role: Res<lunco_core_session::NetworkRole>,
+    workspace: Option<Res<WorkspaceResource>>,
+    mut state: HostScenarioLifecycle,
+) {
+    let active = workspace.as_ref().and_then(|w| w.active_twin);
+    if (!role.is_host() && (state.pending.owner.is_some() || state.scenario.owner.is_some()))
+        || state
+            .pending
+            .owner
+            .is_some_and(|owner| Some(owner) != active)
+        || state
+            .scenario
+            .owner
+            .is_some_and(|owner| Some(owner) != active)
+    {
+        state.withdraw();
+    }
 }
 
 /// Spawn an off-thread manifest build for `twin`, replacing any in-flight one
 /// (a newer scenario supersedes a build still running for the previous one).
 fn spawn_manifest_build(
+    owner: lunco_workspace::TwinId,
     twin: &Twin,
     roots: Option<&lunco_assets_core::TwinRoots>,
     journal_head: Option<lunco_twin_journal::EntryId>,
     pending: &mut PendingScenarioManifest,
 ) {
+    pending.owner = Some(owner);
+    pending.task = None;
     let Some(roots) = roots else {
         warn!("[net] cannot build a scenario manifest without the Twin asset registry");
         pending.task = None;
@@ -1414,7 +1559,7 @@ fn spawn_manifest_build(
             return;
         }
     };
-    let Some(mut input) = collect_scenario_input(twin, journal_head) else {
+    let Some(mut input) = collect_scenario_input(owner, twin, journal_head) else {
         warn!(
             "[net] cannot build a scenario manifest for {}: a twin.toml UUID is required",
             twin.root.display()
@@ -1424,15 +1569,23 @@ fn spawn_manifest_build(
     };
     input.name = logical_name;
     let pool = AsyncComputeTaskPool::get();
+    pending.owner = Some(owner);
     pending.task = Some(pool.spawn(async move { build_manifest_from_input(input) }));
 }
 
 /// The host's current journal head (build-time base for Layer B), or `None` if
 /// there's no journal / empty history.
-fn journal_head(journal: &Option<Res<JournalResource>>) -> Option<lunco_twin_journal::EntryId> {
-    journal
-        .as_ref()
-        .and_then(|j| j.with_read(|jj| jj.merged_head()))
+fn journal_head(
+    journal: &Option<Res<JournalResource>>,
+    twin: &Twin,
+) -> Option<lunco_twin_journal::EntryId> {
+    journal.as_ref().and_then(|j| {
+        j.with_read(|jj| {
+            (jj.twin().0 == twin.root.to_string_lossy())
+                .then(|| jj.merged_head())
+                .flatten()
+        })
+    })
 }
 
 /// Startup: if a Twin is already open when the host boots, kick off its manifest
@@ -1453,20 +1606,37 @@ fn spawn_initial_scenario_manifest(
             "[net] Host started with active twin, building scenario manifest for {:?}",
             twin.root
         );
-        spawn_manifest_build(twin, roots.as_deref(), journal_head(&journal), &mut pending);
+        spawn_manifest_build(
+            active,
+            twin,
+            roots.as_deref(),
+            journal_head(&journal, twin),
+            &mut pending,
+        );
     }
 }
 
 /// Poll the in-flight manifest build; when it finishes, publish the result into
 /// [`ScenarioManifestResource`] (which `is_changed`-triggers the broadcast).
-/// `None` from the task (a fail-closed build) leaves the previous manifest in
-/// place rather than clearing it. Host-only, runs in `Update`.
+/// A failed refresh keeps valid content only within the same live mount.
+/// Mount replacement withdraws previous content before building. Host-only.
 fn drive_scenario_manifest(
+    workspace: Option<Res<WorkspaceResource>>,
+    role: Res<lunco_core_session::NetworkRole>,
     mut pending: ResMut<PendingScenarioManifest>,
     mut scenario: ResMut<ScenarioManifestResource>,
     mut asset_paths: ResMut<lunco_networking_sync::scenario_sync::HostAssetPaths>,
     #[cfg(feature = "transport-http")] http_assets: Option<Res<AssetHttpServer>>,
 ) {
+    if !role.is_host()
+        || pending.owner.is_none()
+        || pending.owner != workspace.as_ref().and_then(|w| w.active_twin)
+    {
+        pending.task = None;
+        pending.owner = None;
+        return;
+    }
+    let owner = pending.owner;
     let Some(task) = pending.task.as_mut() else {
         return;
     };
@@ -1495,9 +1665,10 @@ fn drive_scenario_manifest(
                 http.publish(&cid_paths);
                 manifest.asset_base_url = Some(http.base_url.clone());
             }
+            scenario.owner = owner;
             scenario.manifest = Some(manifest);
         }
-        None => warn!("[net] scenario manifest build failed; keeping previous manifest"),
+        None => warn!("[net] scenario manifest build failed; no new manifest published"),
     }
 }
 
@@ -1508,14 +1679,26 @@ fn on_twin_added_host(
     workspace: Res<WorkspaceResource>,
     roots: Option<Res<lunco_assets_core::TwinRoots>>,
     journal: Option<Res<JournalResource>>,
-    mut pending: ResMut<PendingScenarioManifest>,
+    mut state: HostScenarioLifecycle,
 ) {
+    if workspace.active_twin != Some(trigger.event().twin) {
+        return;
+    }
+    if state.scenario.owner != Some(trigger.event().twin) {
+        state.withdraw();
+    }
     if let Some(twin) = workspace.twin(trigger.event().twin) {
         info!(
             "[net] Twin added; building scenario manifest for {:?}",
             twin.root
         );
-        spawn_manifest_build(twin, roots.as_deref(), journal_head(&journal), &mut pending);
+        spawn_manifest_build(
+            trigger.event().twin,
+            twin,
+            roots.as_deref(),
+            journal_head(&journal, twin),
+            &mut state.pending,
+        );
     }
 }
 
@@ -1540,9 +1723,9 @@ fn ingest_asset_offers(
         return;
     }
     let batch = std::mem::take(&mut offers.0);
-    let Some(twin) = workspace
+    let Some((owner, twin)) = workspace
         .as_ref()
-        .and_then(|w| w.active_twin.and_then(|a| w.twin(a)))
+        .and_then(|w| w.active_twin.and_then(|a| w.twin(a).map(|twin| (a, twin))))
     else {
         return; // no active twin to ingest into; drop the batch
     };
@@ -1587,7 +1770,13 @@ fn ingest_asset_offers(
     // Rebuild + re-advertise once for the batch — the manifest revision bump drives
     // the existing broadcast, so the import reaches every peer.
     if wrote {
-        spawn_manifest_build(twin, roots.as_deref(), journal_head(&journal), &mut pending);
+        spawn_manifest_build(
+            owner,
+            twin,
+            roots.as_deref(),
+            journal_head(&journal, twin),
+            &mut pending,
+        );
     }
 }
 
@@ -1608,13 +1797,19 @@ fn service_manifest_rebuild_request(
         return;
     }
     req.0 = false;
-    let Some(twin) = workspace
+    let Some((owner, twin)) = workspace
         .as_ref()
-        .and_then(|w| w.active_twin.and_then(|a| w.twin(a)))
+        .and_then(|w| w.active_twin.and_then(|a| w.twin(a).map(|twin| (a, twin))))
     else {
         return;
     };
-    spawn_manifest_build(twin, roots.as_deref(), journal_head(&journal), &mut pending);
+    spawn_manifest_build(
+        owner,
+        twin,
+        roots.as_deref(),
+        journal_head(&journal, twin),
+        &mut pending,
+    );
 }
 
 /// Host (Phase 3): poll finished off-thread read jobs and stream their chunks to
@@ -1630,6 +1825,8 @@ fn drain_and_send_asset_chunks(
     server: Single<&Server>,
     mut sender: ServerMultiMessageSender,
     time: Res<Time>,
+    scenario: Res<ScenarioManifestResource>,
+    mut ready_owner: Local<Option<lunco_workspace::TwinId>>,
     // Carries chunks not yet flushed (per-frame cap / still-arriving tasks) across
     // frames. A `Local` (not a resource) — this is the only reader/writer.
     mut ready: Local<Vec<(SessionId, lunco_networking_scenario::AssetChunkMsg)>>,
@@ -1638,6 +1835,15 @@ fn drain_and_send_asset_chunks(
     // [`MAX_UNACKED_CHUNK_ESTIMATE`](lunco_networking_sync::scenario_sync::MAX_UNACKED_CHUNK_ESTIMATE).
     mut unacked_estimate: Local<std::collections::HashMap<SessionId, f32>>,
 ) {
+    if *ready_owner != scenario.owner {
+        ready.clear();
+        unacked_estimate.clear();
+        *ready_owner = scenario.owner;
+    }
+    if scenario.owner.is_none() {
+        tasks.0.clear();
+        return;
+    }
     // Decay the unacked estimate: assume each peer drained at the conservative
     // rate since last frame. Runs before the empty-check so the budget refills
     // even on frames with nothing to flush.

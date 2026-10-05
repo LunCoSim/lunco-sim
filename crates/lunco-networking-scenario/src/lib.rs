@@ -145,6 +145,8 @@ fn varint(mut n: u64) -> [u8; 10] {
 /// arrive via [`AssetChunkMsg`] in Phase 3.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ScenarioManifestMsg {
+    /// Host workspace Twin mount lifetime, scoped to this connection.
+    pub mount_id: u64,
     /// Stable cross-session scenario identity, 16 bytes. Normally the
     /// `twin.toml` uuid (`Uuid::as_bytes()`); for an unmanaged folder (no
     /// `twin.toml`) the **host** derives it as a SHA-256 path digest
@@ -407,4 +409,12 @@ mod tests {
         assert_eq!(&varint(255)[..2], &[0xff, 0x01]);
         assert_eq!(&varint(300)[..2], &[0xac, 0x02]);
     }
+}
+
+/// Serialized lifetime of scene state. Mount IDs are host-issued transient
+/// identities, independent of persistent scenario UUIDs and asset revisions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireSceneScope {
+    Application,
+    Twin { mount_id: u64 },
 }

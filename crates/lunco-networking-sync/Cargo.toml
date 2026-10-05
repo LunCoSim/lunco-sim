@@ -44,6 +44,7 @@ lunco-storage = { path = "../lunco-storage" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-twin-journal = { path = "../lunco-twin-journal", features = ["hooks"] }
 lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-workspace = { path = "../lunco-workspace" }
 serde = { workspace = true }
 serde_json = { workspace = true }
