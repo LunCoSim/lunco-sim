@@ -17,7 +17,8 @@ use lunco_hooks::HookValue;
 use lunco_spatial::{OriginAnchor, WorldGrid};
 use lunco_usd_avian_contracts::ScenePhysicsOwned;
 use lunco_usd_bevy_scene::{
-    FailedSceneLoad, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjectionQueued, UsdSceneRoot,
+    FailedSceneLoad, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjectionFailed,
+    UsdSceneProjectionQueued, UsdSceneRoot,
 };
 use lunco_usd_bevy_stage::{
     UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
@@ -146,6 +147,22 @@ struct PendingSceneStageOutcome {
     outcome: Option<SceneStageAssetOutcome>,
 }
 
+#[derive(bevy::ecs::system::SystemParam)]
+struct SceneProjectionOutcomes<'w, 's> {
+    failed: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static UsdPrimPath,
+            &'static UsdSceneProjectionFailed,
+        ),
+    >,
+    roots: Query<'w, 's, (), With<UsdSceneRoot>>,
+    entities: Query<'w, 's, Entity>,
+    previews: Query<'w, 's, (), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
+}
+
 fn publish_loaded_scene_stage_outcomes(
     mut events: MessageReader<AssetEvent<UsdStageAsset>>,
     in_flight: Option<Res<SceneLoadInFlight>>,
@@ -195,6 +212,7 @@ fn record_scene_load_terminal_outcome(
     stages: Option<Res<Assets<UsdStageAsset>>>,
     q_awaiting: Query<&UsdPrimPath, With<UsdSceneAwaitingStage>>,
     q_projecting: Query<&UsdPrimPath, With<UsdSceneProjectionQueued>>,
+    projection: SceneProjectionOutcomes,
     q_lights: Query<&bevy::light::DirectionalLight>,
     scene_entities: SceneEntities,
     mut mount_state: Option<ResMut<lunco_core::SceneMountState>>,
@@ -263,7 +281,42 @@ fn record_scene_load_terminal_outcome(
         return;
     }
 
-    if let SceneStageAssetOutcome::Failed { error, .. } = outcome {
+    let projection_error = projection
+        .failed
+        .iter()
+        .filter(|(entity, prim, _)| {
+            prim.stage_handle.id() == g.stage_id
+                && !lunco_usd_bevy_scene::is_preview_only(
+                    *entity,
+                    &scene_entities.parents,
+                    &projection.previews,
+                )
+                && match lunco_usd_bevy_scene::scene_root_ancestor(
+                    *entity,
+                    &projection.roots,
+                    &scene_entities.parents,
+                    &projection.entities,
+                ) {
+                    Ok(Some(root)) => mount_state
+                        .as_deref()
+                        .is_none_or(|mount| mount.active_root() == Some(root)),
+                    // Mounted prims such as cameras may leave the USD hierarchy.
+                    Ok(None) | Err(_) => true,
+                }
+        })
+        .min_by(|(_, left, left_error), (_, right, right_error)| {
+            left.path
+                .cmp(&right.path)
+                .then_with(|| left_error.0.cmp(&right_error.0))
+        })
+        .map(|(_, prim, failure)| {
+            format!("scene projection failed at `{}`: {}", prim.path, failure.0)
+        });
+    let terminal_error = match outcome {
+        SceneStageAssetOutcome::Failed { error, .. } => Some(error),
+        SceneStageAssetOutcome::Loaded { .. } => projection_error,
+    };
+    if let Some(error) = terminal_error {
         pending.outcome = None;
         if let Some(state) = mount_state.as_deref_mut() {
             state.begin_replacement();
@@ -1118,6 +1171,131 @@ mod tests {
 
     #[derive(Resource, Default)]
     struct CompletedTransitions(Vec<SceneTransition>);
+
+    #[derive(Resource, Default)]
+    struct FailedTransitions(Vec<String>);
+
+    #[test]
+    fn projection_rejection_fails_the_scene_transaction_and_clears_the_mount() {
+        for failed_owner in ["root", "child", "detached", "preview"] {
+            let transition = SceneTransition::load("scene.usda", "/World");
+            let stage_handle = Handle::<UsdStageAsset>::default();
+            let stage_id = stage_handle.id();
+            let mut app = App::new();
+            app.init_resource::<SceneTransitionCoordinator>()
+                .init_resource::<lunco_core::SceneMountState>()
+                .init_resource::<CompletedTransitions>()
+                .init_resource::<FailedTransitions>()
+                .add_observer(on_scene_transition_completed)
+                .add_observer(on_scene_transition_failed)
+                .add_observer(
+                    |event: On<SceneTransitionCompleted>,
+                     mut results: ResMut<CompletedTransitions>| {
+                        results.0.push(event.event().transition.clone());
+                    },
+                )
+                .add_observer(
+                    |event: On<SceneTransitionFailed>, mut results: ResMut<FailedTransitions>| {
+                        results.0.push(event.event().error.clone());
+                    },
+                );
+            install_scene_lifecycle(&mut app);
+            let transition_id = {
+                let mut coordinator = app.world_mut().resource_mut::<SceneTransitionCoordinator>();
+                coordinator.admit(SceneTransitionRequest::load("scene.usda", "/World"));
+                coordinator.take_admitted().unwrap();
+                coordinator.start(transition)
+            };
+            let root = app
+                .world_mut()
+                .spawn((
+                    UsdSceneRoot,
+                    UsdPrimPath {
+                        stage_handle: stage_handle.clone(),
+                        path: "/World".to_owned(),
+                    },
+                ))
+                .id();
+            let failure = UsdSceneProjectionFailed("invalid stage convention".to_owned());
+            match failed_owner {
+                "root" => {
+                    app.world_mut().entity_mut(root).insert(failure);
+                }
+                "child" => {
+                    app.world_mut().spawn((
+                        UsdPrimPath {
+                            stage_handle: stage_handle.clone(),
+                            path: "/World/Child".to_owned(),
+                        },
+                        failure,
+                        ChildOf(root),
+                    ));
+                }
+                "detached" => {
+                    app.world_mut().spawn((
+                        UsdPrimPath {
+                            stage_handle: stage_handle.clone(),
+                            path: "/World/Camera".to_owned(),
+                        },
+                        failure,
+                    ));
+                }
+                "preview" => {
+                    app.world_mut().spawn((
+                        UsdPrimPath {
+                            stage_handle: stage_handle.clone(),
+                            path: "/Preview".to_owned(),
+                        },
+                        failure,
+                        lunco_usd_bevy_scene::UsdPreviewOnly,
+                    ));
+                }
+                _ => unreachable!(),
+            }
+            app.world_mut()
+                .resource_mut::<lunco_core::SceneMountState>()
+                .register_root(root, true);
+            app.insert_resource(SceneLoadInFlight {
+                transition_id,
+                path: "scene.usda".to_owned(),
+                stage_id,
+            });
+            app.world_mut()
+                .write_message(SceneStageAssetOutcome::Loaded {
+                    transition_id,
+                    stage_id,
+                });
+            app.update();
+            assert!(!app.world().contains_resource::<SceneLoadInFlight>());
+            if failed_owner == "preview" {
+                assert_eq!(app.world().resource::<CompletedTransitions>().0.len(), 1);
+                assert!(app.world().resource::<FailedTransitions>().0.is_empty());
+                assert!(app.world().get_entity(root).is_ok());
+            } else {
+                assert!(
+                    app.world().resource::<CompletedTransitions>().0.is_empty(),
+                    "{failed_owner}"
+                );
+                assert!(
+                    app.world().resource::<FailedTransitions>().0[0]
+                        .contains("invalid stage convention")
+                );
+                assert!(
+                    app.world()
+                        .resource::<SceneTransitionCoordinator>()
+                        .completed_generation()
+                        .is_none()
+                );
+                assert!(
+                    app.world()
+                        .resource::<lunco_core::SceneMountState>()
+                        .active_root()
+                        .is_none()
+                );
+                assert!(app.world().get_entity(root).is_err());
+            }
+        }
+    }
 
     #[test]
     fn explicit_stage_outcome_commits_without_readiness_polling() {

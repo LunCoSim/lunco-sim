@@ -53,6 +53,13 @@ Failed loads leave the viewport in its normal empty-scene presentation. The
 typed transition failure and runtime diagnostics retain the cause; the failure
 text does not replace the empty-state headline.
 
+An asset-load success is not a scene success. The terminal owner checks
+`UsdSceneProjectionFailed` for the running mount, including prims reparented
+outside its USD hierarchy, before committing a generation. A rejected root or
+prim clears the mount and publishes `SceneTransitionFailed` with the cause.
+Preview projection errors remain outside that transaction. Explicit projection
+targets must name an existing absolute USD prim (or the stage pseudo-root).
+
 The coordinator advances `completed_generation` only when the active matching
 transaction reaches `SceneTransitionCompleted`. It then emits
 `SceneTransitionCommitted`; stale completions and failures cannot advance the

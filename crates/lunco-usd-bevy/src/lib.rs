@@ -629,10 +629,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             error!(
                 "[usd-bevy] stage has invalid convention metadata: {error}; refusing visual projection"
             );
-            commands.entity(entity).try_insert((
-                UsdSceneProjectionFailed(error.to_string()),
-                Visibility::Hidden,
-            ));
+            fail_usd_projection(entity, error.to_string(), pending_children, commands);
             return;
         }
     };
@@ -667,8 +664,21 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 return;
             }
         };
-        let Ok(sdf_path) = SdfPath::new(&resolved_path) else {
-            return;
+        let sdf_path = match SdfPath::new(&resolved_path) {
+            Ok(path)
+                if path.is_abs()
+                    && !path.is_property_path()
+                    && (path.is_abs_root() || reader.has_prim(&path)) =>
+            {
+                path
+            }
+            _ => {
+                let message = format!(
+                    "scene projection target `{resolved_path}` is not an existing absolute USD prim"
+                );
+                fail_usd_projection(entity, message, pending_children, commands);
+                return;
+            }
         };
         project_usd_prim_kind(reader, &sdf_path, entity, commands);
         project_spawnable_selectable(reader, &sdf_path, entity, commands);
@@ -2238,7 +2248,7 @@ fn admit_pending_usd_children(
         }
 
         let Some(stage_asset) = context.stages.get(&parent_prim_path.stage_handle) else {
-            fail_pending_usd_children(
+            fail_usd_projection(
                 parent,
                 format!("stage asset disappeared while admitting child `{child_path_text}`"),
                 &mut pending_children,
@@ -2252,7 +2262,7 @@ fn admit_pending_usd_children(
             instance_projection,
         );
         let Ok(child_path) = SdfPath::new(&child_path_text) else {
-            fail_pending_usd_children(
+            fail_usd_projection(
                 parent,
                 format!("queued child path `{child_path_text}` is invalid"),
                 &mut pending_children,
@@ -2292,7 +2302,7 @@ fn admit_pending_usd_children(
         let child_tf = match read_transform_from_usd(&reader, &child_path) {
             Ok(transform) => transform,
             Err(error) => {
-                fail_pending_usd_children(
+                fail_usd_projection(
                     parent,
                     format!(
                         "{} has malformed authored transform; visual projection rejected: {error}",
@@ -2309,7 +2319,7 @@ fn admit_pending_usd_children(
             Some(member.clone())
         } else if is_instance_root {
             let Some(root_path) = resolve_stage_prim_path(&reader, &parent_prim_path.path) else {
-                fail_pending_usd_children(
+                fail_usd_projection(
                     parent,
                     format!(
                         "instance root `{}` could not be resolved while admitting its children",
@@ -2422,7 +2432,7 @@ fn finish_pending_usd_child(
     }
 }
 
-fn fail_pending_usd_children(
+fn fail_usd_projection(
     parent: Entity,
     message: String,
     pending_children: &mut UsdPendingChildAdmissions,

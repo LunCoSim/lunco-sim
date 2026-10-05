@@ -61,6 +61,12 @@ uses the render-free `lunco-usd-geometry` package, while its existing async
 compute path and only Bevy asset insertion remain on the main thread. After the initial asset generation, explicit live edits use the
 canonical `StageView` and the same extractor contract.
 
+The scene transaction closes from asset and structural-projection outcomes.
+`UsdSceneProjectionFailed` on the running mount must fail and clear that
+transaction before a generation can commit; preview errors are separately
+owned. Missing default roots and nonexistent or non-prim explicit targets are
+visible projection failures. Verify the failure edge as well as queue drainage.
+
 Incremental structural reconciliation resolves a live path through the
 `UsdPrimPath` lifecycle index keyed by stage asset and prim path. Insert and
 removal observers maintain it, including component replacement and preview
