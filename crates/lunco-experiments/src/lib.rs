@@ -329,6 +329,31 @@ pub struct Experiment {
     pub color_hint: u8,
 }
 
+impl Experiment {
+    fn definition_is_editable(&self) -> bool {
+        matches!(self.status, RunStatus::Pending) && self.result.is_none()
+    }
+
+    #[cfg(feature = "bevy")]
+    pub(crate) fn has_same_execution_definition(&self, other: &Self) -> bool {
+        self.model_ref == other.model_ref
+            && self.overrides == other.overrides
+            && self.inputs == other.inputs
+            && self.bounds == other.bounds
+    }
+
+    fn require_definition_editable(&self) -> Result<(), String> {
+        if self.definition_is_editable() {
+            Ok(())
+        } else {
+            Err(format!(
+                "experiment {} execution definition is immutable after run admission or result publication",
+                self.id.0
+            ))
+        }
+    }
+}
+
 // ---------- Registry ----------
 
 /// Per-twin cap. v1: 20 finished runs per twin, oldest evicted.
@@ -441,17 +466,14 @@ impl ExperimentRegistry {
         self.by_twin.get(twin).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
-    /// Rewrite every experiment under `twin` whose `model_ref`
-    /// equals `old` to instead reference `new`. Returns the count
-    /// of touched records. Called by the class-rename observer so a
-    /// `model Foo` → `model Bar` edit in the source doesn't strand
-    /// the user's run history under a class name that no longer
-    /// exists.
+    /// Rename the class reference of unadmitted, result-free definitions under
+    /// `twin`. Admitted runs retain the class used by their source snapshot.
+    /// Returns the count of changed definitions.
     pub fn rename_model_ref(&mut self, twin: &TwinId, old: &ModelRef, new: &ModelRef) -> usize {
         let mut hit = 0;
         if let Some(bucket) = self.by_twin.get_mut(twin) {
             for exp in bucket.iter_mut() {
-                if exp.model_ref == *old {
+                if exp.model_ref == *old && exp.definition_is_editable() {
                     exp.model_ref = new.clone();
                     hit += 1;
                 }
@@ -575,32 +597,36 @@ impl ExperimentRegistry {
         }
     }
 
-    /// Replace an experiment's run bounds (t_end, dt, solver, …).
-    pub fn set_bounds(&mut self, id: ExperimentId, bounds: RunBounds) -> bool {
-        match self.get_mut(id) {
-            Some(e) => {
-                e.bounds = bounds;
-                true
-            }
-            None => false,
+    /// Replace bounds before admission. Identical replay is an idempotent no-op.
+    pub fn set_bounds(&mut self, id: ExperimentId, bounds: RunBounds) -> Result<(), String> {
+        let experiment = self
+            .get_mut(id)
+            .ok_or_else(|| format!("experiment {} is not registered", id.0))?;
+        if experiment.bounds == bounds {
+            return Ok(());
         }
+        experiment.require_definition_editable()?;
+        experiment.bounds = bounds;
+        Ok(())
     }
 
-    /// Replace an experiment's parameter overrides + inputs (the sweep point).
+    /// Replace overrides and inputs before admission. Identical replay is a no-op.
     pub fn set_params(
         &mut self,
         id: ExperimentId,
         overrides: BTreeMap<ParamPath, ParamValue>,
         inputs: BTreeMap<ParamPath, ParamValue>,
-    ) -> bool {
-        match self.get_mut(id) {
-            Some(e) => {
-                e.overrides = overrides;
-                e.inputs = inputs;
-                true
-            }
-            None => false,
+    ) -> Result<(), String> {
+        let experiment = self
+            .get_mut(id)
+            .ok_or_else(|| format!("experiment {} is not registered", id.0))?;
+        if experiment.overrides == overrides && experiment.inputs == inputs {
+            return Ok(());
         }
+        experiment.require_definition_editable()?;
+        experiment.overrides = overrides;
+        experiment.inputs = inputs;
+        Ok(())
     }
 
     /// Insert a fully-formed experiment under an explicit id — the **replay**
@@ -758,6 +784,98 @@ impl Plugin for ExperimentsPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn execution_definition_mutation_requires_unadmitted_result_free_rows() {
+        let mut registry = ExperimentRegistry::new();
+        let twin = TwinId("history".into());
+        let model = ModelRef("BeforeRename".into());
+        let id = registry.insert_new(
+            twin.clone(),
+            model.clone(),
+            Default::default(),
+            Default::default(),
+            RunBounds::default(),
+        );
+        let bounds = RunBounds {
+            t_end: 2.0,
+            ..RunBounds::default()
+        };
+        let overrides = BTreeMap::from([(ParamPath("gain".into()), ParamValue::Real(2.0))]);
+        let inputs = BTreeMap::from([(ParamPath("drive".into()), ParamValue::Bool(true))]);
+        registry
+            .set_bounds(id, bounds.clone())
+            .expect("unadmitted bounds edit");
+        registry
+            .set_params(id, overrides.clone(), inputs.clone())
+            .expect("unadmitted parameter edit");
+        let renamed = ModelRef("AfterRename".into());
+        assert_eq!(registry.rename_model_ref(&twin, &model, &renamed), 1);
+
+        for status in [
+            RunStatus::Queued,
+            RunStatus::Running { t_current: 0.0 },
+            RunStatus::Done { wall_time_ms: 1 },
+            RunStatus::Failed {
+                error: "solver refused".into(),
+                partial: false,
+            },
+            RunStatus::Cancelled,
+        ] {
+            registry.set_status(id, status);
+            let bounds_error = registry
+                .set_bounds(id, RunBounds::default())
+                .expect_err("admitted bounds are immutable");
+            assert!(bounds_error.contains("immutable after run admission"));
+            assert!(
+                registry
+                    .set_params(id, Default::default(), Default::default())
+                    .is_err()
+            );
+            assert_eq!(registry.rename_model_ref(&twin, &renamed, &model), 0);
+            registry
+                .set_bounds(id, bounds.clone())
+                .expect("identical bounds replay");
+            registry
+                .set_params(id, overrides.clone(), inputs.clone())
+                .expect("identical parameter replay");
+            assert!(registry.set_name(id, "Presentation label".into()));
+            let retained = registry.get(id).expect("retained run");
+            assert_eq!(retained.model_ref, renamed);
+            assert_eq!(retained.bounds, bounds);
+            assert_eq!(retained.overrides, overrides);
+            assert_eq!(retained.inputs, inputs);
+        }
+
+        let with_result = registry.insert_new(
+            twin.clone(),
+            model.clone(),
+            Default::default(),
+            Default::default(),
+            RunBounds::default(),
+        );
+        registry.set_result(
+            with_result,
+            RunResult {
+                times: vec![0.0],
+                series: Default::default(),
+                meta: RunMeta {
+                    sample_count: 1,
+                    ..Default::default()
+                },
+            },
+        );
+        assert!(registry.set_bounds(with_result, bounds).is_err());
+        assert!(registry.set_params(with_result, overrides, inputs).is_err());
+        assert_eq!(registry.rename_model_ref(&twin, &model, &renamed), 0);
+        let missing = ExperimentId::new();
+        assert!(registry.set_bounds(missing, RunBounds::default()).is_err());
+        assert!(
+            registry
+                .set_params(missing, Default::default(), Default::default())
+                .is_err()
+        );
+    }
 
     #[test]
     fn registry_reports_explicit_and_group_removals_once() {

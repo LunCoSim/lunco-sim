@@ -134,9 +134,8 @@ pub fn record_create(journal: &JournalResource, exp: &Experiment) {
 }
 
 /// Record a `Delete` for an experiment that was **already** removed from the
-/// registry (so the deletion path keeps its existing counter cleanup). Replay is
-/// idempotent, so the self-referential inverse is harmless — undo-of-delete
-/// (re-create from a snapshot) isn't a headline feature.
+/// registry (so the deletion path keeps its existing counter cleanup). This
+/// removal notification carries no retained snapshot for undo.
 pub fn record_delete(journal: &JournalResource, id: ExperimentId) {
     let op = ExperimentOp::Delete { id };
     record(journal, &op, &op);
@@ -150,34 +149,34 @@ pub fn apply_and_record(
     registry: &mut ExperimentRegistry,
     journal: Option<&JournalResource>,
     op: ExperimentOp,
-) {
-    let inverse = registry.get(op.target()).map(|e| match &op {
+) -> Result<(), String> {
+    let experiment = registry
+        .get(op.target())
+        .ok_or_else(|| format!("experiment {} is not registered", op.target().0))?;
+    let inverse = match &op {
         ExperimentOp::SetName { id, .. } => ExperimentOp::SetName {
             id: *id,
-            name: e.name.clone(),
+            name: experiment.name.clone(),
         },
         ExperimentOp::SetBounds { id, .. } => ExperimentOp::SetBounds {
             id: *id,
-            bounds: e.bounds.clone(),
+            bounds: experiment.bounds.clone(),
         },
         ExperimentOp::SetParams { id, .. } => ExperimentOp::SetParams {
             id: *id,
-            overrides: e.overrides.clone(),
-            inputs: e.inputs.clone(),
+            overrides: experiment.overrides.clone(),
+            inputs: experiment.inputs.clone(),
         },
         // Inverse of a delete is re-creating the snapshot; inverse of a create
         // is a delete (create shouldn't reach here — use `record_create`).
-        ExperimentOp::Delete { .. } => create_op(e),
+        ExperimentOp::Delete { .. } => create_op(experiment),
         ExperimentOp::Create { .. } => ExperimentOp::Delete { id: op.target() },
-    });
-    if let Err(error) = apply_op(registry, &op) {
-        bevy::log::warn!("[experiment-journal] edit rejected: {error}");
-        return;
-    }
+    };
+    apply_op(registry, &op)?;
     if let Some(journal) = journal {
-        let inverse = inverse.unwrap_or_else(|| ExperimentOp::Delete { id: op.target() });
         record(journal, &op, &inverse);
     }
+    Ok(())
 }
 
 /// Apply a transported definition only to its immutable admitted origin.
@@ -236,20 +235,27 @@ fn apply_op(registry: &mut ExperimentRegistry, op: &ExperimentOp) -> Result<(), 
             return Err("experiment creation requires origin admission".into());
         }
         ExperimentOp::SetName { id, name } => {
-            registry.set_name(*id, name.clone());
+            if !registry.set_name(*id, name.clone()) {
+                return Err(format!("experiment {} is not registered", id.0));
+            }
         }
         ExperimentOp::SetBounds { id, bounds } => {
-            registry.set_bounds(*id, bounds.clone());
+            registry.set_bounds(*id, bounds.clone())?;
         }
         ExperimentOp::SetParams {
             id,
             overrides,
             inputs,
         } => {
-            registry.set_params(*id, overrides.clone(), inputs.clone());
+            registry.set_params(*id, overrides.clone(), inputs.clone())?;
         }
         ExperimentOp::Delete { id } => {
-            registry.delete(*id);
+            if !registry.delete(*id) {
+                return Err(format!(
+                    "experiment {} cannot be deleted while uncompleted or unregistered",
+                    id.0
+                ));
+            }
         }
     }
     Ok(())
@@ -301,8 +307,26 @@ mod tests {
             name: "renamed".into(),
         })
         .unwrap();
-        assert!(replay_experiment_op(&mut b, &mut origins, origin, &rename).is_ok());
+        assert!(replay_experiment_op(&mut b, &mut origins, origin.clone(), &rename).is_ok());
         assert_eq!(b.get(id).unwrap().name, "renamed");
+        assert!(replay_experiment_op(&mut b, &mut origins, origin.clone(), &json).is_ok());
+        assert_eq!(b.get(id).unwrap().name, "renamed");
+
+        b.set_status(id, RunStatus::Queued);
+        let rejected = ExperimentOp::SetBounds {
+            id,
+            bounds: RunBounds {
+                t_end: 2.0,
+                ..empty_bounds()
+            },
+        };
+        let edit = serde_json::to_value(&rejected).unwrap();
+        let error = replay_experiment_op(&mut b, &mut origins, origin, &edit)
+            .expect_err("transport receives admission rejection");
+        assert!(error.contains("immutable after run admission"));
+        assert!(apply_and_record(&mut b, None, rejected).is_err());
+        assert_eq!(b.get(id).unwrap().bounds, empty_bounds());
+        assert!(matches!(b.get(id).unwrap().status, RunStatus::Queued));
     }
 
     #[test]

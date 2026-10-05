@@ -102,7 +102,7 @@ impl Plugin for ModelicaRunnerPlugin {
         app.add_observer(cancel_retired_replication_runs);
         app.add_systems(
             Last,
-            forget_removed_experiment_sources
+            cancel_removed_experiment_handles
                 .after(lunco_experiments::ExperimentRegistryMaintenanceSet)
                 .run_if(on_message::<lunco_experiments::ExperimentRemoved>),
         );
@@ -179,7 +179,7 @@ fn cancel_runtime_runs(
     }
 }
 
-fn forget_removed_experiment_sources(
+fn cancel_removed_experiment_handles(
     mut removed: MessageReader<lunco_experiments::ExperimentRemoved>,
     mut pending: ResMut<PendingHandles>,
 ) {

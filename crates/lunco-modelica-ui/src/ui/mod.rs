@@ -203,11 +203,8 @@ fn close_drilled_tabs_on_class_removed(
             );
         }
     }
-    // Identity-preserving rename: tabs / experiments / drafts /
-    // running stepper entities that referenced the old class name
-    // re-bind to the new one. Keeps the user's open canvas / run
-    // history / setup / live simulator intact when they retype a
-    // class header in the text editor.
+    // Rebind tabs, unadmitted definitions, drafts, and live entities to the
+    // edited class name. Admitted batch runs retain their execution identity.
     for (old, new) in to_rename {
         let touched_tabs = tabs.rename_drilled_class(doc, &old, &new);
         let touched_experiments = experiments

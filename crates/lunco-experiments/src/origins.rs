@@ -113,19 +113,13 @@ impl ExperimentOrigins {
                     exp.id.0
                 ));
             }
-            // Replayed definitions never reset retained terminal status/results.
-            let current = registry.get_mut(exp.id).ok_or_else(|| {
-                format!(
-                    "experiment {} disappeared during definition admission",
+            if !current.has_same_execution_definition(&exp) {
+                return Err(format!(
+                    "experiment {} creation conflicts with its registered execution definition",
                     exp.id.0
-                )
-            })?;
-            current.model_ref = exp.model_ref;
-            current.name = exp.name;
-            current.overrides = exp.overrides;
-            current.inputs = exp.inputs;
-            current.bounds = exp.bounds;
-            current.color_hint = exp.color_hint;
+                ));
+            }
+            // An identical Create never rewinds later edits, status, or results.
             return Ok(());
         }
         if self.get(&exp.id).is_some() {
@@ -170,6 +164,25 @@ mod tests {
         origins
             .import(&mut registry, source(1), exp.clone())
             .expect("first admission");
+        let mut conflict = exp.clone();
+        conflict.bounds.t_end = 2.0;
+        let error = origins
+            .import(&mut registry, source(1), conflict.clone())
+            .expect_err("Create cannot edit even an unadmitted row");
+        assert!(error.contains("creation conflicts"));
+        registry.set_result(
+            id,
+            crate::RunResult {
+                times: vec![0.0],
+                series: Default::default(),
+                meta: crate::RunMeta {
+                    sample_count: 1,
+                    ..Default::default()
+                },
+            },
+        );
+        registry.set_name(id, "Retained label".into());
+        registry.get_mut(id).expect("fixture").color_hint = 7;
         registry.set_status(id, crate::RunStatus::Cancelled);
         let error = origins
             .import(&mut registry, source(2), exp.clone())
@@ -183,6 +196,31 @@ mod tests {
         origins
             .import(&mut registry, source(1), exp.clone())
             .expect("same owner definition replay");
+        let retained = registry.get(id).expect("retained");
+        assert_eq!(retained.name, "Retained label");
+        assert_eq!(retained.color_hint, 7);
+        assert_eq!(
+            retained.result.as_ref().expect("retained result").times,
+            vec![0.0]
+        );
+        assert!(origins.import(&mut registry, source(1), conflict).is_err());
+        for field in 0..3 {
+            let mut conflict = exp.clone();
+            match field {
+                0 => conflict.model_ref = ModelRef("OtherPlant".into()),
+                1 => {
+                    conflict
+                        .overrides
+                        .insert(ParamPath("gain".into()), ParamValue::Real(3.0));
+                }
+                _ => {
+                    conflict
+                        .inputs
+                        .insert(ParamPath("drive".into()), ParamValue::Bool(true));
+                }
+            }
+            assert!(origins.import(&mut registry, source(1), conflict).is_err());
+        }
         assert!(matches!(
             registry.get(id).expect("retained").status,
             crate::RunStatus::Cancelled

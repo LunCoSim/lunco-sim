@@ -151,9 +151,9 @@ fn on_run_modelica_solve(
     if let Some(journal) = journal.as_ref() {
         lunco_modelica_core::experiment_journal::record_create(journal, &experiment);
     }
+    experiments.set_status(experiment_id, lunco_experiments::RunStatus::Queued);
     let handle = runner.0.run_fast(&experiment, source_snapshot);
     pending.0.push(PendingRun { handle, origin });
-    experiments.set_status(experiment_id, lunco_experiments::RunStatus::Queued);
 
     Ok(Ack::with_data(
         OpId::new(),

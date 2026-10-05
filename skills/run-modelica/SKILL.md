@@ -372,7 +372,12 @@ grouping never determines ownership. Definition replay under another origin
 rejects before mutation; same-origin replay preserves terminal history. Closing that Twin
 cancels unfinished runs and retires late updates and playback signals; completed
 results stay queryable within the bounded history. Loose-document runs have
-application lifetime. A completion must match its immutable pending-handle origin before registry
+application lifetime. A run's execution definition freezes when its registry
+row becomes `Queued`, before runner admission. Change bounds, parameters, or
+inputs by creating a new run; retained results keep the definition that produced
+them. An identical definition replay preserves later display labels and results,
+and conflicting replay is rejected visibly.
+A completion must match its immutable pending-handle origin before registry
 publication. A completion from an inactive Twin cannot automatically
 select the replacement Twin's plot, and a different pinned experiments document
 cannot receive its automatic plot selection. Registry deletion and bounded

@@ -164,8 +164,13 @@ Registry: `BTreeMap<TwinId, Vec<Experiment>>` retains at most 20 terminal runs p
 `ExperimentOrigins` owns the origin of each registered UUID. Local work records
 `PinnedDocumentRuntimeOwner`; replicated work records the exact connection and
 scene lifetime. Registration and definition replay validate row and origin
-together. A conflicting origin is rejected before mutation; replay under the
-same origin updates definition fields without resetting terminal history.
+together. A conflicting origin or execution definition is rejected before
+mutation. An identical `Create` is a no-op and preserves later presentation
+edits, status, and results. Bounds, overrides, inputs, and class references may
+change only while a row is `Pending` and has no result; API/UI admission marks
+the row `Queued` before dispatching its immutable job. Identical bounds or
+parameter replay remains a no-op in every state. Names and colors are
+presentation metadata and may change independently of execution history.
 
 `PendingRun` captures the origin alongside its handle. Progress, completion,
 failure, and cancellation messages carry that immutable origin, and consumers

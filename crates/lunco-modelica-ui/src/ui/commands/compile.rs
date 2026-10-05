@@ -1319,6 +1319,10 @@ fn dispatch_experiment(
             crate::experiment_journal::record_create(&journal, &exp);
         }
 
+        // Freeze the execution definition before admitting its immutable job.
+        world
+            .resource_mut::<lunco_experiments::ExperimentRegistry>()
+            .set_status(exp_id, lunco_experiments::RunStatus::Queued);
         let handle = runner_res.0.run_fast(&exp, source_snapshot);
         // Store the handle so a draining system can pump updates into
         // registry status.
@@ -1326,14 +1330,6 @@ fn dispatch_experiment(
             .resource_mut::<lunco_modelica_runner::PendingHandles>()
             .0
             .push(lunco_modelica_runner::PendingRun { handle, origin });
-        // Mark the run Queued. The scheduler may start it immediately (then
-        // its first progress update flips it to Running via
-        // drain_pending_handles) or hold it behind the concurrency cap, in
-        // which case it stays Queued until a slot frees — letting the panel
-        // show "N running · M queued".
-        world
-            .resource_mut::<lunco_experiments::ExperimentRegistry>()
-            .set_status(exp_id, lunco_experiments::RunStatus::Queued);
         bevy::log::info!(
             "[dispatch_experiment] dispatched run {:?} '{}' for class '{}'",
             exp_id,
@@ -1716,8 +1712,7 @@ pub fn on_delete_experiment(trigger: On<DeleteExperiment>, mut commands: Command
         let purged: Vec<lunco_experiments::ExperimentId> =
             before.difference(&live).copied().collect();
         // Journal each removal (Delete) so the deletion syncs + persists. Done
-        // after the registry mutation (which keeps its counter cleanup); replay
-        // is idempotent.
+        // after the registry mutation, which keeps its counter cleanup.
         if let Some(journal) = &journal {
             for id in &purged {
                 crate::experiment_journal::record_delete(journal, *id);
@@ -1756,12 +1751,22 @@ pub fn on_rename_experiment(trigger: On<RenameExperiment>, mut commands: Command
         match id {
             Some(id) => {
                 // Journal the rename (SetName) so the edit syncs + persists.
-                crate::experiment_journal::apply_and_record(
+                let result = crate::experiment_journal::apply_and_record(
                     &mut reg,
                     journal.as_ref(),
                     crate::experiment_journal::ExperimentOp::SetName { id, name },
                 );
-                bevy::log::info!("[RenameExperiment] {target} → renamed");
+                drop(reg);
+                match result {
+                    Ok(()) => bevy::log::info!("[RenameExperiment] {target} → renamed"),
+                    Err(message) => {
+                        bevy::log::warn!("[RenameExperiment] {message}");
+                        world.commands().trigger(lunco_core::RuntimeError {
+                            name: "experiment-edit-rejected".to_owned(),
+                            message,
+                        });
+                    }
+                }
             }
             None => bevy::log::warn!("[RenameExperiment] no run with id {target}"),
         }

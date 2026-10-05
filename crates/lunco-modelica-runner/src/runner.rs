@@ -373,8 +373,8 @@ impl ExperimentRunner for ModelicaRunner {
 
         // Enqueue the snapshotted job, then start as many as slots allow.
         // A queued run sits silent (no updates) until a slot frees — its
-        // registry status stays `Pending`, which already reads as "queued"
-        // in the panel.
+        // caller marks its registry row `Queued` before admission and its
+        // first progress update transitions it to `Running`.
         match lock_runner_state(&self.state) {
             Ok(mut s) => s.pending.push_back(QueuedJob {
                 run_id,
