@@ -62,7 +62,7 @@ pub(crate) struct PendingStageProjections {
 
 /// Lifecycle-maintained lookup for the one live ECS projection of a USD path.
 /// Preview copies can share a stage/path, so each key keeps ordered candidates
-/// and queries exclude preview ancestry at read time.
+/// and structural queries exclude preview ancestry at read time.
 #[derive(Resource, Default)]
 pub(crate) struct LiveUsdPrimEntities {
     by_stage: HashMap<AssetId<UsdStageAsset>, HashMap<Arc<str>, Vec<Entity>>>,
@@ -779,28 +779,31 @@ pub(crate) fn apply_transform_edits_live(
             .collect()
     };
     for (path, channels, transform) in transforms {
-        let Some(entity) = find_live_entity(world, id, &path) else {
-            // Named, because the silent version of this is "the edit journalled and
-            // saved but nothing moved": an authored translate for a prim this stage
-            // projects no entity for.
-            debug!("[usd] transform edit {path}: no live entity on this stage");
-            continue;
-        };
-        if channels.translate {
-            seat_authored_translate(world, entity, transform.translation);
+        let entities = world
+            .resource::<LiveUsdPrimEntities>()
+            .by_stage
+            .get(&id)
+            .and_then(|paths| paths.get(path.as_str()))
+            .cloned()
+            .unwrap_or_default();
+        if entities.is_empty() {
+            debug!("[usd] transform edit {path}: no projected entity on this stage");
         }
-        let preview_only =
-            channels.scale && lunco_usd_bevy_scene::is_preview_only_entity(world, entity);
-        if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
-            if channels.rotate {
-                tf.rotation = transform.rotation;
+        for entity in entities {
+            if channels.translate {
+                seat_authored_translate(world, entity, transform.translation);
             }
-            // Scale is an authoring-preview capability. Applying it to a live
-            // simulation entity would change render scale without updating its
-            // Avian collider/body contract, so the preview ownership marker is
-            // the explicit admission boundary.
-            if preview_only {
-                tf.scale = transform.scale;
+            let preview_only =
+                channels.scale && lunco_usd_bevy_scene::is_preview_only_entity(world, entity);
+            if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
+                if channels.rotate {
+                    tf.rotation = transform.rotation;
+                }
+                // Scale is admitted only by preview ownership; changing a live
+                // body's render scale requires its physics topology to change.
+                if preview_only {
+                    tf.scale = transform.scale;
+                }
             }
         }
     }
@@ -1626,8 +1629,32 @@ mod tests {
             .non_send_mut::<CanonicalStages>()
             .drain_all_changes();
 
+        let live_scale = Vec3::new(1.0, 2.0, 3.0);
+        let live = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: handle.clone(),
+                    path: "/World/Panel".into(),
+                },
+                Transform::from_scale(live_scale),
+                avian3d::prelude::RigidBody::Dynamic,
+            ))
+            .id();
         let preview_root = app.world_mut().spawn(UsdPreviewOnly).id();
         let panel = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: handle.clone(),
+                    path: "/World/Panel".into(),
+                },
+                Transform::from_scale(Vec3::ONE),
+                ChildOf(preview_root),
+            ))
+            .id();
+
+        let second_preview = app
             .world_mut()
             .spawn((
                 UsdPrimPath {
@@ -1647,6 +1674,12 @@ mod tests {
                 .projector()
                 .author_scale(&SdfPath::new("/World/Panel").unwrap(), [4.0, 5.0, 6.0])
                 .expect("preview scale authors");
+            stages
+                .get(id)
+                .unwrap()
+                .projector()
+                .author_translate(&SdfPath::new("/World/Panel").unwrap(), [7.0, 8.0, 9.0])
+                .expect("shared translation authors");
         }
         project_stage_changes(app.world_mut());
 
@@ -1655,6 +1688,22 @@ mod tests {
             Vec3::new(4.0, 5.0, 6.0),
             "a composed SetScale must reach the already-live USD preview entity"
         );
+        assert_eq!(
+            app.world().get::<Transform>(second_preview).unwrap().scale,
+            Vec3::new(4.0, 5.0, 6.0)
+        );
+        assert_eq!(
+            app.world().get::<Transform>(live).unwrap().scale,
+            live_scale,
+            "a composed scale edit must preserve the live body's physics scale"
+        );
+        for entity in [live, panel, second_preview] {
+            assert_eq!(
+                app.world().get::<Transform>(entity).unwrap().translation,
+                Vec3::new(7.0, 8.0, 9.0),
+                "shared authored translation reaches every stage/path projection"
+            );
+        }
     }
 
     /// A descendant structural edit may resync an existing ancestor in the

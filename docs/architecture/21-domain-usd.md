@@ -1047,7 +1047,11 @@ and `lunco-usd-prim-tree-ui` owns the reusable prim tree.
   targets use the same transaction boundary for canonical translation,
   rotation, and unitless scale through `UsdOp::SetScale`; live simulation
   targets keep scale unavailable until an authored physics topology/solver
-  contract exists. The USD preview stores the exact egui image rectangle
+  contract exists. The canonical-stage transform sink updates every indexed
+  projection of the same stage and prim path, including preview duplicates;
+  scale updates remain restricted to `UsdPreviewOnly` ancestry. Structural
+  reconciliation continues to select the mounted simulation entity.
+  The USD preview stores the exact egui image rectangle
   measured by the viewport and shares that rectangle with preview ray
   selection, render-target sizing, and gizmo picking; toolbar coordinates are
   not treated as scene coordinates. A primary drag captured by a gizmo is

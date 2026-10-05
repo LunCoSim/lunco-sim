@@ -70,6 +70,9 @@ changed path. The canonical stage records a weak identity for each merged
 and comparing its full layer closure. A reloaded recipe has a new identity and
 must merge its current bytes before authoring the reference. Live instance
 handles own asset lifetime; the index and weak recipe cache are derived state.
+Transform edits update every indexed entity sharing that stage/path, including
+preview copies. Scale is applied only beneath `UsdPreviewOnly`; a live body's
+scale remains unchanged. Structural reconciliation still excludes previews.
 For a document-backed runtime reference spawn, the authored document keeps the
 reference arc. The live canonical stage receives only the instance root while
 an instance-scoped view over the shared immutable prepared snapshot projects
