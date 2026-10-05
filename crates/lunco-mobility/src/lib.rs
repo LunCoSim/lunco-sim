@@ -1671,10 +1671,9 @@ fn apply_wheel_suspension(
 
 /// Keep each raycast wheel's avian `Position` in the grid-ABSOLUTE physics frame
 /// so its suspension `RayCaster` originates at the true chassis-up strut top —
-/// not at the wheel's big_space RENDER-frame `GlobalTransform`. The caster's
-/// `Rotation` is deliberately held at identity because its `NEG_Y` direction is
-/// a world-down support probe; the changing local origin supplies the authored
-/// strut-top offset.
+/// not at the wheel's big_space RENDER-frame `GlobalTransform`. The caster
+/// follows the solved hub frame: origin, suspension travel, contact lever and
+/// wheel presentation must describe the same strut line on tilted vehicles.
 ///
 /// avian's `update_ray_caster_positions` derives the ray origin from an entity's
 /// own `Position`/`Rotation` when present, falling back to its `GlobalTransform`
@@ -1720,14 +1719,9 @@ fn sync_raycast_wheel_physics_pose(
                 mount.local.translation.as_dvec3(),
                 mount.local.rotation.as_dquat() * wheel.heading_rotation,
             );
-            // The raycaster's local origin is the authored strut-top offset and
-            // Avian computes `Position + Rotation * origin`. Keep that offset in
-            // the chassis-up direction, but keep the caster rotation identity:
-            // `Dir3::NEG_Y` is the generic world-down support probe. Rotating the
-            // caster by wheel heading/vehicle attitude turns a ground probe
-            // sideways on a ramp and is especially wrong when the rover rolls.
-            let ray_origin =
-                hub_rot.0 * DVec3::Y * strut_offset(suspension.rest_length, wheel.wheel_radius);
+            // Avian transforms this local origin and NEG_Y direction by the
+            // same solved hub rotation used by raycast_contact_point below.
+            let ray_origin = DVec3::Y * strut_offset(suspension.rest_length, wheel.wheel_radius);
             // A NaN rotation or origin poisons the cast and avian asserts on it.
             // avian's `raycast` asserts `origin.is_finite()` and takes the whole
             // app down with it. Do not leave the wheel on an old pose and let the
@@ -1766,8 +1760,8 @@ fn sync_raycast_wheel_physics_pose(
             if raycaster.origin != ray_origin {
                 raycaster.origin = ray_origin;
             }
-            if wrot.0 != DQuat::IDENTITY {
-                wrot.0 = DQuat::IDENTITY;
+            if wrot.0 != hub_rot.0 {
+                wrot.0 = hub_rot.0;
             }
         }
     }
@@ -2392,7 +2386,7 @@ mod wheel_raycast_parallel_tests {
             authored_mount.translation.as_dvec3(),
             authored_mount.rotation.as_dquat() * fixed_heading,
         );
-        let expected_ray_origin = expected_rotation.0 * DVec3::Y * strut_offset(0.8, 0.35);
+        let expected_ray_origin = DVec3::Y * strut_offset(0.8, 0.35);
 
         app.world_mut().run_schedule(FixedPostUpdate);
 
@@ -2406,7 +2400,7 @@ mod wheel_raycast_parallel_tests {
         );
         assert_eq!(
             app.world().get::<Rotation>(wheel).unwrap().0,
-            DQuat::IDENTITY
+            expected_rotation.0
         );
         assert_eq!(
             app.world().get::<Transform>(wheel).unwrap().rotation,
@@ -2420,7 +2414,24 @@ mod wheel_raycast_parallel_tests {
             authored_mount.rotation.as_dquat() * render_sample.as_dquat(),
         );
         let render_ray_origin = render_rotation.0 * DVec3::Y * strut_offset(0.8, 0.35);
-        assert_ne!(render_ray_origin, expected_ray_origin);
+        assert_ne!(render_ray_origin, expected_rotation.0 * expected_ray_origin);
+        // The native cast and the suspension force must use the same contact
+        // point despite vehicle tilt, mount rotation and steering heading.
+        let distance = 0.63;
+        let cast_contact = expected_position.0 + expected_rotation.0 * expected_ray_origin
+            - expected_rotation.0 * DVec3::Y * distance;
+        assert!(
+            (cast_contact
+                - raycast_contact_point(
+                    expected_position.0,
+                    expected_rotation.0,
+                    0.8,
+                    0.35,
+                    distance
+                ))
+            .length()
+                < 1.0e-12
+        );
     }
 
     #[test]
