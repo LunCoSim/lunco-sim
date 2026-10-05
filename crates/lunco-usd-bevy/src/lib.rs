@@ -564,6 +564,7 @@ fn instantiate_usd_prim(
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
     asset_server: &AssetServer,
+    twin_roots: Option<&lunco_assets_core::TwinRoots>,
     meshes: &mut Assets<Mesh>,
     quality: lunco_render::RenderQualityProfile,
     live_child_keys: &mut std::collections::HashSet<(Entity, AssetId<UsdStageAsset>, String)>,
@@ -591,6 +592,7 @@ fn instantiate_usd_prim(
         preview_only,
         commands,
         asset_server,
+        twin_roots,
         meshes,
         quality,
         stage_generation,
@@ -617,6 +619,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
     preview_only: bool,
     commands: &mut Commands,
     asset_server: &AssetServer,
+    twin_roots: Option<&lunco_assets_core::TwinRoots>,
     meshes: &mut Assets<Mesh>,
     quality: lunco_render::RenderQualityProfile,
     stage_generation: u64,
@@ -708,9 +711,25 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         //    (the root carries `SkipContentStamp` → authoritative id). A stage
         //    with no stable source path receives no content provenance and
         //    therefore no derived identity.
-        let source = asset_server
-            .get_path(prim_path.stage_handle.id())
-            .map(|source| source.path().to_string_lossy().into_owned());
+        let source = if preview_only || inherited_member.is_some() {
+            None
+        } else {
+            match asset_server.get_path(prim_path.stage_handle.id()) {
+                Some(path) => match lunco_assets_core::stable_source_path(&path, twin_roots) {
+                    Ok(source) => Some(source),
+                    Err(error) => {
+                        fail_usd_projection(
+                            entity,
+                            format!("USD source identity is unavailable: {error}"),
+                            pending_children,
+                            commands,
+                        );
+                        return;
+                    }
+                },
+                None => None,
+            }
+        };
         if let Some(provenance) = usd_projection_provenance(
             preview_only,
             inherited_member.is_some(),
@@ -1946,6 +1965,7 @@ fn any_pending_usd_meshes(q: Query<(), With<PendingUsdMesh>>) -> bool {
 
 #[derive(SystemParam)]
 struct UsdVisualProjectionState<'w, 's> {
+    twin_roots: Option<Res<'w, lunco_assets_core::TwinRoots>>,
     newly_queued: Query<
         'w,
         's,
@@ -2124,6 +2144,7 @@ fn process_queued_usd_visuals(
             &stages,
             &canonical,
             &asset_server,
+            visual_state.twin_roots.as_deref(),
             &mut meshes,
             requested_profile,
             &mut visual_state.child_keys,

@@ -10056,6 +10056,7 @@ dependencies = [
 name = "lunco-usd-bevy"
 version = "0.1.0"
 dependencies = [
+ "lunco-assets-core",
  "bevy",
  "big_space",
  "lunco-core",

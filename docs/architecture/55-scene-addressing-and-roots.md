@@ -117,14 +117,33 @@ pub fn root_for_file(file: &Path) -> PathBuf   // nearest twin.toml ancestor, el
 Implemented. The services `load_startup_scene` and the interactive open path both use this
 resolver; neither performs its own ancestor walk.
 
-### 3. Identity is `(assigned_authority, rel)`
+### 3. Mount addresses and stable source identity
 
-`TwinRoots` assigns a runtime authority from the authored Twin name (or folder
-name). If another open root requests the same authority, registration allocates
-the next deterministic suffix (`name-2`, `name-3`, …) and returns it; callers
-must use that returned authority. Reopening the same root is idempotent.
-The registry never repoints an existing authority, so a live `twin://` read
-cannot change roots underneath it.
+`TwinRoots` owns both the load authority for one mount lifetime and its stable
+logical source name. Simultaneous roots with the same requested logical name
+are disambiguated as `name-2`, `name-3`, … . Repeated admission of the same live
+root/name is idempotent. Unmount removes the root and composed overlays; a
+reopened folder receives a new load authority even when its logical name is
+unchanged. No retired load authority is rebound, so Bevy's same-path asset
+cache and late readers cannot supply a replacement Twin with outgoing bytes.
+
+Callers must use the authority returned by registration for `twin://` loads,
+document coordinates, overlays, relative dependencies, and Rhai imports.
+`lunco_assets_core::stable_source_path(path, roots)` converts a Bevy `AssetPath`
+to the stable, scheme-stripped source used for USD content provenance.
+Non-Twin sources require no registry; Twin sources require the supplied
+`TwinRoots` owner. Retired mounts keep
+only authority-to-logical-name strings for that conversion; no roots, bytes,
+or handles remain. An unknown Twin authority is an error, never a raw-name
+identity fallback.
+
+Scenario manifests export the logical source name; each peer resolves it to
+its own current mount authority. Different local mount histories therefore
+keep matching content identities. `logical_name` performs that export and
+`mounted_name_for_logical` lets a downloaded scenario reuse an existing local
+root. These conversions belong to the asset owner. Load addresses and script
+import registry keys retain their mount lifetime instead of being normalized
+to a reusable logical name.
 
 ### 4. One mount path, always doc-first
 
@@ -176,7 +195,7 @@ call `OpenFile`, which is already API-accessible. Still no new commands.
 ## Current implementation invariants
 
 - Root discovery is owned by `lunco_twin::root_for_file`.
-- `TwinRoots` returns the assigned authority and never repoints a live name.
+- `TwinRoots` returns the mount authority and never rebinds it after retirement.
 - Open flows register the root, mount the document overlay, and only then load
   the `twin://` scene.
 - Filesystem scene paths are canonicalized through `lunco-storage` before root

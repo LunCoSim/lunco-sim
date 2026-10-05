@@ -72,7 +72,8 @@ pub use lunco_source::{
 };
 pub use scheme_registry::{SchemeRegistry, SchemeRegistryError};
 pub use twin_source::{
-    TWIN_SCHEME, TwinRoots, TwinRootsError, parse_twin_uri, split_twin_rel, twin_uri,
+    TWIN_SCHEME, TwinRoots, TwinRootsError, parse_twin_uri, split_twin_rel, stable_source_path,
+    twin_uri,
 };
 
 /// Explicit native asset-library root override.

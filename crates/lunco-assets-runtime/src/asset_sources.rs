@@ -33,7 +33,8 @@ pub struct TwinRootsPlugin;
 pub struct TwinAssetMounted {
     /// Workspace identity of the mounted Twin.
     pub twin: lunco_workspace::TwinId,
-    /// Exact source authority assigned by [`TwinRoots`].
+    /// Exact mount-local source authority assigned by [`TwinRoots`]. Consumers
+    /// use it for all loads; it is distinct from the stable logical source name.
     pub name: String,
 }
 
@@ -113,9 +114,9 @@ fn unregister_twin_root(
 /// or downloaded copy through the same logical address.
 ///
 /// A **downloaded scenario is just a Twin root** over its cache directory, so it
-/// needs no scheme of its own: one `twin://<name>/<rel>` names the scene on every
-/// peer regardless of where that peer's bytes live. That is what keeps
-/// `Provenance::Content`-derived ids identical across host and client.
+/// needs no scheme of its own. Each peer uses its local mount authority for
+/// loading and the asset owner's stable logical source for content provenance.
+/// Mount histories cannot change `Provenance::Content`-derived ids.
 ///
 /// Returns the [`TwinRoots`] handle (already inserted as a resource) for callers
 /// that want to pre-register a root before the first scene load.
@@ -134,7 +135,7 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
         lunco_asset_source(&assets_dir),
     );
 
-    // `twin://` — a named root, keyed by Twin name: an open Twin's directory, or a
+    // `twin://` — a root keyed by mount authority: an open Twin's directory, or a
     // downloaded scenario's cache dir. Registered on EVERY platform; the reader
     // goes through `lunco_storage`, so on web it reads the OPFS tree.
     let twin_roots = TwinRoots::default();

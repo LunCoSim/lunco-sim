@@ -1255,8 +1255,8 @@ fn collect_scenario_input(
 
     // 5. Two entry-scene forms:
     //    - `twin_scene` = the Twin-relative path (raw `default_scene`), so a
-    //      client holding the Twin locally loads `twin://<name>/<twin_scene>` —
-    //      the *same asset path the host loaded* → matching per-prim gids.
+    //      client holding the Twin locally loads through its own mount authority
+    //      with the same logical source → matching per-prim gids.
     //    - `default_scene` = re-rooted to the manifest root, so a client WITHOUT
     //      a local checkout resolves it against the cache dir mounted as that
     //      Twin's root.
@@ -1394,10 +1394,27 @@ pub(crate) struct PendingScenarioManifest {
 /// (a newer scenario supersedes a build still running for the previous one).
 fn spawn_manifest_build(
     twin: &Twin,
+    roots: Option<&lunco_assets_core::TwinRoots>,
     journal_head: Option<lunco_twin_journal::EntryId>,
     pending: &mut PendingScenarioManifest,
 ) {
-    let Some(input) = collect_scenario_input(twin, journal_head) else {
+    let Some(roots) = roots else {
+        warn!("[net] cannot build a scenario manifest without the Twin asset registry");
+        pending.task = None;
+        return;
+    };
+    let logical_name = match roots
+        .register_twin(twin)
+        .and_then(|authority| roots.logical_name(&authority))
+    {
+        Ok(name) => name,
+        Err(error) => {
+            warn!("[net] cannot admit scenario source identity: {error}");
+            pending.task = None;
+            return;
+        }
+    };
+    let Some(mut input) = collect_scenario_input(twin, journal_head) else {
         warn!(
             "[net] cannot build a scenario manifest for {}: a twin.toml UUID is required",
             twin.root.display()
@@ -1405,6 +1422,7 @@ fn spawn_manifest_build(
         pending.task = None;
         return;
     };
+    input.name = logical_name;
     let pool = AsyncComputeTaskPool::get();
     pending.task = Some(pool.spawn(async move { build_manifest_from_input(input) }));
 }
@@ -1422,6 +1440,7 @@ fn journal_head(journal: &Option<Res<JournalResource>>) -> Option<lunco_twin_jou
 /// `AsyncComputeTaskPool` is guaranteed initialized by then.
 fn spawn_initial_scenario_manifest(
     workspace: Option<Res<WorkspaceResource>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     journal: Option<Res<JournalResource>>,
     mut pending: ResMut<PendingScenarioManifest>,
 ) {
@@ -1434,7 +1453,7 @@ fn spawn_initial_scenario_manifest(
             "[net] Host started with active twin, building scenario manifest for {:?}",
             twin.root
         );
-        spawn_manifest_build(twin, journal_head(&journal), &mut pending);
+        spawn_manifest_build(twin, roots.as_deref(), journal_head(&journal), &mut pending);
     }
 }
 
@@ -1487,6 +1506,7 @@ fn drive_scenario_manifest(
 fn on_twin_added_host(
     trigger: On<TwinAdded>,
     workspace: Res<WorkspaceResource>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     journal: Option<Res<JournalResource>>,
     mut pending: ResMut<PendingScenarioManifest>,
 ) {
@@ -1495,7 +1515,7 @@ fn on_twin_added_host(
             "[net] Twin added; building scenario manifest for {:?}",
             twin.root
         );
-        spawn_manifest_build(twin, journal_head(&journal), &mut pending);
+        spawn_manifest_build(twin, roots.as_deref(), journal_head(&journal), &mut pending);
     }
 }
 
@@ -1512,6 +1532,7 @@ fn ingest_asset_offers(
     role: Res<lunco_core_session::NetworkRole>,
     mut offers: ResMut<lunco_networking_sync::scenario_sync::PendingAssetOffers>,
     workspace: Option<Res<WorkspaceResource>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     journal: Option<Res<JournalResource>>,
     mut pending: ResMut<PendingScenarioManifest>,
 ) {
@@ -1566,7 +1587,7 @@ fn ingest_asset_offers(
     // Rebuild + re-advertise once for the batch — the manifest revision bump drives
     // the existing broadcast, so the import reaches every peer.
     if wrote {
-        spawn_manifest_build(twin, journal_head(&journal), &mut pending);
+        spawn_manifest_build(twin, roots.as_deref(), journal_head(&journal), &mut pending);
     }
 }
 
@@ -1579,6 +1600,7 @@ fn service_manifest_rebuild_request(
     role: Res<lunco_core_session::NetworkRole>,
     mut req: ResMut<lunco_networking_sync::sync::RequestManifestRebuild>,
     workspace: Option<Res<WorkspaceResource>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     journal: Option<Res<JournalResource>>,
     mut pending: ResMut<PendingScenarioManifest>,
 ) {
@@ -1592,7 +1614,7 @@ fn service_manifest_rebuild_request(
     else {
         return;
     };
-    spawn_manifest_build(twin, journal_head(&journal), &mut pending);
+    spawn_manifest_build(twin, roots.as_deref(), journal_head(&journal), &mut pending);
 }
 
 /// Host (Phase 3): poll finished off-thread read jobs and stream their chunks to

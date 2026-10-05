@@ -957,12 +957,10 @@ pub fn update_scenario_download_status(
 /// its files (e.g. the entry scene).
 ///
 /// A downloaded scenario **is** a Twin whose root happens to be its cache
-/// directory, so it needs no scheme of its own: the returned
-/// `twin://<name>/<rel>` is byte-identical to the URI the HOST loads for the same
-/// scene. That identity is load-bearing — `Provenance::Content` hashes
-/// `namespace:source:path`, so addressing the same scene two ways (the host by
-/// twin, a web client by a cache-only scheme) gave every prim a different
-/// `GlobalEntityId` per peer and broke possession + client prediction.
+/// directory, so it uses the same source scheme. The returned load authority is
+/// local to this mount lifetime; the asset owner converts it to the stable
+/// logical `name` for content provenance. Host and client may have different
+/// mount histories while deriving identical `GlobalEntityId`s.
 ///
 /// A twin already open locally keeps its own root: same identity, but a real
 /// checkout is the better source for the bytes, and re-pointing it at a
@@ -973,32 +971,26 @@ pub fn update_scenario_download_status(
 /// a web client for the case that motivated it (a peer with no local checkout).
 ///
 /// Verify by hand until that exists, and treat it as load-bearing: the failure
-/// mode is SILENT. A wrong `name` here, or a root registered after the scene
-/// loads, yields a different asset path than the host used — and since
-/// `Provenance::Content` hashes `namespace:source:path`, every prim then derives a
-/// different `GlobalEntityId` on that peer. Nothing panics and the scene renders
-/// fine; possession and client-side prediction simply never bind, which looks like
-/// a netcode bug far from here. Check the client logs agree with the host on
-/// `twin://<name>/<rel>` for the entry scene, then confirm possession binds.
+/// mode is SILENT. A wrong logical `name` produces different content provenance
+/// and possession/client prediction cannot bind. Check that both peers agree
+/// on the canonical logical source, then confirm possession binds.
 pub fn mount_scenario_twin(
     twins: &lunco_assets_core::twin_source::TwinRoots,
     scenario_id: &[u8; 16],
     name: &str,
     rel: &str,
 ) -> Result<String, lunco_assets_core::twin_source::TwinRootsError> {
-    // `TwinRoots::register` is `#[must_use]`: it returns the name actually
-    // assigned, which may be suffixed (`name-2`, …) if `name` already maps to a
-    // different root. The `root_of` guard means we only call `register` when
-    // `name` is free, so in this path the returned name equals `name` — but the
-    // URI is still built from the returned value, not the requested one, so the
-    // contract holds even if the guard's invariant ever changes. Getting this
-    // wrong resolves the load against the wrong root and every prim on this peer
-    // derives a different `GlobalEntityId` (possession / client prediction then
-    // silently never bind).
-    let assigned = match twins.root_of(name)? {
-        Some(_) => name.to_string(),
+    let assigned = match twins.mounted_name_for_logical(name)? {
+        Some(assigned) => assigned,
         None => twins.register(name, scenario_cache_root(scenario_id))?,
     };
+    let logical = twins.logical_name(&assigned)?;
+    if logical != name {
+        return Err(lunco_assets_core::TwinRootsError::LogicalIdentityMismatch {
+            requested: name.to_string(),
+            assigned: logical,
+        });
+    }
     Ok(lunco_assets_core::twin_uri(&assigned, rel))
 }
 

@@ -1563,8 +1563,8 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                                 .clicked()
                             {
                                 if let Some(scene) = entry.default_scene.clone() {
-                                    // Mounts the cache dir as this twin's root and yields the
-                                    // same `twin://<name>/<rel>` the host uses for the scene.
+                                    // The cache root gets a local load authority and
+                                    // retains the host's stable logical source identity.
                                     let Some(twins) = ctx
                                         .resource::<lunco_assets_core::twin_source::TwinRoots>()
                                         .cloned()

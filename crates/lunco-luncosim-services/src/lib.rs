@@ -121,8 +121,8 @@ fn load_ready_scenario(
     role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     downloads: Res<lunco_networking_sync::scenario_sync::AssetDownloads>,
-    // Twin roots: a downloaded scenario is mounted here as a root over its cache
-    // dir, so it loads under the SAME `twin://<name>/<rel>` the host uses.
+    // Downloaded scenarios use the same logical source identity as the host,
+    // with a load authority assigned to this peer's mount lifetime.
     twins: Res<lunco_assets_core::twin_source::TwinRoots>,
     // Last scenario revision we triggered a load for — reload only on change.
     mut last_loaded: Local<Option<[u8; 32]>>,
@@ -140,23 +140,9 @@ fn load_ready_scenario(
     if *last_loaded == Some(m.revision) || !downloads.all_cached(m) {
         return;
     }
-    // Mounting registers the scenario's cache dir as this twin's root (unless the
-    // twin is already open locally, which keeps its own). Either way the URI is
-    // the host's, so a client that already booted this scene re-triggers the SAME
-    // asset path and `LoadScene` no-ops instead of remounting.
-    //
-    // Verified on a native host/client pair (`scripts/run_host_client.sh`): both
-    // peers mount `twin://luncosim/sandbox_scene.usda`, and this load lands ~1 s
-    // after the client's own boot load — INSIDE the spawn window, so the no-op
-    // depends on `LoadScene`'s `SceneLoadInFlight` arm, not on its
-    // already-spawned-prims arm.
-    //
-    // TODO(verify-web-client): the case this addressing exists for — a peer with
-    // NO local checkout, resolving through the mounted cache dir — is still
-    // unverified. A native pair takes the "twin already open locally" branch, so
-    // it exercises URI agreement but never the cache-root mount. It fails
-    // silently: a wrong root gives that peer its own `GlobalEntityId`s, so
-    // possession and client prediction never bind while the scene still renders.
+    // Reuse the editable local mount when present, otherwise mount the cache.
+    // Repeated admission within this lifetime returns the same load authority,
+    // so LoadScene can recognize an already active or loading scene.
     let uri = match lunco_networking_sync::scenario_sync::mount_scenario_twin(
         &twins,
         &m.scenario_id,

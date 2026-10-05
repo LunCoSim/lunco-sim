@@ -88,10 +88,10 @@ Both `twin://` readers implement that fallback — the `AssetReader` and the
 `SchemeRegistry` handler — because they must agree: a file the asset server can
 load but scenario-sync cannot see is worse than one neither can.
 
-A **downloaded scenario is just a Twin root** over its cache directory, so it
-needs no scheme of its own: one `twin://<name>/<rel>` names the scene on every
-peer regardless of where that peer's bytes live. That is what keeps
-`Provenance::Content`-derived ids identical across host and client.
+A **downloaded scenario is a Twin root** over its cache directory. Its load
+authority is local to the mount, while content provenance uses the shared
+logical source identity. The canonical ownership and conversion contract is
+[`Mount addresses and stable source identity`](55-scene-addressing-and-roots.md#3-mount-addresses-and-stable-source-identity).
 
 ## Choosing a form when you author
 
@@ -103,7 +103,7 @@ including outside the engine repo entirely. What matters is not where the scene 
 | Target | Author it as |
 |---|---|
 | Engine asset library (`assets/`) | `@lunco://vessels/rovers/six_wheel_rover.usda@` |
-| A file co-located with the scene | `@twin://<scene_dir_name>/<file>@` |
+| A file co-located with the scene | `@<relative-path>@` |
 | A scene inside `assets/` referencing `assets/` | a plain path from the assets root, e.g. `@scenarios/foo.rhai@` |
 | ❌ A relative escape | ~~`@../../vessels/…@`~~ |
 

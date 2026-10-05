@@ -708,6 +708,7 @@ mod restart_overlay_tests {
         let mut registry = DocumentRegistry::<UsdDocument>::default();
         let mut backed = lunco_usd_bevy_twin::DocBackedTwinScenes::default();
         let twins = lunco_assets_core::twin_source::TwinRoots::default();
+        twins.register("fixture", std::env::temp_dir()).unwrap();
         let mut ids = Vec::<DocumentId>::new();
         for rel in ["scene.usda", "engine.usda", "unrelated.usda"] {
             let (doc, _) = registry.open_file(

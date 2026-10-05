@@ -1075,7 +1075,7 @@ and `lunco-usd-prim-tree-ui` owns the reusable prim tree.
 |---|---|---|
 | (none) | Layer-relative refs **inside a Twin** (co-located terrain, textures) | the layer's own source |
 | `lunco://` | **Engine asset library** (rovers, parts, vessels, downloaded binaries) — location-independent ref usable from external Twins | `assets/...`, then `<cache>/...` |
-| `twin://<name>/...` | **Internal, runtime-only.** The currently-open Twin's root, keyed by Twin name. Reads an external Twin scene + its co-located assets (fs on native, http on web). Never authored into a file. | the opened Twin folder |
+| `twin://<mount>/...` | **Internal, runtime-only.** The authority assigned to one Twin mount lifetime. Never authored into a file. | the opened Twin folder or downloaded scenario through `lunco-storage` |
 
 The `lunco://` scheme is the engine library scheme. Collaboration protocols
 must use their own explicitly defined scheme.
@@ -1089,11 +1089,12 @@ must use their own explicitly defined scheme.
 > [`56-asset-resolution-and-cache.md`](56-asset-resolution-and-cache.md).
 >
 > **External Twins:** a scene living outside the project (its own repo) is opened
-> via File → Open Folder. The Twin-open flow registers the folder under
-> `twin://<name>` (name from `twin.toml`) and loads `twin://<name>/<default_scene>`.
+> via File → Open Folder. The Twin-open flow registers the folder and loads
+> `twin://<assigned-mount>/<default_scene>`.
 > The scene authors only **relative** paths (co-located terrain glb) and
 > `lunco://` library refs — so the `.usda` is portable and identity
-> (`Provenance`) is the stable `twin://<name>/<rel>`, not a machine path.
+> (`Provenance`) comes from the asset owner's stable logical source conversion.
+> See the [mount identity contract](55-scene-addressing-and-roots.md#3-mount-addresses-and-stable-source-identity).
 
 ### Coordinate Systems
 

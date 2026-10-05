@@ -155,7 +155,9 @@ pub struct ScenarioManifestMsg {
     /// Git-style Merkle root of the asset list — `scenario_revision()`. The
     /// client diffs this against its cached revision to short-circuit a re-fetch.
     pub revision: [u8; 32],
-    /// Human-readable scenario name (from `twin.toml` `name`). For UI + debug.
+    /// Stable logical source authority assigned by the asset owner, normally
+    /// the `twin.toml` name. Simultaneous duplicate names are disambiguated.
+    /// Mount-local load authorities must not cross this wire boundary.
     pub name: String,
     /// Optional entry-point scene path relative to the scenario root (from
     /// `[usd] default_scene`). `None` = no USD scene to auto-load. No
@@ -197,12 +199,11 @@ pub struct ScenarioManifestMsg {
     /// path (re-rooted at the reference closure's common ancestor, e.g.
     /// `scenes/luncosim/sandbox_scene.usda`).
     ///
-    /// EVERY client loads `twin://<name>/<twin_scene>` — the **same asset path
-    /// the host loaded** — so every prim derives the **same `GlobalEntityId`** on
-    /// both peers (identity is `hash(namespace:source:path)`; `source` is the
-    /// asset path). A client without a local checkout mounts the downloaded
-    /// scenario's cache dir as that Twin's root (`mount_scenario_twin`), so the
-    /// URI is identical and only the bytes' location differs.
+    /// Each client mounts the logical `name` and loads through its assigned
+    /// local authority. The asset owner normalizes that load address to the
+    /// same content-provenance source on every peer, independent of local mount
+    /// history. A client without a checkout uses the downloaded cache as its
+    /// root (`mount_scenario_twin`).
 
     ///
     /// Appended last (bincode positional). `None` mirrors `default_scene`.

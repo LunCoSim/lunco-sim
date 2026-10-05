@@ -86,7 +86,7 @@ the shared cache after authored assets. The runtime root is selected by
 `lunco_assets_core::assets_dir_abs()` from the executable/package ancestry before
 the current-directory ancestry; the complete order is built by
 `lunco_assets_core::library_roots()` (`crates/lunco-assets-core/src/lunco_source.rs`).
-`twin://<name>/<rel>` is the same shape one level down: the Twin's authored
+`twin://<assigned-mount>/<rel>` is the same shape one level down: the Twin's authored
 root, its `<twin>/.cache`, then the global cache. This lets Twins reuse a
 global downloaded product without putting a machine path into USD.
 Authored bytes always win over materialised ones. Schemes are registered in
@@ -95,7 +95,12 @@ second texture scheme. Use the existing logical `lunco://` or `twin://` identity
 for every delivered artifact. Canonical URI construction, separator normalization,
 and traversal validation come from the dependency-free `lunco-assets-path` crate;
 source roots and bytes are admitted by `lunco-assets-runtime` using the identity
-and cache contracts from `lunco-assets-core`.
+and cache contracts from `lunco-assets-core`. For reopened Twins, use the
+authority returned by the current mount, never reconstruct it from the
+manifest name or retain an outgoing address. Follow the canonical
+[mount identity contract](../../docs/architecture/55-scene-addressing-and-roots.md#3-mount-addresses-and-stable-source-identity)
+for provenance and scenario synchronization. Verify replacement content through
+the production app; resolver seam tests alone do not prove Bevy cache behavior.
 
 Anything the cache fallback can serve is DECLARED in an `Assets.toml` and
 downloaded only on request (Settings ▸ Downloadable data, the Twin Browser

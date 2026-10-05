@@ -15,16 +15,15 @@
 //! reading through [`lunco_storage`] so the SAME scheme serves native and web.
 //!
 //! A root is an open Twin's directory OR a downloaded scenario's cache directory.
-//! One scheme for both is what keeps a scene's asset path identical on every peer,
-//! and therefore its `Provenance::Content`-derived `GlobalEntityId` identical too.
+//! Both use the same stable logical source identity on every peer.
 //!
-//! ## Path shape — `twin://<name>/<relative>`
-//! The first path segment is the **Twin name** (from its `twin.toml`); the rest
-//! is relative to that Twin's root. This keys multiple open Twins independently
-//! (no single-mutable-root aliasing) and makes the asset *identity*
-//! (`Provenance` source) a stable, machine-independent `twin://moonbase/scene.usda`
-//! — identical on every machine, unique per Twin. `twin://` is **internal**:
-//! it is never authored into a USD/`twin.toml` file.
+//! ## Path shape — `twin://<mount>/<relative>`
+//! The first path segment is an authority assigned to one mount lifetime; the
+//! rest is relative to its root. Authorities are never rebound after unmount,
+//! so cached assets and late readers cannot acquire another Twin's bytes.
+//! [`stable_source_path`] converts the load address to the stable
+//! logical source used for provenance. Dependencies and imports keep their
+//! mount address. `twin://` is internal and never authored into a Twin file.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -46,8 +45,18 @@ pub const TWIN_SCHEME: &str = "twin";
 /// when the registry could not perform the requested mutation.
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum TwinRootsError {
+    #[error("Twin root registry is not installed in this host")]
+    RegistryUnavailable,
     #[error("Twin root registry is unavailable because its lock is poisoned")]
     RegistryPoisoned,
+    #[error("invalid Twin asset authority `{0}`")]
+    InvalidAuthority(String),
+    #[error("unknown Twin asset authority `{0}`")]
+    UnknownAuthority(String),
+    #[error("Twin asset authority namespace is exhausted")]
+    AuthorityExhausted,
+    #[error("requested logical Twin identity `{requested}` was assigned `{assigned}`")]
+    LogicalIdentityMismatch { requested: String, assigned: String },
     #[error("invalid Twin overlay path `{0}`")]
     InvalidOverlayPath(String),
     #[error("Twin asset resolution failed ({0:?}): {1}")]
@@ -61,9 +70,9 @@ pub enum TwinRootsError {
 /// `format!("twin://{name}/{rel}")` duplicated resolution knowledge this crate
 /// owns; a scheme rename must not require editing five crates.
 ///
-/// `rel` is normalised to forward slashes (a URI is not a `Path`) and stripped of
-/// a leading `/`, so a Windows-built relative path still names the same asset on
-/// every peer — the identity has to be byte-identical across the wire.
+/// `name` is the returned mount authority when loading. `rel` is normalized to
+/// forward slashes and stripped of a leading `/`. Logical identity conversion
+/// belongs to [`stable_source_path`], not this load-address helper.
 pub fn twin_uri(name: impl AsRef<str>, rel: impl AsRef<Path>) -> String {
     let rel = crate::asset_path::slashed(rel);
     crate::asset_path::uri(
@@ -94,25 +103,55 @@ fn overlay_key(name: &str, rel: &str) -> PathBuf {
     Path::new(name).join(rel)
 }
 
-/// Registry of open Twin roots, keyed by Twin name. Cloneable handle over two
-/// shared maps: one clone is captured by the registered asset source (read side),
-/// another is inserted as a Bevy resource so the Twin-open flow can register
-/// roots as folders are opened.
-///
-/// The second map — [`overlays`](TwinRoots::set_overlay) — lets a caller serve
-/// **in-memory bytes** for a specific `twin://<name>/<rel>` path instead of the
-/// on-disk file. This is the E1b seam: lunco-usd-bevy-runtime-core registers a scene document's
-/// *composed* (`base ⊕ runtime`) source as the overlay, so the async `UsdLoader`
-/// composes the live world from the editable document — anchored at the same
-/// `twin://` identity, so co-located refs (terrain `.glb`) still resolve, on
-/// every platform the twin source supports.
+/// Authoritative Twin mount registry shared by the asset reader and runtime.
+/// One lock owns mount admission, composed-document overlays, and stable source
+/// identities. Unmount drops roots and bytes; only authority-to-logical-name
+/// metadata remains, so old handles retain diagnosable provenance without
+/// retaining a closed Twin's resources or making its address readable again.
 #[derive(Resource, Clone, Default)]
 pub struct TwinRoots {
-    /// Twin name → absolute root folder.
-    roots: Arc<RwLock<HashMap<String, PathBuf>>>,
-    /// `twin://`-relative path (`<name>/<rel>`) → in-memory bytes that shadow
-    /// the on-disk file for that exact path.
-    overlays: Arc<RwLock<HashMap<PathBuf, Arc<Vec<u8>>>>>,
+    registry: Arc<RwLock<TwinRootRegistry>>,
+}
+
+#[derive(Default)]
+struct TwinRootRegistry {
+    roots: HashMap<String, TwinMount>,
+    identities: HashMap<String, String>,
+    overlays: HashMap<PathBuf, Arc<Vec<u8>>>,
+    next_mount: u64,
+}
+
+struct TwinMount {
+    root: PathBuf,
+    requested: String,
+    admission: u64,
+}
+
+/// Convert a Bevy load address to the stable, scheme-stripped source path used
+/// by content provenance. Non-Twin sources require no registry; Twin sources
+/// require an admitted authority in the supplied registry. Loads, imports, and
+/// dependency anchors keep their mount-local address. Missing ownership must
+/// fail without a raw-name identity fallback or a fabricated empty registry.
+pub fn stable_source_path(
+    path: &bevy::asset::AssetPath<'_>,
+    roots: Option<&TwinRoots>,
+) -> Result<String, TwinRootsError> {
+    let source_path = crate::asset_path::slashed(path.path());
+    if path.source() != &bevy::asset::io::AssetSourceId::Name(TWIN_SCHEME.into()) {
+        return Ok(source_path);
+    }
+    let (authority, relative) = split_twin_rel(&source_path)
+        .ok_or_else(|| TwinRootsError::InvalidAuthority(source_path.clone()))?;
+    if !crate::asset_path::is_safe_relative_path(relative) {
+        return Err(TwinRootsError::AssetResolution(
+            std::io::ErrorKind::InvalidInput,
+            format!("unsafe relative path `{relative}`"),
+        ));
+    }
+    let logical = roots
+        .ok_or(TwinRootsError::RegistryUnavailable)?
+        .logical_name(authority)?;
+    Ok(format!("{logical}/{relative}"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -252,60 +291,120 @@ impl TwinRoots {
         self.register(name, twin.root.clone())
     }
 
-    /// Map a Twin `name` to its absolute root folder, returning the name
-    /// actually assigned — **callers must use the returned name**, not the one
-    /// they passed.
+    /// Admit a Twin root and return its mount-local load authority.
     ///
-    /// Call when a Twin opens, before loading `twin://<name>/<default_scene>`.
-    ///
-    /// The name is the `twin://` authority, so it must stay human-readable and
-    /// machine-independent (it is the stable provenance identity — see
-    /// `docs/architecture/21-domain-usd.md`). That rules out keying by
-    /// canonical path. But names are *not* unique: the name comes from
-    /// `twin.toml`, falling back to the folder's basename, so two unrelated
-    /// folders can both be `scenes`. Blindly inserting silently repointed the
-    /// first Twin's root, breaking every `twin://first/…` read already in
-    /// flight, with no diagnostic.
-    ///
-    /// So: re-registering the *same* root under a name is idempotent (a reopen),
-    /// while a *different* root gets the next free `name-2`, `name-3`, … .
-    #[must_use = "use the RETURNED name to build `twin://` URIs — the requested \
-                  name may already belong to a different root"]
+    /// Repeated admission of the same live root/logical name is idempotent.
+    /// Simultaneous roots with the same requested logical name are disambiguated
+    /// as `name-2`, `name-3`, … . After unmount, a new load authority is assigned
+    /// even for the same folder, while its stable logical identity is unchanged.
+    /// Callers must use the returned authority for all loads and overlays.
+    #[must_use = "use the RETURNED mount authority to build `twin://` load URIs"]
     pub fn register(
         &self,
         name: impl Into<String>,
         root: impl Into<PathBuf>,
     ) -> Result<String, TwinRootsError> {
         let requested = name.into();
+        if !crate::asset_path::is_safe_relative_path(&requested)
+            || requested.contains(['/', '\\', ':', '#', '?'])
+        {
+            return Err(TwinRootsError::InvalidAuthority(requested));
+        }
         let root = root.into();
         let canonical = canonical_root(&root)?;
-        let mut m = self
-            .roots
+        let mut registry = self
+            .registry
             .write()
             .map_err(|_| TwinRootsError::RegistryPoisoned)?;
-        let mut candidate = requested.clone();
-        let mut n = 1u32;
+        if let Some((authority, _)) = registry
+            .roots
+            .iter()
+            .find(|(_, mount)| mount.root == canonical && mount.requested == requested)
+        {
+            return Ok(authority.clone());
+        }
+        let mut logical = requested.clone();
+        let mut n = 1u64;
         loop {
-            match m.get(&candidate) {
-                // Free, or already this exact root (reopen) — take it.
-                None => break,
-                Some(existing) if canonical_root(existing)? == canonical => break,
-                // Taken by a different folder — try the next suffix.
+            let occupied = registry
+                .roots
+                .iter()
+                .find(|(authority, _)| registry.identities.get(*authority) == Some(&logical));
+            match occupied {
                 Some(_) => {
-                    n += 1;
-                    candidate = format!("{requested}-{n}");
+                    n = n.checked_add(1).ok_or(TwinRootsError::AuthorityExhausted)?;
+                    logical = format!("{requested}-{n}");
                 }
+                None => break,
             }
         }
-        if candidate != requested {
+        let mut authority = logical.clone();
+        registry.next_mount = registry
+            .next_mount
+            .checked_add(1)
+            .ok_or(TwinRootsError::AuthorityExhausted)?;
+        while registry.identities.contains_key(&authority) {
+            authority = format!("{logical}--mount-{}", registry.next_mount);
+            if registry.identities.contains_key(&authority) {
+                registry.next_mount = registry
+                    .next_mount
+                    .checked_add(1)
+                    .ok_or(TwinRootsError::AuthorityExhausted)?;
+            }
+        }
+        if logical != requested {
             warn!(
                 "[twin-roots] name `{requested}` is already bound to a different folder — \
-                 registering `{}` as `{candidate}`",
+                 registering `{}` with logical name `{logical}`",
                 root.display()
             );
         }
-        m.insert(candidate.clone(), canonical);
-        Ok(candidate)
+        let admission = registry.next_mount;
+        registry.roots.insert(
+            authority.clone(),
+            TwinMount {
+                root: canonical,
+                requested,
+                admission,
+            },
+        );
+        registry.identities.insert(authority.clone(), logical);
+        Ok(authority)
+    }
+
+    /// Stable logical name of an admitted mount, including retired mounts.
+    /// Identity metadata does not make a retired authority readable again.
+    pub fn logical_name(&self, authority: &str) -> Result<String, TwinRootsError> {
+        self.registry
+            .read()
+            .map_err(|_| TwinRootsError::RegistryPoisoned)?
+            .identities
+            .get(authority)
+            .cloned()
+            .ok_or_else(|| TwinRootsError::UnknownAuthority(authority.to_string()))
+    }
+
+    /// Current load authority for an exact logical name, when it is mounted.
+    /// Used by scenario synchronization to reuse an editable local root instead
+    /// of shadowing it with the downloaded copy.
+    pub fn mounted_name_for_logical(
+        &self,
+        logical: &str,
+    ) -> Result<Option<String>, TwinRootsError> {
+        let registry = self
+            .registry
+            .read()
+            .map_err(|_| TwinRootsError::RegistryPoisoned)?;
+        Ok(registry
+            .roots
+            .keys()
+            .find(|authority| {
+                registry
+                    .identities
+                    .get(*authority)
+                    .is_some_and(|name| name == logical)
+            })
+            .cloned())
     }
 
     /// Serve `bytes` in place of the on-disk file at `twin://<name>/<rel>`. The
@@ -325,10 +424,14 @@ impl TwinRoots {
         {
             return Err(TwinRootsError::InvalidOverlayPath(format!("{name}/{rel}")));
         }
-        self.overlays
+        let mut registry = self
+            .registry
             .write()
-            .map_err(|_| TwinRootsError::RegistryPoisoned)?
-            .insert(overlay_key(name, rel), bytes);
+            .map_err(|_| TwinRootsError::RegistryPoisoned)?;
+        if !registry.roots.contains_key(name) {
+            return Err(TwinRootsError::UnknownAuthority(name.to_string()));
+        }
+        registry.overlays.insert(overlay_key(name, rel), bytes);
         Ok(())
     }
 
@@ -340,9 +443,10 @@ impl TwinRoots {
         {
             return Err(TwinRootsError::InvalidOverlayPath(format!("{name}/{rel}")));
         }
-        self.overlays
+        self.registry
             .write()
             .map_err(|_| TwinRootsError::RegistryPoisoned)?
+            .overlays
             .remove(&overlay_key(name, rel));
         Ok(())
     }
@@ -373,9 +477,9 @@ impl TwinRoots {
     /// (`<name>/<rel>`), if any.
     fn overlay_for(&self, path: &Path) -> Result<Option<Arc<Vec<u8>>>, TwinRootsError> {
         let path = PathBuf::from(crate::asset_path::slashed(path));
-        self.overlays
+        self.registry
             .read()
-            .map(|m| m.get(&path).cloned())
+            .map(|registry| registry.overlays.get(&path).cloned())
             .map_err(|_| TwinRootsError::RegistryPoisoned)
     }
 
@@ -383,41 +487,39 @@ impl TwinRoots {
     /// because a Twin's own `Assets.toml` (scanned on open by
     /// `lunco-assets`]) is addressed by filesystem path, not by URI.
     pub fn root_for(&self, name: &str) -> Result<Option<PathBuf>, TwinRootsError> {
-        self.roots
+        self.registry
             .read()
-            .map(|m| m.get(name).cloned())
+            .map(|registry| registry.roots.get(name).map(|mount| mount.root.clone()))
             .map_err(|_| TwinRootsError::RegistryPoisoned)
     }
 
-    /// Return the authority assigned to an open Twin root.
+    /// Return the first admitted live authority for an open Twin root.
     ///
     /// Names can be disambiguated when two open folders share the same
     /// authored/folder name, so consumers must resolve the assigned authority
     /// instead of reconstructing it from the manifest again.
     pub fn name_for_root(&self, root: impl AsRef<Path>) -> Result<Option<String>, TwinRootsError> {
         let target = canonical_root(root.as_ref())?;
-        self.roots
+        self.registry
             .read()
             .map_err(|_| TwinRootsError::RegistryPoisoned)
-            .and_then(|roots| {
-                roots
+            .map(|registry| {
+                registry
+                    .roots
                     .iter()
-                    .find_map(|(name, existing)| match canonical_root(existing) {
-                        Ok(path) if path == target => Some(Ok(Some(name.clone()))),
-                        Ok(_) => None,
-                        Err(error) => Some(Err(error)),
-                    })
-                    .unwrap_or(Ok(None))
+                    .filter(|(_, mount)| mount.root == target)
+                    .min_by_key(|(_, mount)| mount.admission)
+                    .map(|(name, _)| name.clone())
             })
     }
 
     /// Names of all currently-open Twins, sorted (deterministic order — the
     /// map's own iteration order isn't).
     pub fn names(&self) -> Result<Vec<String>, TwinRootsError> {
-        self.roots
+        self.registry
             .read()
-            .map(|m| {
-                let mut v: Vec<String> = m.keys().cloned().collect();
+            .map(|registry| {
+                let mut v: Vec<String> = registry.roots.keys().cloned().collect();
                 v.sort();
                 v
             })
@@ -478,33 +580,20 @@ impl TwinRoots {
     /// valid source for a late asset request from the outgoing scene.
     pub fn unregister_root(&self, root: impl AsRef<Path>) -> Result<(), TwinRootsError> {
         let target = canonical_root(root.as_ref())?;
-        // Mutations that own both maps always acquire overlays first. If either
-        // lock is poisoned, no half-unmounted root or stale composed bytes are
-        // published to a later Twin using the same authority.
-        let mut overlays = self
-            .overlays
+        let mut registry = self
+            .registry
             .write()
             .map_err(|_| TwinRootsError::RegistryPoisoned)?;
-        let removed = self
+        let removed: Vec<_> = registry
             .roots
-            .write()
-            .map_err(|_| TwinRootsError::RegistryPoisoned)
-            .and_then(|mut roots| {
-                let mut names = Vec::new();
-                for (name, existing) in roots.iter() {
-                    if canonical_root(existing)? == target {
-                        names.push(name.clone());
-                    }
-                }
-                for name in &names {
-                    roots.remove(name);
-                }
-                Ok(names)
-            })?;
-        if removed.is_empty() {
-            return Ok(());
+            .iter()
+            .filter(|(_, mount)| mount.root == target)
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in &removed {
+            registry.roots.remove(name);
         }
-        Self::clear_overlays_for_names(&mut overlays, &removed);
+        Self::clear_overlays_for_names(&mut registry.overlays, &removed);
         Ok(())
     }
 
@@ -514,19 +603,12 @@ impl TwinRoots {
     /// intentionally point at the same directory, so a document view must not
     /// tear down an unrelated Twin merely because their roots match.
     pub fn unregister_name(&self, name: &str) -> Result<(), TwinRootsError> {
-        let mut overlays = self
-            .overlays
+        let mut registry = self
+            .registry
             .write()
             .map_err(|_| TwinRootsError::RegistryPoisoned)?;
-        let removed = self
-            .roots
-            .write()
-            .map_err(|_| TwinRootsError::RegistryPoisoned)
-            .map(|mut roots| roots.remove(name).map(|_| name.to_string()))?;
-        if removed.is_none() {
-            return Ok(());
-        }
-        Self::clear_overlays_for_names(&mut overlays, &[name.to_string()]);
+        registry.roots.remove(name);
+        Self::clear_overlays_for_names(&mut registry.overlays, &[name.to_string()]);
         Ok(())
     }
 }
@@ -692,9 +774,13 @@ mod tests {
     #[test]
     fn overlay_keyed_by_reader_facing_path() {
         let roots = TwinRoots::default();
+        let root = tempfile::tempdir().expect("Twin root");
+        let name = roots
+            .register("moonbase", root.path())
+            .expect("register root");
         let bytes = Arc::new(b"#usda 1.0\n".to_vec());
         roots
-            .set_overlay("moonbase", "scenes/luncosim.usda", bytes.clone())
+            .set_overlay(&name, "scenes/luncosim.usda", bytes.clone())
             .expect("set overlay");
 
         assert_eq!(
@@ -802,10 +888,19 @@ mod tests {
             Ok(Some(second_root.path().to_path_buf())),
             "second Twin resolves to its own folder under the assigned name"
         );
+        assert_eq!(roots.logical_name(&a), Ok("scenes".to_string()));
+        assert_eq!(roots.logical_name(&b), Ok("scenes-2".to_string()));
+        roots.unregister_name(&a).expect("retire first duplicate");
+        assert_eq!(
+            roots
+                .register("scenes", second_root.path())
+                .expect("repeat second admission"),
+            b,
+            "a live duplicate keeps its admitted logical identity after the other Twin closes"
+        );
     }
 
-    /// Reopening the SAME folder is idempotent — it must reuse the name rather
-    /// than accumulating `scenes-2`, `scenes-3`, … on every reopen.
+    /// Repeated admission while the same mount is live is idempotent.
     #[test]
     fn reregistering_same_root_reuses_the_name() {
         let roots = TwinRoots::default();
@@ -819,12 +914,221 @@ mod tests {
             .expect("re-register root");
 
         assert_eq!(first, "moonbase");
-        assert_eq!(again, first, "reopen must reuse the existing name");
+        assert_eq!(
+            again, first,
+            "live admission must reuse the existing authority"
+        );
         assert_eq!(
             roots.names().expect("read Twin registry").len(),
             1,
             "no duplicate registration"
         );
+    }
+
+    #[test]
+    fn retired_mounts_keep_identity_without_roots_bytes_or_rebound_load_addresses() {
+        let root = tempfile::tempdir().expect("Twin root");
+        let replacement = tempfile::tempdir().expect("replacement Twin root");
+        let roots = TwinRoots::default();
+        let first = roots
+            .register("fixture", root.path())
+            .expect("mount first root");
+        let first_path =
+            bevy::asset::AssetPath::parse(&twin_uri(&first, "data/payload.txt")).into_owned();
+        roots
+            .set_overlay(&first, "data/payload.txt", Arc::new(b"first".to_vec()))
+            .expect("first overlay");
+        assert!(
+            roots
+                .overlay_bytes(&first, Path::new("data/payload.txt"))
+                .expect("read first overlay")
+                .is_some()
+        );
+
+        roots
+            .unregister_root(root.path())
+            .expect("retire first mount");
+        assert!(roots.root_for(&first).expect("read retired root").is_none());
+        assert!(
+            roots
+                .overlay_bytes(&first, Path::new("data/payload.txt"))
+                .expect("read retired overlay")
+                .is_none()
+        );
+        assert!(matches!(
+            roots.set_overlay(&first, "data/payload.txt", Arc::new(b"late".to_vec())),
+            Err(TwinRootsError::UnknownAuthority(_))
+        ));
+        assert_eq!(
+            stable_source_path(&first_path, Some(&roots)).expect("retired source identity"),
+            "fixture/data/payload.txt"
+        );
+
+        let reopened = roots
+            .register("fixture", root.path())
+            .expect("reopen same folder");
+        assert_ne!(
+            reopened, first,
+            "Bevy path identities cannot survive a mount lifetime"
+        );
+        assert_eq!(
+            roots
+                .register("fixture", root.path())
+                .expect("repeat live admission"),
+            reopened
+        );
+        let reopened_path =
+            bevy::asset::AssetPath::parse(&twin_uri(&reopened, "data/payload.txt")).into_owned();
+        assert_eq!(
+            stable_source_path(&reopened_path, Some(&roots)),
+            stable_source_path(&first_path, Some(&roots))
+        );
+        roots
+            .unregister_name(&reopened)
+            .expect("retire reopened mount");
+
+        let next = roots
+            .register("fixture", replacement.path())
+            .expect("mount replacement folder");
+        assert_ne!(next, first);
+        assert_ne!(next, reopened);
+        assert_eq!(
+            roots.logical_name(&next).expect("replacement logical name"),
+            "fixture"
+        );
+        assert_eq!(
+            roots
+                .mounted_name_for_logical("fixture")
+                .expect("find logical mount"),
+            Some(next.clone())
+        );
+        assert!(
+            roots
+                .resolve_file(&first, Path::new("data/payload.txt"))
+                .expect("retired file lookup")
+                .is_none()
+        );
+        let next_uri = twin_uri(&next, "scripts/main.rhai");
+        assert_eq!(
+            lunco_assets_path::canonicalize("helpers.rhai", &next_uri),
+            twin_uri(&next, "scripts/helpers.rhai")
+        );
+        assert_eq!(
+            crate::asset_path::source_relative_uri(
+                &bevy::asset::AssetPath::parse(&next_uri),
+                "textures/albedo.png"
+            ),
+            Some(twin_uri(&next, "textures/albedo.png"))
+        );
+    }
+
+    #[test]
+    fn provenance_sources_agree_across_local_mount_history_and_reject_unadmitted_names() {
+        let host_root = tempfile::tempdir().expect("host root");
+        let client_root = tempfile::tempdir().expect("client cache root");
+        let host = TwinRoots::default();
+        let client = TwinRoots::default();
+        let old = host
+            .register("fixture", host_root.path())
+            .expect("host first admission");
+        host.unregister_name(&old).expect("host unmount");
+        let host_name = host
+            .register("fixture", host_root.path())
+            .expect("host reopen");
+        let client_name = client
+            .register("fixture", client_root.path())
+            .expect("client admission");
+        assert_ne!(host_name, client_name);
+        let host_path =
+            bevy::asset::AssetPath::parse(&format!("twin://{host_name}\\scenes\\main.usda"))
+                .into_owned();
+        let client_path =
+            bevy::asset::AssetPath::parse(&twin_uri(&client_name, "scenes/main.usda")).into_owned();
+        assert_eq!(
+            stable_source_path(&host_path, Some(&host)).expect("host provenance"),
+            "fixture/scenes/main.usda"
+        );
+        assert_eq!(
+            stable_source_path(&host_path, Some(&host)),
+            stable_source_path(&client_path, Some(&client))
+        );
+        assert!(matches!(
+            stable_source_path(
+                &bevy::asset::AssetPath::parse("twin://unknown/scenes/main.usda"),
+                Some(&host)
+            ),
+            Err(TwinRootsError::UnknownAuthority(_))
+        ));
+        assert!(matches!(
+            stable_source_path(
+                &bevy::asset::AssetPath::parse(&twin_uri(&host_name, "../outside.usda")),
+                Some(&host)
+            ),
+            Err(TwinRootsError::AssetResolution(
+                std::io::ErrorKind::InvalidInput,
+                _
+            ))
+        ));
+        assert_eq!(
+            stable_source_path(
+                &bevy::asset::AssetPath::parse(r"lunco://scenes\main.usda"),
+                None
+            ),
+            Ok("scenes/main.usda".to_string())
+        );
+        assert_eq!(
+            stable_source_path(&bevy::asset::AssetPath::parse("scenes/main.usda"), None),
+            Ok("scenes/main.usda".to_string())
+        );
+        assert!(matches!(
+            stable_source_path(&client_path, None),
+            Err(TwinRootsError::RegistryUnavailable)
+        ));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn reader_rejects_retired_alias_instead_of_reading_replacement_bytes() {
+        futures_lite::future::block_on(async {
+            let first_root = tempfile::tempdir().expect("first root");
+            let second_root = tempfile::tempdir().expect("second root");
+            lunco_storage::write_file_sync(&first_root.path().join("payload.txt"), b"first")
+                .expect("first bytes");
+            lunco_storage::write_file_sync(&second_root.path().join("payload.txt"), b"second")
+                .expect("second bytes");
+            let roots = TwinRoots::default();
+            let first = roots
+                .register("fixture", first_root.path())
+                .expect("first mount");
+            let reader = TwinReader {
+                roots: roots.clone(),
+            };
+            let first_path = PathBuf::from(format!("{first}/payload.txt"));
+            let mut bytes = Vec::new();
+            AssetReader::read(&reader, &first_path)
+                .await
+                .expect("first reader")
+                .read_to_end(&mut bytes)
+                .await
+                .expect("first read");
+            assert_eq!(bytes, b"first");
+            roots.unregister_name(&first).expect("retire first");
+            let second = roots
+                .register("fixture", second_root.path())
+                .expect("second mount");
+            assert!(matches!(
+                AssetReader::read(&reader, &first_path).await,
+                Err(AssetReaderError::NotFound(_))
+            ));
+            bytes.clear();
+            AssetReader::read(&reader, Path::new(&format!("{second}/payload.txt")))
+                .await
+                .expect("second reader")
+                .read_to_end(&mut bytes)
+                .await
+                .expect("second read");
+            assert_eq!(bytes, b"second");
+        });
     }
 
     #[test]
@@ -927,6 +1231,12 @@ mod tests {
         let session = roots
             .register("__viewport_1", root.path())
             .expect("register session root");
+        assert_eq!(
+            roots
+                .name_for_root(root.path())
+                .expect("find open Twin mount"),
+            Some(twin.clone())
+        );
         roots
             .set_overlay(&twin, "scene.usda", Arc::new(b"twin".to_vec()))
             .expect("set Twin overlay");
@@ -958,19 +1268,19 @@ mod tests {
     }
 
     #[test]
-    fn poisoned_overlay_lock_does_not_partially_unmount_a_root() {
+    fn poisoned_registry_rejects_mount_mutation_and_reads() {
         let twin = tempfile::tempdir().expect("temporary Twin root");
         let roots = TwinRoots::default();
         let name = roots
             .register("moonbase", twin.path())
             .expect("register root");
-        let overlays = roots.overlays.clone();
+        let registry = roots.registry.clone();
         std::thread::spawn(move || {
-            let _guard = overlays.write().expect("overlay lock");
-            panic!("poison overlay registry for the transaction test");
+            let _guard = registry.write().expect("registry lock");
+            panic!("poison registry for the transaction test");
         })
         .join()
-        .expect_err("the transaction test must poison the overlay lock");
+        .expect_err("the transaction test must poison the registry lock");
 
         assert_eq!(
             roots.unregister_name(&name),
@@ -978,8 +1288,8 @@ mod tests {
         );
         assert_eq!(
             roots.root_for(&name),
-            Ok(Some(twin.path().to_path_buf())),
-            "a failed overlay mutation must leave the root registered"
+            Err(TwinRootsError::RegistryPoisoned),
+            "unavailable ownership must fail visibly instead of fabricating a root"
         );
     }
 
