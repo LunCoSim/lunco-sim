@@ -227,23 +227,18 @@ impl NativePluginManifest {
         if self.id.is_empty() || self.id.chars().any(char::is_whitespace) {
             return Err("native plugin id must be non-empty and contain no whitespace".into());
         }
-        if self.path.as_os_str().is_empty() || self.path.is_absolute() {
-            return Err(format!(
-                "native plugin `{}` path must be a non-empty relative path",
-                self.id
-            ));
-        }
-        if self
+        let spelling = self
             .path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-        {
+            .to_str()
+            .ok_or_else(|| format!("native plugin `{}` path must be valid Unicode", self.id))?;
+        let relative = spelling.replace('\\', "/");
+        if relative.contains(':') || !crate::is_safe_relative_path(Path::new(&relative)) {
             return Err(format!(
-                "native plugin `{}` path may not contain `..`",
+                "native plugin `{}` path must be a non-empty Twin-relative path without a root, volume, or parent traversal",
                 self.id
             ));
         }
-        Ok(twin_root.join(&self.path))
+        Ok(twin_root.join(relative))
     }
 }
 
@@ -867,14 +862,38 @@ path = "plugins/libchrono_terrain.so"
             plugin.resolve(Path::new("/twins/demo")).unwrap(),
             PathBuf::from("/twins/demo/plugins/libchrono_terrain.so")
         );
-        assert!(
+        for path in [
+            "",
+            "../escape.so",
+            r"plugins\..\escape.dll",
+            "/plugins/escape.so",
+            r"\plugins\escape.dll",
+            r"C:escape.dll",
+            r"C:\plugins\escape.dll",
+            r"\\server\share\escape.dll",
+            r"\\?\C:\plugins\escape.dll",
+            "plugins/provider.dll:stream",
+        ] {
+            assert!(
+                NativePluginManifest {
+                    id: "chrono-terrain".into(),
+                    path: PathBuf::from(path),
+                    enabled: true,
+                }
+                .resolve(Path::new("/twins/demo"))
+                .is_err(),
+                "{path:?} must not escape the Twin"
+            );
+        }
+        assert_eq!(
             NativePluginManifest {
                 id: "chrono-terrain".into(),
-                path: PathBuf::from("../escape.so"),
+                path: PathBuf::from(r"plugins\провајдер with spaces.dll"),
                 enabled: true,
             }
             .resolve(Path::new("/twins/demo"))
-            .is_err()
+            .unwrap(),
+            PathBuf::from("/twins/demo/plugins/провајдер with spaces.dll")
         );
     }
 

@@ -107,7 +107,10 @@ to remove exactly that implementation; reloading the authored manifest is the
 explicit operation that installs the authored policy again.
 
 For a trusted native implementation, add an explicit `[[native_plugins]]`
-entry to the Twin manifest. The provider must implement an existing reflected
+entry to the Twin manifest. Use a portable Twin-relative path without a root,
+volume, parent traversal, or alternate data stream. The loader checks canonical
+containment before admitting a library, including symlinks and Windows junctions.
+The provider must implement an existing reflected
 installable hook and return the declared typed result through the native ABI;
 it does not declare a second hook list or mutate the owner's ECS/USD state.
 Use a native provider for expensive or platform-specific computation, not for

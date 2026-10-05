@@ -308,7 +308,9 @@ validated values. `lunco-hooks-plugin-api` owns the stable edition-2024 ABI v2
 and typed invocation wire helpers; `lunco-hooks-native` owns `libloading`, unsafe
 admission, callback limits, and exact-registration teardown. Enable that path
 only from an application composition feature. A Twin must explicitly approve a
-provider with a Twin-relative `[[native_plugins]]` manifest entry; USD and Rhai
+provider with a Twin-relative `[[native_plugins]]` manifest entry. Reject rooted,
+volume-relative, traversal, and alternate-stream paths; resolve through the asset
+owner's canonical containment check before loading. USD and Rhai
 source do not load shared libraries. Native code is trusted process code, so
 untrusted bundles require deployment-level signature and isolation controls.
 

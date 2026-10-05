@@ -42,8 +42,11 @@ path = "plugins/libchrono_terrain.so"
 enabled = true
 ```
 
-The path is Twin-relative, must not be absolute or contain `..`, and is
-resolved without probing the filesystem during manifest parsing. USD and Rhai
+The path is Twin-relative and portable: manifest parsing normalizes separators
+and rejects roots, volumes, parent traversal, and alternate data streams.
+Before loading, the asset owner canonicalizes the file and checks that it stays
+inside the canonical Twin root, including through symlinks or Windows junctions.
+Manifest parsing itself does not probe the filesystem. USD and Rhai
 source cannot cause a library to load. Native libraries are trusted native
 code; the loader is an admission and lifecycle boundary, not a security
 sandbox. A deployment that accepts untrusted Twin bundles must add signature,
