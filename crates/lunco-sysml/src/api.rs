@@ -110,18 +110,23 @@ impl Plugin for SysmlApiPlugin {
 /// Other URI schemes and extensions belong to their owning domain observers.
 #[on_command(OpenFile)]
 fn on_open_sysml_file(trigger: On<OpenFile>, mut pending: ResMut<PendingSysmlOpens>) {
-    let raw = trigger.event().path.trim();
-    let path = raw.strip_prefix("file://").unwrap_or(raw);
-    let extension = std::path::Path::new(path)
+    let raw = &trigger.event().path;
+    let path = match lunco_storage::file_uri_to_path(raw) {
+        Ok(Some(path)) => path,
+        Ok(None) if lunco_assets_core::has_scheme(raw) => return,
+        Ok(None) => std::path::PathBuf::from(raw),
+        Err(error) => {
+            warn!("[SysmlOpenFile] {error}");
+            return;
+        }
+    };
+    let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
         .map(str::to_ascii_lowercase);
-    if lunco_assets_core::has_scheme(path)
-        || !matches!(extension.as_deref(), Some("sysml" | "kerml"))
-    {
+    if !matches!(extension.as_deref(), Some("sysml" | "kerml")) {
         return;
     }
-    let path = std::path::PathBuf::from(path);
     if pending.tasks.iter().any(|load| load.path == path) {
         return;
     }

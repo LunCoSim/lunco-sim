@@ -19,6 +19,14 @@ path. These are denied by clippy **on the wasm target**, which is the only
 place they are actually true (see *Enforcement layers*); a wasm build gate in
 CI catches anything that slips through (transitive deps, std API drift).
 
+Native `file:` URI conversion is owned by `lunco-storage::file_uri_to_path`
+and `file_path_to_uri`, using `url` for standard parsing, percent encoding,
+Windows drives and UNC authorities. Domain openers decode before extension,
+ownership, or I/O decisions. Non-file input remains available for raw native
+paths or registered asset sources; invalid file URIs fail without a raw-path
+fallback. File URI queries/fragments are rejected, and browser builds reject
+native file URIs explicitly.
+
 ---
 
 ## Why the policy exists

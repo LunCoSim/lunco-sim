@@ -43,6 +43,15 @@ the backend to ship.
 
 ## Usage
 
+Native file URI conversion belongs to `file_uri_to_path` and
+`file_path_to_uri`. They delegate URL parsing and encoding to `url`, including
+percent-encoded spaces and Unicode, local authorities, and Windows drive/UNC
+paths. `file_uri_to_path` returns `None` only for non-file spellings; callers
+may preserve a raw native path or route another scheme in that case. Invalid
+file URIs return an error and must not be retried as literal paths. Browser
+builds reject file URIs because they have no native filesystem. Use encoded
+`%23` and `%3F` for filename characters; URI fragments and queries are rejected.
+
 ```rust
 use lunco_storage::{FileStorage, Storage, StorageHandle};
 

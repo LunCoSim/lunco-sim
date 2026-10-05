@@ -100,6 +100,144 @@ pub enum StorageError {
 /// Result alias for storage operations.
 pub type StorageResult<T> = Result<T, StorageError>;
 
+/// Decode a standard `file:` URI into its native filesystem path.
+///
+/// `Ok(None)` means the spelling has no `file:` scheme: callers may then
+/// route another asset scheme or keep a raw native path unchanged. An invalid
+/// file URI is an error, never a raw-path fallback. Decoding, drive letters,
+/// localhost, and Windows UNC authorities are owned by the `url` crate.
+/// Browser builds reject file URIs because they have no native filesystem.
+pub fn file_uri_to_path(reference: &str) -> StorageResult<Option<PathBuf>> {
+    if !reference
+        .split_once(':')
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("file"))
+    {
+        return Ok(None);
+    }
+    let invalid = |detail: String| {
+        StorageError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid file URI `{reference}`: {detail}"),
+        ))
+    };
+    let violation = std::cell::Cell::new(None);
+    let report_violation = |value| violation.set(Some(value));
+    let uri = url::Url::options()
+        .syntax_violation_callback(Some(&report_violation))
+        .parse(reference)
+        .map_err(|error| invalid(error.to_string()))?;
+    if let Some(violation) = violation.get() {
+        return Err(invalid(violation.to_string()));
+    }
+    if uri.query().is_some() || uri.fragment().is_some() {
+        return Err(invalid(
+            "filesystem paths cannot contain a URI query or fragment".into(),
+        ));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let path = uri
+            .to_file_path()
+            .map_err(|()| invalid("path or authority is not valid on this platform".into()))?;
+        if path.as_os_str().as_encoded_bytes().contains(&0) {
+            return Err(invalid("filesystem paths cannot contain NUL bytes".into()));
+        }
+        Ok(Some(path))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Err(StorageError::Unsupported(
+            "file URIs require a native filesystem".into(),
+        ))
+    }
+}
+
+/// Encode an absolute native filesystem path as a standard `file:` URI.
+/// Relative paths and browser storage keys are not native file URI addresses.
+pub fn file_path_to_uri(path: &Path) -> StorageResult<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if path.as_os_str().as_encoded_bytes().contains(&0) {
+            return Err(StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "filesystem paths cannot contain NUL bytes",
+            )));
+        }
+        url::Url::from_file_path(path)
+            .map(|uri| uri.into())
+            .map_err(|()| {
+                StorageError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("cannot encode native path {} as a file URI", path.display()),
+                ))
+            })
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        Err(StorageError::Unsupported(
+            "file URIs require a native filesystem".into(),
+        ))
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod file_uri_tests {
+    use super::*;
+
+    #[test]
+    fn file_uris_preserve_native_paths_and_reject_invalid_addresses() {
+        let path = std::env::temp_dir().join("провајдер with spaces.mo");
+        let uri = file_path_to_uri(&path).unwrap();
+        assert!(uri.contains("%20"));
+        assert_eq!(file_uri_to_path(&uri).unwrap(), Some(path.clone()));
+        let localhost = uri.replacen("file://", "file://localhost", 1);
+        assert_eq!(file_uri_to_path(&localhost).unwrap(), Some(path));
+        for native_or_asset in [
+            r"C:\Projects\My Twin\scene.usda",
+            r"\\server\share\scene.usda",
+            "relative/with spaces.mo",
+            "twin://demo/scene.usda",
+        ] {
+            assert_eq!(file_uri_to_path(native_or_asset).unwrap(), None);
+        }
+        for invalid in [
+            "file:///invalid%00.mo",
+            "file:///invalid%GG.mo",
+            "file:///model.mo?version=2",
+            "file:///model.mo#Main",
+            r"file://C:\Projects\model.mo",
+            "file://user@localhost/model.mo",
+        ] {
+            assert!(
+                file_uri_to_path(invalid).is_err(),
+                "{invalid:?} must be rejected"
+            );
+        }
+        assert!(file_path_to_uri(Path::new("relative.mo")).is_err());
+
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                file_uri_to_path("FILE:///C:/Projects/My%20Twin/scene.usda").unwrap(),
+                Some(PathBuf::from(r"C:\Projects\My Twin\scene.usda"))
+            );
+            assert_eq!(
+                file_uri_to_path("file://server/share/My%20Twin/scene.usda").unwrap(),
+                Some(PathBuf::from(r"\\server\share\My Twin\scene.usda"))
+            );
+        }
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                file_uri_to_path("FILE:///home/user/My%20Twin/scene.usda").unwrap(),
+                Some(PathBuf::from("/home/user/My Twin/scene.usda"))
+            );
+            assert!(file_uri_to_path("file://server/share/scene.usda").is_err());
+        }
+    }
+}
+
 /// The kind of entry addressed by a storage handle.
 ///
 /// Directory identity is part of the storage backend rather than a caller

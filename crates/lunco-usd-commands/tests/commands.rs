@@ -460,7 +460,7 @@ fn open_file_for_usd_path_creates_document() {
 #[test]
 fn open_file_file_uri_creates_document() {
     let tmp_dir = tempfile::tempdir().unwrap();
-    let tmp_path = tmp_dir.path().join("scene.usda");
+    let tmp_path = tmp_dir.path().join("провајдер with spaces.usda");
     lunco_storage::write_file_sync(&tmp_path, b"#usda 1.0\ndef Xform \"X\" {}\n").unwrap();
 
     let mut app = App::new();
@@ -469,7 +469,7 @@ fn open_file_file_uri_creates_document() {
     app.update();
 
     app.world_mut().trigger(OpenFile {
-        path: format!("file://{}", tmp_path.display()),
+        path: lunco_storage::file_path_to_uri(&tmp_path).unwrap(),
     });
     wait_for_one_usd_document(&mut app);
 
@@ -479,7 +479,7 @@ fn open_file_file_uri_creates_document() {
             .ids()
             .count(),
         1,
-        "file:// USD paths must use the filesystem document reader"
+        "standard file URIs must decode before reaching the filesystem document reader"
     );
 }
 

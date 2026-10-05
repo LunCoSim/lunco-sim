@@ -508,36 +508,44 @@ fn on_open_file(
     mut pending: Option<ResMut<PendingTwinOpens>>,
     mut commands: Commands,
 ) {
-    let raw_path = trigger.event().path.clone();
-    let path = raw_path
-        .strip_prefix("file://")
-        .unwrap_or(&raw_path)
-        .to_string();
-    if !is_usd_path(&path) {
-        return;
-    }
-
-    // A scheme already names its root. Send it through the typed scene
-    // transition so it gets the same admission, teardown, and readiness path
-    // as startup, tutorials, and Twin default scenes.
-    if lunco_assets_core::has_scheme(&path) {
-        commands.trigger(LoadScene {
-            path,
-            root_prim: String::new(),
-        });
+    let raw_path = &trigger.event().path;
+    let path = match lunco_storage::file_uri_to_path(raw_path) {
+        Ok(Some(path)) => path,
+        Ok(None) if lunco_assets_core::has_scheme(raw_path) => {
+            // Asset schemes enter the shared typed scene transition; decoded
+            // native file URIs keep their filesystem identity below.
+            if is_usd_path(raw_path) {
+                commands.trigger(LoadScene {
+                    path: raw_path.clone(),
+                    root_prim: String::new(),
+                });
+            }
+            return;
+        }
+        Ok(None) => std::path::PathBuf::from(raw_path),
+        Err(error) => {
+            warn!("[OpenFile] {error}");
+            return;
+        }
+    };
+    if !is_usd_path(&path.to_string_lossy()) {
         return;
     }
 
     let Some(workspace) = workspace else {
         warn!(
-            "[OpenFile] cannot open USD filesystem scene `{path}`: WorkspacePlugin is not installed"
+            "[OpenFile] cannot open USD filesystem scene `{}`: WorkspacePlugin is not installed",
+            path.display()
         );
         return;
     };
-    let abs = match lunco_storage::canonicalize_file_path(Path::new(&path)) {
+    let abs = match lunco_storage::canonicalize_file_path(&path) {
         Ok(abs) => abs,
         Err(error) => {
-            warn!("[OpenFile] cannot resolve USD filesystem scene `{path}`: {error}");
+            warn!(
+                "[OpenFile] cannot resolve USD filesystem scene `{}`: {error}",
+                path.display()
+            );
             return;
         }
     };
@@ -552,7 +560,8 @@ fn on_open_file(
     }
     let Some(pending) = pending.as_deref_mut() else {
         warn!(
-            "[OpenFile] cannot open USD filesystem scene `{path}`: WorkspacePlugin is not installed"
+            "[OpenFile] cannot open USD filesystem scene `{}`: WorkspacePlugin is not installed",
+            path.display()
         );
         return;
     };

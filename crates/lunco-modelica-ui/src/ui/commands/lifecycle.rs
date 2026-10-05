@@ -821,33 +821,64 @@ pub fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
             focus_in_memory_doc(world, name);
             return;
         }
-        let lower = path.to_ascii_lowercase();
+        let native_file_path = match lunco_storage::file_uri_to_path(&path) {
+            Ok(path) => path,
+            Err(error) => {
+                let message = format!("Modelica file open refused: {error}");
+                bevy::log::warn!("[OpenFile] {message}");
+                world.commands().trigger(lunco_core::RuntimeError {
+                    name: "modelica-file-open-failed".to_owned(),
+                    message,
+                });
+                return;
+            }
+        };
+        let filesystem_path = native_file_path
+            .as_deref()
+            .unwrap_or_else(|| std::path::Path::new(&path));
         // A filesystem USD path can look like a Modelica tree id to the
         // permissive ClassRef parser (especially when it contains slashes).
         // Let the USD OpenFile observer own those extensions; otherwise an
         // assembly inspection opens a bogus Modelica document, switches the
         // active editor, and reports a misleading parse/reload failure.
-        let is_usd = std::path::Path::new(&lower)
+        let is_usd = filesystem_path
             .extension()
             .and_then(|s| s.to_str())
-            .map(|ext| matches!(ext, "usda" | "usd" | "usdc"))
-            .unwrap_or(false);
+            .is_some_and(|ext| {
+                ["usda", "usd", "usdc"]
+                    .iter()
+                    .any(|usd| ext.eq_ignore_ascii_case(usd))
+            });
         if is_usd {
             return;
         }
 
         // Everything else (bundled://, file://, raw .mo path) flows
         // through the typed ClassRef + single `open_class` entry.
+        if let Some(native_path) = native_file_path {
+            if !native_path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("mo"))
+            {
+                return;
+            }
+            crate::ui::panels::package_browser::open_class(
+                world,
+                crate::class_ref::ClassRef::user_file(native_path, Vec::<String>::new()),
+                true,
+            );
+            return;
+        }
         if let Some(class) = crate::class_ref::ClassRef::parse_tree_id(&path) {
             crate::ui::panels::package_browser::open_class(world, class, true);
             return;
         }
 
-        let is_modelica = std::path::Path::new(&lower)
+        let is_modelica = std::path::Path::new(&path)
             .extension()
             .and_then(|s| s.to_str())
-            .map(|ext| ext == "mo")
-            .unwrap_or(false);
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("mo"));
         if !is_modelica {
             return;
         }

@@ -180,7 +180,7 @@ impl ClassRef {
     ///   first qualified segment.
     /// - `bundled://<file>` and `bundled://<file>#<qualified>` →
     ///   [`Library::Bundled`].
-    /// - `file:///<abs>` and any absolute `.mo` path → [`Library::UserFile`].
+    /// - Standard `file:` URIs and absolute `.mo` paths → [`Library::UserFile`].
     pub fn parse_tree_id(s: &str) -> Option<Self> {
         if let Some(qualified) = s.strip_prefix("library_path:") {
             return parse_library_qualified(qualified);
@@ -188,11 +188,13 @@ impl ClassRef {
         if let Some(tail) = s.strip_prefix("bundled://") {
             return Some(parse_bundled(tail));
         }
-        if let Some(rest) = s.strip_prefix("file://") {
-            return Some(ClassRef::user_file(
-                PathBuf::from(rest),
-                Vec::<String>::new(),
-            ));
+        match lunco_storage::file_uri_to_path(s) {
+            Ok(Some(path)) => return Some(ClassRef::user_file(path, Vec::<String>::new())),
+            Ok(None) => {}
+            Err(error) => {
+                bevy::log::warn!("[ClassRef] {error}");
+                return None;
+            }
         }
         // mem:// identifiers don't carry a DocumentId; resolution
         // requires consulting the in-memory model cache.
@@ -320,10 +322,11 @@ mod tests {
 
     #[test]
     fn user_file_absolute_path() {
-        let c = ClassRef::parse_tree_id("/home/user/models/MyRocket.mo").unwrap();
+        let expected = std::env::temp_dir().join("MyRocket.mo");
+        let c = ClassRef::parse_tree_id(expected.to_str().unwrap()).unwrap();
         match &c.library {
             Library::UserFile { path } => {
-                assert_eq!(path.as_os_str(), "/home/user/models/MyRocket.mo");
+                assert_eq!(path, &expected);
             }
             other => panic!("expected UserFile, got {other:?}"),
         }
@@ -332,8 +335,11 @@ mod tests {
 
     #[test]
     fn file_url_user_file() {
-        let c = ClassRef::parse_tree_id("file:///home/user/MyRocket.mo").unwrap();
-        assert!(matches!(c.library, Library::UserFile { .. }));
+        let path = std::env::temp_dir().join("провајдер with spaces.mo");
+        let uri = lunco_storage::file_path_to_uri(&path).unwrap();
+        let c = ClassRef::parse_tree_id(&uri).unwrap();
+        assert_eq!(c.library, Library::UserFile { path });
+        assert!(ClassRef::parse_tree_id("file:///invalid%00.mo").is_none());
     }
 
     #[test]

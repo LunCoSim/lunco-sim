@@ -370,18 +370,18 @@ struct PendingUsdDiscards {
 fn on_open_file_for_usd(trigger: On<OpenFile>, mut commands: Commands) {
     let path = trigger.event().path.clone();
     commands.queue(move |world: &mut World| {
-        // `file://` is a filesystem spelling, not a registered asset source;
-        // strip it before deciding whether this is an already-addressable
-        // scene URI. Other schemes do not have a filesystem document to read;
-        // `on_open_file` sends them through the typed scene transition.
-        let stripped = path.strip_prefix("file://").unwrap_or(&path);
-        if lunco_assets_core::has_scheme(stripped) {
+        let path = match lunco_storage::file_uri_to_path(&path) {
+            Ok(Some(path)) => path,
+            Ok(None) if lunco_assets_core::has_scheme(&path) => return,
+            Ok(None) => PathBuf::from(path),
+            Err(error) => {
+                bevy::log::warn!("[UsdOpenFile] {error}");
+                return;
+            }
+        };
+        if !is_usd_path(&path.to_string_lossy()) {
             return;
         }
-        if !is_usd_path(stripped) {
-            return;
-        }
-        let path = PathBuf::from(stripped);
         let twin_root = world
             .get_resource::<WorkspaceResource>()
             .and_then(|workspace| {
