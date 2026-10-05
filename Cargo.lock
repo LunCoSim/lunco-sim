@@ -8970,6 +8970,7 @@ dependencies = [
  "tempfile",
  "uuid",
  "wasm-bindgen-futures",
+ "web-time",
 ]
 
 [[package]]

@@ -3668,6 +3668,7 @@ impl Plugin for SyncPlugin {
             .init_resource::<crate::http_fetch::AssetHttpFetch>()
             .init_resource::<crate::scenario_sync::ScenarioDownloadStatus>()
             .init_resource::<crate::scenario_sync::CachedTwinsRegistry>()
+            .init_resource::<crate::scenario_sync::ScenarioCacheLimits>()
             .init_resource::<crate::scenario_sync::CachedTwinsIndex>()
             // Inbound host `RunStatus` presence updates, pushed by the shared
             // `drain_sync_inbox` (`InboundClientCtx`) — the CLIENT arm is the
@@ -3763,7 +3764,7 @@ impl Plugin for SyncPlugin {
                         crate::scenario_sync::request_missing_assets,
                         crate::scenario_sync::reassemble_asset_chunks,
                         crate::scenario_sync::drain_persist_results,
-                        // G1: persist `.scenario.json` once fully cached.
+                        // Persist immutable admission metadata once fully cached.
                         crate::scenario_sync::write_scenario_index,
                         // G2: refresh the download-progress resource for the overlay.
                         crate::scenario_sync::update_scenario_download_status,
@@ -3773,7 +3774,7 @@ impl Plugin for SyncPlugin {
                         // stops the bookkeeping; the async persist writes finish
                         // on their own.
                         .run_if(crate::wire_is_live),
-                    // G3: rebuild the cached-twins registry from index.json (boot).
+                    // Rebuild the cached-twins registry from retained revision records.
                     // UNGATED on purpose: the cached-twins menu lists previously
                     // downloaded twins in single-player too, and the system is a
                     // one-shot (internal `kicked` latch) + channel poll.

@@ -47,7 +47,9 @@ A failed build cannot retain another mount's published manifest. On the client,
 Twin close, disconnect, connection replacement, or role change retires download
 admission and replaces all asynchronous result channels. Late completions cannot
 mount a scene or publish into the next download status. Downloaded mount aliases
-are retired by their owner; borrowed editable mounts remain workspace-owned.
+are retired by their owner. Downloaded mounts admit the exact persistent UUID
+and content revision cache; a matching logical name alone never admits an
+editable checkout. A conflicting live logical name rejects visibly.
 Verified cache bytes and the cached-Twin catalog are application resources.
 
 Client Twin merge uses a `ReplicatedJournal` isolated by exact mount and
@@ -77,6 +79,42 @@ Twin reload acceptance additionally needs an owned host/client pass with delayed
 old-mount traffic and same-source reopening. Desktop builds without the opt-in
 `networking` feature do not exercise this contract.
 
+
+### Revision cache and catalog
+
+`lunco-networking-sync::scenario_sync` owns downloaded bytes under
+`scenarios/<uuid-hex>/<revision-hex>/<relative-path>`. UUID and revision are typed
+fixed-size byte arrays before path construction. Both HTTP and chunk transfers,
+cache probes, scene mounts, menu loads, and promotion use that exact revision.
+Native writes use `lunco-storage`'s complete-byte atomic replacement; OPFS writes
+publish when their writable stream closes. Detached retired downloads may finish
+persisting immutable cache bytes, but cannot change another revision or publish
+into its live download state.
+
+`mount_scenario_twin` returns `ScenarioTwinMount` with its actual authority,
+root, load path, and ownership. It acquires retirement ownership only for a newly
+registered authority; existing exact cache mounts retain their previous owner.
+Repeated admission by the same connection and host mount preserves its existing
+ownership only when authority and root also match. It reuses only that exact cache
+root and logical identity. It never infers scenario identity or content from a name, and cannot
+borrow editable bytes without an explicit content proof.
+
+Each manifest admission captures a UTC nanosecond timestamp and an ID from the
+shared identity owner. Its immutable `.scenario-<timestamp>-<token>.json` record
+stores revision assets and menu metadata. Newest selection uses that captured
+(timestamp, token) order, including same-revision metadata changes. It does not
+use worker completion order. Boot asynchronously scans those records and merges
+with any newer downloads admitted during the scan.
+
+`ScenarioCacheLimits` owns the budgets: 4096 entries per namespace and revision
+scan, eight retained admission records per revision, and the wire envelope byte
+budget per metadata record. Quota violations and corrupt records warn and hold
+the affected catalog admission; the currently admitted manifest still owns live
+scene metadata. Retention deletes old catalog records only. Existing storage
+listing/read APIs materialize a whole directory/file before caller processing
+and read-admission limits apply; they are not streaming enumeration. OPFS uses
+the storage owner's asynchronous `read_directory` parity API. Cached asset
+revision eviction is separate from Twin teardown.
 
 ## 1. The four classifying axes
 

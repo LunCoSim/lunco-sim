@@ -128,7 +128,9 @@ pub fn fetch_missing_assets_http(
             .assets
             .iter()
             .filter(|a| a.cid == outcome.cid)
-            .filter_map(|a| asset_storage_handle(&manifest.scenario_id, &a.path))
+            .filter_map(|a| {
+                asset_storage_handle(&manifest.scenario_id, &manifest.revision, &a.path)
+            })
             .collect();
         if targets.is_empty() {
             warn!("[net] fetched asset has no manifest entry / safe path; discarding");

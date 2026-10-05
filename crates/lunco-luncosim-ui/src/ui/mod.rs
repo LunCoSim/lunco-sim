@@ -1574,10 +1574,11 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                                     let path = match lunco_networking_sync::scenario_sync::mount_scenario_twin(
                                         &twins,
                                         &entry.scenario_id,
+                                        &entry.revision,
                                         &entry.name,
                                         &scene,
                                     ) {
-                                        Ok(path) => path,
+                                        Ok(mount) => mount.path,
                                         Err(error) => {
                                             ctx.trigger(lunco_telemetry_core::TelemetryEvent {
                                                 name: "scenario-twin-mount-failed".into(),

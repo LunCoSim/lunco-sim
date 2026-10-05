@@ -56,7 +56,7 @@ pub struct TwinManifest {
     /// Stable cross-session identity for this Twin/scenario.
     ///
     /// This is the **scenario id** the networking scenario-sync layer
-    /// keys client asset caches on (`cache_dir()/scenarios/<uuid>/…`).
+    /// keys client asset caches on (`cache_dir()/scenarios/<uuid>/<revision>/…`).
     /// It is *stable* across restarts and renames once minted — unlike
     /// `TwinId(u64)` (re-minted every session) or the on-disk path
     /// (changes on move). The **content revision** (which assets make

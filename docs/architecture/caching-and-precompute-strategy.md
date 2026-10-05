@@ -86,8 +86,8 @@ identifying that signal first.
   is now sha2-256 (the new CID). Resolve by *role*, not by picking one algorithm —
   see §2 "Two-tier hashing."
 - **CID exists but is scenario-scoped and not a disk blob store.** The new CID is
-  content-addressed *on the wire* only; **on disk it is uuid+path keyed**
-  (`<cache_dir>/scenarios/<uuid>/<rel>`, `scenario_sync.rs:145`) with **no
+  content-addressed *on the wire* only; **on disk it is UUID+revision+path keyed**
+  (`<cache_dir>/scenarios/<uuid>/<revision>/<rel>`) with **no
   dedup** — identical bytes in two scenarios stored twice. A CID-keyed blob
   store is still net-new.
 - **OPFS exists but is off-trait.** `OpfsStorage` holds non-`Send` JS values
@@ -96,9 +96,11 @@ identifying that signal first.
   There is **no sync web `exists`** (the sync `read_file_sync`/`write_file_sync`
   helpers route wasm to `localStorage`, *not* OPFS — a footgun for any generic
   cache that calls them). No streaming (whole-`Vec` buffering), no eviction.
-- **No eviction anywhere.** Both `cache_dir()` and the new `scenarios/` cache
-  grow unbounded; cross-session cache-hit detection is explicitly deferred
-  (`scenario_sync.rs:29-32`) so a restarted web client re-fetches everything.
+- **Asset revision eviction remains separate.** Scenario metadata retains a
+  bounded set of admission records per revision and rebuilds the cached-Twin
+  menu asynchronously. Verified revision asset trees persist across sessions;
+  automatic eviction of those trees is not part of Twin teardown. See the
+  [cache and catalog owner](../../crates/lunco-networking/SYNC_ARCHITECTURE.md#revision-cache-and-catalog).
 
 ## 2. Proposed substrate: one content-addressed cache crate
 

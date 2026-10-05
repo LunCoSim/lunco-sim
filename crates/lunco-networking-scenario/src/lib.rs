@@ -152,7 +152,7 @@ pub struct ScenarioManifestMsg {
     /// `twin.toml`) the **host** derives it as a SHA-256 path digest
     /// (truncated to 16 B) so distinct folder-scenarios get distinct ids
     /// instead of colliding on all-zeros. Either way the client keys its
-    /// `scenarios/<scenario_id>/` asset cache on this value.
+    /// `scenarios/<scenario_id>/<revision>/` asset cache on this identity and its revision.
     pub scenario_id: [u8; 16],
     /// Git-style Merkle root of the asset list — `scenario_revision()`. The
     /// client diffs this against its cached revision to short-circuit a re-fetch.
@@ -204,9 +204,8 @@ pub struct ScenarioManifestMsg {
     /// Each client mounts the logical `name` and loads through its assigned
     /// local authority. The asset owner normalizes that load address to the
     /// same content-provenance source on every peer, independent of local mount
-    /// history. A client without a checkout uses the downloaded cache as its
-    /// root (`mount_scenario_twin`).
-
+    /// history. Clients mount the exact UUID/revision downloaded cache through
+    /// `mount_scenario_twin`; a matching name alone never admits editable bytes.
     ///
     /// Appended last (bincode positional). `None` mirrors `default_scene`.
     pub twin_scene: Option<String>,

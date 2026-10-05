@@ -147,60 +147,21 @@ fn load_ready_scenario(
     if last_loaded.as_ref() == Some(&*remote) || !downloads.all_cached(m) {
         return;
     }
-    // Reuse the editable local mount when present, otherwise mount the cache.
-    // Repeated admission within this lifetime returns the same load authority,
-    // so LoadScene can recognize an already active or loading scene.
-    let owns_mount = match twins.mounted_name_for_logical(&m.name) {
-        Ok(existing) => existing.is_none(),
-        Err(error) => {
-            lunco_core::trigger_runtime_error(
-                &mut commands,
-                "scenario-twin-mount-failed",
-                error.to_string(),
-            );
-            return;
-        }
-    };
-    let uri = match lunco_networking_sync::scenario_sync::mount_scenario_twin(
+    let mount = match lunco_networking_sync::scenario_sync::mount_scenario_twin(
         &twins,
         &m.scenario_id,
+        &m.revision,
         &m.name,
         scene,
     ) {
-        Ok(uri) => uri,
+        Ok(mount) => mount,
         Err(error) => {
             lunco_core::trigger_runtime_error(
                 &mut commands,
                 "scenario-twin-mount-failed",
                 format!("could not mount downloaded scenario Twin: {error}"),
             );
-            return;
-        }
-    };
-    let Some((authority, _)) = lunco_assets_core::parse_twin_uri(&uri) else {
-        lunco_core::trigger_runtime_error(
-            &mut commands,
-            "scenario-twin-mount-failed",
-            "mounted scenario has no Twin authority",
-        );
-        return;
-    };
-    let root = match twins.root_for(authority) {
-        Ok(Some(root)) => root,
-        Ok(None) => {
-            lunco_core::trigger_runtime_error(
-                &mut commands,
-                "scenario-twin-mount-failed",
-                "mounted scenario root is unavailable",
-            );
-            return;
-        }
-        Err(error) => {
-            lunco_core::trigger_runtime_error(
-                &mut commands,
-                "scenario-twin-mount-failed",
-                error.to_string(),
-            );
+            *last_loaded = Some(remote.clone());
             return;
         }
     };
@@ -211,16 +172,24 @@ fn load_ready_scenario(
             journal,
         );
     }
+    let owns_mount = mount.owns_mount
+        || replica.0.as_ref().is_some_and(|old| {
+            old.owns_mount
+                && old.connection == connection
+                && old.host_twin == host_twin
+                && old.authority == mount.authority
+                && old.root == mount.root
+        });
     replica.0 = Some(lunco_core_session::ReplicatedSceneOwner {
         connection,
         host_twin,
-        authority: authority.to_owned(),
-        root,
+        authority: mount.authority,
+        root: mount.root,
         owns_mount,
     });
     info!("[net] scenario fully cached; loading entry scene (read-only): {scene}");
     commands.trigger(LoadScene {
-        path: uri,
+        path: mount.path,
         root_prim: String::new(),
     });
     *last_loaded = Some(remote.clone());

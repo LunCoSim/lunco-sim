@@ -84,6 +84,46 @@ impl OpfsStorage {
         Ok(array.to_vec())
     }
 
+    /// List direct children with the same File-handle mapping as native storage.
+    /// Enumeration remains asynchronous and creates no directories.
+    pub async fn read_directory(
+        &self,
+        handle: &StorageHandle,
+    ) -> StorageResult<Vec<StorageHandle>> {
+        let path = handle
+            .as_file_path()
+            .ok_or_else(|| unsupported("OpfsStorage addresses File handles only"))?;
+        let segments: Vec<_> = path
+            .components()
+            .filter_map(|component| match component {
+                std::path::Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect();
+        let directory = resolve_dir(&segments_root().await?, &segments, false).await?;
+        let iterator = directory.keys();
+        let mut entries = Vec::new();
+        loop {
+            let result = JsFuture::from(iterator.next().map_err(js_err)?)
+                .await
+                .map_err(js_err)?;
+            let done = js_sys::Reflect::get(&result, &JsValue::from_str("done"))
+                .map_err(js_err)?
+                .as_bool()
+                .ok_or_else(|| unsupported("OPFS directory iterator returned no done flag"))?;
+            if done {
+                break;
+            }
+            let name = js_sys::Reflect::get(&result, &JsValue::from_str("value"))
+                .map_err(js_err)?
+                .as_string()
+                .ok_or_else(|| unsupported("OPFS directory iterator returned no name"))?;
+            entries.push(StorageHandle::File(path.join(name)));
+        }
+        entries.sort_by_key(|entry| entry.display_name());
+        Ok(entries)
+    }
+
     /// Delete the OPFS file addressed by `handle`. [`StorageError::NotFound`]
     /// when the file (or any directory on its path) doesn't exist.
     pub async fn delete(&self, handle: &StorageHandle) -> StorageResult<()> {

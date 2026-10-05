@@ -48,6 +48,10 @@ Each concurrent write reserves its own staging file; replacement and create-only
 `write_new` share this staging owner. `write_new` preserves an existing destination.
 Consumers must use these storage methods for concurrent cache persistence.
 
+`OpfsStorage` exposes asynchronous `read_directory` with the same File-handle
+mapping and sorted direct-child results as native storage. Callers bound catalog
+processing and metadata reads; directory enumeration returns the complete list.
+
 Native file URI conversion belongs to `file_uri_to_path` and
 `file_path_to_uri`. They delegate URL parsing and encoding to `url`, including
 percent-encoded spaces and Unicode, local authorities, and Windows drive/UNC

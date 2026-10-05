@@ -3,7 +3,7 @@
 //! Phase 1 ([`lunco_networking_scenario`]) publishes the manifest: "scenario X at revision
 //! R with these asset CIDs". This module moves the actual **bytes**, one-way
 //! host → client, so a joined client can materialise the scenario in its local
-//! cache (`<cache_dir>/scenarios/<scenario_id>/<path>`). It is deliberately the
+//! cache (`<cache_dir>/scenarios/<scenario_id>/<revision>/<path>`). It is deliberately the
 //! *content plane* only — opaque bytes addressed by CID, verified by re-hashing,
 //! no merge (documents merge via the journal; see `NETWORKING_ASSET_SYNC_DESIGN.md`).
 //!
@@ -25,11 +25,8 @@
 //!   to the CID (**fail-closed** — a mismatched blob is discarded, never cached),
 //!   then persisted via `lunco_storage::write_file_sync`.
 //!
-//! Deferred (documented, not silent): explicit flow-control/backpressure beyond a
-//! per-frame send cap; the `AssetHave` dedupe hint; cross-session on-disk
-//! cache-hit detection (needs a cheap sync `exists`/metadata storage API — today
-//! a restarted client re-fetches); off-threading the client-side verify+write of
-//! a completed large asset; and Phase 4 (loading the scene once assets land).
+//! Persisted revision caches and their admission catalog are application-owned.
+//! Transfer and scene publication remain pinned to the live connection/mount.
 
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
@@ -95,8 +92,31 @@ pub struct ScenarioManifestResource {
 pub struct RemoteScenarioManifest {
     pub connection: Option<Entity>,
     pub host_twin: Option<lunco_workspace::TwinId>,
+    /// Catalog ordering pinned when this manifest was admitted.
+    pub cache_admission: Option<CacheAdmission>,
     /// The most recent manifest the host pushed.
     pub manifest: Option<ScenarioManifestMsg>,
+}
+
+/// Immutable catalog admission identity, independent of worker completion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CacheAdmission {
+    pub cached_at_unix_ns: u64,
+    pub token: String,
+}
+
+impl CacheAdmission {
+    fn new() -> Result<Self, String> {
+        let timestamp = web_time::SystemTime::now()
+            .duration_since(web_time::SystemTime::UNIX_EPOCH)
+            .map_err(|error| format!("invalid cache admission clock: {error}"))?;
+        let cached_at_unix_ns = u64::try_from(timestamp.as_nanos())
+            .map_err(|_| "cache admission timestamp exceeds its storage range".to_string())?;
+        Ok(Self {
+            cached_at_unix_ns,
+            token: lunco_id::random_token(),
+        })
+    }
 }
 
 impl RemoteScenarioManifest {
@@ -205,6 +225,13 @@ impl ClientScenarioLifecycle<'_> {
         owner: lunco_workspace::TwinId,
         manifest: ScenarioManifestMsg,
     ) {
+        let cache_admission = match CacheAdmission::new() {
+            Ok(admission) => Some(admission),
+            Err(error) => {
+                warn!("[net] scenario cache catalog admission rejected: {error}");
+                None
+            }
+        };
         if self.remote.connection == Some(connection) && self.remote.host_twin == Some(owner) {
             self.clear_content();
         } else {
@@ -213,6 +240,7 @@ impl ClientScenarioLifecycle<'_> {
         self.remote.connection = Some(connection);
         self.remote.host_twin = Some(owner);
         self.remote.manifest = Some(manifest);
+        self.remote.cache_admission = cache_admission;
     }
 }
 
@@ -478,7 +506,7 @@ impl CacheProbeState {
 
 // ── Cross-session cache index (G1 integrity + G3 menu metadata) ───────────────
 
-/// One per-asset record persisted in `<cache_root>/.scenario.json`. The probe keys
+/// One per-asset record persisted in an immutable catalog admission. The probe keys
 /// cache-hits on `cid` — not file presence — so a twin whose content changed at a
 /// path is re-fetched, never served stale; the cached-twin menu reads the same
 /// file for name/size/scene.
@@ -489,43 +517,83 @@ struct ScenarioIndexAsset {
     size: u64,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Default)]
+#[derive(serde::Serialize, serde::Deserialize)]
 struct ScenarioIndex {
-    name: String,
-    default_scene: Option<String>,
-    revision: [u8; 32],
-    total_bytes: u64,
+    summary: CachedTwinSummary,
     assets: Vec<ScenarioIndexAsset>,
 }
 
-/// `<cache_root>/.scenario.json` — the per-scenario "what's cached" marker.
-fn scenario_index_path(scenario_id: &[u8; 16]) -> PathBuf {
-    scenario_cache_root(scenario_id).join(".scenario.json")
+fn catalog_record_name(admission: &CacheAdmission) -> String {
+    format!(
+        ".scenario-{:020}-{}.json",
+        admission.cached_at_unix_ns, admission.token
+    )
 }
 
-/// One cached scenario, listed in the top-level `<cache>/scenarios/index.json`
-/// and surfaced in the cached-twins menu (G3). Persisted across sessions so the
-/// menu can list + load downloaded twins with no server connected.
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
+/// One immutable downloaded revision admission. The catalog selects the newest
+/// captured admission per UUID, never the last worker to finish.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct CachedTwinSummary {
     pub scenario_id: [u8; 16],
     pub name: String,
     pub default_scene: Option<String>,
     pub total_bytes: u64,
     pub revision: [u8; 32],
+    pub cached_at_unix_ns: u64,
+    pub admission_token: String,
 }
 
-/// The cached-twins menu's data: every scenario fully downloaded to this peer's
-/// cache. Rebuilt from `index.json` at boot ([`refresh_cached_twins_registry`])
-/// and kept current by [`write_scenario_index`] as new downloads complete.
+/// Cache catalog processing and metadata retention budgets. Asset cache bytes
+/// are retained independently; these limits bound catalog admission/read work.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct ScenarioCacheLimits {
+    pub max_namespace_entries: usize,
+    pub max_admission_records: usize,
+    pub max_record_bytes: usize,
+}
+
+impl Default for ScenarioCacheLimits {
+    fn default() -> Self {
+        Self {
+            max_namespace_entries: 4096,
+            max_admission_records: 8,
+            max_record_bytes: crate::codec::MAX_ENVELOPE_BYTES,
+        }
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct CachedTwinsRegistry {
     pub entries: Vec<CachedTwinSummary>,
 }
 
-/// Channel for the async `index.json` read at boot to report back to
-/// [`refresh_cached_twins_registry`] (sibling of [`AssetPersist`] /
-/// [`AssetCacheProbe`]).
+impl CachedTwinsRegistry {
+    fn admit(&mut self, summary: CachedTwinSummary) {
+        if let Some(existing) = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.scenario_id == summary.scenario_id)
+        {
+            if catalog_order(existing) >= catalog_order(&summary) {
+                return;
+            }
+            *existing = summary;
+        } else {
+            self.entries.push(summary);
+        }
+        self.entries.sort_by(|a, b| {
+            catalog_order(b)
+                .cmp(&catalog_order(a))
+                .then(a.scenario_id.cmp(&b.scenario_id))
+        });
+    }
+}
+
+fn catalog_order(summary: &CachedTwinSummary) -> (u64, &str) {
+    (summary.cached_at_unix_ns, &summary.admission_token)
+}
+
+/// Application-owned result channel for the asynchronous boot catalog scan.
 #[derive(Resource)]
 pub struct CachedTwinsIndex {
     tx: Sender<Vec<CachedTwinSummary>>,
@@ -537,11 +605,6 @@ impl Default for CachedTwinsIndex {
         let (tx, rx) = unbounded();
         Self { tx, rx }
     }
-}
-
-/// `<cache>/scenarios/index.json` — the top-level list of cached scenarios.
-fn scenarios_index_path() -> PathBuf {
-    lunco_assets_core::scenarios_dir().join("index.json")
 }
 
 /// Client-side queue: raw chunks pushed by the `AssetChunk` arm of
@@ -614,9 +677,11 @@ pub struct AssetServeTasks(pub Vec<(SessionId, Task<Vec<AssetChunkMsg>>)>);
 
 // ── Cache paths ───────────────────────────────────────────────────────────────
 
-/// Root of a scenario's local asset cache: `<cache_dir>/scenarios/<hex id>/`.
-pub fn scenario_cache_root(scenario_id: &[u8; 16]) -> PathBuf {
-    lunco_assets_core::scenarios_dir().join(hex16(scenario_id))
+/// Immutable revision cache root: `<cache_dir>/scenarios/<hex id>/<hex revision>/`.
+pub fn scenario_cache_root(scenario_id: &[u8; 16], revision: &[u8; 32]) -> PathBuf {
+    lunco_assets_core::scenarios_dir()
+        .join(hex_bytes(scenario_id))
+        .join(hex_bytes(revision))
 }
 
 /// A safe *relative* `PathBuf` from a `/`-separated manifest asset path,
@@ -633,12 +698,12 @@ pub fn safe_rel_path(rel: &str) -> Option<PathBuf> {
 
 /// Resolve a manifest asset's relative path to its on-disk cache location under
 /// [`scenario_cache_root`], traversal-guarded via [`safe_rel_path`].
-fn scenario_asset_path(scenario_id: &[u8; 16], rel: &str) -> Option<PathBuf> {
-    Some(scenario_cache_root(scenario_id).join(safe_rel_path(rel)?))
+fn scenario_asset_path(scenario_id: &[u8; 16], revision: &[u8; 32], rel: &str) -> Option<PathBuf> {
+    Some(scenario_cache_root(scenario_id, revision).join(safe_rel_path(rel)?))
 }
 
-fn hex16(b: &[u8; 16]) -> String {
-    let mut s = String::with_capacity(32);
+fn hex_bytes(b: &[u8]) -> String {
+    let mut s = String::with_capacity(b.len() * 2);
     for byte in b {
         s.push_str(&format!("{byte:02x}"));
     }
@@ -796,7 +861,7 @@ pub fn reassemble_asset_chunks(
                 m.assets
                     .iter()
                     .filter(|a| a.cid.as_slice() == ch.cid.as_slice())
-                    .filter_map(|a| asset_storage_handle(&m.scenario_id, &a.path))
+                    .filter_map(|a| asset_storage_handle(&m.scenario_id, &m.revision, &a.path))
                     .collect()
             })
             .unwrap_or_default();
@@ -852,12 +917,212 @@ pub fn drain_persist_results(
 
 // ── Client: cross-session cache-hit probe (G1) ─────────────────────────────────
 
-/// Read the scenario index, if present and well-formed. `None` if missing or
-/// unreadable — treated as "nothing recognized", so assets are fetched afresh.
-async fn read_scenario_index(scenario_id: &[u8; 16]) -> Option<ScenarioIndex> {
-    let handle = StorageHandle::File(scenario_index_path(scenario_id));
-    let bytes = storage_read(&handle).await?;
-    serde_json::from_slice(&bytes).ok()
+/// Read the newest valid admission record for one immutable revision.
+async fn read_revision_index(
+    root: &std::path::Path,
+    scenario_id: &[u8; 16],
+    revision: &[u8; 32],
+    limits: ScenarioCacheLimits,
+) -> Option<ScenarioIndex> {
+    let records = revision_catalog_records(root, limits).await;
+    for (admission, handle) in records.into_iter().rev().take(limits.max_admission_records) {
+        let Some(bytes) = storage_read(&handle).await else {
+            continue;
+        };
+        if bytes.len() > limits.max_record_bytes {
+            warn!(
+                "[net] scenario catalog record exceeds metadata budget: {}",
+                handle.display_name()
+            );
+            continue;
+        }
+        let index = match serde_json::from_slice::<ScenarioIndex>(&bytes) {
+            Ok(index) => index,
+            Err(error) => {
+                warn!("[net] invalid scenario catalog record: {error}");
+                continue;
+            }
+        };
+        if index.summary.scenario_id != *scenario_id
+            || index.summary.revision != *revision
+            || index.summary.cached_at_unix_ns != admission.cached_at_unix_ns
+            || index.summary.admission_token != admission.token
+        {
+            warn!("[net] scenario catalog identity does not match its admitted path");
+            continue;
+        }
+        return Some(index);
+    }
+    None
+}
+
+fn parse_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
+    if value.len() != N * 2
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    let mut bytes = [0; N];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        bytes[index] =
+            ((pair[0] as char).to_digit(16)? * 16 + (pair[1] as char).to_digit(16)?) as u8;
+    }
+    Some(bytes)
+}
+
+fn record_admission(handle: &StorageHandle) -> Option<CacheAdmission> {
+    let name = handle.as_file_path()?.file_name()?.to_str()?;
+    let value = name.strip_prefix(".scenario-")?.strip_suffix(".json")?;
+    let (timestamp, token) = value.split_once('-')?;
+    if timestamp.len() != 20 || !timestamp.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    parse_hex::<16>(token)?;
+    Some(CacheAdmission {
+        cached_at_unix_ns: timestamp.parse().ok()?,
+        token: token.to_string(),
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn storage_directory(
+    handle: &StorageHandle,
+) -> lunco_storage::StorageResult<Vec<StorageHandle>> {
+    use lunco_storage::Storage;
+    lunco_storage::FileStorage::new()
+        .read_directory(handle)
+        .await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn storage_directory(
+    handle: &StorageHandle,
+) -> lunco_storage::StorageResult<Vec<StorageHandle>> {
+    lunco_storage::OpfsStorage::new()
+        .read_directory(handle)
+        .await
+}
+
+async fn catalog_directory(
+    handle: &StorageHandle,
+    limits: ScenarioCacheLimits,
+) -> Vec<StorageHandle> {
+    if limits.max_namespace_entries == 0
+        || limits.max_admission_records == 0
+        || limits.max_record_bytes == 0
+    {
+        warn!("[net] scenario cache catalog budgets must be non-zero");
+        return Vec::new();
+    }
+    match storage_directory(handle).await {
+        Ok(entries) if entries.len() <= limits.max_namespace_entries => entries,
+        Ok(_) => {
+            warn!(
+                "[net] scenario catalog namespace exceeds entry budget: {}",
+                handle.display_name()
+            );
+            Vec::new()
+        }
+        Err(lunco_storage::StorageError::NotFound) => Vec::new(),
+        Err(error) => {
+            warn!("[net] scenario catalog directory read failed: {error}");
+            Vec::new()
+        }
+    }
+}
+
+async fn revision_catalog_records(
+    root: &std::path::Path,
+    limits: ScenarioCacheLimits,
+) -> Vec<(CacheAdmission, StorageHandle)> {
+    let mut records: Vec<_> = catalog_directory(&StorageHandle::File(root.to_path_buf()), limits)
+        .await
+        .into_iter()
+        .filter_map(|handle| record_admission(&handle).map(|admission| (admission, handle)))
+        .collect();
+    records.sort_by(|a, b| {
+        (a.0.cached_at_unix_ns, &a.0.token).cmp(&(b.0.cached_at_unix_ns, &b.0.token))
+    });
+    records
+}
+
+async fn read_cache_catalog(limits: ScenarioCacheLimits) -> Vec<CachedTwinSummary> {
+    let mut registry = CachedTwinsRegistry::default();
+    let scenarios = catalog_directory(
+        &StorageHandle::File(lunco_assets_core::scenarios_dir()),
+        limits,
+    )
+    .await;
+    let mut remaining_revisions = limits.max_namespace_entries;
+    for scenario in scenarios {
+        let Some(id) = scenario
+            .as_file_path()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .and_then(parse_hex::<16>)
+        else {
+            continue;
+        };
+        for revision in catalog_directory(&scenario, limits).await {
+            let Some(revision) = revision
+                .as_file_path()
+                .and_then(|path| path.file_name())
+                .and_then(|name| name.to_str())
+                .and_then(parse_hex::<32>)
+            else {
+                continue;
+            };
+            if remaining_revisions == 0 {
+                warn!("[net] scenario catalog scan exhausted revision budget");
+                return registry.entries;
+            }
+            remaining_revisions -= 1;
+            if let Some(index) =
+                read_revision_index(&scenario_cache_root(&id, &revision), &id, &revision, limits)
+                    .await
+            {
+                registry.admit(index.summary);
+            }
+        }
+    }
+    registry.entries
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn storage_delete(handle: &StorageHandle) -> lunco_storage::StorageResult<()> {
+    use lunco_storage::Storage;
+    lunco_storage::FileStorage::new().delete(handle).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn storage_delete(handle: &StorageHandle) -> lunco_storage::StorageResult<()> {
+    lunco_storage::OpfsStorage::new().delete(handle).await
+}
+
+async fn retain_catalog_records(root: &std::path::Path, limits: ScenarioCacheLimits) {
+    let records = revision_catalog_records(root, limits).await;
+    let remove = records.len().saturating_sub(limits.max_admission_records);
+    for (_, handle) in records.into_iter().take(remove) {
+        if let Err(error) = storage_delete(&handle).await {
+            if !matches!(error, lunco_storage::StorageError::NotFound) {
+                warn!("[net] scenario catalog retention failed: {error}");
+            }
+        }
+    }
+}
+
+async fn persist_catalog_record(
+    root: &std::path::Path,
+    admission: &CacheAdmission,
+    bytes: Vec<u8>,
+    limits: ScenarioCacheLimits,
+) {
+    let handle = StorageHandle::File(root.join(catalog_record_name(admission)));
+    if do_write(handle, bytes).await {
+        retain_catalog_records(root, limits).await;
+    }
 }
 
 /// True iff the cache file for an asset is present on disk/OPFS.
@@ -868,11 +1133,25 @@ async fn cached_asset_exists(path: &std::path::Path) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 async fn storage_read(handle: &StorageHandle) -> Option<Vec<u8>> {
     use lunco_storage::Storage;
-    lunco_storage::FileStorage::new().read(handle).await.ok()
+    match lunco_storage::FileStorage::new().read(handle).await {
+        Ok(bytes) => Some(bytes),
+        Err(lunco_storage::StorageError::NotFound) => None,
+        Err(error) => {
+            warn!("[net] scenario cache read failed: {error}");
+            None
+        }
+    }
 }
 #[cfg(target_arch = "wasm32")]
 async fn storage_read(handle: &StorageHandle) -> Option<Vec<u8>> {
-    lunco_storage::OpfsStorage::new().read(handle).await.ok()
+    match lunco_storage::OpfsStorage::new().read(handle).await {
+        Ok(bytes) => Some(bytes),
+        Err(lunco_storage::StorageError::NotFound) => None,
+        Err(error) => {
+            warn!("[net] scenario cache read failed: {error}");
+            None
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -893,15 +1172,21 @@ async fn run_cache_probe(
     scenario_id: [u8; 16],
     revision: [u8; 32],
     assets: Vec<(Vec<u8>, String)>,
+    limits: ScenarioCacheLimits,
 ) -> ProbeOutcome {
-    let by_path: HashMap<String, Vec<u8>> = read_scenario_index(&scenario_id)
-        .await
-        .map(|idx| idx.assets.into_iter().map(|a| (a.path, a.cid)).collect())
-        .unwrap_or_default();
+    let by_path: HashMap<String, Vec<u8>> = read_revision_index(
+        &scenario_cache_root(&scenario_id, &revision),
+        &scenario_id,
+        &revision,
+        limits,
+    )
+    .await
+    .map(|idx| idx.assets.into_iter().map(|a| (a.path, a.cid)).collect())
+    .unwrap_or_default();
     let mut cached = HashSet::new();
     for (cid, rel) in &assets {
         if by_path.get(rel).is_some_and(|c| c == cid) {
-            if let Some(p) = scenario_asset_path(&scenario_id, rel) {
+            if let Some(p) = scenario_asset_path(&scenario_id, &revision, rel) {
                 if cached_asset_exists(&p).await {
                     cached.insert(cid.clone());
                 }
@@ -920,6 +1205,7 @@ pub fn drive_cache_probe(
     remote: Res<RemoteScenarioManifest>,
     connection: Res<lunco_core_session::ClientConnection>,
     probe: Res<AssetCacheProbe>,
+    limits: Res<ScenarioCacheLimits>,
     mut state: ResMut<CacheProbeState>,
     mut downloads: ResMut<AssetDownloads>,
 ) {
@@ -931,6 +1217,7 @@ pub fn drive_cache_probe(
             state.kicked = Some(m.revision);
             let scenario_id = m.scenario_id;
             let revision = m.revision;
+            let limits = *limits;
             let assets: Vec<(Vec<u8>, String)> = m
                 .assets
                 .iter()
@@ -938,7 +1225,7 @@ pub fn drive_cache_probe(
                 .collect();
             let tx = probe.tx.clone();
             let fut = async move {
-                let outcome = run_cache_probe(scenario_id, revision, assets).await;
+                let outcome = run_cache_probe(scenario_id, revision, assets, limits).await;
                 let _ = tx.send(outcome);
             };
             #[cfg(not(target_arch = "wasm32"))]
@@ -956,46 +1243,48 @@ pub fn drive_cache_probe(
     }
 }
 
-/// Client: once a scenario is fully cached, persist its `.scenario.json` index so
+/// Client: once a scenario is fully cached, persist its immutable admission so
 /// a later session's probe recognizes it and the cached-twin menu can list it.
-/// Fires once per revision. Client-only.
+/// Fires once per admitted manifest. Client-only.
 pub fn write_scenario_index(
     role: Res<NetworkRole>,
     remote: Res<RemoteScenarioManifest>,
     connection: Res<lunco_core_session::ClientConnection>,
     downloads: Res<AssetDownloads>,
+    limits: Res<ScenarioCacheLimits>,
     mut registry: ResMut<CachedTwinsRegistry>,
-    mut written: Local<Option<[u8; 32]>>,
+    mut written: Local<Option<String>>,
 ) {
     if !remote.is_live(*role, connection.0) {
         return;
     }
-    let Some(m) = remote.manifest.as_ref() else {
+    let (Some(m), Some(admission)) = (remote.manifest.as_ref(), remote.cache_admission.as_ref())
+    else {
+        warn_once!("[net] live scenario has no cache catalog admission");
         return;
     };
-    if *written == Some(m.revision) || !downloads.all_cached(m) {
+    if written.as_ref() == Some(&admission.token) || !downloads.all_cached(m) {
         return;
     }
-    *written = Some(m.revision);
+    if limits.max_admission_records == 0
+        || limits.max_namespace_entries == 0
+        || limits.max_record_bytes == 0
+    {
+        warn!("[net] scenario cache catalog budgets must be non-zero");
+        return;
+    }
+    *written = Some(admission.token.clone());
     let summary = CachedTwinSummary {
         scenario_id: m.scenario_id,
         name: m.name.clone(),
         default_scene: m.default_scene.clone(),
         total_bytes: m.assets.iter().map(|a| a.size).sum(),
         revision: m.revision,
+        cached_at_unix_ns: admission.cached_at_unix_ns,
+        admission_token: admission.token.clone(),
     };
-    // Keep the in-memory registry current so the menu updates live as a download
-    // completes; the async block below persists both the per-scenario index and
-    // the top-level index.json so a later boot can rebuild the registry.
-    registry
-        .entries
-        .retain(|e| e.scenario_id != summary.scenario_id);
-    registry.entries.push(summary.clone());
     let index = ScenarioIndex {
-        name: m.name.clone(),
-        default_scene: m.default_scene.clone(),
-        revision: m.revision,
-        total_bytes: summary.total_bytes,
+        summary: summary.clone(),
         assets: m
             .assets
             .iter()
@@ -1006,33 +1295,23 @@ pub fn write_scenario_index(
             })
             .collect(),
     };
-    let Ok(bytes) = serde_json::to_vec(&index) else {
-        return;
+    let bytes = match serde_json::to_vec(&index) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            warn!("[net] scenario catalog serialization failed: {error}");
+            return;
+        }
     };
-    let per_scenario = StorageHandle::File(scenario_index_path(&m.scenario_id));
-    let top_index = StorageHandle::File(scenarios_index_path());
+    if bytes.len() > limits.max_record_bytes {
+        warn!("[net] scenario catalog record exceeds metadata budget");
+        return;
+    }
+    registry.admit(summary);
+    let root = scenario_cache_root(&m.scenario_id, &m.revision);
+    let admission = admission.clone();
+    let limits = *limits;
     let fut = async move {
-        if !do_write(per_scenario, bytes).await {
-            warn!(
-                "[net] scenario index write failed for {:?}",
-                summary.scenario_id
-            );
-        }
-        // Merge into the top-level index.json (read → replace this id → write).
-        let mut entries: Vec<CachedTwinSummary> = match storage_read(&top_index).await {
-            Some(b) => serde_json::from_slice(&b).unwrap_or_default(),
-            None => Vec::new(),
-        };
-        entries.retain(|e| e.scenario_id != summary.scenario_id);
-        entries.push(summary);
-        match serde_json::to_vec(&entries) {
-            Ok(json) => {
-                if !do_write(top_index, json).await {
-                    warn!("[net] top-level scenario index write failed");
-                }
-            }
-            Err(e) => warn!("[net] top-level scenario index serialise failed: {e}"),
-        }
+        persist_catalog_record(&root, &admission, bytes, limits).await;
     };
     #[cfg(not(target_arch = "wasm32"))]
     AsyncComputeTaskPool::get().spawn(fut).detach();
@@ -1040,26 +1319,20 @@ pub fn write_scenario_index(
     wasm_bindgen_futures::spawn_local(fut);
 }
 
-/// G3 boot: read the top-level `index.json` once and rebuild
-/// [`CachedTwinsRegistry`] so the cached-twins menu lists twins downloaded in a
-/// prior session. Runs on every peer (host included — a host may have promoted
-/// a scenario earlier); no-op after the first successful read.
+/// Read retained revision records asynchronously at boot, merging by pinned
+/// admission order even if this session downloaded a Twin before the scan ends.
 pub fn refresh_cached_twins_registry(
     index: Res<CachedTwinsIndex>,
+    limits: Res<ScenarioCacheLimits>,
     mut registry: ResMut<CachedTwinsRegistry>,
     mut kicked: Local<bool>,
 ) {
     if !*kicked {
         *kicked = true;
         let tx = index.tx.clone();
+        let limits = *limits;
         let fut = async move {
-            let entries = match storage_read(&StorageHandle::File(scenarios_index_path())).await {
-                Some(bytes) => {
-                    serde_json::from_slice::<Vec<CachedTwinSummary>>(&bytes).unwrap_or_default()
-                }
-                None => Vec::new(),
-            };
-            let _ = tx.send(entries);
+            let _ = tx.send(read_cache_catalog(limits).await);
         };
         #[cfg(not(target_arch = "wasm32"))]
         AsyncComputeTaskPool::get().spawn(fut).detach();
@@ -1067,10 +1340,8 @@ pub fn refresh_cached_twins_registry(
         wasm_bindgen_futures::spawn_local(fut);
     }
     if let Ok(entries) = index.rx.try_recv() {
-        // Only adopt the on-disk list if we haven't already accumulated entries
-        // this session (a download completed before the boot read landed).
-        if registry.entries.is_empty() {
-            registry.entries = entries;
+        for summary in entries {
+            registry.admit(summary);
         }
     }
 }
@@ -1119,53 +1390,103 @@ pub fn update_scenario_download_status(
     };
 }
 
-/// Mount a downloaded scenario as a Twin root and return the asset URI for one of
-/// its files (e.g. the entry scene).
-///
-/// A downloaded scenario **is** a Twin whose root happens to be its cache
-/// directory, so it uses the same source scheme. The returned load authority is
-/// local to this mount lifetime; the asset owner converts it to the stable
-/// logical `name` for content provenance. Host and client may have different
-/// mount histories while deriving identical `GlobalEntityId`s.
-///
-/// A twin already open locally keeps its own root: same identity, but a real
-/// checkout is the better source for the bytes, and re-pointing it at a
-/// read-only cache copy would shadow the user's editable files.
-///
-/// TODO(verify-host-client): this path has NO runtime coverage. It cannot be unit
-/// tested — it needs a real host/client pair (`scripts/run_host_client.sh`), plus
-/// a web client for the case that motivated it (a peer with no local checkout).
-///
-/// Verify by hand until that exists, and treat it as load-bearing: the failure
-/// mode is SILENT. A wrong logical `name` produces different content provenance
-/// and possession/client prediction cannot bind. Check that both peers agree
-/// on the canonical logical source, then confirm possession binds.
+/// Exact downloaded mount admitted by UUID and revision, with its real asset
+/// authority and root. Ownership is acquired only when this admission creates
+/// its authority; an already mounted cache remains owned by its existing caller.
+#[derive(Debug)]
+pub struct ScenarioTwinMount {
+    pub path: String,
+    pub authority: String,
+    pub root: PathBuf,
+    pub owns_mount: bool,
+}
+
+/// Mount the exact verified UUID/revision cache and return its typed ownership.
+/// A live logical name bound to another root is a conflict; a name alone never
+/// proves that an editable checkout contains this scenario's bytes.
 pub fn mount_scenario_twin(
     twins: &lunco_assets_core::twin_source::TwinRoots,
     scenario_id: &[u8; 16],
+    revision: &[u8; 32],
     name: &str,
     rel: &str,
-) -> Result<String, lunco_assets_core::twin_source::TwinRootsError> {
-    let assigned = match twins.mounted_name_for_logical(name)? {
-        Some(assigned) => assigned,
-        None => twins.register(name, scenario_cache_root(scenario_id))?,
+) -> Result<ScenarioTwinMount, lunco_assets_core::twin_source::TwinRootsError> {
+    mount_cached_root(twins, scenario_cache_root(scenario_id, revision), name, rel)
+}
+
+fn mount_cached_root(
+    twins: &lunco_assets_core::twin_source::TwinRoots,
+    root: PathBuf,
+    name: &str,
+    rel: &str,
+) -> Result<ScenarioTwinMount, lunco_assets_core::twin_source::TwinRootsError> {
+    use lunco_assets_core::twin_source::TwinRootsError;
+    safe_rel_path(rel).ok_or_else(|| {
+        TwinRootsError::AssetResolution(
+            std::io::ErrorKind::InvalidInput,
+            format!("unsafe scenario scene path `{rel}`"),
+        )
+    })?;
+    let existing = twins.name_for_root(&root)?;
+    let existing_root = match existing.as_ref() {
+        Some(authority) => Some(
+            twins
+                .root_for(authority)?
+                .ok_or_else(|| TwinRootsError::UnknownAuthority(authority.clone()))?,
+        ),
+        None => None,
     };
+    let existing_logical = twins.mounted_name_for_logical(name)?;
+    if let Some(logical_mount) = existing_logical.as_ref() {
+        let logical_root = twins
+            .root_for(logical_mount)?
+            .ok_or_else(|| TwinRootsError::UnknownAuthority(logical_mount.clone()))?;
+        if existing_root.as_ref() != Some(&logical_root) {
+            return Err(TwinRootsError::AssetResolution(
+                std::io::ErrorKind::AlreadyExists,
+                format!(
+                    "logical Twin `{name}` is already mounted from another root; downloaded scenario requires its exact UUID/revision cache"
+                ),
+            ));
+        }
+    }
+    let assigned = twins.register(name, root)?;
+    let owns_mount = existing_logical.as_deref() != Some(assigned.as_str());
     let logical = twins.logical_name(&assigned)?;
     if logical != name {
-        return Err(lunco_assets_core::TwinRootsError::LogicalIdentityMismatch {
+        if owns_mount {
+            twins.unregister_name(&assigned)?;
+        }
+        return Err(TwinRootsError::LogicalIdentityMismatch {
             requested: name.to_string(),
             assigned: logical,
         });
     }
-    Ok(lunco_assets_core::twin_uri(&assigned, rel))
+    let root = twins
+        .root_for(&assigned)?
+        .ok_or_else(|| TwinRootsError::UnknownAuthority(assigned.clone()))?;
+    Ok(ScenarioTwinMount {
+        path: lunco_assets_core::twin_uri(&assigned, rel),
+        authority: assigned,
+        root,
+        owns_mount,
+    })
 }
 
 /// The storage handle for a scenario asset's cache location. A
 /// [`StorageHandle::File`] on **both** platforms (native: absolute, under
 /// `cache_dir()`; web: the same path fed to `OpfsStorage`, which maps its
 /// components onto the OPFS tree) — so only the backend, not the handle, differs.
-pub(crate) fn asset_storage_handle(scenario_id: &[u8; 16], rel: &str) -> Option<StorageHandle> {
-    Some(StorageHandle::File(scenario_asset_path(scenario_id, rel)?))
+pub(crate) fn asset_storage_handle(
+    scenario_id: &[u8; 16],
+    revision: &[u8; 32],
+    rel: &str,
+) -> Option<StorageHandle> {
+    Some(StorageHandle::File(scenario_asset_path(
+        scenario_id,
+        revision,
+        rel,
+    )?))
 }
 
 /// Spawn the verify-passed asset's write on the platform's async executor and
@@ -1352,8 +1673,8 @@ fn on_promote_scenario(
 /// identity as the Twin uuid** (so a future re-download / bidirectional sync
 /// recognizes it), then `add_twin` + `TwinAdded` — which the USD observer turns
 /// into a `twin://` scene load backed by the promoted folder instead of the
-/// read-only cache dir. The scene URI is unchanged by promotion — only the root
-/// that Twin name resolves to moves.
+/// read-only revision cache. The workspace asset owner assigns the promoted
+/// Twin a live load authority; stable logical provenance remains owner-derived.
 #[cfg(not(target_arch = "wasm32"))]
 fn promote_scenario_to_folder(
     manifest: &ScenarioManifestMsg,
@@ -1362,7 +1683,7 @@ fn promote_scenario_to_folder(
     commands: &mut Commands,
 ) {
     let target = PathBuf::from(folder);
-    let cache_root = scenario_cache_root(&manifest.scenario_id);
+    let cache_root = scenario_cache_root(&manifest.scenario_id, &manifest.revision);
     for asset in &manifest.assets {
         let Some(rel) = safe_rel_path(&asset.path) else {
             error!("[promote] unsafe asset path {:?}; aborting", asset.path);
@@ -1454,7 +1775,7 @@ mod tests {
         let targets: Vec<_> = assets
             .iter()
             .filter(|(_, cid)| cid.as_slice() == shared.as_slice())
-            .filter_map(|(path, _)| asset_storage_handle(&id, path))
+            .filter_map(|(path, _)| asset_storage_handle(&id, &[4; 32], path))
             .collect();
 
         assert_eq!(
@@ -1462,18 +1783,175 @@ mod tests {
             2,
             "both paths sharing the CID must be written"
         );
-        let expect = |rel: &str| StorageHandle::File(scenario_asset_path(&id, rel).unwrap());
+        let expect =
+            |rel: &str| StorageHandle::File(scenario_asset_path(&id, &[4; 32], rel).unwrap());
         assert!(targets.contains(&expect("rover.glb")));
         assert!(targets.contains(&expect("structures/rover.glb")));
     }
 
     #[test]
+    fn catalog_retention_and_selection_use_admission_order() {
+        bevy::tasks::block_on(async {
+            let root = tempfile::tempdir().unwrap();
+            let id = [1; 16];
+            let revision = [2; 32];
+            let limits = ScenarioCacheLimits {
+                max_admission_records: 2,
+                ..Default::default()
+            };
+            // Finish the oldest metadata write last, including a same-revision rename.
+            for timestamp in [3, 2, 1] {
+                let admission = CacheAdmission {
+                    cached_at_unix_ns: timestamp,
+                    token: format!("{timestamp:032x}"),
+                };
+                let index = ScenarioIndex {
+                    summary: CachedTwinSummary {
+                        scenario_id: id,
+                        revision,
+                        name: format!("admission {timestamp}"),
+                        default_scene: Some(format!("scene-{timestamp}.usda")),
+                        total_bytes: 0,
+                        cached_at_unix_ns: timestamp,
+                        admission_token: admission.token.clone(),
+                    },
+                    assets: Vec::new(),
+                };
+                persist_catalog_record(
+                    root.path(),
+                    &admission,
+                    serde_json::to_vec(&index).unwrap(),
+                    limits,
+                )
+                .await;
+            }
+            let records = revision_catalog_records(root.path(), limits).await;
+            assert_eq!(records.len(), 2);
+            assert_eq!(records[0].0.cached_at_unix_ns, 2);
+            let selected = read_revision_index(root.path(), &id, &revision, limits)
+                .await
+                .unwrap();
+            assert_eq!(selected.summary.name, "admission 3");
+            assert_eq!(
+                selected.summary.default_scene.as_deref(),
+                Some("scene-3.usda")
+            );
+            assert!(
+                read_revision_index(root.path(), &[4; 16], &revision, limits)
+                    .await
+                    .is_none()
+            );
+            let mut registry = CachedTwinsRegistry::default();
+            registry.admit(selected.summary.clone());
+            let mut late = selected.summary;
+            late.cached_at_unix_ns = 1;
+            late.name = "late old metadata".into();
+            registry.admit(late);
+            assert_eq!(registry.entries[0].name, "admission 3");
+        });
+    }
+
+    #[test]
+    fn catalog_record_paths_validate_canonical_identities() {
+        let admission = CacheAdmission {
+            cached_at_unix_ns: 42,
+            token: "ab".repeat(16),
+        };
+        assert_eq!(
+            record_admission(&StorageHandle::File(catalog_record_name(&admission).into())),
+            Some(admission)
+        );
+        assert!(
+            record_admission(&StorageHandle::File(
+                ".scenario-00000000000000000042-../escape.json".into()
+            ))
+            .is_none()
+        );
+        assert!(parse_hex::<16>(&"ff".repeat(16)).is_some());
+        assert!(parse_hex::<16>(&"FF".repeat(16)).is_none());
+        assert!(parse_hex::<32>("../escape").is_none());
+    }
+
+    #[test]
+    fn downloaded_mount_requires_exact_root_and_stable_identity() {
+        let first = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let roots = lunco_assets_core::TwinRoots::default();
+        let a =
+            mount_cached_root(&roots, first.path().to_path_buf(), "shared", "scene.usda").unwrap();
+        let repeated =
+            mount_cached_root(&roots, first.path().to_path_buf(), "shared", "scene.usda").unwrap();
+        assert_eq!(a.authority, repeated.authority);
+        assert_eq!(a.root, repeated.root);
+        assert!(a.owns_mount);
+        assert!(!repeated.owns_mount);
+        let aliases = lunco_assets_core::TwinRoots::default();
+        aliases.register("editor", first.path()).unwrap();
+        let shared = aliases.register("shared", first.path()).unwrap();
+        let borrowed =
+            mount_cached_root(&aliases, first.path().to_path_buf(), "shared", "scene.usda")
+                .unwrap();
+        assert_eq!(borrowed.authority, shared);
+        assert!(!borrowed.owns_mount);
+        assert!(matches!(
+            mount_cached_root(&roots, other.path().to_path_buf(), "shared", "scene.usda"),
+            Err(lunco_assets_core::TwinRootsError::AssetResolution(
+                std::io::ErrorKind::AlreadyExists,
+                _
+            ))
+        ));
+        assert_eq!(roots.names().unwrap(), vec![a.authority.clone()]);
+        assert!(
+            mount_cached_root(
+                &roots,
+                first.path().to_path_buf(),
+                "shared",
+                "../scene.usda"
+            )
+            .is_err()
+        );
+        roots.unregister_name(&a.authority).unwrap();
+        let replacement =
+            mount_cached_root(&roots, other.path().to_path_buf(), "shared", "scene.usda").unwrap();
+        assert_ne!(replacement.authority, a.authority);
+        assert_eq!(
+            roots.logical_name(&replacement.authority).unwrap(),
+            "shared"
+        );
+    }
+
+    #[test]
+    fn cache_paths_isolate_uuid_and_revision() {
+        let id = [7; 16];
+        let old_revision = [1; 32];
+        let next_revision = [2; 32];
+        let old = scenario_asset_path(&id, &old_revision, "models/vehicle.bin").unwrap();
+        let next = scenario_asset_path(&id, &next_revision, "models/vehicle.bin").unwrap();
+        assert_ne!(old, next);
+        assert!(old.starts_with(scenario_cache_root(&id, &old_revision)));
+        assert!(next.starts_with(scenario_cache_root(&id, &next_revision)));
+        assert_ne!(
+            scenario_cache_root(&id, &next_revision),
+            scenario_cache_root(&[8; 16], &next_revision)
+        );
+        let admission = CacheAdmission {
+            cached_at_unix_ns: 10,
+            token: "ab".repeat(16),
+        };
+        assert_ne!(
+            scenario_cache_root(&id, &old_revision).join(catalog_record_name(&admission)),
+            scenario_cache_root(&id, &next_revision).join(catalog_record_name(&admission))
+        );
+        assert_eq!(hex_bytes(&[0, 0xff]), "00ff");
+    }
+
+    #[test]
     fn asset_path_rejects_traversal() {
         let id = [7u8; 16];
-        assert!(scenario_asset_path(&id, "scenes/main.usda").is_some());
-        assert!(scenario_asset_path(&id, "../escape").is_none());
-        assert!(scenario_asset_path(&id, "a/../../b").is_none());
-        assert!(scenario_asset_path(&id, "a//b").is_none()); // empty segment
+        assert!(scenario_asset_path(&id, &[4; 32], "scenes/main.usda").is_some());
+        assert!(scenario_asset_path(&id, &[4; 32], "../escape").is_none());
+        assert!(scenario_asset_path(&id, &[4; 32], "a/../../b").is_none());
+        assert!(scenario_asset_path(&id, &[4; 32], "a//b").is_none()); // empty segment
     }
 
     #[test]
