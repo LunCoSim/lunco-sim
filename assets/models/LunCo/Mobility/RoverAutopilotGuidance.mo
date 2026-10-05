@@ -9,9 +9,9 @@ within LunCo.Mobility;
 // on the rover control surface, while Avian's positive Y angular rate is the
 // opposite sign for this vehicle frame, hence the additive rate term below.
 //
-// The front-half gate keeps a rear waypoint from becoming reverse throttle.
-// The target remains the heading reference until the body is aligned, so a
-// rover turns in place and then drives forward toward the same waypoint.
+// Skid steering can turn in place. Wheel-steered vehicles instead follow the
+// target curvature and reverse when the target is behind them; zero drive with
+// a steering angle cannot recover a missed waypoint on an Ackermann chassis.
 model RoverAutopilotGuidance
   extends LunCo.Icons.Guidance;
 
@@ -30,6 +30,8 @@ model RoverAutopilotGuidance
   parameter Real heading_kd = 0.8 "Yaw-rate damping gain (s/rad)";
   parameter Real front_transition = 0.05
     "Continuous front/behind transition in heading cosine";
+  parameter Real turn_in_place = 1.0
+    "1 for skid steering, 0 for wheel-steered forward/reverse recovery";
 
   output Real throttle_cmd "Forward throttle command";
   output Real steer_cmd "Damped normalized steer command";
@@ -54,6 +56,10 @@ model RoverAutopilotGuidance
   Real turn_only_gate;
   Real steer_gate;
   Real raw_steer;
+  Real wheel_steer;
+  Real travel_direction;
+  Real arrival_gate;
+  Real wheel_approach;
 
 equation
   enabled_gate = max(0.0, min(1.0, enabled));
@@ -91,10 +97,26 @@ equation
   // local -Z/+X convention. Adding it to the right-positive heading error is
   // therefore negative feedback and removes the post-turn overshoot.
   raw_steer = heading_kp * heading_error_rad + heading_kd * yaw_rate;
-  steer_cmd = enabled_gate * steer_gate *
-    max(-1.0, min(1.0, raw_steer));
+  travel_direction = 2.0 * front_gate - 1.0;
+  // Curvature has the same sign in forward and reverse. Rate damping changes
+  // sign with travel direction because steering reverses its yaw effect.
+  wheel_steer = heading_kp * sin(heading_error_rad)
+    + heading_kd * yaw_rate * travel_direction;
+  // The crawl-to-stop band belongs inside the accepted arrival circle.
+  // Tapering outside it can balance a slope before the waypoint is reached.
+  arrival_gate = max(0.0, min(1.0,
+    (distance_safe - max(1.0e-3, radius) + 0.05) / 0.05));
+  wheel_approach = arrival_gate * (0.35 + 0.65 * approach_gate);
+  steer_cmd = enabled_gate * (
+    turn_in_place * steer_gate * max(-1.0, min(1.0, raw_steer))
+    + (1.0 - turn_in_place) * arrival_gate *
+      max(-1.0, min(1.0, wheel_steer)));
 
-  throttle_cmd = enabled_gate * (1.0 - turn_only_gate) * front_gate *
-    speed * (0.25 + 0.75 * max(0.0, dot_heading)) * approach_gate;
-  brake_cmd = enabled_gate * (1.0 - turn_only_gate) * (1.0 - approach_gate);
+  throttle_cmd = enabled_gate * (1.0 - turn_only_gate) * speed * (
+    turn_in_place * front_gate *
+      (0.25 + 0.75 * max(0.0, dot_heading)) * approach_gate
+    + (1.0 - turn_in_place) * travel_direction * wheel_approach);
+  brake_cmd = enabled_gate * (1.0 - turn_only_gate) * (
+    turn_in_place * (1.0 - approach_gate)
+    + (1.0 - turn_in_place) * (1.0 - arrival_gate));
 end RoverAutopilotGuidance;

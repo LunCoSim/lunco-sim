@@ -36,7 +36,7 @@ model RoverAckermannDrivetrain
   input Real autopilot_yaw_rate "Authoritative rover angular rate about Y (rad/s)";
   input Real piloted "1 while an external session owns manual control";
 
-  RoverAutopilotGuidance guidance;
+  RoverAutopilotGuidance guidance(turn_in_place=0.0);
   Real piloted_gate "Clamped possession signal";
   Real program_gate "Clamped authored-program authority";
   Real guidance_gate "Authored-program waypoint-guidance authority";
