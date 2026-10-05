@@ -53,15 +53,15 @@ fn delegates_schemed_reference_resolution_to_the_asset_caller() {
 #[test]
 fn composes_available_siblings_when_one_layer_is_missing() {
     let dir = tempfile::tempdir().unwrap();
-    let scene = dir.path().join("scene.usda");
-    let available = dir.path().join("available.usda");
+    let scene = dir.path().join("scene café.usda");
+    let available = dir.path().join("available #%.usda");
     lunco_storage::write_file_sync(
         &scene,
         br#"#usda 1.0
 (
     subLayers = [
         @missing.usda@,
-        @available.usda@
+        @available #%.usda@
     ]
 )
 def Xform "Root" {}
@@ -76,6 +76,23 @@ def Xform "Available" {}
     )
     .unwrap();
 
-    compose_file_to_stage_with_roots(&scene, None, None)
+    let stage = compose_file_to_stage_with_roots(&scene, None, None)
         .expect("a missing sibling layer must not discard available USD content");
+    assert!(stage.prim("/Root").is_defined().unwrap());
+    assert!(stage.prim("/Available").is_defined().unwrap());
+    assert!(!stage.prim("/Missing").is_defined().unwrap());
+
+    let root_id = lunco_storage::file_path_to_uri(&scene).unwrap();
+    for invalid in [
+        "file:///invalid%00.usda",
+        "file:///invalid%GG.usda",
+        "file:///invalid.usda?query",
+    ] {
+        let source = format!("#usda 1.0\n(subLayers = [@{invalid}@])\ndef Xform \"Root\" {{}}\n");
+        let error =
+            lunco_usd_compose::compose_source_to_stage_with_roots(&root_id, &source, None, None)
+                .err()
+                .expect("invalid file URI must reject composition");
+        assert!(error.to_string().contains("file URI"), "{error}");
+    }
 }

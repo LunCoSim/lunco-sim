@@ -9,11 +9,12 @@ description = "Asset-backed OpenUSD stage composition for LunCoSim"
 openusd = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-path = { path = "../lunco-assets-path" }
+lunco-storage = { path = "../lunco-storage" }
 lunco-hash = { path = "../lunco-hash", features = ["cid"] }
 anyhow = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
-lunco-storage = { path = "../lunco-storage" }
 tempfile = { workspace = true }
 
 [lints]

@@ -60,25 +60,29 @@ pub fn shipped_asset_root(path: &Path) -> Option<&Path> {
         .find(|a| a.file_name() == Some(std::ffi::OsStr::new(ASSETS_DIR_NAME)))
 }
 
-/// Map an asset id back to the file holding its bytes: `lunco://<rel>` resolves
-/// against `assets_root`, anything else is treated as a filesystem path.
+/// Map a canonical asset id to its native byte source.
 ///
-/// `None` when the id names the shipped library but no library root was found —
-/// the caller composed a file that lives outside any `assets/` tree, so a
-/// `lunco://` reference in it cannot be reached.
-///
-/// A source-relative id (one whose leading `/` was stripped when it was
-/// canonicalized) is re-rooted, since it has to become absolute to be readable
-/// again. A drive-qualified Windows path is already absolute and passes through.
-pub fn id_to_disk_path(id: &str, assets_root: Option<&Path>) -> Option<PathBuf> {
+/// Standard file URIs decode through `lunco-storage`; malformed URIs return
+/// `InvalidInput`. Library identities require their explicit `assets_root`.
+/// Raw native absolute paths remain accepted. Source-relative identities have
+/// no implicit filesystem root and return `None`.
+pub fn id_to_disk_path(id: &str, assets_root: Option<&Path>) -> std::io::Result<Option<PathBuf>> {
+    if let Some(path) = lunco_storage::file_uri_to_path(id).map_err(|error| match error {
+        lunco_storage::StorageError::Io(error) => error,
+        error => std::io::Error::other(error.to_string()),
+    })? {
+        return Ok(Some(path));
+    }
     match parse_lunco_uri(id) {
-        Some(rel) => Some(assets_root?.join(crate::asset_path::relative_path(rel)?)),
+        Some(rel) => Ok(assets_root
+            .zip(crate::asset_path::relative_path(rel))
+            .map(|(root, rel)| root.join(rel))),
         None => {
             let p = PathBuf::from(id);
             // A scheme-less relative id has no owning root. Do not invent one
             // from the Unix filesystem root: that is wrong on Windows and
             // would make an unanchored reference depend on the host CWD.
-            p.is_absolute().then_some(p)
+            Ok(p.is_absolute().then_some(p))
         }
     }
 }
@@ -89,7 +93,7 @@ pub fn id_to_disk_path(id: &str, assets_root: Option<&Path>) -> Option<PathBuf> 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_asset_bytes(id: &str, assets_root: Option<&Path>) -> std::io::Result<Vec<u8>> {
     let Some(rel) = parse_lunco_uri(id) else {
-        let path = id_to_disk_path(id, assets_root).ok_or_else(|| {
+        let path = id_to_disk_path(id, assets_root)?.ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!("asset `{id}` has no resolvable native root"),
@@ -255,11 +259,11 @@ mod tests {
     fn library_ids_cannot_escape_the_asset_root() {
         let root = tempfile::tempdir().expect("temporary asset root");
         assert_eq!(
-            id_to_disk_path("lunco://terrain/moon.usda", Some(root.path())),
+            id_to_disk_path("lunco://terrain/moon.usda", Some(root.path())).unwrap(),
             Some(root.path().join("terrain/moon.usda"))
         );
         assert_eq!(
-            id_to_disk_path(r"lunco://terrain\moon.usda", Some(root.path())),
+            id_to_disk_path(r"lunco://terrain\moon.usda", Some(root.path())).unwrap(),
             Some(root.path().join("terrain/moon.usda"))
         );
         for id in [
@@ -268,7 +272,7 @@ mod tests {
             r"lunco://terrain\..\outside.usda",
         ] {
             assert!(
-                id_to_disk_path(id, Some(root.path())).is_none(),
+                id_to_disk_path(id, Some(root.path())).unwrap().is_none(),
                 "unsafe library id must be rejected: {id}"
             );
         }
@@ -276,11 +280,27 @@ mod tests {
 
     #[test]
     fn unanchored_relative_ids_are_not_assigned_a_host_root() {
-        assert_eq!(id_to_disk_path("scenes/scene.usda", None), None);
+        assert_eq!(id_to_disk_path("scenes/scene.usda", None).unwrap(), None);
         let absolute = std::env::temp_dir().join("lunco-absolute-scene.usda");
         assert_eq!(
-            id_to_disk_path(&absolute.to_string_lossy(), None),
+            id_to_disk_path(&absolute.to_string_lossy(), None).unwrap(),
             Some(absolute)
+        );
+    }
+
+    #[test]
+    fn file_uri_reader_decodes_native_paths_and_rejects_invalid_input() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("провајдер with spaces.usda");
+        lunco_storage::write_file_sync(&source, b"#usda 1.0\n").unwrap();
+        let id = lunco_storage::file_path_to_uri(&source).unwrap();
+        assert_eq!(id_to_disk_path(&id, None).unwrap(), Some(source));
+        assert_eq!(read_asset_bytes(&id, None).unwrap(), b"#usda 1.0\n");
+        assert_eq!(
+            read_asset_bytes("file:///invalid%00.usda", None)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidInput
         );
     }
 

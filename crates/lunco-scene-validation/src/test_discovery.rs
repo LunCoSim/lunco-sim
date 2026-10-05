@@ -210,6 +210,7 @@ fn discover_scene_test(scene_path: &Path) -> Result<Option<SceneTest>, String> {
             &source_asset,
             lunco_assets_core::shipped_asset_root(scene_path),
         )
+        .map_err(|error| format!("{scene_path:?}: invalid test source {source_asset}: {error}"))?
         .ok_or_else(|| format!("{scene_path:?}: cannot resolve test source {source_asset}"))?;
         let source = lunco_assets_core::read_asset_file_string(&source_path).map_err(|error| {
             format!(
@@ -249,7 +250,30 @@ fn discover_scene_test(scene_path: &Path) -> Result<Option<SceneTest>, String> {
 mod tests {
     use std::fs;
 
+    #[cfg(not(target_arch = "wasm32"))]
+    use super::discover_scene_test;
     use super::{SceneTestKind, classify_rhai_source, scene_paths};
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn invalid_file_uri_test_source_is_a_terminal_discovery_error() {
+        let root = tempfile::tempdir().unwrap();
+        let scene = root.path().join("scene.usda");
+        lunco_storage::write_file_sync(
+            &scene,
+            br#"#usda 1.0
+ def Scope "Program" (prepend apiSchemas = ["LunCoProgramAPI"])
+ {
+     uniform token info:implementationSource = "sourceAsset"
+     uniform asset info:sourceAsset = @file:///tests/invalid%00.rhai@
+ }
+"#,
+        )
+        .unwrap();
+        let error = discover_scene_test(&scene).unwrap_err();
+        assert!(error.contains("invalid test source"), "{error}");
+        assert!(error.contains("invalid file URI"), "{error}");
+    }
 
     #[test]
     fn omitted_kind_is_headless() {

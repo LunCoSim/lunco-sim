@@ -32,9 +32,13 @@ use lunco_usd_data::metadata::AttrUiHint;
 /// still the authoritative asset identity; reading it here keeps the render
 /// projection live and avoids a second precomputed cache or a custom USD
 /// attribute.
-fn binary_assets_in_spec(stage: &Stage, layer_id: &str, path: &SdfPath) -> Vec<String> {
+fn binary_assets_in_spec(
+    stage: &Stage,
+    layer_id: &str,
+    path: &SdfPath,
+) -> anyhow::Result<Vec<String>> {
     let Some(layer) = stage.layer(layer_id) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let data = layer.data();
     let anchor = ResolvedPath::new(layer_id);
@@ -63,10 +67,14 @@ fn binary_assets_in_spec(stage: &Stage, layer_id: &str, path: &SdfPath) -> Vec<S
         }
     }
 
-    arcs.into_iter()
-        .filter(|asset_path| lunco_usd_compose::is_binary_asset(asset_path))
+    let canonical = arcs
+        .into_iter()
         .map(|asset_path| lunco_usd_compose::canonicalize_at(&asset_path, Some(&anchor)))
-        .collect()
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(canonical
+        .into_iter()
+        .filter(|asset_path| lunco_usd_compose::is_binary_asset(asset_path))
+        .collect())
 }
 
 fn numeric_value_as_f64(value: &Value) -> Option<f64> {
@@ -1679,7 +1687,15 @@ impl UsdRead for StageView<'_> {
         let stack = self.stage().prim(prim.clone()).prim_stack().ok()?;
         let mut matches = Vec::new();
         for (layer_id, authored_path) in stack {
-            for asset in binary_assets_in_spec(self.stage(), &layer_id, &authored_path) {
+            let assets = match binary_assets_in_spec(self.stage(), &layer_id, &authored_path) {
+                Ok(assets) => assets,
+                Err(error) => {
+                    error!(target: "usd-bevy", prim = %prim.as_str(), %error,
+                        "invalid binary payload/reference identifier");
+                    return None;
+                }
+            };
+            for asset in assets {
                 if !matches.contains(&asset) {
                     matches.push(asset);
                 }

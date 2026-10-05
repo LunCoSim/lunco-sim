@@ -10371,6 +10371,7 @@ dependencies = [
  "lunco-storage",
  "openusd",
  "tempfile",
+ "url",
 ]
 
 [[package]]

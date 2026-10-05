@@ -152,7 +152,9 @@ pub fn check_stage_closure_limits(
     Ok(())
 }
 
-pub use resolver::{LuncoUsdResolver, SharedLayerBytes, canonicalize_at, is_binary_asset};
+pub use resolver::{
+    LuncoUsdResolver, ResolverDiagnostics, SharedLayerBytes, canonicalize_at, is_binary_asset,
+};
 
 /// True when `path` is a USD layer that can declare further asset dependencies.
 pub fn is_usd_layer(path: &Path) -> bool {
@@ -214,7 +216,12 @@ pub fn compose_file_to_stage_with_roots(
 ) -> Result<Stage> {
     let root_id = match assets_root.and_then(|root| path.strip_prefix(root).ok()) {
         Some(rel) => lunco_assets_core::engine_asset_uri(&lunco_assets_path::slashed(rel)),
-        None => lunco_assets_path::canonicalize_root(&path.to_string_lossy()),
+        None => {
+            let absolute = lunco_storage::canonicalize_file_path(path)
+                .map_err(|error| anyhow!("cannot resolve USD root {}: {error}", path.display()))?;
+            lunco_storage::file_path_to_uri(&absolute)
+                .map_err(|error| anyhow!("cannot identify USD root {}: {error}", path.display()))?
+        }
     };
     let root_bytes = lunco_assets_core::read_asset_file_bytes(path)
         .map_err(|error| anyhow!("cannot read {}: {error}", path.display()))?;
@@ -237,10 +244,11 @@ pub fn compose_source_to_stage_with_roots(
 ) -> Result<(Stage, Vec<StageDependencyDiagnostic>)> {
     let recipe = recipe_from_source_with_roots(root_id, source, assets_root, twin_root)?;
     let diagnostics = recipe.dependency_diagnostics.clone();
-    let stage = Stage::builder()
-        .resolver(LuncoUsdResolver::new(recipe.bytes.clone()))
-        .open(&recipe.root_id)
-        .map_err(|error| anyhow!("USD composition error: {error}"))?;
+    let resolver = LuncoUsdResolver::new(recipe.bytes.clone())?;
+    let resolver_diagnostics = resolver.diagnostics();
+    let stage = Stage::builder().resolver(resolver).open(&recipe.root_id);
+    resolver_diagnostics.check()?;
+    let stage = stage.map_err(|error| anyhow!("USD composition error: {error}"))?;
     Ok((stage, diagnostics))
 }
 
@@ -255,6 +263,7 @@ pub fn recipe_from_source_with_roots(
     assets_root: Option<&Path>,
     twin_root: Option<&Path>,
 ) -> Result<recipe::StageRecipe> {
+    let root_id = canonicalize_at(root_id, None)?;
     let root_bytes = source.as_bytes().to_vec();
     let limits = StageClosureLimits::default();
     check_stage_closure_limits(&limits, 1, 0, 0, root_bytes.len())?;
@@ -324,12 +333,15 @@ pub fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
     let text = std::str::from_utf8(raw).map_err(|e| anyhow!("layer {id} is not UTF-8: {e}"))?;
     let data = parse_usda(text).map_err(|e| anyhow!("USD parse error in {id}: {e}"))?;
     let anchor = ResolvedPath::new(id);
-    Ok(data
-        .composition_asset_dependencies()
-        .into_iter()
-        .filter(|arc| !is_binary_asset(arc))
-        .map(|arc| canonicalize_at(&arc, Some(&anchor)))
-        .collect())
+    canonicalize_at(id, None)?;
+    let mut children = Vec::new();
+    for arc in data.composition_asset_dependencies() {
+        let canonical = canonicalize_at(&arc, Some(&anchor))?;
+        if !is_binary_asset(&canonical) {
+            children.push(canonical);
+        }
+    }
+    Ok(children)
 }
 
 #[cfg(test)]

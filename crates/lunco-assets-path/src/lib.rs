@@ -131,12 +131,9 @@ pub fn is_safe_relative_components(path: &Path) -> bool {
 /// different (nonexistent) source. That is the subtle failure this function
 /// exists to prevent.
 ///
-/// The anchor is NOT optional. It used to be, defaulting to `""`, which meant a
-/// relative reference with no anchor resolved against the *default* source rather
-/// than the caller's root — silently, and differently from every subsystem that
-/// did pass one. That is the precise "loads here, 404s there" split this module
-/// exists to close, so a caller that has no anchoring document now has to say so
-/// by calling [`canonicalize_root`] instead of passing `None`.
+/// The anchor is required. A caller without an anchoring document uses
+/// [`canonicalize_root`] explicitly, giving a relative reference its documented
+/// assets-root meaning rather than an implicit filesystem location.
 ///
 /// MUST stay identical between any pre-fetch pass and the resolver that consumes
 /// its results — a pre-fetch keyed on one spelling and a lookup keyed on another
@@ -154,9 +151,7 @@ pub fn canonicalize(asset_path: &str, anchor: &str) -> String {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_default();
-    let resolved = normalize(&base.join(&asset_path))
-        .to_string_lossy()
-        .into_owned();
+    let resolved = slashed(normalize(&base.join(&asset_path)));
     match scheme {
         Some(s) => uri(s, &resolved),
         None => resolved,
@@ -164,20 +159,18 @@ pub fn canonicalize(asset_path: &str, anchor: &str) -> String {
 }
 
 /// Canonicalize a reference that NAMES a root — no document anchors it: the scene
-/// layer a stage is opened from, or a filesystem path handed in from outside.
+/// layer a stage is opened from. Native filesystem entrypoints must first
+/// encode their absolute paths as standard file URIs at the storage boundary.
 ///
-/// This is the honest spelling of what passing `None` used to mean. A relative
-/// reference here is assets-root-relative by definition rather than by accident,
-/// which is what makes the distinction worth a second entry point: the two cases
-/// are genuinely different questions, and collapsing them into one nullable
-/// argument is what let callers ask the wrong one without noticing.
+/// Relative references here are assets-root-relative. Native filesystem roots
+/// have a different owner and must arrive URI-encoded from `lunco-storage`.
 pub fn canonicalize_root(reference: &str) -> String {
     let reference = slashed(reference);
     if has_scheme(&reference) {
         return reference;
     }
     let rel = reference.strip_prefix('/').unwrap_or(&reference);
-    normalize(Path::new(rel)).to_string_lossy().into_owned()
+    slashed(normalize(Path::new(rel)))
 }
 
 /// Split `scheme://rest` into its two halves, or `None` for a bare reference.
@@ -243,6 +236,15 @@ mod tests {
             canonicalize("lib.rhai", "twin://ep1/main.rhai"),
             "twin://ep1/lib.rhai"
         );
+        assert_eq!(
+            canonicalize(r"sub\child.usda", "twin://ep1/scenes/main.usda"),
+            "twin://ep1/scenes/sub/child.usda"
+        );
+        assert_eq!(
+            canonicalize_root(r"scenes\sub\..\child.usda"),
+            "scenes/child.usda"
+        );
+        assert_eq!(canonicalize_root("/scenes/child.usda"), "scenes/child.usda");
     }
 
     #[test]

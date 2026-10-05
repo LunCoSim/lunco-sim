@@ -640,7 +640,7 @@ impl CanonicalStage {
     /// PCP will canonicalize the authored `references` arc. This is the key to
     /// load the asset closure under (`AssetServer::load` / [`add_layer_bytes`])
     /// so the injected bytes match what PCP demands.
-    pub fn canonical_reference_id(&self, asset_path: &str) -> String {
+    pub fn canonical_reference_id(&self, asset_path: &str) -> anyhow::Result<String> {
         let anchor = openusd::ar::ResolvedPath::new(&self.scene_layer);
         lunco_usd_compose::canonicalize_at(asset_path, Some(&anchor))
     }
@@ -650,7 +650,7 @@ impl CanonicalStage {
         asset_path: &str,
     ) -> anyhow::Result<openusd::sdf::Reference> {
         use anyhow::anyhow;
-        let reference_id = self.canonical_reference_id(asset_path);
+        let reference_id = self.canonical_reference_id(asset_path)?;
         let source = self
             .resolver_bytes
             .as_ref()
@@ -2047,7 +2047,9 @@ mod authoring_tests {
 
         // The reference id PCP will demand === what we inject the bytes under.
         let asset_path = "rover.usda";
-        let ref_id = cs.canonical_reference_id(asset_path);
+        let ref_id = cs
+            .canonical_reference_id(asset_path)
+            .expect("valid reference");
         assert!(!cs.has_layer_bytes(&ref_id), "rover not loaded yet");
 
         // Inject the rover's closure into the LIVE resolver, then author the
@@ -2103,7 +2105,7 @@ mod authoring_tests {
         const A: &str = "#usda 1.0\n(\n    defaultPrim = \"A\"\n)\ndef Xform \"A\"\n{\n    def Cube \"FromA\"\n    {\n    }\n}\n";
         const B: &str = "#usda 1.0\n(\n    defaultPrim = \"B\"\n)\ndef Xform \"B\"\n{\n    def Cube \"FromB\"\n    {\n    }\n}\n";
         for (path, src) in [("a.usda", A), ("b.usda", B)] {
-            let id = cs.canonical_reference_id(path);
+            let id = cs.canonical_reference_id(path).expect("valid reference");
             assert!(cs.add_layer_bytes(HashMap::from([(id, src.as_bytes().to_vec())])));
         }
 

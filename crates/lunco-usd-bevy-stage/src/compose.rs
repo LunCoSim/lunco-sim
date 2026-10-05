@@ -38,8 +38,6 @@ use anyhow::{Result, anyhow, ensure};
 use bevy::asset::{AssetPath, Handle, LoadContext, ReadAssetBytesError, io::AssetReaderError};
 use openusd::usd::Stage;
 
-use lunco_assets_path::canonicalize_root;
-
 use crate::asset::UsdLayerReadReceipt;
 use lunco_usd_compose::recipe::{StageClosureLimits, StageDependencyDiagnostic, StageRecipe};
 use lunco_usd_compose::{
@@ -95,7 +93,7 @@ pub async fn fetch_layer_closure_with_limits(
         limits.max_parallel_reads > 0,
         "USD layer closure parallel read limit must be greater than zero"
     );
-    let root_id = canonicalize_root(root_asset_path);
+    let root_id = lunco_usd_compose::canonicalize_at(root_asset_path, None)?;
     check_stage_closure_limits(&limits, 1, 0, 0, root_bytes.len())?;
 
     // 1. Pre-fetch BFS — keyed by the SAME canonical id the resolver will use.
@@ -311,16 +309,16 @@ where
 /// The runtime adapter owns the live canonical stage.
 pub fn build_stage_with_resolver(recipe: &StageRecipe) -> Result<(Stage, SharedLayerBytes)> {
     let _resolver_span = bevy::log::info_span!("usd_live_resolver_snapshot").entered();
-    let resolver = LuncoUsdResolver::new(recipe.bytes.clone());
+    let resolver = LuncoUsdResolver::new(recipe.bytes.clone())?;
     drop(_resolver_span);
     let shared = resolver.shared();
+    let diagnostics = resolver.diagnostics();
     let stage = {
         let _open_span = bevy::log::info_span!("usd_live_open_stage").entered();
-        Stage::builder()
-            .resolver(resolver)
-            .open(&recipe.root_id)
-            .map_err(|e| anyhow!("USD composition error: {e}"))?
+        Stage::builder().resolver(resolver).open(&recipe.root_id)
     };
+    diagnostics.check()?;
+    let stage = stage.map_err(|e| anyhow!("USD composition error: {e}"))?;
     Ok((stage, shared))
 }
 

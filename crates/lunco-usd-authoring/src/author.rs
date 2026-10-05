@@ -515,8 +515,8 @@ pub fn open_doc_stage_with_layers(
     let root_anchor = ResolvedPath::new(&root_id);
     let runtime_asset = ".__luncosim_document_runtime__.usda";
     let view_asset = ".__luncosim_document_view__.usda";
-    let runtime_id = lunco_usd_compose::canonicalize_at(runtime_asset, Some(&root_anchor));
-    let view_id = lunco_usd_compose::canonicalize_at(view_asset, Some(&root_anchor));
+    let runtime_id = lunco_usd_compose::canonicalize_at(runtime_asset, Some(&root_anchor))?;
+    let view_id = lunco_usd_compose::canonicalize_at(view_asset, Some(&root_anchor))?;
 
     let mut view_layer = view.clone();
     let pseudo_root = view_layer
@@ -532,11 +532,14 @@ pub fn open_doc_stage_with_layers(
     bytes.insert(runtime_id, data_to_usda(runtime)?.into_bytes());
     bytes.insert(view_id.clone(), data_to_usda(&view_layer)?.into_bytes());
 
-    Stage::builder()
-        .resolver(lunco_usd_compose::LuncoUsdResolver::new(bytes))
+    let resolver = lunco_usd_compose::LuncoUsdResolver::new(bytes)?;
+    let diagnostics = resolver.diagnostics();
+    let stage = Stage::builder()
+        .resolver(resolver)
         .session_layer(view_id.clone())
-        .open(&root_id)
-        .map_err(|error| anyhow!("create layered document stage: {error}"))
+        .open(&root_id);
+    diagnostics.check()?;
+    stage.map_err(|error| anyhow!("create layered document stage: {error}"))
 }
 
 fn populate_doc_root(stage: Stage, data: &sdf::Data) -> Result<Stage> {

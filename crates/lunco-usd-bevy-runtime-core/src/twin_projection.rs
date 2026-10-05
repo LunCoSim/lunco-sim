@@ -4473,6 +4473,32 @@ fn spawn_prim_op(
         };
         cs.canonical_reference_id(&asset_path)
     };
+    let ref_id = match ref_id {
+        Ok(id) => id,
+        Err(error) => {
+            let detail = format!("invalid USD reference identifier: {error}");
+            let mut item = failed_ref_spawn(
+                progress_key,
+                scene_id,
+                prim_path,
+                type_name,
+                &asset_path,
+                reference_prim_path,
+                detail.clone(),
+            );
+            item.held = report_reference_failure(
+                world,
+                progress_key,
+                scene_id,
+                prim_path,
+                &asset_path,
+                &detail,
+            );
+            item.failure_reported = true;
+            world.resource_mut::<PendingRefSpawns>().push(item, false);
+            return;
+        }
+    };
     let ref_handle = world
         .resource::<AssetServer>()
         .load::<UsdStageAsset>(bevy::asset::AssetPath::parse(&ref_id).into_owned());
@@ -4884,11 +4910,25 @@ fn ensure_reference_layers_for_rebuild(
             else {
                 return false;
             };
-            if cs.has_layer_bytes(&cs.canonical_reference_id(&asset_path)) {
-                continue;
-            }
-            cs.canonical_reference_id(&asset_path)
+            cs.canonical_reference_id(&asset_path).map(|id| {
+                let present = cs.has_layer_bytes(&id);
+                (id, present)
+            })
         };
+        let (reference_id, present) = match reference_id {
+            Ok(reference) => reference,
+            Err(error) => {
+                report_stage_projection_reset_failure(
+                    world,
+                    scene_id,
+                    format!("invalid USD rebuild reference {asset_path:?}: {error}"),
+                );
+                return false;
+            }
+        };
+        if present {
+            continue;
+        }
         let handle = if let Some(handle) = world
             .resource::<PendingRefSpawns>()
             .retained_assets
@@ -6500,7 +6540,8 @@ mod tests {
             .non_send_mut::<CanonicalStages>()
             .get_or_build(scene_id, &scene_recipe)
             .expect("open the live scene stage")
-            .canonical_reference_id("vehicle.usda");
+            .canonical_reference_id("vehicle.usda")
+            .expect("valid reference");
         let reference_recipe =
             lunco_usd_compose::recipe::StageRecipe::from_source(reference_id, REFERENCE);
         let reference_handle = app
@@ -6823,8 +6864,12 @@ mod tests {
                 .get_or_build(scene_id, &scene_recipe)
                 .expect("open the live scene stage");
             (
-                stage.canonical_reference_id("first.usda"),
-                stage.canonical_reference_id("second.usda"),
+                stage
+                    .canonical_reference_id("first.usda")
+                    .expect("valid first reference"),
+                stage
+                    .canonical_reference_id("second.usda")
+                    .expect("valid second reference"),
             )
         };
         let first_reference_recipe = lunco_usd_compose::recipe::StageRecipe::from_source(

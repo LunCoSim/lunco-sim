@@ -2150,7 +2150,13 @@ fn document_composition_context(
         ));
     }
 
-    Ok((absolute_path.to_string_lossy().into_owned(), None, None))
+    let root_id = lunco_storage::file_path_to_uri(&absolute_path).map_err(|error| {
+        format!(
+            "cannot identify USD document {}: {error}",
+            absolute_path.display()
+        )
+    })?;
+    Ok((root_id, None, None))
 }
 
 fn validate_attribute_types_in_view(

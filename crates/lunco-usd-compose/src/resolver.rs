@@ -10,10 +10,10 @@
 //! `std::fs` in openusd lives in `ar::DefaultResolver`, which we don't use, and
 //! the `get_modification_timestamp` default, which we override).
 //!
-//! Identifiers (`create_identifier`) and the loader's pre-fetch BFS share ONE
-//! [`canonicalize`] so the id a layer is fetched under is byte-identical to the
-//! id openusd's collector later passes to `resolve` — a mismatch would surface
-//! as a spurious "failed to resolve asset path" error.
+//! Identifiers and the loader's pre-fetch BFS share [`canonicalize_at`], so a
+//! fetched layer has the same identity OpenUSD later resolves. Native roots use
+//! standard file URIs; logical asset sources use the asset-path algebra.
+//! Invalid identifiers fail at layer admission before lazy composition.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -74,20 +74,83 @@ pub fn is_binary_asset(asset_path: &str) -> bool {
     }
 }
 
-/// [`canonicalize`] against an openusd `ResolvedPath` anchor.
+/// Resolve an authored asset identifier against its document.
 ///
-/// The canonicalization RULE lives in `lunco-assets-core`, which owns every asset-path
-/// operation, so USD composition, texture lookup, terrain, the scene loader and the
-/// rhai module resolver cannot drift apart on what a reference means. All this
-/// crate contributes is the openusd-specific type conversion.
-///
-/// openusd hands the anchor as an `Option` (absent when it is resolving a ROOT
-/// layer), so this is where that absence is mapped onto the explicit
-/// [`canonicalize_root`] rather than smuggled through as an empty anchor.
-pub fn canonicalize_at(asset_path: &str, anchor: Option<&ResolvedPath>) -> String {
-    match anchor.and_then(|a| a.to_str()) {
-        Some(a) => canonicalize(asset_path, a),
-        None => canonicalize_root(asset_path),
+/// Asset-source identities use `lunco-assets-path`. Native file identities use
+/// the storage owner's standard file-URI contract and URL path segments, which
+/// preserve drive/share roots and encode literal filenames on every platform.
+pub fn canonicalize_at(asset_path: &str, anchor: Option<&ResolvedPath>) -> anyhow::Result<String> {
+    if let Some(path) = lunco_storage::file_uri_to_path(asset_path)? {
+        return Ok(lunco_storage::file_path_to_uri(&path)?);
+    }
+    let Some(anchor) = anchor else {
+        return Ok(canonicalize_root(asset_path));
+    };
+    let anchor = anchor
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("USD anchor is not UTF-8"))?;
+    if lunco_assets_path::is_anchored(&lunco_assets_path::slashed(asset_path)) {
+        return Ok(canonicalize_root(asset_path));
+    }
+    if let Some(path) = lunco_storage::file_uri_to_path(anchor)? {
+        let mut url = url::Url::parse(&lunco_storage::file_path_to_uri(&path)?)?;
+        let path_segments = url
+            .path_segments()
+            .ok_or_else(|| anyhow::anyhow!("invalid file URI anchor: {anchor}"))?
+            .collect::<Vec<_>>();
+        let first = path_segments.first().copied().unwrap_or_default();
+        let drive = first.len() == 2
+            && first.as_bytes()[0].is_ascii_alphabetic()
+            && first.as_bytes()[1] == b':';
+        let root_depth = usize::from(url.host_str().is_some() || drive);
+        let mut depth = path_segments.len().saturating_sub(1);
+        {
+            let mut segments = url.path_segments_mut().map_err(|_| {
+                anyhow::anyhow!("file URI cannot anchor asset {asset_path:?}: {anchor}")
+            })?;
+            segments.pop();
+            for segment in lunco_assets_path::slashed(asset_path).split('/') {
+                match segment {
+                    "" | "." => {}
+                    ".." => {
+                        if depth > root_depth {
+                            segments.pop();
+                            depth -= 1;
+                        }
+                    }
+                    segment => {
+                        segments.push(segment);
+                        depth += 1;
+                    }
+                }
+            }
+        }
+        let id = url.to_string();
+        lunco_storage::file_uri_to_path(&id)?;
+        return Ok(id);
+    }
+    Ok(canonicalize(asset_path, anchor))
+}
+
+/// Diagnostics retained across OpenUSD's infallible identifier callback.
+/// Stage admission checks this handle before returning a composed stage.
+#[derive(Clone, Default)]
+pub struct ResolverDiagnostics(Rc<RefCell<Vec<(String, String)>>>);
+
+impl ResolverDiagnostics {
+    pub fn check(&self) -> anyhow::Result<()> {
+        let diagnostics = self.0.borrow();
+        if diagnostics.is_empty() {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "invalid USD asset identifiers: {}",
+            diagnostics
+                .iter()
+                .map(|(id, error)| format!("{id:?}: {error}"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
     }
 }
 
@@ -111,19 +174,27 @@ pub fn canonicalize_at(asset_path: &str, anchor: Option<&ResolvedPath>) -> Strin
 /// subsequently-authored reference compose (demand-driven resolution).
 pub struct LuncoUsdResolver {
     bytes: SharedLayerBytes,
+    diagnostics: ResolverDiagnostics,
 }
 
 impl LuncoUsdResolver {
-    /// Build a resolver owning a fresh shared map seeded with `bytes`.
-    pub fn new(bytes: HashMap<String, Vec<u8>>) -> Self {
-        Self {
-            bytes: Rc::new(RefCell::new(bytes)),
+    /// Admit layer identifiers and authored arcs before OpenUSD's lazy reads.
+    pub fn new(bytes: HashMap<String, Vec<u8>>) -> anyhow::Result<Self> {
+        for (id, raw) in &bytes {
+            crate::child_layer_ids(id, raw)?;
         }
+        Ok(Self {
+            bytes: Rc::new(RefCell::new(bytes)),
+            diagnostics: ResolverDiagnostics::default(),
+        })
     }
 
-    /// A clone of the shared byte-map handle, so the caller (the
-    /// [`CanonicalStage`] that installs this resolver into a live stage) can
-    /// keep injecting layer bytes after the stage is built.
+    /// Capture identifier errors across the infallible OpenUSD callback.
+    pub fn diagnostics(&self) -> ResolverDiagnostics {
+        self.diagnostics.clone()
+    }
+
+    /// Clone the byte-map handle for validated runtime layer injection.
     pub fn shared(&self) -> SharedLayerBytes {
         self.bytes.clone()
     }
@@ -131,13 +202,31 @@ impl LuncoUsdResolver {
 
 impl ar::Resolver for LuncoUsdResolver {
     fn create_identifier(&self, asset_path: &str, anchor: Option<&ResolvedPath>) -> String {
-        if is_binary_asset(asset_path) {
-            return BINARY_STUB_ID.to_string();
+        match canonicalize_at(asset_path, anchor) {
+            Ok(id) if is_binary_asset(&id) => BINARY_STUB_ID.to_string(),
+            Ok(id) => id,
+            Err(error) => {
+                // The trait cannot return an error. Retain the authored spelling
+                // for its diagnostic and make resolution explicitly fail.
+                self.diagnostics
+                    .0
+                    .borrow_mut()
+                    .push((asset_path.to_owned(), error.to_string()));
+                asset_path.to_owned()
+            }
         }
-        canonicalize_at(asset_path, anchor)
     }
 
     fn resolve(&self, asset_path: &str) -> Option<ResolvedPath> {
+        if self
+            .diagnostics
+            .0
+            .borrow()
+            .iter()
+            .any(|(id, _)| id == asset_path)
+        {
+            return None;
+        }
         if asset_path == BINARY_STUB_ID || self.bytes.borrow().contains_key(asset_path) {
             Some(ResolvedPath::new(asset_path))
         } else {
@@ -146,11 +235,25 @@ impl ar::Resolver for LuncoUsdResolver {
     }
 
     fn resolve_for_new_asset(&self, asset_path: &str) -> Option<ResolvedPath> {
-        Some(ResolvedPath::new(asset_path))
+        match canonicalize_at(asset_path, None) {
+            Ok(id) => Some(ResolvedPath::new(id)),
+            Err(error) => {
+                self.diagnostics
+                    .0
+                    .borrow_mut()
+                    .push((asset_path.to_owned(), error.to_string()));
+                None
+            }
+        }
     }
 
     fn open_asset(&self, resolved_path: &ResolvedPath) -> io::Result<Box<dyn Asset>> {
-        let key = resolved_path.to_str().unwrap_or_default();
+        let key = resolved_path.to_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "USD asset identifier is not UTF-8",
+            )
+        })?;
         if key == BINARY_STUB_ID {
             return Ok(Box::new(Cursor::new(EMPTY_USDA.to_vec())));
         }
@@ -176,5 +279,78 @@ impl ar::Resolver for LuncoUsdResolver {
         _resolved_path: &ResolvedPath,
     ) -> Option<SystemTime> {
         None
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_file_anchors_preserve_roots_and_encode_relative_filenames() {
+        let root = std::env::temp_dir()
+            .join("composition café")
+            .join("scene.usda");
+        let anchor = ResolvedPath::new(lunco_storage::file_path_to_uri(&root).unwrap());
+        let id = canonicalize_at(r"folder\..\available #%.usda", Some(&anchor)).unwrap();
+        let native = lunco_storage::file_uri_to_path(&id).unwrap().unwrap();
+        assert_eq!(native, root.parent().unwrap().join("available #%.usda"));
+        assert_eq!(
+            canonicalize_at("/scenes/asset.usda", Some(&anchor)).unwrap(),
+            "scenes/asset.usda"
+        );
+        assert!(canonicalize_at("file:///bad%00.usda", Some(&anchor)).is_err());
+        let binary = canonicalize_at("mesh#v1.glb", Some(&anchor)).unwrap();
+        assert!(is_binary_asset(&binary));
+        let source = b"#usda 1.0\ndef Xform \"Mesh\" (prepend references = @mesh#v1.glb@) {}\n";
+        assert!(
+            crate::child_layer_ids(anchor.to_str().unwrap(), source)
+                .unwrap()
+                .is_empty()
+        );
+
+        #[cfg(windows)]
+        for (native, expected) in [
+            (r"C:\dir\scene.usda", "file:///C:/dir/child.usda"),
+            (r"\\?\C:\dir\scene.usda", "file:///C:/dir/child.usda"),
+            (
+                r"\\server\share\dir\scene.usda",
+                "file://server/share/dir/child.usda",
+            ),
+            (
+                r"\\?\UNC\server\share\dir\scene.usda",
+                "file://server/share/dir/child.usda",
+            ),
+        ] {
+            let anchor = ResolvedPath::new(
+                lunco_storage::file_path_to_uri(std::path::Path::new(native)).unwrap(),
+            );
+            assert_eq!(
+                canonicalize_at("child.usda", Some(&anchor)).unwrap(),
+                expected
+            );
+            let at_root = canonicalize_at("../../../../child.usda", Some(&anchor)).unwrap();
+            assert!(
+                at_root == "file:///C:/child.usda" || at_root == "file://server/share/child.usda",
+                "{at_root}"
+            );
+        }
+    }
+
+    #[test]
+    fn infallible_resolver_adapter_retains_invalid_identifier_diagnostic() {
+        use openusd::ar::Resolver;
+        let invalid = "file:///invalid%00.usda";
+        assert!(
+            LuncoUsdResolver::new(HashMap::from([(invalid.to_owned(), EMPTY_USDA.to_vec())]))
+                .is_err()
+        );
+        let resolver = LuncoUsdResolver::new(HashMap::new()).unwrap();
+        let id = resolver.create_identifier(invalid, None);
+        assert_eq!(id, invalid);
+        assert!(resolver.resolve(&id).is_none());
+        assert!(resolver.resolve_for_new_asset(invalid).is_none());
+        let error = resolver.diagnostics().check().unwrap_err().to_string();
+        assert!(error.contains(invalid), "{error}");
     }
 }
