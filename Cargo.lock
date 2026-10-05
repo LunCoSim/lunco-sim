@@ -7695,6 +7695,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "crossbeam-channel",
+ "lunco-workspace",
  "serde",
  "uuid",
  "web-time",
@@ -8410,6 +8411,7 @@ dependencies = [
  "lunco-assets-runtime",
  "lunco-command-contracts",
  "lunco-core",
+ "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-experiments",
@@ -8649,6 +8651,7 @@ dependencies = [
  "bevy",
  "crossbeam-channel",
  "lunco-core-runtime",
+ "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-experiments",
@@ -8680,6 +8683,7 @@ dependencies = [
  "lunco-modelica-ast",
  "lunco-signal",
  "lunco-storage",
+ "lunco-workspace",
  "serde",
  "web-time",
 ]
@@ -8837,6 +8841,7 @@ dependencies = [
  "lunco-assets-runtime",
  "lunco-core",
  "lunco-core-runtime",
+ "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-experiments",
@@ -8852,6 +8857,7 @@ dependencies = [
  "lunco-storage",
  "lunco-telemetry-core",
  "lunco-time",
+ "lunco-workspace",
  "rayon",
  "rumoca-compile",
  "rumoca-ir-solve",
@@ -10622,9 +10628,11 @@ name = "lunco-usd-sim-domain"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "lunco-assets-core",
  "lunco-assets-runtime",
  "lunco-core",
  "lunco-core-runtime",
+ "lunco-core-session",
  "lunco-cosim-core",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -10645,6 +10653,7 @@ dependencies = [
  "lunco-usd-bevy-stage",
  "lunco-usd-compose",
  "lunco-usd-sim-core",
+ "lunco-workspace",
  "openusd",
  "web-time",
 ]

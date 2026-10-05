@@ -92,6 +92,9 @@ pub fn drive_duplicate_loads(
     mut tabs: bevy::prelude::ResMut<crate::model_tabs::ModelTabs>,
     mut canvas_state: bevy::prelude::ResMut<super::CanvasDiagramState>,
     mut commands: bevy::prelude::Commands,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
 ) {
     use bevy::prelude::*;
     // While any duplicate is in-flight, ping egui every tick so the
@@ -106,9 +109,30 @@ pub fn drive_duplicate_loads(
             ctx.get_mut().request_repaint();
         }
     }
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     let doc_ids = openings.doc_ids();
     let mut had_install = false;
     for doc_id in doc_ids {
+        if openings.duplicate_display(doc_id).is_none() {
+            continue;
+        }
+        let admission = lunco_workspace::PinnedDocumentRuntimeOwner::for_document(
+            doc_id,
+            workspace.as_deref().map(|workspace| &workspace.0),
+        );
+        if !admission.is_ok_and(|source| {
+            source.is_current(
+                workspace.as_deref().map(|workspace| &workspace.0),
+                replication.as_ref(),
+            )
+        }) {
+            openings.cancel(doc_id);
+            bevy::log::warn!(
+                "Modelica duplicate {doc_id} cancelled: its admitted document runtime retired"
+            );
+            continue;
+        }
         let t_poll = web_time::Instant::now();
         let polled: Option<lunco_modelica_document::ModelicaDocument> =
             if let Some(OpeningState::Duplicate(b)) = openings.get_mut(doc_id) {

@@ -218,7 +218,7 @@ mod tests {
             id: DocumentId::new(1),
             kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::untitled("X"),
-            context_twin: None,
+            runtime_context: crate::DocumentRuntimeOwner::Application,
             title: "X".into(),
             dirty: true,
         });

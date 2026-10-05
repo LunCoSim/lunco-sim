@@ -34,6 +34,80 @@ pub struct SceneScopeFacts<'w, 's> {
     >,
 }
 impl SceneScopeFacts<'_, '_> {
+    /// Pin an authenticated peer to the hosted document mount, without choosing
+    /// a document or guessing an authority from a display name.
+    pub fn host_owner(&self, connection: Entity) -> Option<lunco_core_session::ReplicationOwner> {
+        match self.host_document_scope()? {
+            ReplicationScope::Application => {
+                Some(lunco_core_session::ReplicationOwner::Application { connection })
+            }
+            ReplicationScope::Twin(host_twin) => {
+                let twin = self.workspace.as_ref()?.twin(host_twin)?;
+                let roots = self.roots.as_ref()?;
+                let authority = if self.scenes.is_empty() {
+                    let names = match roots.names() {
+                        Ok(names) => names,
+                        Err(error) => {
+                            warn_once!("[net] cannot inspect hosted Twin mounts: {error}");
+                            return None;
+                        }
+                    };
+                    let mut matching = None;
+                    for authority in names {
+                        match roots.root_for(&authority) {
+                            Ok(Some(root)) if root == twin.root => {
+                                matching = Some(authority);
+                                break;
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                warn_once!("[net] cannot validate hosted Twin mount: {error}");
+                                return None;
+                            }
+                        }
+                    }
+                    matching?
+                } else {
+                    self.authority()?
+                };
+                let root = match roots.root_for(&authority) {
+                    Ok(Some(root)) if root == twin.root => root,
+                    _ => {
+                        warn_once!("[net] hosted journal has no matching live asset mount");
+                        return None;
+                    }
+                };
+                Some(lunco_core_session::ReplicationOwner::Twin {
+                    scene: ReplicatedSceneOwner {
+                        connection,
+                        host_twin,
+                        authority,
+                        root,
+                        owns_mount: false,
+                    },
+                })
+            }
+        }
+    }
+
+    pub fn client_owner(
+        &self,
+        connection: Option<Entity>,
+        scene: Option<&ReplicatedSceneOwner>,
+        announced: Option<lunco_workspace::TwinId>,
+    ) -> Option<lunco_core_session::ReplicationOwner> {
+        match self.client_scope(connection, scene, announced)? {
+            ReplicationScope::Application => {
+                Some(lunco_core_session::ReplicationOwner::Application {
+                    connection: connection?,
+                })
+            }
+            ReplicationScope::Twin(_) => Some(lunco_core_session::ReplicationOwner::Twin {
+                scene: scene?.clone(),
+            }),
+        }
+    }
+
     fn authority(&self) -> Option<String> {
         let prim = self.scenes.single().ok()?;
         let path = self.assets.as_ref()?.get_path(prim.stage_handle.id())?;

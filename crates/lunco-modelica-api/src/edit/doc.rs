@@ -6,9 +6,10 @@ use bevy::prelude::*;
 use lunco_command_contracts::{Ack, OpId};
 use lunco_core::{Command, on_command};
 use lunco_doc::DocumentId;
+use lunco_experiments::ExperimentOrigins;
 use lunco_experiments::ExperimentRegistry;
 use lunco_modelica_document::ModelicaOp;
-use lunco_modelica_runner::{ExperimentSources, PendingHandles};
+use lunco_modelica_runner::PendingHandles;
 use std::collections::HashSet;
 
 /// Identities of untitled documents allocated specifically for generated
@@ -31,6 +32,9 @@ pub fn on_create_scratch_modelica_document(
     trigger: On<CreateScratchModelicaDocument>,
     mut registry: ResMut<ModelicaDocuments>,
     mut scratch_documents: ResMut<ToolScratchDocuments>,
+    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
 ) -> Result<Ack, String> {
     let request = trigger.event();
     if request.source.trim().is_empty() {
@@ -40,8 +44,12 @@ pub fn on_create_scratch_modelica_document(
     if name.is_empty() {
         return Err("CreateScratchModelicaDocument requires a display name".into());
     }
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     let doc_id = lunco_modelica_core::doc_ops::allocate_scratch_document(
         &mut registry,
+        workspace.as_deref_mut().map(|workspace| &mut workspace.0),
+        replication.as_ref(),
         request.source.clone(),
         name.to_owned(),
     );
@@ -67,7 +75,7 @@ pub fn on_close_scratch_modelica_document(
     mut registry: ResMut<ModelicaDocuments>,
     mut scratch_documents: ResMut<ToolScratchDocuments>,
     mut experiments: Option<ResMut<ExperimentRegistry>>,
-    sources: Option<Res<ExperimentSources>>,
+    sources: Option<Res<ExperimentOrigins>>,
     mut pending: Option<ResMut<PendingHandles>>,
 ) -> Result<Ack, String> {
     let doc = trigger.event().doc_id;
@@ -87,9 +95,13 @@ pub fn on_close_scratch_modelica_document(
         .as_ref()
         .map(|sources| {
             sources
-                .0
                 .iter()
-                .filter_map(|(id, source)| (source.document == doc).then_some(*id))
+                .filter_map(|(id, origin)| {
+                    origin
+                        .local_document()
+                        .filter(|source| source.document == doc)
+                        .map(|_| *id)
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -156,16 +168,17 @@ pub struct SetDocumentSource {
 /// originating from `doc`. Empty when the doc has no in-flight run.
 fn live_runs_for_doc(world: &World, doc: DocumentId) -> Vec<lunco_experiments::ExperimentId> {
     let (Some(sources), Some(registry)) = (
-        world.get_resource::<lunco_modelica_runner::ExperimentSources>(),
+        world.get_resource::<lunco_experiments::ExperimentOrigins>(),
         world.get_resource::<lunco_experiments::ExperimentRegistry>(),
     ) else {
         return Vec::new();
     };
     sources
-        .0
         .iter()
-        .filter(|(id, src_doc)| {
-            src_doc.document == doc
+        .filter(|(id, origin)| {
+            origin
+                .local_document()
+                .is_some_and(|source| source.document == doc)
                 && registry
                     .get(**id)
                     .map(|e| !e.status.is_terminal())
@@ -255,8 +268,8 @@ pub fn on_set_document_source(trigger: On<SetDocumentSource>, mut commands: Comm
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_experiments::ExperimentOrigins;
     use lunco_experiments::{ExperimentRegistry, ModelRef, RunBounds, RunStatus, TwinId};
-    use lunco_modelica_runner::ExperimentSources;
     use std::collections::BTreeMap;
 
     /// Build a world holding one experiment (originating from `run_doc`) at
@@ -268,7 +281,15 @@ mod tests {
     ) -> Vec<lunco_experiments::ExperimentId> {
         let mut world = World::new();
         let mut registry = ExperimentRegistry::new();
-        let id = registry.insert_new(
+        let mut sources = ExperimentOrigins::default();
+        let id = sources.insert_new(
+            &mut registry,
+            lunco_experiments::ExperimentOrigin::LocalDocument(
+                lunco_workspace::PinnedDocumentRuntimeOwner {
+                    document: run_doc,
+                    runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+                },
+            ),
             TwinId("t".into()),
             ModelRef("M".into()),
             BTreeMap::new(),
@@ -276,14 +297,6 @@ mod tests {
             RunBounds::default(),
         );
         registry.set_status(id, status);
-        let mut sources = ExperimentSources::default();
-        sources.0.insert(
-            id,
-            lunco_modelica_runner::ExperimentSource {
-                document: run_doc,
-                runtime_twin: None,
-            },
-        );
         world.insert_resource(registry);
         world.insert_resource(sources);
         live_runs_for_doc(&world, doc)
@@ -335,7 +348,7 @@ mod tests {
     fn empty_when_no_runs_exist() {
         let mut world = World::new();
         world.insert_resource(ExperimentRegistry::new());
-        world.insert_resource(ExperimentSources::default());
+        world.insert_resource(ExperimentOrigins::default());
         assert!(live_runs_for_doc(&world, DocumentId(2)).is_empty());
     }
 
@@ -352,8 +365,16 @@ mod tests {
         let other = DocumentId(3);
         let mut world = World::new();
         let mut registry = ExperimentRegistry::new();
-        let mint = |reg: &mut ExperimentRegistry| {
-            reg.insert_new(
+        let mut sources = ExperimentOrigins::default();
+        let mut mint = |reg: &mut ExperimentRegistry, document| {
+            sources.insert_new(
+                reg,
+                lunco_experiments::ExperimentOrigin::LocalDocument(
+                    lunco_workspace::PinnedDocumentRuntimeOwner {
+                        document,
+                        runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+                    },
+                ),
                 TwinId("t".into()),
                 ModelRef("M".into()),
                 BTreeMap::new(),
@@ -361,38 +382,25 @@ mod tests {
                 RunBounds::default(),
             )
         };
-        let target_id = mint(&mut registry);
-        let other_id = mint(&mut registry);
+        let target_id = mint(&mut registry, doc);
+        let other_id = mint(&mut registry, other);
         registry.set_status(target_id, RunStatus::Running { t_current: 5.0 });
         registry.set_status(other_id, RunStatus::Running { t_current: 5.0 });
-
-        let mut sources = ExperimentSources::default();
-        sources.0.insert(
-            target_id,
-            lunco_modelica_runner::ExperimentSource {
-                document: doc,
-                runtime_twin: None,
-            },
-        );
-        sources.0.insert(
-            other_id,
-            lunco_modelica_runner::ExperimentSource {
-                document: other,
-                runtime_twin: None,
-            },
-        );
 
         // Handles whose cancel hook bumps a shared counter so we can assert
         // exactly which runs were signalled.
         let hits = Arc::new(AtomicUsize::new(0));
         let mk_handle = |id, hits: Arc<AtomicUsize>| {
             let (_tx, rx) = crossbeam_channel::unbounded();
-            lunco_experiments::RunHandle {
-                run_id: id,
-                progress_rx: rx,
-                cancel: Box::new(move || {
-                    hits.fetch_add(1, Ordering::SeqCst);
-                }),
+            lunco_modelica_runner::PendingRun {
+                origin: sources.get(&id).expect("source").clone(),
+                handle: lunco_experiments::RunHandle {
+                    run_id: id,
+                    progress_rx: rx,
+                    cancel: Box::new(move || {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                    }),
+                },
             }
         };
         let handles = PendingHandles(vec![

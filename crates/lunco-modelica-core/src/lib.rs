@@ -184,7 +184,7 @@ fn sync_workspace_on_doc_opened(
     if workspace.document(id).is_some() {
         return;
     }
-    let context_twin = if origin.is_untitled() {
+    let runtime_context = if origin.is_untitled() {
         workspace.active_twin
     } else {
         None
@@ -193,7 +193,10 @@ fn sync_workspace_on_doc_opened(
         id,
         kind: lunco_workspace::DocumentKindId::new("modelica"),
         origin: origin.clone(),
-        context_twin,
+        runtime_context: runtime_context.map_or(
+            lunco_workspace::DocumentRuntimeOwner::Application,
+            lunco_workspace::DocumentRuntimeOwner::LocalTwin,
+        ),
         title: origin.display_name(),
         dirty: document.is_dirty(),
     });

@@ -291,7 +291,7 @@ fn sync_workspace_on_doc_opened(
         return;
     }
     let origin = host.document().origin().clone();
-    let context_twin = if origin.is_untitled() {
+    let runtime_context = if origin.is_untitled() {
         workspace.active_twin
     } else {
         None
@@ -301,7 +301,10 @@ fn sync_workspace_on_doc_opened(
         kind: lunco_workspace::DocumentKindId::new(USD_DOCUMENT_KIND),
         title: origin.display_name(),
         origin,
-        context_twin,
+        runtime_context: runtime_context.map_or(
+            lunco_workspace::DocumentRuntimeOwner::Application,
+            lunco_workspace::DocumentRuntimeOwner::LocalTwin,
+        ),
         dirty: host.document().is_dirty(),
     });
     workspace.active_document = Some(doc);

@@ -5,12 +5,11 @@ use lunco_command_contracts::{Ack, OpId};
 use lunco_core::{Command, on_command, register_commands};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
+use lunco_experiments::{ExperimentOrigin, ExperimentOrigins};
 use lunco_experiments::{ExperimentRegistry, ExperimentRunner, ModelRef, RunBounds, TwinId};
 use lunco_modelica_document::ModelicaDocument;
-use lunco_modelica_runner::{
-    ExperimentSource, ExperimentSources, ModelSource, ModelicaRunnerResource, PendingHandles,
-};
-use lunco_workspace::WorkspaceResource;
+use lunco_modelica_runner::{ModelSource, ModelicaRunnerResource, PendingHandles, PendingRun};
+use lunco_workspace::{PinnedDocumentRuntimeOwner, WorkspaceResource};
 
 type ModelicaDocuments = DocumentRegistry<ModelicaDocument>;
 
@@ -33,9 +32,11 @@ fn on_run_modelica_solve(
     trigger: On<RunModelicaSolve>,
     registry: Res<ModelicaDocuments>,
     workspace: Option<Res<WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
     runner: Option<Res<ModelicaRunnerResource>>,
     mut experiments: Option<ResMut<ExperimentRegistry>>,
-    mut sources: Option<ResMut<ExperimentSources>>,
+    mut sources: Option<ResMut<ExperimentOrigins>>,
     mut pending: Option<ResMut<PendingHandles>>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) -> Result<Ack, String> {
@@ -84,10 +85,18 @@ fn on_run_modelica_solve(
         .map(|package| format!("{package}.{model_name}"))
         .unwrap_or(model_name);
     let filename = document.origin().session_uri();
-    let attribution = ExperimentSource::for_document(
+    let attribution = PinnedDocumentRuntimeOwner::for_document(
         request.doc_id,
         workspace.as_deref().map(|workspace| &workspace.0),
     )?;
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    if !attribution.is_current(
+        workspace.as_deref().map(|workspace| &workspace.0),
+        replication.as_ref(),
+    ) {
+        return Err("solve source runtime has retired".into());
+    }
     let runner = runner.ok_or_else(|| "Modelica runner is not installed".to_owned())?;
     let mut experiments = experiments
         .take()
@@ -105,9 +114,9 @@ fn on_run_modelica_solve(
         source,
         filename,
         extras: Vec::new(),
-        runtime_twin: attribution.runtime_twin,
+        runtime: attribution.runtime.clone(),
     };
-    let twin_id = TwinId(match attribution.runtime_twin {
+    let twin_id = TwinId(match attribution.runtime.local_twin() {
         Some(twin) => format!("workspace:{}", twin.raw()),
         None => format!("loose-document:{}", request.doc_id.raw()),
     });
@@ -123,7 +132,10 @@ fn on_run_modelica_solve(
     };
     lunco_modelica_core::sim_target::validate_run_bounds(&bounds)
         .map_err(|error| error.to_string())?;
-    let experiment_id = experiments.insert_new(
+    let origin = ExperimentOrigin::LocalDocument(attribution);
+    let experiment_id = sources.insert_new(
+        &mut experiments,
+        origin.clone(),
         twin_id,
         model_ref,
         Default::default(),
@@ -139,9 +151,8 @@ fn on_run_modelica_solve(
     if let Some(journal) = journal.as_ref() {
         lunco_modelica_core::experiment_journal::record_create(journal, &experiment);
     }
-    sources.0.insert(experiment_id, attribution);
     let handle = runner.0.run_fast(&experiment, source_snapshot);
-    pending.0.push(handle);
+    pending.0.push(PendingRun { handle, origin });
     experiments.set_status(experiment_id, lunco_experiments::RunStatus::Queued);
 
     Ok(Ack::with_data(

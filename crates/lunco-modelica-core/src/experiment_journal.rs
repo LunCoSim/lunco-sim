@@ -21,8 +21,8 @@ use std::time::Duration;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::JournalResource;
 use lunco_experiments::{
-    Experiment, ExperimentId, ExperimentRegistry, ModelRef, ParamPath, ParamValue, RunBounds,
-    RunStatus, TwinId,
+    Experiment, ExperimentId, ExperimentOrigin, ExperimentOrigins, ExperimentRegistry, ModelRef,
+    ParamPath, ParamValue, RunBounds, RunStatus, TwinId,
 };
 use lunco_twin_journal::{AuthorTag, DomainKind, OpPayload};
 use serde::{Deserialize, Serialize};
@@ -170,50 +170,46 @@ pub fn apply_and_record(
         ExperimentOp::Delete { .. } => create_op(e),
         ExperimentOp::Create { .. } => ExperimentOp::Delete { id: op.target() },
     });
-    apply_op(registry, &op);
+    if let Err(error) = apply_op(registry, &op) {
+        bevy::log::warn!("[experiment-journal] edit rejected: {error}");
+        return;
+    }
     if let Some(journal) = journal {
         let inverse = inverse.unwrap_or_else(|| ExperimentOp::Delete { id: op.target() });
         record(journal, &op, &inverse);
     }
 }
 
-/// Apply an `ExperimentOp` to the registry **without** recording — the replay
-/// entry point (op arrived via the journal, already logged). Returns `false`
-/// (logged) if the payload isn't an `ExperimentOp`.
+/// Apply a transported definition only to its immutable admitted origin.
+/// The transport owner supplies authenticated scope/connection/mount facts;
+/// a journal's synthetic document key never identifies a source document.
 pub fn replay_experiment_op(
     registry: &mut ExperimentRegistry,
+    origins: &mut ExperimentOrigins,
+    origin: ExperimentOrigin,
     op_json: &serde_json::Value,
-) -> bool {
-    match serde_json::from_value::<ExperimentOp>(op_json.clone()) {
-        Ok(op) => {
-            apply_op(registry, &op);
-            true
-        }
-        Err(e) => {
-            bevy::log::warn!("[experiment-journal] op payload is not an ExperimentOp: {e}");
-            false
-        }
-    }
-}
-
-/// Apply an op to the registry through its public mutators. Shared by
-/// [`apply_and_record`] (local edits) and [`replay_experiment_op`] (remote).
-fn apply_op(registry: &mut ExperimentRegistry, op: &ExperimentOp) {
-    match op {
-        ExperimentOp::Create {
-            id,
-            twin_id,
-            model_ref,
-            name,
-            overrides,
-            inputs,
-            bounds,
-            color_hint,
-            created_at_ms,
-        } => {
-            let created_at =
-                web_time::SystemTime::UNIX_EPOCH + Duration::from_millis(*created_at_ms);
-            registry.insert_with_id(Experiment {
+) -> Result<(), String> {
+    let op: ExperimentOp = serde_json::from_value(op_json.clone())
+        .map_err(|error| format!("experiment op payload is invalid: {error}"))?;
+    if let ExperimentOp::Create {
+        id,
+        twin_id,
+        model_ref,
+        name,
+        overrides,
+        inputs,
+        bounds,
+        color_hint,
+        created_at_ms,
+    } = &op
+    {
+        let created_at = web_time::SystemTime::UNIX_EPOCH
+            .checked_add(Duration::from_millis(*created_at_ms))
+            .ok_or("experiment creation timestamp is outside the platform range")?;
+        return origins.import(
+            registry,
+            origin,
+            Experiment {
                 id: *id,
                 twin_id: twin_id.clone(),
                 model_ref: model_ref.clone(),
@@ -225,7 +221,19 @@ fn apply_op(registry: &mut ExperimentRegistry, op: &ExperimentOp) {
                 result: None,
                 created_at,
                 color_hint: *color_hint,
-            });
+            },
+        );
+    }
+    origins.require(registry, op.target(), &origin)?;
+    apply_op(registry, &op)
+}
+
+/// Apply an op to the registry through its public mutators. Shared by
+/// [`apply_and_record`] (local edits) and [`replay_experiment_op`] (remote).
+fn apply_op(registry: &mut ExperimentRegistry, op: &ExperimentOp) -> Result<(), String> {
+    match op {
+        ExperimentOp::Create { .. } => {
+            return Err("experiment creation requires origin admission".into());
         }
         ExperimentOp::SetName { id, name } => {
             registry.set_name(*id, name.clone());
@@ -244,6 +252,7 @@ fn apply_op(registry: &mut ExperimentRegistry, op: &ExperimentOp) {
             registry.delete(*id);
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -278,7 +287,11 @@ mod tests {
         let json = serde_json::to_value(&op).unwrap();
 
         let mut b = ExperimentRegistry::new();
-        assert!(replay_experiment_op(&mut b, &json));
+        let mut origins = ExperimentOrigins::default();
+        let origin = ExperimentOrigin::Replicated(lunco_workspace::ReplicationOwner::Application {
+            connection: bevy::prelude::Entity::from_bits(1),
+        });
+        assert!(replay_experiment_op(&mut b, &mut origins, origin.clone(), &json).is_ok());
         let e = b.get(id).expect("replayed with the SAME id");
         assert_eq!(e.model_ref, ModelRef("M".into()));
 
@@ -288,16 +301,25 @@ mod tests {
             name: "renamed".into(),
         })
         .unwrap();
-        assert!(replay_experiment_op(&mut b, &rename));
+        assert!(replay_experiment_op(&mut b, &mut origins, origin, &rename).is_ok());
         assert_eq!(b.get(id).unwrap().name, "renamed");
     }
 
     #[test]
     fn bad_payload_is_rejected_softly() {
         let mut r = ExperimentRegistry::new();
-        assert!(!replay_experiment_op(
-            &mut r,
-            &serde_json::json!({ "nope": 1 })
-        ));
+        let mut origins = ExperimentOrigins::default();
+        let origin = ExperimentOrigin::Replicated(lunco_workspace::ReplicationOwner::Application {
+            connection: bevy::prelude::Entity::from_bits(1),
+        });
+        assert!(
+            replay_experiment_op(
+                &mut r,
+                &mut origins,
+                origin,
+                &serde_json::json!({ "nope": 1 })
+            )
+            .is_err()
+        );
     }
 }

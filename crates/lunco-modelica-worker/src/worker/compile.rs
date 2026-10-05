@@ -14,7 +14,7 @@ pub fn dispatch_modelica_compile_requests(
     let mut requests: Vec<_> = requests.read().cloned().collect();
     requests.sort_unstable_by_key(|request| {
         (
-            request.doc.raw(),
+            request.source.document.raw(),
             request.entity.map(Entity::to_bits),
             request.class.clone(),
         )
@@ -25,7 +25,33 @@ pub fn dispatch_modelica_compile_requests(
 }
 
 fn dispatch_one(world: &mut World, request: CompileRequested) {
-    let doc = request.doc;
+    let doc = request.source.document;
+    let workspace = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .map(|workspace| &workspace.0);
+    let replication = lunco_core_session::current_replication_owner_in(world);
+    if !request.source.is_current(workspace, replication.as_ref()) {
+        fail_request(
+            world,
+            doc,
+            request.entity,
+            request.class.as_deref().unwrap_or_default(),
+            "compile source runtime owner has retired or changed",
+        );
+        return;
+    }
+    if request.entity.is_some_and(|entity| {
+        world.get_entity(entity).is_err() || world.get::<ModelicaModel>(entity).is_none()
+    }) {
+        fail_request(
+            world,
+            doc,
+            None,
+            request.class.as_deref().unwrap_or_default(),
+            "compile target participant has retired",
+        );
+        return;
+    }
     if doc.is_unassigned() {
         fail_request(
             world,
@@ -46,6 +72,38 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
         );
         return;
     };
+    let linked = world
+        .get_resource::<ModelicaDocuments>()
+        .and_then(|documents| documents.simulator_for(doc));
+    let target_entity = request
+        .entity
+        .or_else(|| linked.filter(|entity| world.get::<ModelicaModel>(*entity).is_some()));
+    if target_entity
+        .and_then(|entity| world.get::<lunco_workspace::PinnedDocumentRuntimeOwner>(entity))
+        .is_some_and(|source| *source != request.source)
+    {
+        fail_request(
+            world,
+            doc,
+            None,
+            request.class.as_deref().unwrap_or_default(),
+            "compile target belongs to a different admitted document runtime",
+        );
+        return;
+    }
+    if target_entity
+        .and_then(|entity| world.get::<ModelicaModel>(entity))
+        .is_some_and(|model| model.document != doc)
+    {
+        fail_request(
+            world,
+            doc,
+            None,
+            request.class.as_deref().unwrap_or_default(),
+            "Modelica participant is linked to a different document",
+        );
+        return;
+    }
     let Some(host) = documents.host(doc) else {
         fail_request(
             world,
@@ -149,6 +207,15 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
     sibling_documents.sort_unstable_by_key(|(other_doc, _)| other_doc.raw());
     for (other_doc, host) in sibling_documents {
         let other_document = host.document();
+        if !request.source.shares_runtime_with(
+            other_doc,
+            world
+                .get_resource::<lunco_workspace::WorkspaceResource>()
+                .map(|workspace| &workspace.0),
+            replication.as_ref(),
+        ) {
+            continue;
+        }
         if lunco_modelica_source_roots::is_library_document(other_document) {
             continue;
         }
@@ -201,20 +268,6 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
         }
     }
 
-    let linked = world
-        .get_resource::<ModelicaDocuments>()
-        .and_then(|documents| documents.simulator_for(doc));
-    let target_entity = request
-        .entity
-        .or_else(|| linked.filter(|entity| world.get::<ModelicaModel>(*entity).is_some()));
-    if request
-        .entity
-        .is_some_and(|entity| world.get::<ModelicaModel>(entity).is_none())
-    {
-        // A request tied to a participant that has already been removed is
-        // stale by definition; the next lifecycle pass will see current state.
-        return;
-    }
     let existing = target_entity.and_then(|entity| {
         world.get::<ModelicaModel>(entity).map(|model| {
             (
@@ -225,26 +278,12 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
                 model.is_compiling,
                 model.compiled_generation,
                 model.resume_after_compile,
-                model.document,
             )
         })
     });
-    if existing
-        .as_ref()
-        .is_some_and(|(_, _, _, _, _, _, _, model_doc)| *model_doc != doc)
-    {
-        fail_request(
-            world,
-            doc,
-            target_entity,
-            &model_name,
-            "Modelica participant is linked to a different document",
-        );
-        return;
-    }
     let communication_period = existing
         .as_ref()
-        .map(|(_, _, period, _, _, _, _, _)| *period)
+        .map(|(_, _, period, _, _, _, _)| *period)
         .unwrap_or(lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS);
     if let Err(error) =
         lunco_modelica_runtime::validate_communication_period_secs(communication_period)
@@ -254,7 +293,7 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
     }
     if !request.force
         && existing.as_ref().is_some_and(
-            |(_, _, _, is_compiled, is_compiling, compiled_generation, _, _)| {
+            |(_, _, _, is_compiled, is_compiling, compiled_generation, _)| {
                 *is_compiled && !*is_compiling && *compiled_generation == generation
             },
         )
@@ -264,7 +303,7 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
 
     let old_inputs = existing
         .as_ref()
-        .map(|(_, inputs, _, _, _, _, _, _)| inputs.clone())
+        .map(|(_, inputs, _, _, _, _, _)| inputs.clone())
         .unwrap_or_default();
     let mut inputs = HashMap::new();
     for (name, value) in inputs_with_defaults {
@@ -279,23 +318,38 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
             .or_insert_with(|| old_inputs.get(&name).copied().unwrap_or(0.0));
     }
 
-    let session_id = match existing.as_ref().map(|(session_id, ..)| *session_id) {
-        None | Some(0) => 1,
-        Some(session_id) => match session_id.checked_add(1) {
-            Some(next) => next,
-            None => {
-                fail_request(
-                    world,
-                    doc,
-                    target_entity,
-                    &model_name,
-                    "Modelica compile session id is exhausted",
-                );
-                return;
-            }
-        },
+    let previous_session = existing
+        .as_ref()
+        .map(|(session_id, ..)| *session_id)
+        .unwrap_or(0)
+        .max(
+            target_entity
+                .and_then(|entity| {
+                    world.get::<lunco_modelica_runtime::ModelicaSessionEpoch>(entity)
+                })
+                .map(|epoch| epoch.0)
+                .unwrap_or(0),
+        );
+    let Some(session_id) = previous_session.checked_add(1) else {
+        fail_request(
+            world,
+            doc,
+            target_entity,
+            &model_name,
+            "Modelica compile session id is exhausted",
+        );
+        return;
     };
-    let entity = target_entity.unwrap_or_else(|| world.spawn_empty().id());
+    let entity = match target_entity {
+        Some(entity) => entity,
+        None => world
+            .spawn(lunco_modelica_runtime::EditorModelicaActor)
+            .id(),
+    };
+    world.entity_mut(entity).insert((
+        request.source,
+        lunco_modelica_runtime::ModelicaSessionEpoch(session_id),
+    ));
     let link_error = if let Some(mut documents) = world.get_resource_mut::<ModelicaDocuments>() {
         if documents.document_of(entity) != Some(doc) {
             documents.link(entity, doc).err()
@@ -314,7 +368,7 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
     let resume_after_compile = request.resume_after_compile
         || existing
             .as_ref()
-            .is_some_and(|(_, _, _, _, _, _, resume, _)| *resume);
+            .is_some_and(|(_, _, _, _, _, _, resume)| *resume);
     let model = ModelicaModel {
         model_name: model_name.clone(),
         source_uri: source_uri.clone(),
@@ -339,7 +393,7 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
         is_compiled: false,
         compiled_generation: existing
             .as_ref()
-            .map_or(0, |(_, _, _, _, _, generation, _, _)| *generation),
+            .map_or(0, |(_, _, _, _, _, generation, _)| *generation),
         live_solver_snapshot: None,
         pending_generation: generation,
         resume_after_compile,
@@ -501,7 +555,10 @@ mod tests {
             .link(entity, doc)
             .expect("document link");
         app.world_mut().write_message(CompileRequested {
-            doc,
+            source: lunco_workspace::PinnedDocumentRuntimeOwner {
+                document: doc,
+                runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+            },
             entity: Some(entity),
             class: Some("RoverPlant".to_owned()),
             force: false,
@@ -532,5 +589,68 @@ mod tests {
         assert!(model.paused);
         assert!(model.resume_after_compile);
         assert_eq!(model.pending_generation, 1);
+    }
+    #[test]
+    fn retired_compile_source_and_missing_target_fail_without_spawning_actor() {
+        use lunco_doc::PathlessOrigin;
+        let mut documents = ModelicaDocuments::default();
+        let doc = documents.allocate(
+            "model Plant Real x; equation der(x)=1; end Plant;".into(),
+            PathlessOrigin::untitled("Plant"),
+        );
+        documents
+            .host_mut(doc)
+            .expect("fixture")
+            .document_mut()
+            .refresh_ast_now();
+        let mut world = World::new();
+        world.insert_resource(documents);
+        world.insert_resource(lunco_doc_bevy::DocumentDiagnostics::default());
+        world.insert_resource(Messages::<ModelicaNotice>::default());
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let (_results, result_rx) = crossbeam_channel::unbounded();
+        world.insert_resource(ModelicaChannels { tx, rx: result_rx });
+        let source = lunco_workspace::PinnedDocumentRuntimeOwner {
+            document: doc,
+            runtime: lunco_workspace::DocumentRuntimeOwner::LocalTwin(
+                lunco_workspace::TwinId::new(7),
+            ),
+        };
+        dispatch_one(
+            &mut world,
+            CompileRequested {
+                source,
+                entity: None,
+                class: Some("Plant".into()),
+                force: true,
+                resume_after_compile: true,
+            },
+        );
+        assert!(rx.try_recv().is_err());
+        assert_eq!(world.resource::<Messages<ModelicaNotice>>().len(), 1);
+        let target = world.spawn_empty().id();
+        world.despawn(target);
+        dispatch_one(
+            &mut world,
+            CompileRequested {
+                source: lunco_workspace::PinnedDocumentRuntimeOwner {
+                    document: doc,
+                    runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+                },
+                entity: Some(target),
+                class: Some("Plant".into()),
+                force: true,
+                resume_after_compile: true,
+            },
+        );
+        assert!(rx.try_recv().is_err());
+        assert_eq!(
+            world
+                .query::<&lunco_modelica_runtime::EditorModelicaActor>()
+                .iter(&world)
+                .count(),
+            0
+        );
+        assert_eq!(world.resource::<Messages<ModelicaNotice>>().len(), 2);
     }
 }

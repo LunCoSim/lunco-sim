@@ -20,9 +20,9 @@ use lunco_doc::{Document, DocumentOrigin};
 use lunco_modelica_runtime::ModelicaModel;
 use lunco_workspace::WorkspaceResource;
 
+use lunco_experiments::ExperimentOrigins;
 use lunco_experiments::{ExperimentId, ExperimentRegistry, RunStatus};
 use lunco_modelica_core::models::bundled_models;
-use lunco_modelica_runner::ExperimentSources;
 // `DrilledInClassNames` reads migrated to
 // `lunco_modelica_core::sim_default::drilled_class_for_doc`.
 use lunco_doc::CompileState;
@@ -401,7 +401,7 @@ impl ApiQueryProvider for ListCompileCandidatesProvider {
 
 /// Reports, per non-package class in a document, the simulation bounds the
 /// Fast Run popup / Experiments Setup would use — and *where they come
-/// from*. Answers "why does it propose 10 s?": a class with no
+/// from*. Answers "why does it propose 1 s?": a class with no
 /// `experiment(...)` annotation (or one missing `StopTime`) resolves to the
 /// one-second fallback, while an annotated class surfaces its authored `StopTime`.
 ///
@@ -667,8 +667,8 @@ impl ApiQueryProvider for RunStatusProvider {
             return err_missing_field("experiment_id");
         };
         let sources_doc = world
-            .get_resource::<ExperimentSources>()
-            .and_then(|s| s.0.get(&id).map(|source| source.document.raw()));
+            .get_resource::<ExperimentOrigins>()
+            .and_then(|s| s.local_document(&id).map(|source| source.document.raw()));
         let Some(registry) = world.get_resource::<ExperimentRegistry>() else {
             return query_error(
                 ApiErrorCode::EntityNotFound,
@@ -710,10 +710,14 @@ impl ApiQueryProvider for ListRunsProvider {
         // Snapshot the sources map into an id→doc table we can reuse
         // per row without re-borrowing the resource.
         let id_to_doc: std::collections::HashMap<ExperimentId, u64> = world
-            .get_resource::<ExperimentSources>()
+            .get_resource::<ExperimentOrigins>()
             .map(|s| {
-                s.0.iter()
-                    .map(|(k, source)| (*k, source.document.raw()))
+                s.iter()
+                    .filter_map(|(k, origin)| {
+                        origin
+                            .local_document()
+                            .map(|source| (*k, source.document.raw()))
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -866,11 +870,14 @@ fn parse_experiment_id(params: &ApiValue, field: &str) -> Option<ExperimentId> {
 /// Mirrors [`latest_run_for_doc`] but returns the id so a caller can
 /// look up the full result. `None` when the doc has no runs.
 fn latest_experiment_id_for_doc(world: &World, doc_id: DocumentId) -> Option<ExperimentId> {
-    let sources = world.get_resource::<ExperimentSources>()?;
+    let sources = world.get_resource::<ExperimentOrigins>()?;
     let registry = world.get_resource::<ExperimentRegistry>()?;
     let mut best: Option<&lunco_experiments::Experiment> = None;
-    for (id, d) in &sources.0 {
-        if d.document != doc_id {
+    for (id, origin) in sources.iter() {
+        if origin
+            .local_document()
+            .is_none_or(|source| source.document != doc_id)
+        {
             continue;
         }
         if let Some(exp) = registry.get(*id) {

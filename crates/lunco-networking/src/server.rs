@@ -937,8 +937,16 @@ fn on_server_disconnected(
     mut pending_requests: ResMut<lunco_networking_sync::scenario_sync::PendingAssetRequests>,
     mut serve_tasks: ResMut<lunco_networking_sync::scenario_sync::AssetServeTasks>,
     mut replay: ResMut<PendingJournalReplay>,
+    mut origins: ResMut<lunco_networking_sync::journal_plane::JournalIngressOrigins>,
+    mut inbox: ResMut<SyncInbox>,
     mut commands: Commands,
 ) {
+    inbox
+        .entries
+        .retain(|entry| entry.connection != trigger.entity);
+    for owner in origins.retire_connection(trigger.entity) {
+        commands.trigger(lunco_core_session::ReplicationOwnerRetired { owner });
+    }
     // `TelemetrySubscriptions` is not reaped here: a disconnecting client's
     // telemetry subscriptions outlive its session
     // (needs a session/peer field on `TelemetrySubscription`, see
@@ -1148,11 +1156,11 @@ fn assemble_and_send_snapshots(
 /// Pull inbound frames from each client link into the inbox, tagged with the
 /// connection-derived session (the trusted origin for authority).
 fn host_recv_inbox(
-    mut q: Query<(&RemoteId, &mut MessageReceiver<Frame>), With<ClientOf>>,
+    mut q: Query<(Entity, &RemoteId, &mut MessageReceiver<Frame>), With<ClientOf>>,
     mut inbox: ResMut<SyncInbox>,
     assigned: Res<AssignedSessions>,
 ) {
-    for (remote, mut receiver) in q.iter_mut() {
+    for (connection, remote, mut receiver) in q.iter_mut() {
         // Bind every inbound envelope to the SERVER-ASSIGNED session for this
         // connection — the unforgeable trusted origin. A peer cannot spoof another
         // session: the id comes from the connection, not the wire (review H4). A
@@ -1165,7 +1173,13 @@ fn host_recv_inbox(
         };
         for frame in receiver.receive() {
             if let Some(env) = deserialize_env(&frame.0) {
-                inbox.entries.push((session, env));
+                inbox
+                    .entries
+                    .push(lunco_networking_sync::sync::SyncInboxEntry {
+                        sender: session,
+                        connection,
+                        envelope: env,
+                    });
             }
         }
     }
@@ -1464,13 +1478,23 @@ struct HostScenarioLifecycle<'w> {
     paths: ResMut<'w, lunco_networking_sync::scenario_sync::HostAssetPaths>,
     tasks: ResMut<'w, lunco_networking_sync::scenario_sync::AssetServeTasks>,
     outbox: ResMut<'w, SyncOutbox>,
+    origins: ResMut<'w, lunco_networking_sync::journal_plane::JournalIngressOrigins>,
     #[cfg(feature = "transport-http")]
     http: Option<Res<'w, AssetHttpServer>>,
 }
 
 impl HostScenarioLifecycle<'_> {
-    fn withdraw(&mut self) {
+    fn withdraw(&mut self, commands: &mut Commands) {
         let owner = self.scenario.owner.or(self.pending.owner);
+        let retired = match owner {
+            Some(owner) => self
+                .origins
+                .retire_scope(lunco_core_session::ReplicationScope::Twin(owner)),
+            None => self.origins.clear(),
+        };
+        for owner in retired {
+            commands.trigger(lunco_core_session::ReplicationOwnerRetired { owner });
+        }
         self.replay.0.clear();
         self.pending.task = None;
         self.pending.owner = None;
@@ -1489,6 +1513,7 @@ impl HostScenarioLifecycle<'_> {
                     | SyncEnvelope::Snapshot(_)
                     | SyncEnvelope::Spawn(_)
                     | SyncEnvelope::Despawn(_)
+                    | SyncEnvelope::RunStatus(_)
             )
         });
         #[cfg(feature = "transport-http")]
@@ -1506,9 +1531,13 @@ impl HostScenarioLifecycle<'_> {
     }
 }
 
-fn on_twin_closed_host(event: On<lunco_workspace::TwinClosed>, mut state: HostScenarioLifecycle) {
+fn on_twin_closed_host(
+    event: On<lunco_workspace::TwinClosed>,
+    mut state: HostScenarioLifecycle,
+    mut commands: Commands,
+) {
     if state.pending.owner == Some(event.twin) || state.scenario.owner == Some(event.twin) {
-        state.withdraw();
+        state.withdraw(&mut commands);
     }
 }
 
@@ -1516,9 +1545,10 @@ fn reconcile_host_scenario_owner(
     role: Res<lunco_core_session::NetworkRole>,
     workspace: Option<Res<WorkspaceResource>>,
     mut state: HostScenarioLifecycle,
+    mut commands: Commands,
 ) {
     let active = workspace.as_ref().and_then(|w| w.active_twin);
-    if (!role.is_host() && (state.pending.owner.is_some() || state.scenario.owner.is_some()))
+    if (!role.is_host() && role.is_changed())
         || state
             .pending
             .owner
@@ -1528,7 +1558,7 @@ fn reconcile_host_scenario_owner(
             .owner
             .is_some_and(|owner| Some(owner) != active)
     {
-        state.withdraw();
+        state.withdraw(&mut commands);
     }
 }
 
@@ -1680,12 +1710,13 @@ fn on_twin_added_host(
     roots: Option<Res<lunco_assets_core::TwinRoots>>,
     journal: Option<Res<JournalResource>>,
     mut state: HostScenarioLifecycle,
+    mut commands: Commands,
 ) {
     if workspace.active_twin != Some(trigger.event().twin) {
         return;
     }
     if state.scenario.owner != Some(trigger.event().twin) {
-        state.withdraw();
+        state.withdraw(&mut commands);
     }
     if let Some(twin) = workspace.twin(trigger.event().twin) {
         info!(

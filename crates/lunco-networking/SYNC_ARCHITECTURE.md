@@ -38,7 +38,9 @@ late spawns and manifests for the same mount. A despawn cancels only matching
 owner work. Reliable journal and ownership envelopes may wait for their matching
 root under the codec's bounded byte budget; budget exhaustion disconnects visibly.
 The version handshake is admitted before any traffic is consumed on a connection.
-The positional wire contract is version 5.
+The positional wire contract is version 6. Run status carries the producer's
+immutable scope alongside its experiment UUID. Its consumer requires the exact
+admitted run origin, transport, and live mount before changing a row.
 
 The host pins manifest preparation and connect-time journal replay to the admitted
 mount. Twin close, replacement, or role change withdraws the manifest, cancels
@@ -53,6 +55,8 @@ editable checkout. A conflicting live logical name rejects visibly.
 Verified cache bytes and the cached-Twin catalog are application resources.
 
 Deferred ownership and document messages retain their exact admitted byte cost.
+Each inbox and deferred entry retains its authenticated connection entity;
+retry never substitutes the current connection for the captured one.
 Retiring one scene removes only its messages and budget. A change to the actual
 ready scene scope retries the remaining queue without requiring another network
 packet; unchanged waiting scopes do not serialize the queue each frame. Future
@@ -62,7 +66,10 @@ Client Twin merge uses a `ReplicatedJournal` isolated by exact mount and
 connection. Independent Twins may reuse journal EntryIds, so their slots cannot
 share the local persistent journal. Application traffic uses its explicitly bound
 application journal. The host canonicalizes admitted client entries to its own
-journal storage identity. The mirror's owner also governs later projection;
+journal storage identity. `JournalIngressOrigins` pins each accepted EntryId to
+its authenticated connection and actual `ReplicationOwner`; canonical history
+without that ingress attribution cannot become current remote work. Reusing an
+EntryId with another origin rejects before journal mutation. The mirror's owner also governs later projection;
 there is one journal reader for each admitted scope and connection.
 `lunco-luncosim-services` validates the live root before projecting admitted
 entries into USD, Modelica, experiment, shader, or obstacle state. Applied-entry
@@ -78,6 +85,9 @@ Stable journal identity alone cannot admit work from a previous mount. Predictio
 interpolation, rollback, assembly, playback, visual-lead, and divergence buffers;
 `PredictionStateLifecycle` clears these on scene teardown and remote owner
 retirement while preserving configuration.
+`ReplicationOwnerRetired` is emitted by the owning mount, handshake connection,
+and host ingress withdrawal seams. It removes only exact-owner transport state
+and cancels remote runtime participation; immutable history remains available.
 
 Verification uses generic protocol/queue/admission/teardown tests and the real
 host/client harness. Scene-free smoke success proves Application replication;

@@ -493,7 +493,13 @@ fn client_recv_inbox(
                 inbox.entries.clear();
             }
             inbox.connection = Some(entity);
-            inbox.entries.push((SessionId::LOCAL, env));
+            inbox
+                .entries
+                .push(lunco_networking_sync::sync::SyncInboxEntry {
+                    sender: SessionId::LOCAL,
+                    connection: entity,
+                    envelope: env,
+                });
         }
     }
 }

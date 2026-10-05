@@ -398,6 +398,7 @@ fn close_model_tab(world: &mut World, tab_id: u64) {
 
 fn create_new_scratch_model(
     request: &CreateNewScratchModel,
+    replication: Option<&lunco_workspace::ReplicationOwner>,
     registry: &mut ModelicaDocuments,
     cache: &mut PackageTreeCache,
     model_tabs: &mut ModelTabs,
@@ -424,6 +425,8 @@ fn create_new_scratch_model(
     let mem_id = format!("mem://{name}");
     let doc_id = lunco_modelica_core::doc_ops::allocate_scratch_document(
         registry,
+        Some(&mut workspace.0),
+        replication,
         source.clone(),
         name.clone(),
     );
@@ -455,6 +458,8 @@ fn create_new_scratch_model(
 pub fn on_create_new_scratch_model(
     trigger: On<CreateNewScratchModel>,
     mut registry: ResMut<ModelicaDocuments>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
     mut cache: ResMut<PackageTreeCache>,
     mut model_tabs: ResMut<ModelTabs>,
     mut workbench: ResMut<WorkbenchState>,
@@ -463,8 +468,11 @@ pub fn on_create_new_scratch_model(
     active_id: Option<Res<ActiveCommandId>>,
     results: Option<ResMut<lunco_core::CommandResults>>,
 ) {
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     let doc_id = create_new_scratch_model(
         trigger.event(),
+        replication.as_ref(),
         &mut registry,
         &mut cache,
         &mut model_tabs,
@@ -490,14 +498,19 @@ pub fn on_create_new_scratch_model(
 pub fn on_create_new_scratch_model(
     trigger: On<CreateNewScratchModel>,
     mut registry: ResMut<ModelicaDocuments>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
     mut cache: ResMut<PackageTreeCache>,
     mut model_tabs: ResMut<ModelTabs>,
     mut workbench: ResMut<WorkbenchState>,
     mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
     mut commands: Commands,
 ) {
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     create_new_scratch_model(
         trigger.event(),
+        replication.as_ref(),
         &mut registry,
         &mut cache,
         &mut model_tabs,
@@ -518,13 +531,15 @@ pub fn on_duplicate_model_from_read_only(
     mut console: ResMut<lunco_ui::log::LogBuffer>,
     mut commands: Commands,
     mut egui_q: Query<&mut bevy_egui::EguiContext>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
 ) {
     // Unassigned ⇒ the active document, so one verb serves the tab context
     // menu and the API.
     let source_doc = match trigger.event().source_doc_id {
         raw if raw.is_unassigned() => {
-            let Some(active) = workspace.and_then(|ws| ws.active_document) else {
+            let Some(active) = workspace.as_ref().and_then(|ws| ws.active_document) else {
                 console.error("Duplicate failed: no active document");
                 return;
             };
@@ -578,6 +593,16 @@ pub fn on_duplicate_model_from_read_only(
     let name = unique_in_memory_name(&cache, &base_name);
 
     let doc_id = registry.reserve_id();
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    if let Some(workspace) = workspace.as_deref_mut() {
+        lunco_modelica_core::doc_ops::register_scratch_context(
+            &mut workspace.0,
+            doc_id,
+            name.clone(),
+            replication.as_ref(),
+        );
+    }
 
     let mem_id = format!("mem://{name}");
     cache.in_memory_models.retain(|e| e.id != mem_id);
@@ -676,6 +701,15 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
     let name = unique_in_memory_name(world.resource::<PackageTreeCache>(), &base_name);
 
     let doc_id = world.resource_mut::<ModelicaDocuments>().reserve_id();
+    let replication = lunco_core_session::current_replication_owner_in(world);
+    if let Some(mut workspace) = world.get_resource_mut::<lunco_workspace::WorkspaceResource>() {
+        lunco_modelica_core::doc_ops::register_scratch_context(
+            &mut workspace.0,
+            doc_id,
+            name.clone(),
+            replication.as_ref(),
+        );
+    }
     let mem_id = format!("mem://{name}");
     {
         let mut cache = world.resource_mut::<PackageTreeCache>();
@@ -1436,11 +1470,32 @@ pub fn render_close_dialogs(
 }
 
 #[on_command(NewDocument)]
-pub fn on_new_modelica_document(trigger: On<lunco_doc_bevy::NewDocument>, mut commands: Commands) {
+pub fn on_new_modelica_document(
+    trigger: On<lunco_doc_bevy::NewDocument>,
+    mut registry: ResMut<ModelicaDocuments>,
+    mut cache: ResMut<PackageTreeCache>,
+    mut model_tabs: ResMut<ModelTabs>,
+    mut workbench: ResMut<WorkbenchState>,
+    mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+    mut commands: Commands,
+) {
     if trigger.event().kind != "modelica" {
         return;
     }
-    commands.trigger(CreateNewScratchModel::default());
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    create_new_scratch_model(
+        &CreateNewScratchModel::default(),
+        replication.as_ref(),
+        &mut registry,
+        &mut cache,
+        &mut model_tabs,
+        &mut workbench,
+        &mut workspace,
+        &mut commands,
+    );
 }
 
 /// Read a file's text and echo it to the log between `-- BEGIN --` /

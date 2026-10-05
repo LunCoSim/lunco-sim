@@ -311,15 +311,17 @@ renaming a folder mid-session doesn't invalidate references.
 
 ### DocumentEntry
 Workspace-level metadata for one open Document: `{ id, kind, origin,
-context_twin, title, dirty }`. Does NOT hold the parsed source + ops + undo
+runtime_context, title, dirty }`. Does NOT hold the parsed source + ops + undo
 stack — those live in domain registries (e.g.
 `DocumentRegistry<ModelicaDocument>` in `lunco-doc-bevy`).
 
 ### Twin-Document association rule
 The **deepest** registered Twin whose folder contains the document's
 path wins (sub-Twins outrank their parent — the "nearest `twin.toml`"
-rule, matching Cargo). For Untitled docs, the explicit `context_twin`
-pin applies instead. Docs matching neither are **loose** — shown under
+rule, matching Cargo). For generated or Untitled docs, the explicit `runtime_context` retains the
+admitted application, local Twin, or replicated scene lifetime. Replicated
+contexts carry their authenticated connection and exact mount rather than a
+fabricated local Twin id. Docs matching no Twin context are **loose** — shown under
 a "Loose" group in the Twin Browser.
 
 ### Recents

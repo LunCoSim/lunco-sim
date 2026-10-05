@@ -351,15 +351,19 @@ pub fn project_run_results_to_ui(
     mut ev_failed: MessageReader<lunco_experiments::RunFailed>,
     mut ev_cancelled: MessageReader<lunco_experiments::RunCancelled>,
     registry: Res<lunco_experiments::ExperimentRegistry>,
-    sources: Res<lunco_modelica_runner::ExperimentSources>,
+    sources: Res<lunco_experiments::ExperimentOrigins>,
     mut playback: ResMut<lunco_modelica_runner::PlaybackEntities>,
     mut console: Option<ResMut<LogBuffer>>,
     mut plot_states: Option<ResMut<lunco_experiments_ui::PlotPanelStates>>,
     active_plot: Option<Res<lunco_experiments_ui::ActivePlot>>,
     mut signals: Option<ResMut<SignalRegistry>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
     pins: Option<Res<crate::ui::doc_pin::DocPinState>>,
 ) {
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     let workspace = workspace.as_deref().map(|workspace| &workspace.0);
     let selected_document = pins
         .as_deref()
@@ -373,7 +377,7 @@ pub fn project_run_results_to_ui(
         if !matches!(entry.status, lunco_experiments::RunStatus::Done { .. }) {
             continue;
         }
-        let Some(source) = sources.0.get(&run_id) else {
+        let Some(source) = ev.origin.local_document() else {
             lunco_core::trigger_runtime_error(
                 &mut commands,
                 "experiment-ui-publication-failed",
@@ -381,7 +385,9 @@ pub fn project_run_results_to_ui(
             );
             continue;
         };
-        if !source.is_in_active_scope(workspace) {
+        if Some(&ev.origin) != sources.get(&run_id)
+            || !source.is_in_active_scope(workspace, replication.as_ref())
+        {
             continue;
         }
         let run_name = entry.name.clone();
@@ -446,7 +452,7 @@ pub fn project_run_results_to_ui(
                 .0
                 .entry(doc_id)
                 .or_insert_with(|| commands.spawn_empty().id());
-            commands.entity(entity).try_insert(*source);
+            commands.entity(entity).try_insert(source.clone());
             signals_mut.drop_entity(entity);
             for (path, samples) in &result.series {
                 let sig = SignalRef {
@@ -464,10 +470,11 @@ pub fn project_run_results_to_ui(
         let Some(entry) = registry.get(ev.experiment_id) else {
             continue;
         };
-        if !sources
-            .0
-            .get(&ev.experiment_id)
-            .is_some_and(|source| source.is_in_active_scope(workspace))
+        if Some(&ev.origin) != sources.get(&ev.experiment_id)
+            || !ev
+                .origin
+                .local_document()
+                .is_some_and(|source| source.is_in_active_scope(workspace, replication.as_ref()))
             || !matches!(entry.status, lunco_experiments::RunStatus::Failed { .. })
         {
             continue;
@@ -482,10 +489,11 @@ pub fn project_run_results_to_ui(
         let Some(entry) = registry.get(ev.experiment_id) else {
             continue;
         };
-        if !sources
-            .0
-            .get(&ev.experiment_id)
-            .is_some_and(|source| source.is_in_active_scope(workspace))
+        if Some(&ev.origin) != sources.get(&ev.experiment_id)
+            || !ev
+                .origin
+                .local_document()
+                .is_some_and(|source| source.is_in_active_scope(workspace, replication.as_ref()))
             || !matches!(entry.status, lunco_experiments::RunStatus::Cancelled)
         {
             continue;
@@ -502,9 +510,30 @@ pub fn retire_closed_twin_playback(
     trigger: On<lunco_workspace::TwinClosed>,
     mut commands: Commands,
 ) {
-    let twin = trigger.event().twin;
-    let root = trigger.event().root.clone();
-    // Resolve after earlier playback spawn/attribution commands have committed.
+    queue_retire_runtime_projection(
+        &mut commands,
+        lunco_workspace::DocumentRuntimeOwner::LocalTwin(trigger.event().twin),
+        Some((trigger.event().twin, trigger.event().root.clone())),
+    );
+}
+
+pub fn retire_replication_playback(
+    trigger: On<lunco_core_session::ReplicationOwnerRetired>,
+    mut commands: Commands,
+) {
+    queue_retire_runtime_projection(
+        &mut commands,
+        lunco_workspace::DocumentRuntimeOwner::Replicated(trigger.event().owner.clone()),
+        None,
+    );
+}
+
+fn queue_retire_runtime_projection(
+    commands: &mut Commands,
+    owner: lunco_workspace::DocumentRuntimeOwner,
+    local_root: Option<(lunco_workspace::TwinId, std::path::PathBuf)>,
+) {
+    // Apply after earlier playback spawn/attribution commands have committed.
     commands.queue(move |world: &mut World| {
         let retired: Vec<_> = world
             .resource::<lunco_modelica_runner::PlaybackEntities>()
@@ -512,8 +541,8 @@ pub fn retire_closed_twin_playback(
             .iter()
             .filter_map(|(document, entity)| {
                 world
-                    .get::<lunco_modelica_runner::ExperimentSource>(*entity)
-                    .is_some_and(|source| source.runtime_twin == Some(twin))
+                    .get::<lunco_workspace::PinnedDocumentRuntimeOwner>(*entity)
+                    .is_some_and(|source| source.runtime == owner)
                     .then_some((*document, *entity))
             })
             .collect();
@@ -525,27 +554,50 @@ pub fn retire_closed_twin_playback(
                     .documents()
                     .iter()
                     .filter(|entry| {
-                        lunco_workspace::document_belongs_to_twin_root(entry, twin, &root)
+                        entry.runtime_context == owner
+                            || local_root.as_ref().is_some_and(|(twin, root)| {
+                                lunco_workspace::document_belongs_to_twin_root(entry, *twin, root)
+                            })
                     })
                     .map(|entry| entry.id),
             );
         }
-        if let Some(sources) = world.get_resource::<lunco_modelica_runner::ExperimentSources>() {
+        if let Some(sources) = world.get_resource::<lunco_experiments::ExperimentOrigins>() {
             closed_documents.extend(
                 sources
-                    .0
-                    .values()
-                    .filter(|source| source.runtime_twin == Some(twin))
+                    .iter()
+                    .filter_map(|(_, origin)| origin.local_document())
+                    .filter(|source| source.runtime == owner)
                     .map(|source| source.document),
             );
+        }
+        if let Some(mut openings) =
+            world.get_resource_mut::<crate::ui::document_openings::DocumentOpenings>()
+        {
+            for document in &closed_documents {
+                openings.cancel(*document);
+            }
         }
         if let Some(mut pins) = world.get_resource_mut::<crate::ui::doc_pin::DocPinState>() {
             for document in &closed_documents {
                 pins.forget(*document);
             }
         }
+        let retired_runs: Vec<_> = world
+            .get_resource::<lunco_experiments::ExperimentOrigins>()
+            .map(|origins| {
+                origins
+                    .iter()
+                    .filter(|(_, origin)| origin.belongs_to_runtime(&owner))
+                    .map(|(id, _)| *id)
+                    .collect()
+            })
+            .unwrap_or_default();
         if let Some(mut states) = world.get_resource_mut::<lunco_experiments_ui::PlotPanelStates>()
         {
+            for run in retired_runs {
+                states.forget_experiment(run);
+            }
             for document in &closed_documents {
                 states.forget_scope(&crate::ui::doc_pin::twin_id_for_doc(*document));
             }
@@ -580,7 +632,8 @@ mod tests {
 
     #[test]
     fn closed_twin_retires_only_its_playback_projection() {
-        use lunco_modelica_runner::{ExperimentSource, PlaybackEntities};
+        use lunco_modelica_runner::PlaybackEntities;
+        use lunco_workspace::PinnedDocumentRuntimeOwner;
         let mut app = App::new();
         app.init_resource::<PlaybackEntities>()
             .init_resource::<SignalRegistry>()
@@ -596,9 +649,12 @@ mod tests {
             let document = lunco_doc::DocumentId::new(index as u64 + 1);
             let entity = app
                 .world_mut()
-                .spawn(ExperimentSource {
+                .spawn(PinnedDocumentRuntimeOwner {
                     document,
-                    runtime_twin,
+                    runtime: runtime_twin.map_or(
+                        lunco_workspace::DocumentRuntimeOwner::Application,
+                        lunco_workspace::DocumentRuntimeOwner::LocalTwin,
+                    ),
                 })
                 .id();
             app.world_mut()

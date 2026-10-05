@@ -163,10 +163,15 @@ impl ClientScenarioLifecycle<'_> {
         *self.status = ScenarioDownloadStatus::default();
     }
 
-    fn clear_content(&mut self) {
+    fn clear_content(&mut self, commands: &mut Commands) {
         self.snapshots.0.clear();
         self.prediction.reset();
         if let Some(scene) = self.scene.0.take() {
+            commands.trigger(lunco_core_session::ReplicationOwnerRetired {
+                owner: lunco_core_session::ReplicationOwner::Twin {
+                    scene: scene.clone(),
+                },
+            });
             if scene.owns_mount {
                 match self.roots.as_ref() {
                     Some(roots) => {
@@ -184,7 +189,7 @@ impl ClientScenarioLifecycle<'_> {
         self.reset_downloads();
     }
 
-    pub(crate) fn withdraw(&mut self) {
+    pub(crate) fn withdraw(&mut self, commands: &mut Commands) {
         if let (Some(connection), Some(owner)) = (self.remote.connection, self.remote.host_twin) {
             self.spawns.retire(connection, owner);
             self.journal
@@ -196,11 +201,12 @@ impl ClientScenarioLifecycle<'_> {
         if let Some(scene) = self.scene.0.as_ref() {
             self.spawns.retire(scene.connection, scene.host_twin);
         }
-        self.clear_content();
+        self.clear_content(commands);
     }
 
     pub(crate) fn replace_manifest(
         &mut self,
+        commands: &mut Commands,
         connection: Entity,
         owner: lunco_workspace::TwinId,
         manifest: ScenarioManifestMsg,
@@ -213,9 +219,9 @@ impl ClientScenarioLifecycle<'_> {
             }
         };
         if self.remote.connection == Some(connection) && self.remote.host_twin == Some(owner) {
-            self.clear_content();
+            self.clear_content(commands);
         } else {
-            self.withdraw();
+            self.withdraw(commands);
         }
         self.remote.connection = Some(connection);
         self.remote.host_twin = Some(owner);
@@ -230,12 +236,22 @@ pub(crate) fn reconcile_client_scenario_owner(
     mut state: ClientScenarioLifecycle,
     mut inbox: ResMut<crate::sync::SyncInbox>,
     mut outbox: ResMut<SyncOutbox>,
+    mut commands: Commands,
 ) {
     if role.is_changed()
         || connection.is_changed()
         || (state.remote.connection.is_some() && state.remote.connection != connection.0)
     {
-        state.withdraw();
+        if let Some(previous) = state.handshake.0 {
+            if connection.0 != Some(previous) || *role != NetworkRole::Client {
+                commands.trigger(lunco_core_session::ReplicationOwnerRetired {
+                    owner: lunco_core_session::ReplicationOwner::Application {
+                        connection: previous,
+                    },
+                });
+            }
+        }
+        state.withdraw(&mut commands);
         state.spawns.clear();
         state.journal.clear();
         state.handshake.0 = None;
@@ -252,6 +268,7 @@ pub(crate) fn reconcile_client_scenario_owner(
 pub(crate) fn on_twin_closed_client(
     event: On<lunco_workspace::TwinClosed>,
     mut state: ClientScenarioLifecycle,
+    mut commands: Commands,
 ) {
     if state
         .scene
@@ -259,7 +276,7 @@ pub(crate) fn on_twin_closed_client(
         .as_ref()
         .is_some_and(|owner| owner.root == event.root)
     {
-        state.withdraw();
+        state.withdraw(&mut commands);
     }
 }
 
@@ -2025,8 +2042,7 @@ pub(crate) struct DeferredSceneMessages {
 }
 
 struct DeferredSceneMessage {
-    sender: SessionId,
-    envelope: SyncEnvelope,
+    ingress: crate::sync::SyncInboxEntry,
     bytes: usize,
 }
 
@@ -2042,21 +2058,17 @@ impl DeferredSceneMessages {
     pub(crate) fn take(
         &mut self,
         scope: Option<lunco_core_session::ReplicationScope>,
-    ) -> Vec<(SessionId, SyncEnvelope)> {
+    ) -> Vec<crate::sync::SyncInboxEntry> {
         self.bytes = 0;
         self.attempted_scope = scope;
         std::mem::take(&mut self.entries)
             .into_iter()
-            .map(|entry| (entry.sender, entry.envelope))
+            .map(|entry| entry.ingress)
             .collect()
     }
 
-    pub(crate) fn admit(
-        &mut self,
-        sender: SessionId,
-        envelope: SyncEnvelope,
-    ) -> Result<(), String> {
-        let bytes = crate::codec::serialize_env(&envelope)
+    pub(crate) fn admit(&mut self, ingress: crate::sync::SyncInboxEntry) -> Result<(), String> {
+        let bytes = crate::codec::serialize_env(&ingress.envelope)
             .ok_or_else(|| {
                 "cannot encode deferred scene message within the envelope budget".to_owned()
             })?
@@ -2066,11 +2078,7 @@ impl DeferredSceneMessages {
             .checked_add(bytes)
             .filter(|total| *total <= crate::codec::MAX_ENVELOPE_BYTES)
             .ok_or_else(|| "deferred scene replay exceeds envelope budget".to_owned())?;
-        self.entries.push(DeferredSceneMessage {
-            sender,
-            envelope,
-            bytes,
-        });
+        self.entries.push(DeferredSceneMessage { ingress, bytes });
         self.bytes = total;
         Ok(())
     }
@@ -2078,12 +2086,13 @@ impl DeferredSceneMessages {
     pub(crate) fn retire_scope(&mut self, scope: crate::scope::WireSceneScope) {
         let bytes = &mut self.bytes;
         self.entries.retain(|entry| {
-            let owned = match &entry.envelope {
+            let owned = match &entry.ingress.envelope {
                 SyncEnvelope::Ownership(message) => message.scope == scope,
                 SyncEnvelope::JournalEntry(message) => message.scope == scope,
                 SyncEnvelope::JournalBatch(messages) => {
                     messages.iter().any(|message| message.scope == scope)
                 }
+                SyncEnvelope::RunStatus(message) => message.scope == scope,
                 _ => false,
             };
             if owned {
@@ -2112,8 +2121,15 @@ mod deferred_scene_tests {
             json: "replacement".into(),
         });
         let b_bytes = crate::codec::serialize_env(&b).unwrap().len();
-        pending.admit(SessionId::LOCAL, a).unwrap();
-        pending.admit(SessionId::LOCAL, b).unwrap();
+        let mut world = World::new();
+        let connection = world.spawn_empty().id();
+        let entry = |envelope| crate::sync::SyncInboxEntry {
+            sender: SessionId::LOCAL,
+            connection,
+            envelope,
+        };
+        pending.admit(entry(a)).unwrap();
+        pending.admit(entry(b)).unwrap();
         assert!(pending.bytes > b_bytes);
         pending.retire_scope(scope_a);
         assert_eq!(pending.bytes, b_bytes);
@@ -2131,8 +2147,9 @@ mod deferred_scene_tests {
         let ready = pending.take(live);
         assert_eq!(ready.len(), 1);
         assert!(
-            matches!(&ready[0].1, SyncEnvelope::JournalEntry(message) if message.scope == scope_b)
+            matches!(&ready[0].envelope, SyncEnvelope::JournalEntry(message) if message.scope == scope_b)
         );
+        assert_eq!(ready[0].connection, connection);
         assert!(pending.is_empty());
         assert_eq!(pending.bytes, 0);
         assert!(!pending.needs_retry(live));
@@ -2141,7 +2158,7 @@ mod deferred_scene_tests {
             scope: scope_b,
             json: "x".repeat(crate::codec::MAX_ENVELOPE_BYTES),
         });
-        assert!(pending.admit(SessionId::LOCAL, over_limit).is_err());
+        assert!(pending.admit(entry(over_limit)).is_err());
         assert!(pending.is_empty());
         assert_eq!(pending.bytes, 0);
     }

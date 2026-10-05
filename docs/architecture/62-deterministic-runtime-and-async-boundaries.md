@@ -717,14 +717,17 @@ run; that storage read remains synchronous at the browser host boundary.
 First-compile intent is admitted by `request_modelica_compiles` in
 `ModelicaSet::AdmitCompileRequests`, inside the application lifecycle cycle.
 `ModelicaExecutionPlugin` consumes the typed `CompileRequested` intent and the
-worker owner resolves the current document snapshot and dispatches the
-compiler command without UI resources; the UI command only resolves the
+worker owner validates the pinned document runtime lifetime, resolves the current
+document snapshot and same-owner sibling overlays, then dispatches the compiler
+command without UI resources; the UI command only resolves the
 selected class and publishes intent. Solver stepping remains in
 `spawn_modelica_requests` inside `FixedUpdate`. Because this request is emitted
 only for an unpaused model, it carries resume intent through compilation so a
 successful first compile does not leave the model paused. The compile request
 can therefore be dispatched while `Time<Virtual>` is held. Compile-result
-commit validates both worker session and captured document generation. If the
+commit validates worker session, pinned runtime lifetime, and captured document
+generation. Session epochs persist on the entity across participant retirement,
+so an old response cannot match a recreated Modelica component. If the
 document changed during compilation, the old result is discarded and an active
 model remains held with its run intent for the current revision. The scene
 admission hold still needs to include reference closure, Modelica preparation,
@@ -742,8 +745,9 @@ A session-wide baseline collector and initial authoritative-state snapshot
 still need to consume these owner facts.
 
 Generated domain projection follows the same path: it publishes the validated
-source and interface, the document owner links a generated Modelica document,
-and the next lifecycle admission emits `CompileRequested`. Projection does not
+source and interface with the exact source mount's runtime lifetime. The document
+owner links and registers that attribution before the next lifecycle admission
+emits `CompileRequested`, including sources from replicated scenes. Projection does not
 send a worker command before the model has a linked document. This preserves
 the compile dispatcher's source-generation and session fences and makes the
 generated participant's readiness state visible to lifecycle admission.

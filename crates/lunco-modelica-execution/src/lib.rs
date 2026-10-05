@@ -108,6 +108,8 @@ impl Plugin for ModelicaExecutionPlugin {
         app.init_resource::<lunco_modelica_worker::worker::CosimLag>();
         app.register_type::<ModelicaModel>()
             .add_observer(lunco_modelica_worker::worker::on_remove_modelica)
+            .add_observer(lunco_modelica_worker::worker::retire_closed_twin_models)
+            .add_observer(lunco_modelica_worker::worker::retire_replication_models)
             .add_systems(
                 Update,
                 lunco_modelica_worker::worker::handle_modelica_responses

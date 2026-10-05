@@ -13,6 +13,11 @@
 //! lives in `lunco-modelica-core`. Future backends (FMU, codegen, remote)
 //! plug in the same way.
 
+#[cfg(feature = "bevy")]
+mod origins;
+#[cfg(feature = "bevy")]
+pub use origins::{ExperimentOrigin, ExperimentOrigins};
+
 pub mod solver;
 pub use solver::{
     RuntimeProfile, SolverCaps, SolverError, SolverId, SolverParams, SolverRequest, SolverSpec,
@@ -600,17 +605,18 @@ impl ExperimentRegistry {
 
     /// Insert a fully-formed experiment under an explicit id — the **replay**
     /// entry point (a peer's journaled `Create` op reconstructs the row here,
-    /// preserving the originating id rather than minting a new one, so later
-    /// `SetName`/`SetBounds` ops in the same journal resolve). Overwrites any
-    /// existing row with the same id in the twin bucket. Bypasses the auto-name /
-    /// color counters (the op already carries the authored name/values).
-    pub fn insert_with_id(&mut self, exp: Experiment) {
-        let bucket = self.by_twin.entry(exp.twin_id.clone()).or_default();
-        if let Some(pos) = bucket.iter().position(|e| e.id == exp.id) {
-            bucket[pos] = exp;
-        } else {
-            bucket.push(exp);
+    /// preserving the originating id rather than minting a new one. A UUID is
+    /// globally unique across presentation buckets; an existing identity is
+    /// rejected. Bypasses auto-name/color counters.
+    pub fn insert_with_id(&mut self, exp: Experiment) -> Result<(), String> {
+        if self.get(exp.id).is_some() {
+            return Err(format!("experiment {} already exists", exp.id.0));
         }
+        self.by_twin
+            .entry(exp.twin_id.clone())
+            .or_default()
+            .push(exp);
+        Ok(())
     }
 }
 
@@ -675,6 +681,7 @@ pub struct RunRequested {
 #[derive(Message, Clone, Debug)]
 pub struct RunProgress {
     pub experiment_id: ExperimentId,
+    pub origin: ExperimentOrigin,
     pub t_current: f64,
 }
 
@@ -682,12 +689,14 @@ pub struct RunProgress {
 #[derive(Message, Clone, Debug)]
 pub struct RunCompleted {
     pub experiment_id: ExperimentId,
+    pub origin: ExperimentOrigin,
 }
 
 #[cfg(feature = "bevy")]
 #[derive(Message, Clone, Debug)]
 pub struct RunFailed {
     pub experiment_id: ExperimentId,
+    pub origin: ExperimentOrigin,
     pub error: String,
 }
 
@@ -695,6 +704,7 @@ pub struct RunFailed {
 #[derive(Message, Clone, Debug)]
 pub struct RunCancelled {
     pub experiment_id: ExperimentId,
+    pub origin: ExperimentOrigin,
 }
 
 #[cfg(feature = "bevy")]
@@ -711,8 +721,10 @@ pub struct ExperimentRegistryMaintenanceSet;
 fn publish_removed_experiments(
     mut registry: ResMut<ExperimentRegistry>,
     mut removed: MessageWriter<ExperimentRemoved>,
+    mut origins: ResMut<ExperimentOrigins>,
 ) {
     for experiment_id in registry.bypass_change_detection().take_removed() {
+        origins.remove(experiment_id);
         removed.write(ExperimentRemoved { experiment_id });
     }
 }
@@ -727,6 +739,7 @@ pub struct ExperimentsPlugin;
 impl Plugin for ExperimentsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ExperimentRegistry>()
+            .init_resource::<ExperimentOrigins>()
             .add_message::<RunRequested>()
             .add_message::<RunProgress>()
             .add_message::<RunCompleted>()

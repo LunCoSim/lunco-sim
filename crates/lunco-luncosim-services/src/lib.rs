@@ -95,7 +95,11 @@ impl Plugin for LunCoSimServicesPlugin {
             app.add_systems(Update, replay_scenario_journal);
             app.add_systems(Update, replay_scenario_journal_modelica);
             #[cfg(feature = "experiments")]
-            app.add_systems(Update, replay_scenario_journal_experiment);
+            app.add_systems(
+                Update,
+                replay_scenario_journal_experiment
+                    .after(lunco_networking_sync::sync::drain_sync_inbox),
+            );
             app.add_systems(Update, replay_scenario_journal_shader);
             app.add_systems(Update, replay_scenario_journal_obstacle);
             app.init_resource::<lunco_networking_sync::sync::PendingRunStatus>();
@@ -109,7 +113,10 @@ impl Plugin for LunCoSimServicesPlugin {
             #[cfg(feature = "experiments")]
             app.add_systems(
                 Update,
-                (broadcast_run_status, apply_run_status)
+                (
+                    broadcast_run_status,
+                    apply_run_status.after(replay_scenario_journal_experiment),
+                )
                     .run_if(resource_exists::<lunco_experiments::ExperimentRegistry>),
             );
         }
@@ -431,6 +438,9 @@ fn replay_scenario_journal_experiment(
     remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
+    origins: Option<ResMut<lunco_experiments::ExperimentOrigins>>,
+    ingress: Res<lunco_networking_sync::journal_plane::JournalIngressOrigins>,
+    mut commands: Commands,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
 ) {
     let scope = if role.is_host() {
@@ -454,7 +464,8 @@ fn replay_scenario_journal_experiment(
     } else {
         journal.map(|journal| journal.clone())
     };
-    let (Some(journal), Some(mut registry)) = (journal, registry) else {
+    let (Some(journal), Some(mut registry), Some(mut origins)) = (journal, registry, origins)
+    else {
         return;
     };
     if role.is_host() && facts.host_journal_scope(&journal, &application) != Some(scope) {
@@ -476,8 +487,38 @@ fn replay_scenario_journal_experiment(
         &applied,
         lunco_twin_journal::DomainKind::Experiment,
     );
+    let client_owner =
+        lunco_core_session::current_replication_owner(Some(&connection), Some(&scene));
     for (id, op) in pending {
-        lunco_modelica_core::experiment_journal::replay_experiment_op(&mut registry, &op);
+        let owner = if role.is_host() {
+            ingress
+                .get(&journal, &id)
+                .filter(|owner| {
+                    owner.scope() == scope
+                        && facts.host_owner(owner.connection()).as_ref() == Some(*owner)
+                })
+                .cloned()
+        } else {
+            client_owner
+                .as_ref()
+                .filter(|owner| owner.scope() == scope)
+                .cloned()
+        };
+        let Some(owner) = owner else {
+            warn!(
+                "experiment journal entry {id:?} rejected: admitted transport origin has retired or is missing"
+            );
+            applied.insert(id);
+            continue;
+        };
+        if let Err(error) = lunco_modelica_core::experiment_journal::replay_experiment_op(
+            &mut registry,
+            &mut origins,
+            lunco_experiments::ExperimentOrigin::Replicated(owner),
+            &op,
+        ) {
+            lunco_core::trigger_runtime_error(&mut commands, "experiment-replay-rejected", error);
+        }
         applied.insert(id);
     }
 }
@@ -789,59 +830,115 @@ fn request_rebuild_after_result(
 #[cfg(all(feature = "networking", feature = "experiments"))]
 fn broadcast_run_status(
     role: Option<Res<lunco_core_session::NetworkRole>>,
+    facts: lunco_networking_sync::scope::SceneScopeFacts,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut outbox: ResMut<lunco_networking_sync::sync::SyncOutbox>,
     mut progress: MessageReader<lunco_experiments::RunProgress>,
     mut completed: MessageReader<lunco_experiments::RunCompleted>,
     mut failed: MessageReader<lunco_experiments::RunFailed>,
     mut cancelled: MessageReader<lunco_experiments::RunCancelled>,
     registry: Res<lunco_experiments::ExperimentRegistry>,
+    origins: Res<lunco_experiments::ExperimentOrigins>,
+    mut commands: Commands,
 ) {
     if !matches!(role.as_deref(), Some(lunco_core_session::NetworkRole::Host)) {
         return;
     }
     use lunco_command_contracts::SyncChannel;
     use lunco_networking_sync::sync::{RunStatusMsg, SyncEnvelope};
-    let msg = |id: lunco_experiments::ExperimentId,
-               phase: u8,
-               t_current: f64,
-               wall_time_ms: u64,
-               error: String| {
-        SyncEnvelope::RunStatus(RunStatusMsg {
-            experiment_id: id.uuid_bytes(),
-            phase,
-            t_current,
-            wall_time_ms,
-            error,
-        })
+    let workspace = workspace.as_deref().map(|workspace| &workspace.0);
+    let scope_for = |id: lunco_experiments::ExperimentId,
+                     origin: &lunco_experiments::ExperimentOrigin| {
+        if origins.require(&registry, id, origin).is_err() {
+            return None;
+        }
+        let source = origin.local_document()?;
+        if !source.is_current(workspace, None) {
+            return None;
+        }
+        let scope = match &source.runtime {
+            lunco_workspace::DocumentRuntimeOwner::Application => {
+                lunco_core_session::ReplicationScope::Application
+            }
+            lunco_workspace::DocumentRuntimeOwner::LocalTwin(twin) => {
+                lunco_core_session::ReplicationScope::Twin(*twin)
+            }
+            lunco_workspace::DocumentRuntimeOwner::Replicated(_) => return None,
+        };
+        (facts.host_scene_scope() == Some(scope))
+            .then_some(lunco_networking_sync::scope::wire_scope(scope))
     };
-    for m in progress.read() {
-        outbox.0.push((
-            SyncChannel::ControlStream,
-            msg(m.experiment_id, 2, m.t_current, 0, String::new()),
-        ));
+    let msg =
+        |scope, id: lunco_experiments::ExperimentId, phase, t_current, wall_time_ms, error| {
+            SyncEnvelope::RunStatus(RunStatusMsg {
+                scope,
+                experiment_id: id.uuid_bytes(),
+                phase,
+                t_current,
+                wall_time_ms,
+                error,
+            })
+        };
+    for event in progress.read() {
+        if let Some(scope) = scope_for(event.experiment_id, &event.origin) {
+            outbox.0.push((
+                SyncChannel::ControlStream,
+                msg(
+                    scope,
+                    event.experiment_id,
+                    2,
+                    event.t_current,
+                    0,
+                    String::new(),
+                ),
+            ));
+        }
     }
-    for m in completed.read() {
-        let wall = registry
-            .get(m.experiment_id)
-            .and_then(|e| e.result.as_ref())
-            .map(|r| r.meta.wall_time_ms)
-            .unwrap_or(0);
+    for event in completed.read() {
+        let Some(scope) = scope_for(event.experiment_id, &event.origin) else {
+            continue;
+        };
+        let Some(result) = registry
+            .get(event.experiment_id)
+            .and_then(|run| run.result.as_ref())
+        else {
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                "experiment-status-publication-rejected",
+                format!(
+                    "completed experiment {:?} has no result metadata",
+                    event.experiment_id
+                ),
+            );
+            continue;
+        };
         outbox.0.push((
             SyncChannel::CommandBus,
-            msg(m.experiment_id, 3, 0.0, wall, String::new()),
+            msg(
+                scope,
+                event.experiment_id,
+                3,
+                0.0,
+                result.meta.wall_time_ms,
+                String::new(),
+            ),
         ));
     }
-    for m in failed.read() {
-        outbox.0.push((
-            SyncChannel::CommandBus,
-            msg(m.experiment_id, 4, 0.0, 0, m.error.clone()),
-        ));
+    for event in failed.read() {
+        if let Some(scope) = scope_for(event.experiment_id, &event.origin) {
+            outbox.0.push((
+                SyncChannel::CommandBus,
+                msg(scope, event.experiment_id, 4, 0.0, 0, event.error.clone()),
+            ));
+        }
     }
-    for m in cancelled.read() {
-        outbox.0.push((
-            SyncChannel::CommandBus,
-            msg(m.experiment_id, 5, 0.0, 0, String::new()),
-        ));
+    for event in cancelled.read() {
+        if let Some(scope) = scope_for(event.experiment_id, &event.origin) {
+            outbox.0.push((
+                SyncChannel::CommandBus,
+                msg(scope, event.experiment_id, 5, 0.0, 0, String::new()),
+            ));
+        }
     }
 }
 
@@ -851,35 +948,62 @@ fn broadcast_run_status(
 /// carries the trajectory; a late progress packet must not downgrade it).
 #[cfg(all(feature = "networking", feature = "experiments"))]
 fn apply_run_status(
+    facts: lunco_networking_sync::scope::SceneScopeFacts,
+    connection: Res<lunco_core_session::ClientConnection>,
+    scene: Res<lunco_core_session::ReplicatedScene>,
+    remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     mut pending: ResMut<lunco_networking_sync::sync::PendingRunStatus>,
     mut registry: ResMut<lunco_experiments::ExperimentRegistry>,
+    origins: Res<lunco_experiments::ExperimentOrigins>,
+    mut commands: Commands,
 ) {
-    if pending.0.is_empty() {
-        return;
-    }
-    for m in std::mem::take(&mut pending.0) {
-        let id = lunco_experiments::ExperimentId::from_uuid_bytes(m.experiment_id);
-        let already_done = matches!(
-            registry.get(id).map(|e| &e.status),
-            Some(lunco_experiments::RunStatus::Done { .. })
-        );
-        if already_done && m.phase != 3 {
+    let current = lunco_core_session::current_replication_owner(Some(&connection), Some(&scene));
+    let live_scope = facts.client_scope(connection.0, scene.0.as_ref(), remote.host_twin);
+    for admitted in std::mem::take(&mut pending.entries) {
+        if current.as_ref() != Some(&admitted.owner) || live_scope != Some(admitted.owner.scope()) {
             continue;
         }
-        let status = match m.phase {
+        let message = admitted.message;
+        if lunco_networking_sync::scope::internal_scope(message.scope)
+            != Some(admitted.owner.scope())
+        {
+            continue;
+        }
+        let id = lunco_experiments::ExperimentId::from_uuid_bytes(message.experiment_id);
+        if let Err(error) = origins.require(
+            &registry,
+            id,
+            &lunco_experiments::ExperimentOrigin::Replicated(admitted.owner),
+        ) {
+            lunco_core::trigger_runtime_error(&mut commands, "experiment-status-rejected", error);
+            continue;
+        }
+        // Terminal history cannot be revived by delayed packets from its owner.
+        if registry.get(id).is_some_and(|run| run.status.is_terminal()) {
+            continue;
+        }
+        let status = match message.phase {
+            0 => lunco_experiments::RunStatus::Pending,
             1 => lunco_experiments::RunStatus::Queued,
-            2 => lunco_experiments::RunStatus::Running {
-                t_current: m.t_current,
+            2 if message.t_current.is_finite() => lunco_experiments::RunStatus::Running {
+                t_current: message.t_current,
             },
             3 => lunco_experiments::RunStatus::Done {
-                wall_time_ms: m.wall_time_ms,
+                wall_time_ms: message.wall_time_ms,
             },
             4 => lunco_experiments::RunStatus::Failed {
-                error: m.error,
+                error: message.error,
                 partial: false,
             },
             5 => lunco_experiments::RunStatus::Cancelled,
-            _ => lunco_experiments::RunStatus::Pending,
+            _ => {
+                lunco_core::trigger_runtime_error(
+                    &mut commands,
+                    "experiment-status-rejected",
+                    format!("experiment {id:?} received an invalid run status"),
+                );
+                continue;
+            }
         };
         registry.set_status(id, status);
     }

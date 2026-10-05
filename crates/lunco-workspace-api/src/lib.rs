@@ -54,7 +54,7 @@ impl ApiQueryProvider for ListOpenDocumentsProvider {
                     "origin": origin_to_api_value(&entry.origin),
                     "dirty": entry.dirty,
                     "active": Some(entry.id) == active,
-                    "context_twin": entry.context_twin.map(|t| t.raw()),
+                    "runtime_context": runtime_owner_to_api_value(&entry.runtime_context),
                 })
             })
             .collect();
@@ -282,5 +282,23 @@ fn origin_to_api_value(origin: &DocumentOrigin) -> ApiValue {
             "path": path.to_string_lossy().into_owned(),
             "writable": *writable,
         }),
+    }
+}
+
+/// External projection of the authoritative typed document runtime.
+fn runtime_owner_to_api_value(owner: &lunco_workspace::DocumentRuntimeOwner) -> ApiValue {
+    match owner {
+        lunco_workspace::DocumentRuntimeOwner::Application => api_value!({"kind": "application"}),
+        lunco_workspace::DocumentRuntimeOwner::LocalTwin(twin) => {
+            api_value!({"kind": "local_twin", "twin": twin.raw()})
+        }
+        lunco_workspace::DocumentRuntimeOwner::Replicated(owner) => match owner {
+            lunco_workspace::ReplicationOwner::Application { connection } => {
+                api_value!({"kind": "replicated_application", "connection": connection.to_bits()})
+            }
+            lunco_workspace::ReplicationOwner::Twin { scene } => {
+                api_value!({"kind": "replicated_twin", "connection": scene.connection.to_bits(), "host_twin": scene.host_twin.raw(), "authority": scene.authority.clone()})
+            }
+        },
     }
 }

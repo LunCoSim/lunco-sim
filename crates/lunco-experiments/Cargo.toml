@@ -14,10 +14,11 @@ web-time = { workspace = true }
 # events. Off by default so headless callers (CLI sweeps, tests) stay
 # Bevy-free.
 bevy = { workspace = true, optional = true }
+lunco-workspace = { path = "../lunco-workspace", optional = true }
 
 [features]
 default = ["bevy"]
-bevy = ["dep:bevy"]
+bevy = ["dep:bevy", "dep:lunco-workspace"]
 
 [lints]
 workspace = true

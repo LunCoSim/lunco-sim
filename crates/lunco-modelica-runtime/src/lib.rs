@@ -534,7 +534,7 @@ pub enum NoticeLevel {
 /// Core request to compile a Modelica document.
 #[derive(Message, Clone)]
 pub struct CompileRequested {
-    pub doc: lunco_doc::DocumentId,
+    pub source: lunco_workspace::PinnedDocumentRuntimeOwner,
     /// Existing live participant when compilation is part of scene startup;
     /// `None` asks the document owner to reuse or create the document's model.
     pub entity: Option<Entity>,
@@ -660,3 +660,14 @@ impl ModelicaSignalLayout {
             })
     }
 }
+
+/// Marks the transient actor created by editor document compilation.
+/// Supplied USD actors retain their geometry when their Modelica participation
+/// is retired; only document-created actors are despawned in full.
+#[derive(Component)]
+pub struct EditorModelicaActor;
+
+/// Last admitted or retired Modelica session for a reusable ECS actor.
+/// Component removal preserves this epoch; entity despawn ends its lifetime.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct ModelicaSessionEpoch(pub u64);

@@ -710,6 +710,7 @@ impl Plugin for ModelicaUiPlugin {
             // plot auto-pick, and SignalRegistry playback.
             .add_systems(Update, core_observers::project_run_results_to_ui)
             .add_observer(core_observers::retire_closed_twin_playback)
+            .add_observer(core_observers::retire_replication_playback)
             .add_systems(
                 Last,
                 core_observers::forget_removed_plot_runs

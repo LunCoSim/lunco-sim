@@ -441,12 +441,15 @@ fn render_unified_toolbar(
     // toolbar for both the live stepper and the experiment runner.
     let experiment_run_t: Option<f64> = {
         let reg = ctx.resource::<lunco_experiments::ExperimentRegistry>();
-        let src = ctx.resource::<lunco_modelica_runner::ExperimentSources>();
+        let src = ctx.resource::<lunco_experiments::ExperimentOrigins>();
         match (reg, src) {
             (Some(reg), Some(src)) => src
-                .0
                 .iter()
-                .filter(|(_, source)| source.document == doc)
+                .filter(|(_, origin)| {
+                    origin
+                        .local_document()
+                        .is_some_and(|source| source.document == doc)
+                })
                 .filter_map(|(id, _)| reg.get(*id))
                 .find_map(|e| match e.status {
                     lunco_experiments::RunStatus::Running { t_current } => Some(t_current),

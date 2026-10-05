@@ -35,6 +35,11 @@ replication runtime; the deployment guide owns service and TLS facts.
   cancellation, and prediction-buffer teardown at their generic owners. The
   scene-free `net_smoke` harness covers Application traffic; it does not prove
   Twin reload behavior. Use an owned host/client session for that acceptance.
+- Preserve `SyncInboxEntry` connection provenance through deferral and retry.
+  Host journal replay reads `JournalIngressOrigins` rather than guessing an
+  owner from retained history. Run status requires the immutable experiment
+  origin and current admitted owner. Cover EntryId reuse and exact
+  `ReplicationOwnerRetired` teardown at the generic transport seam.
 
 ## Production deployment
 

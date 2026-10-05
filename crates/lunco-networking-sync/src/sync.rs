@@ -248,7 +248,7 @@ pub struct DespawnReplicationMsg {
 ///
 /// The handshake is the host's first reliable message, so a mismatched peer is
 /// rejected before it can apply a single snapshot.
-pub const WIRE_VERSION: u32 = 5;
+pub const WIRE_VERSION: u32 = 6;
 
 /// Host → a freshly-connected client: the **wire version**, the **server-assigned**
 /// session id, the connection-bound journal author, and the current tick. The
@@ -305,9 +305,10 @@ pub struct InboundClientCtx<'w, 's> {
     // Client fills this from the host's `RunStatus` presence updates; host arm is
     // a no-op (it's the authoritative source).
     pending_run_status: ResMut<'w, PendingRunStatus>,
-    // Canonical Twin journal — a client applies host-sent entries here via
-    // `append_remote` (merge). `Option` so the drain still runs in a build with
-    // no journal (e.g. a minimal networking-only test); host arm is a no-op.
+    journal_origins: ResMut<'w, crate::journal_plane::JournalIngressOrigins>,
+    // Canonical application/local Twin journal. Host ingress requires immutable
+    // transport provenance; a client Twin uses its separate scoped mirror.
+    // `Option` permits minimal networking hosts without an authored journal.
     journal: Option<ResMut<'w, JournalResource>>,
     // Named-frame conversion service for observer AOI reports. A sender's
     // private Grid nesting never crosses the network boundary.
@@ -480,6 +481,7 @@ pub struct SharePerspectiveMsg {
 /// `RunStatus`. `experiment_id` is the 16 UUID bytes.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunStatusMsg {
+    pub scope: crate::scope::WireSceneScope,
     pub experiment_id: [u8; 16],
     /// 0=Pending 1=Queued 2=Running 3=Done 4=Failed 5=Cancelled.
     pub phase: u8,
@@ -495,7 +497,21 @@ pub struct RunStatusMsg {
 /// crate into the local `ExperimentRegistry`. Host arm is a no-op (it's the
 /// authoritative source). Mirrors the other `Pending*` inbox resources.
 #[derive(Resource, Default)]
-pub struct PendingRunStatus(pub Vec<RunStatusMsg>);
+pub struct PendingRunStatus {
+    pub entries: Vec<AdmittedRunStatus>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AdmittedRunStatus {
+    pub owner: lunco_core_session::ReplicationOwner,
+    pub message: RunStatusMsg,
+}
+
+impl PendingRunStatus {
+    pub fn retire(&mut self, owner: &lunco_core_session::ReplicationOwner) {
+        self.entries.retain(|entry| &entry.owner != owner);
+    }
+}
 
 /// Set by any subsystem that just wrote new content into the shared twin (e.g. a
 /// finished experiment result) to ask the host to rebuild + re-advertise the
@@ -635,7 +651,15 @@ pub struct SyncInbox {
     /// Client transport that filled these entries. Host messages use their
     /// authenticated sender SessionId and leave this client-only field absent.
     pub connection: Option<Entity>,
-    pub entries: Vec<(SessionId, SyncEnvelope)>,
+    pub entries: Vec<SyncInboxEntry>,
+}
+
+/// One decoded envelope pinned to the actual authenticated transport lifetime.
+#[derive(Clone, Debug)]
+pub struct SyncInboxEntry {
+    pub sender: SessionId,
+    pub connection: Entity,
+    pub envelope: SyncEnvelope,
 }
 
 /// Tunable replication knobs (the user's "HZ + only-if-changed" ask).
@@ -1181,17 +1205,20 @@ pub fn drain_sync_inbox(
     if inbox.entries.is_empty() && !retry_scene {
         return;
     }
-    let mut drained: Vec<(SessionId, SyncEnvelope)> = std::mem::take(&mut inbox.entries);
+    let mut drained = std::mem::take(&mut inbox.entries);
+    if *role == NetworkRole::Client {
+        drained.retain(|entry| Some(entry.connection) == ctx.connection.0);
+    }
     if *role == NetworkRole::Client && ctx.scenario.handshake.0 != ctx.connection.0 {
         if !drained
             .iter()
-            .any(|(_, envelope)| matches!(envelope, SyncEnvelope::Handshake(_)))
+            .any(|entry| matches!(entry.envelope, SyncEnvelope::Handshake(_)))
         {
             inbox.entries = drained;
             return;
         }
-        drained.sort_by_key(|(_, envelope)| {
-            if matches!(envelope, SyncEnvelope::Handshake(_)) {
+        drained.sort_by_key(|entry| {
+            if matches!(entry.envelope, SyncEnvelope::Handshake(_)) {
                 0
             } else {
                 1
@@ -1205,20 +1232,30 @@ pub fn drain_sync_inbox(
     // Only sort when a control command is actually present — otherwise every entry
     // keys to 0 (the common case: a batch of snapshots/cursors) and the sort is pure
     // overhead. The stable sort preserves arrival order among equal keys.
-    let has_control = drained.iter().any(|(_, env)| {
-        matches!(env, SyncEnvelope::Command(m) if is_control_command(&m.payload.type_name))
+    let has_control = drained.iter().any(|entry| {
+        matches!(&entry.envelope, SyncEnvelope::Command(m) if is_control_command(&m.payload.type_name))
     });
     if has_control {
-        drained.sort_by_key(|(_, env)| match env {
+        drained.sort_by_key(|entry| match &entry.envelope {
             SyncEnvelope::Command(m) if is_control_command(&m.payload.type_name) => 1u8,
             _ => 0,
         });
     }
-    for (sender, env) in drained {
+    for SyncInboxEntry {
+        sender,
+        connection: ingress_connection,
+        envelope: env,
+    } in drained
+    {
+        if *role == NetworkRole::Client && Some(ingress_connection) != ctx.connection.0 {
+            warn!("[net] rejected envelope from a replaced connection");
+            continue;
+        }
         let envelope_scope = match &env {
             SyncEnvelope::Ownership(message) => Some(message.scope),
             SyncEnvelope::JournalEntry(message) => Some(message.scope),
             SyncEnvelope::JournalBatch(messages) => messages.first().map(|message| message.scope),
+            SyncEnvelope::RunStatus(message) => Some(message.scope),
             _ => None,
         };
         if *role == NetworkRole::Client {
@@ -1238,7 +1275,11 @@ pub fn drain_sync_inbox(
                         _ => false,
                     };
                     if pending {
-                        if let Err(error) = ctx.scenario.deferred.admit(sender, env) {
+                        if let Err(error) = ctx.scenario.deferred.admit(SyncInboxEntry {
+                            sender,
+                            connection: ingress_connection,
+                            envelope: env,
+                        }) {
                             error!("[net] {error}; disconnecting");
                             commands.trigger(lunco_core_session::NetDisconnectRequest {});
                         }
@@ -1712,6 +1753,7 @@ pub fn drain_sync_inbox(
                             &incoming_rev[..4]
                         );
                         ctx.scenario.replace_manifest(
+                            &mut commands,
                             connection,
                             lunco_workspace::TwinId::new(m.mount_id),
                             m,
@@ -1728,7 +1770,7 @@ pub fn drain_sync_inbox(
                         ctx.scenario.spawns.retire(connection, owner);
                     }
                     if ctx.scenario.remote.host_twin == Some(owner) {
-                        ctx.scenario.withdraw();
+                        ctx.scenario.withdraw(&mut commands);
                     }
                 }
             }
@@ -1809,11 +1851,6 @@ pub fn drain_sync_inbox(
                         "[journal-plane] rejected journal edit from unauthorized session {sender}"
                     );
                 } else if let Some(journal) = ctx.journal.as_ref() {
-                    let author = role.is_host().then(|| {
-                        lunco_twin_journal::AuthorId::new(crate::journal_plane::author_for_session(
-                            sender,
-                        ))
-                    });
                     if let Some(scope) = if role.is_host() {
                         ctx.scope
                             .host_journal_scope(journal, &ctx.application_journal)
@@ -1826,7 +1863,29 @@ pub fn drain_sync_inbox(
                             &ctx.application_journal,
                         )
                     } {
-                        let admitted = if *role == NetworkRole::Client
+                        let admitted = if role.is_host() {
+                            if let Some(owner) = ctx.scope.host_owner(ingress_connection) {
+                                match ctx.journal_origins.admit(
+                                    journal,
+                                    &msg,
+                                    lunco_twin_journal::AuthorId::new(
+                                        crate::journal_plane::author_for_session(sender),
+                                    ),
+                                    owner,
+                                ) {
+                                    Ok(id) => Some(id),
+                                    Err(error) => {
+                                        warn!("[journal-plane] journal edit rejected: {error}");
+                                        None
+                                    }
+                                }
+                            } else {
+                                warn!(
+                                    "[journal-plane] journal edit rejected: no admitted runtime owner"
+                                );
+                                None
+                            }
+                        } else if *role == NetworkRole::Client
                             && matches!(scope, lunco_core_session::ReplicationScope::Twin(_))
                         {
                             ctx.connection.0.and_then(|connection| {
@@ -1838,7 +1897,7 @@ pub fn drain_sync_inbox(
                                 )
                             })
                         } else {
-                            crate::journal_plane::apply_inbound_entry(journal, &msg, author, scope)
+                            crate::journal_plane::apply_inbound_entry(journal, &msg, scope)
                         };
                         let _ = admitted;
                     }
@@ -1848,8 +1907,23 @@ pub fn drain_sync_inbox(
                 // Presence: the host's experiment run advanced. Only a client
                 // consumes (the host is the authoritative source); the assembly
                 // crate drains `PendingRunStatus` into its ExperimentRegistry.
-                if !role.is_host() {
-                    ctx.pending_run_status.0.push(msg);
+                if *role == NetworkRole::Client {
+                    let Some(owner) = ctx.scope.client_owner(
+                        ctx.connection.0,
+                        ctx.scenario.scene.0.as_ref(),
+                        ctx.scenario.remote.host_twin,
+                    ) else {
+                        warn!("[net] run status rejected: no admitted runtime owner");
+                        continue;
+                    };
+                    if msg.phase > 5 || (msg.phase == 2 && !msg.t_current.is_finite()) {
+                        warn!("[net] run status rejected: invalid phase or running time");
+                        continue;
+                    }
+                    ctx.pending_run_status.entries.push(AdmittedRunStatus {
+                        owner,
+                        message: msg,
+                    });
                 }
             }
             SyncEnvelope::JournalBatch(msgs) => {
@@ -1870,11 +1944,6 @@ pub fn drain_sync_inbox(
                     );
                 } else if let Some(journal) = ctx.journal.as_ref() {
                     for msg in &msgs {
-                        let author = role.is_host().then(|| {
-                            lunco_twin_journal::AuthorId::new(
-                                crate::journal_plane::author_for_session(sender),
-                            )
-                        });
                         if let Some(scope) = if role.is_host() {
                             ctx.scope
                                 .host_journal_scope(journal, &ctx.application_journal)
@@ -1887,7 +1956,31 @@ pub fn drain_sync_inbox(
                                 &ctx.application_journal,
                             )
                         } {
-                            let admitted = if *role == NetworkRole::Client
+                            let admitted = if role.is_host() {
+                                if let Some(owner) = ctx.scope.host_owner(ingress_connection) {
+                                    match ctx.journal_origins.admit(
+                                        journal,
+                                        msg,
+                                        lunco_twin_journal::AuthorId::new(
+                                            crate::journal_plane::author_for_session(sender),
+                                        ),
+                                        owner,
+                                    ) {
+                                        Ok(id) => Some(id),
+                                        Err(error) => {
+                                            warn!(
+                                                "[journal-plane] journal replay rejected: {error}"
+                                            );
+                                            None
+                                        }
+                                    }
+                                } else {
+                                    warn!(
+                                        "[journal-plane] journal replay rejected: no admitted runtime owner"
+                                    );
+                                    None
+                                }
+                            } else if *role == NetworkRole::Client
                                 && matches!(scope, lunco_core_session::ReplicationScope::Twin(_))
                             {
                                 ctx.connection.0.and_then(|connection| {
@@ -1899,9 +1992,7 @@ pub fn drain_sync_inbox(
                                     )
                                 })
                             } else {
-                                crate::journal_plane::apply_inbound_entry(
-                                    journal, msg, author, scope,
-                                )
+                                crate::journal_plane::apply_inbound_entry(journal, msg, scope)
                             };
                             let _ = admitted;
                         }
@@ -3668,12 +3759,14 @@ impl Plugin for SyncPlugin {
             // (`net_smoke --connect`) on its first drained message: the same
             // missing-resource class as `PendingAssetOffers` above.
             .init_resource::<PendingRunStatus>()
+            .init_resource::<crate::journal_plane::JournalIngressOrigins>()
             .register_settings_section::<CursorSettings>()
             .register_settings_section::<TutorialSettings>()
             .init_resource::<SyncChannelRegistry>()
             .add_observer(apply_sync_command)
             .add_observer(on_update_profile_rbac)
             .add_observer(crate::scenario_sync::on_twin_closed_client)
+            .add_observer(crate::journal_plane::on_replication_owner_retired)
             .add_systems(
                 PreUpdate,
                 crate::scenario_sync::reconcile_client_scenario_owner,
@@ -4105,6 +4198,7 @@ mod codec_roundtrip {
     fn journal_batch_is_appended_last() {
         let last = discriminant_of(&SyncEnvelope::JournalBatch(Vec::new()));
         let run_status = discriminant_of(&SyncEnvelope::RunStatus(RunStatusMsg {
+            scope: crate::scope::WireSceneScope::Application,
             experiment_id: [0u8; 16],
             phase: 0,
             t_current: 0.0,

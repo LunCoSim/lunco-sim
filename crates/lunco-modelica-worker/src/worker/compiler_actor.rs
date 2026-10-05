@@ -306,7 +306,9 @@ fn compile_artifact(
         } else {
             Vec::new()
         };
-        (outcome, diagnostics, compiler.library_revision())
+        let library_revision = compiler.library_revision();
+        compiler.clear_user_documents();
+        (outcome, diagnostics, library_revision)
     }));
     let (outcome, diagnostics, library_revision) = match outcome {
         Ok(result) => result,

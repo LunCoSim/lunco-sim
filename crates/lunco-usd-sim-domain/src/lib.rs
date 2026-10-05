@@ -356,6 +356,8 @@ impl AuthoredTelemetryIndexes {
 /// invalidation.
 #[derive(Component, Clone, Debug)]
 pub struct GeneratedModelicaSource {
+    /// Exact Workspace runtime captured from the USD source mount at admission.
+    pub runtime_owner: lunco_workspace::DocumentRuntimeOwner,
     /// Composed USD network root that owns this compilation unit.
     pub network_root: String,
     /// Stable transient document URI used by the Modelica compiler for this unit.
@@ -433,6 +435,71 @@ pub enum ModelicaParameterValue {
     Boolean(bool),
 }
 
+#[derive(SystemParam)]
+pub struct GeneratedSourceAdmission<'w> {
+    assets: Option<Res<'w, AssetServer>>,
+    roots: Option<Res<'w, lunco_assets_core::TwinRoots>>,
+    workspace: Option<Res<'w, lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<'w, lunco_core_session::ClientConnection>>,
+    replica: Option<Res<'w, lunco_core_session::ReplicatedScene>>,
+}
+impl GeneratedSourceAdmission<'_> {
+    fn runtime_owner(
+        &self,
+        stage: AssetId<UsdStageAsset>,
+        asset: &UsdStageAsset,
+    ) -> Result<lunco_workspace::DocumentRuntimeOwner, String> {
+        let path = self
+            .assets
+            .as_ref()
+            .and_then(|assets| assets.get_path(stage));
+        let Some(path) = path else {
+            // Externally composed/application hosts have no asset mount.
+            if asset.recipe.is_none() || self.workspace.is_none() && self.assets.is_none() {
+                return Ok(lunco_workspace::DocumentRuntimeOwner::Application);
+            }
+            return Err("USD source has no admitted asset-server origin".into());
+        };
+        let uri = lunco_assets_core::asset_path::anchor_of(&path);
+        let Some((authority, _)) = lunco_assets_core::parse_twin_uri(&uri) else {
+            return Ok(lunco_workspace::DocumentRuntimeOwner::Application);
+        };
+        let root = self
+            .roots
+            .as_ref()
+            .ok_or("Twin asset mounts are not installed")?
+            .root_for(authority)
+            .map_err(|error| error.to_string())?
+            .ok_or("USD source Twin authority has retired")?;
+        let replication = lunco_core_session::current_replication_owner(
+            self.connection.as_deref(),
+            self.replica.as_deref(),
+        );
+        if let Some(lunco_workspace::ReplicationOwner::Twin { scene }) = replication {
+            if scene.authority == authority && scene.root == root {
+                return Ok(lunco_workspace::DocumentRuntimeOwner::Replicated(
+                    lunco_workspace::ReplicationOwner::Twin { scene },
+                ));
+            }
+        }
+        let workspace = self
+            .workspace
+            .as_ref()
+            .ok_or("USD Twin source has no Workspace owner")?;
+        let mut owners = workspace
+            .twins()
+            .filter(|(_, twin)| twin.root == root)
+            .map(|(owner, _)| owner);
+        let owner = owners
+            .next()
+            .ok_or("USD source mount has no registered Workspace Twin")?;
+        if owners.next().is_some() {
+            return Err("USD source mount has ambiguous Workspace Twin ownership".into());
+        }
+        Ok(lunco_workspace::DocumentRuntimeOwner::LocalTwin(owner))
+    }
+}
+
 /// One network root and its public causal boundary.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DomainNetwork {
@@ -462,6 +529,7 @@ pub struct DomainNetwork {
 /// shared by every network task. The task owns the policy call and source
 /// validation; the main thread only commits the resulting ECS/Modelica state.
 struct PendingDomainProjection {
+    runtime_owner: lunco_workspace::DocumentRuntimeOwner,
     entity: Entity,
     stage_id: AssetId<UsdStageAsset>,
     stage_generation: u64,
@@ -937,6 +1005,7 @@ fn queue_domain_projection_work(
     admission: &mut lunco_core_runtime::AsyncWorkAdmission,
     pending: &mut PendingDomainProjections,
     entity: Entity,
+    runtime_owner: lunco_workspace::DocumentRuntimeOwner,
     stage_id: AssetId<UsdStageAsset>,
     stage_generation: u64,
     scene_generation: u64,
@@ -952,6 +1021,7 @@ fn queue_domain_projection_work(
     let completion = Arc::new(Mutex::new(None));
     let Some(operation) = operation else {
         pending.tasks.push_back(PendingDomainProjection {
+            runtime_owner,
             entity,
             stage_id,
             stage_generation,
@@ -999,6 +1069,7 @@ fn queue_domain_projection_work(
     ) {
         Ok(()) => {
             pending.tasks.push_back(PendingDomainProjection {
+                runtime_owner: runtime_owner.clone(),
                 entity,
                 stage_id,
                 stage_generation,
@@ -1015,6 +1086,7 @@ fn queue_domain_projection_work(
         }
         Err(lunco_core_runtime::AsyncWorkRejection::NativeDispatcherUnavailable) => {
             pending.tasks.push_back(PendingDomainProjection {
+                runtime_owner: runtime_owner.clone(),
                 entity,
                 stage_id,
                 stage_generation,
@@ -1041,6 +1113,7 @@ fn queue_domain_projection(
     admission: &mut lunco_core_runtime::AsyncWorkAdmission,
     pending: &mut PendingDomainProjections,
     entity: Entity,
+    runtime_owner: lunco_workspace::DocumentRuntimeOwner,
     stage_id: AssetId<UsdStageAsset>,
     stage_generation: u64,
     scene_generation: u64,
@@ -1079,6 +1152,7 @@ fn queue_domain_projection(
         admission,
         pending,
         entity,
+        runtime_owner,
         stage_id,
         stage_generation,
         scene_generation,
@@ -1161,6 +1235,7 @@ fn resolve_domain_synthesizer(
 fn commit_domain_projection(
     commands: &mut Commands,
     entity: Entity,
+    runtime_owner: lunco_workspace::DocumentRuntimeOwner,
     prim: &UsdPrimPath,
     previous: Option<&DomainProjectionState>,
     installed_model: Option<&ModelicaModel>,
@@ -1174,6 +1249,19 @@ fn commit_domain_projection(
     telemetry_scope: AuthoredTelemetryScope,
     notices: &mut MessageWriter<ModelicaNotice>,
 ) -> bool {
+    let Some(session_id) = installed_model.map_or(Some(1), |model| model.session_id.checked_add(1))
+    else {
+        lunco_core::trigger_runtime_error(
+            commands,
+            "modelica-session-exhausted",
+            format!("generated participant {entity} exhausted its session identity"),
+        );
+        if installed_model.is_some() {
+            commands.entity(entity).try_remove::<ModelicaModel>();
+        }
+        return false;
+    };
+
     let synthesized = match synthesized {
         Ok(synthesized) => synthesized,
         Err(errors) => {
@@ -1202,7 +1290,7 @@ fn commit_domain_projection(
                 ModelicaModel {
                     model_name: model_name.to_string(),
                     source_uri: format!("generated://{model_name}.mo"),
-                    session_id: installed_model.map_or(1, |model| model.session_id + 1),
+                    session_id,
                     is_stepping: false,
                     is_compiling: false,
                     last_error: Some(message.clone()),
@@ -1211,6 +1299,7 @@ fn commit_domain_projection(
                 UsdSourcedCosim,
                 DomainProjectionState { fingerprint },
                 GeneratedModelicaSource {
+                    runtime_owner: runtime_owner.clone(),
                     network_root: prim.path.clone(),
                     doc_uri: format!("generated://{model_name}.mo"),
                     source: String::new(),
@@ -1269,7 +1358,7 @@ fn commit_domain_projection(
         .model_name
         .unwrap_or_else(|| model_name.to_string());
     let declared_output_ports = interface.outputs.clone();
-    let session_id = installed_model.map_or(1, |model| model.session_id + 1);
+
     let doc_uri = format!("generated://{model_name}.mo");
     let mut model = ModelicaModel {
         model_name: compiled_name.clone(),
@@ -1326,6 +1415,7 @@ fn commit_domain_projection(
         prim.path, component_count, model_name
     );
     let generated_source = GeneratedModelicaSource {
+        runtime_owner,
         network_root: prim.path.clone(),
         doc_uri,
         source: source_for_diagnostics,
@@ -1359,6 +1449,7 @@ fn commit_domain_projection(
 /// Modelica program facets. The generated source is runtime projection only.
 pub fn project_domain_islands(
     mut projection_admission: DomainProjectionAdmission,
+    source_admission: GeneratedSourceAdmission,
     preview: (
         Query<&ChildOf>,
         Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
@@ -1468,6 +1559,22 @@ pub fn project_domain_islands(
         let Some(stage_asset) = stages.get(&prim.stage_handle) else {
             continue;
         };
+        let runtime_owner = match source_admission.runtime_owner(id, stage_asset) {
+            Ok(owner) => owner,
+            Err(error) => {
+                lunco_core::trigger_runtime_error(
+                    &mut projection_admission.commands,
+                    "modelica-generated-source-admission-failed",
+                    format!("[{}] generated source admission failed: {error}", prim.path),
+                );
+                clear_pending_domain_projection(
+                    entity,
+                    projection_pending,
+                    &mut projection_admission.commands,
+                );
+                continue;
+            }
+        };
         let (canonical_reader, stage_generation) =
             canonical.reader_for_entity(id, stage_asset, instance_projection);
         let prepared_network = instance_projection.is_none()
@@ -1540,6 +1647,7 @@ pub fn project_domain_islands(
                 &mut admission,
                 &mut pending,
                 entity,
+                runtime_owner.clone(),
                 id,
                 stage_generation,
                 scene_generation,
@@ -1600,6 +1708,7 @@ pub fn project_domain_islands(
                 &mut admission,
                 &mut pending,
                 entity,
+                runtime_owner.clone(),
                 id,
                 stage_generation,
                 scene_generation,
@@ -1686,6 +1795,7 @@ pub fn project_domain_islands(
             &mut admission,
             &mut pending,
             entity,
+            runtime_owner,
             id,
             stage_generation,
             scene_generation,
@@ -1837,6 +1947,7 @@ pub fn poll_domain_projection_tasks(
         commit_domain_projection(
             &mut commands,
             task.entity,
+            task.runtime_owner,
             prim,
             previous,
             installed_model,
@@ -1869,6 +1980,10 @@ pub fn poll_domain_projection_tasks(
 /// owns synthesis, while the document registry owns inspectable source and the
 /// scene-to-document link used by the standard Modelica UI and API.
 pub fn sync_generated_network_documents(
+    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+    mut commands: Commands,
     mut generated: Query<(Entity, &GeneratedModelicaSource, &mut ModelicaModel)>,
     source_entities: Query<Entity, With<GeneratedModelicaSource>>,
     mut pending: ResMut<PendingGeneratedSourceDocuments>,
@@ -1879,6 +1994,8 @@ pub fn sync_generated_network_documents(
         lunco_modelica_runtime::generated_source::GeneratedModelicaSources,
     >,
 ) {
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     let mut entities = pending.0.take_queued();
     if pending.0.take_initial_discovery() {
         entities.extend(source_entities.iter());
@@ -1921,6 +2038,57 @@ pub fn sync_generated_network_documents(
                 lunco_doc::PathlessOrigin::bundled(format!("generated/{}.mo", model.model_name)),
             )
         };
+        if let Some(workspace) = workspace.as_deref_mut() {
+            if source
+                .runtime_owner
+                .local_twin()
+                .is_some_and(|twin| workspace.twin(twin).is_none())
+            {
+                lunco_core::trigger_runtime_error(
+                    &mut commands,
+                    "modelica-generated-source-admission-failed",
+                    format!(
+                        "generated source {} belongs to a retired Twin",
+                        source.doc_uri
+                    ),
+                );
+                continue;
+            }
+            if let Some(entry) = workspace.document_mut(document) {
+                entry.runtime_context = source.runtime_owner.clone();
+            } else {
+                workspace.add_document(lunco_workspace::DocumentEntry {
+                    id: document,
+                    kind: lunco_workspace::DocumentKindId::new("modelica"),
+                    origin: lunco_doc::DocumentOrigin::bundled(format!(
+                        "generated/{}.mo",
+                        model.model_name
+                    )),
+                    runtime_context: source.runtime_owner.clone(),
+                    title: model.model_name.clone(),
+                    dirty: false,
+                });
+            }
+        }
+        let pin = lunco_workspace::PinnedDocumentRuntimeOwner {
+            document,
+            runtime: source.runtime_owner.clone(),
+        };
+        if !pin.is_current(
+            workspace.as_deref().map(|workspace| &workspace.0),
+            replication.as_ref(),
+        ) {
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                "modelica-generated-source-admission-failed",
+                format!(
+                    "generated source {} runtime owner has retired",
+                    source.doc_uri
+                ),
+            );
+            continue;
+        }
+        commands.entity(entity).try_insert(pin);
         documents.reload_external_source(document, &source.source);
         if let Err(error) = documents.link(entity, document) {
             bevy::log::warn!(
@@ -2856,27 +3024,47 @@ mod tests {
         let root = app.world_mut().spawn_empty().id();
         app.world_mut()
             .resource_mut::<PendingDomainProjectionCandidates>()
-            .discovery.insert(root);
+            .discovery
+            .insert(root);
         app.update();
-        assert!(app.world().resource::<lunco_core_runtime::SimulationProgress>()
-            .blockers().any(|blocker| blocker.key == key));
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .blockers()
+                .any(|blocker| blocker.key == key)
+        );
         {
-            let mut candidates = app.world_mut().resource_mut::<PendingDomainProjectionCandidates>();
+            let mut candidates = app
+                .world_mut()
+                .resource_mut::<PendingDomainProjectionCandidates>();
             candidates.initial_discovery = false;
             candidates.take_discovery_batch(1);
         }
         let network_key = lunco_core_runtime::SimulationProgressKey::usd_domain_projection(root);
-        app.world_mut().resource_mut::<lunco_core_runtime::SimulationProgress>()
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationProgress>()
             .acquire(network_key, "Prepare discovered network");
         app.update();
-        let progress = app.world().resource::<lunco_core_runtime::SimulationProgress>();
+        let progress = app
+            .world()
+            .resource::<lunco_core_runtime::SimulationProgress>();
         assert!(!progress.blockers().any(|blocker| blocker.key == key));
-        assert!(progress.blockers().any(|blocker| blocker.key == network_key));
+        assert!(
+            progress
+                .blockers()
+                .any(|blocker| blocker.key == network_key)
+        );
         // A replacement scene must acquire the discovery hold again.
-        app.world_mut().resource_mut::<PendingDomainProjectionCandidates>().reset_for_scene();
+        app.world_mut()
+            .resource_mut::<PendingDomainProjectionCandidates>()
+            .reset_for_scene();
         app.update();
-        assert!(app.world().resource::<lunco_core_runtime::SimulationProgress>()
-            .blockers().any(|blocker| blocker.key == key));
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .blockers()
+                .any(|blocker| blocker.key == key)
+        );
     }
 
     fn synthesis_test_context() -> lunco_core::RuntimeExecutionContext {
@@ -3175,6 +3363,7 @@ mod tests {
     fn generated_document_sync_queues_source_and_model_lifecycle() {
         fn source() -> GeneratedModelicaSource {
             GeneratedModelicaSource {
+                runtime_owner: lunco_workspace::DocumentRuntimeOwner::Application,
                 network_root: "/Rig".into(),
                 doc_uri: "generated://Rig.mo".into(),
                 source: "model Rig end Rig;".into(),
@@ -3853,6 +4042,7 @@ def Scope "Rig"
             .world_mut()
             .spawn((
                 GeneratedModelicaSource {
+                    runtime_owner: lunco_workspace::DocumentRuntimeOwner::Application,
                     network_root: "/Rig".into(),
                     doc_uri: "generated://Rig.mo".into(),
                     source: "model Rig end Rig;".into(),
@@ -3904,6 +4094,7 @@ def Scope "Rig"
                     ..default()
                 },
                 GeneratedModelicaSource {
+                    runtime_owner: lunco_workspace::DocumentRuntimeOwner::Application,
                     network_root: "/Rig".into(),
                     doc_uri: "generated://Generated.mo".into(),
                     source: "model Generated end Generated;".into(),
@@ -3989,6 +4180,7 @@ def Scope "Rig"
             .world_mut()
             .spawn((
                 GeneratedModelicaSource {
+                    runtime_owner: lunco_workspace::DocumentRuntimeOwner::Application,
                     network_root: "/Rig".into(),
                     doc_uri: "generated://Rig.mo".into(),
                     source: "model Rig end Rig;".into(),

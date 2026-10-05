@@ -104,15 +104,26 @@ snapshots include the runtime owner, are retired on its `TwinClosed`, and cannot
 be republished by a cancelled worker. Native and wasm Fast Run compilers release
 user overlays after capturing compilation outcomes while retaining application libraries.
 
-Fast Run admission pins an `ExperimentSource` containing the exact document
-and optional runtime `lunco_workspace::TwinId`, resolved through
-`Workspace::twin_for`. The registry's string grouping key identifies history,
-not runtime ownership. `TwinClosed` withdraws matching queued work, requests
-cancellation of executing work, marks retained unfinished rows `Cancelled`,
-and retires their update receivers so late worker results cannot revive them.
-Native batch solves cooperate at solver cancellation boundaries; cancellation
-does not interrupt a Rust thread inside a blocking solver call. Application-owned
-loose-document runs retain application lifetime.
+Scratch and reserved duplicate documents register their typed creation context
+synchronously at allocation. Deferred document-open delivery cannot rebind them
+to a replacement Twin. Duplicate installation validates the captured context,
+and owner retirement cancels its pending work and status handle.
+
+Fast Run admission records an `ExperimentOrigin` in the sole
+`ExperimentOrigins` registry. Local document work pins its exact document and
+runtime lifetime through `PinnedDocumentRuntimeOwner`; replicated work pins the
+exact authenticated connection and admitted scene mount. Presentation grouping
+identifies retained history and never determines ownership. Definition replay
+rejects a UUID attributed to another origin before changing its row, and replay
+from the same origin preserves terminal status and results.
+
+Each pending handle and emitted lifecycle message carries its immutable admitted
+origin. The receiver validates it before changing status, publishing results,
+or updating UI/playback. Closing an owner withdraws queued work, requests
+cancellation of executing work, marks unfinished rows `Cancelled`, and retires
+receivers. A buffered completion cannot revive a cancelled row or update a UUID
+that was subsequently admitted under another origin. Loose-document work has
+application lifetime.
 
 The UI publishes results only while the pinned document owner remains in the
 active workspace scope. Automatic plot selection also requires the selected
@@ -570,8 +581,10 @@ compile or step can settle while a host holds the fixed clock during scene
 readiness. It registers `spawn_modelica_requests` in `FixedUpdate`, where the
 master clock advances and the next deterministic communication request is
 issued. `ModelicaExecutionPlugin` consumes `CompileRequested` intent and the
-worker dispatches from the current document snapshot; the UI command only
-resolves class selection. Coupling the response drain to `FixedUpdate` (or
+worker validates the pinned document runtime owner before gathering the current
+snapshot; sibling documents must share that exact admitted runtime. The UI
+command only resolves class selection. A requested target entity that has been
+removed is rejected; it cannot create an editor actor implicitly. Coupling the response drain to `FixedUpdate` (or
 forgetting either registration when splitting the crate) leaves `is_compiling`
 stuck forever in a max-speed/readiness loop even though the worker has finished.
 
@@ -1502,3 +1515,13 @@ finishing the acausal-connector visuals on `lunco-canvas`.
 - [Modelica Language Specification §5.3 — Static Name Lookup](https://specification.modelica.org/maint/3.7/class-predefined-types-and-declarations.html#static-name-lookup) — the scope/import resolution rules our type lookup follows
 - [Modelica Language Specification §18 — Annotations](https://specification.modelica.org/maint/3.7/annotations.html) — `Placement`, `Line`, `Icon` annotation shapes our pretty-printer emits
 - [rumoca on GitHub](https://github.com/LunCoSim/rumoca) — the parser + runtime crate family
+
+Live participants retain their admitted document owner. Closing the owner sends
+worker Despawn and retires solver state, sample streams, telemetry, and pending
+compile results. Editor-created actors are despawned; a USD projection keeps its
+geometry while its Modelica participant is removed. A per-entity session epoch
+survives participant removal/recreation and prevents an old worker response
+from matching the replacement participant. Captured compilation outcomes and
+diagnostics release their user-source overlays; application libraries retain
+their own lifetime. Generated domain documents carry the exact source mount's
+runtime attribution before first compile admission, including replicated scenes.

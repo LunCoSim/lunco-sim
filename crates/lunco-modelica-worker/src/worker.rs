@@ -37,7 +37,8 @@ mod bridge;
 mod compile;
 pub use bridge::{
     handle_modelica_responses, on_remove_modelica, reconcile_modelica_preparation_progress,
-    request_modelica_compiles, spawn_modelica_requests,
+    request_modelica_compiles, retire_closed_twin_models, retire_replication_models,
+    spawn_modelica_requests,
 };
 pub use compile::dispatch_modelica_compile_requests;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1620,11 +1621,13 @@ impl CompileBackend for InlineCompileBackend<'_> {
         } else {
             Vec::new()
         };
+        let library_revision = compiler.library_revision();
+        compiler.clear_user_documents();
         BackendCompileResult {
             unit,
             outcome,
             diagnostics,
-            library_revision: compiler.library_revision(),
+            library_revision,
         }
     }
 }

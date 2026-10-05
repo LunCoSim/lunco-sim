@@ -117,9 +117,13 @@ pub fn run_is_in_active_scope<R: lunco_modelica_core::sim_default::ResourceRead>
     let workspace = ctx
         .read_resource::<lunco_workspace::WorkspaceResource>()
         .map(|workspace| &workspace.0);
-    ctx.read_resource::<lunco_modelica_runner::ExperimentSources>()
-        .and_then(|sources| sources.0.get(&id))
-        .is_some_and(|source| source.is_in_active_scope(workspace))
+    let replication = lunco_core_session::current_replication_owner(
+        ctx.read_resource::<lunco_core_session::ClientConnection>(),
+        ctx.read_resource::<lunco_core_session::ReplicatedScene>(),
+    );
+    ctx.read_resource::<lunco_experiments::ExperimentOrigins>()
+        .and_then(|sources| sources.get(&id))
+        .is_some_and(|origin| origin.is_in_active_scope(workspace, replication.as_ref()))
 }
 
 /// `PanelCtx` sibling of [`doc_display_name`].

@@ -47,7 +47,8 @@ The wasm host has no COOP/COEP headers and the worker is intentionally a separat
 ```
 lunco-experiments/        (backend-agnostic)
   Experiment, RunResult, RunBounds, ParamValue, ParamPath
-  ExperimentRegistry  (Resource, per-twin)
+  ExperimentRegistry  (Resource, presentation-grouped history)
+  ExperimentOrigins   (Resource, immutable runtime admission attribution)
   ExperimentRunner    (trait)
   messages: RunRequested, RunProgress, RunCompleted, RunFailed, RunCancelled, ExperimentRemoved
 
@@ -158,8 +159,20 @@ pub enum ParamValue {
 
 Registry: `BTreeMap<TwinId, Vec<Experiment>>` retains at most 20 terminal runs per presentation group, evicting the oldest terminal row. Pending, queued, and running rows are retained. Removal publishes `ExperimentRemoved` so source attribution and plot selections retire together.
 
-### Why per-twin scoping
-Experiments tied to a workspace are expected. Switching twins should filter the list. Retrofitting later costs more than getting it right at the type level now.
+### Runtime attribution and retained history
+
+`ExperimentOrigins` owns the origin of each registered UUID. Local work records
+`PinnedDocumentRuntimeOwner`; replicated work records the exact connection and
+scene lifetime. Registration and definition replay validate row and origin
+together. A conflicting origin is rejected before mutation; replay under the
+same origin updates definition fields without resetting terminal history.
+
+`PendingRun` captures the origin alongside its handle. Progress, completion,
+failure, and cancellation messages carry that immutable origin, and consumers
+validate it before changing the registry or publishing plots and playback.
+Retained rows do not regain runtime ownership when another Twin becomes active.
+Closing or removing their owner retires unfinished work and its receivers;
+explicit deletion and bounded history eviction also remove origin records.
 
 ### Why BTreeMap for overrides and series
 Deterministic ordering for display, plot legend stability, and reproducible result hashes. Cost is negligible at the volumes involved.
@@ -317,10 +330,14 @@ overrides at the DAE level (`apply_value_bindings_to_dae`) rather than reflatten
 per run. A sweep that varies only top-level scalar parameters recompiles
 **zero** times after the first point.
 
-**Per-run demux.** Results route by `run_id` — native: one `crossbeam` channel
+**Per-run demux.** Results route by exact `run_id` and admitted origin — native: one `crossbeam` channel
 per `RunHandle`, drained by `drain_pending_handles`; wasm: the `RUN_SENDERS`
 map in `worker_transport.rs`, forwarded by `forward_run_update`. Cancel is
 per-run (native `AtomicBool`, wasm `CancelRun{run_id}`).
+
+Replicated experiment definitions are replayed after the authenticated inbox is
+drained. Run status is applied after that replay so a same-frame definition and
+status cannot race their ownership admission.
 
 ### One bounded scheduler, one platform-specific spawn
 
@@ -329,7 +346,7 @@ per-run (native `AtomicBool`, wasm `CancelRun{run_id}`).
 `pump_scheduler`, which starts jobs while `in_flight < max_parallel` — outside
 the lock. On a terminal update `finish_run` frees the slot and re-pumps.
 Cancellation withdraws queued jobs immediately. Each job owns the immutable
-source text, document URI, extras, and optional typed runtime Twin captured
+source text, document URI, extras, and exact typed runtime owner captured
 at admission; execution never looks up a mutable class-name source map.
 Compiled DAE entries include that owner; `TwinClosed` removes its entries,
 and cancelled workers cannot republish them after retirement. User overlays

@@ -650,7 +650,7 @@ mod save_tests {
             id: lunco_doc::DocumentId::new(1),
             kind: lunco_workspace::DocumentKindId::new("modelica"),
             origin: lunco_doc::DocumentOrigin::untitled("scratch"),
-            context_twin: None,
+            runtime_context: lunco_workspace::DocumentRuntimeOwner::Application,
             title: "Engine Model".into(),
             dirty: true,
         };

@@ -6,6 +6,7 @@ license.workspace = true
 description = "Modelica experiment scheduling and shared run execution"
 
 [dependencies]
+lunco-core-session = { path = "../lunco-core-session" }
 bevy.workspace = true
 crossbeam-channel.workspace = true
 lunco-core-runtime = { path = "../lunco-core-runtime" }

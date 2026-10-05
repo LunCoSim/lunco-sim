@@ -78,7 +78,7 @@ pub fn document_belongs_to_twin_root(
                 .zip(root.canonicalize().ok())
                 .is_some_and(|(path, root)| path.strip_prefix(root).is_ok())
     }) || matches!(entry.origin, DocumentOrigin::Untitled { .. })
-        && entry.context_twin == Some(twin)
+        && entry.runtime_context == DocumentRuntimeOwner::LocalTwin(twin)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -126,6 +126,159 @@ impl TwinId {
     }
 }
 
+/// Scope admitted by the authenticated scene transport.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ReplicationScope {
+    Application,
+    Twin(TwinId),
+}
+
+/// Exact remote scene mount and transport lifetime; host IDs are never local IDs.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ReplicatedSceneOwner {
+    pub connection: bevy::prelude::Entity,
+    pub host_twin: TwinId,
+    pub authority: String,
+    pub root: std::path::PathBuf,
+    pub owns_mount: bool,
+}
+
+/// Authenticated owner captured at replicated input admission.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ReplicationOwner {
+    Application { connection: bevy::prelude::Entity },
+    Twin { scene: ReplicatedSceneOwner },
+}
+impl ReplicationOwner {
+    pub fn connection(&self) -> bevy::prelude::Entity {
+        match self {
+            Self::Application { connection } => *connection,
+            Self::Twin { scene } => scene.connection,
+        }
+    }
+    pub fn scope(&self) -> ReplicationScope {
+        match self {
+            Self::Application { .. } => ReplicationScope::Application,
+            Self::Twin { scene } => ReplicationScope::Twin(scene.host_twin),
+        }
+    }
+    pub fn is_in_active_scope(
+        &self,
+        workspace: Option<&Workspace>,
+        current: Option<&Self>,
+    ) -> bool {
+        current == Some(self)
+            && match self {
+                Self::Application { .. } => {
+                    workspace.is_none_or(|workspace| workspace.active_twin.is_none())
+                }
+                Self::Twin { .. } => true,
+            }
+    }
+}
+
+/// Authoritative lifetime of document work, independent of its display grouping.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DocumentRuntimeOwner {
+    #[default]
+    Application,
+    LocalTwin(TwinId),
+    Replicated(ReplicationOwner),
+}
+impl DocumentRuntimeOwner {
+    pub fn local_twin(&self) -> Option<TwinId> {
+        match self {
+            Self::LocalTwin(twin) => Some(*twin),
+            _ => None,
+        }
+    }
+}
+
+/// Document and exact runtime owner captured when work is admitted.
+#[derive(bevy::prelude::Component, Debug, Clone, PartialEq, Eq)]
+pub struct PinnedDocumentRuntimeOwner {
+    pub document: DocumentId,
+    pub runtime: DocumentRuntimeOwner,
+}
+impl PinnedDocumentRuntimeOwner {
+    pub fn for_document(
+        document: DocumentId,
+        workspace: Option<&Workspace>,
+    ) -> Result<Self, String> {
+        let runtime = match workspace {
+            Some(workspace) => {
+                let entry = workspace.document(document).ok_or_else(|| {
+                    format!("document {document} is not registered in the workspace")
+                })?;
+                let runtime = workspace.runtime_owner_for(entry);
+                if runtime
+                    .local_twin()
+                    .is_some_and(|id| workspace.twin(id).is_none())
+                {
+                    return Err(format!("document {document} has a closed Twin context"));
+                }
+                runtime
+            }
+            None => DocumentRuntimeOwner::Application,
+        };
+        Ok(Self { document, runtime })
+    }
+    pub fn is_current(
+        &self,
+        workspace: Option<&Workspace>,
+        replication: Option<&ReplicationOwner>,
+    ) -> bool {
+        let registered = workspace.map_or(
+            self.runtime == DocumentRuntimeOwner::Application,
+            |workspace| {
+                workspace
+                    .document(self.document)
+                    .is_some_and(|entry| workspace.runtime_owner_for(entry) == self.runtime)
+            },
+        );
+        registered
+            && match &self.runtime {
+                DocumentRuntimeOwner::Application => true,
+                DocumentRuntimeOwner::LocalTwin(id) => {
+                    workspace.is_some_and(|workspace| workspace.twin(*id).is_some())
+                }
+                DocumentRuntimeOwner::Replicated(owner) => replication == Some(owner),
+            }
+    }
+    pub fn is_in_active_scope(
+        &self,
+        workspace: Option<&Workspace>,
+        replication: Option<&ReplicationOwner>,
+    ) -> bool {
+        self.is_current(workspace, replication)
+            && match &self.runtime {
+                DocumentRuntimeOwner::Application => {
+                    workspace.is_none_or(|workspace| workspace.active_twin.is_none())
+                        && !matches!(replication, Some(ReplicationOwner::Twin { .. }))
+                }
+                DocumentRuntimeOwner::LocalTwin(twin) => {
+                    workspace.is_some_and(|workspace| workspace.active_twin == Some(*twin))
+                        && !matches!(replication, Some(ReplicationOwner::Twin { .. }))
+                }
+                DocumentRuntimeOwner::Replicated(owner) => {
+                    owner.is_in_active_scope(workspace, replication)
+                }
+            }
+    }
+    /// Explicit library sources retain their application owner; authored sibling
+    /// overlays must share this exact admitted document runtime.
+    pub fn shares_runtime_with(
+        &self,
+        document: DocumentId,
+        workspace: Option<&Workspace>,
+        replication: Option<&ReplicationOwner>,
+    ) -> bool {
+        self.is_current(workspace, replication)
+            && Self::for_document(document, workspace)
+                .is_ok_and(|other| other.runtime == self.runtime)
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DocumentEntry
 // ─────────────────────────────────────────────────────────────────────────────
@@ -146,7 +299,7 @@ impl TwinId {
 ///    [`Workspace::twin_for`].
 /// 2. **By context pin** — an Untitled document explicitly pinned to
 ///    a Twin at creation ("New Model" from the Rover Twin's toolbar
-///    creates an Untitled with `context_twin = Some(rover_id)`). This
+///    creates an Untitled with `runtime_context = DocumentRuntimeOwner::LocalTwin(rover_id)`). This
 ///    survives until the doc is saved; on Save-As the context becomes
 ///    advisory and the by-path rule takes over.
 ///
@@ -162,11 +315,9 @@ pub struct DocumentEntry {
     pub kind: DocumentKindId,
     /// Persistence state of the Document (Untitled vs File, writable).
     pub origin: DocumentOrigin,
-    /// Optional pin to a Twin — used by Untitled docs to remember the
-    /// context they were created in. `None` means "not pinned"; the
-    /// Workspace can still associate a Persistent doc with a Twin by
-    /// path lookup.
-    pub context_twin: Option<TwinId>,
+    /// Context captured at creation for Untitled documents. File documents
+    /// resolve local ownership through their canonical Workspace path.
+    pub runtime_context: DocumentRuntimeOwner,
     /// Display title for the tab ("Rover.mo", "● Untitled-1", …).
     /// The Workspace doesn't enforce a format — consumers set and
     /// update this as they see fit.
@@ -275,7 +426,7 @@ impl Workspace {
     pub fn document_is_in_active_scope(&self, entry: &DocumentEntry) -> bool {
         match self.active_twin {
             Some(active) => self.twin_for(entry) == Some(active),
-            None => self.twin_for(entry).is_none(),
+            None => self.runtime_owner_for(entry) == DocumentRuntimeOwner::Application,
         }
     }
 
@@ -376,7 +527,37 @@ impl Workspace {
             }
             None
         } else {
-            entry.context_twin
+            entry.runtime_context.local_twin()
+        }
+    }
+
+    /// Snapshot the visible creation context at synchronous document admission.
+    /// An admitted remote scene overrides the retained local browser lens.
+    pub fn new_document_runtime_owner(
+        &self,
+        replication: Option<&ReplicationOwner>,
+    ) -> DocumentRuntimeOwner {
+        match replication {
+            Some(owner @ ReplicationOwner::Twin { .. }) => {
+                DocumentRuntimeOwner::Replicated(owner.clone())
+            }
+            _ => self.active_twin.map_or(
+                DocumentRuntimeOwner::Application,
+                DocumentRuntimeOwner::LocalTwin,
+            ),
+        }
+    }
+
+    /// Resolve document lifetime through the canonical local path lens or the
+    /// explicitly admitted Untitled context. Remote IDs never enter `twin_for`.
+    pub fn runtime_owner_for(&self, entry: &DocumentEntry) -> DocumentRuntimeOwner {
+        if matches!(entry.origin, DocumentOrigin::File { .. }) {
+            self.twin_for(entry).map_or(
+                DocumentRuntimeOwner::Application,
+                DocumentRuntimeOwner::LocalTwin,
+            )
+        } else {
+            entry.runtime_context.clone()
         }
     }
 
@@ -478,7 +659,7 @@ version = "0.1.0"
             id: DocumentId::new(1),
             kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::writable_file(&model_path),
-            context_twin: None,
+            runtime_context: DocumentRuntimeOwner::Application,
             title: "Rover.mo".into(),
             dirty: false,
         });
@@ -501,7 +682,7 @@ version = "0.1.0"
             id: DocumentId::new(10),
             kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::untitled("Untitled-1"),
-            context_twin: Some(tid),
+            runtime_context: DocumentRuntimeOwner::LocalTwin(tid),
             title: "● Untitled-1".into(),
             dirty: true,
         });
@@ -530,7 +711,7 @@ version = "0.1.0"
             id: DocumentId::new(1),
             kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::writable_file(&a_file),
-            context_twin: None,
+            runtime_context: DocumentRuntimeOwner::Application,
             title: "a.mo".into(),
             dirty: false,
         });
@@ -538,7 +719,7 @@ version = "0.1.0"
             id: DocumentId::new(2),
             kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::writable_file(&b_file),
-            context_twin: None,
+            runtime_context: DocumentRuntimeOwner::Application,
             title: "b.mo".into(),
             dirty: false,
         });
@@ -571,7 +752,7 @@ version = "0.1.0"
             id: DocumentId::new(1),
             kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::writable_file(&a_file),
-            context_twin: None,
+            runtime_context: DocumentRuntimeOwner::Application,
             title: "a.mo".into(),
             dirty: false,
         });
@@ -579,7 +760,7 @@ version = "0.1.0"
             id: DocumentId::new(2),
             kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::writable_file(&b_file),
-            context_twin: None,
+            runtime_context: DocumentRuntimeOwner::Application,
             title: "b.mo".into(),
             dirty: false,
         });
@@ -614,7 +795,7 @@ version = "0.1.0"
             id: DocumentId::new(1),
             kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::writable_file(&model),
-            context_twin: Some(b),
+            runtime_context: DocumentRuntimeOwner::LocalTwin(b),
             title: "shared.mo".into(),
             dirty: false,
         });
@@ -639,7 +820,7 @@ version = "0.1.0"
             id: DocumentId::new(1),
             kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::writable_file(&model),
-            context_twin: None,
+            runtime_context: DocumentRuntimeOwner::Application,
             title: "m.mo".into(),
             dirty: false,
         });
@@ -660,7 +841,7 @@ version = "0.1.0"
             id,
             kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::untitled("U"),
-            context_twin: None,
+            runtime_context: DocumentRuntimeOwner::Application,
             title: "U".into(),
             dirty: true,
         });
@@ -668,5 +849,67 @@ version = "0.1.0"
         let closed = ws.close_document(id);
         assert!(closed.is_some());
         assert_eq!(ws.active_document, None);
+    }
+
+    #[test]
+    fn pinned_remote_documents_require_exact_mount_and_transport_and_filter_overlays() {
+        let mut workspace = Workspace::new();
+        let temporary = tempfile::tempdir().expect("temporary local root");
+        let local = workspace.add_twin(load_twin(temporary.path()));
+        workspace.active_twin = None;
+        let remote = ReplicationOwner::Twin {
+            scene: ReplicatedSceneOwner {
+                connection: bevy::prelude::Entity::from_bits(1),
+                host_twin: local,
+                authority: "remote".into(),
+                root: std::path::PathBuf::from("remote-cache"),
+                owns_mount: true,
+            },
+        };
+        for (raw, runtime_context) in [
+            (1, DocumentRuntimeOwner::Application),
+            (2, DocumentRuntimeOwner::Replicated(remote.clone())),
+            (3, DocumentRuntimeOwner::LocalTwin(local)),
+        ] {
+            workspace.add_document(DocumentEntry {
+                id: DocumentId::new(raw),
+                kind: DocumentKindId::new("modelica"),
+                origin: DocumentOrigin::untitled("Probe"),
+                runtime_context,
+                title: "Probe".into(),
+                dirty: false,
+            });
+        }
+        let source = PinnedDocumentRuntimeOwner::for_document(DocumentId::new(2), Some(&workspace))
+            .expect("registered remote document");
+        assert!(source.is_current(Some(&workspace), Some(&remote)));
+        assert!(source.is_in_active_scope(Some(&workspace), Some(&remote)));
+        assert!(!source.is_current(Some(&workspace), None));
+        let mut replacement = remote.clone();
+        if let ReplicationOwner::Twin { scene } = &mut replacement {
+            scene.connection = bevy::prelude::Entity::from_bits(2);
+        }
+        assert!(!source.is_current(Some(&workspace), Some(&replacement)));
+        assert!(!source.shares_runtime_with(DocumentId::new(1), Some(&workspace), Some(&remote)));
+        assert!(!source.shares_runtime_with(DocumentId::new(3), Some(&workspace), Some(&remote)));
+        let loose = PinnedDocumentRuntimeOwner::for_document(DocumentId::new(1), Some(&workspace))
+            .expect("application document");
+        assert!(loose.is_current(Some(&workspace), Some(&remote)));
+        assert!(!loose.is_in_active_scope(Some(&workspace), Some(&remote)));
+        let application_connection = ReplicationOwner::Application {
+            connection: remote.connection(),
+        };
+        assert!(loose.is_in_active_scope(Some(&workspace), Some(&application_connection)));
+        workspace.active_twin = Some(local);
+        let local_source =
+            PinnedDocumentRuntimeOwner::for_document(DocumentId::new(3), Some(&workspace))
+                .expect("local document");
+        assert!(local_source.is_in_active_scope(Some(&workspace), Some(&application_connection)));
+        assert!(!local_source.is_in_active_scope(Some(&workspace), Some(&remote)));
+        assert!(source.is_in_active_scope(Some(&workspace), Some(&remote)));
+        assert_eq!(
+            workspace.new_document_runtime_owner(Some(&remote)),
+            DocumentRuntimeOwner::Replicated(remote)
+        );
     }
 }

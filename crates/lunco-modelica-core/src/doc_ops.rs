@@ -20,10 +20,38 @@ type ModelicaDocuments = lunco_doc_bevy::DocumentRegistry<ModelicaDocument>;
 /// lifecycle publication.
 pub fn allocate_scratch_document(
     registry: &mut lunco_doc_bevy::DocumentRegistry<ModelicaDocument>,
+    workspace: Option<&mut lunco_workspace::Workspace>,
+    replication: Option<&lunco_workspace::ReplicationOwner>,
     source: String,
     display_name: String,
 ) -> lunco_doc::DocumentId {
-    registry.allocate(source, lunco_doc::PathlessOrigin::untitled(display_name))
+    let document = registry.allocate(
+        source,
+        lunco_doc::PathlessOrigin::untitled(display_name.clone()),
+    );
+    if let Some(workspace) = workspace {
+        register_scratch_context(workspace, document, display_name, replication);
+    }
+    document
+}
+
+/// Register an allocated or reserved Untitled document before any async work or
+/// deferred lifecycle delivery can change its admitted runtime context.
+pub fn register_scratch_context(
+    workspace: &mut lunco_workspace::Workspace,
+    document: lunco_doc::DocumentId,
+    display_name: String,
+    replication: Option<&lunco_workspace::ReplicationOwner>,
+) {
+    let runtime_context = workspace.new_document_runtime_owner(replication);
+    workspace.add_document(lunco_workspace::DocumentEntry {
+        id: document,
+        kind: lunco_workspace::DocumentKindId::new("modelica"),
+        origin: lunco_doc::DocumentOrigin::untitled(display_name.clone()),
+        runtime_context,
+        title: display_name,
+        dirty: false,
+    });
 }
 
 /// Drain the registry's pending doc-lifecycle rings into the canonical

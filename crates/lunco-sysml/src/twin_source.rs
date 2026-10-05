@@ -348,7 +348,7 @@ pub(crate) fn sync_workspace_on_sysml_doc_opened(
         return;
     }
     let origin = host.document().origin().clone();
-    let context_twin = origin
+    let runtime_context = origin
         .is_untitled()
         .then_some(workspace.active_twin)
         .flatten();
@@ -356,7 +356,10 @@ pub(crate) fn sync_workspace_on_sysml_doc_opened(
         id: document,
         kind: lunco_workspace::DocumentKindId::new("sysml"),
         origin: origin.clone(),
-        context_twin,
+        runtime_context: runtime_context.map_or(
+            lunco_workspace::DocumentRuntimeOwner::Application,
+            lunco_workspace::DocumentRuntimeOwner::LocalTwin,
+        ),
         title: origin.display_name(),
         dirty: host.document().is_dirty(),
     });

@@ -6,11 +6,30 @@ use super::*;
 pub fn on_remove_modelica(
     trigger: On<Remove, ModelicaModel>,
     channels: Res<ModelicaChannels>,
+    models: Query<(
+        &ModelicaModel,
+        Option<&lunco_modelica_runtime::ModelicaSessionEpoch>,
+    )>,
     mut sim_registry: ResMut<lunco_signal::SimRegistry>,
     step_diagnostics: Option<ResMut<lunco_modelica_runtime::ModelicaStepDiagnostics>>,
     mut commands: Commands,
 ) {
     let entity = trigger.entity;
+    if let Ok((model, epoch)) = models.get(entity) {
+        let retained = model
+            .session_id
+            .max(epoch.map(|epoch| epoch.0).unwrap_or(0));
+        commands.queue(move |world: &mut World| {
+            if let Ok(mut entity) = world.get_entity_mut(entity) {
+                let current = entity
+                    .get::<lunco_modelica_runtime::ModelicaSessionEpoch>()
+                    .map_or(0, |epoch| epoch.0);
+                entity.insert(lunco_modelica_runtime::ModelicaSessionEpoch(
+                    retained.max(current),
+                ));
+            }
+        });
+    }
     sim_registry.remove_entity(entity);
     if let Some(mut diagnostics) = step_diagnostics {
         diagnostics.remove(entity);
@@ -36,17 +55,29 @@ pub fn on_remove_modelica(
 /// clock resumes.
 pub fn request_modelica_compiles(
     mut compile_requests: MessageWriter<CompileRequested>,
-    models: Query<(Entity, &ModelicaModel, Option<&lunco_core::GlobalEntityId>)>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+    mut notices: MessageWriter<ModelicaNotice>,
+    mut commands: Commands,
+    models: Query<(
+        Entity,
+        &ModelicaModel,
+        Option<&lunco_core::GlobalEntityId>,
+        Option<&lunco_workspace::PinnedDocumentRuntimeOwner>,
+    )>,
 ) {
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     let mut models: Vec<_> = models.iter().collect();
-    models.sort_unstable_by_key(|(entity, _, global_id)| {
+    models.sort_unstable_by_key(|(entity, _, global_id, _)| {
         (
             global_id.map(lunco_core::GlobalEntityId::get),
             entity.to_bits(),
         )
     });
 
-    for (entity, model, _) in models {
+    for (entity, model, _, pinned) in models {
         if model.paused
             || model.is_compiled
             || model.is_compiling
@@ -57,8 +88,42 @@ pub fn request_modelica_compiles(
             continue;
         }
 
+        let admission = pinned.cloned().map_or_else(|| lunco_workspace::PinnedDocumentRuntimeOwner::for_document(model.document, workspace.as_deref().map(|workspace| &workspace.0)), |source| {
+            if source.document == model.document && source.is_current(workspace.as_deref().map(|workspace| &workspace.0), replication.as_ref()) { Ok(source) }
+            else { Err("automatic compile participant belongs to a retired or changed document runtime".to_owned()) }
+        });
+        let source = match admission {
+            Ok(source)
+                if source.is_current(
+                    workspace.as_deref().map(|workspace| &workspace.0),
+                    replication.as_ref(),
+                ) =>
+            {
+                source
+            }
+            Ok(_) => {
+                notices.write(ModelicaNotice {
+                    level: NoticeLevel::Error,
+                    text: "automatic compile source runtime has retired".into(),
+                });
+                continue;
+            }
+            Err(error) => {
+                notices.write(ModelicaNotice {
+                    level: NoticeLevel::Error,
+                    text: error.clone(),
+                });
+                commands.queue(move |world: &mut World| {
+                    if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
+                        model.last_error = Some(error);
+                        model.paused = true;
+                    }
+                });
+                continue;
+            }
+        };
         compile_requests.write(CompileRequested {
-            doc: model.document,
+            source,
             entity: Some(entity),
             class: if model.model_name.is_empty() {
                 None
@@ -146,6 +211,7 @@ mod compile_admission_tests {
     fn compile_intent_is_admitted_while_virtual_time_is_paused() {
         let mut app = App::new();
         app.add_message::<CompileRequested>()
+            .add_message::<ModelicaNotice>()
             .init_resource::<CapturedCompileRequests>()
             .init_resource::<Time<Virtual>>()
             .add_systems(
@@ -164,7 +230,7 @@ mod compile_admission_tests {
         assert!(app.world().resource::<Time<Virtual>>().is_paused());
         let requests = &app.world().resource::<CapturedCompileRequests>().0;
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].doc, lunco_doc::DocumentId::new(7));
+        assert_eq!(requests[0].source.document, lunco_doc::DocumentId::new(7));
         assert_eq!(requests[0].entity, Some(entity));
         assert_eq!(requests[0].class.as_deref(), Some("RoverPlant"));
         assert!(requests[0].resume_after_compile);
@@ -596,7 +662,15 @@ fn include_compile_explanation(diagnostics: &mut [lunco_doc::Diagnostic], error:
 /// and unpauses the simulation.
 pub fn handle_modelica_responses(
     channels: Res<ModelicaChannels>,
-    mut q_models: Query<(Entity, &mut ModelicaModel)>,
+    mut q_models: Query<(
+        Entity,
+        &mut ModelicaModel,
+        Option<&lunco_workspace::PinnedDocumentRuntimeOwner>,
+        Option<&lunco_modelica_runtime::ModelicaSessionEpoch>,
+    )>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
     // Core compile-state (UI-agnostic). Optional so headless cosim tests run
     // without it.
     compile_states: Option<ResMut<lunco_doc_bevy::DocumentDiagnostics>>,
@@ -620,6 +694,8 @@ pub fn handle_modelica_responses(
     coupling: Option<ResMut<lunco_core_runtime::SimulationBarrier>>,
     faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     let mut compile_states = compile_states;
     let mut source_roots = source_roots;
     let mut faults = faults;
@@ -684,7 +760,16 @@ pub fn handle_modelica_responses(
         }
 
         let lifecycle_result = result.is_new_model || result.is_parameter_update || result.is_reset;
-        if let Ok((_, mut model)) = q_models.get_mut(result.entity) {
+        if let Ok((_, mut model, source, epoch)) = q_models.get_mut(result.entity) {
+            if source.is_some_and(|source| {
+                !source.is_current(
+                    workspace.as_deref().map(|workspace| &workspace.0),
+                    replication.as_ref(),
+                )
+            }) || epoch.is_some_and(|epoch| result.session_id < epoch.0)
+            {
+                continue;
+            }
             // ALWAYS check session ID before resetting is_stepping
             // Stale results must NOT reset the flag.
             if result.session_id < model.session_id {
@@ -1285,7 +1370,7 @@ pub fn handle_modelica_responses(
     // already observed this release, so the current physics step consumes only
     // the fresh output that just arrived.
     if let Some(mut coupling) = coupling {
-        coupling.held = q_models.iter().any(|(entity, model)| {
+        coupling.held = q_models.iter().any(|(entity, model, _, _)| {
             let shared_clock_participant = participants
                 .as_deref()
                 .is_none_or(|participants| participants.requires_barrier(entity));
@@ -1484,6 +1569,7 @@ mod compile_fault_tests {
         let mut app = App::new();
         app.add_message::<ModelicaNotice>()
             .add_message::<CompileRequested>()
+            .add_message::<ModelicaNotice>()
             .init_resource::<SimSampleStream>()
             .init_resource::<lunco_doc_bevy::DocumentDiagnostics>()
             .init_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
@@ -1567,7 +1653,7 @@ mod compile_fault_tests {
 
         let requests = &app.world().resource::<CapturedCompileRequests>().0;
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].doc, doc);
+        assert_eq!(requests[0].source.document, doc);
         assert_eq!(requests[0].entity, Some(entity));
         assert!(requests[0].resume_after_compile);
         assert!(rx_command.try_recv().is_err());
@@ -1577,3 +1663,194 @@ mod compile_fault_tests {
 // ===========================================================================
 // The macro-step contract
 // ===========================================================================
+
+/// Retire only live participation admitted to the exact outgoing Twin.
+pub fn retire_closed_twin_models(
+    trigger: On<lunco_workspace::TwinClosed>,
+    models: Query<
+        (
+            Entity,
+            &lunco_workspace::PinnedDocumentRuntimeOwner,
+            Has<lunco_modelica_runtime::EditorModelicaActor>,
+        ),
+        With<ModelicaModel>,
+    >,
+    mut commands: Commands,
+) {
+    retire_models_owned_by(
+        &lunco_workspace::DocumentRuntimeOwner::LocalTwin(trigger.event().twin),
+        &models,
+        &mut commands,
+    );
+}
+
+/// Release live Modelica participation when its exact remote mount/connection retires.
+pub fn retire_replication_models(
+    trigger: On<lunco_core_session::ReplicationOwnerRetired>,
+    models: Query<
+        (
+            Entity,
+            &lunco_workspace::PinnedDocumentRuntimeOwner,
+            Has<lunco_modelica_runtime::EditorModelicaActor>,
+        ),
+        With<ModelicaModel>,
+    >,
+    mut commands: Commands,
+) {
+    retire_models_owned_by(
+        &lunco_workspace::DocumentRuntimeOwner::Replicated(trigger.event().owner.clone()),
+        &models,
+        &mut commands,
+    );
+}
+
+fn retire_models_owned_by(
+    owner: &lunco_workspace::DocumentRuntimeOwner,
+    models: &Query<
+        (
+            Entity,
+            &lunco_workspace::PinnedDocumentRuntimeOwner,
+            Has<lunco_modelica_runtime::EditorModelicaActor>,
+        ),
+        With<ModelicaModel>,
+    >,
+    commands: &mut Commands,
+) {
+    for (entity, source, editor_actor) in models.iter() {
+        if &source.runtime != owner {
+            continue;
+        }
+        if editor_actor {
+            commands.entity(entity).try_despawn();
+        } else {
+            commands
+                .entity(entity)
+                .try_remove::<(ModelicaModel, lunco_workspace::PinnedDocumentRuntimeOwner)>();
+        }
+    }
+}
+
+#[cfg(test)]
+mod document_runtime_owner_tests {
+    use super::*;
+    #[derive(Component)]
+    struct Geometry;
+    #[test]
+    fn twin_retirement_preserves_geometry_epoch_and_rejects_previous_session_results() {
+        use lunco_workspace::PinnedDocumentRuntimeOwner;
+        let a = lunco_workspace::TwinId::new(7);
+        let b = lunco_workspace::TwinId::new(8);
+        let doc = lunco_doc::DocumentId::new(1);
+        let mut app = App::new();
+        app.add_message::<ModelicaNotice>()
+            .init_resource::<lunco_signal::SimRegistry>()
+            .init_resource::<SimSampleStream>()
+            .add_observer(on_remove_modelica)
+            .add_observer(retire_closed_twin_models)
+            .add_systems(Update, handle_modelica_responses);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let (results, result_rx) = crossbeam_channel::unbounded();
+        app.insert_resource(ModelicaChannels { tx, rx: result_rx });
+        let geometry = app
+            .world_mut()
+            .spawn((
+                Geometry,
+                ModelicaModel {
+                    document: doc,
+                    session_id: 1,
+                    ..Default::default()
+                },
+                PinnedDocumentRuntimeOwner {
+                    document: doc,
+                    runtime: lunco_workspace::DocumentRuntimeOwner::LocalTwin(a),
+                },
+            ))
+            .id();
+        let editor = app
+            .world_mut()
+            .spawn((
+                lunco_modelica_runtime::EditorModelicaActor,
+                ModelicaModel::default(),
+                PinnedDocumentRuntimeOwner {
+                    document: doc,
+                    runtime: lunco_workspace::DocumentRuntimeOwner::LocalTwin(a),
+                },
+            ))
+            .id();
+        let application = app
+            .world_mut()
+            .spawn((
+                ModelicaModel::default(),
+                PinnedDocumentRuntimeOwner {
+                    document: doc,
+                    runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+                },
+            ))
+            .id();
+        let other = app
+            .world_mut()
+            .spawn((
+                ModelicaModel::default(),
+                PinnedDocumentRuntimeOwner {
+                    document: doc,
+                    runtime: lunco_workspace::DocumentRuntimeOwner::LocalTwin(b),
+                },
+            ))
+            .id();
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: a,
+            root: Default::default(),
+            was_active: true,
+        });
+        app.world_mut().flush();
+        assert!(app.world().get_entity(editor).is_err());
+        assert!(app.world().get::<Geometry>(geometry).is_some());
+        assert!(app.world().get::<ModelicaModel>(geometry).is_none());
+        assert_eq!(
+            app.world()
+                .get::<lunco_modelica_runtime::ModelicaSessionEpoch>(geometry)
+                .expect("retained epoch")
+                .0,
+            1
+        );
+        assert!(app.world().get::<ModelicaModel>(application).is_some());
+        assert!(app.world().get::<ModelicaModel>(other).is_some());
+        assert_eq!(
+            rx.try_iter()
+                .filter(|command| matches!(command, ModelicaCommand::Despawn { .. }))
+                .count(),
+            2
+        );
+        app.world_mut().entity_mut(geometry).insert((
+            ModelicaModel {
+                document: doc,
+                session_id: 2,
+                is_compiling: true,
+                ..Default::default()
+            },
+            PinnedDocumentRuntimeOwner {
+                document: doc,
+                runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+            },
+            lunco_modelica_runtime::ModelicaSessionEpoch(2),
+        ));
+        results
+            .send(ModelicaResult {
+                entity: geometry,
+                session_id: 1,
+                is_new_model: true,
+                outputs: vec![("x".into(), 99.0)],
+                ..Default::default()
+            })
+            .expect("buffered old result");
+        app.update();
+        let model = app
+            .world()
+            .get::<ModelicaModel>(geometry)
+            .expect("replacement participant");
+        assert!(model.is_compiling);
+        assert!(!model.is_compiled);
+        assert!(model.variables.is_empty());
+        assert!(app.world().resource::<SimSampleStream>().batches.is_empty());
+    }
+}

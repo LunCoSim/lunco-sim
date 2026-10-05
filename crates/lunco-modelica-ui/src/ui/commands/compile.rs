@@ -647,7 +647,10 @@ pub fn on_compile_model(
 ) {
     let request = trigger.event();
     let doc = if request.doc_id.is_unassigned() {
-        let Some(active) = workspace.and_then(|workspace| workspace.active_document) else {
+        let Some(active) = workspace
+            .as_ref()
+            .and_then(|workspace| workspace.active_document)
+        else {
             console.error("Compile failed: no active Modelica document".to_owned());
             return;
         };
@@ -714,8 +717,19 @@ pub fn on_compile_model(
         console.error(message);
         return;
     };
-    requests.write(lunco_modelica_runtime::CompileRequested {
+    let source = match lunco_workspace::PinnedDocumentRuntimeOwner::for_document(
         doc,
+        workspace.as_deref().map(|workspace| &workspace.0),
+    ) {
+        Ok(source) => source,
+        Err(error) => {
+            compile_states.set_error_message(doc, error.clone());
+            console.error(error);
+            return;
+        }
+    };
+    requests.write(lunco_modelica_runtime::CompileRequested {
+        source,
         entity: None,
         class: Some(model_name),
         force: request.force,
@@ -1042,7 +1056,7 @@ fn dispatch_experiment(
         let Some(doc) = resolve_doc_or_active(world, raw) else {
             return Err("no active Modelica document".to_owned());
         };
-        let attribution = match lunco_modelica_runner::ExperimentSource::for_document(
+        let attribution = match lunco_workspace::PinnedDocumentRuntimeOwner::for_document(
             doc,
             world
                 .get_resource::<lunco_workspace::WorkspaceResource>()
@@ -1051,6 +1065,15 @@ fn dispatch_experiment(
             Ok(source) => source,
             Err(message) => return Err(message),
         };
+        let replication = lunco_core_session::current_replication_owner_in(world);
+        if !attribution.is_current(
+            world
+                .get_resource::<lunco_workspace::WorkspaceResource>()
+                .map(|workspace| &workspace.0),
+            replication.as_ref(),
+        ) {
+            return Err("experiment source runtime has retired".into());
+        }
 
         // Resolve source + target class. Mirrors `on_compile_model`
         // class resolution: drilled-in class > picker (when ambiguous)
@@ -1199,7 +1222,7 @@ fn dispatch_experiment(
             source,
             filename,
             extras,
-            runtime_twin: attribution.runtime_twin,
+            runtime: attribution.runtime.clone(),
         };
 
         // Bounds use the current document AST and draft through the shared
@@ -1255,18 +1278,29 @@ fn dispatch_experiment(
         // doc so multi-tab workflows keep run histories separate
         // (Model A's runs ≠ Model B's runs).
         let twin_id = crate::ui::doc_pin::twin_id_for_doc(doc);
-        let exp_id = {
-            let mut reg = world.resource_mut::<lunco_experiments::ExperimentRegistry>();
-            let id = reg.insert_new(twin_id, model_ref, overrides, inputs, bounds);
-            // Apply a caller-supplied label so sweep rows are identifiable
-            // in ListRuns (e.g. "Isp=300") instead of the auto "Run N".
-            if let Some(name) = label {
-                if let Some(e) = reg.get_mut(id) {
-                    e.name = name;
+        let origin = lunco_experiments::ExperimentOrigin::LocalDocument(attribution);
+        let exp_id = world.resource_scope(
+            |world, mut origins: Mut<lunco_experiments::ExperimentOrigins>| {
+                let mut reg = world.resource_mut::<lunco_experiments::ExperimentRegistry>();
+                let id = origins.insert_new(
+                    &mut reg,
+                    origin.clone(),
+                    twin_id,
+                    model_ref,
+                    overrides,
+                    inputs,
+                    bounds,
+                );
+                // Apply a caller-supplied label so sweep rows are identifiable
+                // in ListRuns (e.g. "Isp=300") instead of the auto "Run N".
+                if let Some(name) = label {
+                    if let Some(e) = reg.get_mut(id) {
+                        e.name = name;
+                    }
                 }
-            }
-            id
-        };
+                id
+            },
+        );
         let exp = world
             .resource::<lunco_experiments::ExperimentRegistry>()
             .get(exp_id)
@@ -1285,18 +1319,13 @@ fn dispatch_experiment(
             crate::experiment_journal::record_create(&journal, &exp);
         }
 
-        // Pin the source and its runtime owner before work can publish results.
-        world
-            .resource_mut::<lunco_modelica_runner::ExperimentSources>()
-            .0
-            .insert(exp_id, attribution);
         let handle = runner_res.0.run_fast(&exp, source_snapshot);
         // Store the handle so a draining system can pump updates into
         // registry status.
         world
             .resource_mut::<lunco_modelica_runner::PendingHandles>()
             .0
-            .push(handle);
+            .push(lunco_modelica_runner::PendingRun { handle, origin });
         // Mark the run Queued. The scheduler may start it immediately (then
         // its first progress update flips it to Running via
         // drain_pending_handles) or hold it behind the concurrency cap, in

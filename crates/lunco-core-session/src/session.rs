@@ -546,12 +546,13 @@ pub struct NetSpawn {
     pub rotation: DQuat,
 }
 
-/// Lifetime that admits replicated scene and document state. Application is
-/// valid only for a world without an active Twin or scene.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ReplicationScope {
-    Application,
-    Twin(lunco_workspace::TwinId),
+pub use lunco_workspace::{ReplicatedSceneOwner, ReplicationOwner, ReplicationScope};
+
+/// Exact replicated lifetime retired by its scene or transport owner.
+/// Consumers cancel only work admitted under this immutable owner snapshot.
+#[derive(Event, Clone, Debug)]
+pub struct ReplicationOwnerRetired {
+    pub owner: ReplicationOwner,
 }
 
 /// Exact ECS lifetime of the current client transport. Entity generations
@@ -559,19 +560,32 @@ pub enum ReplicationScope {
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClientConnection(pub Option<Entity>);
 
-/// The remote Twin mount admitted to the local scene. The host's mount ID is
-/// an internal typed Twin ID; transport adapters serialize its raw value.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReplicatedSceneOwner {
-    pub connection: Entity,
-    pub host_twin: lunco_workspace::TwinId,
-    pub authority: String,
-    pub root: std::path::PathBuf,
-    pub owns_mount: bool,
-}
-
 #[derive(Resource, Default, Clone, Debug)]
 pub struct ReplicatedScene(pub Option<ReplicatedSceneOwner>);
+
+/// Current admitted client lifetime, read from the existing session resources.
+/// A stale mount cannot authorize work after its exact transport is replaced.
+pub fn current_replication_owner(
+    connection: Option<&ClientConnection>,
+    scene: Option<&ReplicatedScene>,
+) -> Option<ReplicationOwner> {
+    let connection = connection?.0?;
+    match scene.and_then(|scene| scene.0.as_ref()) {
+        Some(scene) if scene.connection == connection => Some(ReplicationOwner::Twin {
+            scene: scene.clone(),
+        }),
+        Some(_) => None,
+        None => Some(ReplicationOwner::Application { connection }),
+    }
+}
+
+/// World adapter for owner consumers outside ECS parameter systems.
+pub fn current_replication_owner_in(world: &World) -> Option<ReplicationOwner> {
+    current_replication_owner(
+        world.get_resource::<ClientConnection>(),
+        world.get_resource::<ReplicatedScene>(),
+    )
+}
 
 /// One replicated spawn the host told us to instantiate locally, pinned to the
 /// host-allocated `gid` (M1 content-reconstruction: geometry loads locally,

@@ -11,6 +11,7 @@ anyhow = { workspace = true }
 bevy.workspace = true
 crossbeam-channel = { workspace = true }
 lunco-doc = { path = "../lunco-doc" }
+lunco-workspace = { path = "../lunco-workspace" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-engineering-values = { path = "../lunco-engineering-values" }
 lunco-signal = { path = "../lunco-signal" }

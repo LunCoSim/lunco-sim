@@ -2309,14 +2309,15 @@ fn load_run_into_draft(
     id: ExperimentId,
 ) -> Result<(DocumentId, lunco_experiments::ModelRef), String> {
     let source = world
-        .get_resource::<lunco_modelica_runner::ExperimentSources>()
-        .and_then(|sources| sources.0.get(&id))
-        .copied()
+        .get_resource::<lunco_experiments::ExperimentOrigins>()
+        .and_then(|sources| sources.local_document(&id))
+        .cloned()
         .ok_or_else(|| format!("experiment {id:?} has no source attribution"))?;
     let workspace = world
         .get_resource::<lunco_workspace::WorkspaceResource>()
         .map(|workspace| &workspace.0);
-    if !source.is_in_active_scope(workspace) {
+    let replication = lunco_core_session::current_replication_owner_in(world);
+    if !source.is_in_active_scope(workspace, replication.as_ref()) {
         return Err(format!(
             "experiment {id:?} no longer belongs to the active document owner scope"
         ));

@@ -37,8 +37,8 @@ live in the Workspace. A Twin doesn't own a list; it answers "does
 this document belong to me?" by checking whether the doc's storage
 handle lies under its folder (or has been context-pinned to it while
 Untitled). Opening an Untitled scratch doc while the Rover Twin is
-active puts the doc in the Workspace with `context_twin =
-Some(rover_id)`; on Save into `rover-twin/models/`, path ownership
+active puts the doc in the Workspace with
+`runtime_context = DocumentRuntimeOwner::LocalTwin(rover_id)`; on Save into `rover-twin/models/`, path ownership
 takes over and the pin becomes irrelevant. One code path, no
 ceremonial moves.
 
@@ -52,7 +52,7 @@ ceremonial moves.
   struct.
 - **`TwinId(u64)`** — Workspace-minted stable id. `0` is the
   "unassigned" sentinel; actual ids start at 1.
-- **`DocumentEntry`** — `{ id, kind, origin, context_twin, title, dirty }`.
+- **`DocumentEntry`** — `{ id, kind, origin, runtime_context, title, dirty }`.
   Workspace-level metadata only; the parsed source + ops + undo stack
   live in generic domain registries (e.g. `DocumentRegistry<ModelicaDocument>`).
   Domain
@@ -70,9 +70,10 @@ When asked "which Twin claims this doc?":
    registered Twin's folder, return the **deepest** matching Twin
    (sub-Twins win over the enclosing Twin — matches the "nearest
    `twin.toml`" rule).
-2. Otherwise, if the doc is `Untitled { context: Some(id) }`, return
-   that pinned Twin.
-3. Otherwise, the doc is **loose** — shown under a "Loose" group in
+2. Otherwise, a `LocalTwin(id)` runtime context returns that pinned Twin.
+3. An explicit replicated context retains its exact connection, host mount,
+   authority, and root. It does not fabricate a local Workspace Twin id.
+4. An application context is **loose** — shown under a "Loose" group in
    the Twin Browser.
 
 ```rust
@@ -84,12 +85,18 @@ match workspace.twin_for(entry) {
 
 ## Save flow uses the Workspace for defaults
 
-`Save As` on an Untitled with `context_twin = Some(id)` pre-fills the
+`Save As` on an Untitled with a `LocalTwin(id)` runtime context pre-fills the
 picker at that Twin's folder root, so scratch docs land inside the
 project the user is working on without them having to navigate. After
 the save, the doc's origin becomes `File { path, writable: true }`
-and the `context_twin` pin becomes advisory (path ownership is
-stronger).
+and the local runtime context becomes advisory (path ownership is stronger).
+
+`PinnedDocumentRuntimeOwner` captures document identity and one exact
+`DocumentRuntimeOwner` when work is admitted. Workspace owns document context
+and local Twin lenses; core-session supplies current replicated lifetime facts
+from its existing connection and scene resources. Every reader validates the
+pin before consuming async results. A retained document does not transfer
+already admitted work to a new owner when its scene closes or is replaced.
 
 ## What's not here
 

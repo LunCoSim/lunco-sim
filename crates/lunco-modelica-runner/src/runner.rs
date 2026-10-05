@@ -57,7 +57,7 @@ pub struct ModelSource {
     pub source: String,
     pub filename: String,
     pub extras: Vec<(String, String)>,
-    pub runtime_twin: Option<lunco_workspace::TwinId>,
+    pub runtime: lunco_workspace::DocumentRuntimeOwner,
 }
 
 /// Platform default for the number of runs allowed to execute
@@ -183,7 +183,7 @@ type ModelIdent = (String, String);
 #[cfg(not(target_arch = "wasm32"))]
 struct CachedDae {
     model: ModelIdent,
-    runtime_twin: Option<lunco_workspace::TwinId>,
+    runtime: lunco_workspace::DocumentRuntimeOwner,
     dae: Arc<Dae>,
 }
 
@@ -203,12 +203,12 @@ fn publish_cached_dae(
     let model = (source.model_name.clone(), source.filename.clone());
     state
         .dae_cache
-        .retain(|_, entry| entry.model != model || entry.runtime_twin != source.runtime_twin);
+        .retain(|_, entry| entry.model != model || entry.runtime != source.runtime);
     state.dae_cache.insert(
         key,
         CachedDae {
             model,
-            runtime_twin: source.runtime_twin,
+            runtime: source.runtime.clone(),
             dae,
         },
     );
@@ -294,12 +294,13 @@ impl ModelicaRunner {
 
     /// Release this runtime owner's compiled snapshots after its runs cancel.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn retire_twin_cache(&self, twin: lunco_workspace::TwinId) -> Result<(), String> {
+    pub fn retire_runtime_cache(
+        &self,
+        owner: &lunco_workspace::DocumentRuntimeOwner,
+    ) -> Result<(), String> {
         let mut state =
             lock_runner_state(&self.state).map_err(|_| POISONED_RUNNER_STATE.to_owned())?;
-        state
-            .dae_cache
-            .retain(|_, entry| entry.runtime_twin != Some(twin));
+        state.dae_cache.retain(|_, entry| &entry.runtime != owner);
         Ok(())
     }
 
@@ -696,7 +697,7 @@ pub fn pump_wasm_forwarders() {
 #[cfg(not(target_arch = "wasm32"))]
 fn dae_cache_key(src: &ModelSource) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    src.runtime_twin.hash(&mut h);
+    src.runtime.hash(&mut h);
     src.model_name.hash(&mut h);
     src.filename.hash(&mut h);
     src.source.hash(&mut h);
@@ -1775,62 +1776,19 @@ impl ExperimentDrafts {
 /// Drained each Update by [`drain_pending_handles`]: terminal updates
 /// get written back into the registry + emitted as Bevy messages.
 #[derive(Resource, Default)]
-pub struct PendingHandles(pub Vec<RunHandle>);
+pub struct PendingHandles(pub Vec<PendingRun>);
 
-/// Source document and mounted runtime owner pinned at run admission.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExperimentSource {
-    pub document: lunco_doc::DocumentId,
-    /// Exact mounted Twin at admission; `None` is an application-owned run.
-    pub runtime_twin: Option<lunco_workspace::TwinId>,
+/// Immutable ownership envelope for an admitted asynchronous handle.
+pub struct PendingRun {
+    pub handle: RunHandle,
+    pub origin: lunco_experiments::ExperimentOrigin,
 }
-
-impl ExperimentSource {
-    /// Pin ownership from the workspace's document authority, independently
-    /// of the experiment registry's display/history grouping key.
-    pub fn for_document(
-        document: lunco_doc::DocumentId,
-        workspace: Option<&lunco_workspace::Workspace>,
-    ) -> Result<Self, String> {
-        let runtime_twin = match workspace {
-            Some(workspace) => {
-                let entry = workspace.document(document).ok_or_else(|| {
-                    format!("experiment document {document} is not registered in the workspace")
-                })?;
-                let twin = workspace.twin_for(entry);
-                if twin.is_some_and(|id| workspace.twin(id).is_none()) {
-                    return Err(format!(
-                        "experiment document {document} has a closed Twin context"
-                    ));
-                }
-                twin
-            }
-            None => None,
-        };
-        Ok(Self {
-            document,
-            runtime_twin,
-        })
-    }
-
-    /// Whether automatic UI publication still belongs to the current scope.
-    pub fn is_in_active_scope(&self, workspace: Option<&lunco_workspace::Workspace>) -> bool {
-        match workspace {
-            Some(workspace) => workspace.document(self.document).is_some_and(|entry| {
-                workspace.twin_for(entry) == self.runtime_twin
-                    && self
-                        .runtime_twin
-                        .is_none_or(|id| workspace.twin(id).is_some())
-                    && workspace.document_is_in_active_scope(entry)
-            }),
-            None => self.runtime_twin.is_none(),
-        }
+impl std::ops::Deref for PendingRun {
+    type Target = RunHandle;
+    fn deref(&self) -> &RunHandle {
+        &self.handle
     }
 }
-
-/// Retained run attribution follows the bounded experiment registry's lifetime.
-#[derive(Resource, Default)]
-pub struct ExperimentSources(pub std::collections::HashMap<ExperimentId, ExperimentSource>);
 
 /// Per-document playback entity: holds the latest completed run's
 /// time-series in `SignalRegistry` so canvas plot tiles can resolve
@@ -1852,18 +1810,20 @@ pub struct PlaybackEntities(
 pub fn drain_pending_handles(
     mut pending: ResMut<PendingHandles>,
     mut registry: ResMut<ExperimentRegistry>,
+    origins: Res<lunco_experiments::ExperimentOrigins>,
     mut ev_progress: MessageWriter<RunProgress>,
     mut ev_completed: MessageWriter<RunCompleted>,
     mut ev_failed: MessageWriter<RunFailed>,
     mut ev_cancelled: MessageWriter<RunCancelled>,
 ) {
-    let mut keep: Vec<RunHandle> = Vec::with_capacity(pending.0.len());
+    let mut keep: Vec<PendingRun> = Vec::with_capacity(pending.0.len());
     for handle in pending.0.drain(..) {
         // Owner cancellation/deletion is terminal even if a worker already
         // queued progress or completion before observing its cancel flag.
-        if registry
-            .get(handle.run_id)
-            .is_none_or(|run| run.status.is_terminal())
+        if origins.get(&handle.run_id) != Some(&handle.origin)
+            || registry
+                .get(handle.run_id)
+                .is_none_or(|run| run.status.is_terminal())
         {
             handle.cancel();
             continue;
@@ -1886,6 +1846,7 @@ pub fn drain_pending_handles(
                     }
                     ev_progress.write(RunProgress {
                         experiment_id: handle.run_id,
+                        origin: handle.origin.clone(),
                         t_current,
                     });
                 }
@@ -1909,6 +1870,7 @@ pub fn drain_pending_handles(
                     registry.set_status(handle.run_id, RunStatus::Done { wall_time_ms: wall });
                     ev_completed.write(RunCompleted {
                         experiment_id: handle.run_id,
+                        origin: handle.origin.clone(),
                     });
                     terminal = true;
                 }
@@ -1927,6 +1889,7 @@ pub fn drain_pending_handles(
                     );
                     ev_failed.write(RunFailed {
                         experiment_id: handle.run_id,
+                        origin: handle.origin.clone(),
                         error,
                     });
                     terminal = true;
@@ -1935,6 +1898,7 @@ pub fn drain_pending_handles(
                     registry.set_status(handle.run_id, RunStatus::Cancelled);
                     ev_cancelled.write(RunCancelled {
                         experiment_id: handle.run_id,
+                        origin: handle.origin.clone(),
                     });
                     terminal = true;
                 }
@@ -2019,7 +1983,7 @@ mod tests {
             source: "model".to_owned(),
             filename: format!("{model}.mo"),
             extras: Vec::new(),
-            runtime_twin: None,
+            runtime: lunco_workspace::DocumentRuntimeOwner::Application,
         }
     }
 
@@ -2082,22 +2046,24 @@ mod tests {
         let b = mint_exp(&mut registry, "SameName");
         let mut first = test_source("SameName");
         first.source = "first admitted source".into();
-        first.runtime_twin = Some(lunco_workspace::TwinId::new(1));
+        first.runtime =
+            lunco_workspace::DocumentRuntimeOwner::LocalTwin(lunco_workspace::TwinId::new(1));
         let mut second = first.clone();
         second.source = "second admitted source".into();
-        second.runtime_twin = Some(lunco_workspace::TwinId::new(2));
+        second.runtime =
+            lunco_workspace::DocumentRuntimeOwner::LocalTwin(lunco_workspace::TwinId::new(2));
         let ah = runner.run_fast(&a, first);
         let bh = runner.run_fast(&b, second);
         {
             let state = runner.state.lock().expect("state");
             assert_eq!(state.pending[0].source.source, "first admitted source");
             assert_eq!(
-                state.pending[0].source.runtime_twin,
+                state.pending[0].source.runtime.local_twin(),
                 Some(lunco_workspace::TwinId::new(1))
             );
             assert_eq!(state.pending[1].source.source, "second admitted source");
             assert_eq!(
-                state.pending[1].source.runtime_twin,
+                state.pending[1].source.runtime.local_twin(),
                 Some(lunco_workspace::TwinId::new(2))
             );
         }
@@ -2113,9 +2079,10 @@ mod tests {
         let twin = lunco_workspace::TwinId::new(1);
         let mut source = test_source("CacheProbe");
         let mut owned = source.clone();
-        owned.runtime_twin = Some(twin);
+        owned.runtime = lunco_workspace::DocumentRuntimeOwner::LocalTwin(twin);
         let mut other = source.clone();
-        other.runtime_twin = Some(lunco_workspace::TwinId::new(2));
+        other.runtime =
+            lunco_workspace::DocumentRuntimeOwner::LocalTwin(lunco_workspace::TwinId::new(2));
         let cancel = AtomicBool::new(false);
         for input in [&source, &owned, &other] {
             publish_cached_dae(
@@ -2128,7 +2095,9 @@ mod tests {
         }
         assert_eq!(runner.state.lock().expect("state").dae_cache.len(), 3);
         cancel.store(true, Ordering::SeqCst);
-        runner.retire_twin_cache(twin).expect("cache retirement");
+        runner
+            .retire_runtime_cache(&lunco_workspace::DocumentRuntimeOwner::LocalTwin(twin))
+            .expect("cache retirement");
         {
             let mut state = runner.state.lock().expect("state");
             publish_cached_dae(
@@ -2290,29 +2259,42 @@ mod tests {
         let loose = lunco_doc::DocumentId::new(1);
         let retired = lunco_doc::DocumentId::new(2);
         let closed_twin = lunco_workspace::TwinId::new(1);
-        for (id, context_twin) in [(loose, None), (retired, Some(closed_twin))] {
+        for (id, local_twin) in [(loose, None), (retired, Some(closed_twin))] {
             workspace.add_document(lunco_workspace::DocumentEntry {
                 id,
                 kind: lunco_workspace::DocumentKindId::new("modelica"),
                 origin: lunco_doc::DocumentOrigin::untitled("OwnershipProbe"),
-                context_twin,
+                runtime_context: local_twin.map_or(
+                    lunco_workspace::DocumentRuntimeOwner::Application,
+                    lunco_workspace::DocumentRuntimeOwner::LocalTwin,
+                ),
                 title: "OwnershipProbe".to_owned(),
                 dirty: false,
             });
         }
         let source =
-            ExperimentSource::for_document(loose, Some(&workspace)).expect("loose document");
-        assert_eq!(source.runtime_twin, None);
-        assert!(source.is_in_active_scope(Some(&workspace)));
-        let outgoing = ExperimentSource {
+            lunco_workspace::PinnedDocumentRuntimeOwner::for_document(loose, Some(&workspace))
+                .expect("loose document");
+        assert_eq!(
+            source.runtime,
+            lunco_workspace::DocumentRuntimeOwner::Application
+        );
+        assert!(source.is_in_active_scope(Some(&workspace), None));
+        let outgoing = lunco_workspace::PinnedDocumentRuntimeOwner {
             document: retired,
-            runtime_twin: Some(closed_twin),
+            runtime: lunco_workspace::DocumentRuntimeOwner::LocalTwin(closed_twin),
         };
-        assert!(!outgoing.is_in_active_scope(Some(&workspace)));
-        assert!(ExperimentSource::for_document(retired, Some(&workspace)).is_err());
+        assert!(!outgoing.is_in_active_scope(Some(&workspace), None));
         assert!(
-            ExperimentSource::for_document(lunco_doc::DocumentId::new(3), Some(&workspace))
+            lunco_workspace::PinnedDocumentRuntimeOwner::for_document(retired, Some(&workspace))
                 .is_err()
+        );
+        assert!(
+            lunco_workspace::PinnedDocumentRuntimeOwner::for_document(
+                lunco_doc::DocumentId::new(3),
+                Some(&workspace)
+            )
+            .is_err()
         );
     }
 
@@ -2377,18 +2359,38 @@ mod tests {
         let (connected_tx, connected_rx) = unbounded();
         let (disconnected_tx, disconnected_rx) = unbounded::<RunUpdate>();
         drop(disconnected_tx);
+        let mut origins = lunco_experiments::ExperimentOrigins::default();
+        let mut admitted = ExperimentRegistry::new();
+        let origin = lunco_experiments::ExperimentOrigin::LocalDocument(
+            lunco_workspace::PinnedDocumentRuntimeOwner {
+                document: lunco_doc::DocumentId::new(1),
+                runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+            },
+        );
+        for exp in registry.iter_all() {
+            origins
+                .import(&mut admitted, origin.clone(), exp.clone())
+                .expect("admitted fixture");
+        }
         let mut app = App::new();
-        app.insert_resource(registry)
+        app.insert_resource(admitted)
+            .insert_resource(origins)
             .insert_resource(PendingHandles(vec![
-                RunHandle {
-                    run_id: connected.id,
-                    progress_rx: connected_rx,
-                    cancel: Box::new(|| {}),
+                PendingRun {
+                    origin: origin.clone(),
+                    handle: RunHandle {
+                        run_id: connected.id,
+                        progress_rx: connected_rx,
+                        cancel: Box::new(|| {}),
+                    },
                 },
-                RunHandle {
-                    run_id: disconnected.id,
-                    progress_rx: disconnected_rx,
-                    cancel: Box::new(|| {}),
+                PendingRun {
+                    origin,
+                    handle: RunHandle {
+                        run_id: disconnected.id,
+                        progress_rx: disconnected_rx,
+                        cancel: Box::new(|| {}),
+                    },
                 },
             ]))
             .add_message::<RunProgress>()
@@ -2456,7 +2458,7 @@ mod tests {
             source: "model M Real x = 1; end M;".into(),
             filename: "M.mo".into(),
             extras: vec![],
-            runtime_twin: None,
+            runtime: lunco_workspace::DocumentRuntimeOwner::Application,
         };
 
         // Identical input → identical key (the cache must still HIT on a re-run

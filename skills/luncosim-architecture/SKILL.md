@@ -230,8 +230,8 @@ readiness separate from the shared `SimulationProgress` lifecycle gate.
 First-compile intent is admitted by `request_modelica_compiles` in the lifecycle
 cycle while solver stepping stays in `FixedUpdate`, so compilation can be
 requested while virtual simulation time is held. The Modelica execution owner
-consumes typed `CompileRequested` intent and owns document resolution and
-worker dispatch; the UI command only chooses the class and publishes intent.
+consumes typed `CompileRequested` intent, validates its pinned document runtime
+lifetime, and owns same-owner source gathering and worker dispatch; the UI command only chooses the class and publishes intent.
 On native, source-root installation, compile requests, Reset, parameter updates,
 and cache-invalidating Step auto-init share one single-owner Rumoca actor FIFO.
 Results return asynchronously and commit in submission order; actor requests

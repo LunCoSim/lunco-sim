@@ -366,10 +366,14 @@ completed numeric result. Retain that id, poll `RunStatus` with it, and read the
 trajectory with `GetExperimentResult` using the same id. Do not identify a run
 by its label or by whichever run is newest.
 
-Runs pin the source document's runtime Twin at admission. Closing that Twin
+Runs capture their exact `ExperimentOrigin` at admission: a pinned local document
+runtime lifetime or an authenticated replicated connection/mount. Presentation
+grouping never determines ownership. Definition replay under another origin
+rejects before mutation; same-origin replay preserves terminal history. Closing that Twin
 cancels unfinished runs and retires late updates and playback signals; completed
 results stay queryable within the bounded history. Loose-document runs have
-application lifetime. A completion from an inactive Twin cannot automatically
+application lifetime. A completion must match its immutable pending-handle origin before registry
+publication. A completion from an inactive Twin cannot automatically
 select the replacement Twin's plot, and a different pinned experiments document
 cannot receive its automatic plot selection. Registry deletion and bounded
 eviction also remove the retained document/owner attribution and plot visibility.
