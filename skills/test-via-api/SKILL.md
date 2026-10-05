@@ -457,6 +457,9 @@ scene tree or a fire-and-forget command acknowledgement as a running model.
 
 ## Diagnosing common failures
 
+- **Non-Unicode native CLI arguments**: the process rejects them with exit code
+  2 before startup. Use the storage-owned file URI conversion when a native
+  filesystem address must cross a Unicode command boundary.
 - **"0 nodes 0 edges" after drill-in**: the target class resolved but
   conversion dropped nodes. Check:
   1. `InspectActiveDoc` → are the components really there in the AST?

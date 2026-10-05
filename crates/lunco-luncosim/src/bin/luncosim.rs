@@ -7,6 +7,11 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> lunco_luncosim_core::AppExit {
+    #[cfg(not(target_family = "wasm"))]
+    if std::env::args_os().any(|argument| argument.to_str().is_none()) {
+        eprintln!("luncosim: command-line arguments must be valid Unicode");
+        std::process::exit(2);
+    }
     // The updater package owns the Velopack process hook. It must see the original
     // process before CLI dispatch. It does not perform the GitHub update check;
     // that remains an explicit native GUI operation in the Updates menu.

@@ -48,6 +48,11 @@ ordinary temporary directories; they do not require Windows symlink privileges
 or exercise Windows junction escape behavior. Unix test results alone are not
 Windows execution evidence.
 
+The native process entry point validates OS arguments before Unicode CLI
+dispatch or updater initialization. A non-Unicode argument returns exit code 2
+with a diagnostic instead of panicking inside `std::env::args`. Native file
+URI decoding remains the storage-owned filesystem boundary.
+
 ---
 
 ## Why the policy exists
