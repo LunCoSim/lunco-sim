@@ -292,7 +292,7 @@ Successful fire-and-forget response: `{"data":{"accepted":true}}`. A result-retu
 
 ### Loading a scene or model
 
-Two commands, two different argument types, and mixing them up is a silent no-op:
+Choose the command that owns the address type and check its result:
 
 | command | takes | notes |
 |---|---|---|
@@ -310,8 +310,9 @@ are refused with
 [scene] `…` is not a root-qualified scene address — LoadScene takes `lunco://…` or `twin://…`
 ```
 
-and the load is a no-op — the currently mounted scene remains active. Read the
-status bar or query the active scene before trusting a screenshot. Use `OpenFile`
+The command returns a terminal rejection before admission; the currently mounted
+scene remains active. Read the command result and query the active scene before
+trusting a screenshot. Use `OpenFile`
 for a filesystem path; it resolves the workspace layer and preserves the
 document-first mounting contract.
 
