@@ -145,6 +145,30 @@ root. These conversions belong to the asset owner. Load addresses and script
 import registry keys retain their mount lifetime instead of being normalized
 to a reusable logical name.
 
+### Native payload and source admission
+
+Native USD composition uses standard `file:` URIs. Bevy does not register a
+filesystem source: `lunco_assets_core::asset_path::load_asset_path` decodes a
+native reference through `lunco-storage` and maps it to a typed `AssetPath`
+inside the originating stage's exact live Twin mount. The stage's
+`AssetServer` path supplies that lifetime authority; a manifest name or native
+recipe root cannot replace it. Missing, unknown, retired, and non-Twin origins,
+or native paths outside the admitted root, reject the owning operation.
+
+This adapter performs no filesystem I/O during projection. The storage URI
+conversion normalizes native Windows drive/UNC and canonical verbatim-root
+spellings; the asynchronous Twin reader owns filesystem and symlink validation.
+The shared USD `resolve_stage_asset_path` returns `Result<AssetPath>` and all
+binary, material, dome, scenario, and policy consumers keep that typed value
+through `AssetServer::load`. A binary's glTF label is attached with
+`AssetPath::with_label`, separately from the filename, so encoded `#`, `%`,
+spaces, and Unicode remain filesystem characters. `EmbeddedScenarioPath` and
+pending policy source keys carry the same typed address. Rhai import loading
+uses the existing script-source canonical path/extension rule and this typed
+asset adapter; filesystem `#` is never reparsed as an asset label. Interpreter
+and prepared-module registry identities remain opaque string keys. Invalid live material
+or dome replacements report the error and retain the previous valid intent.
+
 ### 4. One mount path, always doc-first
 
 ```

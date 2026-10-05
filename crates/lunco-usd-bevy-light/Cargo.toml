@@ -6,6 +6,7 @@ license.workspace = true
 description = "USD light and dome projection for Bevy"
 
 [dependencies]
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_light", "hdr", "ktx2", "zstd_rust"] }
 half = "2"

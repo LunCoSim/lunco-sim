@@ -79,7 +79,7 @@ impl AssetLoader for RhaiSourceLoader {
         reader.read_to_end(&mut bytes).await?;
         let text = String::from_utf8(bytes)?;
         let importer = canonical_asset_id(load_context.path());
-        let dependencies = load_import_dependencies(&text, &importer, load_context)?;
+        let dependencies = load_import_dependencies(&text, load_context)?;
         #[cfg(not(target_arch = "wasm32"))]
         let (text, ast) = AsyncComputeTaskPool::get()
             .spawn(async move { compile_rhai_source(text, importer) })
@@ -113,32 +113,39 @@ fn compile_rhai_source(
 #[cfg(feature = "rhai")]
 fn load_import_dependencies(
     source: &str,
-    importer: &str,
     load_context: &mut LoadContext<'_>,
 ) -> Result<Vec<Handle<RhaiSource>>, anyhow::Error> {
-    import_dependency_ids(source, importer).map(|ids| {
-        ids.into_iter()
-            .map(|id| load_context.load(AssetPath::parse(&id).into_owned()))
-            .collect()
-    })
+    let paths = import_dependency_paths(source, load_context.path())?;
+    Ok(paths
+        .into_iter()
+        .map(|path| load_context.load(path))
+        .collect())
 }
 
 #[cfg(feature = "rhai")]
-fn import_dependency_ids(source: &str, importer: &str) -> Result<Vec<String>, anyhow::Error> {
-    lunco_scripting_rhai_core::module_resolver::imported_paths(source)
-        .map_err(|error| anyhow::anyhow!("cannot inspect Rhai imports in {importer}: {error}"))
-        .map(|paths| {
-            paths
-                .into_iter()
-                .map(|path| {
-                    lunco_assets_runtime::script_source::ScriptSources::canonical_id(
-                        &path,
-                        Some(importer),
-                        "rhai",
-                    )
-                })
-                .collect()
+fn import_dependency_paths(
+    source: &str,
+    origin: &AssetPath<'_>,
+) -> Result<Vec<AssetPath<'static>>, anyhow::Error> {
+    let importer = canonical_asset_id(origin);
+    let paths = lunco_scripting_rhai_core::module_resolver::imported_paths(source)
+        .map_err(|error| anyhow::anyhow!("cannot inspect Rhai imports in {importer}: {error}"))?;
+    paths
+        .into_iter()
+        .map(|path| {
+            let canonical = lunco_assets_runtime::script_source::ScriptSources::canonical_id(
+                &path,
+                Some(&importer),
+                "rhai",
+            );
+            // The script owner has already resolved the complete source path,
+            // including its root-relative/default-source rule and extension. Hand
+            // that reference to the asset owner without applying a second anchor;
+            // filenames are paths, while interpreter/cache identities remain keys.
+            lunco_assets_core::asset_path::load_asset_path(&canonical, None, None)
+                .map_err(anyhow::Error::from)
         })
+        .collect()
 }
 
 /// Handles for application-owned Rhai sources selected by the authored startup
@@ -525,12 +532,34 @@ mod tests {
     #[test]
     fn imported_assets_use_the_importers_canonical_source() {
         assert_eq!(
-            import_dependency_ids(
+            import_dependency_paths(
                 r#"import "helpers" as helpers; import "/scripting/lib/shots" as shots;"#,
-                "twin://mission/main.rhai",
+                &AssetPath::parse("twin://mission/main.rhai"),
             )
             .unwrap(),
-            ["twin://mission/helpers.rhai", "scripting/lib/shots.rhai"]
+            [
+                AssetPath::parse("twin://mission/helpers.rhai"),
+                AssetPath::parse("scripting/lib/shots.rhai")
+            ]
+        );
+    }
+    #[test]
+    fn imported_assets_preserve_source_parent_and_filename_characters() {
+        let origin =
+            AssetPath::from_path_buf(std::path::PathBuf::from("mission/# 100% 月/main.rhai"))
+                .with_source(lunco_assets_core::TWIN_SCHEME);
+        let paths = import_dependency_paths(r##"import "helpers#%" as helpers;"##, &origin)
+            .expect("literal import");
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].source(), origin.source());
+        assert_eq!(
+            paths[0].path(),
+            std::path::Path::new("mission/# 100% 月/helpers#%.rhai")
+        );
+        assert_eq!(paths[0].label(), None);
+        assert_eq!(
+            canonical_asset_id(&paths[0]),
+            "twin://mission/# 100% 月/helpers#%.rhai"
         );
     }
 }

@@ -855,6 +855,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             } else {
                 light::LightProjectionScope::Scene
             },
+            twin_roots,
         );
 
         // UsdGeomCamera (`def Camera`) → camera intent (see `camera.rs`). The
@@ -1136,6 +1137,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 &mut commands.entity(entity),
                 asset_server,
                 prim_path.stage_handle.id(),
+                twin_roots,
             )
         } else if mesh_pending || is_procedural_terrain_visual_owner(reader, &sdf_path) {
             // DEM terrain is projected as an Xform and receives its mesh later from
@@ -1148,6 +1150,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 &mut commands.entity(entity),
                 asset_server,
                 prim_path.stage_handle.id(),
+                twin_roots,
             )
         } else {
             Ok(())
@@ -1209,6 +1212,27 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         //   materials, and lights at the cost of being opaque to the
         //   USD prim-path tree.
         if let Some(asset_uri) = reader.binary_asset_uri(&sdf_path) {
+            let asset_path = match lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
+                asset_server,
+                prim_path.stage_handle.id(),
+                &asset_uri,
+                twin_roots,
+            ) {
+                Ok(path) => path,
+                Err(error) => {
+                    let message = format!("{} binary asset rejected: {error}", sdf_path.as_str());
+                    commands.entity(entity).try_insert((
+                        UsdSceneProjectionFailed(message.clone()),
+                        Visibility::Hidden,
+                    ));
+                    lunco_core::trigger_runtime_error(
+                        commands,
+                        "usd-visual-asset-resolution-failed",
+                        message,
+                    );
+                    return;
+                }
+            };
             let mode = reader
                 .text(&sdf_path, "lunco:assetMode")
                 .unwrap_or_else(|| "scene".to_string());
@@ -1217,8 +1241,8 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             match mode.as_str() {
                 "mesh" => {
                     let label = label.unwrap_or_else(|| "Mesh0/Primitive0".to_string());
-                    let path = format!("{asset_uri}#{label}");
-                    let mesh_h: Handle<Mesh> = asset_server.load(&path);
+                    let path = asset_path.clone().with_label(label);
+                    let mesh_h: Handle<Mesh> = asset_server.load(path.clone());
                     // Single-mesh path keeps `lunco-usd-avian` collider
                     // construction unchanged — the entity ends up with
                     // a `Mesh3d` exactly like the Cube/Sphere branches.
@@ -1229,6 +1253,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                         &mut commands.entity(entity),
                         asset_server,
                         prim_path.stage_handle.id(),
+                        twin_roots,
                     ) {
                         error!(
                             "[usd-bevy] {} has malformed authored material attribute `{}`; no PbrLook was created",
@@ -1239,8 +1264,8 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 }
                 _ => {
                     let label = label.unwrap_or_else(|| "Scene0".to_string());
-                    let path = format!("{asset_uri}#{label}");
-                    let scene_h: Handle<WorldAsset> = asset_server.load(&path);
+                    let path = asset_path.clone().with_label(label);
+                    let scene_h: Handle<WorldAsset> = asset_server.load(path.clone());
                     // Mark the entity so the diagnostics plugin can drop the
                     // placeholder Mesh3d once this Scene
                     // finishes loading. The marker is harmless if the
@@ -1250,7 +1275,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                         .entity(entity)
                         .try_insert(WorldAssetRoot(scene_h))
                         .try_insert(GlbPlaceholder)
-                        .try_insert(PlaceholderAssetUri(path));
+                        .try_insert(PlaceholderAssetUri(path.to_string()));
                 }
             }
         }
@@ -2782,6 +2807,7 @@ fn read_standard_material(
     sdf_path: &SdfPath,
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    twin_roots: Option<&lunco_assets_core::TwinRoots>,
 ) -> Result<PbrLook, MaterialReadError> {
     let mut base_color_texture = None;
     let mut emissive_texture = None;
@@ -2879,7 +2905,15 @@ fn read_standard_material(
                     asset_server,
                     stage_id,
                     &asset_path,
-                );
+                    twin_roots,
+                )
+                .map_err(|error| {
+                    error!(
+                        "[usd-bevy] {} texture `{input}` rejected: {error}",
+                        sdf_path.as_str()
+                    );
+                    MaterialReadError::new(input)
+                })?;
 
                 let is_srgb =
                     match read_material_token(reader, &texture_path, "inputs:sourceColorSpace")?
@@ -3133,8 +3167,9 @@ fn apply_standard_material(
     entity_cmd: &mut EntityCommands,
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    twin_roots: Option<&lunco_assets_core::TwinRoots>,
 ) -> Result<(), MaterialReadError> {
-    let look = read_standard_material(reader, sdf_path, asset_server, stage_id)?;
+    let look = read_standard_material(reader, sdf_path, asset_server, stage_id, twin_roots)?;
     entity_cmd.try_insert((Mesh3d(mesh_handle.clone()), look));
     Ok(())
 }
@@ -3150,8 +3185,9 @@ fn apply_standard_material_intent(
     entity_cmd: &mut EntityCommands,
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    twin_roots: Option<&lunco_assets_core::TwinRoots>,
 ) -> Result<(), MaterialReadError> {
-    let look = read_standard_material(reader, sdf_path, asset_server, stage_id)?;
+    let look = read_standard_material(reader, sdf_path, asset_server, stage_id, twin_roots)?;
     entity_cmd.try_insert(look);
     Ok(())
 }
@@ -3165,6 +3201,7 @@ fn refresh_standard_surface_material_intents(
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
     asset_server: Res<AssetServer>,
+    twin_roots: Option<Res<lunco_assets_core::TwinRoots>>,
     prims: Query<(
         Entity,
         &UsdPrimPath,
@@ -3236,7 +3273,13 @@ fn refresh_standard_surface_material_intents(
             let Some(target) = target else {
                 continue;
             };
-            match read_standard_material(&reader, &sdf_path, &asset_server, stage_id) {
+            match read_standard_material(
+                &reader,
+                &sdf_path,
+                &asset_server,
+                stage_id,
+                twin_roots.as_deref(),
+            ) {
                 Ok(look) if looks.get(target).is_ok_and(|current| *current == look) => {}
                 Ok(look) => {
                     commands.entity(target).insert(look);

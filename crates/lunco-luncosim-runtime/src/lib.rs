@@ -538,9 +538,11 @@ fn resolve_policy_source_file(
     path: &str,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     asset_server: &AssetServer,
+    twin_roots: Option<&lunco_assets_core::TwinRoots>,
+    live: &mut std::collections::HashSet<bevy::asset::AssetPath<'static>>,
     sources: Option<&Assets<lunco_scripting_rhai_world::source_asset::RhaiSource>>,
     pending: &mut std::collections::HashMap<
-        String,
+        bevy::asset::AssetPath<'static>,
         Handle<lunco_scripting_rhai_world::source_asset::RhaiSource>,
     >,
 ) -> PolicySource {
@@ -548,11 +550,22 @@ fn resolve_policy_source_file(
         warn!("[policy] sourcePath '{path}' authored but the RhaiSource asset loader is absent");
         return PolicySource::Failed;
     };
-    let asset_id =
-        lunco_usd_bevy_stage::asset::resolve_stage_asset_path(asset_server, stage_id, path);
-    let handle = pending.entry(asset_id.clone()).or_insert_with(|| {
-        asset_server.load(bevy::asset::AssetPath::parse(&asset_id).into_owned())
-    });
+    let asset_id = match lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
+        asset_server,
+        stage_id,
+        path,
+        twin_roots,
+    ) {
+        Ok(path) => path,
+        Err(error) => {
+            warn!("[policy] sourcePath '{path}' rejected: {error}");
+            return PolicySource::Failed;
+        }
+    };
+    live.insert(asset_id.clone());
+    let handle = pending
+        .entry(asset_id.clone())
+        .or_insert_with(|| asset_server.load(asset_id.clone()));
     let root_failed = asset_server.load_state(&*handle).is_failed();
     let dependencies_failed = asset_server
         .recursive_dependency_load_state(&*handle)
@@ -582,11 +595,12 @@ fn project_usd_policies(
     mut synthesizers: ResMut<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     asset_server: Res<AssetServer>,
+    twin_roots: Option<Res<lunco_assets_core::TwinRoots>>,
     stage_revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
     sources: Option<Res<Assets<lunco_scripting_rhai_world::source_asset::RhaiSource>>>,
     mut pending: Local<
         std::collections::HashMap<
-            String,
+            bevy::asset::AssetPath<'static>,
             Handle<lunco_scripting_rhai_world::source_asset::RhaiSource>,
         >,
     >,
@@ -788,23 +802,7 @@ fn project_usd_policies(
     if !policy_facts_changed && !source_changed && !failed_policy_source {
         return;
     }
-    let live: std::collections::HashSet<String> = {
-        let _span = bevy::log::info_span!("usd_policy_index_live_source_paths").entered();
-        authored_by_stage
-            .iter()
-            .flat_map(|policies| policies.iter())
-            .filter_map(|authored| {
-                authored.source_path.as_deref().map(|path| {
-                    lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
-                        &asset_server,
-                        authored.stage_id,
-                        path,
-                    )
-                })
-            })
-            .collect()
-    };
-    pending.retain(|p, _| live.contains(p.as_str()));
+    let mut live = std::collections::HashSet::new();
 
     let mut desired = Vec::with_capacity(
         authored_by_stage
@@ -825,6 +823,8 @@ fn project_usd_policies(
                     path,
                     authored.stage_id,
                     &asset_server,
+                    twin_roots.as_deref(),
+                    &mut live,
                     sources.as_deref(),
                     &mut pending,
                 ) {
@@ -843,6 +843,7 @@ fn project_usd_policies(
             });
         }
     }
+    pending.retain(|path, _| live.contains(path));
     let previous_synthesizers: std::collections::HashSet<String> = registry
         .policies
         .iter()

@@ -243,6 +243,9 @@ authored asset pipeline (and the storage boundary for native synchronous
 helpers). Editing an asset changes the runtime source without a Rust rebuild; a
 missing or invalid source is reported and never replaced by stale compiled
 policy.
+USD scenario asset markers and pending policy sources carry typed Bevy
+`AssetPath` values through the load boundary; native source admission follows
+the [asset-owner contract](55-scene-addressing-and-roots.md#native-payload-and-source-admission).
 NB: `goto` is a reserved word in rhai — the nav helper is `nav_to`.
 
 The shared scene-selection package registers `InspectSelection` as a read-only

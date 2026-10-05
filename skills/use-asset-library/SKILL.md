@@ -101,6 +101,13 @@ manifest name or retain an outgoing address. Follow the canonical
 [mount identity contract](../../docs/architecture/55-scene-addressing-and-roots.md#3-mount-addresses-and-stable-source-identity)
 for provenance and scenario synchronization. Verify replacement content through
 the production app; resolver seam tests alone do not prove Bevy cache behavior.
+Native USD payloads, texture inputs, and Rhai asset sources use the
+[typed native admission contract](../../docs/architecture/55-scene-addressing-and-roots.md#native-payload-and-source-admission).
+Pass the stage's actual `AssetServer` path and current `TwinRoots` to the asset
+owner; keep its `Result<AssetPath>` through loading and attach labels separately.
+Verify a valid native filename with URI characters and a rejected foreign or
+retired mount through the production consumer; do not register an unrestricted
+`file:` source or enable unapproved paths to make a fixture load.
 
 Anything the cache fallback can serve is DECLARED in an `Assets.toml` and
 downloaded only on request (Settings ▸ Downloadable data, the Twin Browser

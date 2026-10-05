@@ -229,7 +229,7 @@ fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, paths: &[St
                 if view.type_name(&sp).as_deref() != Some(ltok::T_DOME_LIGHT) {
                     return None;
                 }
-                let env = match read_dome_environment(&view, &sp, &asset_server, id, quality) {
+                let env = match read_dome_environment(&view, &sp, &asset_server, id, quality, world.get_resource::<lunco_assets_core::TwinRoots>()) {
                     Ok(env) => env,
                     Err(_) => {
                         bevy::log::error!(
@@ -327,8 +327,11 @@ fn apply_graphics_dome_quality(
 /// silently fall back to defaults. The defaults are what we want anyway:
 /// `RenderAssetUsages::default()` keeps the pixels in the main world, which is
 /// exactly the CPU access [`Equirect::flatten`] needs.
-fn load_dome_texture(asset_server: &AssetServer, path: &str) -> Handle<Image> {
-    asset_server.load::<Image>(path.to_string())
+fn load_dome_texture(
+    asset_server: &AssetServer,
+    path: bevy::asset::AssetPath<'static>,
+) -> Handle<Image> {
+    asset_server.load::<Image>(path)
 }
 
 /// Read a `DomeLight` prim's HDRI intent. `Ok(None)` when the prim authors no
@@ -346,6 +349,7 @@ pub fn read_dome_environment(
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<lunco_usd_bevy_stage::UsdStageAsset>,
     quality: RenderQualityProfile,
+    twin_roots: Option<&lunco_assets_core::TwinRoots>,
 ) -> Result<Option<UsdDomeEnvironment>, crate::light::LightReadError> {
     let texture_authored = reader.has_authored_attribute(sdf_path, ltok::A_TEXTURE_FILE)
         || !reader
@@ -361,7 +365,22 @@ pub fn read_dome_environment(
     }
     let texture_path = texture_value
         .filter(|p| !p.is_empty())
-        .map(|p| lunco_usd_bevy_stage::asset::resolve_stage_asset_path(asset_server, stage_id, &p));
+        .map(|p| {
+            lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
+                asset_server,
+                stage_id,
+                &p,
+                twin_roots,
+            )
+        })
+        .transpose()
+        .map_err(|error| {
+            error!(
+                "[usd-bevy] {} dome texture rejected: {error}",
+                sdf_path.as_str()
+            );
+            crate::light::LightReadError
+        })?;
     let Some(texture_path) = texture_path else {
         return Ok(None);
     };
@@ -374,7 +393,7 @@ pub fn read_dome_environment(
 
     let intensity = crate::light::read_dome_intensity(reader, sdf_path, quality)?;
     Ok(Some(UsdDomeEnvironment {
-        texture: load_dome_texture(asset_server, &texture_path),
+        texture: load_dome_texture(asset_server, texture_path),
         format: DomeFormat::LatLong,
         intensity: intensity.value,
         intensity_uses_graphics_default: intensity.uses_graphics_default,

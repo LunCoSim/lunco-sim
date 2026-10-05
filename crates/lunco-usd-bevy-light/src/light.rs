@@ -701,6 +701,7 @@ pub fn instantiate_light_prim(
     stage_id: bevy::asset::AssetId<lunco_usd_bevy_stage::UsdStageAsset>,
     quality: lunco_render::RenderQualityProfile,
     scope: LightProjectionScope,
+    twin_roots: Option<&lunco_assets_core::TwinRoots>,
 ) -> bool {
     if !light_is_in_scope(scope, prim_type) {
         // A preview has one session-local presentation light. Dominant
@@ -885,6 +886,7 @@ pub fn instantiate_light_prim(
                 asset_server,
                 stage_id,
                 quality,
+                twin_roots,
             ) {
                 Ok(Some(env)) => env,
                 Ok(None) => {

@@ -150,7 +150,7 @@ pub struct EmbeddedScenarioSource(pub String);
 /// `uniform asset info:sourceAsset = @scenarios/foo.rhai@` of a
 /// `LunCoProgramAPI` prim — awaiting load.
 ///
-/// The asset-relative path to a `.rhai` source. The USD loader
+/// The admitted, typed asset path to a `.rhai` source. The USD loader
 /// (`lunco-usd-bevy`) stamps this on the prim that OWNS the program;
 /// `lunco-scripting` loads the file through the `AssetServer` (wasm-safe — no
 /// `std::fs`) and, once ready, replaces it with an [`EmbeddedScenarioSource`]
@@ -160,7 +160,7 @@ pub struct EmbeddedScenarioSource(pub String);
 /// depending on each other (same as [`EmbeddedScenarioSource`]).
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component)]
-pub struct EmbeddedScenarioPath(pub String);
+pub struct EmbeddedScenarioPath(pub bevy::asset::AssetPath<'static>);
 
 /// The USD path of the `LunCoProgramAPI` prim a running scenario came from.
 ///

@@ -513,7 +513,10 @@ const TEST_KIND = "graphics";
 ```
 
 The scene still binds the observer through `LunCoProgramAPI` and
-`info:sourceAsset`. The runner discovers that composed binding and reads the
+`info:sourceAsset`. Native asset sources must follow the
+[typed native admission contract](../../docs/architecture/55-scene-addressing-and-roots.md#native-payload-and-source-admission)
+through the originating live Twin; keep asset labels separate from filesystem
+characters. The runner discovers that composed binding and reads the
 literal without executing the script, so USD does not carry a second test-mode
 field and the shell gate does not maintain an exception list. Valid values are
 `"headless"`, `"graphics"`, `"render-contract"`, and `"editor"`. Use

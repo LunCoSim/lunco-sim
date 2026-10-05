@@ -6,6 +6,7 @@ license.workspace = true
 description = "Headless composed-USD reader and projection substrate for Bevy integrations"
 
 [dependencies]
+lunco-assets-core = { path = "../lunco-assets-core" }
 bevy = { workspace = true, features = ["bevy_asset"] }
 anyhow = { workspace = true }
 openusd = { workspace = true }

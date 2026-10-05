@@ -514,6 +514,8 @@ fn on_run_scenario_asset(
     if path.is_empty() {
         return Err("RunScenarioAsset: source_asset must not be empty".to_string());
     }
+    let path = lunco_assets_core::asset_path::load_asset_path(&path, None, None)
+        .map_err(|error| format!("RunScenarioAsset: {error}"))?;
     let owner_twin = resolve_scenario_twin_owner(
         workspace.as_deref(),
         cmd.owner_twin_id,
@@ -1167,14 +1169,9 @@ pub fn resolve_embedded_scenario_paths(
     }
     for (entity, path) in q.iter() {
         let handle = pending.entry(entity).or_insert_with(|| {
-            // Address the script through `lunco://` rather than stripping an
-            // `assets/` prefix by hand and riding the DEFAULT source: an authored
-            // `assets/foo.rhai`, a bare `foo.rhai`, and an explicit
-            // `lunco://foo.rhai` must all name the same script, and only
-            // `lunco-assets-core` gets to decide what that means. A ref that already
-            // carries its own scheme (`twin://…`) is passed through untouched, so
-            // a Twin-owned script resolves against the Twin.
-            let uri = lunco_assets_core::engine_asset_uri(&path.0);
+            // Projection has already admitted and resolved the typed load path.
+            // Keep filesystem characters and asset labels separate through load.
+            let uri = path.0.clone();
             info!(
                 "[scripting] loading scenario script `{}` for {entity:?} as `{uri}`",
                 path.0,

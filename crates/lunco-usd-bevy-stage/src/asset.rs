@@ -77,24 +77,17 @@ impl UsdStageAsset {
 #[derive(Asset, TypePath)]
 pub struct UsdLayerReadReceipt;
 
-/// Resolve a USD asset path relative to the stage that authored it.
-///
-/// The canonical asset-path rule is shared with USD layer composition, so a
-/// texture, scenario, or layer reference spelled the same way resolves the
-/// same way. An in-memory stage has no asset-server anchor and therefore uses
-/// the root canonicalization rule.
+/// Resolve a USD asset reference into its typed Bevy load address. Native
+/// references require the stage's exact live Twin mount; externally composed
+/// stages without an asset-server origin cannot admit native asset loads.
 pub fn resolve_stage_asset_path(
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     asset_path: &str,
-) -> String {
-    use lunco_assets_core::asset_path::anchor_of;
-    use lunco_assets_path::{canonicalize, canonicalize_root};
-
-    match asset_server.get_path(stage_id) {
-        Some(stage_path) => canonicalize(asset_path, &anchor_of(&stage_path)),
-        None => canonicalize_root(asset_path),
-    }
+    roots: Option<&lunco_assets_core::TwinRoots>,
+) -> Result<bevy::asset::AssetPath<'static>, lunco_assets_core::TwinRootsError> {
+    let origin = asset_server.get_path(stage_id);
+    lunco_assets_core::asset_path::load_asset_path(asset_path, origin.as_ref(), roots)
 }
 
 /// Bevy loader that fetches and composes the available transitive USD layer

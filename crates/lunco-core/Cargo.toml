@@ -5,7 +5,7 @@ edition = "2024"
 license.workspace = true
 
 [dependencies]
-bevy = { workspace = true }
+bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-runtime-context = { path = "../lunco-runtime-context" }
 serde = { workspace = true }

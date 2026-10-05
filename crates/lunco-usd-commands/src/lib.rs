@@ -2107,17 +2107,14 @@ fn document_composition_context(
         });
 
     if let Some(twin) = twin {
-        let name = twin
-            .manifest
-            .as_ref()
-            .map(|manifest| manifest.name.as_str())
-            .filter(|name| !name.trim().is_empty())
+        let roots = world
+            .get_resource::<lunco_assets_core::TwinRoots>()
             .ok_or_else(|| {
-                format!(
-                    "Twin at {} has no name for USD composition identity",
-                    twin.root.display()
-                )
+                "USD document composition requires its Twin asset registry".to_owned()
             })?;
+        let name = roots.register_twin(twin).map_err(|error| {
+            format!("cannot admit the USD document's Twin asset authority: {error}")
+        })?;
         let twin_root = lunco_storage::canonicalize_file_path(&twin.root).map_err(|error| {
             format!("cannot resolve Twin root {}: {error}", twin.root.display())
         })?;
@@ -2129,7 +2126,7 @@ fn document_composition_context(
             )
         })?;
         return Ok((
-            lunco_assets_core::twin_uri(name, relative),
+            lunco_assets_core::twin_uri(&name, relative),
             assets_root,
             Some(twin_root),
         ));

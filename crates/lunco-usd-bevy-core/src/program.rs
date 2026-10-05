@@ -200,6 +200,7 @@ pub fn apply_program_resolution(
                 world.resource::<AssetServer>(),
                 stage_id,
                 asset,
+                world.get_resource::<lunco_assets_core::TwinRoots>(),
             )
         })
     });
@@ -233,7 +234,20 @@ pub fn apply_program_resolution(
                 );
                 return;
             };
-            entity.insert(lunco_core::EmbeddedScenarioPath(asset));
+            match asset {
+                Ok(asset) => {
+                    entity.insert(lunco_core::EmbeddedScenarioPath(asset));
+                }
+                Err(error) => {
+                    let id = entity.id();
+                    drop(entity);
+                    lunco_core::trigger_runtime_error(
+                        &mut world.commands(),
+                        "usd-program-asset-resolution-failed",
+                        format!("Rhai program asset for {id:?}: {error}"),
+                    );
+                }
+            }
         }
         Some(resolved) => {
             bevy::log::warn!(

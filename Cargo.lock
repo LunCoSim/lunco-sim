@@ -8135,6 +8135,7 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "lunco-api-transport",
+ "lunco-assets-core",
  "lunco-celestial-spatial",
  "lunco-core",
  "lunco-core-runtime",
@@ -10056,9 +10057,9 @@ dependencies = [
 name = "lunco-usd-bevy"
 version = "0.1.0"
 dependencies = [
- "lunco-assets-core",
  "bevy",
  "big_space",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-render",
  "lunco-usd-bevy-camera",
@@ -10134,6 +10135,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-usd-bevy-stage",
  "lunco-usd-compose",
@@ -10173,6 +10175,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "half",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-port-core",
  "lunco-render",
