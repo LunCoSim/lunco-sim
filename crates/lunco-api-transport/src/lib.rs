@@ -14,6 +14,7 @@ use lunco_api::{
     queries::{self, ApiQueryRegistryPlugin, ApiVisibilityPlugin},
     subscription::ApiTelemetryPlugin,
 };
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 use lunco_api_core::ApiResponse;
 pub mod transports;
 
