@@ -426,6 +426,12 @@ lets USD prim projection recreate cosim Modelica models and rewire connections
 from the composed stage. Object/reference-level reload is intentionally still a
 TODO: do not approximate it by respawning only a visual subtree, because that
 would leave physics, connections, or Modelica worker state stale.
+Before replacement asset I/O, the document owner republishes the current
+persistent source for the scene and its tracked reference closure. This includes
+referenced Editor buffers that advanced since their preview mounted. Dirty
+buffers stay dirty, and disposable `@view@` opinions are excluded. Publishing
+only the root would let a warm reload consume obsolete component parameters.
+
 
 The **read** surface is the `UsdRead` trait (`lunco-usd-bevy-stage/src/read.rs`): `children`,
 `scalar::<T>`, `attr_value`, `rel_target`, `scalar_at` (time-sampled), etc. The
