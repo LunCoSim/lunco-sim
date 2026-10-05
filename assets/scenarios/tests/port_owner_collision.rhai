@@ -98,8 +98,8 @@ fn on_tick(me, ctx) {
             failures.push(t_true(finding.message.contains("PORT_OWNER_COLLISION: `mass` has 2 input owners"),
                 "collision message did not describe the duplicate input owners"));
             failures.push(t_true(finding.message.contains("winner: ")
-                && finding.message.contains("System at"),
-                "collision message did not identify the generated Modelica owner"));
+                && finding.message.contains("Modelica co-simulation component at"),
+                "collision message did not identify the Modelica owner"));
             failures.push(t_true(finding.message.contains("Avian rigid body"),
                 "collision message did not identify the rigid-body owner"));
             failures.push(t_true(finding.message.contains("/PortOwnerCollision/CollisionCase.inputs:mass"),
