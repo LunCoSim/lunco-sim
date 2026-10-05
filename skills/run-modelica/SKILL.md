@@ -169,6 +169,17 @@ solve-cache reads and writes run with DAE lowering in the preparation pool; the
 native owner thread does not perform cache I/O or fall back to synchronous
 lowering. Wasm keeps compilation inside its Modelica Web Worker.
 
+Native optional solve-cache reads capture the cache-owned
+`lunco_modelica_worker::worker::PreparedSolveDiskLimits` resource before
+`ModelicaExecutionPlugin` starts the worker. Defaults are 64 MiB compressed,
+256 MiB decoded, and a 64 MiB zstd window; see
+[the cache read contract](../../docs/architecture/20-domain-modelica.md) for
+valid ranges and configuration timing. Missing records are cache misses;
+rejected existing records warn and recompute admitted equations. Invalid limits
+are a typed worker startup failure. For decode changes, run the generic
+`prepared_solve_disk_cache_` tests; do not substitute repository models for the
+inline-storage boundary fixtures.
+
 On native desktop startup, cache-miss solve-IR lowering runs in the worker's
 bounded preparation pool because the DAE input and solve options are immutable.
 The worker alone commits the resulting solve model and constructs the live

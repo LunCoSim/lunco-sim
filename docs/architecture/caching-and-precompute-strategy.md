@@ -340,6 +340,8 @@ the integrator state.
 4. **Compiled DAE and prepared solve-IR caches** — `lunco-modelica-worker/src/worker.rs` owns
    worker execution, while `worker/cache.rs` owns the prepared-solve cache
    and `worker/scheduling.rs` owns the native command lanes.
+   Native optional disk reads follow the cache-owned budgets and rejection
+   contract in [the Modelica architecture](20-domain-modelica.md).
    The worker keeps the per-entity `CachedModel` for instant Reset and a worker-owned
    structural artifact cache that shares immutable DAE compilation across
    scene instances. The prepared live solve IR is reused by structural source

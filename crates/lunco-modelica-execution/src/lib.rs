@@ -42,6 +42,10 @@ impl Plugin for ModelicaExecutionPlugin {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
+            app.init_resource::<lunco_modelica_worker::worker::PreparedSolveDiskLimits>();
+            let disk_limits = *app
+                .world()
+                .resource::<lunco_modelica_worker::worker::PreparedSolveDiskLimits>();
             let failure_sender = tx_res.clone();
             let spawn = thread::Builder::new()
                 .name("modelica-worker".into())
@@ -49,7 +53,11 @@ impl Plugin for ModelicaExecutionPlugin {
                     let failure_sender = tx_res.clone();
                     if let Err(payload) =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            lunco_modelica_worker::worker::modelica_worker(rx_cmd, tx_res)
+                            lunco_modelica_worker::worker::modelica_worker(
+                                rx_cmd,
+                                tx_res,
+                                disk_limits,
+                            )
                         }))
                     {
                         let detail = payload

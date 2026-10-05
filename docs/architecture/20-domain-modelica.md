@@ -469,6 +469,26 @@ instance-qualified names for diagnostics, but those names and their runtime
 root suffix are excluded from the structural cache key. Parameter bindings,
 solver instances, live state, and telemetry remain per entity.
 
+Native prepared-solve disk reads use the cache-owned `PreparedSolveDiskLimits`
+resource, captured before the worker starts. Insert it before
+`ModelicaExecutionPlugin` to configure compressed bytes, decoded bytes, and the
+zstd window logarithm. Defaults are 64 MiB compressed, 256 MiB decoded, and a
+64 MiB zstd window (`zstd_window_log_max = 26`). Byte budgets must be positive
+and at most the named 256 MiB codec ceiling; window logarithms must be 10–28.
+Invalid configuration reports a typed worker failure before the preparation
+pool starts. Changing the resource after startup does not change that worker's
+immutable snapshot.
+
+The preparation pool reads through `FileStorage::read_bounded`, streams zstd
+with both decoded-byte and window limits, and requires bounded codec decoding,
+full record consumption, and the exact admitted source/library/solver/parameter
+key. A missing optional file is a cache miss. An unreadable, oversized,
+malformed, truncated, or mismatched record warns with its rejection cause and
+recomputes from the admitted DAE; it does not prevent authored model loading.
+The browser has no prepared-solve disk-cache reader. Generic inline-storage
+tests cover this decoding boundary; RAM eviction and persistent retention are
+separate cache concerns.
+
 Session IDs fence stale results: when a Compile or UpdateParameters bumps
 the session, any in-flight Step for the old session is discarded.
 

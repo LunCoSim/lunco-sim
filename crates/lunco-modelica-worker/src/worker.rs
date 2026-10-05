@@ -32,6 +32,8 @@ use lunco_signal::{SimSnapshot, SimStream};
 const PREPARED_SOLVE_CACHE_VERSION: u32 = 5;
 
 mod cache;
+#[cfg(not(target_arch = "wasm32"))]
+pub use cache::PreparedSolveDiskLimits;
 use cache::{PreparedSolveCache, PreparedSolveKey};
 mod bridge;
 mod compile;
@@ -294,6 +296,7 @@ fn build_stepper(
 /// commits a completed model and creates the thread-affine live stepper.
 struct SolvePreparationPool {
     pool: rayon::ThreadPool,
+    disk_limits: PreparedSolveDiskLimits,
     tx: Sender<WorkerPreparationResult>,
     rx: Receiver<WorkerPreparationResult>,
     next_id: u64,
@@ -370,7 +373,8 @@ fn prepare_source_root_payload(id: String, payload: LoadSourceRootPayload) -> Pr
 
 #[cfg(not(target_arch = "wasm32"))]
 impl SolvePreparationPool {
-    fn new() -> Result<Self, String> {
+    fn new(disk_limits: PreparedSolveDiskLimits) -> Result<Self, String> {
+        disk_limits.validate()?;
         // Solve lowering is memory-heavy and each request walks a complete
         // structural graph. A small dedicated pool avoids turning parallel
         // startup into memory-bandwidth contention while reserving two logical
@@ -390,6 +394,7 @@ impl SolvePreparationPool {
         let (tx, rx) = crossbeam_channel::unbounded();
         Ok(Self {
             pool,
+            disk_limits,
             tx,
             rx,
             next_id: 0,
@@ -439,6 +444,8 @@ impl SolvePreparationPool {
             )
         });
         let tx = self.tx.clone();
+        let disk_limits = self.disk_limits;
+        let cache_key = work.plan.key.clone();
         let queued_at = web_time::Instant::now();
         self.pool.spawn(move || {
             let preparation_started = web_time::Instant::now();
@@ -454,16 +461,20 @@ impl SolvePreparationPool {
             let cached = {
                 let _cache_span =
                     bevy::log::info_span!("modelica_solve_preparation_disk_cache_lookup").entered();
-                disk_cache.as_ref().and_then(
-                    |(source_key, revision, solver_id, overrides)| {
-                        PreparedSolveCache::load_disk(
-                            *source_key,
-                            *revision,
-                            solver_id,
-                            overrides,
-                        )
-                    },
-                )
+                if disk_cache.is_some() {
+                    match PreparedSolveCache::load_disk(&cache_key, disk_limits) {
+                        Ok(model) => model,
+                        Err(error) => {
+                            log::warn!(
+                                "[modelica-runtime] rejected optional prepared-solve cache for `{model_name}` source={:016x}: {error}; recomputing from admitted equations",
+                                cache_key.source_key,
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
             };
             let disk_hit = cached.is_some();
             let result = if let Some(model) = cached {
@@ -2674,7 +2685,11 @@ fn set_input_or_warn(
 /// [`process_worker_command`] in the `lunica_worker` Web Worker bundle with the
 /// source carried in the message.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
+pub fn modelica_worker(
+    rx: Receiver<ModelicaCommand>,
+    tx: Sender<ModelicaResult>,
+    disk_limits: PreparedSolveDiskLimits,
+) {
     let mut steppers: HashMap<Entity, (u64, String, LiveStepper)> = HashMap::default();
     let mut current_sessions: HashMap<Entity, u64> = HashMap::default();
     // Which models declared the realtime promise, from `Compile`. Half of the
@@ -2698,7 +2713,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
     let mut prepared_solve_cache = PreparedSolveCache::new();
     // Immutable DAE lowering is dispatched to this bounded pool; the native
     // Rumoca session itself is owned by a separate single-thread actor.
-    let mut solve_preparation_pool = match SolvePreparationPool::new() {
+    let mut solve_preparation_pool = match SolvePreparationPool::new(disk_limits) {
         Ok(pool) => pool,
         Err(error) => {
             let _ = tx.send(ModelicaResult::worker_failure(error));
