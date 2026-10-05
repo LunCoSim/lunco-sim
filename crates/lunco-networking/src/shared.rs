@@ -6,8 +6,6 @@ use lightyear::prelude::*;
 use lunco_command_contracts::{SessionId, SyncChannel};
 use lunco_core_session::{NetStatus, NetworkRole};
 use lunco_networking_sync::sync::DeclareChannelExt;
-#[cfg(not(target_family = "wasm"))]
-use lunco_storage::Storage;
 
 use crate::NetworkMode;
 
@@ -17,13 +15,15 @@ pub(crate) const PROTOCOL_ID: u64 = 0x004C_554E_434F_0001; // "LUNCO"
 /// Explicitly-marked development key. It is non-zero so an accidental public
 /// bind cannot be mistaken for authenticated netcode. Hosts using this key are
 /// restricted to loopback; deployments must provide a real key.
-const DEV_NETCODE_KEY: [u8; 32] = [
+pub(crate) const DEV_NETCODE_KEY: [u8; 32] = [
     0x4c, 0x75, 0x6e, 0x43, 0x6f, 0x2d, 0x64, 0x65, 0x76, 0x2d, 0x6e, 0x65, 0x74, 0x2d, 0x6b, 0x65,
     0x79, 0x2d, 0x6f, 0x6e, 0x6c, 0x79, 0x2d, 0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x2d, 0x76, 0x31, 0x00,
 ];
 
 const ENV_NETCODE_KEY: &str = "LUNCO_NETCODE_KEY";
 const ENV_NETCODE_KEY_FILE: &str = "LUNCO_NETCODE_KEY_FILE";
+/// Fixed-size authentication input, allowing whitespace around its 64 digits.
+const MAX_NETCODE_KEY_FILE_BYTES: usize = 1024;
 
 /// Parse the 32-byte netcode key from canonical lowercase/uppercase hex.
 fn parse_netcode_key(value: &str) -> Result<[u8; 32], String> {
@@ -56,36 +56,39 @@ fn parse_netcode_key(value: &str) -> Result<[u8; 32], String> {
 /// `LUNCO_NETCODE_KEY_FILE`. A missing value selects the explicitly-limited
 /// loopback development key. Browser builds may provide the key at compile
 /// time through the same variable; otherwise they use that development key.
-pub(crate) fn netcode_key() -> [u8; 32] {
+pub(crate) fn netcode_key() -> Result<[u8; 32], String> {
     #[cfg(not(target_family = "wasm"))]
     {
-        if let Ok(value) = std::env::var(ENV_NETCODE_KEY) {
+        if let Some(value) = std::env::var_os(ENV_NETCODE_KEY) {
+            let value = value
+                .into_string()
+                .map_err(|_| format!("{ENV_NETCODE_KEY} is not valid UTF-8"))?;
             return parse_netcode_key(&value)
-                .unwrap_or_else(|error| panic!("invalid {ENV_NETCODE_KEY}: {error}"));
+                .map_err(|error| format!("invalid {ENV_NETCODE_KEY}: {error}"));
         }
-        if let Ok(path) = std::env::var(ENV_NETCODE_KEY_FILE) {
+        if let Some(path) = std::env::var_os(ENV_NETCODE_KEY_FILE) {
+            if path.is_empty() {
+                return Err(format!("{ENV_NETCODE_KEY_FILE} is empty"));
+            }
             let storage = lunco_storage::FileStorage::new();
-            let bytes = storage
-                .read_sync(&lunco_storage::StorageHandle::File(
-                    std::path::PathBuf::from(&path),
-                ))
-                .unwrap_or_else(|error| {
-                    panic!("cannot read {ENV_NETCODE_KEY_FILE}={path}: {error:?}")
-                });
+            let handle = lunco_storage::StorageHandle::File(path.into());
+            let bytes =
+                bevy::tasks::block_on(storage.read_bounded(&handle, MAX_NETCODE_KEY_FILE_BYTES))
+                    .map_err(|error| format!("cannot read {ENV_NETCODE_KEY_FILE}: {error}"))?;
             let value = String::from_utf8(bytes)
-                .unwrap_or_else(|error| panic!("{ENV_NETCODE_KEY_FILE} is not UTF-8: {error}"));
+                .map_err(|error| format!("{ENV_NETCODE_KEY_FILE} is not UTF-8: {error}"))?;
             return parse_netcode_key(&value)
-                .unwrap_or_else(|error| panic!("invalid key in {ENV_NETCODE_KEY_FILE}: {error}"));
+                .map_err(|error| format!("invalid key in {ENV_NETCODE_KEY_FILE}: {error}"));
         }
     }
 
     #[cfg(target_family = "wasm")]
     if let Some(value) = option_env!("LUNCO_NETCODE_KEY") {
         return parse_netcode_key(value)
-            .unwrap_or_else(|error| panic!("invalid build-time {ENV_NETCODE_KEY}: {error}"));
+            .map_err(|error| format!("invalid build-time {ENV_NETCODE_KEY}: {error}"));
     }
 
-    DEV_NETCODE_KEY
+    Ok(DEV_NETCODE_KEY)
 }
 
 pub(crate) fn is_dev_netcode_key(key: &[u8; 32]) -> bool {
@@ -141,15 +144,15 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
     app.add_plugins(crate::diagnostics::NetDiagnosticsPlugin);
 
     let tick = Duration::from_secs_f64(lunco_core_runtime::SECS_PER_TICK);
-    match mode {
-        Some(NetworkMode::Host { port }) => {
-            #[cfg(not(target_family = "wasm"))]
-            {
+    let mut startup_error = None;
+    if let Some(NetworkMode::Host { port }) = mode {
+        #[cfg(not(target_family = "wasm"))]
+        match crate::server::prepare_host(*port) {
+            Ok(prepared) => {
                 app.insert_resource(NetworkRole::Host);
                 app.insert_resource(NetStatus {
                     role: NetworkRole::Host,
                     endpoint: format!(":{port}"),
-                    peers: 0,
                     connected: true,
                     ..Default::default()
                 });
@@ -157,79 +160,62 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
                     tick_duration: tick,
                 });
                 add_protocol(app);
-                crate::server::setup_host(app, *port);
+                crate::server::setup_host(app, prepared);
+                return;
             }
-            #[cfg(target_family = "wasm")]
-            {
-                let _ = port;
-                warn!("Host mode is unsupported on wasm; use --connect");
-            }
+            Err(error) => startup_error = Some(error),
         }
-        // None (idle local) or Some(Connect) — both build the client stack. They
-        // differ only in `NetworkRole`, set per-branch below (`Client` vs
-        // `Standalone`); identity authority is DERIVED from that role
-        // (`NetworkRole::is_authoritative`), so there is nothing else to keep in
-        // sync — a pure client defers id-minting to the host, an idle-local
-        // sandbox is its own authority and mints.
-        client_mode => {
-            app.add_plugins(lightyear::prelude::client::ClientPlugins {
-                tick_duration: tick,
-            });
-            add_protocol(app);
-            // Ferry systems, disconnect observer, JoinServer/LeaveServer commands,
-            // and (wasm) the hostname-URL dialing plugin.
-            crate::client::register_client_systems(app);
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = port;
+            startup_error = Some("Host mode is unsupported on wasm; use --connect".to_string());
+        }
+    }
 
-            if let Some(NetworkMode::Connect { server, client_id }) = client_mode {
-                // Auto-connect (CLI `--connect` / browser `?connect=`). A pure
-                // client defers identity + authority to the host: `Client` is
-                // non-authoritative (`is_authoritative == false`), so it mints no
-                // ids — the host allocates them and replication pins them.
-                app.insert_resource(NetworkRole::Client);
-                app.insert_resource(NetStatus {
-                    role: NetworkRole::Client,
-                    endpoint: server.clone(),
-                    peers: 0,
-                    connected: false,
-                    ..Default::default()
-                });
-                let server = server.clone();
-                let client_id = *client_id;
-                app.add_systems(
-                    Startup,
-                    move |mut commands: Commands, mut status: ResMut<NetStatus>, mut connection: ResMut<lunco_core_session::ClientConnection>| {
-                        // Empty digest ⇒ ambient source: env on native, URL `#hash`
-                        // on wasm (the `?connect=host:port#digest` deep-link path).
-                        // A construction failure lands on `NetStatus::last_error`
-                        // (C4) — the app starts disconnected instead of panicking.
-                        connection.0 = crate::client::spawn_client(
-                            &mut commands,
-                            &server,
-                            client_id,
-                            "",
-                            &mut status,
-                        );
-                    },
-                );
-            } else {
-                // Idle local sandbox — single-player until `JoinServer`. `Standalone`
-                // is authoritative (`is_authoritative == true`), so it mints ids
-                // exactly like a Host — which is what makes a runtime
-                // `SkipContentStamp` spawn (any palette drop) get a `GlobalEntityId`,
-                // so possession can claim ownership and a `piloted`-gated vessel (the
-                // lander) obeys the stick. This regressed once, when authority lived
-                // in a *separate* `IsServer(false)` flag here that drifted from the
-                // `Standalone` role; deriving it from the role removed that hazard.
-                app.insert_resource(NetworkRole::Standalone);
-                app.insert_resource(NetStatus {
-                    role: NetworkRole::Standalone,
-                    endpoint: String::new(),
-                    peers: 0,
-                    connected: false,
-                    ..Default::default()
-                });
-            }
+    // The client-capable local stack also owns rejected host startup: the app
+    // remains usable, with the explicit error published and no host admitted.
+    app.add_plugins(lightyear::prelude::client::ClientPlugins {
+        tick_duration: tick,
+    });
+    add_protocol(app);
+    crate::client::register_client_systems(app);
+    if let Some(NetworkMode::Connect { server, client_id }) = mode {
+        app.insert_resource(NetworkRole::Client);
+        app.insert_resource(NetStatus {
+            role: NetworkRole::Client,
+            endpoint: server.clone(),
+            ..Default::default()
+        });
+        let server = server.clone();
+        let client_id = *client_id;
+        app.add_systems(
+            Startup,
+            move |mut commands: Commands,
+                  mut status: ResMut<NetStatus>,
+                  mut connection: ResMut<lunco_core_session::ClientConnection>,
+                  mut role: ResMut<NetworkRole>| {
+                match crate::client::prepare_client(&server, client_id, "") {
+                    Ok(prepared) => {
+                        connection.0 = Some(crate::client::spawn_client(&mut commands, prepared))
+                    }
+                    Err(error) => {
+                        warn!("[net] connection startup rejected: {error}");
+                        status.last_error = error;
+                        status.role = NetworkRole::Standalone;
+                        *role = NetworkRole::Standalone;
+                    }
+                }
+            },
+        );
+    } else {
+        if let Some(error) = startup_error.as_ref() {
+            warn!("[net] host startup rejected: {error}");
         }
+        app.insert_resource(NetworkRole::Standalone);
+        app.insert_resource(NetStatus {
+            last_error: startup_error.unwrap_or_default(),
+            ..Default::default()
+        });
     }
 }
 
@@ -276,6 +262,8 @@ mod tests {
     fn key_parser_rejects_zero_and_wrong_length() {
         assert!(parse_netcode_key(&"00".repeat(32)).is_err());
         assert!(parse_netcode_key("deadbeef").is_err());
+        assert!(parse_netcode_key(&"gg".repeat(32)).is_err());
+        assert!(parse_netcode_key("").is_err());
     }
 
     #[test]

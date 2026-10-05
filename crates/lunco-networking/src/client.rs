@@ -115,76 +115,60 @@ fn seed_pending_from_deep_link_arg(mut pending: ResMut<crate::connection_state::
 /// `sandbox.lunco.space` validates correctly on native builds. Netcode never
 /// validates the transport address (the upstream check is disabled), so its
 /// `server_addr` is just token data — a placeholder carrying the right port.
-pub(crate) fn spawn_client(
-    commands: &mut Commands,
+/// Connection preparation validates all user input before session mutation.
+pub(crate) struct PreparedClient {
+    netcode: NetcodeClient,
+    io: crate::wt_client::WtUrlClientIo,
+}
+
+pub(crate) fn prepare_client(
     server: &str,
     client_id: u64,
     digest: &str,
-    status: &mut NetStatus,
-) -> Option<Entity> {
-    // Netcode needs a `SocketAddr` for its token, but never validates it against
-    // the transport — the real dial is done by `WtUrlClientIo` below.
-    let server_addr = SocketAddr::from(([127, 0, 0, 1], port_of(server)));
-
+) -> Result<PreparedClient, String> {
+    let certificate_digest = if digest.trim().is_empty() {
+        client_cert_digest()?
+    } else {
+        crate::wt_client::parse_certificate_digest(digest)?
+    };
     let auth = Authentication::Manual {
-        server_addr,
+        server_addr: SocketAddr::from(([127, 0, 0, 1], port_of(server))),
         client_id,
-        private_key: netcode_key(),
+        private_key: netcode_key()?,
         protocol_id: PROTOCOL_ID,
     };
-    let netcode = match NetcodeClient::new(
+    let netcode = NetcodeClient::new(
         auth,
         NetcodeConfig {
-            // Match the 30 s server/QUIC timeout. A short 5 s reaper raced the
-            // documented "don't race" rationale and killed a briefly-stalled
-            // host during scene-load / cosim-compile (review M5).
             client_timeout_secs: 30,
             ..default()
         },
-    ) {
-        Ok(n) => n,
-        Err(e) => {
-            // A malformed address/config must surface on the status seam, not
-            // panic the app — the Connect UI shows `last_error` (C4).
-            let msg = format!("netcode client setup failed for '{server}': {e}");
-            error!("[net] {msg}");
-            status.connected = false;
-            status.last_error = msg;
-            return None;
-        }
-    };
-    status.last_error = String::new();
+    )
+    .map_err(|error| format!("netcode client setup failed for '{server}': {error}"))?;
+    Ok(PreparedClient {
+        netcode,
+        io: crate::wt_client::WtUrlClientIo {
+            url: format!("https://{server}"),
+            certificate_digest,
+        },
+    })
+}
 
-    let client_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
-    let client = {
-        let mut ent = commands.spawn((
+pub(crate) fn spawn_client(commands: &mut Commands, prepared: PreparedClient) -> Entity {
+    let PreparedClient { netcode, io } = prepared;
+    info!("[net] connecting to {}", io.url);
+    let client = commands
+        .spawn((
             Name::new("LunCoClient"),
             Client::default(),
             Link::new(sim_latency_conditioner()),
-            LocalAddr(client_addr),
+            LocalAddr(SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0)),
             netcode,
-        ));
-        // Both native and wasm: dial the hostname URL so DNS resolves and SNI
-        // carries the domain name — required for CA cert validation on native.
-        // An explicit UI/command-supplied digest (Connect panel "Cert digest"
-        // field) wins; empty ⇒ fall back to the ambient source (env on native,
-        // URL `#hash` on wasm). Normalized to bare lowercase hex so a pasted
-        // colon-separated host digest (`ab:cd:…`) decodes.
-        let normalized = normalize_digest(digest);
-        let certificate_digest = if normalized.is_empty() {
-            client_cert_digest()
-        } else {
-            normalized
-        };
-        ent.try_insert(crate::wt_client::WtUrlClientIo {
-            url: format!("https://{server}"),
-            certificate_digest,
-        });
-        ent.id()
-    };
-    info!("[net] connecting to {server} as client {client_id}");
+            io,
+        ))
+        .id();
     commands.trigger(Connect { entity: client });
-    Some(client)
+    client
 }
 
 /// Join a networked session at `address` (`host:port` — a hostname like
@@ -216,29 +200,19 @@ fn on_join_server(
     mut local: ResMut<LocalSession>,
     mut connection: ResMut<ClientConnection>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
-) {
-    // Drop any current connection first, then dial the new address.
+) -> Result<lunco_command_contracts::Ack, lunco_command_contracts::Reject> {
+    let address = crate::normalize_addr(&cmd.address);
+    let prepared =
+        prepare_client(&address, crate::next_client_id(), &cmd.digest).map_err(|error| {
+            warn!("[net] join rejected: {error}");
+            status.last_error = error.clone();
+            lunco_command_contracts::Reject::InvalidOp(error)
+        })?;
     for e in &existing {
         commands.entity(e).try_despawn();
     }
-    let address = crate::normalize_addr(&cmd.address);
-    connection.0 = None;
-    let entity = spawn_client(
-        &mut commands,
-        &address,
-        crate::next_client_id(),
-        &cmd.digest,
-        &mut status,
-    );
-    let Some(entity) = entity else {
-        // Construction failed — stay Standalone; the error is on
-        // `NetStatus::last_error` for the Connect UI.
-        status.endpoint = address;
-        *role = NetworkRole::Standalone;
-        status.role = NetworkRole::Standalone;
-        local.0 = SessionId::LOCAL;
-        return;
-    };
+    let entity = spawn_client(&mut commands, prepared);
+    status.last_error.clear();
     connection.0 = Some(entity);
     // Standalone→Client: authority follows the role automatically
     // (`is_authoritative()` is now false), so a joined client stops minting ids —
@@ -259,6 +233,9 @@ fn on_join_server(
     if let Some(journal) = journal {
         journal.set_local_author(lunco_networking_sync::journal_plane::local_author_id());
     }
+    Ok(lunco_command_contracts::Ack::new(
+        lunco_command_contracts::OpId::new(),
+    ))
 }
 
 #[lunco_core::on_command(LeaveServer)]
@@ -300,23 +277,9 @@ fn on_net_disconnect_request(_trigger: On<NetDisconnectRequest>, mut commands: C
     commands.trigger(LeaveServer {});
 }
 
-/// Parse the port out of a `host:port` string for the wasm netcode placeholder
-/// address (default `5888`). The host half is irrelevant — the browser dials the
-/// hostname URL via [`WtUrlClientIo`](crate::wt_client::WtUrlClientIo), not this
-/// `SocketAddr`.
 /// Parse the port out of a `host:port` string for the netcode placeholder
 /// address (default `5888`). The host half is irrelevant — `WtUrlClientIo`
 /// dials the full hostname URL; this is only used for the netcode token.
-/// Strip a cert digest to bare lowercase hex. The host prints/logs it
-/// colon-separated (`ab:cd:…`); `wt_client::from_hex` needs the colons and any
-/// stray whitespace gone, so accept whatever the user pastes.
-fn normalize_digest(d: &str) -> String {
-    d.chars()
-        .filter(char::is_ascii_hexdigit)
-        .map(|c| c.to_ascii_lowercase())
-        .collect()
-}
-
 fn port_of(server: &str) -> u16 {
     server
         .rsplit(':')
@@ -392,33 +355,29 @@ fn on_client_disconnected(
 
 /// Returns the cert digest for `WtUrlClientIo`.
 ///
-/// - **Native**: always empty → `WtUrlClientIo` uses the system CA store.
-///   Pass `--connect sandbox.lunco.space` and the Let's Encrypt cert validates.
-///   For localhost dev with a self-signed cert you'll need to pass the digest
-///   another way (e.g. an env var); that path isn't wired yet.
-/// - **Browser**: read from the URL hash (`#<digest>`). Empty hash ⇒ normal CA
-///   validation. Non-empty ⇒ pin for a self-signed dev cert (localhost only).
-fn client_cert_digest() -> String {
+/// Native environment or browser URL pin; empty means normal unpinned mode.
+/// Invalid supplied values reject connection preparation.
+fn client_cert_digest() -> Result<Option<[u8; 32]>, String> {
     #[cfg(not(target_family = "wasm"))]
     {
-        // Production: system CA store validates the server cert normally.
-        // Dev override: set LUNCO_CERT_DIGEST=<hex> to pin a self-signed cert.
-        std::env::var("LUNCO_CERT_DIGEST").unwrap_or_default()
+        let value = std::env::var_os("LUNCO_CERT_DIGEST")
+            .map(|value| {
+                value
+                    .into_string()
+                    .map_err(|_| "LUNCO_CERT_DIGEST is not valid UTF-8".to_string())
+            })
+            .transpose()?;
+        crate::wt_client::parse_certificate_digest(value.as_deref().unwrap_or(""))
     }
     #[cfg(target_family = "wasm")]
     {
-        // Digest in the URL hash (`#<hex>`). Stripped of colons so lightyear's
-        // hex decoder doesn't panic on the colon-separated form the host logs.
-        web_sys::window()
-            .and_then(|w| w.location().hash().ok())
-            .map(|h| {
-                h.trim_start_matches('#')
-                    .chars()
-                    .filter(|c| c.is_ascii_hexdigit())
-                    .flat_map(char::to_lowercase)
-                    .collect()
-            })
-            .unwrap_or_default()
+        let window = web_sys::window()
+            .ok_or_else(|| "certificate pin requires a browser window".to_string())?;
+        let hash = window
+            .location()
+            .hash()
+            .map_err(|_| "cannot read browser certificate pin".to_string())?;
+        crate::wt_client::parse_certificate_digest(hash.trim_start_matches('#'))
     }
 }
 

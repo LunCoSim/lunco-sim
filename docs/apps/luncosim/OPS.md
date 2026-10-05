@@ -72,10 +72,10 @@ Equivalent env vars (CLI wins if both given): `LUNCO_TLS_CERT` + `LUNCO_TLS_KEY`
 
 Behaviour:
 - **Cert specified + valid** → serves it. Logs `🔐 WebTransport using cert from …`.
-- **Cert specified + unreadable/invalid** → **panics on boot** (fail-loud; it
-  won't silently fall back to a cert browsers reject). Usually a permissions
-  issue — `privkey.pem` is `root:root 0600`; run as root or copy the PEMs to a
-  path your user can read.
+- **Cert specified + unreadable/invalid/mismatched key** → host startup rejects
+  before opening a listener. The local app remains usable; `NetStatus.last_error`
+  and the `host startup rejected` warning identify the error. Check PEM paths,
+  permissions, matching certificates, and PKCS#8 private-key encoding, then restart.
 - **Nothing specified** → dev **self-signed** cert. Browsers reject it without a
   pinned digest, but a **native client over a bare IP works with no cert at all**
   (see §4).

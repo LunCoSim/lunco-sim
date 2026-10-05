@@ -43,6 +43,13 @@ replication runtime; the deployment guide owns service and TLS facts.
 
 ## Production deployment
 
+Host admission validates native TLS paths, PEM/key matching, bind restrictions,
+and netcode keys before creating a listener. Invalid explicit configuration
+rejects visibly through `NetStatus.last_error`; check listener admission rather
+than process liveness alone. `JoinServer` rejects invalid key/pin configuration
+before replacing the current connection. Pins cross the transport boundary as
+validated 32-byte values, and the invite digest belongs to the session status.
+
 Follow the deployment guide's exact binary, asset, cache, service-account,
 firewall, TLS, and nginx layout. Use a real non-development netcode key before
 binding a public interface. Verify service logs, certificate renewal, client

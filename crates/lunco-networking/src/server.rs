@@ -85,133 +85,115 @@ const ENV_TLS_KEY: &str = "LUNCO_TLS_KEY";
 ///   - a **directory** (e.g. a certbot live dir) → `<dir>/fullchain.pem` +
 ///     `<dir>/privkey.pem`. So `--cert /etc/letsencrypt/live/sandbox.lunco.space`
 ///     is all you need.
-///   - a **file** (ends in `.pem`/`.crt`/`.cer`) → that cert; the key comes from
+///   - a **file** (extension `.pem`/`.crt`/`.cer`, case-insensitive) → that cert; the key comes from
 ///     `--key <file>`, else the sibling `privkey.pem` next to it.
 /// - **Env** (fallback): `LUNCO_TLS_CERT` + `LUNCO_TLS_KEY`, both required.
+/// `--key` overrides the default key for both file and directory certificate paths.
 ///
 /// `None` ⇒ both unset and no `--cert` ⇒ dev self-signed.
-fn resolve_cert_paths() -> Option<(String, String)> {
-    let args: Vec<String> = std::env::args().collect();
-    let mut cli_cert: Option<String> = None;
-    let mut cli_key: Option<String> = None;
-    for i in 0..args.len() {
-        match args[i].as_str() {
-            "--cert" => cli_cert = args.get(i + 1).cloned(),
-            "--key" => cli_key = args.get(i + 1).cloned(),
-            _ => {}
-        }
-    }
-
-    if let Some(cert) = cli_cert.filter(|s| !s.is_empty()) {
-        // Distinguish a cert FILE from a live DIRECTORY by extension alone — no
-        // `std::fs` probe (raw fs is clippy-banned workspace-wide for wasm parity).
-        // `.key` is intentionally absent: a key is never a cert chain, so a
-        // private key passed as `--cert` must not be classified as a cert file
-        // and loaded into the chain slot (review M6). Cert extensions only.
-        let is_file = [".pem", ".crt", ".cer"]
-            .iter()
-            .any(|ext| cert.ends_with(ext));
-        if !is_file {
-            // Directory layout: certbot's fullchain.pem + privkey.pem.
-            return Some((
-                format!("{cert}/fullchain.pem"),
-                format!("{cert}/privkey.pem"),
-            ));
-        }
-        let key = cli_key.filter(|s| !s.is_empty()).unwrap_or_else(|| {
-            // Sibling privkey.pem next to the cert file. Accept either
-            // separator so Windows paths (`C:\certs\fullchain.pem`) resolve
-            // the sibling correctly too.
-            match cert.rfind(['/', '\\']) {
-                Some(sep) => format!("{}{}privkey.pem", &cert[..sep], &cert[sep..=sep]),
-                None => "privkey.pem".to_string(),
+fn resolve_cert_paths(
+    args: impl IntoIterator<Item = std::ffi::OsString>,
+    env_cert: Option<std::ffi::OsString>,
+    env_key: Option<std::ffi::OsString>,
+) -> Result<Option<(PathBuf, PathBuf)>, String> {
+    let mut cli_cert = None;
+    let mut cli_key = None;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        let target = if arg == "--cert" {
+            Some(&mut cli_cert)
+        } else if arg == "--key" {
+            Some(&mut cli_key)
+        } else {
+            None
+        };
+        if let Some(target) = target {
+            let value = args
+                .next()
+                .filter(|value| {
+                    !value.is_empty()
+                        && !value.to_str().is_some_and(|value| value.starts_with("--"))
+                })
+                .ok_or_else(|| format!("TLS: {} requires a path", arg.to_string_lossy()))?;
+            if target.replace(PathBuf::from(value)).is_some() {
+                return Err(format!(
+                    "TLS: {} was specified more than once",
+                    arg.to_string_lossy()
+                ));
             }
-        });
-        return Some((cert, key));
+        }
     }
-
-    match (std::env::var(ENV_TLS_CERT), std::env::var(ENV_TLS_KEY)) {
-        (Ok(c), Ok(k)) => Some((c, k)),
-        // Exactly one set — almost certainly a typo'd/forgotten var. Fail loud.
-        (Ok(_), Err(_)) | (Err(_), Ok(_)) => panic!(
-            "TLS: only one of {ENV_TLS_CERT}/{ENV_TLS_KEY} is set; both are required. \
-             Set both, pass `--cert <dir|file>`, or unset both for a dev self-signed cert."
-        ),
-        (Err(_), Err(_)) => None,
+    if let Some(cert) = cli_cert {
+        let is_file = cert
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|extension| {
+                ["pem", "crt", "cer"]
+                    .iter()
+                    .any(|known| extension.eq_ignore_ascii_case(known))
+            });
+        let default_key = if is_file {
+            cert.with_file_name("privkey.pem")
+        } else {
+            cert.join("privkey.pem")
+        };
+        let cert = if is_file {
+            cert
+        } else {
+            cert.join("fullchain.pem")
+        };
+        return Ok(Some((cert, cli_key.unwrap_or(default_key))));
+    }
+    if cli_key.is_some() {
+        return Err("TLS: --key requires --cert".into());
+    }
+    match (env_cert, env_key) {
+        (Some(cert), Some(key)) if !cert.is_empty() && !key.is_empty() => {
+            Ok(Some((cert.into(), key.into())))
+        }
+        (None, None) => Ok(None),
+        _ => Err(format!(
+            "TLS: {ENV_TLS_CERT} and {ENV_TLS_KEY} must both contain paths"
+        )),
     }
 }
 
-/// Resolve the host's WebTransport TLS identity.
-///
-/// - **Production** (`--cert <dir|file>`, or `LUNCO_TLS_CERT`+`LUNCO_TLS_KEY`):
-///   load that CA-signed cert (e.g. certbot `fullchain.pem` + `privkey.pem`).
-///   Browsers validate via the normal chain, so clients connect with **no**
-///   `#digest`. See [`resolve_cert_paths`].
-/// - **Dev** (nothing specified): ECDSA-P256 self-signed for
-///   `localhost`/`127.0.0.1`; print + persist the cert digest so a browser can
-///   pin it via the connect URL `#<digest>`. A **native** client dialing a bare
-///   IP skips validation entirely and needs no digest (see `wt_client.rs`).
-///
-/// **Fail-loud:** if a cert IS specified but the PEM can't be loaded, this
-/// PANICS rather than silently serving a self-signed cert. An operator who set
-/// it asked for that specific identity; falling back would hand browsers an
-/// untrusted cert (connection refused) with no obvious server-side cause — a
-/// misconfiguration that looks like a network fault. Crashing surfaces it
-/// immediately in the service logs / exit code.
-/// Whether a cert was specified ⇒ likely a real CA cert ⇒ guests need no digest.
-/// Returns `(identity, bare_hex_digest)`; the digest is empty when a CA cert is
-/// served (guests validate the chain) and non-empty for the dev self-signed cert
-/// so the invite link can pin it.
-fn resolve_identity() -> (Identity, String) {
-    if let Some((cert_path, key_path)) = resolve_cert_paths() {
-        let identity = load_pem_identity(&cert_path, &key_path).unwrap_or_else(|e| {
-            panic!(
-                "TLS: a cert was specified but could not be loaded ({e}). Refusing to \
-                 start with a fallback self-signed cert — browsers would reject it. \
-                 Fix the PEM paths/permissions (cert={cert_path}, key={key_path}), or \
-                 remove `--cert`/the env vars to run with a dev self-signed cert."
-            )
-        });
-        info!("TLS: WebTransport using cert from {cert_path}");
-        // A real CA cert's digest is unused (browsers validate the chain), but a
-        // *self-signed* cert pinned this way still needs the hash-pin — so
-        // publish the digest here too. This is the supported way to get a STABLE
-        // digest across host restarts: point at a persisted self-signed cert
-        // instead of minting a fresh one each launch. See announce_digest.
-        let digest = announce_digest(&identity);
-        return (identity, digest);
-    }
-
-    // ECDSA-P256 self-signed cert — fresh each launch (→ a new digest every
-    // restart) UNLESS you pin a persisted one above. Publish the digest so
-    // browser clients can pin it in the connect URL (`#<digest>`).
-    let identity = Identity::self_signed(vec!["localhost".to_string(), "127.0.0.1".to_string()])
-        .expect("self-signed certificate");
-    let digest = announce_digest(&identity);
-    (identity, digest)
+/// Explicit certificate failures reject host admission. Omitted certificate
+/// configuration creates a self-signed development identity. Its digest belongs
+/// to the session's invite/status resource.
+fn resolve_identity() -> Result<(Identity, String), String> {
+    let identity = match resolve_cert_paths(
+        std::env::args_os(),
+        std::env::var_os(ENV_TLS_CERT),
+        std::env::var_os(ENV_TLS_KEY),
+    )? {
+        Some((cert_path, key_path)) => {
+            let identity = load_pem_identity(&cert_path, &key_path)?;
+            info!("TLS: WebTransport using cert from {}", cert_path.display());
+            identity
+        }
+        None => Identity::self_signed(vec!["localhost".to_string(), "127.0.0.1".to_string()])
+            .map_err(|error| format!("TLS: cannot create self-signed certificate: {error}"))?,
+    };
+    validate_identity(&identity)?;
+    let digest = certificate_digest(&identity)?;
+    Ok((identity, digest))
 }
 
-/// Compute the cert's DER-SHA256 digest, log it, and write it to
-/// `lunco_cert_digest.txt` so browser clients can hash-pin it (`#<digest>`).
-/// Called on BOTH identity paths so a persisted self-signed cert (loaded via
-/// the env vars) yields a stable digest across restarts. Returns the **bare
-/// lowercase hex** form (colons stripped) for embedding in an invite link.
-fn announce_digest(identity: &Identity) -> String {
-    let digest = format!("{}", identity.certificate_chain().as_slice()[0].hash());
+/// Compute and log the first certificate's DER-SHA256 digest for this session.
+fn certificate_digest(identity: &Identity) -> Result<String, String> {
+    let certificate = identity
+        .certificate_chain()
+        .as_slice()
+        .first()
+        .ok_or_else(|| "TLS: certificate chain is empty".to_string())?;
+    let digest = format!("{}", certificate.hash());
     info!("TLS: WebTransport cert digest: {digest}");
-    let digest_path = std::env::temp_dir().join("lunco_cert_digest.txt");
-    // lunco-storage, not std::fs (clippy-banned workspace-wide for wasm parity).
-    if FileStorage::new()
-        .write_sync(&StorageHandle::File(digest_path.clone()), digest.as_bytes())
-        .is_ok()
-    {
-        info!("TLS: digest written to {}", digest_path.display());
-    }
-    digest
+    Ok(digest
         .chars()
-        .filter(|c| c.is_ascii_hexdigit())
-        .map(|c| c.to_ascii_lowercase())
-        .collect()
+        .filter(char::is_ascii_hexdigit)
+        .map(|character| character.to_ascii_lowercase())
+        .collect())
 }
 
 /// Best-guess primary LAN IPv4 for the invite-link prefill: open a UDP socket
@@ -292,19 +274,43 @@ impl AssetHttpServer {
     }
 }
 
-/// Build an [`Identity`] from PEM cert-chain + private-key files. Reads route
-/// through [`lunco_storage`] (raw `std::fs` is clippy-banned); parsing is sync
-/// (`rustls_pemfile` → DER → wtransport's sync constructors).
-fn load_pem_identity(cert_path: &str, key_path: &str) -> Result<Identity, String> {
+/// Validate the exact TLS pair before the transport's infallible identity path.
+fn validate_identity(identity: &Identity) -> Result<(), String> {
+    use wtransport::tls::rustls;
+    let certificates = identity
+        .certificate_chain()
+        .as_slice()
+        .iter()
+        .map(|certificate| rustls::pki_types::CertificateDer::from(certificate.der().to_vec()))
+        .collect();
+    let key = rustls::pki_types::PrivateKeyDer::Pkcs8(rustls::pki_types::PrivatePkcs8KeyDer::from(
+        identity.private_key().secret_der().to_vec(),
+    ));
+    // This is the same fallible certificate/key check used by rustls's
+    // with_single_cert, before wtransport's infallible identity path.
+    rustls::sign::CertifiedKey::from_der(
+        certificates,
+        key,
+        &rustls::crypto::ring::default_provider(),
+    )
+    .map_err(|error| format!("TLS certificate/private key rejected: {error}"))?;
+    Ok(())
+}
+
+/// Read native PEM paths through storage; parse at the TLS owner.
+fn load_pem_identity(cert_path: &Path, key_path: &Path) -> Result<Identity, String> {
     let storage = FileStorage::new();
     let cert_bytes = storage
-        .read_sync(&StorageHandle::File(PathBuf::from(cert_path)))
-        .map_err(|e| format!("read cert {cert_path}: {e:?}"))?;
+        .read_sync(&StorageHandle::File(cert_path.to_path_buf()))
+        .map_err(|e| format!("read cert {}: {e:?}", cert_path.display()))?;
     let key_bytes = storage
-        .read_sync(&StorageHandle::File(PathBuf::from(key_path)))
-        .map_err(|e| format!("read key {key_path}: {e:?}"))?;
+        .read_sync(&StorageHandle::File(key_path.to_path_buf()))
+        .map_err(|e| format!("read key {}: {e:?}", key_path.display()))?;
+    identity_from_pem(&cert_bytes, &key_bytes)
+}
 
-    let mut cert_rd: &[u8] = &cert_bytes;
+fn identity_from_pem(cert_bytes: &[u8], key_bytes: &[u8]) -> Result<Identity, String> {
+    let mut cert_rd = cert_bytes;
     let certs = rustls_pemfile::certs(&mut cert_rd)
         .map(|r| {
             r.map_err(|e| format!("parse cert PEM: {e}"))
@@ -315,45 +321,79 @@ fn load_pem_identity(cert_path: &str, key_path: &str) -> Result<Identity, String
         })
         .collect::<Result<Vec<_>, _>>()?;
     if certs.is_empty() {
-        return Err(format!("no CERTIFICATE blocks in {cert_path}"));
+        return Err("TLS: no CERTIFICATE blocks in certificate PEM".into());
     }
 
-    let mut key_rd: &[u8] = &key_bytes;
+    let mut key_rd = key_bytes;
     let key_der = rustls_pemfile::private_key(&mut key_rd)
         .map_err(|e| format!("parse key PEM: {e}"))?
-        .ok_or_else(|| format!("no PRIVATE KEY block in {key_path}"))?;
+        .ok_or_else(|| "TLS: no PRIVATE KEY block in key PEM".to_string())?;
+    if !matches!(
+        &key_der,
+        wtransport::tls::rustls::pki_types::PrivateKeyDer::Pkcs8(_)
+    ) {
+        return Err("WebTransport private key must use PKCS#8 PEM encoding".into());
+    }
     // certbot writes PKCS#8 (`BEGIN PRIVATE KEY`); wtransport wraps the DER as such.
     let private_key = PrivateKey::from_der_pkcs8(key_der.secret_der().to_vec());
 
     Ok(Identity::new(CertificateChain::new(certs), private_key))
 }
 
-/// Spawn the server entity (WebTransport cert via [`resolve_identity`]), trigger
-/// `Start`, and register the lifecycle observers + ferry systems.
-pub(crate) fn setup_host(app: &mut App, port: u16) {
-    let (identity, digest) = resolve_identity();
-    let netcode_key = netcode_key();
+/// Prepared host inputs contain no admitted transport or ECS state.
+pub(crate) struct PreparedHost {
+    identity: Identity,
+    digest: String,
+    netcode_key: [u8; 32],
+    address: SocketAddr,
+}
 
-    // A missing deployment key selects the explicitly-marked development key.
-    // Keep that key useful for local smoke tests, but never let it authenticate
-    // a host reachable from the LAN. Production hosts opt into a real key and
-    // may then choose a public bind through `LUNCO_NET_BIND`.
-    let bind_host = std::env::var("LUNCO_NET_BIND").unwrap_or_else(|_| {
-        if is_dev_netcode_key(&netcode_key) {
-            "127.0.0.1".to_string()
-        } else {
-            "0.0.0.0".to_string()
-        }
-    });
-    let bind_ip = bind_host
+fn resolve_host_bind(value: Option<&str>, key: &[u8; 32]) -> Result<IpAddr, String> {
+    let default = if is_dev_netcode_key(key) {
+        "127.0.0.1"
+    } else {
+        "0.0.0.0"
+    };
+    let value = value.unwrap_or(default);
+    let ip = value
         .parse::<IpAddr>()
-        .unwrap_or_else(|error| panic!("invalid LUNCO_NET_BIND={bind_host}: {error}"));
-    if is_dev_netcode_key(&netcode_key) && !bind_ip.is_loopback() {
-        panic!(
-            "refusing non-loopback WebTransport bind {bind_ip} with the development netcode key; \
-             provide LUNCO_NETCODE_KEY or LUNCO_NETCODE_KEY_FILE before using LUNCO_NET_BIND"
-        );
+        .map_err(|error| format!("invalid LUNCO_NET_BIND={value}: {error}"))?;
+    if is_dev_netcode_key(key) && !ip.is_loopback() {
+        return Err(format!(
+            "refusing non-loopback WebTransport bind {ip} with the development netcode key; provide LUNCO_NETCODE_KEY or LUNCO_NETCODE_KEY_FILE"
+        ));
     }
+    Ok(ip)
+}
+
+pub(crate) fn prepare_host(port: u16) -> Result<PreparedHost, String> {
+    let netcode_key = netcode_key()?;
+    let bind_host = std::env::var_os("LUNCO_NET_BIND")
+        .map(|value| {
+            value
+                .into_string()
+                .map_err(|_| "LUNCO_NET_BIND is not valid UTF-8".to_string())
+        })
+        .transpose()?;
+    let bind_ip = resolve_host_bind(bind_host.as_deref(), &netcode_key)?;
+    let (identity, digest) = resolve_identity()?;
+    Ok(PreparedHost {
+        identity,
+        digest,
+        netcode_key,
+        address: SocketAddr::new(bind_ip, port),
+    })
+}
+
+/// Admit a fully validated host, then register its lifecycle and ferry systems.
+pub(crate) fn setup_host(app: &mut App, prepared: PreparedHost) {
+    let PreparedHost {
+        identity,
+        digest,
+        netcode_key,
+        address: server_addr,
+    } = prepared;
+    let port = server_addr.port();
 
     // Seed the *Copy invite link* prefill (LAN IP:port) + the cert digest a
     // browser guest must pin, onto the always-on NetStatus seam so the workbench
@@ -367,7 +407,6 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
         status.invite_digest = digest;
     }
 
-    let server_addr = SocketAddr::new(bind_ip, port);
     let server = app
         .world_mut()
         .spawn((
@@ -1969,5 +2008,135 @@ mod tests {
         assert!(!is_runtime_state("terrain/dem/metadata.yaml"));
         // Not a prefix match on a similarly-named directory.
         assert!(!is_runtime_state("historical_data/site.usda"));
+    }
+}
+
+#[cfg(test)]
+mod configuration_tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(|value| OsString::from(*value)).collect()
+    }
+
+    #[test]
+    fn tls_path_configuration_rejects_incomplete_and_preserves_native_paths() {
+        assert_eq!(resolve_cert_paths(args(&[]), None, None).unwrap(), None);
+        for invalid in [
+            args(&["--cert"]),
+            args(&["--cert", ""]),
+            args(&["--key", "key.pem"]),
+            args(&["--cert", "--key", "key.pem"]),
+            args(&["--cert", "one", "--cert", "two"]),
+        ] {
+            assert!(resolve_cert_paths(invalid, None, None).is_err());
+        }
+        assert!(resolve_cert_paths(args(&[]), Some("cert.pem".into()), None).is_err());
+        assert!(resolve_cert_paths(args(&[]), Some("".into()), Some("key.pem".into())).is_err());
+        let directory = PathBuf::from("native # % δ certs");
+        assert_eq!(
+            resolve_cert_paths(
+                vec!["--cert".into(), directory.clone().into_os_string()],
+                None,
+                None
+            )
+            .unwrap(),
+            Some((
+                directory.join("fullchain.pem"),
+                directory.join("privkey.pem")
+            ))
+        );
+        assert_eq!(
+            resolve_cert_paths(
+                args(&["--cert", "fullchain.PEM", "--key", "explicit key.pem"]),
+                Some("ignored".into()),
+                None
+            )
+            .unwrap(),
+            Some(("fullchain.PEM".into(), "explicit key.pem".into()))
+        );
+    }
+
+    #[test]
+    fn host_bind_rejects_invalid_and_public_development_admission() {
+        let development = crate::shared::DEV_NETCODE_KEY;
+        assert!(resolve_host_bind(Some("not an IP"), &development).is_err());
+        assert!(resolve_host_bind(Some(""), &development).is_err());
+        assert!(resolve_host_bind(Some("0.0.0.0"), &development).is_err());
+        assert!(resolve_host_bind(None, &development).unwrap().is_loopback());
+        assert!(
+            resolve_host_bind(Some("::1"), &development)
+                .unwrap()
+                .is_loopback()
+        );
+        assert_eq!(
+            resolve_host_bind(Some("0.0.0.0"), &[0xab; 32]).unwrap(),
+            IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
+        );
+    }
+
+    #[test]
+    fn tls_identity_validates_key_and_certificate_before_admission() {
+        let first = Identity::self_signed(["localhost"]).unwrap();
+        let other = Identity::self_signed(["localhost"]).unwrap();
+        assert!(validate_identity(&first).is_ok());
+        let mismatch = Identity::new(
+            first.certificate_chain().clone(),
+            other.private_key().clone_key(),
+        );
+        assert!(validate_identity(&mismatch).is_err());
+        let invalid = Identity::new(
+            first.certificate_chain().clone(),
+            PrivateKey::from_der_pkcs8(vec![1, 2, 3]),
+        );
+        assert!(validate_identity(&invalid).is_err());
+        assert!(identity_from_pem(b"not a certificate", b"not a key").is_err());
+        let cert = first.certificate_chain().as_slice()[0].to_pem();
+        let key = first.private_key().to_secret_pem();
+        let parsed = identity_from_pem(cert.as_bytes(), key.as_bytes()).unwrap();
+        assert!(validate_identity(&parsed).is_ok());
+        let empty = Identity::new(
+            CertificateChain::new(Vec::new()),
+            first.private_key().clone_key(),
+        );
+        assert!(certificate_digest(&empty).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn tls_windows_drive_and_unc_paths_use_native_sibling_resolution() {
+        for directory in [r"C:\native # % δ certs", r"\\host\share\native certs"] {
+            let directory = PathBuf::from(directory);
+            let cert = directory.join("fullchain.pem");
+            assert_eq!(
+                resolve_cert_paths(
+                    vec!["--cert".into(), cert.clone().into_os_string()],
+                    None,
+                    None
+                )
+                .unwrap(),
+                Some((cert, directory.join("privkey.pem")))
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tls_native_non_utf8_paths_remain_os_paths() {
+        use std::os::unix::ffi::OsStringExt;
+        let directory = PathBuf::from(OsString::from_vec(vec![b'c', 0xff]));
+        assert_eq!(
+            resolve_cert_paths(
+                vec!["--cert".into(), directory.clone().into_os_string()],
+                None,
+                None
+            )
+            .unwrap(),
+            Some((
+                directory.join("fullchain.pem"),
+                directory.join("privkey.pem")
+            ))
+        );
     }
 }

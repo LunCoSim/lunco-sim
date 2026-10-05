@@ -21,17 +21,17 @@ use lightyear::prelude::{LinkStart, Linked, Linking};
 use lightyear_aeronet::AeronetLinkOf;
 
 /// Component on the client entity: the full WebTransport URL to dial plus the
-/// optional self-signed cert digest. An **empty** digest means:
+/// optional self-signed cert digest. An absent digest means:
 /// - browser: no `serverCertificateHashes` → normal CA validation.
 /// - native: uses the system CA store → normal CA validation.
 ///
-/// A non-empty hex digest pins a specific self-signed cert (localhost dev only).
+/// A validated 32-byte digest pins a specific self-signed cert.
 #[derive(Component)]
 pub(crate) struct WtUrlClientIo {
     /// Full URL, e.g. `https://sandbox.lunco.space:5888`.
     pub url: String,
-    /// Bare lowercase hex SHA-256 of a self-signed cert, or empty for CA.
-    pub certificate_digest: String,
+    /// Validated SHA-256 pin. `None` selects the documented unpinned mode.
+    pub certificate_digest: Option<[u8; 32]>,
 }
 
 /// Registers the URL-dialing link observer on both native and wasm. Add once;
@@ -55,9 +55,12 @@ fn link(
 ) {
     if let Ok((entity, io)) = query.get(trigger.entity) {
         let url = io.url.clone();
-        let digest = io.certificate_digest.clone();
-        commands.queue(move |world: &mut World| -> Result {
-            let config = client_config(&url, digest)?;
+        let digest = io.certificate_digest;
+        commands.queue(move |world: &mut World| {
+            if world.get_entity(entity).is_err() {
+                return;
+            }
+            let config = client_config(&url, digest);
             let entity_mut = world.spawn((AeronetLinkOf(entity), Name::from("WtUrlClient")));
             // Native: `into_options()` converts the URL string to wtransport's
             // `ConnectOptions`, which preserves the hostname for SNI and DNS
@@ -72,18 +75,17 @@ fn link(
             {
                 WebTransportClient::connect(config, url).apply(entity_mut);
             }
-            Ok(())
         });
     }
 }
 
 /// Build the `ClientConfig` for the given URL.
 ///
-/// - Empty digest: use system CA store (native) / no `serverCertificateHashes`
+/// - Absent digest: use system CA store (native hostname) / no `serverCertificateHashes`
 ///   (browser) → normal CA chain validation. **Production path.**
-/// - Non-empty hex digest: pin a specific self-signed cert SHA-256.
+/// - Present digest: pin a specific self-signed cert SHA-256.
 ///   **Dev/localhost only.**
-fn client_config(url: &str, cert_hash: String) -> Result<ClientConfig> {
+fn client_config(url: &str, cert_hash: Option<[u8; 32]>) -> ClientConfig {
     #[cfg(not(target_family = "wasm"))]
     {
         native_client_config(url, cert_hash)
@@ -110,31 +112,17 @@ fn url_host_is_bare_ip(url: &str) -> bool {
     host.parse::<std::net::IpAddr>().is_ok()
 }
 
-/// Native client config. Empty digest + hostname → system CA store (validates
-/// `sandbox.lunco.space`'s Let's Encrypt cert normally). Empty digest + bare IP
-/// → no validation (direct LAN/dev). Non-empty digest → self-signed cert pinning.
+/// Native client config. Absent digest + hostname → system CA store. Absent
+/// digest + bare IP → no validation (direct LAN/dev). Present digest → pinning.
 #[cfg(not(target_family = "wasm"))]
-fn native_client_config(url: &str, cert_digest: String) -> Result<ClientConfig> {
+fn native_client_config(url: &str, cert_digest: Option<[u8; 32]>) -> ClientConfig {
     use aeronet_webtransport::wtransport::{config::IpBindConfig, tls::Sha256Digest};
     use core::time::Duration;
 
     let config = ClientConfig::builder().with_bind_config(IpBindConfig::InAddrAnyV4);
-    let config = if !cert_digest.is_empty() {
+    let config = if let Some(hash) = cert_digest {
         // Dev: self-signed cert pinned by its SHA-256 digest (explicit override).
         info!("[net] connecting to {url} with pinned cert digest");
-        let bytes = from_hex(&cert_digest)?;
-        // A SHA-256 digest is exactly 32 bytes; `from_hex` only guarantees even
-        // length, so guard before `copy_from_slice` (which panics on a length
-        // mismatch) and fail gracefully on a malformed `LUNCO_CERT_DIGEST`.
-        if bytes.len() != 32 {
-            return Err(format!(
-                "cert digest must be 32 bytes (64 hex chars), got {} bytes: {cert_digest}",
-                bytes.len()
-            )
-            .into());
-        }
-        let mut hash = [0u8; 32];
-        hash.copy_from_slice(&bytes);
         let digest = Sha256Digest::new(hash);
         config.with_server_certificate_hashes([digest])
     } else if url_host_is_bare_ip(url) {
@@ -154,7 +142,7 @@ fn native_client_config(url: &str, cert_digest: String) -> Result<ClientConfig> 
         config.with_native_certs()
     };
 
-    Ok(config
+    config
         .keep_alive_interval(Some(Duration::from_secs(1)))
         // 30s (was 5s): a client's frame loop legitimately stalls past a few
         // seconds during heavy startup (USD scene load + Modelica cosim compile)
@@ -164,58 +152,85 @@ fn native_client_config(url: &str, cert_digest: String) -> Result<ClientConfig> 
         // timeout (see `NetcodeConfig` in server.rs) so neither layer races ahead.
         .max_idle_timeout(Some(Duration::from_secs(30)))
         .expect("valid idle timeout")
-        .build())
+        .build()
 }
 
-/// Browser client config. Empty digest → no `serverCertificateHashes` → normal
-/// CA validation. Non-empty → pin for localhost self-signed dev cert.
+/// Browser client config. Absent digest → normal CA validation. Present digest
+/// → pin for a self-signed development certificate.
 #[cfg(target_family = "wasm")]
-fn wasm_client_config(cert_hash: String) -> Result<ClientConfig> {
+fn wasm_client_config(cert_hash: Option<[u8; 32]>) -> ClientConfig {
     use aeronet_webtransport::xwt_web::{CertificateHash, HashAlgorithm};
 
-    let server_certificate_hashes = if cert_hash.is_empty() {
-        Vec::new()
-    } else {
-        let hash = from_hex(&cert_hash)?;
+    let server_certificate_hashes = if let Some(hash) = cert_hash {
         vec![CertificateHash {
             algorithm: HashAlgorithm::Sha256,
             value: Vec::from(hash),
         }]
+    } else {
+        Vec::new()
     };
 
-    Ok(ClientConfig {
+    ClientConfig {
         server_certificate_hashes,
         ..Default::default()
-    })
+    }
 }
 
-// Hex → bytes for the cert digest (bare lowercase hex, no colons). Adapted from
-// lightyear_webtransport, which adapted it from ring's test helpers.
-fn from_hex(hex_str: &str) -> core::result::Result<Vec<u8>, String> {
-    if !hex_str.len().is_multiple_of(2) {
+/// Decode one optional SHA-256 pin at connection admission. Only documented
+/// colon/whitespace separators may be removed; other characters reject.
+pub(crate) fn parse_certificate_digest(
+    value: &str,
+) -> core::result::Result<Option<[u8; 32]>, String> {
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    let mut hash = [0u8; 32];
+    let mut digits = 0usize;
+    for character in value.chars() {
+        if character == ':' || character.is_ascii_whitespace() {
+            continue;
+        }
+        let nibble = character
+            .to_digit(16)
+            .ok_or_else(|| "certificate digest contains a non-hex character".to_string())?;
+        if digits >= 64 {
+            return Err("certificate digest must contain exactly 64 hex digits".into());
+        }
+        hash[digits / 2] |= (nibble as u8) << (if digits.is_multiple_of(2) { 4 } else { 0 });
+        digits += 1;
+    }
+    if digits != 64 {
         return Err(format!(
-            "cert digest hex has an odd number of digits ({}): {hex_str}",
-            hex_str.len(),
+            "certificate digest must contain exactly 64 hex digits, got {digits}"
         ));
     }
-    let mut result = Vec::with_capacity(hex_str.len() / 2);
-    for digits in hex_str.as_bytes().chunks(2) {
-        let hi = from_hex_digit(digits[0])?;
-        let lo = from_hex_digit(digits[1])?;
-        result.push((hi * 0x10) | lo);
-    }
-    Ok(result)
+    Ok(Some(hash))
 }
 
-fn from_hex_digit(d: u8) -> core::result::Result<u8, String> {
-    use core::ops::RangeInclusive;
-    const DECIMAL: (u8, RangeInclusive<u8>) = (0, b'0'..=b'9');
-    const HEX_LOWER: (u8, RangeInclusive<u8>) = (10, b'a'..=b'f');
-    const HEX_UPPER: (u8, RangeInclusive<u8>) = (10, b'A'..=b'F');
-    for (offset, range) in &[DECIMAL, HEX_LOWER, HEX_UPPER] {
-        if range.contains(&d) {
-            return Ok(d - range.start() + offset);
+#[cfg(test)]
+mod configuration_tests {
+    use super::*;
+    #[test]
+    fn certificate_pin_rejects_invalid_explicit_input_and_preserves_valid_bytes() {
+        assert_eq!(parse_certificate_digest(""), Ok(None));
+        assert_eq!(parse_certificate_digest(" "), Ok(None));
+        assert_eq!(
+            parse_certificate_digest(&"AB:".repeat(32)),
+            Ok(Some([0xab; 32]))
+        );
+        assert_eq!(
+            parse_certificate_digest(&"ab".repeat(32)),
+            Ok(Some([0xab; 32]))
+        );
+        for invalid in [
+            ":",
+            "g",
+            "ab",
+            &"a".repeat(63),
+            &"a".repeat(65),
+            &format!("{}g", "ab".repeat(32)),
+        ] {
+            assert!(parse_certificate_digest(invalid).is_err());
         }
     }
-    Err(format!("invalid hex digit '{}'", d as char))
 }

@@ -135,7 +135,7 @@ else
         success "cert ready under $PREFIX/certs"
     else
         error "certbot failed — check DNS for $DOMAIN points here + port 80 is reachable."
-        error "the service will PANIC on start with cert env set but no cert (fail-loud)."
+        error "host startup will reject missing cert files; fix the certificate before starting the service."
     fi
 fi
 

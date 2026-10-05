@@ -7,9 +7,9 @@ Documentation=file:/opt/lunco/deploy/DEPLOY.md
 After=network-online.target
 Wants=network-online.target
 
-# Trip into `failed` (not an endless restart loop) after repeated crashes, so
-# `systemctl status` surfaces a genuinely broken config (e.g. a bad cert, which
-# is a deliberate fail-loud panic). StartLimit* live in [Unit].
+# Bound restarts after unexpected process failures. Configuration rejection
+# keeps the app local; inspect the journal's host startup diagnostic to confirm
+# listener admission. StartLimit* live in [Unit].
 StartLimitIntervalSec=120
 StartLimitBurst=5
 
