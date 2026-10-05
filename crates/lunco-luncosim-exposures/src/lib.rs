@@ -658,6 +658,9 @@ fn simulation_progress_facts(
                     lunco_core_runtime::SimulationProgressOwner::TerrainPreparation => {
                         "TerrainPreparation"
                     }
+                    lunco_core_runtime::SimulationProgressOwner::TerrainColliderAdmission => {
+                        "TerrainColliderAdmission"
+                    }
                     lunco_core_runtime::SimulationProgressOwner::DocumentPreparation => {
                         "DocumentPreparation"
                     }

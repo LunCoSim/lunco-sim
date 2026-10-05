@@ -509,6 +509,8 @@ pub enum SimulationProgressOwner {
     UsdPhysicsAdmission,
     /// Authored terrain data and collider preparation.
     TerrainPreparation,
+    /// Resident collision support required by the active physical assemblies.
+    TerrainColliderAdmission,
     /// USD document source preparation and revision admission.
     DocumentPreparation,
     /// Modelica source/interface preparation.

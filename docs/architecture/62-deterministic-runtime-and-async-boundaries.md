@@ -22,6 +22,22 @@ architectures, compiler versions, or solver profiles. Those numerical promises
 need an explicit deterministic profile and their own cross-platform evidence.
 Rendering and interpolated presentation samples are outside authoritative state.
 
+The workspace enables Avian's maintained `enhanced-determinism` feature. In
+addition to deterministic math, it selects Parry's ordered contact-subdetector
+caches, including heightfield manifolds. Terrain collider bakes commit complete
+required cohorts in canonical coordinate order. Missing resident collision
+support holds shared simulation admission as well as physics; guidance and
+engine state cannot run ahead while bodies wait for terrain. Fixed admission
+refreshes the physics hold after asynchronous coupling completion so force
+delivery and integration consume the same clock state.
+
+Griffin same-host evidence on 2026-10-05: source-pinned fresh runs have exactly
+equal final pose/speed/upright values at tick 5110, and one retained warm-reload
+observer matches 91 samples across two 5400-tick replacements. Logs:
+`target/griffin-enhanced-determinism-replay-driver.log` and
+`target/griffin-egress-contact-deterministic-49817.log`. This does not establish
+cross-platform equality or acceptance of the whole mission.
+
 The runtime remains event driven. It does not poll for readiness on every
 simulation tick, and it does not add a second authoritative time source.
 

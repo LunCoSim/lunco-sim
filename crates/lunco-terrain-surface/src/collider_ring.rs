@@ -201,7 +201,10 @@ pub struct ColliderTiles {
 /// height the heightfield was rebased by — so the spawn site can anchor the
 /// tile's `CellCoord` at that same height (mirroring the visual CDLOD tiles).
 #[derive(Component, Default)]
-pub struct PendingColliderBakes(HashMap<QuadCoord, Task<(Collider, f64)>>);
+pub struct PendingColliderBakes(
+    HashMap<QuadCoord, Task<(Collider, f64)>>,
+    HashMap<QuadCoord, (Collider, f64)>,
+);
 
 /// Back-pointer from a spawned collider tile to its owning terrain. Tiles are
 /// children of the big_space **grid** (each carries its own `CellCoord`), so they
@@ -1101,6 +1104,10 @@ pub(crate) fn update_collider_ring(
                 Some(aabb) => !qt.region(*coord).overlaps_aabb(aabb),
                 None => false,
             });
+            pending.1.retain(|coord, _| match dirty {
+                Some(aabb) => !qt.region(*coord).overlaps_aabb(aabb),
+                None => false,
+            });
             t.oracle_key = Some(oracle_key);
             t.surface_revision = surface_change
                 .filter(|change| change.surface_key == oracle_key)
@@ -1133,6 +1140,7 @@ pub(crate) fn update_collider_ring(
             && *ring_nodes == tiles.last_ring_nodes
             && tiles.stale.is_empty()
             && pending.0.is_empty()
+            && pending.1.is_empty()
         {
             continue;
         }
@@ -1145,15 +1153,21 @@ pub(crate) fn update_collider_ring(
 
         // Despawn tiles no longer wanted; drop in-flight bakes for them too.
         let t = &mut *tiles;
-        t.map.retain(|coord, ent| {
-            let keep = wanted.contains(coord);
-            if !keep {
-                commands.entity(*ent).try_despawn();
-                t.stale.remove(coord);
+        let mut removed: Vec<_> = t
+            .map
+            .keys()
+            .copied()
+            .filter(|coord| !wanted.contains(coord))
+            .collect();
+        removed.sort_unstable_by_key(|coord| (coord.depth, coord.x, coord.z));
+        for coord in removed {
+            if let Some(entity) = t.map.remove(&coord) {
+                commands.entity(entity).try_despawn();
+                t.stale.remove(&coord);
             }
-            keep
-        });
+        }
         pending.0.retain(|coord, _| wanted.contains(coord));
+        pending.1.retain(|coord, _| wanted.contains(coord));
 
         // Finalize completed off-thread bakes: spawn the tile entity. Each
         // anchors to its own big_space `CellCoord` (from its world centre);
@@ -1169,6 +1183,26 @@ pub(crate) fn update_collider_ring(
                 None => true,
             },
         );
+        for (coord, collider, origin_y) in done.drain(..) {
+            pending.1.insert(coord, (collider, origin_y));
+        }
+        // Admit the completed batch in canonical coordinate order. Worker
+        // completion and HashMap iteration must not choose collider entity IDs
+        // or broad-phase insertion order at a shared terrain seam.
+        if pending.0.is_empty()
+            && ring_nodes.iter().all(|coord| {
+                (tiles.map.contains_key(coord) && !tiles.stale.contains(coord))
+                    || pending.1.contains_key(coord)
+            })
+        {
+            done.extend(
+                pending
+                    .1
+                    .drain()
+                    .map(|(coord, (collider, y))| (coord, collider, y)),
+            );
+            done.sort_unstable_by_key(|(coord, _, _)| (coord.depth, coord.x, coord.z));
+        }
         for (coord, collider, origin_y) in done.drain(..) {
             let region = qt.region(coord);
             let center = region.center;
@@ -1226,8 +1260,9 @@ pub(crate) fn update_collider_ring(
         // Queue bakes for newly-wanted (or stale-resident) tiles OFF-THREAD
         // (oracle sampling + parry heightfield build used to stall the frame at
         // every tile-boundary cross).
-        for coord in wanted.iter() {
+        for coord in ring_nodes.iter() {
             if pending.0.contains_key(coord)
+                || pending.1.contains_key(coord)
                 || (tiles.map.contains_key(coord) && !tiles.stale.contains(coord))
             {
                 continue;
@@ -1343,6 +1378,7 @@ pub fn hold_physics_until_dem_ready(
     // pass. Testing mere presence is a no-op; we must test VALIDITY.
     q_live: Query<&avian3d::prelude::ColliderAabb>,
     holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    mut progress: Option<ResMut<lunco_core_runtime::SimulationProgress>>,
     mut required_nodes: Local<Vec<QuadCoord>>,
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
@@ -1412,11 +1448,18 @@ pub fn hold_physics_until_dem_ready(
             }
         }
     }
-    // Gate PHYSICS, not the clock. This suspends rigid-body integration only — the
-    // transport, the tick, the epoch and the celestial chain all keep running — so
-    // the scene is not born "paused" (the user never has to press play to undo an
-    // engine wait) and the planets don't stop while a heightfield bakes. Edge-guarded
-    // so the `ResMut` is only dereferenced when the state actually flips.
+    // Terrain residency is a causal admission boundary. Letting guidance and
+    // chamber state advance while bodies are held makes the first live force
+    // depend on asynchronous tile preparation time. Hold the shared simulation
+    // without changing the user's transport; Update continues preparing tiles.
+    if let Some(progress) = progress.as_mut() {
+        let key = terrain_collider_admission_key();
+        if wait {
+            progress.acquire(key, "Waiting for resident terrain collision support");
+        } else {
+            progress.release(key);
+        }
+    }
     let was_waiting = holds.holds(lunco_physics::PhysicsHolds::TERRAIN_READY);
     if was_waiting != wait {
         if wait {
@@ -1462,6 +1505,21 @@ pub fn hold_physics_until_dem_ready(
             info!("[terrain] physics admission hold released");
         }
         holds.set(lunco_physics::PhysicsHolds::TERRAIN_READY, wait);
+    }
+}
+
+fn terrain_collider_admission_key() -> lunco_core_runtime::SimulationProgressKey {
+    lunco_core_runtime::SimulationProgressKey {
+        owner: lunco_core_runtime::SimulationProgressOwner::TerrainColliderAdmission,
+        operation_id: 0,
+    }
+}
+
+pub(crate) fn clear_terrain_collider_admission(
+    mut progress: Option<ResMut<lunco_core_runtime::SimulationProgress>>,
+) {
+    if let Some(progress) = progress.as_mut() {
+        progress.release(terrain_collider_admission_key());
     }
 }
 

@@ -357,7 +357,9 @@ sysmlv2-stdlib = "=0.1.0"
 # wasm worker — the same feature-unification trap as A1. Nothing in the tree
 # constructs `PhysicsDebugPlugin` or `PhysicsGizmos`; re-enable it here (and only
 # here) if collider debug-draw is ever wired up.
-avian3d = { version = "0.7.0", default-features = false, features = ["3d", "f64", "parry-f64", "parallel", "default-collider", "collider-from-mesh", "bevy_diagnostic", "xpbd_joints"] }
+# Stable contact-subdetector ordering is part of same-build scene replay.
+# Use the maintained feature for ordered Parry caches and deterministic math.
+avian3d = { version = "0.7.0", default-features = false, features = ["3d", "f64", "parry-f64", "parallel", "default-collider", "collider-from-mesh", "bevy_diagnostic", "xpbd_joints", "enhanced-determinism"] }
 # big_space bevy-0.19 support is not released yet; consume the upstream
 # compatibility branch. Cargo.lock pins the exact reviewed revision.
 # TODO(deps): swap back to a crates.io release once one ships for bevy 0.19.

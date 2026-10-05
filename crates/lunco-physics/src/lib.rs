@@ -34,8 +34,8 @@
 
 pub use avian3d::prelude::Physics;
 use avian3d::prelude::{
-    AngularVelocity, ContactGraph, CustomPositionIntegration, LinearVelocity,
-    Position, RigidBody, Rotation, Sensor,
+    AngularVelocity, ContactGraph, CustomPositionIntegration, LinearVelocity, Position, RigidBody,
+    Rotation, Sensor,
 };
 pub use avian3d::schedule::PhysicsTime;
 use bevy::ecs::schedule::ApplyDeferred;
@@ -865,8 +865,9 @@ pub fn physics_is_live(
 /// Pausing the physics clock zeroes the physics delta, so the solver does not step
 /// — while `Time<Virtual>` (and therefore the tick, epoch, ephemeris and animation)
 /// keeps advancing. Runs in `PreUpdate`, ahead of the physics schedule, and is
-/// change-driven: it only writes when the desired state differs from the actual, so
-/// it is also self-healing if anything pauses the physics clock out of band.
+/// repeated at the admitted fixed-step boundary: an asynchronous solver result
+/// can release the coupling barrier after PreUpdate. Forces and integration
+/// must consume the same admission state rather than a stale paused flag.
 pub fn apply_physics_holds(
     holds: Res<PhysicsHolds>,
     coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
@@ -1119,7 +1120,10 @@ impl Plugin for PhysicsGatePlugin {
             .add_systems(lunco_core::SceneTeardown, reset_scene_physics_state)
             // Inside the fixed loop, ahead of avian's `FixedPostUpdate` integration,
             // so a granted step coincides with a step that actually runs.
-            .add_systems(bevy::prelude::FixedPreUpdate, grant_physics_step)
+            .add_systems(
+                bevy::prelude::FixedPreUpdate,
+                (apply_physics_holds, grant_physics_step).chain(),
+            )
             .add_systems(
                 bevy::prelude::FixedPostUpdate,
                 apply_transport_pause_before_physics
@@ -1437,6 +1441,40 @@ mod tests {
         faults.raise("physics-body-escaped", None, "rover", "out of bounds");
         world.insert_resource(faults);
         assert!(!world.run_system_once(physics_is_live).unwrap());
+    }
+
+    #[test]
+    fn fixed_admission_refreshes_a_barrier_released_after_preupdate() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.init_resource::<PhysicsHolds>()
+            .init_resource::<PhysicsStepRequest>()
+            .init_resource::<lunco_core_runtime::SimulationBarrier>()
+            .init_resource::<Time<Physics>>()
+            .init_resource::<Time<Virtual>>()
+            .add_systems(
+                FixedPreUpdate,
+                (apply_physics_holds, grant_physics_step).chain(),
+            );
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationBarrier>()
+            .held = true;
+        app.world_mut()
+            .run_system_once(apply_physics_holds)
+            .unwrap();
+        assert!(!app.world_mut().run_system_once(physics_is_live).unwrap());
+        // The worker finishes after the render-frame pause was projected.
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationBarrier>()
+            .held = false;
+        app.world_mut().run_schedule(FixedPreUpdate);
+        assert!(app.world_mut().run_system_once(physics_is_live).unwrap());
+        // A terrain hold still prevents force delivery after solver completion.
+        app.world_mut()
+            .resource_mut::<PhysicsHolds>()
+            .set(PhysicsHolds::TERRAIN_READY, true);
+        app.world_mut().run_schedule(FixedPreUpdate);
+        assert!(!app.world_mut().run_system_once(physics_is_live).unwrap());
     }
 
     /// A queued step lets exactly ONE frame of physics through a hold, then the

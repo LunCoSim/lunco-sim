@@ -62,6 +62,10 @@ impl Plugin for TerrainSurfacePlugin {
         app.register_type::<crate::collider_ring::TerrainColliderRing>();
         app.register_type::<avian3d::prelude::NarrowPhaseConfig>();
         app.init_resource::<crate::collider_ring::PhysicsSupportCache>();
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            crate::collider_ring::clear_terrain_collider_admission,
+        );
         app.configure_sets(Update, TerrainSurfaceSet::PhysicsSupportCache);
         // Physics owns the support contract; this cache turns Avian's change
         // events into a stable assembly projection. Ring selection and the
@@ -142,10 +146,8 @@ impl Plugin for TerrainSurfacePlugin {
         // terrains, until the ring tiles under every dynamic body are resident —
         // so dynamic bodies don't fall through the not-yet-ready collider (esp. web,
         // where the DEM load is slow). See `collider_ring::hold_physics_until_dem_ready`.
-        // This is a `lunco_physics::PhysicsHolds` hold, NOT a transport pause:
-        // the user's play state is untouched, so the scene does not open
-        // "paused" while the DEM bakes and resumes on its own the moment the
-        // terrain is safe to step.
+        // The physics hold and shared causal admission hold leave the user's
+        // play state untouched and release together once terrain is safe.
         app.add_systems(
             Update,
             crate::collider_ring::hold_physics_until_dem_ready
