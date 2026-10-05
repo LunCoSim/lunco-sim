@@ -41,7 +41,36 @@ impl Plugin for ModelicaExecutionPlugin {
         let (tx_res, rx_res) = unbounded();
 
         #[cfg(not(target_arch = "wasm32"))]
-        thread::spawn(move || lunco_modelica_worker::worker::modelica_worker(rx_cmd, tx_res));
+        {
+            let failure_sender = tx_res.clone();
+            let spawn = thread::Builder::new()
+                .name("modelica-worker".into())
+                .spawn(move || {
+                    let failure_sender = tx_res.clone();
+                    if let Err(payload) =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            lunco_modelica_worker::worker::modelica_worker(rx_cmd, tx_res)
+                        }))
+                    {
+                        let detail = payload
+                            .downcast_ref::<String>()
+                            .map(String::as_str)
+                            .or_else(|| payload.downcast_ref::<&str>().copied())
+                            .unwrap_or("non-string panic payload");
+                        let _ = failure_sender.send(
+                            lunco_modelica_runtime::ModelicaResult::worker_failure(format!(
+                                "Modelica worker panicked: {detail}"
+                            )),
+                        );
+                    }
+                });
+            if let Err(error) = spawn {
+                let _ =
+                    failure_sender.send(lunco_modelica_runtime::ModelicaResult::worker_failure(
+                        format!("cannot start Modelica worker: {error}"),
+                    ));
+            }
+        }
 
         #[cfg(not(target_arch = "wasm32"))]
         app.insert_resource(ModelicaChannels {
@@ -80,6 +109,7 @@ impl Plugin for ModelicaExecutionPlugin {
             ));
         }
 
+        app.init_resource::<lunco_modelica_runtime::ModelicaWorkerFailure>();
         app.init_resource::<lunco_signal::SimRegistry>();
         app.init_resource::<SimSampleStream>();
         app.init_resource::<lunco_modelica_runtime::ModelicaStepDiagnostics>();

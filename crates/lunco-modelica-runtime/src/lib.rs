@@ -179,9 +179,17 @@ pub enum LoadSourceRootPayload {
     },
 }
 
+/// Application-lifetime worker failure. Scene teardown cannot revive a dead
+/// transport; subsequent compile requests reject with this exact diagnostic.
+#[derive(Resource, Default)]
+pub struct ModelicaWorkerFailure(pub Option<String>);
+
 /// Result received from the background simulation worker.
 #[derive(Serialize, Deserialize)]
 pub struct ModelicaResult {
+    /// Worker-wide transport/startup failure, consumed before entity routing.
+    #[serde(default)]
+    pub worker_failure: Option<String>,
     pub entity: Entity,
     pub session_id: u64,
     /// Presentation-only preparation transition; never a solver transaction.
@@ -236,9 +244,20 @@ pub struct ModelicaResult {
     pub live_solver_snapshot: Option<ModelicaLiveSolverSnapshot>,
 }
 
+impl ModelicaResult {
+    /// A terminal worker-owner diagnostic has no participant identity.
+    pub fn worker_failure(error: impl Into<String>) -> Self {
+        Self {
+            worker_failure: Some(error.into()),
+            ..Default::default()
+        }
+    }
+}
+
 impl Default for ModelicaResult {
     fn default() -> Self {
         Self {
+            worker_failure: None,
             entity: Entity::PLACEHOLDER,
             session_id: 0,
             preparation_phase: None,

@@ -370,7 +370,7 @@ fn prepare_source_root_payload(id: String, payload: LoadSourceRootPayload) -> Pr
 
 #[cfg(not(target_arch = "wasm32"))]
 impl SolvePreparationPool {
-    fn new() -> Self {
+    fn new() -> Result<Self, String> {
         // Solve lowering is memory-heavy and each request walks a complete
         // structural graph. A small dedicated pool avoids turning parallel
         // startup into memory-bandwidth contention while reserving two logical
@@ -383,19 +383,19 @@ impl SolvePreparationPool {
             .stack_size(16 * 1024 * 1024)
             .thread_name(|index| format!("modelica-solve-{index}"))
             .build()
-            .expect("Modelica solve-preparation pool must be constructible");
+            .map_err(|error| format!("cannot start Modelica solve-preparation pool: {error}"))?;
         bevy::log::info!(
             "[modelica-runtime] solve preparation pool ready: {threads} worker thread(s)"
         );
         let (tx, rx) = crossbeam_channel::unbounded();
-        Self {
+        Ok(Self {
             pool,
             tx,
             rx,
             next_id: 0,
             in_flight_solve_keys: HashMap::default(),
             solve_followers: HashMap::default(),
-        }
+        })
     }
 
     fn allocate_id(&mut self) -> u64 {
@@ -2698,8 +2698,20 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
     let mut prepared_solve_cache = PreparedSolveCache::new();
     // Immutable DAE lowering is dispatched to this bounded pool; the native
     // Rumoca session itself is owned by a separate single-thread actor.
-    let mut solve_preparation_pool = SolvePreparationPool::new();
-    let mut compiler = CompilerActor::new(solve_preparation_pool.tx.clone());
+    let mut solve_preparation_pool = match SolvePreparationPool::new() {
+        Ok(pool) => pool,
+        Err(error) => {
+            let _ = tx.send(ModelicaResult::worker_failure(error));
+            return;
+        }
+    };
+    let mut compiler = match CompilerActor::new(solve_preparation_pool.tx.clone()) {
+        Ok(compiler) => compiler,
+        Err(error) => {
+            let _ = tx.send(ModelicaResult::worker_failure(error));
+            return;
+        }
+    };
     // Lock-free publish stream per entity (Phase A of the multi-sim
     // refactor — see `sim_stream.rs`). The UI side holds a clone of
     // the same `Arc<ArcSwap<SimSnapshot>>`; every successful Step

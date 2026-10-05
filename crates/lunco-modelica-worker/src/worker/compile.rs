@@ -26,6 +26,19 @@ pub fn dispatch_modelica_compile_requests(
 
 fn dispatch_one(world: &mut World, request: CompileRequested) {
     let doc = request.source.document;
+    if let Some(error) = world
+        .get_resource::<lunco_modelica_runtime::ModelicaWorkerFailure>()
+        .and_then(|failure| failure.0.clone())
+    {
+        fail_request(
+            world,
+            doc,
+            request.entity,
+            request.class.as_deref().unwrap_or_default(),
+            &error,
+        );
+        return;
+    }
     let workspace = world
         .get_resource::<lunco_workspace::WorkspaceResource>()
         .map(|workspace| &workspace.0);

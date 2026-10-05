@@ -104,6 +104,13 @@ snapshots include the runtime owner, are retired on its `TwinClosed`, and cannot
 be republished by a cancelled worker. Native and wasm Fast Run compilers release
 user overlays after capturing compilation outcomes while retaining application libraries.
 
+Native worker, compiler actor, and solve-pool startup are fallible. A startup
+failure or unexpected worker disconnect travels through the typed worker-wide
+`ModelicaResult.worker_failure` boundary before participant routing. The bridge
+records `ModelicaWorkerFailure`, faults the affected runtime, ends live compile
+and step state, and rejects later compiles. This application-owned failure
+survives scene teardown; a buffered success cannot revive a dead worker.
+
 Scratch and reserved duplicate documents register their typed creation context
 synchronously at allocation. Deferred document-open delivery cannot rebind them
 to a replacement Twin. Duplicate installation validates the captured context,

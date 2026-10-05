@@ -69,18 +69,18 @@ pub(super) struct CompilerActor {
 }
 
 impl CompilerActor {
-    pub(super) fn new(results: Sender<WorkerPreparationResult>) -> Self {
+    pub(super) fn new(results: Sender<WorkerPreparationResult>) -> Result<Self, String> {
         let (tx, rx) = crossbeam_channel::unbounded();
         let thread = std::thread::Builder::new()
             .name("modelica-rumoca-owner".to_owned())
             .stack_size(16 * 1024 * 1024)
             .spawn(move || compiler_actor_loop(rx, results))
-            .expect("Modelica compiler actor thread must be constructible");
-        Self {
+            .map_err(|error| format!("cannot start Modelica compiler actor: {error}"))?;
+        Ok(Self {
             tx: Some(tx),
             next_id: 1,
             thread: Some(thread),
-        }
+        })
     }
 
     pub(super) fn submit_compile(
@@ -469,7 +469,7 @@ mod tests {
     #[test]
     fn source_root_and_compile_share_one_fifo_owner() {
         let (results_tx, results_rx) = crossbeam_channel::unbounded();
-        let mut actor = CompilerActor::new(results_tx);
+        let mut actor = CompilerActor::new(results_tx).expect("test compiler actor");
         let root_id = actor
             .submit_source_root(
                 PreparedSourceRoot::prepare(

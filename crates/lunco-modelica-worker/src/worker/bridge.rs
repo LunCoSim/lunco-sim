@@ -662,6 +662,7 @@ fn include_compile_explanation(diagnostics: &mut [lunco_doc::Diagnostic], error:
 /// and unpauses the simulation.
 pub fn handle_modelica_responses(
     channels: Res<ModelicaChannels>,
+    mut worker_failure: Option<ResMut<lunco_modelica_runtime::ModelicaWorkerFailure>>,
     mut q_models: Query<(
         Entity,
         &mut ModelicaModel,
@@ -700,7 +701,32 @@ pub fn handle_modelica_responses(
     let mut source_roots = source_roots;
     let mut faults = faults;
     let mut step_diagnostics = step_diagnostics;
-    while let Ok(result) = channels.rx.try_recv() {
+    let mut transport_failure = None;
+    loop {
+        let result = match channels.rx.try_recv() {
+            Ok(result) => result,
+            Err(crossbeam_channel::TryRecvError::Empty) => break,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                if worker_failure
+                    .as_ref()
+                    .is_some_and(|failure| failure.0.is_none())
+                {
+                    transport_failure =
+                        Some("Modelica worker result channel disconnected".to_owned());
+                }
+                break;
+            }
+        };
+        if let Some(error) = result.worker_failure {
+            transport_failure = Some(error);
+            break;
+        }
+        if worker_failure
+            .as_ref()
+            .is_some_and(|failure| failure.0.is_some())
+        {
+            continue;
+        }
         if let Some(root_id) = result.unloaded_source_root_id.as_ref() {
             if let Some(error) = result.error.as_ref() {
                 let detail = format!(
@@ -1365,6 +1391,60 @@ pub fn handle_modelica_responses(
         }
     }
 
+    if let Some(error) = transport_failure {
+        let first = worker_failure.as_deref_mut().is_none_or(|failure| {
+            if failure.0.is_some() {
+                false
+            } else {
+                failure.0 = Some(error.clone());
+                true
+            }
+        });
+        if first {
+            bevy::log::error!("[Modelica] {error}");
+            notices.write(ModelicaNotice {
+                level: NoticeLevel::Error,
+                text: error.clone(),
+            });
+            if let Some(faults) = faults.as_deref_mut() {
+                faults.raise(
+                    "modelica-worker-failed",
+                    None,
+                    "Modelica worker",
+                    error.clone(),
+                );
+            }
+            for (entity, mut model, _, _) in &mut q_models {
+                model.paused = true;
+                model.is_compiling = false;
+                model.is_compiled = false;
+                model.is_stepping = false;
+                model.in_flight_step = None;
+                model.resume_after_compile = false;
+                model.live_solver_snapshot = None;
+                model.last_error = Some(error.clone());
+                if let Some(states) = compile_states.as_deref_mut() {
+                    states.set_error_message(model.document, error.clone());
+                }
+                if let Some(diagnostics) = step_diagnostics.as_deref_mut() {
+                    diagnostics.remove(entity);
+                }
+            }
+            if let Some(roots) = source_roots.as_deref_mut() {
+                for root in roots.roots.values_mut() {
+                    if matches!(
+                        root.state,
+                        lunco_modelica_source_roots::LoadState::Loading { .. }
+                            | lunco_modelica_source_roots::LoadState::Ready
+                    ) {
+                        root.state = lunco_modelica_source_roots::LoadState::Failed(error.clone());
+                    }
+                }
+            }
+            sample_stream.batches.clear();
+        }
+    }
+
     // A result landing is the only release edge for the coupling barrier. The
     // next FixedUpdate may dispatch the following step, but PreUpdate has
     // already observed this release, so the current physics step consumes only
@@ -1420,6 +1500,128 @@ mod compile_fault_tests {
         mut captured: ResMut<CapturedCompileRequests>,
     ) {
         captured.0.extend(requests.read().cloned());
+    }
+
+    #[test]
+    fn worker_failure_and_disconnect_retire_live_work_without_revival() {
+        for explicit_failure in [false, true] {
+            let mut app = App::new();
+            app.add_message::<ModelicaNotice>()
+                .add_message::<CompileRequested>()
+                .init_resource::<SimSampleStream>()
+                .init_resource::<lunco_modelica_runtime::ModelicaWorkerFailure>()
+                .init_resource::<lunco_core::RuntimeFaults>()
+                .init_resource::<lunco_doc_bevy::DocumentDiagnostics>()
+                .init_resource::<lunco_core_runtime::SimulationBarrier>()
+                .add_systems(Update, handle_modelica_responses);
+            let (tx_result, rx_result) = crossbeam_channel::unbounded();
+            let (tx_command, _rx_command) = crossbeam_channel::unbounded();
+            app.insert_resource(ModelicaChannels {
+                tx: tx_command,
+                rx: rx_result,
+            });
+            let document = lunco_doc::DocumentId::new(1);
+            let entity = app
+                .world_mut()
+                .spawn(ModelicaModel {
+                    model_name: "Plant".into(),
+                    document,
+                    session_id: 4,
+                    is_compiling: true,
+                    is_stepping: true,
+                    is_compiled: true,
+                    resume_after_compile: true,
+                    live_solver_snapshot: Some(test_solver_snapshot()),
+                    ..Default::default()
+                })
+                .id();
+            if explicit_failure {
+                tx_result
+                    .send(ModelicaResult::worker_failure("thread admission failed"))
+                    .unwrap();
+                tx_result
+                    .send(ModelicaResult {
+                        entity,
+                        session_id: 4,
+                        is_new_model: true,
+                        live_solver_snapshot: Some(test_solver_snapshot()),
+                        ..Default::default()
+                    })
+                    .unwrap();
+            }
+            drop(tx_result);
+            app.world_mut().run_schedule(Update);
+            let failure = app
+                .world()
+                .resource::<lunco_modelica_runtime::ModelicaWorkerFailure>()
+                .0
+                .clone()
+                .expect("worker failure retained");
+            assert!(app.world().resource::<lunco_core::RuntimeFaults>().active());
+            assert!(
+                app.world()
+                    .resource::<lunco_core_runtime::SimulationBarrier>()
+                    .held
+            );
+            let model = app.world().get::<ModelicaModel>(entity).unwrap();
+            assert!(model.paused);
+            assert!(
+                !model.is_compiling
+                    && !model.is_compiled
+                    && !model.is_stepping
+                    && !model.resume_after_compile
+            );
+            assert!(model.live_solver_snapshot.is_none());
+            assert_eq!(model.last_error.as_deref(), Some(failure.as_str()));
+            // Scene fault reset cannot re-admit a dead application transport,
+            // and a buffered success cannot resurrect its participant.
+            app.world_mut()
+                .resource_mut::<lunco_core::RuntimeFaults>()
+                .clear();
+            app.world_mut().run_schedule(Update);
+            assert!(
+                !app.world()
+                    .get::<ModelicaModel>(entity)
+                    .unwrap()
+                    .is_compiled
+            );
+            assert_eq!(
+                app.world()
+                    .resource::<lunco_modelica_runtime::ModelicaWorkerFailure>()
+                    .0
+                    .as_deref(),
+                Some(failure.as_str())
+            );
+            assert_eq!(app.world().resource::<Messages<ModelicaNotice>>().len(), 1);
+            let source = lunco_workspace::PinnedDocumentRuntimeOwner {
+                document,
+                runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+            };
+            app.world_mut().write_message(CompileRequested {
+                source,
+                entity: Some(entity),
+                class: Some("Plant".into()),
+                force: true,
+                resume_after_compile: true,
+            });
+            app.add_systems(Update, super::dispatch_modelica_compile_requests);
+            app.world_mut().run_schedule(Update);
+            assert!(
+                !app.world()
+                    .get::<ModelicaModel>(entity)
+                    .unwrap()
+                    .is_compiling
+            );
+            assert!(
+                app.world()
+                    .get::<ModelicaModel>(entity)
+                    .unwrap()
+                    .last_error
+                    .as_ref()
+                    .unwrap()
+                    .contains(&failure)
+            );
+        }
     }
 
     #[test]

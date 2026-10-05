@@ -497,8 +497,12 @@ Poll until `done`, `failed`, or `cancelled`; only request the trajectory after
 for retaining the id returned by the dispatch you just made.
 
 A native worker panic, thread-admission failure, or disconnect without a
-terminal result produces `failed` with its cause and retires the handle. The
-scheduler releases the worker slot on every exit. A compiler poisoned by a
+terminal result produces `failed` with its cause and retires the handle.
+Live-worker startup or transport failure produces a worker-wide typed diagnostic,
+holds the affected simulation, and rejects subsequent live compiles. Scene reload
+does not restart a failed application worker; restart the owned app after resolving
+the reported startup problem.
+The scheduler releases the worker slot on every exit. A compiler poisoned by a
 panic rejects subsequent compilation visibly; treat that diagnostic as a
 failed run rather than polling indefinitely.
 
