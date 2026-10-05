@@ -25,8 +25,11 @@ model WrenchAllocator
 
   Real wrench_body[6];
   Real command_iteration[actuator_count, allocation_iterations + 1];
-  Real residual[6, allocation_iterations, actuator_count];
-  Real gradient[actuator_count, allocation_iterations];
+  final parameter Real coupling[actuator_count, actuator_count] =
+    {{sum(wrench_matrix[row, i] * wrench_matrix[row, j] for row in 1:6)
+      for j in 1:actuator_count} for i in 1:actuator_count}
+    "Fixed actuator Gram matrix W-transpose times W";
+  Real projected_wrench[actuator_count];
   Real column_norm_squared[actuator_count];
   Real matrix_norm_squared;
   Real relaxation;
@@ -45,26 +48,24 @@ equation
   // Every coordinate uses the already updated commands earlier in its sweep.
   // This is bounded coordinate descent, rather than a simultaneous gradient
   // update that converges slowly for coupled translation/rotation geometry.
-  // The solve is algebraic and acyclic, so the shared evaluator can compile
-  // its bounded work while retaining Modelica ownership of the allocation.
+  // The fixed Gram matrix factors the gradient W'*(W*q-demand) into
+  // coupling*q-W'*demand. This removes repeated six-axis residual equations
+  // without changing sweep order, limits, relaxation or iteration count.
   for i in 1:actuator_count loop
     command_iteration[i, 1] = lower_command[i];
-    column_norm_squared[i] = sum(wrench_matrix[row, i] * wrench_matrix[row, i]
+    column_norm_squared[i] = coupling[i, i];
+    projected_wrench[i] = sum(wrench_matrix[row, i] * wrench_body[row]
       for row in 1:6);
   end for;
   matrix_norm_squared = sum(column_norm_squared[i] for i in 1:actuator_count);
   relaxation = max(0.0, min(1.0, allocation_step * matrix_norm_squared));
   for k in 1:allocation_iterations loop
     for i in 1:actuator_count loop
-      for row in 1:6 loop
-        residual[row, k, i] = sum(wrench_matrix[row, j]
-          * command_iteration[j, if j < i then k + 1 else k]
-          for j in 1:actuator_count) - wrench_body[row];
-      end for;
-      gradient[i, k] = sum(wrench_matrix[row, i] * residual[row, k, i]
-        for row in 1:6);
       command_iteration[i, k + 1] = max(lower_command[i], min(upper_command[i],
-        command_iteration[i, k] - relaxation * gradient[i, k]
+        command_iteration[i, k] - relaxation
+          * (sum(coupling[i, j]
+              * command_iteration[j, if j < i then k + 1 else k]
+              for j in 1:actuator_count) - projected_wrench[i])
           / max(1.0e-12, column_norm_squared[i])));
     end for;
   end for;

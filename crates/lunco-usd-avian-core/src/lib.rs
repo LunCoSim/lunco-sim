@@ -1293,7 +1293,11 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
             continue;
         }
         pos.0 = p.0;
-        rot.0 = r.0;
+        // Matrix decomposition and reference rebranching may choose -q for the
+        // same attitude. Preserve the seated solver hemisphere: Avian's XPBD
+        // fixed-angle feedback uses the quaternion vector part, so a sign-only
+        // refresh must not reverse its restoring correction.
+        rot.0 = if rot.0.dot(r.0) < 0.0 { -r.0 } else { r.0 };
         shadow.capture(cell, tf, active_frame);
         if !q_pose_seeded.contains(e) {
             commands
@@ -1815,6 +1819,54 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::system::SystemState;
     use lunco_spatial::coords::world_pose;
+
+    #[test]
+    fn pose_refresh_preserves_the_seated_quaternion_hemisphere() {
+        let mut world = World::new();
+        let frame = world
+            .spawn((Grid::new(1000.0, 0.0), Transform::default()))
+            .id();
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
+        world.insert_resource(PhysicsFrameTransportState {
+            frame: Some(frame),
+            ..Default::default()
+        });
+        let target = DQuat::from_rotation_y(-135.0_f64.to_radians());
+        let previous = Transform::from_xyz(2.0, 59.0, 2.0).with_rotation(target.as_quat());
+        let mut shadow = BridgeShadow::default();
+        shadow.capture(None, &previous, frame);
+        let body = world
+            .spawn((
+                ChildOf(frame),
+                Transform::from_xyz(2.0, 60.0, 2.0).with_rotation(-target.as_quat()),
+                Position(DVec3::new(2.0, 59.0, 2.0)),
+                Rotation(target),
+                LinearVelocity::ZERO,
+                AngularVelocity::ZERO,
+                shadow,
+                lunco_physics::PhysicsPoseSeeded,
+            ))
+            .id();
+        world.run_system_once(pose_to_position_fixed_step).unwrap();
+        let refreshed = world.get::<Rotation>(body).unwrap().0;
+        assert!(
+            refreshed.dot(target) > 0.0,
+            "pose refresh changed quaternion sign: {refreshed:?}"
+        );
+        let basis = DQuat::from_rotation_x(0.4);
+        let mut constraint =
+            avian3d::dynamics::solver::xpbd::joints::FixedAngleConstraintShared::default();
+        constraint.prepare(
+            &Rotation::IDENTITY,
+            &Rotation(refreshed),
+            target * basis,
+            basis,
+        );
+        assert!(constraint.rotation_difference.w > 0.0);
+        assert!(
+            (world.get::<Position>(body).unwrap().0 - DVec3::new(2.0, 60.0, 2.0)).length() < 1.0e-5
+        );
+    }
 
     #[test]
     fn bridge_owned_writeback_is_not_an_external_pose_change() {

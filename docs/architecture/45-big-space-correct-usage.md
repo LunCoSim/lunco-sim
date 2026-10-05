@@ -368,3 +368,12 @@ target/debug/luncosim --api 4101
 
 Use the API `Exit` command and verify the port is released before another
 session is started.
+
+### Quaternion continuity at the physics bridge
+
+Pose refresh preserves the hemisphere of the current Avian `Rotation`. Matrix
+decomposition or reference rebranching can produce `-q` for the same attitude;
+that representation change must not undo a locked joint's admitted quaternion
+sign. Avian's XPBD fixed-angle correction uses the quaternion vector part. The
+bridge regression exercises a sign-changing pose refresh and verifies native
+constraint feedback remains in the positive hemisphere.

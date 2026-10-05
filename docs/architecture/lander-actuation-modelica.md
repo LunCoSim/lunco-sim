@@ -70,6 +70,15 @@ their moment arms provide pitch and roll, and the horizontal pairs cancel net
 force while providing yaw. No second matrix or vehicle-specific remap is
 authoritative.
 
+The allocator precomputes the fixed Gram matrix `WᵀW` from the authored
+six-axis wrench columns. Each cyclic coordinate sweep evaluates
+`(WᵀW)q − Wᵀd`, using already updated coordinates earlier in that sweep.
+Only command iterates and the projected demand are live algebraic variables;
+six-axis residuals are not repeated for every coordinate and sweep. Iteration
+count, relaxation, command bounds and actuator order remain source-owned.
+Floating-point reassociation is checked against bounded allocation and physical
+mission acceptance rather than assumed to preserve bitwise results.
+
 The accepted `landing_handoff` input is the single landed-state boundary at the
 airframe actuator owner. `landing_engine_cutoff` closes the main-engine request
 when the target-qualified contact event is accepted; the airframe retains only

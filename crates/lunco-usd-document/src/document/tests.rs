@@ -891,6 +891,24 @@ fn view_layer_composes_without_entering_persistent_runtime_source() {
     let fork = document.fork(DocumentId::new(15), "Route.usda").unwrap();
     assert!(fork.composed().spec(&points).is_some());
     assert!(fork.composed().spec(&ribbon).is_none());
+
+    let generation = document.generation();
+    let dirty = document.is_dirty();
+    let authored = document.persistent_composed_source().unwrap();
+    document.clear_view();
+    assert_eq!(document.generation(), generation + 1);
+    assert_eq!(document.is_dirty(), dirty);
+    assert_eq!(document.persistent_composed_source().unwrap(), authored);
+    assert!(document.composed().spec(&ribbon).is_none());
+    assert!(document.composed().spec(&points).is_some());
+    assert!(
+        document
+            .view_ops_since_source_baseline()
+            .unwrap()
+            .is_empty()
+    );
+    document.clear_view();
+    assert_eq!(document.generation(), generation + 1);
 }
 
 #[test]

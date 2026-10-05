@@ -440,14 +440,14 @@ pub(crate) fn on_restart_scene_refresh_active_document(
         .cloned()
         .collect::<std::collections::HashSet<_>>();
     if let Err(error) =
-        publish_restart_document_overlays(&registry, backed, &twins, doc, &name, &dependencies)
+        publish_restart_document_overlays(&mut registry, backed, &twins, doc, &name, &dependencies)
     {
         warn!("[restart-scene] could not publish the refreshed Twin sources: {error}");
     }
 }
 
 fn publish_restart_document_overlays(
-    registry: &DocumentRegistry<UsdDocument>,
+    registry: &mut DocumentRegistry<UsdDocument>,
     backed: &mut lunco_usd_bevy_twin::DocBackedTwinScenes,
     twins: &lunco_assets_core::twin_source::TwinRoots,
     active_doc: lunco_doc::DocumentId,
@@ -463,9 +463,10 @@ fn publish_restart_document_overlays(
             continue;
         }
         let document = registry
-            .host(doc)
+            .host_mut(doc)
             .ok_or_else(|| format!("document {doc} is not open"))?
-            .document();
+            .document_mut();
+        document.clear_view();
         sources.push((
             rel,
             doc,
@@ -628,7 +629,7 @@ mod restart_overlay_tests {
             })
             .unwrap();
         publish_restart_document_overlays(
-            &registry,
+            &mut registry,
             &mut backed,
             &twins,
             ids[0],
@@ -644,7 +645,15 @@ mod restart_overlay_tests {
         assert!(source.contains("radius = 2"));
         assert!(!source.contains("99"));
         assert!(registry.host(ids[1]).unwrap().document().is_dirty());
-        assert_eq!(backed.overlay_synced_generation(ids[1]), Some(1));
+        assert!(
+            !registry
+                .host(ids[1])
+                .unwrap()
+                .document()
+                .composed_source()
+                .contains("99")
+        );
+        assert_eq!(backed.overlay_synced_generation(ids[1]), Some(2));
         assert_eq!(
             twins
                 .overlay_bytes("fixture", Path::new("unrelated.usda"))

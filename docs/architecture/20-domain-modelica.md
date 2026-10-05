@@ -23,6 +23,11 @@ timestamps. Script output wires retain their separate one-tick exchange delay.
 
 ## Contents
 
+Live compile admission retains an entity's existing name. The generated class
+name remains simulation metadata; it must not replace a vehicle's authored
+identity in control HUDs or the scene tree. An unnamed participant receives its
+model name when first admitted.
+
 - [1. Scope](#1-scope)
 - [2. Architecture in layers](#2-architecture-in-layers)
 - [2a. Generated network schemas](#2a-generated-network-schemas)

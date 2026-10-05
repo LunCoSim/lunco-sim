@@ -9,7 +9,7 @@
 use avian3d::prelude::{
     AngularInertia, AngularVelocity, CenterOfMass, ColliderDisabled, ComputedAngularInertia,
     ComputedCenterOfMass, ComputedMass, LinearVelocity, Mass, NoAutoAngularInertia,
-    NoAutoCenterOfMass, NoAutoMass, RigidBody, Sleeping,
+    NoAutoCenterOfMass, NoAutoMass, RigidBody, SimpleCollider, Sleeping,
 };
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry, SimulationQueryReadScope};
@@ -227,6 +227,16 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             .get::<avian3d::prelude::RigidBodyDisabled>(entity)
             .is_some();
         let collider = world.get::<avian3d::prelude::Collider>(entity).is_some();
+        let collider_local_bounds = world
+            .get::<avian3d::prelude::Collider>(entity)
+            .map(|shape| {
+                let bounds = shape.aabb(bevy::math::DVec3::ZERO, bevy::math::DQuat::IDENTITY);
+                api_value!({
+                    "frame": "body_local",
+                    "min": api_value!([bounds.min.x, bounds.min.y, bounds.min.z]),
+                    "max": api_value!([bounds.max.x, bounds.max.y, bounds.max.z]),
+                })
+            });
         let collider_disabled = world.get::<ColliderDisabled>(entity).is_some();
         let authored_mass = world.get::<Mass>(entity);
         let authored_inertia = world.get::<AngularInertia>(entity);
@@ -394,6 +404,7 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             "physics_pose_authoritative": pose_authoritative,
             "rigid_body_disabled": disabled,
             "collider_present": collider,
+            "collider_local_bounds": collider_local_bounds,
             "collider_disabled": collider_disabled,
             "authored_mass_kg": authored_mass.map(|mass| mass.0 as f64),
             "mass_override_active": world.get::<NoAutoMass>(entity).is_some(),

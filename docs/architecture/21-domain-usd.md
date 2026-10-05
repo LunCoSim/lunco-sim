@@ -85,7 +85,10 @@ depend on the full USD physics projector;
 `lunco-usd-avian-joints` owns native Avian joint construction, seating, solver
 admission, pair filtering, and graph-safe detach; `lunco-usd-avian` owns
 OpenUSD physics projection and translates authored joint facts into that generic
-boundary;
+boundary. `lunco-usd-avian-reader` collects compound geometry only from active
+composed descendants, stopping at deactivated subtrees and nested rigid bodies.
+Inactive proxy geometry cannot suppress an active hull or contribute a collider;
+prepared and live readers obey this same contract;
 `lunco-usd-actuation` owns the render-free composed USD force/torque actuator
 reader used by the simulation projectors;
 `lunco-usd-sim-core` owns the small shared USD-simulation protocol, the
@@ -429,7 +432,12 @@ would leave physics, connections, or Modelica worker state stale.
 Before replacement asset I/O, the document owner republishes the current
 persistent source for the scene and its tracked reference closure. This includes
 referenced Editor buffers that advanced since their preview mounted. Dirty
-buffers stay dirty, and disposable `@view@` opinions are excluded. Publishing
+buffers stay dirty, and disposable `@view@` opinions are excluded. Restart also
+clears the view layer of the mounted source closure before remount. Derived route
+positions and other presentation from the outgoing scene cannot enter the new
+scene through canonical document projection. Clearing view data advances its
+projection generation without changing authored dirty state or undo history.
+Publishing
 only the root would let a warm reload consume obsolete component parameters.
 
 

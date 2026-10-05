@@ -34,6 +34,10 @@ public contract fit; add a new mission/vehicle model only when the equation or
 interface is genuinely absent. An isolated Modelica compile proves neither USD
 wiring nor runtime physics.
 
+Compile admission preserves an existing participant/vehicle name; generated
+class identity belongs to simulation metadata. Verify a control HUD against
+the physical vehicle identity after compile and reload.
+
 For shared plume calculations, reuse
 `LunCo.Propulsion.computePlumePhotometry`. `PlumePhotometry` supplies named USD
 ports; `RCSJet` calls the function directly with static nozzle parameters.

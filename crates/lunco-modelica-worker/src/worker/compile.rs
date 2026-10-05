@@ -344,9 +344,11 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
         pending_generation: generation,
         resume_after_compile,
     };
-    world
-        .entity_mut(entity)
-        .insert((Name::new(model_name.clone()), model));
+    let mut entry = world.entity_mut(entity);
+    if !entry.contains::<Name>() {
+        entry.insert(Name::new(model_name.clone()));
+    }
+    entry.insert(model);
     if let Some(mut diagnostics) = world.get_resource_mut::<lunco_doc_bevy::DocumentDiagnostics>() {
         diagnostics.mark_started(doc);
     }

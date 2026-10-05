@@ -181,6 +181,12 @@ to the solve-pool worker count plus two staged operations, so the serialized
 Rumoca owner can compile later programs while solve workers are busy without
 building an unbounded DAE backlog.
 
+For wrench-allocation cost, inspect the generated actuator count and sweep
+count separately from retained algebraic variables. The maintained allocator
+factors fixed geometry through `WᵀW`; preserve bounded cyclic sweep semantics,
+iteration count and command limits. Validate the numeric allocation and physical
+mission after reassociation, then compare preparation and settled-step profiles.
+
 Application policy startup has separate Tracy spans for
 `application_policy_source_prepare_offthread`,
 `application_policy_compile_offthread`,

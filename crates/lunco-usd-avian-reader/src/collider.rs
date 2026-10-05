@@ -543,6 +543,12 @@ fn gather_compound_candidates(
     out: &mut Vec<(SdfPath, Transform)>,
 ) -> Result<(), TransformReadError> {
     for child in reader.children(path) {
+        // Child enumeration retains inactive prims for authoring. Deactivation
+        // removes the entire subtree from the physical composition, including
+        // any proxy that would otherwise suppress active render colliders.
+        if !reader.is_active(&child) {
+            continue;
+        }
         if reader.has_api_schema(&child, ptok::API_RIGID_BODY) {
             continue;
         }

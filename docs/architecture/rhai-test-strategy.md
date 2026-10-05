@@ -503,3 +503,8 @@ Every subsequent deletion must name its replacement scene/scenario and retain a
 negative or anti-trivial control. If no production surface can expose the
 claim, the correct outcome is to keep the Rust mechanism test and document the
 boundary—not to weaken the claim to make it scriptable.
+
+`QueryPhysicsState.collider_local_bounds` reports the live cooked collider's
+minimum and maximum in body-local metres (or null without a collider). Use this
+to compare admitted collision geometry with authored envelopes before changing
+proxy dimensions in response to a contact failure.

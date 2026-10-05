@@ -487,9 +487,7 @@ impl Plugin for UsdAvianPlugin {
 
         app.configure_sets(
             Update,
-            (
-                UsdVisualProjectionSet.before(lunco_usd_avian_joints::JointPreparation),
-            ),
+            (UsdVisualProjectionSet.before(lunco_usd_avian_joints::JointPreparation),),
         );
         app.register_type::<ShouldBeDynamic>()
             .register_type::<collision_filters::SharedTireContact>()
@@ -509,8 +507,7 @@ impl Plugin for UsdAvianPlugin {
             .add_systems(
                 Update,
                 (
-                    build_usd_physics_joints
-                        .run_if(any_with_component::<PendingUsdJoint>),
+                    build_usd_physics_joints.run_if(any_with_component::<PendingUsdJoint>),
                     bevy::ecs::schedule::ApplyDeferred,
                 )
                     .chain()
@@ -2020,9 +2017,8 @@ fn build_usd_physics_joints(
                     .get(e)
                     .is_ok_and(lunco_usd_avian_core::BridgeShadow::is_seeded)
         };
-        let missing_pose_owner = |e: Entity| {
-            !q_pose_authoritative.contains(e) && q_shadow.get(e).is_err()
-        };
+        let missing_pose_owner =
+            |e: Entity| !q_pose_authoritative.contains(e) && q_shadow.get(e).is_err();
         let body0_missing_pose_owner = body0_ent.is_some_and(missing_pose_owner);
         let body1_missing_pose_owner = body1_ent.is_some_and(missing_pose_owner);
         if body0_missing_pose_owner || body1_missing_pose_owner {
@@ -3702,11 +3698,11 @@ def Xform "Root" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] )
         let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("bad.usda", source))
             .expect("build stage");
         let root = SdfPath::new("/Root").unwrap();
+        let error = collect_child_colliders_from_usd(&stage.view(), &root)
+            .expect_err("an invalid collisionEnabled must reject incomplete compound geometry");
         assert!(
-            collect_child_colliders_from_usd(&stage.view(), &root)
-                .expect("the malformed flag is refused without corrupting traversal")
-                .is_empty(),
-            "an invalid authored collisionEnabled must not become the schema default true"
+            matches!(error, ColliderProjectionError::Backend { prim, detail }
+            if prim == "/Root/Body" && detail.contains("physics:collisionEnabled"))
         );
     }
 
@@ -3879,6 +3875,60 @@ def Xform "Rig"
             "the leg's compound is its strut alone — the pad is its own body, not \
              the leg's geometry"
         );
+    }
+
+    #[test]
+    fn inactive_geometry_is_excluded_from_live_and_prepared_compounds() {
+        let recipe = StageRecipe::from_source(
+            "inactive-collider.usda",
+            r#"#usda 1.0
+(
+    defaultPrim = "Body"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+def Xform "Body" (prepend apiSchemas = "PhysicsRigidBodyAPI")
+{
+    def Cube "Hull" (prepend apiSchemas = "PhysicsCollisionAPI")
+    {
+        double size = 2
+    }
+    def Cube "DisabledPanel" (
+        active = false
+        prepend apiSchemas = "PhysicsCollisionAPI"
+    )
+    {
+        double size = 20
+        uniform token purpose = "proxy"
+    }
+    def Xform "DisabledAssembly" (active = false)
+    {
+        def Cube "Panel" (prepend apiSchemas = "PhysicsCollisionAPI")
+        {
+            double size = 30
+        }
+    }
+}
+"#,
+        );
+        let stage = CanonicalStage::from_recipe(&recipe).expect("compose inactive geometry");
+        let asset = UsdStageAsset::from_recipe(recipe).expect("prepare inactive geometry");
+        let root = SdfPath::new("/Body").unwrap();
+        let live = stage.view();
+        for reader in [
+            &live as &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+            asset.projection_plan.as_ref() as &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+        ] {
+            let shapes = collect_child_colliders_from_usd(reader, &root).unwrap();
+            assert_eq!(
+                shapes.len(),
+                1,
+                "inactive proxy must not suppress the live hull"
+            );
+            let bounds = Collider::compound(shapes).aabb(DVec3::ZERO, DQuat::IDENTITY);
+            assert_eq!(bounds.min, DVec3::splat(-1.0));
+            assert_eq!(bounds.max, DVec3::splat(1.0));
+        }
     }
 
     /// A body describing its shape twice — a detailed `render` mesh and a cheap

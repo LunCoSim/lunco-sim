@@ -1954,6 +1954,26 @@ impl UsdDocument {
         })
     }
 
+    /// Retire presentation derived from the outgoing scene. Authored layers,
+    /// their dirty state, and undo history remain owned by the document.
+    pub fn clear_view(&mut self) {
+        if self.view_op_log.is_empty() {
+            return;
+        }
+        self.view = std::sync::Arc::new(
+            usda_to_data(EMPTY_USDA).expect("the built-in empty USD layer must parse"),
+        );
+        self.view_revision += 1;
+        self.view_op_log.clear();
+        self.view_history_start_revision = self.view_revision;
+        self.generation += 1;
+        if self.changes.len() == CHANGE_HISTORY_CAPACITY {
+            self.changes.pop_front();
+        }
+        self.changes
+            .push_back((self.generation, UsdChange::FullReload));
+    }
+
     /// Create a new editable untitled snapshot of this document.
     ///
     /// The base and runtime USD layers, revision history, dirty baseline, and
