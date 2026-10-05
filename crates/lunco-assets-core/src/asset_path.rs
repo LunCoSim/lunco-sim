@@ -253,6 +253,47 @@ pub fn web_url(reference: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn logical_load_addresses_preserve_filename_characters_without_labels() {
+        for (reference, source, path) in [
+            (
+                "twin://fixture/scenes/scene # % 月.usda",
+                Some(crate::TWIN_SCHEME),
+                "fixture/scenes/scene # % 月.usda",
+            ),
+            (
+                "lunco://scenes/scene # % 月.usda",
+                Some(crate::LUNCO_SCHEME),
+                "scenes/scene # % 月.usda",
+            ),
+            (
+                "schemas/schema # % 月.usda",
+                None,
+                "schemas/schema # % 月.usda",
+            ),
+        ] {
+            let address =
+                load_asset_path(reference, None, None, None).expect("logical load address");
+            assert_eq!(address.path(), std::path::Path::new(path));
+            assert_eq!(
+                address.source(),
+                &source
+                    .map(|source| AssetSourceId::Name(source.into()))
+                    .unwrap_or_default()
+            );
+            assert_eq!(address.label(), None);
+        }
+        let origin = load_asset_path("twin://fixture/scenes/main.usda", None, None, None).unwrap();
+        let relative = load_asset_path("child # % 月.usda", Some(&origin), None, None).unwrap();
+        assert_eq!(
+            relative.path(),
+            std::path::Path::new("fixture/scenes/child # % 月.usda")
+        );
+        assert_eq!(relative.source(), origin.source());
+        assert_eq!(relative.label(), None);
+        assert_eq!(relative.with_label("Scene0").label(), Some("Scene0"));
+    }
+
     fn prepared_load_asset_path(
         reference: &str,
         origin: Option<&AssetPath<'_>>,

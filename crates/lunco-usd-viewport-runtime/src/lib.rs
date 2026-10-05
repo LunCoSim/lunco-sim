@@ -1556,9 +1556,20 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             );
             return;
         };
-        let stage_handle = world
-            .resource::<AssetServer>()
-            .load::<UsdStageAsset>(lunco_assets_core::twin_uri(&name, &rel));
+        let address = lunco_assets_core::twin_uri(&name, &rel);
+        let path = match lunco_assets_core::asset_path::load_asset_path(&address, None, None, None)
+        {
+            Ok(path) => path,
+            Err(error) => {
+                report_preview_error(
+                    world,
+                    "usd-preview-open-failed",
+                    format!("invalid preview source `{address}`: {error}"),
+                );
+                return;
+            }
+        };
+        let stage_handle = world.resource::<AssetServer>().load::<UsdStageAsset>(path);
         if let Some(old_doc) = world
             .resource::<UsdViewportState>()
             .session(preview)
@@ -2994,9 +3005,19 @@ fn mount_preview_session(world: &mut World, preview: UsdPreviewId) {
     let Some((name, rel)) = viewport_twin_coords(world, doc) else {
         return;
     };
-    let handle = world
-        .resource::<AssetServer>()
-        .load::<UsdStageAsset>(lunco_assets_core::twin_uri(&name, &rel));
+    let address = lunco_assets_core::twin_uri(&name, &rel);
+    let path = match lunco_assets_core::asset_path::load_asset_path(&address, None, None, None) {
+        Ok(path) => path,
+        Err(error) => {
+            report_preview_error(
+                world,
+                "usd-preview-open-failed",
+                format!("invalid preview source `{address}`: {error}"),
+            );
+            return;
+        }
+    };
+    let handle = world.resource::<AssetServer>().load::<UsdStageAsset>(path);
     world
         .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
         .track_preview(doc, name, rel);

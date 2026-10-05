@@ -35,7 +35,7 @@ use std::{
 };
 
 use anyhow::{Result, anyhow, ensure};
-use bevy::asset::{AssetPath, Handle, LoadContext, ReadAssetBytesError, io::AssetReaderError};
+use bevy::asset::{Handle, LoadContext, ReadAssetBytesError, io::AssetReaderError};
 use openusd::usd::Stage;
 
 use crate::asset::UsdLayerReadReceipt;
@@ -134,29 +134,32 @@ pub async fn fetch_layer_closure_with_limits(
                 }
                 let child_depth = depth + 1;
                 check_stage_closure_limits(&limits, seen.len(), child_depth, 0, total_bytes)?;
-                // Parse `child_id` as an `AssetPath` (NOT a `PathBuf`): only the
-                // string form parses a `source://` scheme into an asset source.
-                // `PathBuf::from("lunco://vessels/…")` keeps the whole string as a
-                // default-source relative path → `assets/lunco://vessels/…` →
-                // "Path not found". `AssetPath::parse` routes `lunco://…` to the
-                // registered `lunco` source; plain relative ids stay default-source.
-                requests.push((id.clone(), child_id, child_depth, dependency_order));
+                // The asset owner reconstructs source and filesystem path
+                // separately, preserving literal filename characters as data.
+                let child_path = lunco_assets_core::asset_path::load_asset_path(&child_id, None, None, None)
+                    .map_err(|error| anyhow!("USD dependency `{child_id}` referenced by `{id}` has an invalid load address: {error}"))?;
+                requests.push((
+                    id.clone(),
+                    child_id,
+                    child_path,
+                    child_depth,
+                    dependency_order,
+                ));
             }
         }
 
         let mut next_frontier = Vec::new();
         for request_batch in requests.chunks(limits.max_parallel_reads) {
             let reads = request_batch.iter().map(
-                |(referring_id, child_id, child_depth, dependency_order)| {
+                |(referring_id, child_id, child_path, child_depth, dependency_order)| {
                     let mut child_context = load_context.begin_labeled_asset();
                     let referring_id = referring_id.clone();
                     let child_id = child_id.clone();
+                    let child_path = child_path.clone();
                     let child_depth = *child_depth;
                     let dependency_order = *dependency_order;
                     async move {
-                        let fetched = child_context
-                            .read_asset_bytes(AssetPath::parse(&child_id).into_owned())
-                            .await;
+                        let fetched = child_context.read_asset_bytes(child_path).await;
                         (
                             dependency_order,
                             referring_id,

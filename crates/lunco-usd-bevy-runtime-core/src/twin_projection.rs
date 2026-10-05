@@ -1845,9 +1845,22 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         // directly onto that stage — the op is the single delta description, so we
         // never re-derive an edit's value by reading it back out of `composed`.
         let twin_path = lunco_assets_core::twin_uri(&name, &rel);
+        let source_path =
+            match lunco_assets_core::asset_path::load_asset_path(&twin_path, None, None, None) {
+                Ok(path) => path,
+                Err(error) => {
+                    world.trigger(lunco_core::RuntimeError {
+                        name: "usd-source-address-invalid".into(),
+                        message: format!(
+                            "document {doc} has invalid composed source `{twin_path}`: {error}"
+                        ),
+                    });
+                    continue;
+                }
+            };
         let scene_id = world
             .resource::<AssetServer>()
-            .load::<UsdStageAsset>(twin_path.clone())
+            .load::<UsdStageAsset>(source_path)
             .id();
 
         // The initial scene recipe contains base + runtime, but omits the
@@ -4476,7 +4489,7 @@ fn spawn_prim_op(
         return;
     };
 
-    let ref_id = {
+    let ref_path = {
         let Some(cs) = world
             .get_non_send::<CanonicalStages>()
             .and_then(|s| s.get(scene_id))
@@ -4504,9 +4517,20 @@ fn spawn_prim_op(
             return;
         };
         cs.canonical_reference_id(&asset_path)
+            .map_err(|error| error.to_string())
+            .and_then(|ref_id| {
+                lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
+                    world.resource::<AssetServer>(),
+                    scene_id,
+                    &ref_id,
+                    world.get_resource::<TwinRoots>(),
+                    cs.native_asset_paths(),
+                )
+                .map_err(|error| error.to_string())
+            })
     };
-    let ref_id = match ref_id {
-        Ok(id) => id,
+    let ref_path = match ref_path {
+        Ok(path) => path,
         Err(error) => {
             let detail = format!("invalid USD reference identifier: {error}");
             let mut item = failed_ref_spawn(
@@ -4533,7 +4557,7 @@ fn spawn_prim_op(
     };
     let ref_handle = world
         .resource::<AssetServer>()
-        .load::<UsdStageAsset>(bevy::asset::AssetPath::parse(&ref_id).into_owned());
+        .load::<UsdStageAsset>(ref_path);
     let reason = format!("Preparing USD reference {prim_path} from `{asset_path}`");
     let held = acquire_reference_progress(world, progress_key, scene_id, reason);
     enqueue_reference_spawn(
@@ -4969,9 +4993,31 @@ fn ensure_reference_layers_for_rebuild(
         {
             handle
         } else {
-            let handle = world
-                .resource::<AssetServer>()
-                .load::<UsdStageAsset>(bevy::asset::AssetPath::parse(&reference_id).into_owned());
+            let path = {
+                let prepared = world
+                    .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+                    .and_then(|stages| stages.get(scene_id))
+                    .and_then(|stage| stage.native_asset_paths());
+                lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
+                    world.resource::<AssetServer>(),
+                    scene_id,
+                    &reference_id,
+                    world.get_resource::<TwinRoots>(),
+                    prepared,
+                )
+            };
+            let path = match path {
+                Ok(path) => path,
+                Err(error) => {
+                    report_stage_projection_reset_failure(
+                        world,
+                        scene_id,
+                        format!("invalid USD rebuild reference {asset_path:?}: {error}"),
+                    );
+                    return false;
+                }
+            };
+            let handle = world.resource::<AssetServer>().load::<UsdStageAsset>(path);
             world
                 .resource_mut::<PendingRefSpawns>()
                 .retained_assets

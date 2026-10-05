@@ -147,6 +147,14 @@ to a reusable logical name.
 
 ### Native payload and source admission
 
+USD scene, document-source, preview, schema, reference, and transitive-layer
+loads reconstruct the typed address through `load_asset_path`. The registered
+source and filesystem path remain separate through Bevy loading; logical
+filenames containing `#`, `%`, spaces, or Unicode remain filename data. Labels
+are attached explicitly with `AssetPath::with_label`. Scene transition strings
+and canonical recipe keys describe identities and never replace the typed load
+address. Full scene restart retains the asset server's existing typed path.
+
 Native USD composition uses standard `file:` URIs. Bevy does not register a
 filesystem source. `lunco-assets-core::asset_path::PreparedAssetPaths` prepares
 native references through `lunco-storage::canonicalize_file_path` on the stage

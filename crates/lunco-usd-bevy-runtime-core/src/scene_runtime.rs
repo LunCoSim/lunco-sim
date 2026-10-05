@@ -147,7 +147,9 @@ fn on_open_twin_scene(
         "[twin] doc-backing starting scene `{scene_uri}` (twin `{}`) — mount follows",
         twin.root.display()
     );
-    let handle = asset_server.load::<UsdSourceText>(scene_uri);
+    let source_path = lunco_assets_core::asset_path::load_asset_path(&scene_uri, None, None, None)
+        .map_err(|error| format!("invalid Twin scene source `{scene_uri}`: {error}"))?;
+    let handle = asset_server.load::<UsdSourceText>(source_path);
     let source_ready = usd_sources.get(handle.id()).is_some();
     let source_failed = asset_server
         .get_load_state(handle.id())
@@ -264,6 +266,19 @@ pub(crate) fn execute_admitted_load_scene(
 
     let transition = lunco_core::SceneTransition::load(path.clone(), root_prim.clone());
     let transition_id = coordinator.start(transition.clone());
+    let asset_path = match lunco_assets_core::asset_path::load_asset_path(&path, None, None, None) {
+        Ok(path) => path,
+        Err(error) => {
+            let error = format!("invalid USD scene address `{path}`: {error}");
+            warn!("{error}");
+            commands.trigger(lunco_core::SceneTransitionFailed {
+                id: transition_id,
+                transition,
+                error,
+            });
+            return;
+        }
+    };
     // Admission is the commit point. Only now does this request own scene state;
     // a request queued behind another transaction must not mutate the active
     // transaction's diagnostics or viewport reason.
@@ -287,7 +302,7 @@ pub(crate) fn execute_admitted_load_scene(
     // Deliberately NOT "any prim from this stage": the active simulation owns
     // one scene root. The editor preview, when present, uses `UsdPreviewOnly`
     // and is outside this simulation mount identity.
-    let new_id = asset_server.load::<UsdStageAsset>(&path).id();
+    let new_id = asset_server.load::<UsdStageAsset>(asset_path).id();
     let stage_already_loaded = asset_server.load_state(new_id).is_loaded();
     if q_usd.iter().any(|(entity, upp, is_scene_root)| {
         let current_mount_is_live = mount_state.as_deref().is_none_or(|state| {

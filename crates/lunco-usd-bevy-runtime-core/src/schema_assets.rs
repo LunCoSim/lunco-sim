@@ -51,10 +51,19 @@ pub(crate) fn request_schema_assets(
             let owner = lunco_assets_runtime::discovery::schema_asset_owner(path)?;
             let path = std::path::Path::new(path);
             let module = path.file_stem()?.to_str()?.to_owned();
+            let address = path.to_string_lossy();
+            let path =
+                match lunco_assets_core::asset_path::load_asset_path(&address, None, None, None) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        error!("[schema] invalid schema source `{address}`: {error}");
+                        return None;
+                    }
+                };
             Some((
                 owner == lunco_assets_runtime::discovery::SchemaAssetOwner::Lunco,
                 module,
-                asset_server.load::<UsdSourceText>(path.to_string_lossy().into_owned()),
+                asset_server.load::<UsdSourceText>(path),
             ))
         })
         .collect::<Vec<_>>();

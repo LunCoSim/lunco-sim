@@ -109,7 +109,9 @@ layers use the full-stage reset owner.
 Native asset inputs follow the [shared preparation gate](../../docs/architecture/55-scene-addressing-and-roots.md#native-payload-and-source-admission): preserve the reader's current prepared table, retain edits/hints across superseded jobs, and release `UsdNativeAssetPreparation` only after that exact stage revision reaches live consumption or teardown. A queued visual or installed policy must remain deferred while native preparation holds its generation.
 
 Doc-backed Twin admission is also asset-event driven. `UsdSourceText` is loaded
-through the registered source scheme; `AssetEvent` and
+through the shared typed `load_asset_path` address and registered source scheme;
+scene, preview, schema, reference and transitive layer readers preserve literal
+filename characters and attach Bevy labels separately. `AssetEvent` and
 `AssetLoadFailedEvent` advance or fail the pending document transaction. The
 default Twin path parses the exact source revision through native
 `AsyncWorkAdmission`, commits it through `DocumentRegistry::open_prepared_file`,

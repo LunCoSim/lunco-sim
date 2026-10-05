@@ -980,6 +980,8 @@ pub fn validate_scene_address(path_in: &str) -> Result<String, String> {
         !name.is_empty() && lunco_assets_path::is_safe_relative_path(rel)
     });
     if valid_lunco || valid_twin {
+        lunco_assets_core::asset_path::load_asset_path(path_in, None, None, None)
+            .map_err(|error| format!("invalid scene address `{path_in}`: {error}"))?;
         return Ok(path_in.to_string());
     }
 
@@ -1000,21 +1002,29 @@ pub fn spawn_scene_root_world(
     path_in: &str,
     root_prim_in: &str,
 ) -> Option<Entity> {
-    let asset_path = match validate_scene_address(path_in) {
+    let address = match validate_scene_address(path_in) {
         Ok(path) => path,
         Err(error) => {
             warn!("{error}");
             return None;
         }
     };
+    let asset_path =
+        match lunco_assets_core::asset_path::load_asset_path(&address, None, None, None) {
+            Ok(path) => path,
+            Err(error) => {
+                warn!("invalid USD scene address `{address}`: {error}");
+                return None;
+            }
+        };
     // File-backed source: the AssetServer reads + composes the on-disk
     // stage. The USD command runtime's E1 projection takes the other door
     // ([`spawn_scene_root_with_stage`]) to mount a document's *composed*
     // (base ⊕ runtime) stage instead.
     let handle = world
         .resource::<AssetServer>()
-        .load::<UsdStageAsset>(asset_path.clone());
-    spawn_scene_root_with_stage(world, &asset_path, root_prim_in, handle)
+        .load::<UsdStageAsset>(asset_path);
+    spawn_scene_root_with_stage(world, &address, root_prim_in, handle)
 }
 
 /// The mounted scene root — the entity a scene's whole prim subtree hangs from.
