@@ -95,7 +95,9 @@ identifying that signal first.
   every caller forks at a `#[cfg]` (see `scenario_sync.rs:327` `do_write`).
   There is **no sync web `exists`** (the sync `read_file_sync`/`write_file_sync`
   helpers route wasm to `localStorage`, *not* OPFS — a footgun for any generic
-  cache that calls them). No streaming (whole-`Vec` buffering), no eviction.
+  cache that calls them). Bounded metadata reads use native/OPFS
+  `read_bounded` with the caller's byte budget before materialization. Directory
+  listing still returns a complete list; general streaming and eviction are absent.
 - **Asset revision eviction remains separate.** Scenario metadata retains a
   bounded set of admission records per revision and rebuilds the cached-Twin
   menu asynchronously. Verified revision asset trees persist across sessions;

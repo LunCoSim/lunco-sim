@@ -116,10 +116,12 @@ with any newer downloads admitted during the scan.
 scan, eight retained admission records per revision, and the wire envelope byte
 budget per metadata record. Quota violations and corrupt records warn and hold
 the affected catalog admission; the currently admitted manifest still owns live
-scene metadata. Retention deletes old catalog records only. Existing storage
-listing/read APIs materialize a whole directory/file before caller processing
-and read-admission limits apply; they are not streaming enumeration. OPFS uses
-the storage owner's asynchronous `read_directory` parity API. Cached asset
+scene metadata. Retention deletes old catalog records only. Metadata reads pass
+`max_record_bytes` to the storage owner's `read_bounded` before decoding;
+oversized native files and OPFS snapshots are rejected before full allocation.
+Directory listing still materializes the complete list before processing limits
+apply; it is not streaming enumeration. OPFS uses the storage owner's
+asynchronous `read_directory` parity API. Cached asset
 revision eviction is separate from Twin teardown.
 
 ## 1. The four classifying axes

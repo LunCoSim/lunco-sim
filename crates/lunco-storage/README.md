@@ -48,6 +48,14 @@ Each concurrent write reserves its own staging file; replacement and create-only
 `write_new` share this staging owner. `write_new` preserves an existing destination.
 Consumers must use these storage methods for concurrent cache persistence.
 
+`FileStorage::read_bounded(handle, max_bytes)` and the matching OPFS method
+enforce caller-owned read budgets before materializing full contents. Native
+reads take at most the limit plus one sentinel byte, including concurrent file
+growth; memory reads check length before cloning. OPFS checks the immutable
+`File` snapshot's size before allocating its array buffer or Rust bytes.
+Oversized inputs return `StorageError::SizeLimitExceeded { max_bytes }`.
+Optional cache and artifact readers use these methods before decoding records.
+
 `OpfsStorage` exposes asynchronous `read_directory` with the same File-handle
 mapping and sorted direct-child results as native storage. Callers bound catalog
 processing and metadata reads; directory enumeration returns the complete list.

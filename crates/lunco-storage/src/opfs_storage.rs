@@ -71,6 +71,24 @@ impl OpfsStorage {
 
     /// Read the full contents of the OPFS file addressed by `handle`.
     pub async fn read(&self, handle: &StorageHandle) -> StorageResult<Vec<u8>> {
+        self.read_contents(handle, None).await
+    }
+
+    /// Read within the caller's byte budget. The immutable File snapshot's
+    /// size is checked before allocating its array buffer or Rust byte vector.
+    pub async fn read_bounded(
+        &self,
+        handle: &StorageHandle,
+        max_bytes: usize,
+    ) -> StorageResult<Vec<u8>> {
+        self.read_contents(handle, Some(max_bytes)).await
+    }
+
+    async fn read_contents(
+        &self,
+        handle: &StorageHandle,
+        max_bytes: Option<usize>,
+    ) -> StorageResult<Vec<u8>> {
         let (dirs, file) = split_handle(handle)?;
         let dir = resolve_dir(&segments_root().await?, &dirs, false).await?;
         let file_handle = get_file(&dir, &file, false).await?;
@@ -79,6 +97,23 @@ impl OpfsStorage {
             .map_err(|_| StorageError::NotFound)?
             .dyn_into::<web_sys::File>()
             .map_err(|_| unsupported("getFile did not return a File"))?;
+        if let Some(max_bytes) = max_bytes {
+            let size = file.size();
+            if !size.is_finite() || size < 0.0 || size.fract() != 0.0 {
+                return Err(StorageError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "OPFS returned an invalid File size",
+                )));
+            }
+            // wasm32 budgets are exact in JavaScript's numeric representation.
+            let limit = f64::from(
+                u32::try_from(max_bytes)
+                    .map_err(|_| unsupported("read budget exceeds the wasm32 address space"))?,
+            );
+            if size > limit {
+                return Err(StorageError::SizeLimitExceeded { max_bytes });
+            }
+        }
         let buf = JsFuture::from(file.array_buffer()).await.map_err(js_err)?;
         let array = js_sys::Uint8Array::new(&buf);
         Ok(array.to_vec())

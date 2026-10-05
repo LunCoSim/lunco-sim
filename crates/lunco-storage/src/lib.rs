@@ -78,6 +78,10 @@ pub enum StorageError {
     #[error("entry already exists")]
     AlreadyExists,
 
+    /// Contents exceed the caller's byte budget for this read.
+    #[error("contents exceed the {max_bytes}-byte read limit")]
+    SizeLimitExceeded { max_bytes: usize },
+
     /// Handle is read-only (source library libraries, remote snapshots, etc.).
     #[error("handle is read-only")]
     ReadOnly,

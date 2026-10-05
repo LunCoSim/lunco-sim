@@ -29,7 +29,7 @@ replication runtime; the deployment guide owns service and TLS facts.
   use the protocol adapter only at serialization. Application is valid only in
   a scene-free world; missing Twin ownership must reject visibly.
 - Cache persistence uses the [storage atomic-write contract](../../crates/lunco-storage/README.md#usage). Cover concurrent replacement at that generic owner before relying on detached cache writes.
-- Revision and catalog work follows the [cache owner contract](../../crates/lunco-networking/SYNC_ARCHITECTURE.md#revision-cache-and-catalog). Cover UUID/revision isolation, conflicting same-name mounts, out-of-order metadata completion, retention, and the OPFS configuration with generic temp fixtures.
+- Revision and catalog work follows the [cache owner contract](../../crates/lunco-networking/SYNC_ARCHITECTURE.md#revision-cache-and-catalog). Pass `ScenarioCacheLimits.max_record_bytes` to native/OPFS `read_bounded` before decoding metadata. Cover UUID/revision isolation, conflicting same-name mounts, out-of-order metadata completion, retention, corrupt/oversized records, and the OPFS configuration with generic temp fixtures.
 - For lifecycle work, cover old-mount rejection, same-source reopening, exact
   connection replacement, deferred spawn/replay retirement, asynchronous result
   cancellation, and prediction-buffer teardown at their generic owners. The

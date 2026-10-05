@@ -906,16 +906,9 @@ async fn read_revision_index(
 ) -> Option<ScenarioIndex> {
     let records = revision_catalog_records(root, limits).await;
     for (admission, handle) in records.into_iter().rev().take(limits.max_admission_records) {
-        let Some(bytes) = storage_read(&handle).await else {
+        let Some(bytes) = storage_read(&handle, limits.max_record_bytes).await else {
             continue;
         };
-        if bytes.len() > limits.max_record_bytes {
-            warn!(
-                "[net] scenario catalog record exceeds metadata budget: {}",
-                handle.display_name()
-            );
-            continue;
-        }
         let index = match serde_json::from_slice::<ScenarioIndex>(&bytes) {
             Ok(index) => index,
             Err(error) => {
@@ -1111,9 +1104,11 @@ async fn cached_asset_exists(path: &std::path::Path) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn storage_read(handle: &StorageHandle) -> Option<Vec<u8>> {
-    use lunco_storage::Storage;
-    match lunco_storage::FileStorage::new().read(handle).await {
+async fn storage_read(handle: &StorageHandle, max_bytes: usize) -> Option<Vec<u8>> {
+    match lunco_storage::FileStorage::new()
+        .read_bounded(handle, max_bytes)
+        .await
+    {
         Ok(bytes) => Some(bytes),
         Err(lunco_storage::StorageError::NotFound) => None,
         Err(error) => {
@@ -1123,8 +1118,11 @@ async fn storage_read(handle: &StorageHandle) -> Option<Vec<u8>> {
     }
 }
 #[cfg(target_arch = "wasm32")]
-async fn storage_read(handle: &StorageHandle) -> Option<Vec<u8>> {
-    match lunco_storage::OpfsStorage::new().read(handle).await {
+async fn storage_read(handle: &StorageHandle, max_bytes: usize) -> Option<Vec<u8>> {
+    match lunco_storage::OpfsStorage::new()
+        .read_bounded(handle, max_bytes)
+        .await
+    {
         Ok(bytes) => Some(bytes),
         Err(lunco_storage::StorageError::NotFound) => None,
         Err(error) => {
@@ -1777,6 +1775,7 @@ mod tests {
             let revision = [2; 32];
             let limits = ScenarioCacheLimits {
                 max_admission_records: 2,
+                max_record_bytes: 1024,
                 ..Default::default()
             };
             // Finish the oldest metadata write last, including a same-revision rename.
@@ -1815,6 +1814,42 @@ mod tests {
             assert_eq!(
                 selected.summary.default_scene.as_deref(),
                 Some("scene-3.usda")
+            );
+            let expanded_limits = ScenarioCacheLimits {
+                max_admission_records: 3,
+                ..limits
+            };
+            for (timestamp, bytes) in [
+                (4, vec![b'x'; limits.max_record_bytes + 1]),
+                (5, b"{".to_vec()),
+            ] {
+                persist_catalog_record(
+                    root.path(),
+                    &CacheAdmission {
+                        cached_at_unix_ns: timestamp,
+                        token: format!("{timestamp:032x}"),
+                    },
+                    bytes,
+                    expanded_limits,
+                )
+                .await;
+            }
+            let recovered = read_revision_index(root.path(), &id, &revision, expanded_limits)
+                .await
+                .unwrap();
+            assert_eq!(recovered.summary, selected.summary);
+            assert!(
+                read_revision_index(
+                    root.path(),
+                    &id,
+                    &revision,
+                    ScenarioCacheLimits {
+                        max_record_bytes: 0,
+                        ..expanded_limits
+                    }
+                )
+                .await
+                .is_none()
             );
             assert!(
                 read_revision_index(root.path(), &[4; 16], &revision, limits)

@@ -24,6 +24,8 @@
 #![cfg_attr(not(target_arch = "wasm32"), allow(clippy::disallowed_methods))]
 
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
+use std::io::Read;
 use std::sync::Mutex;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -45,6 +47,79 @@ impl FileStorage {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Read at most the caller's byte budget, rejecting oversized contents
+    /// before returning bytes. File reads remain bounded if the file grows.
+    pub async fn read_bounded(
+        &self,
+        handle: &StorageHandle,
+        max_bytes: usize,
+    ) -> StorageResult<Vec<u8>> {
+        self.read_contents(handle, Some(max_bytes))
+    }
+
+    fn read_contents(
+        &self,
+        handle: &StorageHandle,
+        max_bytes: Option<usize>,
+    ) -> StorageResult<Vec<u8>> {
+        match handle {
+            #[cfg(not(target_arch = "wasm32"))]
+            StorageHandle::File(path) => {
+                let file = std::fs::File::open(path).map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        StorageError::NotFound
+                    } else {
+                        StorageError::Io(error)
+                    }
+                })?;
+                read_contents(file, max_bytes)
+            }
+            StorageHandle::Memory(key) => {
+                let map = self
+                    .memory
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let bytes = map.get(key).ok_or(StorageError::NotFound)?;
+                if let Some(max_bytes) = max_bytes
+                    && bytes.len() > max_bytes
+                {
+                    return Err(StorageError::SizeLimitExceeded { max_bytes });
+                }
+                Ok(bytes.clone())
+            }
+            _ => Err(StorageError::Unsupported(
+                "FileStorage does not handle web / remote variants".into(),
+            )),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_contents(
+    mut reader: impl std::io::Read,
+    max_bytes: Option<usize>,
+) -> StorageResult<Vec<u8>> {
+    let mut bytes = Vec::new();
+    if let Some(max_bytes) = max_bytes {
+        // The sentinel distinguishes an exact-limit file from oversized data.
+        // Take bounds actual I/O, independently of metadata or later growth.
+        let read_limit = u64::try_from(max_bytes)
+            .map_err(|_| {
+                StorageError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "read budget exceeds the reader address space",
+                ))
+            })?
+            .saturating_add(1);
+        reader.take(read_limit).read_to_end(&mut bytes)?;
+        if bytes.len() > max_bytes {
+            return Err(StorageError::SizeLimitExceeded { max_bytes });
+        }
+    } else {
+        reader.read_to_end(&mut bytes)?;
+    }
+    Ok(bytes)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -127,24 +202,7 @@ fn stage_atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<s
 #[async_trait::async_trait]
 impl Storage for FileStorage {
     async fn read(&self, handle: &StorageHandle) -> StorageResult<Vec<u8>> {
-        match handle {
-            #[cfg(not(target_arch = "wasm32"))]
-            StorageHandle::File(path) => match std::fs::read(path) {
-                Ok(bytes) => Ok(bytes),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StorageError::NotFound),
-                Err(e) => Err(StorageError::Io(e)),
-            },
-            StorageHandle::Memory(key) => {
-                let map = self
-                    .memory
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                map.get(key).cloned().ok_or(StorageError::NotFound)
-            }
-            _ => Err(StorageError::Unsupported(
-                "FileStorage does not handle web / remote variants".into(),
-            )),
-        }
+        self.read_contents(handle, None)
     }
 
     async fn write(&self, handle: &StorageHandle, bytes: &[u8]) -> StorageResult<()> {
@@ -372,6 +430,122 @@ mod tests {
             s.write(&h, b"world").await.unwrap();
             assert_eq!(s.read(&h).await.unwrap(), b"world");
         });
+    }
+
+    #[test]
+    fn bounded_memory_reads_reject_oversized_contents_and_accept_boundaries() {
+        block_on(async {
+            let storage = FileStorage::new();
+            let handle = StorageHandle::Memory("bounded".into());
+            assert!(matches!(
+                storage.read_bounded(&handle, 0).await,
+                Err(StorageError::NotFound)
+            ));
+            storage.write(&handle, b"abc").await.unwrap();
+            assert_eq!(storage.read_bounded(&handle, 3).await.unwrap(), b"abc");
+            assert!(matches!(
+                storage.read_bounded(&handle, 2).await,
+                Err(StorageError::SizeLimitExceeded { max_bytes: 2 })
+            ));
+            assert!(matches!(
+                storage.read_bounded(&handle, 0).await,
+                Err(StorageError::SizeLimitExceeded { max_bytes: 0 })
+            ));
+            storage.write(&handle, b"").await.unwrap();
+            assert!(storage.read_bounded(&handle, 0).await.unwrap().is_empty());
+            assert!(storage.read(&handle).await.unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bounded_file_reads_reject_oversized_contents_and_accept_boundaries() {
+        block_on(async {
+            let root = tempdir().unwrap();
+            let storage = FileStorage::new();
+            let handle = StorageHandle::File(root.path().join("bounded.bin"));
+            assert!(matches!(
+                storage.read_bounded(&handle, 0).await,
+                Err(StorageError::NotFound)
+            ));
+            storage.write(&handle, b"abc").await.unwrap();
+            assert_eq!(storage.read_bounded(&handle, 3).await.unwrap(), b"abc");
+            assert!(matches!(
+                storage.read_bounded(&handle, 2).await,
+                Err(StorageError::SizeLimitExceeded { max_bytes: 2 })
+            ));
+            assert_eq!(storage.read(&handle).await.unwrap(), b"abc");
+            storage.write(&handle, b"").await.unwrap();
+            assert!(storage.read_bounded(&handle, 0).await.unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bounded_file_reads_cap_growth_after_open() {
+        use std::io::{Read, Write};
+        use std::sync::{
+            Barrier,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        struct GrowingFile<'a> {
+            file: std::fs::File,
+            barrier: &'a Barrier,
+            consumed: &'a AtomicUsize,
+            growing: bool,
+        }
+        impl Read for GrowingFile<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                let read = self.file.read(buffer)?;
+                self.consumed.fetch_add(read, Ordering::Relaxed);
+                if !self.growing {
+                    self.growing = true;
+                    self.barrier.wait();
+                    self.barrier.wait();
+                }
+                Ok(read)
+            }
+        }
+
+        let root = tempdir().unwrap();
+        let path = root.path().join("growing.bin");
+        FileStorage::new()
+            .write_sync(&StorageHandle::File(path.clone()), b"a")
+            .unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        assert_eq!(file.metadata().unwrap().len(), 1);
+        let barrier = Barrier::new(2);
+        let consumed = AtomicUsize::new(0);
+        let result = std::thread::scope(|scope| {
+            let writer = scope.spawn(|| {
+                barrier.wait();
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&path)
+                    .unwrap();
+                file.write_all(&[b'b'; 63]).unwrap();
+                file.flush().unwrap();
+                barrier.wait();
+            });
+            let result = read_contents(
+                GrowingFile {
+                    file,
+                    barrier: &barrier,
+                    consumed: &consumed,
+                    growing: false,
+                },
+                Some(3),
+            );
+            writer.join().unwrap();
+            result
+        });
+        assert!(matches!(
+            result,
+            Err(StorageError::SizeLimitExceeded { max_bytes: 3 })
+        ));
+        assert_eq!(consumed.load(Ordering::Relaxed), 4);
+        assert_eq!(std::fs::metadata(path).unwrap().len(), 64);
     }
 
     #[test]
