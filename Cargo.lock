@@ -10267,6 +10267,7 @@ dependencies = [
  "lunco-usd-sim-core",
  "lunco-workspace",
  "openusd",
+ "tempfile",
 ]
 
 [[package]]

@@ -201,6 +201,14 @@ pub fn apply_program_resolution(
                 stage_id,
                 asset,
                 world.get_resource::<lunco_assets_core::TwinRoots>(),
+                world
+                    .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+                    .zip(world.get_resource::<bevy::prelude::Assets<UsdStageAsset>>())
+                    .and_then(|(canonical, assets)| {
+                        assets
+                            .get(stage_id)
+                            .and_then(|asset| canonical.native_asset_paths_for(stage_id, asset))
+                    }),
             )
         })
     });

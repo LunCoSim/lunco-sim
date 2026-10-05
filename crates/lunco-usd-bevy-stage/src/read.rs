@@ -106,6 +106,11 @@ pub struct UsdReadPrimFacts {
 /// plan or the live canonical `StageView`. Extractors depend on this seam rather
 /// than reaching into OpenUSD directly.
 pub trait UsdRead {
+    /// Worker-prepared native addresses for this exact composed read revision.
+    fn native_asset_paths(&self) -> Option<&lunco_assets_core::asset_path::PreparedAssetPaths> {
+        None
+    }
+
     /// Composed `typeName` of the prim at `prim` (e.g. `"Cube"`, `"Mesh"`).
     /// Named `type_name` to distinguish it from authoring-layer helpers.
     fn type_name(&self, prim: &SdfPath) -> Option<String>;
@@ -675,6 +680,8 @@ pub trait UsdRead {
 /// and the send-safe asset projection plan. It is an adapter over the same
 /// [`UsdRead`] implementation, not a second source of USD facts.
 pub trait UsdReadObject {
+    fn native_asset_paths(&self) -> Option<&lunco_assets_core::asset_path::PreparedAssetPaths>;
+
     fn type_name(&self, prim: &SdfPath) -> Option<String>;
     fn kind(&self, prim: &SdfPath) -> Option<String>;
     fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value>;
@@ -1179,6 +1186,10 @@ pub fn has_runtime_port_surface(view: &dyn UsdReadObject, prim: &SdfPath) -> boo
 }
 
 impl<T: UsdRead + ?Sized> UsdReadObject for T {
+    fn native_asset_paths(&self) -> Option<&lunco_assets_core::asset_path::PreparedAssetPaths> {
+        UsdRead::native_asset_paths(self)
+    }
+
     fn type_name(&self, prim: &SdfPath) -> Option<String> {
         UsdRead::type_name(self, prim)
     }
@@ -1362,6 +1373,10 @@ impl<T: UsdRead + ?Sized> UsdReadObject for T {
 }
 
 impl UsdRead for StageView<'_> {
+    fn native_asset_paths(&self) -> Option<&lunco_assets_core::asset_path::PreparedAssetPaths> {
+        self.prepared_native_paths()
+    }
+
     fn type_name(&self, prim: &SdfPath) -> Option<String> {
         self.stage()
             .prim(prim.clone())
@@ -1797,6 +1812,13 @@ pub enum UsdReadSource<'a> {
 }
 
 impl UsdRead for UsdReadSource<'_> {
+    fn native_asset_paths(&self) -> Option<&lunco_assets_core::asset_path::PreparedAssetPaths> {
+        match self {
+            Self::Prepared(reader) => UsdRead::native_asset_paths(*reader),
+            Self::Live(reader) => UsdRead::native_asset_paths(reader),
+        }
+    }
+
     fn type_name(&self, prim: &SdfPath) -> Option<String> {
         match self {
             Self::Prepared(reader) => UsdRead::type_name(*reader, prim),

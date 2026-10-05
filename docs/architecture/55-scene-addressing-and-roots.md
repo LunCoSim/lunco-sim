@@ -148,16 +148,32 @@ to a reusable logical name.
 ### Native payload and source admission
 
 Native USD composition uses standard `file:` URIs. Bevy does not register a
-filesystem source: `lunco_assets_core::asset_path::load_asset_path` decodes a
-native reference through `lunco-storage` and maps it to a typed `AssetPath`
-inside the originating stage's exact live Twin mount. The stage's
-`AssetServer` path supplies that lifetime authority; a manifest name or native
-recipe root cannot replace it. Missing, unknown, retired, and non-Twin origins,
-or native paths outside the admitted root, reject the owning operation.
+filesystem source. `lunco-assets-core::asset_path::PreparedAssetPaths` prepares
+native references through `lunco-storage::canonicalize_file_path` on the stage
+worker, checks canonical containment, and returns Twin-relative typed
+`AssetPath` results. Filesystem canonicalization owns Windows case-variant
+directory names, UNC/verbatim prefixes, and symlink/junction resolution;
+projection never performs filesystem lookup or case folding. The stage's
+`AssetServer` origin supplies the exact lifetime authority. Manifest names and
+native recipe roots cannot replace it. Missing, retired, non-Twin, malformed,
+and outside-root references retain terminal errors for their owning consumer.
 
-This adapter performs no filesystem I/O during projection. The storage URI
-conversion normalizes native Windows drive/UNC and canonical verbatim-root
-spellings; the asynchronous Twin reader owns filesystem and symlink validation.
+The initial loader and dependent-plan worker discover native values through
+composed USD asset attributes, arrays, time samples, and binary arcs. Their
+immutable table travels with the projection plan. Live sink changes share one
+bounded `AsyncWorkAdmission` gate before material, light, program, policy, or
+structural consumption. The gate prepares only native inputs absent from the
+current table and retains newer changes and transform hints while work is
+pending. Publication rechecks the exact canonical-stage lifetime/generation,
+origin and live mount; stale completion cannot admit or release newer work.
+An authoritative stage holds `UsdNativeAssetPreparation` through the admitted
+live projection, and teardown cancels queued work, drops its completion channel,
+and releases only its own holds. Ordinary transform edits reuse the shared
+table without native I/O or a whole-stage snapshot.
+
+`load_asset_path` resolves the prepared table without filesystem I/O, rechecks
+the live mount, and rejects an absent current entry. The asynchronous Twin reader
+continues to validate canonical containment before reading bytes.
 The shared USD `resolve_stage_asset_path` returns `Result<AssetPath>` and all
 binary, material, dome, scenario, and policy consumers keep that typed value
 through `AssetServer::load`. A binary's glTF label is attached with

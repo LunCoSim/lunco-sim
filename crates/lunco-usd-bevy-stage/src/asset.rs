@@ -85,16 +85,29 @@ pub fn resolve_stage_asset_path(
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     asset_path: &str,
     roots: Option<&lunco_assets_core::TwinRoots>,
+    prepared: Option<&lunco_assets_core::asset_path::PreparedAssetPaths>,
 ) -> Result<bevy::asset::AssetPath<'static>, lunco_assets_core::TwinRootsError> {
     let origin = asset_server.get_path(stage_id);
-    lunco_assets_core::asset_path::load_asset_path(asset_path, origin.as_ref(), roots)
+    lunco_assets_core::asset_path::load_asset_path(asset_path, origin.as_ref(), roots, prepared)
 }
 
 /// Bevy loader that fetches and composes the available transitive USD layer
 /// closure before publishing a [`UsdStageAsset`]. Missing transitive layers
 /// remain unresolved USD arcs and are carried as runtime diagnostics.
-#[derive(Default, TypePath)]
-pub struct UsdLoader;
+#[derive(TypePath)]
+pub struct UsdLoader {
+    roots: Option<lunco_assets_core::TwinRoots>,
+}
+
+impl bevy::prelude::FromWorld for UsdLoader {
+    fn from_world(world: &mut bevy::prelude::World) -> Self {
+        Self {
+            roots: world
+                .get_resource::<lunco_assets_core::TwinRoots>()
+                .cloned(),
+        }
+    }
+}
 
 impl AssetLoader for UsdLoader {
     type Asset = UsdStageAsset;
@@ -113,6 +126,8 @@ impl AssetLoader for UsdLoader {
         // Preserve the named Bevy asset source when anchoring relative USD
         // arcs. The asset-path module owns both scheme reconstruction and
         // platform separator normalization.
+        let origin = load_context.path().clone().into_owned();
+        let roots = self.roots.clone();
         let root_asset_path = anchor_of(load_context.path());
 
         let fetched = fetch_layer_closure(load_context, &root_asset_path, bytes).await?;
@@ -124,14 +139,22 @@ impl AssetLoader for UsdLoader {
         let (recipe, projection_plan) = {
             AsyncComputeTaskPool::get()
                 .spawn(async move {
-                    let projection_plan = UsdStageProjectionPlan::from_recipe(&recipe)?;
+                    let mut projection_plan = UsdStageProjectionPlan::from_recipe(&recipe)?;
+                    projection_plan.prepare_native_asset_paths(Some(origin), roots.as_ref());
+                    if let Some(paths) = projection_plan.native_asset_paths_snapshot() {
+                        paths.validate_owner(roots.as_ref())?;
+                    }
                     Ok::<_, anyhow::Error>((recipe, projection_plan))
                 })
                 .await?
         };
         #[cfg(target_arch = "wasm32")]
         let (recipe, projection_plan) = {
-            let projection_plan = UsdStageProjectionPlan::from_recipe(&recipe)?;
+            let mut projection_plan = UsdStageProjectionPlan::from_recipe(&recipe)?;
+            projection_plan.prepare_native_asset_paths(Some(origin), roots.as_ref());
+            if let Some(paths) = projection_plan.native_asset_paths_snapshot() {
+                paths.validate_owner(roots.as_ref())?;
+            }
             (recipe, projection_plan)
         };
         UsdStageAsset::from_prepared_recipe(recipe, source_dependencies, projection_plan)

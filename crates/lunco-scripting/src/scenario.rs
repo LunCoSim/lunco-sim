@@ -1919,6 +1919,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         blocker.key.owner,
                         lunco_core_runtime::SimulationProgressOwner::SceneLifecycle
                             | lunco_core_runtime::SimulationProgressOwner::SceneReferences
+                            | lunco_core_runtime::SimulationProgressOwner::UsdNativeAssetPreparation
                             | lunco_core_runtime::SimulationProgressOwner::UsdSimulationTopology
                             | lunco_core_runtime::SimulationProgressOwner::UsdDomainProjection
                             | lunco_core_runtime::SimulationProgressOwner::UsdDomainDiscovery

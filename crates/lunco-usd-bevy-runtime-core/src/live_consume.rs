@@ -499,11 +499,14 @@ pub(crate) fn publish_pending_stage_projections(world: &mut World) {
                 .stages
                 .iter()
                 .filter(|(stage_id, projection)| {
-                    !crate::twin_projection::has_pending_reference_projection(
-                        world,
-                        **stage_id,
-                        &projection.required_reference_paths,
-                    )
+                    !world
+                        .get_resource::<crate::native_assets::PendingNativeAssetPaths>()
+                        .is_some_and(|pending| pending.contains(**stage_id))
+                        && !crate::twin_projection::has_pending_reference_projection(
+                            world,
+                            **stage_id,
+                            &projection.required_reference_paths,
+                        )
                 })
                 .map(|(stage_id, _)| *stage_id)
                 .collect::<Vec<_>>()
@@ -611,7 +614,18 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         return;
     }
     // Phase 1: drain the sink inboxes (owned + `Send`), releasing the borrow.
-    let batches = world.non_send_mut::<CanonicalStages>().drain_all_changes();
+    let drained = world.non_send_mut::<CanonicalStages>().drain_all_changes();
+    let incoming = drained
+        .into_iter()
+        .map(|(id, changes)| {
+            let hints = world
+                .get_resource_mut::<LiveTransformEditHints>()
+                .map(|mut hints| hints.take(id))
+                .unwrap_or_default();
+            (id, changes, hints)
+        })
+        .collect();
+    let batches = crate::native_assets::admit_stage_changes(world, incoming);
     if batches.is_empty() {
         publish_pending_stage_projections(world);
         return;
@@ -620,11 +634,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     let mut projected_anything = false;
     let mut connection_paths_changed = false;
     let mut input_defaults_changed = false;
-    for (id, changes) in batches {
-        let authored_transform_edits = world
-            .get_resource_mut::<LiveTransformEditHints>()
-            .map(|mut hints| hints.take(id))
-            .unwrap_or_default();
+    for (id, changes, authored_transform_edits) in batches {
         // Merge this stage's committed changes into one resync / info-only set.
         let mut resynced: Vec<String> = Vec::new();
         let mut info_only: Vec<String> = Vec::new();
@@ -663,6 +673,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         }
 
         if resynced.is_empty() && info_only.is_empty() && authored_transform_edits.is_empty() {
+            crate::native_assets::finish_stage_projection(world, id);
             publish_scene_change_batch(
                 world,
                 id,
@@ -690,6 +701,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         // so a live edit shows up without reloading the scene.
         refresh_edited_prims_live(world, id, &info_only);
         reconcile_structural_live(world, id, &resynced);
+        crate::native_assets::finish_stage_projection(world, id);
         publish_scene_change_batch(
             world,
             id,

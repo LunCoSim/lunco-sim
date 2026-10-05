@@ -39,6 +39,7 @@ lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-workspace = { path = "../lunco-workspace" }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 avian3d = { workspace = true }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 

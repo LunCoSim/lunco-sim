@@ -46,12 +46,15 @@ composition arc before OpenUSD's infallible identifier callback. That callback
 records any rejected identity; stage construction checks its diagnostics before
 publishing the stage.
 
-The Windows job in `.github/workflows/nightly.yml` runs eight exact native-path
+Native projection uses the shared worker-prepared `PreparedAssetPaths` table;
+see [native admission and revision ownership](55-scene-addressing-and-roots.md#native-payload-and-source-admission).
+
+The Windows job in `.github/workflows/nightly.yml` runs nine exact native-path
 regressions after the desktop release build, using that release profile and
 target cache. They cover standard drive/UNC file URIs, encoded filenames,
 canonical Twin roots, display-name component encoding, provider manifest
 confinement, native asset admission,
-retired/foreign mount rejection, and verbatim-root conversion. These tests use
+retired/foreign mount rejection, case-variant canonical admission, and verbatim-root conversion. These tests use
 ordinary temporary directories; they do not require Windows symlink privileges
 or exercise Windows junction escape behavior. Unix test results alone are not
 Windows execution evidence.

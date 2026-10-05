@@ -142,7 +142,7 @@ fn import_dependency_paths(
             // including its root-relative/default-source rule and extension. Hand
             // that reference to the asset owner without applying a second anchor;
             // filenames are paths, while interpreter/cache identities remain keys.
-            lunco_assets_core::asset_path::load_asset_path(&canonical, None, None)
+            lunco_assets_core::asset_path::load_asset_path(&canonical, None, None, None)
                 .map_err(anyhow::Error::from)
         })
         .collect()

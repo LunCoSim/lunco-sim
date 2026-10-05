@@ -91,6 +91,9 @@ pub struct CanonicalStage {
     /// generation. Any later live edit makes the snapshot stale by advancing
     /// `generation`.
     prepared_plan: Option<(Arc<crate::UsdStageProjectionPlan>, u64)>,
+    native_paths: Option<Arc<lunco_assets_core::asset_path::PreparedAssetPaths>>,
+    native_paths_generation: u64,
+    native_paths_pending: bool,
 }
 
 /// Send-safe authored-layer snapshot of one canonical generation.
@@ -147,6 +150,9 @@ impl CanonicalStage {
             reference_recipes: HashMap::new(),
             generation: 0,
             prepared_plan: None,
+            native_paths: None,
+            native_paths_generation: 0,
+            native_paths_pending: false,
         }
     }
 
@@ -165,7 +171,48 @@ impl CanonicalStage {
 
     /// A [`StageView`] over the live composed stage for typed reads.
     pub fn view(&self) -> StageView<'_> {
-        StageView::new(&self.stage)
+        StageView::with_native_paths(&self.stage, self.native_asset_paths())
+    }
+
+    /// Identity of this canonical stage lifetime, independent of its asset id.
+    pub fn identity(&self) -> u64 {
+        self.resolver_identity
+    }
+
+    /// Immutable prior admission results reused by the preparation owner.
+    pub fn cached_native_asset_paths(
+        &self,
+    ) -> Option<&Arc<lunco_assets_core::asset_path::PreparedAssetPaths>> {
+        self.native_paths.as_ref()
+    }
+
+    /// Native addresses admitted for the current composed generation.
+    pub fn native_asset_paths(&self) -> Option<&lunco_assets_core::asset_path::PreparedAssetPaths> {
+        (!self.native_paths_pending && self.native_paths_generation == self.generation)
+            .then_some(self.native_paths.as_deref())
+            .flatten()
+    }
+
+    /// Whether native address preparation still holds this projection revision.
+    pub fn native_asset_paths_ready(&self) -> bool {
+        !self.native_paths_pending
+    }
+
+    pub fn set_native_asset_paths(
+        &mut self,
+        paths: Arc<lunco_assets_core::asset_path::PreparedAssetPaths>,
+    ) {
+        self.native_paths = Some(paths);
+        self.native_paths_generation = self.generation;
+        self.native_paths_pending = false;
+    }
+
+    pub fn hold_native_asset_paths(
+        &mut self,
+        paths: Arc<lunco_assets_core::asset_path::PreparedAssetPaths>,
+    ) {
+        self.native_paths = Some(paths);
+        self.native_paths_pending = true;
     }
 
     /// The underlying stage (escape hatch for authoring / reads not yet wrapped).
@@ -1239,6 +1286,9 @@ impl CanonicalStages {
         let Some(stage) = self.get_mut(asset) else {
             return false;
         };
+        if let Some(paths) = plan.native_asset_paths_snapshot() {
+            stage.set_native_asset_paths(paths);
+        }
         stage.prepared_plan = Some((plan, stage.generation));
         true
     }
@@ -1258,6 +1308,20 @@ impl CanonicalStages {
                     *generation == stage.generation && Arc::ptr_eq(prepared, plan)
                 })
         })
+    }
+
+    /// Native admission data from the same generation selected by `reader_for`.
+    pub fn native_asset_paths_for<'a>(
+        &'a self,
+        asset: bevy::asset::AssetId<UsdStageAsset>,
+        stage_asset: &'a UsdStageAsset,
+    ) -> Option<&'a lunco_assets_core::asset_path::PreparedAssetPaths> {
+        if let Some(stage) = self.get(asset)
+            && stage.generation() > 0
+        {
+            return stage.native_asset_paths();
+        }
+        UsdRead::native_asset_paths(stage_asset.projection_plan.as_ref())
     }
 
     /// Select the one composed read surface for an asset generation.
@@ -1476,6 +1540,9 @@ pub fn sync_canonical_stages(
                 }
                 match CanonicalStage::from_recipe(recipe) {
                     Ok(mut cs) => {
+                        if let Some(paths) = asset.projection_plan.native_asset_paths_snapshot() {
+                            cs.set_native_asset_paths(paths);
+                        }
                         cs.prepared_plan = Some((asset.projection_plan.clone(), cs.generation));
                         bevy::log::info!(
                             "[canonical] reopened live CanonicalStage for {:?} ({} prims)",

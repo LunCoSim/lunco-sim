@@ -156,6 +156,12 @@ The live `Stage` remains in its thread-affine owner. Runtime sidecar read/parse
 and editor-preview initial serialization are still synchronous, and the native
 admission queue reports its missing wasm worker transport visibly.
 
+Native binary, texture and source references use the stage worker's immutable
+asset-admission table. Live changes with new native inputs pass the shared
+revision-fenced preparation gate before the sink consumes them; its
+`UsdNativeAssetPreparation` hold keeps the authoritative physics clock closed
+through that projection. See the [asset admission owner](55-scene-addressing-and-roots.md#native-payload-and-source-admission).
+
 Core USD schema assets register incrementally through
 `lunco-usd-bevy-runtime-core`. `lunco-usd-authoring` applies matching linear-unit
 facts as declarations arrive and validates missing entries only after all

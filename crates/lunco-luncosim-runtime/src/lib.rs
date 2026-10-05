@@ -539,6 +539,7 @@ fn resolve_policy_source_file(
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     asset_server: &AssetServer,
     twin_roots: Option<&lunco_assets_core::TwinRoots>,
+    native_paths: Option<&lunco_assets_core::asset_path::PreparedAssetPaths>,
     live: &mut std::collections::HashSet<bevy::asset::AssetPath<'static>>,
     sources: Option<&Assets<lunco_scripting_rhai_world::source_asset::RhaiSource>>,
     pending: &mut std::collections::HashMap<
@@ -555,6 +556,7 @@ fn resolve_policy_source_file(
         stage_id,
         path,
         twin_roots,
+        native_paths,
     ) {
         Ok(path) => path,
         Err(error) => {
@@ -616,6 +618,13 @@ fn project_usd_policies(
         Option<std::collections::HashSet<(AssetId<UsdStageAsset>, Option<(usize, u64)>)>>,
     >,
 ) {
+    if roots.iter().any(|prim| {
+        canonical
+            .get(prim.stage_handle.id())
+            .is_some_and(|stage| !stage.native_asset_paths_ready())
+    }) {
+        return;
+    }
     let failed_policy_source = source_failures.read().fold(false, |failed, event| {
         failed || pending.values().any(|handle| handle.id() == event.id)
     });
@@ -824,6 +833,9 @@ fn project_usd_policies(
                     authored.stage_id,
                     &asset_server,
                     twin_roots.as_deref(),
+                    stages.get(authored.stage_id).and_then(|stage| {
+                        canonical.native_asset_paths_for(authored.stage_id, stage)
+                    }),
                     &mut live,
                     sources.as_deref(),
                     &mut pending,

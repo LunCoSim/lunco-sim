@@ -947,9 +947,18 @@ mod tests {
                     .with_source(TWIN_SCHEME);
             let file_uri = lunco_storage::file_path_to_uri(&twin.root.join(relative))
                 .expect("native payload URI");
-            let payload =
-                crate::asset_path::load_asset_path(&file_uri, Some(&origin), Some(&roots))
-                    .expect("special-name native asset admission");
+            let prepared = crate::asset_path::PreparedAssetPaths::prepare_on_worker(
+                [file_uri.clone()],
+                Some(origin.clone()),
+                Some(&roots),
+            );
+            let payload = crate::asset_path::load_asset_path(
+                &file_uri,
+                Some(&origin),
+                Some(&roots),
+                Some(&prepared),
+            )
+            .expect("special-name native asset admission");
             assert_eq!(payload.path(), Path::new(&first).join(relative));
             assert_eq!(payload.label(), None);
             let reader = TwinReader {
@@ -978,7 +987,7 @@ mod tests {
                 Err(AssetReaderError::NotFound(_))
             ));
             assert!(
-                matches!(crate::asset_path::load_asset_path(&file_uri, Some(&origin), Some(&roots)),
+                matches!(crate::asset_path::load_asset_path(&file_uri, Some(&origin), Some(&roots), None),
                 Err(TwinRootsError::UnknownAuthority(authority)) if authority == first)
             );
             roots

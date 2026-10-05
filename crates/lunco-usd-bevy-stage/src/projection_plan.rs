@@ -112,6 +112,7 @@ struct InstanceNamespace {
 /// Runtime edits still use the canonical live stage as their owner.
 #[derive(Clone, Debug, Default)]
 pub struct UsdStageProjectionPlan {
+    native_paths: Option<Arc<lunco_assets_core::asset_path::PreparedAssetPaths>>,
     data: Arc<UsdStageProjectionData>,
     namespace: Option<InstanceNamespace>,
     instance_default_prim: Option<String>,
@@ -121,6 +122,29 @@ pub struct UsdStageProjectionPlan {
 }
 
 impl UsdStageProjectionPlan {
+    /// Share the immutable native admission snapshot with its live stage owner.
+    pub fn native_asset_paths_snapshot(
+        &self,
+    ) -> Option<Arc<lunco_assets_core::asset_path::PreparedAssetPaths>> {
+        self.native_paths.clone()
+    }
+
+    /// Prepare native asset references through the authoritative asset owner.
+    /// Called only on the same worker that prepares this composed snapshot.
+    pub fn prepare_native_asset_paths(
+        &mut self,
+        origin: Option<bevy::asset::AssetPath<'static>>,
+        roots: Option<&lunco_assets_core::TwinRoots>,
+    ) {
+        let references =
+            crate::native_paths::native_references_for_prims(self, UsdRead::prim_paths(self));
+        self.native_paths = Some(Arc::new(
+            lunco_assets_core::asset_path::PreparedAssetPaths::prepare_on_worker(
+                references, origin, roots,
+            ),
+        ));
+    }
+
     /// Build the initial projection from the same composed OpenUSD stage that
     /// runtime readers use. The stage is local to this worker call and is
     /// dropped before the plan crosses the async asset boundary.
@@ -486,6 +510,7 @@ impl UsdStageProjectionPlan {
         let instance_root = instance_root.to_string();
         Ok(Self {
             data: Arc::clone(&self.data),
+            native_paths: self.native_paths.clone(),
             namespace: Some(InstanceNamespace {
                 source_root,
                 instance_root: instance_root.clone(),
@@ -592,6 +617,10 @@ impl UsdStageProjectionPlan {
 }
 
 impl UsdRead for UsdStageProjectionPlan {
+    fn native_asset_paths(&self) -> Option<&lunco_assets_core::asset_path::PreparedAssetPaths> {
+        self.native_paths.as_deref()
+    }
+
     fn type_name(&self, prim: &SdfPath) -> Option<String> {
         self.prim(prim).and_then(|prim| prim.type_name.clone())
     }

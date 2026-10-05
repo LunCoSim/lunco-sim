@@ -828,7 +828,10 @@ fn enqueue_reference_spawn(world: &mut World, mut item: RefSpawn) {
     }
 }
 
-fn is_authoritative_scene_stage(world: &World, scene_id: AssetId<UsdStageAsset>) -> bool {
+pub(crate) fn is_authoritative_scene_stage(
+    world: &World,
+    scene_id: AssetId<UsdStageAsset>,
+) -> bool {
     let Some(root) = world
         .get_resource::<lunco_core::SceneMountState>()
         .and_then(lunco_core::SceneMountState::active_root)
@@ -1117,6 +1120,7 @@ pub(crate) fn reset_scene_projection_state(
     mut pending_instances: Option<ResMut<PendingInstanceProjections>>,
     mut pending_stage_projections: Option<ResMut<crate::live_consume::PendingStageProjections>>,
     mut admission: Option<ResMut<AsyncWorkAdmission>>,
+    mut pending_native_paths: Option<ResMut<crate::native_assets::PendingNativeAssetPaths>>,
     mut progress: Option<ResMut<SimulationProgress>>,
 ) {
     if let Some(progress) = progress.as_deref_mut() {
@@ -1142,6 +1146,9 @@ pub(crate) fn reset_scene_projection_state(
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
+    }
+    if let Some(pending) = pending_native_paths.as_deref_mut() {
+        pending.clear(admission.as_deref_mut(), progress.as_deref_mut());
     }
     pending_refs.items.clear();
     pending_refs.ready.clear();
@@ -2697,6 +2704,22 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
                 wake_reference_spawns_for_asset(world, completion.stage);
             }
             Ok(Some(refresh)) => {
+                if let Some(paths) = refresh.projection_plan.native_asset_paths_snapshot()
+                    && let Err(error) = paths.validate_owner(world.get_resource::<TwinRoots>())
+                {
+                    report_stage_projection_reset_failure(
+                        world,
+                        completion.stage,
+                        error.to_string(),
+                    );
+                    retain_dependent_stage_plan_failure(
+                        world,
+                        completion.stage,
+                        pending_refresh,
+                        error.to_string(),
+                    );
+                    continue;
+                }
                 let current_plan = world
                     .resource::<Assets<UsdStageAsset>>()
                     .get(completion.stage)
@@ -3022,6 +3045,10 @@ fn submit_pending_dependent_stage_refreshes(world: &mut World) {
                 world.resource::<TwinProjectionWake>().clone(),
             )
         };
+        let worker_origin = world
+            .get_resource::<AssetServer>()
+            .and_then(|server| server.get_path(stage).map(|path| path.into_owned()));
+        let worker_roots = world.get_resource::<TwinRoots>().cloned();
         let worker_base_recipe = Arc::clone(&base_recipe);
         let worker_layer_patches = layer_patches.clone();
         let worker_reference_recipes = reference_recipes.clone();
@@ -3108,8 +3135,13 @@ fn submit_pending_dependent_stage_refreshes(world: &mut World) {
                                 revision
                             )
                             .entered();
-                            UsdStageProjectionPlan::from_recipe(&recipe)
-                                .map_err(|error| error.to_string())?
+                            let mut plan = UsdStageProjectionPlan::from_recipe(&recipe)
+                                .map_err(|error| error.to_string())?;
+                            plan.prepare_native_asset_paths(
+                                worker_origin.clone(),
+                                worker_roots.as_ref(),
+                            );
+                            plan
                         };
                         Ok(Some(PreparedDependentStagePlan {
                             recipe,

@@ -514,7 +514,7 @@ fn on_run_scenario_asset(
     if path.is_empty() {
         return Err("RunScenarioAsset: source_asset must not be empty".to_string());
     }
-    let path = lunco_assets_core::asset_path::load_asset_path(&path, None, None)
+    let path = lunco_assets_core::asset_path::load_asset_path(&path, None, None, None)
         .map_err(|error| format!("RunScenarioAsset: {error}"))?;
     let owner_twin = resolve_scenario_twin_owner(
         workspace.as_deref(),

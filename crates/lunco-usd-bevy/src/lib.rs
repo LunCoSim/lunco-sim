@@ -151,7 +151,7 @@ impl Plugin for UsdVisualPlugin {
             .register_type::<bevy::gltf::GltfMaterialName>();
         app.init_asset::<UsdStageAsset>()
             .init_asset::<lunco_usd_bevy_stage::asset::UsdLayerReadReceipt>()
-            .register_asset_loader(UsdLoader)
+            .init_asset_loader::<UsdLoader>()
             // E1b: raw-source asset so a scene document's base layer can be read
             // through the same (web-ready) asset source the live world uses.
             .init_asset::<UsdSourceText>()
@@ -1217,6 +1217,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 prim_path.stage_handle.id(),
                 &asset_uri,
                 twin_roots,
+                UsdRead::native_asset_paths(reader),
             ) {
                 Ok(path) => path,
                 Err(error) => {
@@ -2091,6 +2092,7 @@ fn process_queued_usd_visuals(
     let started = web_time::Instant::now();
     let mut projected = 0usize;
     let mut visited = 0usize;
+    let mut native_deferred = Vec::new();
 
     while !visual_state.queued.is_empty() {
         if visited != 0 && started.elapsed() >= settings.frame_budget {
@@ -2127,6 +2129,15 @@ fn process_queued_usd_visuals(
                 projected += 1;
                 continue;
             }
+        }
+
+        if canonical
+            .get(prim_path.stage_handle.id())
+            .is_some_and(|stage| !stage.native_asset_paths_ready())
+        {
+            native_deferred.push((prim_path.path.clone(), entity));
+            visual_state.queued_entities.insert(entity);
+            continue;
         }
 
         commands
@@ -2184,6 +2195,7 @@ fn process_queued_usd_visuals(
         }
         projected += 1;
     }
+    visual_state.queued.extend(native_deferred);
     if projected > 0 {
         debug!(
             "[usd-bevy] projected {projected} prim(s) in {:.2} ms",
@@ -2906,6 +2918,7 @@ fn read_standard_material(
                     stage_id,
                     &asset_path,
                     twin_roots,
+                    reader.native_asset_paths(),
                 )
                 .map_err(|error| {
                     error!(

@@ -17,6 +17,7 @@
 use bevy::prelude::{App, IntoScheduleConfigs, Plugin};
 
 mod live_consume;
+mod native_assets;
 pub mod scene;
 mod scene_runtime;
 mod schema_assets;
@@ -73,6 +74,7 @@ impl Plugin for UsdSceneRuntimePlugin {
         app.init_resource::<twin_projection::PendingInstanceProjections>();
         app.init_resource::<lunco_core_runtime::SimulationProgress>();
         app.init_resource::<live_consume::PendingStageProjections>();
+        app.init_resource::<native_assets::PendingNativeAssetPaths>();
         live_consume::install_live_prim_entity_index(app);
         app.add_systems(
             bevy::prelude::PreUpdate,

@@ -15,6 +15,7 @@ pub mod authoring;
 pub mod canonical;
 pub mod compose;
 pub mod instance;
+pub mod native_paths;
 pub mod projection_plan;
 pub mod read;
 pub mod source;

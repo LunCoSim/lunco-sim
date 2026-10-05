@@ -499,6 +499,8 @@ pub enum SimulationProgressOwner {
     UsdDocumentProjection,
     /// Preparation and replacement of an authored dependent USD stage.
     UsdDependentStageProjection,
+    /// Native asset address preparation and its exact live USD projection.
+    UsdNativeAssetPreparation,
     /// Discovery of the mounted USD stage's Modelica domain roots.
     UsdDomainDiscovery,
     /// Preparation of an authored USD Modelica domain network.

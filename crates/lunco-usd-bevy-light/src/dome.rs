@@ -371,6 +371,7 @@ pub fn read_dome_environment(
                 stage_id,
                 &p,
                 twin_roots,
+                reader.native_asset_paths(),
             )
         })
         .transpose()

@@ -17,11 +17,31 @@ use openusd::usd::{Collection, PrimPredicate, Stage, compute_included_paths};
 /// [`UsdDataExt`]: lunco_usd_data::usd_data::UsdDataExt
 pub struct StageView<'a> {
     stage: &'a Stage,
+    native_paths: Option<&'a lunco_assets_core::asset_path::PreparedAssetPaths>,
 }
 
 impl<'a> StageView<'a> {
     pub fn new(stage: &'a Stage) -> Self {
-        Self { stage }
+        Self {
+            stage,
+            native_paths: None,
+        }
+    }
+
+    pub(crate) fn with_native_paths(
+        stage: &'a Stage,
+        native_paths: Option<&'a lunco_assets_core::asset_path::PreparedAssetPaths>,
+    ) -> Self {
+        Self {
+            stage,
+            native_paths,
+        }
+    }
+
+    pub(crate) fn prepared_native_paths(
+        &self,
+    ) -> Option<&lunco_assets_core::asset_path::PreparedAssetPaths> {
+        self.native_paths
     }
 
     /// The underlying stage (escape hatch for reads not yet wrapped).
