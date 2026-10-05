@@ -40,6 +40,15 @@ use bevy::prelude::*;
 /// [`SchemeRegistry`](crate::scheme_registry::SchemeRegistry).
 pub const TWIN_SCHEME: &str = "twin";
 
+// A display name becomes one URI component. Unreserved ASCII stays readable;
+// percent and delimiters are encoded so distinct authored names stay distinct.
+const TWIN_NAME_COMPONENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+const TWIN_DOT_NAME_COMPONENT: &percent_encoding::AsciiSet = &TWIN_NAME_COMPONENT.add(b'.');
+
 /// Failure of the authoritative open-Twin registry. A failed lock is not an
 /// absent Twin: callers must not publish a mounted/unmounted postcondition
 /// when the registry could not perform the requested mutation.
@@ -275,7 +284,9 @@ impl TwinRoots {
     /// in the same observer dispatch. Exposing this operation on the asset
     /// owner lets that composition root establish the `twin://` authority
     /// before any domain observer resolves the scene; repeated registration is
-    /// idempotent for the same root.
+    /// idempotent for the same root. The authored manifest/folder display name
+    /// is percent-encoded as one logical-source URI component; metadata is not
+    /// changed. Low-level `register` accepts already-encoded source components.
     pub fn register_twin(&self, twin: &lunco_twin::Twin) -> Result<String, TwinRootsError> {
         let name = twin
             .manifest
@@ -288,7 +299,13 @@ impl TwinRoots {
                     .map(|name| name.to_string_lossy().into_owned())
             })
             .unwrap_or_else(|| "twin".to_string());
-        self.register(name, twin.root.clone())
+        let encode = if name == "." || name == ".." {
+            TWIN_DOT_NAME_COMPONENT
+        } else {
+            TWIN_NAME_COMPONENT
+        };
+        let logical = percent_encoding::utf8_percent_encode(&name, encode).to_string();
+        self.register(logical, twin.root.clone())
     }
 
     /// Admit a Twin root and return its mount-local load authority.
@@ -898,6 +915,116 @@ mod tests {
             b,
             "a live duplicate keeps its admitted logical identity after the other Twin closes"
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn register_twin_encodes_display_names_without_rebinding_retired_mounts() {
+        futures_lite::future::block_on(async {
+            let parent = tempfile::tempdir().expect("temporary parent");
+            let folder_name = "Path # % Мир";
+            let folder = parent.path().join(folder_name);
+            lunco_storage::ensure_directory_sync(&folder).expect("Twin folder");
+            let relative = Path::new("payload # % Мир.txt");
+            lunco_storage::write_file_sync(&folder.join(relative), b"literal filename")
+                .expect("payload");
+            let lunco_twin::TwinMode::Folder(mut twin) =
+                lunco_twin::TwinMode::open(&folder).expect("open folder")
+            else {
+                panic!("expected plain folder Twin");
+            };
+            let roots = TwinRoots::default();
+            let expected = "Path%20%23%20%25%20%D0%9C%D0%B8%D1%80";
+            let first = roots.register_twin(&twin).expect("special folder mount");
+            assert_eq!(first, expected);
+            assert_eq!(
+                roots.register_twin(&twin).expect("idempotent folder mount"),
+                first
+            );
+            assert!(twin.manifest.is_none());
+            let origin =
+                bevy::asset::AssetPath::from_path_buf(Path::new(&first).join("entry.usda"))
+                    .with_source(TWIN_SCHEME);
+            let file_uri = lunco_storage::file_path_to_uri(&twin.root.join(relative))
+                .expect("native payload URI");
+            let payload =
+                crate::asset_path::load_asset_path(&file_uri, Some(&origin), Some(&roots))
+                    .expect("special-name native asset admission");
+            assert_eq!(payload.path(), Path::new(&first).join(relative));
+            assert_eq!(payload.label(), None);
+            let reader = TwinReader {
+                roots: roots.clone(),
+            };
+            let mut bytes = Vec::new();
+            AssetReader::read(&reader, payload.path())
+                .await
+                .expect("literal payload reader")
+                .read_to_end(&mut bytes)
+                .await
+                .expect("literal payload bytes");
+            assert_eq!(bytes, b"literal filename");
+
+            roots.unregister_name(&first).expect("retire folder mount");
+            let reopened = roots.register_twin(&twin).expect("reopen folder mount");
+            assert_ne!(reopened, first);
+            assert_eq!(
+                roots
+                    .logical_name(&reopened)
+                    .expect("stable logical identity"),
+                expected
+            );
+            assert!(matches!(
+                AssetReader::read(&reader, payload.path()).await,
+                Err(AssetReaderError::NotFound(_))
+            ));
+            assert!(
+                matches!(crate::asset_path::load_asset_path(&file_uri, Some(&origin), Some(&roots)),
+                Err(TwinRootsError::UnknownAuthority(authority)) if authority == first)
+            );
+            roots
+                .unregister_name(&reopened)
+                .expect("retire reopened mount");
+
+            for (display, expected) in [
+                ("plain-name_1.0~", "plain-name_1.0~"),
+                (
+                    r"A/B?C\D:E # % 月",
+                    "A%2FB%3FC%5CD%3AE%20%23%20%25%20%E6%9C%88",
+                ),
+                ("#", "%23"),
+                ("%23", "%2523"),
+                (".", "%2E"),
+                ("..", "%2E%2E"),
+            ] {
+                twin.manifest = Some(lunco_twin::TwinManifest::new(display));
+                let authority = roots
+                    .register_twin(&twin)
+                    .expect("manifest display-name mount");
+                assert_eq!(
+                    roots
+                        .logical_name(&authority)
+                        .expect("manifest logical identity"),
+                    expected
+                );
+                assert_eq!(
+                    twin.manifest.as_ref().unwrap().name,
+                    display,
+                    "display metadata is unchanged"
+                );
+                roots
+                    .unregister_name(&authority)
+                    .expect("retire manifest mount");
+            }
+            for invalid in ["a/b", r"a\b", "a:b", "a#b", "a?b", ".", ".."] {
+                assert!(
+                    matches!(
+                        roots.register(invalid, &folder),
+                        Err(TwinRootsError::InvalidAuthority(_))
+                    ),
+                    "low-level registration must reject {invalid:?}"
+                );
+            }
+        });
     }
 
     /// Repeated admission while the same mount is live is idempotent.

@@ -252,7 +252,8 @@ jobs:
             asset_path::tests::native_load_paths_keep_filesystem_characters_and_separate_labels \
             asset_path::tests::native_load_paths_reject_missing_retired_and_foreign_ownership \
             asset_path::tests::windows_native_load_paths_normalize_verbatim_mount_roots \
-            lunco_source::tests::file_uri_reader_decodes_native_paths_and_rejects_invalid_input
+            lunco_source::tests::file_uri_reader_decodes_native_paths_and_rejects_invalid_input \
+            twin_source::tests::register_twin_encodes_display_names_without_rebinding_retired_mounts
 
       # ── Cross-compile (macOS x86_64 on Apple Silicon) ───────────────────
       # Only runs when the matrix entry sets `cross_target`. Adds the

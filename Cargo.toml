@@ -477,6 +477,7 @@ rumoca-tool-lint   = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a8
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 url = "2.5.8"
+percent-encoding = "2.3.2"
 anyhow = "1.0"
 # Pure-Rust embedded scripting engine. Chosen over Luau/mlua because mlua only
 # reaches wasm via `wasm32-unknown-emscripten`; rhai compiles cleanly to

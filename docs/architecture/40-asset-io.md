@@ -27,6 +27,13 @@ paths or registered asset sources; invalid file URIs fail without a raw-path
 fallback. File URI queries/fragments are rejected, and browser builds reject
 native file URIs explicitly.
 
+`TwinRoots::register_twin` converts the workspace Twin's display name into one
+percent-encoded logical-source URI component. Unreserved ASCII names retain
+their spelling; spaces, Unicode, percent and URI/path delimiters are encoded
+injectively. Manifest metadata and filesystem folder names remain unchanged.
+Low-level `register` consumes source components and still rejects unsafe
+unencoded delimiters; consumers use its returned mount authority for loading.
+
 Native synchronous USD composition encodes its resolved root through
 `file_path_to_uri`. `lunco-usd-compose::canonicalize_at` returns `Result` and
 anchors relative filenames with URL path segments, preserving Windows drive,
@@ -39,10 +46,11 @@ composition arc before OpenUSD's infallible identifier callback. That callback
 records any rejected identity; stage construction checks its diagnostics before
 publishing the stage.
 
-The Windows job in `.github/workflows/nightly.yml` runs seven exact native-path
+The Windows job in `.github/workflows/nightly.yml` runs eight exact native-path
 regressions after the desktop release build, using that release profile and
 target cache. They cover standard drive/UNC file URIs, encoded filenames,
-canonical Twin roots, provider manifest confinement, native asset admission,
+canonical Twin roots, display-name component encoding, provider manifest
+confinement, native asset admission,
 retired/foreign mount rejection, and verbatim-root conversion. These tests use
 ordinary temporary directories; they do not require Windows symlink privileges
 or exercise Windows junction escape behavior. Unix test results alone are not
