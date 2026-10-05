@@ -487,3 +487,9 @@ command that lowers to ops, and pure-function tests.
 - `reconcile_structural_live` does nothing for a prim that exists **and** already
   has an entity — it spawns and despawns only. Refreshing an existing entity is
   your job.
+
+Active `TwinClosed` retires the scene mount and publishes `SceneOwnerRetired`
+before deferred teardown. Scene-time readiness closes immediately; pending
+admissions and scene requests are discarded, the active transaction fails, and
+`ClearScene` runs at the next lifecycle phase. Inactive Twin closure must not
+clear another Twin's scene. See architecture 61 for the shared owner contract.

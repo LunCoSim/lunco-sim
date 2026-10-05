@@ -787,11 +787,11 @@ pub(crate) fn on_scene_transition_started(
     state.begin_scene_load(trigger.event().id);
 }
 
-pub(crate) fn on_scene_transition_failed(
-    trigger: On<lunco_core::SceneTransitionFailed>,
+pub(crate) fn on_scene_owner_retired(
+    trigger: On<lunco_core::SceneOwnerRetired>,
     mut scene_time: Option<ResMut<crate::SceneTimeState>>,
-    mut transport: Option<ResMut<crate::TimeTransport>>,
-    mut pending_scene_pause: Option<ResMut<crate::PendingScenePause>>,
+    transport: Option<ResMut<crate::TimeTransport>>,
+    pending_scene_pause: Option<ResMut<crate::PendingScenePause>>,
 ) {
     let Some(state) = scene_time.as_deref_mut() else {
         return;
@@ -800,6 +800,13 @@ pub(crate) fn on_scene_transition_failed(
         return;
     }
     state.clear_scene();
+    pause_retired_scene(transport, pending_scene_pause);
+}
+
+fn pause_retired_scene(
+    mut transport: Option<ResMut<crate::TimeTransport>>,
+    mut pending_scene_pause: Option<ResMut<crate::PendingScenePause>>,
+) {
     if let Some(transport) = transport.as_deref_mut() {
         transport.mode = crate::TransportMode::Paused;
     }
@@ -808,11 +815,27 @@ pub(crate) fn on_scene_transition_failed(
     }
 }
 
+pub(crate) fn on_scene_transition_failed(
+    trigger: On<lunco_core::SceneTransitionFailed>,
+    mut scene_time: Option<ResMut<crate::SceneTimeState>>,
+    transport: Option<ResMut<crate::TimeTransport>>,
+    pending_scene_pause: Option<ResMut<crate::PendingScenePause>>,
+) {
+    let Some(state) = scene_time.as_deref_mut() else {
+        return;
+    };
+    if state.transition_id != Some(trigger.event().id) {
+        return;
+    }
+    state.clear_scene();
+    pause_retired_scene(transport, pending_scene_pause);
+}
+
 pub(crate) fn on_scene_transition_completed(
     trigger: On<lunco_core::SceneTransitionCompleted>,
     scene_time: Option<ResMut<crate::SceneTimeState>>,
-    mut transport: Option<ResMut<crate::TimeTransport>>,
-    mut pending_scene_pause: Option<ResMut<crate::PendingScenePause>>,
+    transport: Option<ResMut<crate::TimeTransport>>,
+    pending_scene_pause: Option<ResMut<crate::PendingScenePause>>,
 ) {
     if trigger.event().transition != lunco_core::SceneTransition::Clear {
         return;
@@ -823,12 +846,7 @@ pub(crate) fn on_scene_transition_completed(
         }
         state.clear_scene();
     }
-    if let Some(transport) = transport.as_deref_mut() {
-        transport.mode = crate::TransportMode::Paused;
-    }
-    if let Some(pending_scene_pause) = pending_scene_pause.as_deref_mut() {
-        pending_scene_pause.0 = false;
-    }
+    pause_retired_scene(transport, pending_scene_pause);
 }
 
 fn apply_time_transport(transport: &mut crate::TimeTransport, cmd: &SetTimeTransport) {
@@ -1468,6 +1486,7 @@ mod tests {
             .init_resource::<LastClockT>()
             .add_observer(on_apply_scene_time_selection)
             .add_observer(on_scene_transition_failed)
+            .add_observer(on_scene_owner_retired)
             .add_observer(on_scene_transition_completed);
         app.world_mut().trigger(crate::ApplySceneTimeSelection {
             selection: crate::SceneTimeSelection {
@@ -1491,6 +1510,9 @@ mod tests {
                 transition: lunco_core::SceneTransition::Clear,
             });
 
+        app.world_mut()
+            .trigger(lunco_core::SceneOwnerRetired { id: stale_id });
+
         let state = app.world().resource::<crate::SceneTimeState>();
         assert_eq!(state.transition_id, Some(current_id));
         assert_eq!(state.phase, crate::SceneTimePhase::Loading);
@@ -1500,6 +1522,30 @@ mod tests {
             app.world().resource::<crate::TimeTransport>().mode,
             crate::TransportMode::Playing
         );
+    }
+
+    #[test]
+    fn scene_owner_retirement_immediately_stops_its_clock() {
+        let mut coordinator = lunco_core::SceneTransitionCoordinator::default();
+        let id = coordinator.start(lunco_core::SceneTransition::Clear);
+        let mut state = crate::SceneTimeState::default();
+        state.begin_scene_load(id);
+        state.phase = crate::SceneTimePhase::Ready;
+        let mut app = App::new();
+        app.insert_resource(state)
+            .insert_resource(crate::TimeTransport::default())
+            .insert_resource(crate::PendingScenePause(true))
+            .add_observer(on_scene_owner_retired);
+        app.world_mut()
+            .trigger(lunco_core::SceneOwnerRetired { id });
+        let state = app.world().resource::<crate::SceneTimeState>();
+        assert_eq!(state.phase, crate::SceneTimePhase::NoScene);
+        assert_eq!(state.transition_id, None);
+        assert_eq!(
+            app.world().resource::<crate::TimeTransport>().mode,
+            crate::TransportMode::Paused
+        );
+        assert!(!app.world().resource::<crate::PendingScenePause>().0);
     }
 
     #[test]

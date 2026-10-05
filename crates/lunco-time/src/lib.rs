@@ -1069,6 +1069,7 @@ impl Plugin for TimePlugin {
             .add_observer(domain::on_apply_scene_time_selection)
             .add_observer(domain::on_scene_transition_started)
             .add_observer(domain::on_scene_transition_failed)
+            .add_observer(domain::on_scene_owner_retired)
             .add_observer(domain::on_scene_transition_completed)
             .add_systems(First, capture_time_update_timing.after(TimeSystems))
             .add_systems(

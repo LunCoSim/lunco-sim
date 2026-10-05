@@ -53,6 +53,8 @@ pub(crate) fn clear_scene_on_twin_closed(
     mut admission: ResMut<lunco_core_runtime::AsyncWorkAdmission>,
     mut backed: ResMut<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
+    mut coordinator: ResMut<lunco_core::SceneTransitionCoordinator>,
+    mut mount_state: Option<ResMut<lunco_core::SceneMountState>>,
     mut commands: Commands,
 ) {
     let root = trigger.event().root.clone();
@@ -61,6 +63,24 @@ pub(crate) fn clear_scene_on_twin_closed(
     }
     for doc in backed.release_root(&root) {
         registry.remove(doc);
+    }
+    if !trigger.event().was_active {
+        return;
+    }
+    if let Some(state) = mount_state.as_deref_mut() {
+        state.begin_replacement();
+    }
+    commands.remove_resource::<SceneLoadInFlight>();
+    commands.remove_resource::<lunco_usd_bevy_scene::FailedSceneLoad>();
+    if let Some(id) = coordinator.lifecycle_id() {
+        commands.trigger(lunco_core::SceneOwnerRetired { id });
+    }
+    if let Some((id, transition)) = coordinator.retire_current_owner() {
+        commands.trigger(lunco_core::SceneTransitionFailed {
+            id,
+            transition,
+            error: format!("scene owner Twin {} closed", trigger.event().twin.raw()),
+        });
     }
     commands.trigger(ClearScene {});
 }
@@ -608,6 +628,80 @@ mod restart_overlay_tests {
     use super::*;
     use lunco_doc::DocumentId;
     use lunco_usd_document::document::{LayerId, UsdOp};
+
+    #[test]
+    fn twin_close_retires_only_the_active_scene_owner() {
+        for was_active in [false, true] {
+            let mut app = App::new();
+            app.init_resource::<crate::twin_projection::PendingTwinDocs>()
+                .init_resource::<lunco_core_runtime::AsyncWorkAdmission>()
+                .init_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
+                .init_resource::<DocumentRegistry<UsdDocument>>()
+                .init_resource::<lunco_core::SceneTransitionCoordinator>()
+                .init_resource::<lunco_core::SceneMountState>()
+                .add_observer(clear_scene_on_twin_closed)
+                .add_observer(crate::scene::on_scene_transition_failed)
+                .add_observer(|_: On<ClearScene>, mut state: ResMut<lunco_core::SceneTransitionCoordinator>| {
+                    state.admit(lunco_core::SceneTransitionRequest::clear());
+                });
+            let id = app
+                .world_mut()
+                .resource_mut::<lunco_core::SceneTransitionCoordinator>()
+                .start(lunco_core::SceneTransition::load(
+                    "twin://old/scene.usda",
+                    "/World",
+                ));
+            app.world_mut()
+                .resource_mut::<lunco_core::SceneTransitionCoordinator>()
+                .admit(lunco_core::SceneTransitionRequest::load(
+                    "twin://old/queued.usda",
+                    "/World",
+                ));
+            let root = app.world_mut().spawn_empty().id();
+            app.world_mut()
+                .resource_mut::<lunco_core::SceneMountState>()
+                .register_root(root, true);
+            app.insert_resource(SceneLoadInFlight {
+                transition_id: id,
+                path: "twin://old/scene.usda".into(),
+                stage_id: Handle::<UsdStageAsset>::default().id(),
+            });
+            app.world_mut().trigger(TwinClosed {
+                twin: lunco_workspace::TwinId::new(1),
+                root: std::path::PathBuf::from("owner"),
+                was_active,
+            });
+            app.world_mut().flush();
+            let state = app
+                .world()
+                .resource::<lunco_core::SceneTransitionCoordinator>();
+            if was_active {
+                assert!(state.active_id().is_none());
+                assert!(!app.world().contains_resource::<SceneLoadInFlight>());
+                assert!(
+                    app.world()
+                        .resource::<lunco_core::SceneMountState>()
+                        .active_root()
+                        .is_none()
+                );
+                assert_eq!(
+                    app.world_mut()
+                        .resource_mut::<lunco_core::SceneTransitionCoordinator>()
+                        .take_admitted(),
+                    Some(lunco_core::SceneTransitionRequest::clear())
+                );
+            } else {
+                assert_eq!(state.active_id(), Some(id));
+                assert!(app.world().contains_resource::<SceneLoadInFlight>());
+                assert_eq!(
+                    app.world()
+                        .resource::<lunco_core::SceneMountState>()
+                        .active_root(),
+                    Some(root)
+                );
+            }
+        }
+    }
 
     #[test]
     fn restart_refreshes_referenced_documents_without_view_or_unrelated_buffers() {

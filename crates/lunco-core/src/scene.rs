@@ -108,7 +108,9 @@ pub enum SceneTransitionAdmission {
 /// This resource is the sole admission boundary. An active transaction is never
 /// torn down by a second request while asset/projection work still owns entities
 /// from it. The newest request is retained and admitted only from the active
-/// transaction's completed/failed edge. There is no frame polling or retry path.
+/// transaction's completed/failed edge. Explicit owner retirement discards
+/// unstarted requests and closes its active transaction through a failure edge.
+/// There is no frame polling or retry path.
 #[derive(Resource, Debug, Default)]
 pub struct SceneTransitionCoordinator {
     active: Option<(SceneTransitionId, SceneTransition)>,
@@ -146,6 +148,16 @@ impl SceneTransitionCoordinator {
     /// Take the one request admitted for execution at the lifecycle phase.
     pub fn take_admitted(&mut self) -> Option<SceneTransitionRequest> {
         self.admitted.take()
+    }
+
+    /// Retire the current scene owner's unstarted requests and committed
+    /// generation. The returned active transaction still needs its matching
+    /// failure edge before the replacement teardown can be admitted.
+    pub fn retire_current_owner(&mut self) -> Option<(SceneTransitionId, SceneTransition)> {
+        self.admitted = None;
+        self.pending = None;
+        self.completed_generation = None;
+        self.active.clone()
     }
 
     /// Publish the concrete identity resolved by the admitted request.
@@ -209,9 +221,12 @@ impl SceneTransitionCoordinator {
     /// outside a transition, the latest successfully committed scene owns
     /// new lifecycle work. A failed transition never replaces that generation.
     pub fn lifecycle_generation(&self) -> Option<u64> {
-        self.active_id()
-            .map(SceneTransitionId::get)
-            .or_else(|| self.completed_generation())
+        self.lifecycle_id().map(SceneTransitionId::get)
+    }
+
+    /// Typed identity of the current scene owner, including a committed scene.
+    pub fn lifecycle_id(&self) -> Option<SceneTransitionId> {
+        self.active_id().or(self.completed_generation)
     }
 
     /// Advance after an admitted request resolves to a semantic no-op before a
@@ -277,6 +292,13 @@ pub struct SceneTransitionIntent {
 #[derive(Event, Debug, Clone, PartialEq, Eq)]
 pub struct SceneTransitionAdmitted {
     pub request: SceneTransitionRequest,
+}
+
+/// The current scene's lifecycle owner was closed. Clocks reject further work
+/// immediately; entity teardown still executes at the next lifecycle phase.
+#[derive(Event, Debug, Clone, PartialEq, Eq)]
+pub struct SceneOwnerRetired {
+    pub id: SceneTransitionId,
 }
 
 impl SceneTransitionIntent {
@@ -390,6 +412,28 @@ mod tests {
         assert!(coordinator.complete(third_id));
         assert_eq!(coordinator.completed_generation(), Some(third_id.get()));
         assert_eq!(coordinator.lifecycle_generation(), Some(third_id.get()));
+    }
+
+    #[test]
+    fn owner_retirement_discards_pending_work_and_committed_generation() {
+        let mut coordinator = SceneTransitionCoordinator::default();
+        let id = coordinator.start(SceneTransition::load("old.usda", "/World"));
+        coordinator.admit(SceneTransitionRequest::load("outgoing.usda", "/World"));
+        assert_eq!(coordinator.retire_current_owner().unwrap().0, id);
+        assert!(coordinator.fail(id));
+        assert!(!coordinator.has_admitted());
+        assert_eq!(coordinator.lifecycle_id(), None);
+        coordinator.admit(SceneTransitionRequest::clear());
+        assert_eq!(
+            coordinator.take_admitted(),
+            Some(SceneTransitionRequest::clear())
+        );
+        let clear_id = coordinator.start(SceneTransition::Clear);
+        assert!(coordinator.complete(clear_id));
+        coordinator.admit(SceneTransitionRequest::load("unstarted.usda", "/World"));
+        assert!(coordinator.retire_current_owner().is_none());
+        assert!(!coordinator.has_admitted());
+        assert_eq!(coordinator.lifecycle_id(), None);
     }
 
     #[test]

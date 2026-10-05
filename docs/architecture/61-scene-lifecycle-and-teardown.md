@@ -189,6 +189,15 @@ checks. Presentation is a separate admission concern: a missing authored
 camera leaves the loaded scene in an explicit no-camera state and does not turn
 successful USD projection into a false asset-load failure.
 
+Closing the active Twin retires its scene owner immediately: `SceneOwnerRetired`
+closes that owner's scene-time gate and pauses its transport, the mount fence
+rejects outgoing projection, and pending document admissions and scene requests
+are canceled. An in-flight transaction receives its matching failure edge before
+`ClearScene` is admitted for the next `First` teardown. Late results cannot
+complete that transaction. Closing an inactive Twin only releases its documents
+and admissions. Retirement edges carry the same typed transaction identity, so
+an old close cannot stop a replacement scene's clock.
+
 USD visual projection is the deliberate exception to all-at-once scene
 materialisation. The asset loader composes the fetched layer closure on its
 worker and publishes a `UsdStageProjectionPlan`, an immutable `Send` snapshot
