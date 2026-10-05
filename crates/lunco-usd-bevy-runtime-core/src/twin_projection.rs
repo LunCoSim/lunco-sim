@@ -6708,6 +6708,7 @@ mod tests {
             });
 
         crate::live_consume::publish_pending_stage_projections(app.world_mut());
+        app.world_mut().flush();
         assert!(
             app.world()
                 .resource::<ProjectedDocumentEvents>()
@@ -6750,6 +6751,7 @@ mod tests {
             ["/World/Route/W5".to_owned()],
         ));
         crate::live_consume::publish_pending_stage_projections(app.world_mut());
+        app.world_mut().flush();
         assert!(
             app.world()
                 .resource::<ProjectedDocumentEvents>()
@@ -6799,6 +6801,7 @@ mod tests {
                 removed: false,
             });
         crate::live_consume::publish_pending_stage_projections(app.world_mut());
+        app.world_mut().flush();
 
         let events = &app.world().resource::<ProjectedDocumentEvents>().0;
         assert_eq!(events.len(), 1, "one document generation publishes once");
