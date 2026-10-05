@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
-use crossbeam_channel::{Sender, unbounded};
+use crossbeam_channel::{Sender, TryRecvError, unbounded};
 use lunco_experiments::{
     Experiment, ExperimentId, ExperimentRegistry, ExperimentRunner, ModelRef, ParamPath,
     ParamValue, RunBounds, RunCancelled, RunCompleted, RunFailed, RunHandle, RunMeta, RunProgress,
@@ -428,14 +428,18 @@ fn pump_scheduler(state: &Arc<Mutex<RunnerState>>) {
 /// is filled. Called from the off-thread completion path (native thread
 /// end; wasm forwarder on terminal update).
 fn finish_run(state: &Arc<Mutex<RunnerState>>, run_id: ExperimentId) {
-    if let Ok(mut s) = state.lock() {
-        s.in_flight.remove(&run_id);
-    }
+    release_run_slot(state, run_id);
     pump_scheduler(state);
 }
 
+fn release_run_slot(state: &Arc<Mutex<RunnerState>>, run_id: ExperimentId) {
+    if let Ok(mut s) = state.lock() {
+        s.in_flight.remove(&run_id);
+    }
+}
+
 /// Begin executing one already-slotted job. Native: spawn a thread running
-/// `run_inner`, calling `finish_run` when it returns. The thread-per-run
+/// `run_inner`, releasing its slot on every worker outcome. The thread-per-run
 /// model gives each run fresh rumoca `thread_local` caches; the scheduler
 /// caps live threads at `max_parallel`.
 #[cfg(not(target_arch = "wasm32"))]
@@ -453,21 +457,70 @@ fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
     // it immediately without compiling.
     if cancel.load(Ordering::SeqCst) {
         let _ = tx.send(RunUpdate::Cancelled);
-        finish_run(&state, run_id);
+        // Admission already runs inside the scheduler pump, which continues
+        // after this synchronous terminal result without recursive pumping.
+        release_run_slot(&state, run_id);
         return;
     }
-    std::thread::spawn(move || {
+    let worker_tx = tx.clone();
+    start_native_job(state.clone(), run_id, tx, move || {
         run_inner(
-            state.clone(),
-            model_ref,
-            overrides,
-            inputs,
-            bounds,
-            cancel,
-            tx,
+            state, model_ref, overrides, inputs, bounds, cancel, worker_tx,
         );
-        finish_run(&state, run_id);
     });
+}
+
+/// Reclaim the admitted slot even when execution unwinds.
+#[cfg(not(target_arch = "wasm32"))]
+struct NativeRunCompletion {
+    state: Arc<Mutex<RunnerState>>,
+    run_id: ExperimentId,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for NativeRunCompletion {
+    fn drop(&mut self) {
+        finish_run(&self.state, self.run_id);
+    }
+}
+
+/// The native worker boundary owns thread admission and unexpected panics.
+#[cfg(not(target_arch = "wasm32"))]
+fn start_native_job(
+    state: Arc<Mutex<RunnerState>>,
+    run_id: ExperimentId,
+    tx: Sender<RunUpdate>,
+    execute: impl FnOnce() + Send + 'static,
+) {
+    let worker_state = state.clone();
+    let failure_tx = tx.clone();
+    let spawned = std::thread::Builder::new()
+        .name(format!("modelica-experiment-{}", run_id.0))
+        .spawn(move || {
+            let _completion = NativeRunCompletion {
+                state: worker_state,
+                run_id,
+            };
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(execute)) {
+                let detail = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("non-string panic payload");
+                let _ = tx.send(RunUpdate::Failed {
+                    error: format!("experiment worker panicked: {detail}"),
+                    partial: None,
+                });
+            }
+        });
+    if let Err(error) = spawned {
+        let _ = failure_tx.send(RunUpdate::Failed {
+            error: format!("experiment worker could not start: {error}"),
+            partial: None,
+        });
+        // The scheduler pump that admitted this job continues after return.
+        release_run_slot(&state, run_id);
+    }
 }
 
 /// Begin executing one already-slotted job. Wasm: resolve the source on the
@@ -766,7 +819,17 @@ fn run_inner(
         Some(d) => d,
         None => {
             let compiled = {
-                let mut compiler = compiler_handle.lock().unwrap_or_else(|e| e.into_inner());
+                let mut compiler = match compiler_handle.lock() {
+                    Ok(compiler) => compiler,
+                    Err(_) => {
+                        let _ = tx.send(RunUpdate::Failed {
+                            error: "experiment compiler is poisoned after an earlier panic"
+                                .to_owned(),
+                            partial: None,
+                        });
+                        return;
+                    }
+                };
                 compiler.compile_str_multi(
                     &source.model_name,
                     &source.source,
@@ -1682,7 +1745,15 @@ pub fn drain_pending_handles(
     let mut keep: Vec<RunHandle> = Vec::with_capacity(pending.0.len());
     for handle in pending.0.drain(..) {
         let mut terminal = false;
-        while let Ok(update) = handle.progress_rx.try_recv() {
+        loop {
+            let update = match handle.progress_rx.try_recv() {
+                Ok(update) => update,
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => RunUpdate::Failed {
+                    error: "experiment worker disconnected without a terminal outcome".to_owned(),
+                    partial: None,
+                },
+            };
             match update {
                 RunUpdate::Progress { t_current, delta } => {
                     registry.set_status(handle.run_id, RunStatus::Running { t_current });
@@ -1743,6 +1814,9 @@ pub fn drain_pending_handles(
                     });
                     terminal = true;
                 }
+            }
+            if terminal {
+                break;
             }
         }
         // NOTE: do NOT drop sources.0[run_id] when a run goes terminal.
@@ -1868,6 +1942,140 @@ mod tests {
         assert!(
             settled,
             "scheduler should drain to empty after all runs end"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_worker_panic_releases_slot_and_admits_successor() {
+        use std::time::Duration;
+
+        let runner = ModelicaRunner::new();
+        runner.set_max_parallel(1);
+        let mut registry = ExperimentRegistry::new();
+        let panicking = mint_exp(&mut registry, "PanickingWorker");
+        let successor = mint_exp(&mut registry, "Successor");
+        runner.set_model_source(
+            successor.model_ref.clone(),
+            ModelSource {
+                model_name: "Successor".to_owned(),
+                source: "model Successor Real x = 1; end Successor;".to_owned(),
+                filename: "Successor.mo".to_owned(),
+                extras: Vec::new(),
+            },
+        );
+        let compiler = {
+            let mut state = runner.state.lock().expect("runner state");
+            state.in_flight.insert(panicking.id);
+            state.compiler.clone()
+        };
+        let (panic_tx, panic_rx) = unbounded();
+        let (release_tx, release_rx) = crossbeam_channel::bounded(1);
+        start_native_job(runner.state.clone(), panicking.id, panic_tx, move || {
+            release_rx.recv().expect("release worker");
+            let _compiler = compiler.lock().expect("compiler starts valid");
+            panic!("injected experiment compiler panic");
+        });
+        let successor_handle = runner.run_fast(&successor);
+        assert_eq!(runner.queued_count(), 1);
+        release_tx.send(()).expect("release worker");
+
+        let timeout = Duration::from_secs(5);
+        assert!(matches!(
+            panic_rx.recv_timeout(timeout),
+            Ok(RunUpdate::Failed { error, partial: None })
+                if error.contains("injected experiment compiler panic")
+        ));
+        assert!(matches!(
+            panic_rx.recv_timeout(timeout),
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected)
+        ));
+        assert!(matches!(
+            successor_handle.progress_rx.recv_timeout(timeout),
+            Ok(RunUpdate::Progress { .. })
+        ));
+        assert!(matches!(
+            successor_handle.progress_rx.recv_timeout(timeout),
+            Ok(RunUpdate::Failed { error, partial: None })
+                if error.contains("compiler is poisoned")
+        ));
+        assert!(matches!(
+            successor_handle.progress_rx.recv_timeout(timeout),
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected)
+        ));
+        assert_eq!(runner.in_flight_count(), 0);
+        assert_eq!(runner.queued_count(), 0);
+    }
+
+    #[test]
+    fn drain_handles_fails_disconnect_but_keeps_connected_empty_channel() {
+        let mut registry = ExperimentRegistry::new();
+        let connected = mint_exp(&mut registry, "Connected");
+        let disconnected = mint_exp(&mut registry, "Disconnected");
+        let (connected_tx, connected_rx) = unbounded();
+        let (disconnected_tx, disconnected_rx) = unbounded::<RunUpdate>();
+        drop(disconnected_tx);
+        let mut app = App::new();
+        app.insert_resource(registry)
+            .insert_resource(PendingHandles(vec![
+                RunHandle {
+                    run_id: connected.id,
+                    progress_rx: connected_rx,
+                    cancel: Box::new(|| {}),
+                },
+                RunHandle {
+                    run_id: disconnected.id,
+                    progress_rx: disconnected_rx,
+                    cancel: Box::new(|| {}),
+                },
+            ]))
+            .add_message::<RunProgress>()
+            .add_message::<RunCompleted>()
+            .add_message::<RunFailed>()
+            .add_message::<RunCancelled>()
+            .add_systems(Update, drain_pending_handles);
+        app.update();
+
+        let pending = app.world().resource::<PendingHandles>();
+        assert_eq!(pending.0.len(), 1);
+        assert_eq!(pending.0[0].run_id, connected.id);
+        let failures: Vec<_> = app
+            .world_mut()
+            .resource_mut::<Messages<RunFailed>>()
+            .drain()
+            .collect();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].experiment_id, disconnected.id);
+        assert!(
+            failures[0]
+                .error
+                .contains("disconnected without a terminal outcome")
+        );
+        assert!(matches!(
+            &app.world().resource::<ExperimentRegistry>().get(disconnected.id)
+                .expect("disconnected experiment").status,
+            RunStatus::Failed { error, partial: false }
+                if error.contains("disconnected without a terminal outcome")
+        ));
+
+        connected_tx
+            .send(RunUpdate::Cancelled)
+            .expect("terminal update");
+        drop(connected_tx);
+        app.update();
+        assert!(app.world().resource::<PendingHandles>().0.is_empty());
+        assert!(matches!(
+            &app.world()
+                .resource::<ExperimentRegistry>()
+                .get(connected.id)
+                .expect("connected experiment")
+                .status,
+            RunStatus::Cancelled
+        ));
+        assert_eq!(
+            app.world().resource::<Messages<RunFailed>>().len(),
+            0,
+            "disconnect after a terminal update must preserve that outcome"
         );
     }
 

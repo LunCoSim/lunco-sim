@@ -304,6 +304,13 @@ the lock. On a terminal update `finish_run` frees the slot and re-pumps.
 A queued run that is cancelled is caught at `start_job`. The panel shows
 "⏳ Queued"; the Run button queues rather than disabling.
 
+Native thread admission is fallible. A worker panic becomes a terminal
+`RunFailed` diagnostic, and its completion guard releases the scheduler slot
+on every exit. A poisoned compiler fails subsequent compilation visibly.
+The handle drain distinguishes a connected empty channel from a disconnected
+worker: disconnect without a terminal result fails and retires the handle;
+disconnect after completion or cancellation preserves that terminal result.
+
 Spawning is the **only** `#[cfg]` split:
 
 | | Native | Wasm |

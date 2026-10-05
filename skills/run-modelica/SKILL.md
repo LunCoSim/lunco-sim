@@ -447,6 +447,12 @@ Poll until `done`, `failed`, or `cancelled`; only request the trajectory after
 `done`. `ListRuns` is useful for discovery and UI review, not as a substitute
 for retaining the id returned by the dispatch you just made.
 
+A native worker panic, thread-admission failure, or disconnect without a
+terminal result produces `failed` with its cause and retires the handle. The
+scheduler releases the worker slot on every exit. A compiler poisoned by a
+panic rejects subsequent compilation visibly; treat that diagnostic as a
+failed run rather than polling indefinitely.
+
 Cancel / clean up:
 ```bash
 post '{"type":"ExecuteCommand","command":"CancelExperiment","params":{"all":true}}'           # or {"experiment_id":"<uuid>"}
