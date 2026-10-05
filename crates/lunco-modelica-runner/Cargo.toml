@@ -18,6 +18,7 @@ lunco-modelica-core = { path = "../lunco-modelica-core", default-features = fals
 lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-solver = { path = "../lunco-modelica-solver" }
 lunco-settings = { path = "../lunco-settings" }
+lunco-workspace = { path = "../lunco-workspace" }
 rumoca-compile.workspace = true
 rumoca-sim.workspace = true
 serde.workspace = true

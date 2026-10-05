@@ -19,7 +19,6 @@ lunco-modelica-compiler = { path = "../lunco-modelica-compiler" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
 lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-index = { path = "../lunco-modelica-index" }
-lunco-modelica-runner = { path = "../lunco-modelica-runner" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-modelica-source-roots = { path = "../lunco-modelica-source-roots" }
 lunco-modelica-solver = { path = "../lunco-modelica-solver" }

@@ -49,6 +49,22 @@ pub fn resolve_setup_bounds(
     resolve_setup_bounds_in(&resources, doc, model_ref)
 }
 
+pub fn bounds_from_annotation(
+    ctx: &PanelCtx,
+    doc: DocumentId,
+    model_ref: &lunco_experiments::ModelRef,
+) -> Option<lunco_experiments::RunBounds> {
+    lunco_modelica_runner::run_bounds::bounds_from_annotation_in(
+        &PanelResources(ctx),
+        doc,
+        model_ref,
+    )
+}
+
+pub fn run_is_in_active_scope(ctx: &PanelCtx, id: lunco_experiments::ExperimentId) -> bool {
+    crate::ui::doc_pin::run_is_in_active_scope(&PanelResources(ctx), id)
+}
+
 pub fn detected_name_for(ctx: &PanelCtx, doc: DocumentId) -> Option<String> {
     default_simulation_class(ctx, doc)
 }

@@ -340,6 +340,8 @@ pub struct ExperimentRegistry {
     name_counter: BTreeMap<(TwinId, ModelRef), u32>,
     /// Color rotation index per twin.
     color_counter: BTreeMap<TwinId, u8>,
+    /// Removed identities await publication at the owning registry boundary.
+    removed: Vec<ExperimentId>,
 }
 
 impl ExperimentRegistry {
@@ -389,16 +391,18 @@ impl ExperimentRegistry {
         let id = exp.id;
         let bucket = self.by_twin.entry(twin_id).or_default();
         bucket.push(exp);
-        Self::evict_if_needed_in(bucket);
+        if let Some(removed) = Self::evict_if_needed_in(bucket) {
+            self.removed.push(removed);
+        }
         id
     }
 
-    fn evict_if_needed_in(bucket: &mut Vec<Experiment>) {
+    fn evict_if_needed_in(bucket: &mut Vec<Experiment>) -> Option<ExperimentId> {
         // Cap counts only terminal runs. If terminal count exceeds cap,
         // evict oldest terminal.
         let terminal_count = bucket.iter().filter(|e| e.status.is_terminal()).count();
         if terminal_count <= REGISTRY_CAP_PER_TWIN {
-            return;
+            return None;
         }
         // Find oldest terminal by created_at and remove it.
         if let Some((idx, _)) = bucket
@@ -407,8 +411,9 @@ impl ExperimentRegistry {
             .filter(|(_, e)| e.status.is_terminal())
             .min_by_key(|(_, e)| e.created_at)
         {
-            bucket.remove(idx);
+            return Some(bucket.remove(idx).id);
         }
+        None
     }
 
     pub fn get(&self, id: ExperimentId) -> Option<&Experiment> {
@@ -463,7 +468,14 @@ impl ExperimentRegistry {
     /// no in-flight handles still reference the cleared ids (the
     /// drain system will silently drop updates for missing rows).
     pub fn delete_for_twin(&mut self, twin: &TwinId) -> usize {
-        let removed = self.by_twin.remove(twin).map(|v| v.len()).unwrap_or(0);
+        let removed = if let Some(bucket) = self.by_twin.remove(twin) {
+            let count = bucket.len();
+            self.removed
+                .extend(bucket.into_iter().map(|experiment| experiment.id));
+            count
+        } else {
+            0
+        };
         self.name_counter.retain(|(t, _), _| t != twin);
         self.color_counter.remove(twin);
         removed
@@ -476,7 +488,7 @@ impl ExperimentRegistry {
                 if !bucket[pos].status.is_terminal() {
                     return false;
                 }
-                bucket.remove(pos);
+                self.removed.push(bucket.remove(pos).id);
                 return true;
             }
         }
@@ -498,10 +510,17 @@ impl ExperimentRegistry {
         };
         if became_terminal {
             if let Some(bucket) = self.by_twin.get_mut(&twin_id) {
-                Self::evict_if_needed_in(bucket);
+                if let Some(removed) = Self::evict_if_needed_in(bucket) {
+                    self.removed.push(removed);
+                }
             }
         }
         true
+    }
+
+    /// Consume identities removed by explicit deletion or bounded eviction.
+    pub fn take_removed(&mut self) -> Vec<ExperimentId> {
+        std::mem::take(&mut self.removed)
     }
 
     pub fn set_result(&mut self, id: ExperimentId, result: RunResult) -> bool {
@@ -636,18 +655,12 @@ impl RunHandle {
 /// (rumoca, FMU, codegen, …). The runner is responsible for honoring
 /// `Experiment::overrides` and `Experiment::bounds` exactly.
 pub trait ExperimentRunner: Send + Sync {
-    /// Kick off a fast (batch) run. Returns immediately with a handle;
-    /// the actual work happens off-thread (native: std::thread; wasm:
-    /// Web Worker). Concurrency: at most one fast run per runner
-    /// instance is in flight at any time; a second call while another
-    /// is active is implementation-defined (lunco-modelica-core queues).
-    fn run_fast(&self, exp: &Experiment) -> RunHandle;
+    /// Backend-owned immutable input captured when the run is admitted.
+    type Source: Send + 'static;
 
-    /// Read default bounds from the model's `experiment(...)`
-    /// annotation. Returns `None` when the runner can't determine
-    /// defaults (e.g., model not yet compiled). UI falls back to
-    /// `RunBounds::default()`.
-    fn default_bounds(&self, model: &ModelRef) -> Option<RunBounds>;
+    /// Admit a batch run with its complete source snapshot. Execution is
+    /// asynchronous and bounded by the backend scheduler.
+    fn run_fast(&self, exp: &Experiment, source: Self::Source) -> RunHandle;
 }
 
 // ---------- Bevy events ----------
@@ -684,6 +697,26 @@ pub struct RunCancelled {
     pub experiment_id: ExperimentId,
 }
 
+#[cfg(feature = "bevy")]
+#[derive(Message, Clone, Copy, Debug)]
+pub struct ExperimentRemoved {
+    pub experiment_id: ExperimentId,
+}
+
+#[cfg(feature = "bevy")]
+#[derive(SystemSet, Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct ExperimentRegistryMaintenanceSet;
+
+#[cfg(feature = "bevy")]
+fn publish_removed_experiments(
+    mut registry: ResMut<ExperimentRegistry>,
+    mut removed: MessageWriter<ExperimentRemoved>,
+) {
+    for experiment_id in registry.bypass_change_detection().take_removed() {
+        removed.write(ExperimentRemoved { experiment_id });
+    }
+}
+
 /// Plugin that registers the registry resource + run lifecycle events.
 /// Runners are NOT registered here; the binding crate
 /// (`lunco-modelica-core`) inserts its own `ExperimentRunner` resource.
@@ -698,13 +731,45 @@ impl Plugin for ExperimentsPlugin {
             .add_message::<RunProgress>()
             .add_message::<RunCompleted>()
             .add_message::<RunFailed>()
-            .add_message::<RunCancelled>();
+            .add_message::<RunCancelled>()
+            .add_message::<ExperimentRemoved>()
+            .add_systems(
+                Last,
+                publish_removed_experiments
+                    .in_set(ExperimentRegistryMaintenanceSet)
+                    .run_if(resource_changed::<ExperimentRegistry>),
+            );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registry_reports_explicit_and_group_removals_once() {
+        let mut registry = ExperimentRegistry::new();
+        let twin = TwinId("group".to_owned());
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let id = registry.insert_new(
+                twin.clone(),
+                ModelRef("Probe".to_owned()),
+                Default::default(),
+                Default::default(),
+                RunBounds::default(),
+            );
+            registry.set_status(id, RunStatus::Cancelled);
+            ids.push(id);
+        }
+        assert!(registry.delete(ids[0]));
+        assert_eq!(registry.delete_for_twin(&twin), 1);
+        let mut removed = registry.take_removed();
+        removed.sort();
+        ids.sort();
+        assert_eq!(removed, ids);
+        assert!(registry.take_removed().is_empty());
+    }
 
     #[test]
     fn registry_assigns_unique_names() {

@@ -12,8 +12,7 @@
 //! sweep. A target that is neither a top-level DAE parameter nor input
 //! (or a non-scalar value) is a hard error rather than a silent re-compile.
 //!
-//! - One in-flight Fast Run per runner instance. Native enforcement
-//!   matches wasm worker serialization.
+//! - Fast Runs use the configured bounded scheduler on native and wasm.
 //!
 //! ## Compile-once parameter sweeps
 //! Overrides are applied at the *DAE* level, not by reflattening per run.
@@ -22,12 +21,14 @@
 //! each sweep point rebinds the target variables' `start` to literals via
 //! [`apply_value_bindings_to_dae`]. This relies on rumoca's
 //! `preserve_overridable_param_starts` fold (commit 6a849ac) keeping computed
-//! derived params symbolic so they recompute at `SimulationSession::new` time. There
-//! can't be applied at the DAE level (non-top-level param/input, or a
-//! non-scalar value) is a hard error, not a recompile with different source.
+//! derived parameters symbolic so they recompute at `SimulationSession::new`.
+//! Invalid binding targets or non-scalar values produce a terminal run error.
 
+#[cfg(target_arch = "wasm32")]
 use lunco_core_runtime::LockExt;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashMap;
+use std::collections::{BTreeMap, HashSet, VecDeque};
 #[cfg(not(target_arch = "wasm32"))]
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,31 +50,14 @@ use rumoca_compile::parsing::ir_core::{
     Expression as DaeExpression, Literal as DaeLiteral, Span as DaeSpan, VarName as DaeVarName,
 };
 
-/// Bound to the model source kept by the runner. The runner doesn't
-/// own the live document state — `lunco-modelica-core` injects the current
-/// source via [`ModelicaRunner::set_model_source`] before requesting
-/// a run. ModelRef strings are the model's qualified name.
+/// Immutable Modelica source and runtime owner supplied at run admission.
 #[derive(Clone, Debug)]
 pub struct ModelSource {
     pub model_name: String,
     pub source: String,
     pub filename: String,
     pub extras: Vec<(String, String)>,
-}
-
-/// Defaults from a previous compile's `experiment(...)` annotation.
-/// Plumbed in from `CompilationResult.experiment_*` after the model
-/// compiles successfully. UI uses these to prefill the Fast Run
-/// bounds inline display.
-#[derive(Clone, Debug, Default)]
-pub struct ModelDefaults {
-    pub t_start: Option<f64>,
-    pub t_end: Option<f64>,
-    pub tolerance: Option<f64>,
-    pub interval: Option<f64>,
-    /// Modelica `NumberOfIntervals` — the count alternative to `interval`.
-    pub number_of_intervals: Option<f64>,
-    pub solver: Option<lunco_experiments::SolverId>,
+    pub runtime_twin: Option<lunco_workspace::TwinId>,
 }
 
 /// Platform default for the number of runs allowed to execute
@@ -154,7 +138,7 @@ pub fn apply_experiment_settings(
 /// queued run can start later without re-touching the experiment record.
 struct QueuedJob {
     run_id: ExperimentId,
-    model_ref: ModelRef,
+    source: ModelSource,
     overrides: BTreeMap<ParamPath, ParamValue>,
     inputs: BTreeMap<ParamPath, ParamValue>,
     bounds: RunBounds,
@@ -166,12 +150,8 @@ struct QueuedJob {
     cancel: Arc<AtomicBool>,
 }
 
-/// Native + wasm-shared runner state. Stores the latest model source +
-/// annotation defaults the UI provides, so `run_fast` can recompile
-/// without round-tripping through the editor.
+/// Native + wasm-shared scheduling and compiled snapshot cache.
 struct RunnerState {
-    sources: BTreeMap<ModelRef, ModelSource>,
-    defaults: BTreeMap<ModelRef, ModelDefaults>,
     /// Max concurrently-executing runs. `run_fast` starts a run
     /// immediately while `in_flight.len() < max_parallel`, else queues it.
     max_parallel: usize,
@@ -181,12 +161,9 @@ struct RunnerState {
     /// FIFO of runs waiting for a slot. Drained by `pump_scheduler` as
     /// in-flight runs finish.
     pending: VecDeque<QueuedJob>,
-    /// Compile-once cache: `dae_cache_key(source)` → (model identity,
-    /// compiled DAE). A parameter sweep reuses one rumoca compile and applies
-    /// overrides at the DAE level. The key folds the model body (CQ-525), so a
-    /// source edit yields a fresh key; the stored [`ModelIdent`] lets
-    /// `set_model_source` evict only the edited model's entries.
-    dae_cache: HashMap<u64, (ModelIdent, Arc<Dae>)>,
+    /// Source content and runtime owner identify reusable compiled snapshots.
+    #[cfg(not(target_arch = "wasm32"))]
+    dae_cache: HashMap<u64, CachedDae>,
     /// Persistent compiler reused across runs, so source library installs **once** for
     /// the runner (on first source-root admission via `ModelicaCompiler`) instead of
     /// rebuilding a fresh session per run. Behind its **own** lock, not the
@@ -199,23 +176,79 @@ struct RunnerState {
     compiler: Arc<Mutex<lunco_modelica_compiler::ModelicaCompiler>>,
 }
 
-/// `(model_name, filename)` identity used to scope DAE-cache invalidation
-/// to a single model rather than clearing the whole cache (CQ-525).
+/// Source identity whose newer compiled revision replaces an older cache entry.
+#[cfg(not(target_arch = "wasm32"))]
 type ModelIdent = (String, String);
+
+#[cfg(not(target_arch = "wasm32"))]
+struct CachedDae {
+    model: ModelIdent,
+    runtime_twin: Option<lunco_workspace::TwinId>,
+    dae: Arc<Dae>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_cached_dae(
+    state: &mut RunnerState,
+    source: &ModelSource,
+    key: u64,
+    dae: Arc<Dae>,
+    cancel: &AtomicBool,
+) {
+    // Called under the state lock: owner retirement sets cancellation before
+    // taking the same lock, so closed work cannot repopulate its cache.
+    if cancel.load(Ordering::SeqCst) {
+        return;
+    }
+    let model = (source.model_name.clone(), source.filename.clone());
+    state
+        .dae_cache
+        .retain(|_, entry| entry.model != model || entry.runtime_twin != source.runtime_twin);
+    state.dae_cache.insert(
+        key,
+        CachedDae {
+            model,
+            runtime_twin: source.runtime_twin,
+            dae,
+        },
+    );
+}
 
 impl Default for RunnerState {
     fn default() -> Self {
         Self {
-            sources: BTreeMap::new(),
-            defaults: BTreeMap::new(),
             max_parallel: default_max_parallel(),
             in_flight: HashSet::new(),
             pending: VecDeque::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             dae_cache: HashMap::new(),
             // Cheap: `new()` builds an empty session and installs no source library
             // (Layer A). source library lands on the first run that actually needs it.
             #[cfg(not(target_arch = "wasm32"))]
             compiler: Arc::new(Mutex::new(lunco_modelica_compiler::ModelicaCompiler::new())),
+        }
+    }
+}
+
+const POISONED_RUNNER_STATE: &str = "experiment runner state is poisoned; scheduling stopped";
+
+/// A poisoned state can only release queued work with a terminal rejection.
+/// Its guard is never returned to callers and the mutex remains poisoned.
+fn lock_runner_state(
+    state: &Mutex<RunnerState>,
+) -> Result<std::sync::MutexGuard<'_, RunnerState>, ()> {
+    match state.lock() {
+        Ok(guard) => Ok(guard),
+        Err(poisoned) => {
+            let mut guard = poisoned.into_inner();
+            for job in guard.pending.drain(..) {
+                job.cancel.store(true, Ordering::SeqCst);
+                let _ = job.tx.send(RunUpdate::Failed {
+                    error: POISONED_RUNNER_STATE.to_owned(),
+                    partial: None,
+                });
+            }
+            Err(())
         }
     }
 }
@@ -247,7 +280,7 @@ impl ModelicaRunner {
     /// lowering the cap below the current in-flight count simply lets
     /// those drain before new ones start.
     pub fn set_max_parallel(&self, n: usize) {
-        if let Ok(mut s) = self.state.lock() {
+        if let Ok(mut s) = lock_runner_state(&self.state) {
             s.max_parallel = n.max(1);
         }
         // A raised cap may free slots for already-queued runs.
@@ -259,41 +292,15 @@ impl ModelicaRunner {
         self.state.lock().map(|s| s.max_parallel).unwrap_or(1)
     }
 
-    /// Register or update the source for a model so subsequent
-    /// `run_fast` calls have something to compile. Called by the build
-    /// UI on every compile-relevant edit.
-    pub fn set_model_source(&self, model_ref: ModelRef, source: ModelSource) {
-        if let Ok(mut s) = self.state.lock() {
-            // Only invalidate the compile-once cache when the source text (or
-            // extras) actually changed — dispatch re-registers the same raw
-            // source on every run of a sweep, and clearing then would defeat
-            // the cache. (Correctness doesn't depend on this: the cache key
-            // folds in the source hash (CQ-525), so a stale entry is never
-            // served; this only bounds memory.)
-            let changed = s
-                .sources
-                .get(&model_ref)
-                .map(|old| old.source != source.source || old.extras != source.extras)
-                .unwrap_or(true);
-            // Capture identity before `source` is moved into `sources`.
-            let ident: ModelIdent = (source.model_name.clone(), source.filename.clone());
-            s.sources.insert(model_ref, source);
-            if changed {
-                // CQ-525: evict only THIS model's cached DAEs, not the whole
-                // cache — an edit to one model shouldn't force every other
-                // model in a multi-model workspace to recompile.
-                s.dae_cache
-                    .retain(|_, (cached_ident, _)| *cached_ident != ident);
-            }
-        }
-    }
-
-    /// Stash annotation defaults from a successful compile so
-    /// [`ExperimentRunner::default_bounds`] can return them.
-    pub fn set_model_defaults(&self, model_ref: ModelRef, defaults: ModelDefaults) {
-        if let Ok(mut s) = self.state.lock() {
-            s.defaults.insert(model_ref, defaults);
-        }
+    /// Release this runtime owner's compiled snapshots after its runs cancel.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn retire_twin_cache(&self, twin: lunco_workspace::TwinId) -> Result<(), String> {
+        let mut state =
+            lock_runner_state(&self.state).map_err(|_| POISONED_RUNNER_STATE.to_owned())?;
+        state
+            .dae_cache
+            .retain(|_, entry| entry.runtime_twin != Some(twin));
+        Ok(())
     }
 
     /// `true` when no scheduler slot is free — i.e. starting another run
@@ -319,18 +326,26 @@ impl ModelicaRunner {
 }
 
 impl ExperimentRunner for ModelicaRunner {
-    fn run_fast(&self, exp: &Experiment) -> RunHandle {
+    type Source = ModelSource;
+
+    fn run_fast(&self, exp: &Experiment, source: ModelSource) -> RunHandle {
         let (tx, rx) = unbounded();
         let cancel = Arc::new(AtomicBool::new(false));
         let run_id = exp.id;
 
-        // Cancel hook: flip the per-run flag (honored at start for a still
-        // -queued run, and between solver steps once running). On wasm also
-        // tell the worker so an in-flight run stops promptly.
+        // Withdraw queued work immediately; executing work observes the flag
+        // at its cancellation boundaries. The wasm host also receives cancel.
         let cancel_for_hook = cancel.clone();
+        let state_for_hook = Arc::downgrade(&self.state);
         #[cfg(target_arch = "wasm32")]
         let cancel_hook: Box<dyn Fn() + Send + Sync> = Box::new(move || {
             cancel_for_hook.store(true, Ordering::SeqCst);
+            if state_for_hook
+                .upgrade()
+                .is_some_and(|state| withdraw_queued_run(&state, run_id))
+            {
+                return;
+            }
             if let Some(transport) = crate::worker_run_transport() {
                 (transport.dispatch_cancel_run)(run_id);
             }
@@ -338,23 +353,31 @@ impl ExperimentRunner for ModelicaRunner {
         #[cfg(not(target_arch = "wasm32"))]
         let cancel_hook: Box<dyn Fn() + Send + Sync> = Box::new(move || {
             cancel_for_hook.store(true, Ordering::SeqCst);
+            if let Some(state) = state_for_hook.upgrade() {
+                withdraw_queued_run(&state, run_id);
+            }
         });
 
         // Enqueue the snapshotted job, then start as many as slots allow.
         // A queued run sits silent (no updates) until a slot frees — its
         // registry status stays `Pending`, which already reads as "queued"
         // in the panel.
-        {
-            let mut s = self.state.lock_or_recover();
-            s.pending.push_back(QueuedJob {
+        match lock_runner_state(&self.state) {
+            Ok(mut s) => s.pending.push_back(QueuedJob {
                 run_id,
-                model_ref: exp.model_ref.clone(),
+                source,
                 overrides: exp.overrides.clone(),
                 inputs: exp.inputs.clone(),
                 bounds: exp.bounds.clone(),
                 tx,
                 cancel,
-            });
+            }),
+            Err(()) => {
+                let _ = tx.send(RunUpdate::Failed {
+                    error: POISONED_RUNNER_STATE.to_owned(),
+                    partial: None,
+                });
+            }
         }
         pump_scheduler(&self.state);
 
@@ -363,33 +386,6 @@ impl ExperimentRunner for ModelicaRunner {
             progress_rx: rx,
             cancel: cancel_hook,
         }
-    }
-
-    fn default_bounds(&self, model: &ModelRef) -> Option<RunBounds> {
-        let s = self.state.lock().ok()?;
-        let d = s.defaults.get(model)?;
-        // Only report bounds when the annotation actually specified a
-        // horizon. Returning a fabricated `t_end=1.0` here forced callers
-        // to guess "is this a real annotation?" with a fragile
-        // `t_end != 1.0` check that silently dropped a legitimate
-        // `experiment(StopTime=1)`. A stop time is the one field that makes
-        // an experiment annotation usable, so gate on it.
-        let t_end = d.t_end?;
-        Some(RunBounds {
-            t_start: d.t_start.unwrap_or(0.0),
-            t_end,
-            // `Interval=0` sentinel handling shared with every other
-            // annotation→bounds path (preserves this struct's own `solver`).
-            dt: lunco_modelica_core::sim_target::interval_to_dt(d.interval),
-            n_intervals: lunco_modelica_core::sim_target::number_of_intervals_to_n(
-                d.number_of_intervals,
-                lunco_modelica_core::sim_target::interval_to_dt(d.interval),
-            ),
-            tolerance: d.tolerance,
-            solver: d.solver.clone(),
-            h0: None,
-            runtime: lunco_experiments::RuntimeMode::Batch,
-        })
     }
 }
 
@@ -405,7 +401,7 @@ impl ExperimentRunner for ModelicaRunner {
 fn pump_scheduler(state: &Arc<Mutex<RunnerState>>) {
     loop {
         let job = {
-            let mut s = match state.lock() {
+            let mut s = match lock_runner_state(state) {
                 Ok(s) => s,
                 Err(_) => return,
             };
@@ -424,6 +420,24 @@ fn pump_scheduler(state: &Arc<Mutex<RunnerState>>) {
     }
 }
 
+/// Withdraw a queued run immediately; running jobs observe their cancel flag.
+fn withdraw_queued_run(state: &Arc<Mutex<RunnerState>>, run_id: ExperimentId) -> bool {
+    let job = {
+        let Ok(mut state) = lock_runner_state(state) else {
+            return false;
+        };
+        let Some(index) = state.pending.iter().position(|job| job.run_id == run_id) else {
+            return false;
+        };
+        state.pending.remove(index)
+    };
+    let Some(job) = job else {
+        return false;
+    };
+    let _ = job.tx.send(RunUpdate::Cancelled);
+    true
+}
+
 /// Mark a run as no longer in flight and pump the queue so the freed slot
 /// is filled. Called from the off-thread completion path (native thread
 /// end; wasm forwarder on terminal update).
@@ -433,7 +447,7 @@ fn finish_run(state: &Arc<Mutex<RunnerState>>, run_id: ExperimentId) {
 }
 
 fn release_run_slot(state: &Arc<Mutex<RunnerState>>, run_id: ExperimentId) {
-    if let Ok(mut s) = state.lock() {
+    if let Ok(mut s) = lock_runner_state(state) {
         s.in_flight.remove(&run_id);
     }
 }
@@ -446,7 +460,7 @@ fn release_run_slot(state: &Arc<Mutex<RunnerState>>, run_id: ExperimentId) {
 fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
     let QueuedJob {
         run_id,
-        model_ref,
+        source,
         overrides,
         inputs,
         bounds,
@@ -464,9 +478,7 @@ fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
     }
     let worker_tx = tx.clone();
     start_native_job(state.clone(), run_id, tx, move || {
-        run_inner(
-            state, model_ref, overrides, inputs, bounds, cancel, worker_tx,
-        );
+        run_inner(state, source, overrides, inputs, bounds, cancel, worker_tx);
     });
 }
 
@@ -532,7 +544,7 @@ fn start_native_job(
 fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
     let QueuedJob {
         run_id,
-        model_ref,
+        source,
         overrides,
         inputs,
         bounds,
@@ -553,21 +565,7 @@ fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
         t_current: bounds.t_start,
         delta: None,
     });
-    let source_snapshot = state
-        .lock()
-        .ok()
-        .and_then(|s| s.sources.get(&model_ref).cloned());
-    let src = match source_snapshot {
-        Some(src) => src,
-        None => {
-            let _ = tx.send(RunUpdate::Failed {
-                error: format!("no source registered for model {}", model_ref.0),
-                partial: None,
-            });
-            finish_run(&state, run_id);
-            return;
-        }
-    };
+    let src = source;
     // Forward worker updates into the handle's tx; the forwarder frees the
     // slot via `finish_run` when a terminal update arrives.
     let Some(transport) = crate::worker_run_transport() else {
@@ -686,6 +684,7 @@ pub fn pump_wasm_forwarders() {
 #[cfg(not(target_arch = "wasm32"))]
 fn dae_cache_key(src: &ModelSource) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.runtime_twin.hash(&mut h);
     src.model_name.hash(&mut h);
     src.filename.hash(&mut h);
     src.source.hash(&mut h);
@@ -746,7 +745,7 @@ pub fn apply_value_bindings_to_dae(
 #[cfg(not(target_arch = "wasm32"))]
 fn run_inner(
     state: Arc<Mutex<RunnerState>>,
-    model_ref: ModelRef,
+    source: ModelSource,
     overrides: BTreeMap<ParamPath, ParamValue>,
     inputs: BTreeMap<ParamPath, ParamValue>,
     bounds: RunBounds,
@@ -754,6 +753,11 @@ fn run_inner(
     tx: Sender<RunUpdate>,
 ) {
     let t_wall = web_time::Instant::now();
+
+    if cancel.load(Ordering::SeqCst) {
+        let _ = tx.send(RunUpdate::Cancelled);
+        return;
+    }
 
     // Announce that this job has left the queue and is now executing. The
     // batch path is one blocking `simulate_with_diagnostics` call that emits
@@ -770,32 +774,15 @@ fn run_inner(
         delta: None,
     });
 
-    // Resolve model source.
-    let source = match state.lock() {
-        Ok(s) => match s.sources.get(&model_ref) {
-            Some(src) => src.clone(),
-            None => {
-                let _ = tx.send(RunUpdate::Failed {
-                    error: format!("no source registered for model {}", model_ref.0),
-                    partial: None,
-                });
-                return;
-            }
-        },
-        Err(_) => {
-            let _ = tx.send(RunUpdate::Failed {
-                error: "runner state poisoned".to_string(),
-                partial: None,
-            });
-            return;
-        }
-    };
-
     // Persistent runner compiler: clone the handle out of `state` (brief
     // lock), then compile under the compiler's OWN lock so the multi-second
     // compile never holds `state` and stall the scheduler / parallel runs.
     // source library installs once into this session (lazily) instead of per run.
-    let compiler_handle = match state.lock() {
+    if cancel.load(Ordering::SeqCst) {
+        let _ = tx.send(RunUpdate::Cancelled);
+        return;
+    }
+    let compiler_handle = match lock_runner_state(&state) {
         Ok(s) => s.compiler.clone(),
         Err(_) => {
             let _ = tx.send(RunUpdate::Failed {
@@ -814,7 +801,7 @@ fn run_inner(
     let cached = state
         .lock()
         .ok()
-        .and_then(|s| s.dae_cache.get(&key).map(|(_, dae)| dae.clone()));
+        .and_then(|s| s.dae_cache.get(&key).map(|entry| entry.dae.clone()));
     let base_dae: Arc<Dae> = match cached {
         Some(d) => d,
         None => {
@@ -830,19 +817,24 @@ fn run_inner(
                         return;
                     }
                 };
-                compiler.compile_str_multi(
+                if cancel.load(Ordering::SeqCst) {
+                    let _ = tx.send(RunUpdate::Cancelled);
+                    return;
+                }
+                let result = compiler.compile_str_multi(
                     &source.model_name,
                     &source.source,
                     &source.filename,
                     &source.extras,
-                )
+                );
+                compiler.clear_user_documents();
+                result
             };
             match compiled {
                 Ok(d) => {
                     let dae = d.dae.clone();
-                    if let Ok(mut s) = state.lock() {
-                        let ident: ModelIdent = (source.model_name, source.filename);
-                        s.dae_cache.insert(key, (ident, dae.clone()));
+                    if let Ok(mut s) = lock_runner_state(&state) {
+                        publish_cached_dae(&mut s, &source, key, dae.clone(), &cancel);
                     }
                     dae
                 }
@@ -1708,14 +1700,60 @@ impl ExperimentDrafts {
 #[derive(Resource, Default)]
 pub struct PendingHandles(pub Vec<RunHandle>);
 
-/// Map experiment id → originating DocumentId. Lets queries that
-/// know a doc (e.g. the RunStatus API) discover which experiments
-/// belong to it. Run-failure surfacing lives on `RunStatus::Failed`
-/// in the registry — we no longer write run errors into
-/// `CompileStates`, which is reserved for compile/Step errors on
-/// the doc itself.
+/// Source document and mounted runtime owner pinned at run admission.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExperimentSource {
+    pub document: lunco_doc::DocumentId,
+    /// Exact mounted Twin at admission; `None` is an application-owned run.
+    pub runtime_twin: Option<lunco_workspace::TwinId>,
+}
+
+impl ExperimentSource {
+    /// Pin ownership from the workspace's document authority, independently
+    /// of the experiment registry's display/history grouping key.
+    pub fn for_document(
+        document: lunco_doc::DocumentId,
+        workspace: Option<&lunco_workspace::Workspace>,
+    ) -> Result<Self, String> {
+        let runtime_twin = match workspace {
+            Some(workspace) => {
+                let entry = workspace.document(document).ok_or_else(|| {
+                    format!("experiment document {document} is not registered in the workspace")
+                })?;
+                let twin = workspace.twin_for(entry);
+                if twin.is_some_and(|id| workspace.twin(id).is_none()) {
+                    return Err(format!(
+                        "experiment document {document} has a closed Twin context"
+                    ));
+                }
+                twin
+            }
+            None => None,
+        };
+        Ok(Self {
+            document,
+            runtime_twin,
+        })
+    }
+
+    /// Whether automatic UI publication still belongs to the current scope.
+    pub fn is_in_active_scope(&self, workspace: Option<&lunco_workspace::Workspace>) -> bool {
+        match workspace {
+            Some(workspace) => workspace.document(self.document).is_some_and(|entry| {
+                workspace.twin_for(entry) == self.runtime_twin
+                    && self
+                        .runtime_twin
+                        .is_none_or(|id| workspace.twin(id).is_some())
+                    && workspace.document_is_in_active_scope(entry)
+            }),
+            None => self.runtime_twin.is_none(),
+        }
+    }
+}
+
+/// Retained run attribution follows the bounded experiment registry's lifetime.
 #[derive(Resource, Default)]
-pub struct ExperimentSources(pub std::collections::HashMap<ExperimentId, lunco_doc::DocumentId>);
+pub struct ExperimentSources(pub std::collections::HashMap<ExperimentId, ExperimentSource>);
 
 /// Per-document playback entity: holds the latest completed run's
 /// time-series in `SignalRegistry` so canvas plot tiles can resolve
@@ -1744,6 +1782,15 @@ pub fn drain_pending_handles(
 ) {
     let mut keep: Vec<RunHandle> = Vec::with_capacity(pending.0.len());
     for handle in pending.0.drain(..) {
+        // Owner cancellation/deletion is terminal even if a worker already
+        // queued progress or completion before observing its cancel flag.
+        if registry
+            .get(handle.run_id)
+            .is_none_or(|run| run.status.is_terminal())
+        {
+            handle.cancel();
+            continue;
+        }
         let mut terminal = false;
         loop {
             let update = match handle.progress_rx.try_recv() {
@@ -1819,11 +1866,8 @@ pub fn drain_pending_handles(
                 break;
             }
         }
-        // NOTE: do NOT drop sources.0[run_id] when a run goes terminal.
-        // Completed runs must stay resolvable by `doc` (GetExperimentResult
-        // / ListRuns `doc` filter, CompileStatus.latest_run). The mapping is
-        // cleared in lockstep with the registry by DeleteExperiment instead;
-        // dropping it here made every finished run unreachable by doc.
+        // Terminal history retains its document attribution for result queries.
+        // ExperimentRemoved retires attribution on deletion or bounded eviction.
         if !terminal {
             keep.push(handle);
         }
@@ -1892,11 +1936,150 @@ mod tests {
         reg.get(id).cloned().expect("just inserted")
     }
 
+    fn test_source(model: &str) -> ModelSource {
+        ModelSource {
+            model_name: model.to_owned(),
+            source: "model".to_owned(),
+            filename: format!("{model}.mo"),
+            extras: Vec::new(),
+            runtime_twin: None,
+        }
+    }
+
+    #[test]
+    fn poisoned_runner_state_rejects_queued_and_new_runs_without_rescheduling() {
+        let runner = ModelicaRunner::new();
+        runner.set_max_parallel(1);
+        let mut registry = ExperimentRegistry::new();
+        let held = mint_exp(&mut registry, "HeldSlot");
+        runner
+            .state
+            .lock()
+            .expect("state")
+            .in_flight
+            .insert(held.id);
+        let queued = mint_exp(&mut registry, "QueuedBeforePoison");
+        let queued_handle = runner.run_fast(&queued, test_source(&queued.model_ref.0));
+        assert_eq!(runner.queued_count(), 1);
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = runner.state.lock().expect("state starts valid");
+            panic!("injected runner state panic");
+        }));
+        assert!(poisoned.is_err());
+        let rejected = mint_exp(&mut registry, "SubmittedAfterPoison");
+        let rejected_handle = runner.run_fast(&rejected, test_source(&rejected.model_ref.0));
+        for handle in [&queued_handle, &rejected_handle] {
+            assert!(
+                matches!(handle.progress_rx.try_recv(), Ok(RunUpdate::Failed { error, partial: None }) if error == POISONED_RUNNER_STATE)
+            );
+            assert!(matches!(
+                handle.progress_rx.try_recv(),
+                Err(TryRecvError::Disconnected)
+            ));
+        }
+        pump_scheduler(&runner.state);
+        release_run_slot(&runner.state, held.id);
+        assert!(!withdraw_queued_run(&runner.state, queued.id));
+        assert!(runner.state.is_poisoned());
+        let guard = match runner.state.lock() {
+            Err(poisoned) => poisoned.into_inner(),
+            Ok(_) => panic!("the scheduler must remain poisoned"),
+        };
+        assert!(guard.pending.is_empty());
+        assert_eq!(guard.in_flight, HashSet::from([held.id]));
+    }
+
+    #[test]
+    fn queued_same_name_runs_keep_their_admitted_source_snapshots() {
+        let runner = ModelicaRunner::new();
+        runner.set_max_parallel(1);
+        let mut registry = ExperimentRegistry::new();
+        let held = mint_exp(&mut registry, "Held");
+        runner
+            .state
+            .lock()
+            .expect("state")
+            .in_flight
+            .insert(held.id);
+        let a = mint_exp(&mut registry, "SameName");
+        let b = mint_exp(&mut registry, "SameName");
+        let mut first = test_source("SameName");
+        first.source = "first admitted source".into();
+        first.runtime_twin = Some(lunco_workspace::TwinId::new(1));
+        let mut second = first.clone();
+        second.source = "second admitted source".into();
+        second.runtime_twin = Some(lunco_workspace::TwinId::new(2));
+        let ah = runner.run_fast(&a, first);
+        let bh = runner.run_fast(&b, second);
+        {
+            let state = runner.state.lock().expect("state");
+            assert_eq!(state.pending[0].source.source, "first admitted source");
+            assert_eq!(
+                state.pending[0].source.runtime_twin,
+                Some(lunco_workspace::TwinId::new(1))
+            );
+            assert_eq!(state.pending[1].source.source, "second admitted source");
+            assert_eq!(
+                state.pending[1].source.runtime_twin,
+                Some(lunco_workspace::TwinId::new(2))
+            );
+        }
+        ah.cancel();
+        bh.cancel();
+        assert_eq!(runner.queued_count(), 0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cache_retirement_keeps_other_owners_and_rejects_late_cancelled_publish() {
+        let runner = ModelicaRunner::new();
+        let twin = lunco_workspace::TwinId::new(1);
+        let mut source = test_source("CacheProbe");
+        let mut owned = source.clone();
+        owned.runtime_twin = Some(twin);
+        let mut other = source.clone();
+        other.runtime_twin = Some(lunco_workspace::TwinId::new(2));
+        let cancel = AtomicBool::new(false);
+        for input in [&source, &owned, &other] {
+            publish_cached_dae(
+                &mut runner.state.lock().expect("state"),
+                input,
+                dae_cache_key(input),
+                Arc::new(Dae::default()),
+                &cancel,
+            );
+        }
+        assert_eq!(runner.state.lock().expect("state").dae_cache.len(), 3);
+        cancel.store(true, Ordering::SeqCst);
+        runner.retire_twin_cache(twin).expect("cache retirement");
+        {
+            let mut state = runner.state.lock().expect("state");
+            publish_cached_dae(
+                &mut state,
+                &owned,
+                dae_cache_key(&owned),
+                Arc::new(Dae::default()),
+                &cancel,
+            );
+            assert_eq!(state.dae_cache.len(), 2);
+            assert!(!state.dae_cache.contains_key(&dae_cache_key(&owned)));
+        }
+        // A newer application snapshot replaces only its own model revision.
+        source.source = "new application source".into();
+        publish_cached_dae(
+            &mut runner.state.lock().expect("state"),
+            &source,
+            dae_cache_key(&source),
+            Arc::new(Dae::default()),
+            &AtomicBool::new(false),
+        );
+        assert_eq!(runner.state.lock().expect("state").dae_cache.len(), 2);
+    }
+
     /// Submitting more runs than `max_parallel` must NOT reject the extras
     /// (the old busy-gate behaviour) — they queue and drain as slots free,
     /// every run reaching a terminal update, and the scheduler settling
-    /// back to empty. Runs target a model with no registered source, so
-    /// each fails fast in `run_inner` without invoking the compiler.
+    /// back to empty. Explicit malformed source produces a compile rejection.
     #[test]
     fn scheduler_queues_beyond_cap_and_drains_all() {
         use std::time::Duration;
@@ -1908,7 +2091,7 @@ mod tests {
         let mut handles = Vec::new();
         for _ in 0..5 {
             let exp = mint_exp(&mut reg, "NoSuchModel");
-            handles.push(runner.run_fast(&exp));
+            handles.push(runner.run_fast(&exp, test_source(&exp.model_ref.0)));
         }
 
         // Every submitted run must terminate (none rejected).
@@ -1945,6 +2128,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cancelling_queued_run_withdraws_it_before_admission() {
+        let runner = ModelicaRunner::new();
+        runner.set_max_parallel(1);
+        let mut registry = ExperimentRegistry::new();
+        let active = mint_exp(&mut registry, "Active");
+        let queued = mint_exp(&mut registry, "Queued");
+        runner
+            .state
+            .lock()
+            .expect("runner state")
+            .in_flight
+            .insert(active.id);
+        let handle = runner.run_fast(&queued, test_source(&queued.model_ref.0));
+        assert_eq!(runner.queued_count(), 1);
+        handle.cancel();
+        assert_eq!(runner.queued_count(), 0);
+        assert_eq!(runner.in_flight_count(), 1);
+        assert!(matches!(
+            handle.progress_rx.try_recv(),
+            Ok(RunUpdate::Cancelled)
+        ));
+        assert!(matches!(
+            handle.progress_rx.try_recv(),
+            Err(TryRecvError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn source_admission_and_publication_keep_application_and_twin_ownership_distinct() {
+        let mut workspace = lunco_workspace::Workspace::new();
+        let loose = lunco_doc::DocumentId::new(1);
+        let retired = lunco_doc::DocumentId::new(2);
+        let closed_twin = lunco_workspace::TwinId::new(1);
+        for (id, context_twin) in [(loose, None), (retired, Some(closed_twin))] {
+            workspace.add_document(lunco_workspace::DocumentEntry {
+                id,
+                kind: lunco_workspace::DocumentKindId::new("modelica"),
+                origin: lunco_doc::DocumentOrigin::untitled("OwnershipProbe"),
+                context_twin,
+                title: "OwnershipProbe".to_owned(),
+                dirty: false,
+            });
+        }
+        let source =
+            ExperimentSource::for_document(loose, Some(&workspace)).expect("loose document");
+        assert_eq!(source.runtime_twin, None);
+        assert!(source.is_in_active_scope(Some(&workspace)));
+        let outgoing = ExperimentSource {
+            document: retired,
+            runtime_twin: Some(closed_twin),
+        };
+        assert!(!outgoing.is_in_active_scope(Some(&workspace)));
+        assert!(ExperimentSource::for_document(retired, Some(&workspace)).is_err());
+        assert!(
+            ExperimentSource::for_document(lunco_doc::DocumentId::new(3), Some(&workspace))
+                .is_err()
+        );
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn native_worker_panic_releases_slot_and_admits_successor() {
@@ -1955,15 +2198,6 @@ mod tests {
         let mut registry = ExperimentRegistry::new();
         let panicking = mint_exp(&mut registry, "PanickingWorker");
         let successor = mint_exp(&mut registry, "Successor");
-        runner.set_model_source(
-            successor.model_ref.clone(),
-            ModelSource {
-                model_name: "Successor".to_owned(),
-                source: "model Successor Real x = 1; end Successor;".to_owned(),
-                filename: "Successor.mo".to_owned(),
-                extras: Vec::new(),
-            },
-        );
         let compiler = {
             let mut state = runner.state.lock().expect("runner state");
             state.in_flight.insert(panicking.id);
@@ -1976,7 +2210,7 @@ mod tests {
             let _compiler = compiler.lock().expect("compiler starts valid");
             panic!("injected experiment compiler panic");
         });
-        let successor_handle = runner.run_fast(&successor);
+        let successor_handle = runner.run_fast(&successor, test_source(&successor.model_ref.0));
         assert_eq!(runner.queued_count(), 1);
         release_tx.send(()).expect("release worker");
 
@@ -2094,6 +2328,7 @@ mod tests {
             source: "model M Real x = 1; end M;".into(),
             filename: "M.mo".into(),
             extras: vec![],
+            runtime_twin: None,
         };
 
         // Identical input → identical key (the cache must still HIT on a re-run

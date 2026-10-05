@@ -357,12 +357,33 @@ pub fn project_run_results_to_ui(
     mut plot_states: Option<ResMut<lunco_experiments_ui::PlotPanelStates>>,
     active_plot: Option<Res<lunco_experiments_ui::ActivePlot>>,
     mut signals: Option<ResMut<SignalRegistry>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    pins: Option<Res<crate::ui::doc_pin::DocPinState>>,
 ) {
+    let workspace = workspace.as_deref().map(|workspace| &workspace.0);
+    let selected_document = pins
+        .as_deref()
+        .and_then(|pins| pins.experiments)
+        .or_else(|| workspace.and_then(|workspace| workspace.active_document));
     for ev in ev_completed.read() {
         let run_id = ev.experiment_id;
         let Some(entry) = registry.get(run_id) else {
             continue;
         };
+        if !matches!(entry.status, lunco_experiments::RunStatus::Done { .. }) {
+            continue;
+        }
+        let Some(source) = sources.0.get(&run_id) else {
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                "experiment-ui-publication-failed",
+                format!("completed experiment {run_id:?} has no source attribution"),
+            );
+            continue;
+        };
+        if !source.is_in_active_scope(workspace) {
+            continue;
+        }
         let run_name = entry.name.clone();
         let Some(result) = entry.result.as_ref() else {
             continue;
@@ -378,12 +399,15 @@ pub fn project_run_results_to_ui(
         // very first completion so the plot has content without hunting through
         // Telemetry. Skip parameters (constant series) — pick the first 3
         // dynamic signals by series-variance heuristic.
-        if let Some(states) = plot_states.as_mut() {
+        if let Some(states) = plot_states.as_mut()
+            && selected_document.is_none_or(|doc| doc == source.document)
+        {
             let viz = active_plot
                 .as_deref()
                 .copied()
                 .unwrap_or_default()
                 .or_default(crate::ui::viz::DEFAULT_MODELICA_GRAPH);
+            states.sync_twin(viz, &crate::ui::doc_pin::twin_id_for_doc(source.document));
             let entry = states.entry(viz);
             entry.visible_experiments.insert(run_id);
             if entry.picked_vars.is_empty() {
@@ -416,13 +440,13 @@ pub fn project_run_results_to_ui(
         // resolve to real (entity, path) samples without needing a live cosim
         // entity. One entity per doc, reused across runs — drop prior signals
         // then push the new run's data.
-        if let (Some(doc_id), Some(signals_mut)) =
-            (sources.0.get(&run_id).copied(), signals.as_deref_mut())
-        {
+        if let Some(signals_mut) = signals.as_deref_mut() {
+            let doc_id = source.document;
             let entity = *playback
                 .0
                 .entry(doc_id)
                 .or_insert_with(|| commands.spawn_empty().id());
+            commands.entity(entity).try_insert(*source);
             signals_mut.drop_entity(entity);
             for (path, samples) in &result.series {
                 let sig = SignalRef {
@@ -437,22 +461,115 @@ pub fn project_run_results_to_ui(
     }
 
     for ev in ev_failed.read() {
-        let run_name = registry
-            .get(ev.experiment_id)
-            .map(|e| e.name.clone())
-            .unwrap_or_else(|| "Fast Run".into());
+        let Some(entry) = registry.get(ev.experiment_id) else {
+            continue;
+        };
+        if !sources
+            .0
+            .get(&ev.experiment_id)
+            .is_some_and(|source| source.is_in_active_scope(workspace))
+            || !matches!(entry.status, lunco_experiments::RunStatus::Failed { .. })
+        {
+            continue;
+        }
+        let run_name = &entry.name;
         if let Some(c) = console.as_mut() {
             c.error(format!("{run_name} FAILED: {}", ev.error));
         }
     }
 
     for ev in ev_cancelled.read() {
-        let run_name = registry
-            .get(ev.experiment_id)
-            .map(|e| e.name.clone())
-            .unwrap_or_else(|| "Fast Run".into());
+        let Some(entry) = registry.get(ev.experiment_id) else {
+            continue;
+        };
+        if !sources
+            .0
+            .get(&ev.experiment_id)
+            .is_some_and(|source| source.is_in_active_scope(workspace))
+            || !matches!(entry.status, lunco_experiments::RunStatus::Cancelled)
+        {
+            continue;
+        }
+        let run_name = &entry.name;
         if let Some(c) = console.as_mut() {
             c.info(format!("{run_name} cancelled"));
+        }
+    }
+}
+
+/// Retire active playback while completed trajectories remain in run history.
+pub fn retire_closed_twin_playback(
+    trigger: On<lunco_workspace::TwinClosed>,
+    mut commands: Commands,
+) {
+    let twin = trigger.event().twin;
+    let root = trigger.event().root.clone();
+    // Resolve after earlier playback spawn/attribution commands have committed.
+    commands.queue(move |world: &mut World| {
+        let retired: Vec<_> = world
+            .resource::<lunco_modelica_runner::PlaybackEntities>()
+            .0
+            .iter()
+            .filter_map(|(document, entity)| {
+                world
+                    .get::<lunco_modelica_runner::ExperimentSource>(*entity)
+                    .is_some_and(|source| source.runtime_twin == Some(twin))
+                    .then_some((*document, *entity))
+            })
+            .collect();
+        let mut closed_documents: std::collections::HashSet<_> =
+            retired.iter().map(|(doc, _)| *doc).collect();
+        if let Some(workspace) = world.get_resource::<lunco_workspace::WorkspaceResource>() {
+            closed_documents.extend(
+                workspace
+                    .documents()
+                    .iter()
+                    .filter(|entry| {
+                        lunco_workspace::document_belongs_to_twin_root(entry, twin, &root)
+                    })
+                    .map(|entry| entry.id),
+            );
+        }
+        if let Some(sources) = world.get_resource::<lunco_modelica_runner::ExperimentSources>() {
+            closed_documents.extend(
+                sources
+                    .0
+                    .values()
+                    .filter(|source| source.runtime_twin == Some(twin))
+                    .map(|source| source.document),
+            );
+        }
+        if let Some(mut pins) = world.get_resource_mut::<crate::ui::doc_pin::DocPinState>() {
+            for document in &closed_documents {
+                pins.forget(*document);
+            }
+        }
+        if let Some(mut states) = world.get_resource_mut::<lunco_experiments_ui::PlotPanelStates>()
+        {
+            for document in &closed_documents {
+                states.forget_scope(&crate::ui::doc_pin::twin_id_for_doc(*document));
+            }
+        }
+        for (document, entity) in retired {
+            world
+                .resource_mut::<lunco_modelica_runner::PlaybackEntities>()
+                .0
+                .remove(&document);
+            if let Some(mut signals) = world.get_resource_mut::<SignalRegistry>() {
+                signals.drop_entity(entity);
+            }
+            world.despawn(entity);
+        }
+    });
+}
+
+pub fn forget_removed_plot_runs(
+    mut removed: MessageReader<lunco_experiments::ExperimentRemoved>,
+    mut states: Option<ResMut<lunco_experiments_ui::PlotPanelStates>>,
+) {
+    for event in removed.read() {
+        if let Some(states) = states.as_deref_mut() {
+            states.forget_experiment(event.experiment_id);
         }
     }
 }
@@ -460,6 +577,98 @@ pub fn project_run_results_to_ui(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closed_twin_retires_only_its_playback_projection() {
+        use lunco_modelica_runner::{ExperimentSource, PlaybackEntities};
+        let mut app = App::new();
+        app.init_resource::<PlaybackEntities>()
+            .init_resource::<SignalRegistry>()
+            .init_resource::<crate::ui::doc_pin::DocPinState>()
+            .init_resource::<lunco_experiments_ui::PlotPanelStates>()
+            .add_observer(retire_closed_twin_playback);
+        let twin = lunco_workspace::TwinId::new(1);
+        let mut entities = Vec::new();
+        for (index, runtime_twin) in [Some(twin), Some(lunco_workspace::TwinId::new(2)), None]
+            .into_iter()
+            .enumerate()
+        {
+            let document = lunco_doc::DocumentId::new(index as u64 + 1);
+            let entity = app
+                .world_mut()
+                .spawn(ExperimentSource {
+                    document,
+                    runtime_twin,
+                })
+                .id();
+            app.world_mut()
+                .resource_mut::<PlaybackEntities>()
+                .0
+                .insert(document, entity);
+            app.world_mut()
+                .resource_mut::<SignalRegistry>()
+                .push_scalar(
+                    SignalRef {
+                        entity,
+                        path: "value".into(),
+                    },
+                    0.0,
+                    1.0,
+                );
+            entities.push(entity);
+        }
+        let closed_document = lunco_doc::DocumentId::new(1);
+        app.world_mut()
+            .resource_mut::<crate::ui::doc_pin::DocPinState>()
+            .experiments = Some(closed_document);
+        let viz = lunco_viz::VizId(7);
+        {
+            let mut states = app
+                .world_mut()
+                .resource_mut::<lunco_experiments_ui::PlotPanelStates>();
+            states.sync_twin(
+                viz,
+                &crate::ui::doc_pin::twin_id_for_doc(lunco_doc::DocumentId::new(2)),
+            );
+            states.set_var(viz, "other_owner".into(), true);
+            states.sync_twin(viz, &crate::ui::doc_pin::twin_id_for_doc(closed_document));
+            states.set_var(viz, "closed_owner".into(), true);
+        }
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin,
+            root: Default::default(),
+            was_active: true,
+        });
+        app.world_mut().flush();
+        assert!(app.world().get_entity(entities[0]).is_err());
+        assert!(app.world().get_entity(entities[1]).is_ok());
+        assert!(app.world().get_entity(entities[2]).is_ok());
+        assert_eq!(app.world().resource::<PlaybackEntities>().0.len(), 2);
+        let signals = app.world().resource::<SignalRegistry>();
+        assert_eq!(signals.iter_signals().count(), 2);
+        assert!(
+            signals
+                .iter_signals()
+                .all(|(signal, _)| signal.entity != entities[0])
+        );
+        assert_eq!(
+            app.world()
+                .resource::<crate::ui::doc_pin::DocPinState>()
+                .experiments,
+            None
+        );
+        let mut states = app
+            .world_mut()
+            .resource_mut::<lunco_experiments_ui::PlotPanelStates>();
+        assert!(states.get(viz).is_none());
+        states.sync_twin(
+            viz,
+            &crate::ui::doc_pin::twin_id_for_doc(lunco_doc::DocumentId::new(2)),
+        );
+        assert!(states.picked(viz).contains("other_owner"));
+        states.sync_twin(viz, &crate::ui::doc_pin::twin_id_for_doc(closed_document));
+        assert!(states.picked(viz).is_empty());
+    }
 
     #[test]
     fn modelica_lifecycle_notices_reach_recent_status_once() {

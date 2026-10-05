@@ -709,6 +709,13 @@ impl Plugin for ModelicaUiPlugin {
             // Reactive UI: project terminal experiment-run events into console,
             // plot auto-pick, and SignalRegistry playback.
             .add_systems(Update, core_observers::project_run_results_to_ui)
+            .add_observer(core_observers::retire_closed_twin_playback)
+            .add_systems(
+                Last,
+                core_observers::forget_removed_plot_runs
+                    .after(lunco_experiments::ExperimentRegistryMaintenanceSet)
+                    .run_if(on_message::<lunco_experiments::ExperimentRemoved>),
+            )
             // UI→core: workbench Untitled-draft rename → RenameModelicaClass.
             .add_observer(rename_chain::on_rename_open_document_chain_to_modelica)
             .init_resource::<panels::canvas_projection::DiagramAutoLayoutSettings>()

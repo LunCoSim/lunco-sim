@@ -254,9 +254,11 @@ mod wasm {
         let compile = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             STATE.with(|s| {
                 let mut state = s.try_borrow_mut().expect("worker state borrow");
-                state
+                let result = state
                     .compiler()
-                    .compile_str_multi(model_name, source, filename, extras)
+                    .compile_str_multi(model_name, source, filename, extras);
+                state.compiler().clear_user_documents();
+                result
             })
         }));
         let dae = match compile {

@@ -614,7 +614,6 @@ pub fn handle_modelica_responses(
     // the reactive UI viz observer (`ui::core_observers::drain_sim_samples_to_viz`)
     // drains it into `lunco_viz`. Core no longer references any viz/plot types.
     mut sample_stream: ResMut<SimSampleStream>,
-    runner_res: Option<Res<lunco_modelica_runner::ModelicaRunnerResource>>,
     source_roots: Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
     participants: Option<Res<lunco_core_runtime::SimulationBarrierParticipants>>,
     step_diagnostics: Option<ResMut<lunco_modelica_runtime::ModelicaStepDiagnostics>>,
@@ -848,33 +847,6 @@ pub fn handle_modelica_responses(
                 model.live_solver_snapshot = Some(snapshot.clone());
             }
 
-            // Pipe `experiment(...)` annotations into the runner only after
-            // both worker session and source revision have been validated.
-            if result.is_new_model && result.error.is_none() {
-                if let (Some(runner), Some(name)) =
-                    (runner_res.as_ref(), result.compiled_model_name.as_ref())
-                {
-                    runner.0.set_model_defaults(
-                        lunco_experiments::ModelRef(name.clone()),
-                        lunco_modelica_runner::ModelDefaults {
-                            t_start: result.experiment_start_time,
-                            t_end: result.experiment_stop_time,
-                            tolerance: result.experiment_tolerance,
-                            interval: result.experiment_interval,
-                            // The live worker path carries `Interval` only; the
-                            // `NumberOfIntervals` count flows through the batch
-                            // experiments path (compile.rs ModelDefaults builder).
-                            number_of_intervals: None,
-                            solver: result.experiment_solver.as_deref().and_then(|s| {
-                                lunco_modelica_solver::solver_backends::ensure_builtin_solvers();
-                                let id = lunco_experiments::SolverId::from(s);
-                                lunco_experiments::solver::get(&id).map(|spec| spec.id)
-                            }),
-                        },
-                    );
-                }
-            }
-
             // A plain result is a response to exactly one master-issued Step.
             // Validate its sequence and communication point before clearing the
             // in-flight flag or touching the model clock. This is the local
@@ -947,16 +919,14 @@ pub fn handle_modelica_responses(
                     );
                 }
                 if result.error.is_none() {
-                    model.last_accepted_step = Some(
-                        lunco_modelica_runtime::ModelicaStepSample {
-                            session_id: model.session_id,
-                            step_id: in_flight.step_id,
-                            input_time_s: in_flight.start_time,
-                            output_time_s: result.new_time,
-                            inputs: in_flight.sampled_inputs.clone(),
-                            outputs: result.outputs.clone(),
-                        },
-                    );
+                    model.last_accepted_step = Some(lunco_modelica_runtime::ModelicaStepSample {
+                        session_id: model.session_id,
+                        step_id: in_flight.step_id,
+                        input_time_s: in_flight.start_time,
+                        output_time_s: result.new_time,
+                        inputs: in_flight.sampled_inputs.clone(),
+                        outputs: result.outputs.clone(),
+                    });
                 }
                 model.in_flight_step = None;
             } else {

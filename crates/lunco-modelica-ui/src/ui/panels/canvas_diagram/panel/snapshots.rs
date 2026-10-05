@@ -245,6 +245,7 @@ fn seed_state_from_latest_experiment(
     let exps = registry.list_for_twin(&twin);
     let chosen = exps.iter().rev().find(|e| {
         e.result.is_some()
+            && crate::ui::context::run_is_in_active_scope(ctx, e.id)
             && visible_in_active
                 .as_ref()
                 .map(|v| v.contains(&e.id))

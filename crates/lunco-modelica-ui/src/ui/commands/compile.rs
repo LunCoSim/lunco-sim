@@ -25,7 +25,6 @@ use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_modelica_runner::resolve_setup_bounds;
 use lunco_modelica_runtime::ModelicaModel;
-use std::collections::HashMap;
 
 #[cfg(feature = "api")]
 use lunco_api::{DeferredCommandAppExt, executor::PendingApiRequest};
@@ -1044,13 +1043,28 @@ fn dispatch_experiment(
             bevy::log::warn!("[dispatch_experiment] no active document");
             return None;
         };
+        let attribution = match lunco_modelica_runner::ExperimentSource::for_document(
+            doc,
+            world
+                .get_resource::<lunco_workspace::WorkspaceResource>()
+                .map(|workspace| &workspace.0),
+        ) {
+            Ok(source) => source,
+            Err(message) => {
+                world.commands().trigger(lunco_core::RuntimeError {
+                    name: "experiment-admission-failed".to_owned(),
+                    message,
+                });
+                return None;
+            }
+        };
 
         // Resolve source + target class. Mirrors `on_compile_model`
         // class resolution: drilled-in class > picker (when ambiguous)
         // > sole non-package class. Without this, package-wrapped
         // models (AnnotatedRocketStage etc.) fail with "no compilable
         // top-level class".
-        let (source, filename, candidates, experiment_map) = {
+        let (source, filename, candidates) = {
             let registry = world.resource::<crate::ui::document_context::ModelicaDocuments>();
             let host = match registry.host(doc) {
                 Some(h) => h,
@@ -1081,14 +1095,7 @@ fn dispatch_experiment(
             // sole/ambiguous fallback (`candidates[0]`) could pick a leaf model
             // over the annotated system.
             let candidates: Vec<String> = index.simulation_candidates();
-            let mut experiment_map: HashMap<String, lunco_modelica_ast::annotations::Experiment> =
-                HashMap::new();
-            for c in index.classes.values() {
-                if let Some(exp) = &c.experiment {
-                    experiment_map.insert(c.name.clone(), *exp);
-                }
-            }
-            (source, filename, candidates, experiment_map)
+            (source, filename, candidates)
         };
         // Class resolution precedence:
         //   1. explicit_class on the command — API/agent caller knows exactly.
@@ -1201,51 +1208,16 @@ fn dispatch_experiment(
                 return None;
             }
         };
-        runner_res.0.set_model_source(
-            model_ref.clone(),
-            lunco_modelica_runner::ModelSource {
-                model_name: model_name.clone(),
-                source,
-                filename,
-                extras,
-            },
-        );
+        let source_snapshot = lunco_modelica_runner::ModelSource {
+            model_name: model_name.clone(),
+            source,
+            filename,
+            extras,
+            runtime_twin: attribution.runtime_twin,
+        };
 
-        // Seed the runner's annotation cache from the AST so
-        // `default_bounds` works even without a prior interactive compile.
-        // Match by the canonical (qualified) key OR by leaf name: a bare
-        // `FastRunActiveModel{class:"RoverThermalSystem"}` passes a short
-        // name, but `experiment_map` is keyed by `c.name` (qualified), so an
-        // exact-only lookup would miss the `experiment(...)` annotation and
-        // silently fall back to the 1 s default.
-        let model_leaf = model_name.rsplit('.').next().unwrap_or(model_name.as_str());
-        let annotation = experiment_map.get(&model_name).or_else(|| {
-            experiment_map
-                .iter()
-                .find(|(k, _)| k.rsplit('.').next() == Some(model_leaf))
-                .map(|(_, v)| v)
-        });
-        if let Some(exp) = annotation {
-            runner_res.0.set_model_defaults(
-                model_ref.clone(),
-                lunco_modelica_runner::ModelDefaults {
-                    t_start: exp.start_time,
-                    t_end: exp.stop_time,
-                    tolerance: exp.tolerance,
-                    interval: exp.interval,
-                    number_of_intervals: exp.number_of_intervals,
-                    solver: None,
-                },
-            );
-        }
-
-        // Bounds: reuse the single source of truth `resolve_setup_bounds`
-        // (draft override → runner annotation cache → AST `experiment(...)`
-        // → `sim_target::DEFAULT_STOP_TIME`), then apply the command override
-        // on top. This keeps the Fast Run API path bit-identical to the
-        // Experiments-tab Setup form and the Fast Run popup — one resolver,
-        // no per-surface divergence. The annotation cache seeding above is
-        // what makes the cache layer here resolve without a prior
+        // Bounds use the current document AST and draft through the shared
+        // resolver, then apply explicit command overrides without a prior
         // interactive compile.
         let mut bounds = resolve_setup_bounds(world, doc, &model_ref);
 
@@ -1324,13 +1296,12 @@ fn dispatch_experiment(
             crate::experiment_journal::record_create(&journal, &exp);
         }
 
-        let handle = runner_res.0.run_fast(&exp);
-        // Remember which document started this run so failures can be
-        // routed back into the doc's CompileStates + Console.
+        // Pin the source and its runtime owner before work can publish results.
         world
             .resource_mut::<lunco_modelica_runner::ExperimentSources>()
             .0
-            .insert(exp_id, doc);
+            .insert(exp_id, attribution);
+        let handle = runner_res.0.run_fast(&exp, source_snapshot);
         // Store the handle so a draining system can pump updates into
         // registry status.
         world
@@ -1678,33 +1649,6 @@ pub struct DeleteExperiment {
     pub all: bool,
 }
 
-/// Clear all per-experiment side-state for runs that were just removed from
-/// the `ExperimentRegistry`. Keeps the doc→run mapping (`ExperimentSources`)
-/// and the per-plot run-visibility (`PlotPanelStates`) in lockstep with the
-/// registry. Shared by the API `DeleteExperiment` command and the Experiments
-/// panel's delete button so neither leaks stale ids. (Playback entities are
-/// keyed per-doc, not per-run, so they are intentionally left alone — a run
-/// delete doesn't despawn a doc's playback entity.)
-pub(crate) fn purge_experiment_side_state(
-    world: &mut World,
-    removed: &[lunco_experiments::ExperimentId],
-) {
-    if removed.is_empty() {
-        return;
-    }
-    if let Some(mut sources) = world.get_resource_mut::<lunco_modelica_runner::ExperimentSources>()
-    {
-        for id in removed {
-            sources.0.remove(id);
-        }
-    }
-    if let Some(mut states) = world.get_resource_mut::<lunco_experiments_ui::PlotPanelStates>() {
-        for id in removed {
-            states.forget_experiment(*id);
-        }
-    }
-}
-
 #[on_command(DeleteExperiment)]
 pub fn on_delete_experiment(trigger: On<DeleteExperiment>, mut commands: Commands) {
     let target = trigger.event().experiment_id.clone();
@@ -1716,8 +1660,7 @@ pub fn on_delete_experiment(trigger: On<DeleteExperiment>, mut commands: Command
             .cloned();
         let mut reg = world.resource_mut::<lunco_experiments::ExperimentRegistry>();
         // Snapshot ids before deletion so we can compute exactly which runs
-        // were removed and purge their side-state (doc mapping + per-plot
-        // visibility), matching the UI delete path.
+        // were removed and journal the exact deletions.
         let before: std::collections::HashSet<lunco_experiments::ExperimentId> =
             reg.iter_all().map(|e| e.id).collect();
         let mut removed = 0usize;
@@ -1755,7 +1698,6 @@ pub fn on_delete_experiment(trigger: On<DeleteExperiment>, mut commands: Command
                 crate::experiment_journal::record_delete(journal, *id);
             }
         }
-        crate::ui::commands::compile::purge_experiment_side_state(world, &purged);
         bevy::log::info!(
             "[DeleteExperiment] removed {removed} run(s) (all={all}, id={target:?}, doc_id={doc:?})"
         );

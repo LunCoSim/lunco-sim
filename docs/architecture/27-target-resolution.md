@@ -35,16 +35,16 @@ File references in `crates/lunco-modelica-core`, `crates/lunco-modelica-api`, an
 1. **`on_compile_model`** (`compile.rs`) — class precedence: `explicit > drilled > picker(if ambiguous) > detected[0]`. Does not resolve bounds (compile only).
 2. **`dispatch_experiment`** (`compile.rs`) — class precedence: `explicit > drilled > picker > sole`; candidates and bounds use the shared target helpers. Bounds use the canonical `fallback(t_end=1.0) → annotation → draft → cmd_override` ladder.
 3. **`render_setup_section`** (`experiments.rs`) — class: `drilled > simulation_candidates()[0]`; bounds via `resolve_setup_bounds`.
-4. **`QueryExperimentBounds`** (`lunco-modelica-api/src/lib.rs`) — lists all non-package classes; per class reports `resolved_bounds` (via `resolve_setup_bounds`) and its source label (`"draft_override" | "runner_cache" | "annotation" | "fallback_1s"`).
+4. **`QueryExperimentBounds`** (`lunco-modelica-api/src/lib.rs`) — lists all non-package classes; per class reports `resolved_bounds` (via `resolve_setup_bounds`) and its source label (`"draft_override" | "annotation" | "fallback_1s"`).
 
 ### 2.3 Bounds resolution — `model_commands.rs`
-- `resolve_setup_bounds() -> RunBounds` (`model_commands.rs`): precedence `draft override → annotation → runner cache → fallback(t_end=1.0)` through `sim_target::resolve_bounds`.
+- `resolve_setup_bounds() -> RunBounds` (`model_commands.rs`): precedence `draft override → current document annotation → default(t_end=1.0)` through `sim_target::resolve_bounds`.
 - `bounds_from_annotation() -> Option<RunBounds>` (`compile.rs`): looks up class by qualified **or** leaf name; requires `experiment.stop_time = Some(_)`; maps `start_time → t_start` (default 0.0), `stop_time → t_end`, `interval(>0) → dt`, `tolerance → tolerance`; `solver`/`h0` always `None`.
 
 ### 2.4 Types — `lunco-experiments/src/lib.rs`
 - `ModelRef(String)` (`lib.rs`) — opaque qualified class name; the crate does **not** depend on `lunco-modelica-core`.
 - `RunBounds { t_start, t_end, dt: Option, tolerance: Option, solver: Option<String>, h0: Option }` (`lib.rs`).
-- `ExperimentRunner { run_fast(&Experiment) -> RunHandle; default_bounds(&ModelRef) -> Option<RunBounds> }` (`lunco-experiments`) — already backend-agnostic; the Modelica implementation lives in `lunco-modelica-runner`.
+- `ExperimentRunner { type Source; run_fast(&Experiment, Source) -> RunHandle; }` (`lunco-experiments`) — already backend-agnostic; the Modelica implementation lives in `lunco-modelica-runner`.
 - `ExperimentRegistry` — keyed `(TwinId, ModelRef)`; Modelica-specific in usage.
 - `ExperimentDrafts` — `(DocumentId, ModelRef) → ExperimentDraft { bounds_override: Option<RunBounds>, .. }`.
 
@@ -103,7 +103,7 @@ Both paths call `sim_target::default_bounds()` through `resolve_bounds`; the two
 ### 4.4 Bounds precedence as one fold that returns its source
 ```rust
 fn resolve_bounds(layers: BoundsLayers) -> (RunBounds, BoundsSource);
-// layers: { draft: Option, runner_cache: Option, annotation: Option }
+// layers: { draft: Option, annotation: Option }
 ```
 Partial-override semantics defined exactly once. Returns provenance so `QueryExperimentBounds` stops recomputing the source label — single source of truth for "where did this come from."
 
@@ -114,7 +114,7 @@ Delete/privatize `first_non_pkg`, the manual candidate building, and the inline 
 
 §4.1–4.5 are not five separate fixes; they compose into a single pipeline. The core realization: **"which class" and "which bounds" are not two problems — they are the same operation applied to two value types, and bounds is the *downstream* stage of class.**
 
-**Coupled, not parallel.** Bounds depend on the class: the `experiment(...)` annotation lives on the class, the draft is keyed `(doc, class)`, the runner cache is keyed by class. You cannot resolve bounds "for a doc" — only for a *resolved* class. Today `resolve_setup_bounds(world, doc, model_ref)` already takes a `model_ref`, meaning the caller resolved the class by some *other* rule first — which is exactly why bounds end up correct for the wrong class. Unification = class resolution is the first stage of the same call, so bounds are always for the class the resolver itself picked.
+**Coupled, not parallel.** Bounds depend on the class: the `experiment(...)` annotation lives on the class, the draft is keyed `(doc, class)`. You cannot resolve bounds "for a doc" — only for a *resolved* class. Today `resolve_setup_bounds(world, doc, model_ref)` already takes a `model_ref`, meaning the caller resolved the class by some *other* rule first — which is exactly why bounds end up correct for the wrong class. Unification = class resolution is the first stage of the same call, so bounds are always for the class the resolver itself picked.
 
 **The same fold both times.** Class and each bound field resolve down the *identical* source ladder — first present wins, record which layer won:
 
@@ -144,7 +144,7 @@ struct ResolveRequest {            // the ONLY per-call-site variation
 ```
 Internally: `pick` the class over one borrowed `ResolveCtx` (index, drafts, cache, drilled — **no `&World`**); if `Ambiguous`, return now (bounds are unknowable without a class); else `pick` each bound field against the sources **keyed by that class**. One context walk, not two. The four call sites collapse to *fill `ResolveRequest` differently → call `resolve` → react*, and `QueryExperimentBounds` *reads* `why` instead of recomputing the source label.
 
-**`RunBounds` becomes the output of resolution, not a value juggled per-site** — with one `Default` and per-field provenance. The Declared layer is already abstracted as `ExperimentRunner::default_bounds` / `TargetSource::declared_bounds` (Modelica annotation today, USD scene metadata / FMU `DefaultExperiment` tomorrow), so the same fold runs across backends — which is why this unification *is* the §5 USD generalization, not a separate effort.
+**`RunBounds` becomes the output of resolution, not a value juggled per-site** — with one `Default` and per-field provenance. The Declared layer is already abstracted as document annotation reads / `TargetSource::declared_bounds` (Modelica annotation today, USD scene metadata / FMU `DefaultExperiment` tomorrow), so the same fold runs across backends — which is why this unification *is* the §5 USD generalization, not a separate effort.
 
 ---
 

@@ -1,6 +1,5 @@
 //! Shared Modelica run-bound resolution for UI and API callers.
 
-use crate::ModelicaRunnerResource;
 use bevy::prelude::World;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::DocumentRegistry;
@@ -9,7 +8,7 @@ use lunco_modelica_document::ModelicaDocument;
 
 /// Read the `experiment(...)` annotation bounds for a model from live document
 /// state. `None` means the class or annotation is absent.
-pub(crate) fn bounds_from_annotation_in<R: ResourceRead>(
+pub fn bounds_from_annotation_in<R: ResourceRead>(
     ctx: &R,
     doc: DocumentId,
     model_ref: &lunco_experiments::ModelRef,
@@ -42,14 +41,13 @@ pub fn bounds_from_annotation(
 }
 
 /// Resolve the single run-bound precedence used by the Fast Run surfaces:
-/// saved draft override, AST annotation, runner cache, then the documented
+/// saved draft override, current document AST annotation, then the documented
 /// one-second default.
 pub fn resolve_setup_bounds_in<R: ResourceRead>(
     ctx: &R,
     doc: DocumentId,
     model_ref: &lunco_experiments::ModelRef,
 ) -> lunco_experiments::RunBounds {
-    use lunco_experiments::ExperimentRunner;
     let draft = ctx
         .read_resource::<crate::runner::ExperimentDrafts>()
         .and_then(|drafts| {
@@ -58,10 +56,7 @@ pub fn resolve_setup_bounds_in<R: ResourceRead>(
                 .and_then(|draft| draft.bounds_override.clone())
         });
     let annotation = bounds_from_annotation_in(ctx, doc, model_ref);
-    let runner_cached = ctx
-        .read_resource::<ModelicaRunnerResource>()
-        .and_then(|r| r.0.default_bounds(model_ref));
-    lunco_modelica_core::sim_target::resolve_bounds(draft, annotation, runner_cached)
+    lunco_modelica_core::sim_target::resolve_bounds(draft, annotation)
 }
 
 /// `&World` reader for [`resolve_setup_bounds_in`].

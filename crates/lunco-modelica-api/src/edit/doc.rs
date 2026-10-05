@@ -67,7 +67,7 @@ pub fn on_close_scratch_modelica_document(
     mut registry: ResMut<ModelicaDocuments>,
     mut scratch_documents: ResMut<ToolScratchDocuments>,
     mut experiments: Option<ResMut<ExperimentRegistry>>,
-    mut sources: Option<ResMut<ExperimentSources>>,
+    sources: Option<Res<ExperimentSources>>,
     mut pending: Option<ResMut<PendingHandles>>,
 ) -> Result<Ack, String> {
     let doc = trigger.event().doc_id;
@@ -89,7 +89,7 @@ pub fn on_close_scratch_modelica_document(
             sources
                 .0
                 .iter()
-                .filter_map(|(id, source_doc)| (*source_doc == doc).then_some(*id))
+                .filter_map(|(id, source)| (source.document == doc).then_some(*id))
                 .collect()
         })
         .unwrap_or_default();
@@ -130,11 +130,6 @@ pub fn on_close_scratch_modelica_document(
             experiments.delete(*id);
         }
     }
-    if let Some(sources) = sources.as_mut() {
-        for id in run_ids {
-            sources.0.remove(&id);
-        }
-    }
     registry.remove_document(doc);
     scratch_documents.0.remove(&doc);
     Ok(Ack::with_data(
@@ -170,7 +165,7 @@ fn live_runs_for_doc(world: &World, doc: DocumentId) -> Vec<lunco_experiments::E
         .0
         .iter()
         .filter(|(id, src_doc)| {
-            **src_doc == doc
+            src_doc.document == doc
                 && registry
                     .get(**id)
                     .map(|e| !e.status.is_terminal())
@@ -282,7 +277,13 @@ mod tests {
         );
         registry.set_status(id, status);
         let mut sources = ExperimentSources::default();
-        sources.0.insert(id, run_doc);
+        sources.0.insert(
+            id,
+            lunco_modelica_runner::ExperimentSource {
+                document: run_doc,
+                runtime_twin: None,
+            },
+        );
         world.insert_resource(registry);
         world.insert_resource(sources);
         live_runs_for_doc(&world, doc)
@@ -366,8 +367,20 @@ mod tests {
         registry.set_status(other_id, RunStatus::Running { t_current: 5.0 });
 
         let mut sources = ExperimentSources::default();
-        sources.0.insert(target_id, doc);
-        sources.0.insert(other_id, other);
+        sources.0.insert(
+            target_id,
+            lunco_modelica_runner::ExperimentSource {
+                document: doc,
+                runtime_twin: None,
+            },
+        );
+        sources.0.insert(
+            other_id,
+            lunco_modelica_runner::ExperimentSource {
+                document: other,
+                runtime_twin: None,
+            },
+        );
 
         // Handles whose cancel hook bumps a shared counter so we can assert
         // exactly which runs were signalled.

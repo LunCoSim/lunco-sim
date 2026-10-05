@@ -56,7 +56,9 @@ pub(crate) fn on_load_experiment_requested(
 ) {
     let id = trigger.id;
     commands.queue(move |world: &mut World| {
-        load_run_into_draft(world, id);
+        if let Err(error) = load_run_into_draft(world, id) {
+            reject_experiment_action(world, "experiment-setup-rejected", error);
+        }
     });
 }
 
@@ -76,29 +78,25 @@ pub(crate) fn on_rerun_experiment_requested(
 ) {
     let id = trigger.event().id;
     commands.queue(move |world: &mut World| {
-        load_run_into_draft(world, id);
-        if let Some(doc) = world
-            .get_resource::<lunco_modelica_runner::ExperimentSources>()
-            .and_then(|sources| sources.0.get(&id).copied())
-            .or_else(|| {
-                world
-                    .get_resource::<lunco_workspace::WorkspaceResource>()
-                    .and_then(|workspace| workspace.active_document)
-            })
-        {
-            world
-                .commands()
-                .trigger(crate::ui::commands::FastRunActiveModel {
-                    doc_id: doc,
-                    class: None,
-                    t_end: None,
-                    dt: None,
-                    n_intervals: None,
-                    tolerance: None,
-                    solver: None,
-                    h0: None,
-                });
-        }
+        let (doc, model_ref) = match load_run_into_draft(world, id) {
+            Ok(source) => source,
+            Err(error) => {
+                reject_experiment_action(world, "experiment-rerun-rejected", error);
+                return;
+            }
+        };
+        world
+            .commands()
+            .trigger(crate::ui::commands::FastRunActiveModel {
+                doc_id: doc,
+                class: Some(model_ref.0),
+                t_end: None,
+                dt: None,
+                n_intervals: None,
+                tolerance: None,
+                solver: None,
+                h0: None,
+            });
     });
 }
 
@@ -750,7 +748,7 @@ impl ExperimentsPanel {
 
         // Resolve via the SAME precedence the Fast Run popup uses, so the two
         // setup surfaces never disagree (draft → AST `experiment(...)`
-        // annotation → runner cache → fallback). One canonical resolver,
+        // annotation → documented default). One canonical resolver,
         // generic over the read context — see `model_commands::resolve_setup_bounds_in`.
         let mut bounds = crate::ui::context::resolve_setup_bounds(&*ctx, doc, &model_ref);
         let mut bounds_changed = false;
@@ -844,12 +842,7 @@ impl ExperimentsPanel {
 
         // Annotation-default reference for "is this what the model
         // says?" tagging next to the bounds inputs.
-        let annotation_defaults = ctx
-            .resource::<lunco_modelica_runner::ModelicaRunnerResource>()
-            .and_then(|r| {
-                use lunco_experiments::ExperimentRunner;
-                r.0.default_bounds(&model_ref)
-            });
+        let annotation_defaults = crate::ui::context::bounds_from_annotation(ctx, doc, &model_ref);
         let from_annotation = annotation_defaults.is_some();
 
         // Header row stays always visible — Run + Cancel + a tiny
@@ -1521,7 +1514,20 @@ fn parse_override(type_name: &str, text: &str) -> Option<lunco_experiments::Para
 pub fn populate_experiments_view_model(world: &mut World) {
     let twin = crate::ui::doc_pin::resolved_experiments_doc(world)
         .map(crate::ui::doc_pin::twin_id_for_doc);
-    lunco_experiments_ui::populate_experiments_view_model(world, twin.as_ref());
+    let eligible = twin
+        .as_ref()
+        .and_then(|twin| {
+            world.get_resource::<ExperimentRegistry>().map(|registry| {
+                registry
+                    .list_for_twin(twin)
+                    .iter()
+                    .filter(|run| crate::ui::doc_pin::run_is_in_active_scope(world, run.id))
+                    .map(|run| run.id)
+                    .collect()
+            })
+        })
+        .unwrap_or_default();
+    lunco_experiments_ui::populate_experiments_view_model(world, twin.as_ref(), &eligible);
 }
 
 /// Render the experiments multi-series plot. Picker lives in
@@ -1653,7 +1659,11 @@ fn render_experiments_plot_inner(
         };
         let exp_vm = ctx.resource::<ExperimentsViewModel>();
         if let Some(reg) = ctx.resource::<ExperimentRegistry>() {
-            for exp in reg.list_for_twin(&twin) {
+            for exp in reg
+                .list_for_twin(&twin)
+                .iter()
+                .filter(|run| crate::ui::context::run_is_in_active_scope(ctx, run.id))
+            {
                 total_runs += 1;
                 if exp.result.is_none() {
                     continue;
@@ -2058,7 +2068,11 @@ fn render_experiments_plot_inner(
                 .map(|reg| {
                     reg.list_for_twin(&twin)
                         .iter()
-                        .filter(|e| e.result.is_some() && !already.contains(&e.id))
+                        .filter(|e| {
+                            e.result.is_some()
+                                && !already.contains(&e.id)
+                                && crate::ui::context::run_is_in_active_scope(ctx, e.id)
+                        })
                         .map(|e| e.id)
                         .collect()
                 })
@@ -2137,7 +2151,9 @@ fn render_experiments_plot_inner(
                 reg.list_for_twin(&twin)
                     .iter()
                     .rev()
-                    .find(|e| e.result.is_some())
+                    .find(|e| {
+                        e.result.is_some() && crate::ui::context::run_is_in_active_scope(ctx, e.id)
+                    })
                     .and_then(|e| e.result.clone())
             });
             let entry = states.entry(viz_id);
@@ -2265,43 +2281,63 @@ fn export_experiment_csv(world: &mut World, id: ExperimentId) {
     }
 }
 
-/// Copy a completed experiment's bounds + inputs + overrides into
-/// the per-`ModelRef` draft. The toolbar's bounds readout, the
-/// inline Setup section, and the Setup modal all read from that
-/// draft, so a row click is enough to "fork" a previous run as the
-/// next setup. Pure World mutation; no event dispatched.
-fn load_run_into_draft(world: &mut World, id: ExperimentId) {
-    let snapshot = {
-        let registry = match world.get_resource::<ExperimentRegistry>() {
-            Some(r) => r,
-            None => return,
-        };
-        registry.get(id).map(|e| {
+fn reject_experiment_action(world: &mut World, name: &str, message: String) {
+    bevy::log::warn!("[{name}] {message}");
+    world.commands().trigger(lunco_core::RuntimeError {
+        name: name.to_owned(),
+        message,
+    });
+}
+
+/// Copy saved setup only into its exact admitted document and current owner.
+/// Validate ownership and target before changing the document's draft.
+fn load_run_into_draft(
+    world: &mut World,
+    id: ExperimentId,
+) -> Result<(DocumentId, lunco_experiments::ModelRef), String> {
+    let source = world
+        .get_resource::<lunco_modelica_runner::ExperimentSources>()
+        .and_then(|sources| sources.0.get(&id))
+        .copied()
+        .ok_or_else(|| format!("experiment {id:?} has no source attribution"))?;
+    let workspace = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .map(|workspace| &workspace.0);
+    if !source.is_in_active_scope(workspace) {
+        return Err(format!(
+            "experiment {id:?} no longer belongs to the active document owner scope"
+        ));
+    }
+    let (model_ref, bounds, inputs, overrides) = world
+        .get_resource::<ExperimentRegistry>()
+        .and_then(|registry| registry.get(id))
+        .map(|run| {
             (
-                e.model_ref.clone(),
-                e.bounds.clone(),
-                e.inputs.clone(),
-                e.overrides.clone(),
+                run.model_ref.clone(),
+                run.bounds.clone(),
+                run.inputs.clone(),
+                run.overrides.clone(),
             )
         })
-    };
-    let Some((model_ref, bounds, inputs, overrides)) = snapshot else {
-        return;
-    };
-    // Route the draft into the doc that originally spawned this run
-    // (tracked in `ExperimentSources`). Fall back to the currently
-    // resolved experiments doc if the source mapping is missing.
-    let doc = world
-        .get_resource::<lunco_modelica_runner::ExperimentSources>()
-        .and_then(|src| src.0.get(&id).copied())
-        .or_else(|| crate::ui::doc_pin::resolved_experiments_doc(world));
-    let Some(doc) = doc else { return };
-    if let Some(mut drafts) = world.get_resource_mut::<lunco_modelica_runner::ExperimentDrafts>() {
-        let entry = drafts.entry(doc, model_ref);
-        entry.bounds_override = Some(bounds);
-        entry.inputs = inputs;
-        entry.overrides = overrides;
-    }
+        .ok_or_else(|| format!("experiment {id:?} is no longer in run history"))?;
+    let host = world
+        .get_resource::<crate::ui::document_context::ModelicaDocuments>()
+        .and_then(|documents| documents.host(source.document))
+        .ok_or_else(|| format!("experiment {id:?} source document is no longer open"))?;
+    let class = lunco_modelica_core::sim_target::resolve_requested_class(
+        &model_ref.0,
+        &host.document().index().simulation_candidates(),
+    )
+    .map_err(|error| format!("experiment {id:?} target `{}` {error}", model_ref.0))?;
+    let model_ref = lunco_experiments::ModelRef(class);
+    let mut drafts = world
+        .get_resource_mut::<lunco_modelica_runner::ExperimentDrafts>()
+        .ok_or_else(|| "Modelica experiment draft registry is not installed".to_owned())?;
+    let entry = drafts.entry(source.document, model_ref.clone());
+    entry.bounds_override = Some(bounds);
+    entry.inputs = inputs;
+    entry.overrides = overrides;
+    Ok((source.document, model_ref))
 }
 
 /// Build a `var_path -> unit` map for whatever the picker has

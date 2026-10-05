@@ -109,6 +109,19 @@ pub fn resolved_experiments_doc_ctx(ctx: &lunco_workbench_core::PanelCtx) -> Opt
     pin.or_else(|| active_doc_ctx(ctx))
 }
 
+/// Retained history may publish only into its pinned runtime owner's scope.
+pub fn run_is_in_active_scope<R: lunco_modelica_core::sim_default::ResourceRead>(
+    ctx: &R,
+    id: lunco_experiments::ExperimentId,
+) -> bool {
+    let workspace = ctx
+        .read_resource::<lunco_workspace::WorkspaceResource>()
+        .map(|workspace| &workspace.0);
+    ctx.read_resource::<lunco_modelica_runner::ExperimentSources>()
+        .and_then(|sources| sources.0.get(&id))
+        .is_some_and(|source| source.is_in_active_scope(workspace))
+}
+
 /// `PanelCtx` sibling of [`doc_display_name`].
 pub fn doc_display_name_ctx(ctx: &lunco_workbench_core::PanelCtx, doc: DocumentId) -> String {
     ctx.resource::<crate::ui::document_context::ModelicaDocuments>()

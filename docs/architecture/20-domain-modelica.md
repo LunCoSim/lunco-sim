@@ -92,6 +92,35 @@ series through `GetExperimentResult`. `CloseScratchModelicaDocument` removes
 only untitled generated documents and their completed run records; ordinary
 saved-document closing remains an Editor lifecycle operation.
 
+Fast Run bounds read the current document AST annotation after any explicit
+draft override, then use the documented one-second default if neither is present.
+Each admitted job receives its complete immutable `ModelSource`; sources and
+annotation defaults are never kept in class-name maps. Native compiled DAE
+snapshots include the runtime owner, are retired on its `TwinClosed`, and cannot
+be republished by a cancelled worker. Native and wasm Fast Run compilers release
+user overlays after capturing compilation outcomes while retaining application libraries.
+
+Fast Run admission pins an `ExperimentSource` containing the exact document
+and optional runtime `lunco_workspace::TwinId`, resolved through
+`Workspace::twin_for`. The registry's string grouping key identifies history,
+not runtime ownership. `TwinClosed` withdraws matching queued work, requests
+cancellation of executing work, marks retained unfinished rows `Cancelled`,
+and retires their update receivers so late worker results cannot revive them.
+Native batch solves cooperate at solver cancellation boundaries; cancellation
+does not interrupt a Rust thread inside a blocking solver call. Application-owned
+loose-document runs retain application lifetime.
+
+The UI publishes results only while the pinned document owner remains in the
+active workspace scope. Automatic plot selection also requires the selected
+or pinned experiments document to match. Playback entities carry the same typed
+source attribution; closing their Twin drops their signals, entities, document pins, and live/archived
+plot selections while
+completed trajectory history remains queryable. `ExperimentRemoved` reports
+explicit deletion and bounded registry eviction, retiring source attribution
+and pending handles, as well as UI run visibility, without scanning retained
+history each frame. Retained historical results are fenced by their admission
+owner before active plots or canvas snapshots consume them.
+
 `ModelicaCorePlugin` also owns the shared Rumoca engine-sync driver and the
 deferred structural-edit queue. Headless source edits therefore receive the
 same asynchronous parse/install cycle as workbench edits; the UI plugin only

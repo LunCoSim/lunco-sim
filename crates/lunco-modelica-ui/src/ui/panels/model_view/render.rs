@@ -436,7 +436,7 @@ fn render_unified_toolbar(
             (Some(reg), Some(src)) => src
                 .0
                 .iter()
-                .filter(|(_, d)| **d == doc)
+                .filter(|(_, source)| source.document == doc)
                 .filter_map(|(id, _)| reg.get(*id))
                 .find_map(|e| match e.status {
                     lunco_experiments::RunStatus::Running { t_current } => Some(t_current),
@@ -733,7 +733,7 @@ fn render_unified_toolbar(
                 // the panel is closed; keeping it unconditional avoids a hidden
                 // mode switch on the same button.)
                 // Same resolver the Experiments-tab Setup uses, so the two
-                // surfaces always agree (draft → runner cache → AST
+                // surfaces always agree (draft → current AST
                 // annotation → fallback).
                 let bounds = resolve_setup_bounds(world, doc, &model_ref);
                 let overrides_count = world

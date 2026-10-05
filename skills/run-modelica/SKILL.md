@@ -366,6 +366,32 @@ completed numeric result. Retain that id, poll `RunStatus` with it, and read the
 trajectory with `GetExperimentResult` using the same id. Do not identify a run
 by its label or by whichever run is newest.
 
+Runs pin the source document's runtime Twin at admission. Closing that Twin
+cancels unfinished runs and retires late updates and playback signals; completed
+results stay queryable within the bounded history. Loose-document runs have
+application lifetime. A completion from an inactive Twin cannot automatically
+select the replacement Twin's plot, and a different pinned experiments document
+cannot receive its automatic plot selection. Registry deletion and bounded
+eviction also remove the retained document/owner attribution and plot visibility.
+Closing a Twin retires its document pins and archived plot selections. A run
+receives immutable source text at admission, and annotations are read from its
+current document; a same-name model in another Twin cannot supply either. Native cancellation
+is cooperative and does not interrupt a blocking solver call.
+
+For a production lifecycle regression, admit a run from a Twin document and
+queue another behind it, replace the Twin, then query both exact run ids for
+`Cancelled`. Verify the replacement's plot and playback signals receive no old
+completion. Include an application-owned loose-document run as a negative
+ownership case, plus a completed run whose retained result remains readable.
+For the same-name source/bounds regression, launch
+`RunScenarioAsset` with `source_asset:
+"lunco://scenarios/tests/modelica_run_admission_isolation.rhai"` in an owned
+UI-capable Modelica host. Its bounded asynchronous gate uses two scratch
+documents, the ordinary `RunExperiment` acknowledgements and exact run ids,
+and verifies that the unannotated document keeps the one-second default and
+each trajectory retains its own admitted source. Require the authored
+`MODELICA_RUN_ADMISSION_ISOLATION` verdict; launch acceptance alone is insufficient.
+
 ```bash
 # One run with a parameter override + custom bounds + a label:
 post '{"type":"ExecuteCommand","command":"RunExperiment","params":{

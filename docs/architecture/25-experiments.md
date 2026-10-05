@@ -49,7 +49,7 @@ lunco-experiments/        (backend-agnostic)
   Experiment, RunResult, RunBounds, ParamValue, ParamPath
   ExperimentRegistry  (Resource, per-twin)
   ExperimentRunner    (trait)
-  events: RunRequested, RunProgress, RunCompleted, RunFailed
+  messages: RunRequested, RunProgress, RunCompleted, RunFailed, RunCancelled, ExperimentRemoved
 
 lunco-experiments-ui/     (backend-agnostic view state)
   ExperimentVisibility, PlotPanelStates, ActivePlot
@@ -63,7 +63,7 @@ lunco-modelica-core/
 
 lunco-modelica-runner/
   ModelicaRunner: ExperimentRunner
-  compile-once DAE cache and source-string override injector
+  owner-scoped compile-once DAE cache and DAE-level value bindings
   shared batch/interactive run paths and run-bound resolution
 
 lunco-modelica-worker/
@@ -78,8 +78,8 @@ lunco-modelica-ui/
   Run buttons + experiment table + bounds inline UI
 
 lunco-modelica-execution/src/bin/lunica_worker.rs
-  + ModelicaCommand::RunFast / CancelRun
-  + ModelicaResult::RunProgress / RunCompleted / RunFailed
+  + WireMessage::RunFast / CancelRun
+  + WireResult::RunUpdate
   MSL/compile readiness gate extended
 
 lunco-twin/, lunco-twin-journal/      unchanged in v1
@@ -110,18 +110,23 @@ pub struct Experiment {
     pub model_ref: ModelRef,            // opaque to lunco-experiments
     pub name: String,                   // auto: "<model> — N", user-editable
     pub overrides: BTreeMap<ParamPath, ParamValue>,
+    pub inputs: BTreeMap<ParamPath, ParamValue>,
     pub bounds: RunBounds,
     pub status: RunStatus,
     pub result: Option<RunResult>,
     pub created_at: SystemTime,
+    pub color_hint: u8,
 }
 
 pub struct RunBounds {
     pub t_start: f64,
     pub t_end: f64,
-    pub dt: Option<f64>,                // None -> adaptive
+    pub dt: Option<f64>,                // output interval; None -> derived grid
+    pub n_intervals: Option<u32>,        // output interval count; wins over dt
     pub tolerance: Option<f64>,
-    pub solver: Option<String>,         // backend-defined
+    pub solver: Option<SolverId>,        // registered solver demand
+    pub h0: Option<f64>,                 // solver initial step hint
+    pub runtime: RuntimeMode,            // Batch (default) or Interactive
 }
 
 pub enum RunStatus {
@@ -151,7 +156,7 @@ pub enum ParamValue {
 }
 ```
 
-Registry: `HashMap<TwinId, Vec<Experiment>>` capped at 20 per twin, oldest-evicted on overflow (Done/Failed only; Pending/Running never evicted).
+Registry: `BTreeMap<TwinId, Vec<Experiment>>` retains at most 20 terminal runs per presentation group, evicting the oldest terminal row. Pending, queued, and running rows are retained. Removal publishes `ExperimentRemoved` so source attribution and plot selections retire together.
 
 ### Why per-twin scoping
 Experiments tied to a workspace are expected. Switching twins should filter the list. Retrofitting later costs more than getting it right at the type level now.
@@ -163,41 +168,44 @@ Deterministic ordering for display, plot legend stability, and reproducible resu
 
 ```rust
 pub trait ExperimentRunner: Send + Sync {
-    fn run_fast(&self, exp: &Experiment) -> RunHandle;
-    fn default_bounds(&self, model: &ModelRef) -> Option<RunBounds>;
-    fn cancel(&self, run_id: ExperimentId);
+    type Source: Send + 'static;
+    fn run_fast(&self, exp: &Experiment, source: Self::Source) -> RunHandle;
 }
 
 pub struct RunHandle {
     pub progress_rx: crossbeam_channel::Receiver<RunUpdate>,
     pub run_id: ExperimentId,
+    pub cancel: Box<dyn Fn() + Send + Sync>,
 }
 
 pub enum RunUpdate {
-    Progress { t_current: f64 },
+    Progress { t_current: f64, delta: Option<RunResult> },
     Completed(RunResult),
     Failed { error: String, partial: Option<RunResult> },
+    Cancelled,
 }
 ```
 
-The runner limits execution to one in-flight Fast Run per runner instance. Subsequent requests queue (FIFO) to keep native and WASM semantics identical, simplify UI state, and avoid resource contention.
+Fast Runs use the bounded scheduler and `experiments.max_parallel` setting described in [Parallel execution](#parallel-execution).
 
 ## Web Worker protocol
 
-Existing `lunica_worker.rs` is reused. New variants:
+`lunica_worker.rs` consumes the immutable admitted source through the transport-owned envelope:
 
 ```rust
-ModelicaCommand::RunFast {
+WireMessage::RunFast {
     run_id: ExperimentId,
-    model_ref: ModelRef,
+    model_name: String,
+    source: String,
+    filename: String,
+    extras: Vec<(String, String)>,
     overrides: BTreeMap<ParamPath, ParamValue>,
+    inputs: BTreeMap<ParamPath, ParamValue>,
     bounds: RunBounds,
 }
-ModelicaCommand::CancelRun { run_id: ExperimentId }
+WireMessage::CancelRun { run_id: ExperimentId }
 
-ModelicaResult::RunProgress { run_id, t_current, t_end }
-ModelicaResult::RunCompleted { run_id, result: RunResult }
-ModelicaResult::RunFailed   { run_id, error, partial: Option<RunResult> }
+WireResult::RunUpdate { run_id: ExperimentId, update: RunUpdate }
 ```
 
 Encoding: bincode, same as existing messages. Progress throttled to ~10 Hz wall clock. Cancellation polled between solver steps.
@@ -213,8 +221,7 @@ Compiler and DAE state already live in this worker. A second worker would duplic
 [ Interactive ▶ ]   [ Fast ⏩  0 → 10s, dt=auto ⚙ ]
 ```
 
-Bounds beside the Fast button reflect annotation defaults from
-`CompilationResult.experiment_*` after the model's first compile; when no
+Bounds beside the Fast button reflect the current document AST annotation; when no
 annotation provides a horizon, the documented run-bound defaults are used.
 Inline-editable. Gear opens override editor.
 
@@ -229,7 +236,7 @@ Inline-editable. Gear opens override editor.
 └───────────────────────────────────────────┘
 ```
 
-Checkbox toggles plot visibility. Color dot is locked to run id. Click row → load its overrides+bounds into the active model's draft. Cancel button on Running rows.
+Checkbox toggles plot visibility. Color dot is locked to run id. Loading or rerunning a row requires its pinned source document and runtime owner to remain in the active scope; its overrides and bounds apply only to that document's model draft. Cancel is available for queued and running rows.
 
 ### Override editor
 
@@ -275,7 +282,6 @@ rebuilt for display.
 - Diff metrics (RMS, max-error)
 - Solver picker UI
 - Variable include/exclude UI
-- Multiple concurrent runs
 - Interactive runs archiving into Experiments
 - Override of inherited / expression-bound / array / record parameters
 
@@ -301,7 +307,12 @@ per-run (native `AtomicBool`, wasm `CancelRun{run_id}`).
 `run_fast` snapshots a `QueuedJob`, pushes it to `pending`, and calls
 `pump_scheduler`, which starts jobs while `in_flight < max_parallel` — outside
 the lock. On a terminal update `finish_run` frees the slot and re-pumps.
-A queued run that is cancelled is caught at `start_job`. The panel shows
+Cancellation withdraws queued jobs immediately. Each job owns the immutable
+source text, document URI, extras, and optional typed runtime Twin captured
+at admission; execution never looks up a mutable class-name source map.
+Compiled DAE entries include that owner; `TwinClosed` removes its entries,
+and cancelled workers cannot republish them after retirement. User overlays
+are released after compilation while admitted application libraries stay installed. The panel shows
 "⏳ Queued"; the Run button queues rather than disabling.
 
 Native thread admission is fallible. A worker panic becomes a terminal
@@ -310,12 +321,15 @@ on every exit. A poisoned compiler fails subsequent compilation visibly.
 The handle drain distinguishes a connected empty channel from a disconnected
 worker: disconnect without a terminal result fails and retires the handle;
 disconnect after completion or cancellation preserves that terminal result.
+Poisoned scheduler state rejects queued and newly submitted runs with terminal
+failures. The poison guard is used only to cancel and drain pending work; the
+mutex stays poisoned and scheduling does not resume.
 
 Spawning is the **only** `#[cfg]` split:
 
 | | Native | Wasm |
 |---|---|---|
-| Primitive | `std::thread::spawn` per run (fresh rumoca thread-locals) | persistent `WorkerPool`, reused across runs |
+| Primitive | fallible `std::thread::Builder::spawn` per run (fresh rumoca thread-locals) | persistent `WorkerPool`, reused across runs |
 | Cap | `max_parallel`, default `available_parallelism() - 1` clamped `1..=4` | `max_parallel` clamped `1..=8` (`MAX_WORKERS = 8`) |
 | Note | — | worker 0 is primary (parse/compile/MSL); Fast Runs prefer a free non-primary worker |
 

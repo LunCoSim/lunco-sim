@@ -149,6 +149,13 @@ impl PlotPanelStates {
         }
     }
 
+    /// Retire a document/history scope from both live and archived plots.
+    pub fn forget_scope(&mut self, scope: &TwinId) {
+        self.by_viz
+            .retain(|_, state| state.last_twin.as_ref() != Some(scope));
+        self.archived.retain(|(_, key), _| key != scope);
+    }
+
     /// Switch a plot to a Twin while preserving each Twin's selections.
     pub fn sync_twin(&mut self, viz: VizId, twin: &TwinId) {
         let needs_swap = match self.by_viz.get(&viz) {
@@ -254,9 +261,13 @@ impl ExperimentsViewModel {
 }
 
 /// Rebuild the shared trajectory cache when the selected Twin's results
-/// change. The caller owns Twin/document resolution and supplies `None` when
-/// no document is ready to display.
-pub fn populate_experiments_view_model(world: &mut World, twin: Option<&TwinId>) {
+/// change. The caller owns runtime scope and supplies eligible run ids and
+/// the selected document/history group, or `None` when no document is ready.
+pub fn populate_experiments_view_model(
+    world: &mut World,
+    twin: Option<&TwinId>,
+    eligible: &HashSet<ExperimentId>,
+) {
     let clear = |world: &mut World| {
         let mut view_model = world.resource_mut::<ExperimentsViewModel>();
         if view_model.built_for.is_some() {
@@ -276,9 +287,13 @@ pub fn populate_experiments_view_model(world: &mut World, twin: Option<&TwinId>)
             clear(world);
             return;
         };
-        let runs = registry.list_for_twin(twin);
+        let runs: Vec<_> = registry
+            .list_for_twin(twin)
+            .iter()
+            .filter(|run| eligible.contains(&run.id))
+            .collect();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        for experiment in runs {
+        for experiment in &runs {
             experiment.id.hash(&mut hasher);
             match &experiment.status {
                 RunStatus::Pending => 0u8.hash(&mut hasher),
@@ -321,7 +336,11 @@ pub fn populate_experiments_view_model(world: &mut World, twin: Option<&TwinId>)
         let registry = world.resource::<ExperimentRegistry>();
         let mut points = HashMap::new();
         let mut all_vars = BTreeSet::new();
-        for experiment in registry.list_for_twin(twin) {
+        for experiment in registry
+            .list_for_twin(twin)
+            .iter()
+            .filter(|run| eligible.contains(&run.id))
+        {
             let Some(result) = &experiment.result else {
                 continue;
             };

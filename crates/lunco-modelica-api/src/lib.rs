@@ -403,7 +403,7 @@ impl ApiQueryProvider for ListCompileCandidatesProvider {
 /// Fast Run popup / Experiments Setup would use — and *where they come
 /// from*. Answers "why does it propose 10 s?": a class with no
 /// `experiment(...)` annotation (or one missing `StopTime`) resolves to the
-/// 10 s fallback, while an annotated class surfaces its authored `StopTime`.
+/// one-second fallback, while an annotated class surfaces its authored `StopTime`.
 ///
 /// Params: `{doc_id}` (required), `{class}` (optional — short or qualified
 /// name; default = every non-package class).
@@ -459,7 +459,7 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
             );
         }
 
-        use lunco_experiments::{ExperimentRunner, ModelRef};
+        use lunco_experiments::ModelRef;
         use lunco_modelica_runner::{bounds_from_annotation, resolve_setup_bounds};
 
         let classes: Vec<ApiValue> = class_list
@@ -478,16 +478,10 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
                             .and_then(|dr| dr.bounds_override.clone())
                     })
                     .is_some();
-                let has_runner_cache = world
-                    .get_resource::<lunco_modelica_runner::ModelicaRunnerResource>()
-                    .and_then(|r| r.0.default_bounds(&mref))
-                    .is_some();
                 let source = if has_draft {
                     "draft_override"
                 } else if annotation.is_some() {
                     "annotation"
-                } else if has_runner_cache {
-                    "runner_cache"
                 } else {
                     "fallback_1s"
                 };
@@ -555,7 +549,7 @@ impl ApiQueryProvider for CompileStatusProvider {
         let (candidates, preferred_count, has_ast) = match registry.host(doc_id) {
             Some(host) => {
                 let doc_ref = host.document();
-                let has_ast = !doc_ref.ast().has_errors();
+                let has_ast = !doc_ref.syntax_is_stale() && !doc_ref.syntax().has_errors();
                 // Non-package class qualified names from the per-doc
                 // Index — sees optimistic patches and avoids walking
                 // the AST. Same pattern as the candidates query above.
@@ -669,7 +663,7 @@ impl ApiQueryProvider for RunStatusProvider {
         };
         let sources_doc = world
             .get_resource::<ExperimentSources>()
-            .and_then(|s| s.0.get(&id).copied().map(|d| d.raw()));
+            .and_then(|s| s.0.get(&id).map(|source| source.document.raw()));
         let Some(registry) = world.get_resource::<ExperimentRegistry>() else {
             return query_error(
                 ApiErrorCode::EntityNotFound,
@@ -712,7 +706,11 @@ impl ApiQueryProvider for ListRunsProvider {
         // per row without re-borrowing the resource.
         let id_to_doc: std::collections::HashMap<ExperimentId, u64> = world
             .get_resource::<ExperimentSources>()
-            .map(|s| s.0.iter().map(|(k, v)| (*k, v.raw())).collect())
+            .map(|s| {
+                s.0.iter()
+                    .map(|(k, source)| (*k, source.document.raw()))
+                    .collect()
+            })
             .unwrap_or_default();
         let Some(registry) = world.get_resource::<ExperimentRegistry>() else {
             return query_ok(api_value!({"runs": [], "count": 0}));
@@ -867,7 +865,7 @@ fn latest_experiment_id_for_doc(world: &World, doc_id: DocumentId) -> Option<Exp
     let registry = world.get_resource::<ExperimentRegistry>()?;
     let mut best: Option<&lunco_experiments::Experiment> = None;
     for (id, d) in &sources.0 {
-        if *d != doc_id {
+        if d.document != doc_id {
             continue;
         }
         if let Some(exp) = registry.get(*id) {

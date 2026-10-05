@@ -773,6 +773,12 @@ impl ModelicaCompiler {
         self.session.update_document(filename, &stripped);
     }
 
+    /// Release user-document overlays after a caller has captured its compile
+    /// result and diagnostics. Admitted library source roots remain installed.
+    pub fn clear_user_documents(&mut self) {
+        self.evict_user_docs_except(&std::collections::HashSet::new());
+    }
+
     /// Remove every previously-seated user-document overlay whose URI is not
     /// in `keep`, so the reused session holds ONLY the active compile's user
     /// docs (plus the immutable source roots). This is what makes
@@ -1839,6 +1845,42 @@ mod source_root_smoke {
         assert!(
             result.is_err(),
             "a read error must not expose a partial source root"
+        );
+    }
+
+    #[test]
+    fn releasing_user_documents_keeps_admitted_library_source_roots() {
+        let mut compiler = ModelicaCompiler::new();
+        let prepared = PreparedSourceRoot::prepare(
+            "application-library",
+            "inline-library",
+            vec![(
+                "Shared.mo".into(),
+                "package Shared model Component Real x = 1; end Component; end Shared;".into(),
+            )],
+            Vec::new(),
+        );
+        assert!(
+            compiler
+                .install_source_root(prepared)
+                .diagnostics
+                .is_empty()
+        );
+        let result = compiler.compile_str_multi(
+            "Ephemeral",
+            "model Ephemeral Real x = 1; end Ephemeral;",
+            "Ephemeral.mo",
+            &[],
+        );
+        assert!(result.is_ok());
+        compiler.clear_user_documents();
+        assert!(compiler.seated_user_uris.is_empty());
+        assert!(compiler.session.class_lookup_query("Ephemeral").is_none());
+        assert!(
+            compiler
+                .session
+                .class_lookup_query("Shared.Component")
+                .is_some()
         );
     }
 

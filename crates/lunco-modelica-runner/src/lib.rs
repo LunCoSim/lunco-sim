@@ -22,7 +22,7 @@ pub use run_bounds::{bounds_from_annotation, resolve_setup_bounds, resolve_setup
 pub use runner::pump_wasm_forwarders;
 pub use runner::{
     DEFAULT_TOLERANCE, DetectedInput, DetectedParam, ExperimentDraft, ExperimentDrafts,
-    ExperimentSettings, ExperimentSources, ModelDefaults, ModelSource, ModelicaRunner,
+    ExperimentSettings, ExperimentSource, ExperimentSources, ModelSource, ModelicaRunner,
     PendingHandles, PlaybackEntities, RunSink, apply_experiment_settings,
     apply_value_bindings_to_dae, detect_top_level_inputs, detect_top_level_literal_parameters,
     drain_pending_handles, drive_run, stepper_options_from_bounds,
@@ -95,8 +95,301 @@ impl Plugin for ModelicaRunnerPlugin {
         app.init_resource::<ExperimentSources>();
         app.init_resource::<PendingHandles>();
         app.init_resource::<PlaybackEntities>();
+        app.add_observer(cancel_closed_twin_runs);
+        app.add_systems(
+            Last,
+            forget_removed_experiment_sources
+                .after(lunco_experiments::ExperimentRegistryMaintenanceSet)
+                .run_if(on_message::<lunco_experiments::ExperimentRemoved>),
+        );
         use lunco_settings::AppSettingsExt;
         app.register_settings_section::<ExperimentSettings>();
         app.add_systems(Update, (apply_experiment_settings, drain_pending_handles));
+    }
+}
+
+/// A closed runtime owner cancels unfinished work without deleting history.
+fn cancel_closed_twin_runs(
+    trigger: On<lunco_workspace::TwinClosed>,
+    sources: Res<ExperimentSources>,
+    mut pending: ResMut<PendingHandles>,
+    mut experiments: ResMut<lunco_experiments::ExperimentRegistry>,
+    mut cancelled: MessageWriter<lunco_experiments::RunCancelled>,
+    #[cfg(not(target_arch = "wasm32"))] runner: Option<Res<ModelicaRunnerResource>>,
+) {
+    let twin = trigger.event().twin;
+    pending.0.retain(|handle| {
+        if !sources
+            .0
+            .get(&handle.run_id)
+            .is_some_and(|source| source.runtime_twin == Some(twin))
+        {
+            return true;
+        }
+        handle.cancel();
+        if experiments
+            .get(handle.run_id)
+            .is_some_and(|run| !run.status.is_terminal())
+        {
+            experiments.set_status(handle.run_id, lunco_experiments::RunStatus::Cancelled);
+            cancelled.write(lunco_experiments::RunCancelled {
+                experiment_id: handle.run_id,
+            });
+        }
+        false
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(runner) = runner {
+        if let Err(error) = runner.0.retire_twin_cache(twin) {
+            bevy::log::error!("{error}");
+        }
+    }
+}
+
+fn forget_removed_experiment_sources(
+    mut removed: MessageReader<lunco_experiments::ExperimentRemoved>,
+    mut sources: ResMut<ExperimentSources>,
+    mut pending: ResMut<PendingHandles>,
+) {
+    for event in removed.read() {
+        sources.0.remove(&event.experiment_id);
+        pending.0.retain(|handle| {
+            if handle.run_id == event.experiment_id {
+                handle.cancel();
+                false
+            } else {
+                true
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunco_experiments::{
+        ExperimentRegistry, ModelRef, RunBounds, RunHandle, RunStatus, RunUpdate,
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    fn insert_run(
+        registry: &mut ExperimentRegistry,
+        model: &str,
+    ) -> lunco_experiments::ExperimentId {
+        registry.insert_new(
+            lunco_experiments::TwinId("document-history".to_owned()),
+            ModelRef(model.to_owned()),
+            Default::default(),
+            Default::default(),
+            RunBounds::default(),
+        )
+    }
+
+    #[test]
+    fn closing_twin_cancels_exact_owner_and_retires_late_updates() {
+        let a = lunco_workspace::TwinId::new(1);
+        let b = lunco_workspace::TwinId::new(2);
+        let mut registry = ExperimentRegistry::new();
+        let owned = insert_run(&mut registry, "Owned");
+        let other = insert_run(&mut registry, "Other");
+        let application = insert_run(&mut registry, "Application");
+        let completed = insert_run(&mut registry, "Completed");
+        registry.set_status(owned, RunStatus::Running { t_current: 1.0 });
+        registry.set_status(other, RunStatus::Queued);
+        registry.set_status(application, RunStatus::Queued);
+        registry.set_status(completed, RunStatus::Done { wall_time_ms: 1 });
+        let mut sources = ExperimentSources::default();
+        for (index, (id, runtime_twin)) in [
+            (owned, Some(a)),
+            (other, Some(b)),
+            (application, None),
+            (completed, Some(a)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            sources.0.insert(
+                id,
+                ExperimentSource {
+                    document: lunco_doc::DocumentId::new(index as u64 + 1),
+                    runtime_twin,
+                },
+            );
+        }
+        let mut pending = PendingHandles::default();
+        let mut flags = Vec::new();
+        let mut senders = Vec::new();
+        for id in [owned, other, application] {
+            let (tx, rx) = crossbeam_channel::unbounded();
+            let flag = Arc::new(AtomicBool::new(false));
+            let cancelled = flag.clone();
+            pending.0.push(RunHandle {
+                run_id: id,
+                progress_rx: rx,
+                cancel: Box::new(move || {
+                    cancelled.store(true, Ordering::SeqCst);
+                }),
+            });
+            senders.push(tx);
+            flags.push(flag);
+        }
+        let mut app = App::new();
+        app.add_plugins(lunco_experiments::ExperimentsPlugin)
+            .insert_resource(registry)
+            .insert_resource(sources)
+            .insert_resource(pending)
+            .add_observer(cancel_closed_twin_runs)
+            .add_systems(Update, drain_pending_handles);
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: a,
+            root: Default::default(),
+            was_active: true,
+        });
+        assert!(flags[0].load(Ordering::SeqCst));
+        assert!(!flags[1].load(Ordering::SeqCst));
+        assert!(!flags[2].load(Ordering::SeqCst));
+        assert_eq!(app.world().resource::<PendingHandles>().0.len(), 2);
+        assert!(
+            senders[0]
+                .send(RunUpdate::Completed(lunco_experiments::RunResult {
+                    times: vec![0.0],
+                    series: Default::default(),
+                    meta: Default::default(),
+                }))
+                .is_err()
+        );
+        app.update();
+        let registry = app.world().resource::<ExperimentRegistry>();
+        assert!(matches!(
+            registry.get(owned).expect("owned run").status,
+            RunStatus::Cancelled
+        ));
+        assert!(matches!(
+            registry.get(other).expect("other run").status,
+            RunStatus::Queued
+        ));
+        assert!(matches!(
+            registry.get(application).expect("application run").status,
+            RunStatus::Queued
+        ));
+        assert!(matches!(
+            registry.get(completed).expect("completed run").status,
+            RunStatus::Done { .. }
+        ));
+        assert_eq!(app.world().resource::<ExperimentSources>().0.len(), 4);
+    }
+
+    #[test]
+    fn owner_terminal_status_retires_buffered_worker_updates() {
+        let mut registry = ExperimentRegistry::new();
+        let id = insert_run(&mut registry, "CancelledOwner");
+        registry.set_status(id, RunStatus::Cancelled);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        tx.send(RunUpdate::Progress {
+            t_current: 2.0,
+            delta: None,
+        })
+        .expect("buffered progress");
+        tx.send(RunUpdate::Completed(lunco_experiments::RunResult {
+            times: vec![2.0],
+            series: Default::default(),
+            meta: Default::default(),
+        }))
+        .expect("buffered completion");
+        let flag = Arc::new(AtomicBool::new(false));
+        let cancel = flag.clone();
+        let mut app = App::new();
+        app.add_plugins(lunco_experiments::ExperimentsPlugin)
+            .insert_resource(registry)
+            .insert_resource(PendingHandles(vec![RunHandle {
+                run_id: id,
+                progress_rx: rx,
+                cancel: Box::new(move || {
+                    cancel.store(true, Ordering::SeqCst);
+                }),
+            }]))
+            .add_systems(Update, drain_pending_handles);
+        app.update();
+        assert!(flag.load(Ordering::SeqCst));
+        assert!(app.world().resource::<PendingHandles>().0.is_empty());
+        let registry = app.world().resource::<ExperimentRegistry>();
+        assert!(matches!(
+            registry.get(id).expect("retained row").status,
+            RunStatus::Cancelled
+        ));
+        assert!(registry.get(id).expect("retained row").result.is_none());
+        assert_eq!(
+            app.world()
+                .resource::<Messages<lunco_experiments::RunCompleted>>()
+                .len(),
+            0
+        );
+        assert!(tx.send(RunUpdate::Cancelled).is_err());
+    }
+
+    #[test]
+    fn bounded_registry_removals_retire_source_metadata() {
+        let mut app = App::new();
+        app.add_plugins(lunco_experiments::ExperimentsPlugin)
+            .init_resource::<ExperimentSources>()
+            .init_resource::<PendingHandles>()
+            .add_systems(
+                Last,
+                forget_removed_experiment_sources
+                    .after(lunco_experiments::ExperimentRegistryMaintenanceSet)
+                    .run_if(on_message::<lunco_experiments::ExperimentRemoved>),
+            );
+        let mut ids = Vec::new();
+        for index in 0..=lunco_experiments::REGISTRY_CAP_PER_TWIN {
+            let id = {
+                let mut registry = app.world_mut().resource_mut::<ExperimentRegistry>();
+                let id = insert_run(&mut registry, "Bounded");
+                registry.set_status(id, RunStatus::Done { wall_time_ms: 1 });
+                id
+            };
+            ids.push(id);
+            app.world_mut()
+                .resource_mut::<ExperimentSources>()
+                .0
+                .insert(
+                    id,
+                    ExperimentSource {
+                        document: lunco_doc::DocumentId::new(index as u64 + 1),
+                        runtime_twin: None,
+                    },
+                );
+        }
+        app.update();
+        assert_eq!(
+            app.world().resource::<ExperimentSources>().0.len(),
+            lunco_experiments::REGISTRY_CAP_PER_TWIN
+        );
+        let evicted = ids
+            .iter()
+            .copied()
+            .find(|id| {
+                app.world()
+                    .resource::<ExperimentRegistry>()
+                    .get(*id)
+                    .is_none()
+            })
+            .expect("one bounded-history eviction");
+        assert!(
+            !app.world()
+                .resource::<ExperimentSources>()
+                .0
+                .contains_key(&evicted)
+        );
+        let deleted = *ids.last().expect("remaining run");
+        app.world_mut()
+            .resource_mut::<ExperimentRegistry>()
+            .delete(deleted);
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<ExperimentSources>()
+                .0
+                .contains_key(&deleted)
+        );
     }
 }

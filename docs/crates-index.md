@@ -1275,6 +1275,10 @@ compile-once DAE caching, native scheduling, shared batch/interactive run
 paths, run-bound resolution, and experiment-side Bevy resources. The runner
 depends on compiler and solver contracts but not on the worker transport; the
 execution host installs the typed wasm dispatch callbacks during composition.
+Jobs receive immutable source snapshots at admission. Current document ASTs
+own annotation bounds; the runner retains no class-name source/default map.
+Native DAE cache entries carry their runtime Twin owner and are retired on
+`TwinClosed`; retained source attribution follows bounded experiment history.
 
 **`lunco-modelica-telemetry`**
 Render-free execution-side telemetry projection. It retains the current

@@ -8,7 +8,7 @@ use lunco_doc_bevy::DocumentRegistry;
 use lunco_experiments::{ExperimentRegistry, ExperimentRunner, ModelRef, RunBounds, TwinId};
 use lunco_modelica_document::ModelicaDocument;
 use lunco_modelica_runner::{
-    ExperimentSources, ModelSource, ModelicaRunnerResource, PendingHandles,
+    ExperimentSource, ExperimentSources, ModelSource, ModelicaRunnerResource, PendingHandles,
 };
 use lunco_workspace::WorkspaceResource;
 
@@ -95,6 +95,10 @@ fn on_run_modelica_solve(
         .map(|package| format!("{package}.{model_name}"))
         .unwrap_or(model_name);
     let filename = document.origin().session_uri();
+    let attribution = ExperimentSource::for_document(
+        request.doc_id,
+        workspace.as_deref().map(|workspace| &workspace.0),
+    )?;
     let runner = runner.ok_or_else(|| "Modelica runner is not installed".to_owned())?;
     let mut experiments = experiments
         .take()
@@ -106,28 +110,15 @@ fn on_run_modelica_solve(
         .take()
         .ok_or_else(|| "Modelica run-handle queue is not installed".to_owned())?;
 
-    let model_ref = ModelRef(format!("{}#document:{}", model_name, request.doc_id.raw()));
-    runner.0.set_model_source(
-        model_ref.clone(),
-        ModelSource {
-            model_name,
-            source,
-            filename,
-            extras: Vec::new(),
-        },
-    );
-    let workspace_twin = workspace.as_ref().and_then(|workspace| {
-        let state = &workspace.0;
-        state
-            .document(request.doc_id)
-            .and_then(|entry| entry.context_twin)
-            .or_else(|| {
-                (state.active_document == Some(request.doc_id))
-                    .then_some(state.active_twin)
-                    .flatten()
-            })
-    });
-    let twin_id = TwinId(match workspace_twin {
+    let model_ref = ModelRef(model_name.clone());
+    let source_snapshot = ModelSource {
+        model_name,
+        source,
+        filename,
+        extras: Vec::new(),
+        runtime_twin: attribution.runtime_twin,
+    };
+    let twin_id = TwinId(match attribution.runtime_twin {
         Some(twin) => format!("workspace:{}", twin.raw()),
         None => format!("loose-document:{}", request.doc_id.raw()),
     });
@@ -157,8 +148,8 @@ fn on_run_modelica_solve(
     if let Some(journal) = journal.as_ref() {
         lunco_modelica_core::experiment_journal::record_create(journal, &experiment);
     }
-    let handle = runner.0.run_fast(&experiment);
-    sources.0.insert(experiment_id, request.doc_id);
+    sources.0.insert(experiment_id, attribution);
+    let handle = runner.0.run_fast(&experiment, source_snapshot);
     pending.0.push(handle);
     experiments.set_status(experiment_id, lunco_experiments::RunStatus::Queued);
 
