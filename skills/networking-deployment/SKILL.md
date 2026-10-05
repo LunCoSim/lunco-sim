@@ -28,6 +28,7 @@ replication runtime; the deployment guide owns service and TLS facts.
   real scene/document consumer. Preserve typed `ReplicationScope` internally;
   use the protocol adapter only at serialization. Application is valid only in
   a scene-free world; missing Twin ownership must reject visibly.
+- Cache persistence uses the [storage atomic-write contract](../../crates/lunco-storage/README.md#usage). Cover concurrent replacement at that generic owner before relying on detached cache writes.
 - For lifecycle work, cover old-mount rejection, same-source reopening, exact
   connection replacement, deferred spawn/replay retirement, asynchronous result
   cancellation, and prediction-buffer teardown at their generic owners. The

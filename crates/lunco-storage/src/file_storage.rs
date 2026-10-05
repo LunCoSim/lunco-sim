@@ -59,22 +59,10 @@ static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// filesystem and won't collide with a concurrent writer's temp.
 #[cfg(not(target_arch = "wasm32"))]
 fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write as _;
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
-    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("tmp");
-    let tmp = path.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
-    {
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-    }
-    if let Err(e) = std::fs::rename(&tmp, path) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
+    let temporary = stage_atomic_write(path, bytes)?;
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
     }
     Ok(())
 }
@@ -83,8 +71,19 @@ fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 /// commits atomically and fails instead of replacing an existing destination.
 #[cfg(not(target_arch = "wasm32"))]
 fn atomic_write_new(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write as _;
+    let temporary = stage_atomic_write(path, bytes)?;
+    let commit = std::fs::hard_link(&temporary, path);
+    let cleanup = std::fs::remove_file(&temporary);
+    commit?;
+    cleanup?;
+    Ok(())
+}
 
+/// Reserve one unique sibling per write and finish its bytes before publishing.
+/// Both replacement and create-only commits share this staging boundary.
+#[cfg(not(target_arch = "wasm32"))]
+fn stage_atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write as _;
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -94,7 +93,6 @@ fn atomic_write_new(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()>
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("tmp");
-    let mut staged = None;
     for _ in 0..32 {
         let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let temporary = path.with_file_name(format!(
@@ -114,24 +112,16 @@ fn atomic_write_new(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()>
                     let _ = std::fs::remove_file(&temporary);
                     return Err(error);
                 }
-                staged = Some(temporary);
-                break;
+                return Ok(temporary);
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
         }
     }
-    let temporary = staged.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            "unable to reserve a unique storage staging file",
-        )
-    })?;
-    let commit = std::fs::hard_link(&temporary, path);
-    let cleanup = std::fs::remove_file(&temporary);
-    commit?;
-    cleanup?;
-    Ok(())
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "unable to reserve a unique storage staging file",
+    ))
 }
 
 #[async_trait::async_trait]
@@ -407,6 +397,55 @@ mod tests {
             assert!(s.exists(&h).await);
             assert_eq!(s.read(&h).await.unwrap(), b"persisted");
         });
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn concurrent_file_replacements_publish_complete_bytes() {
+        use std::sync::{
+            Barrier,
+            atomic::{AtomicBool, Ordering},
+        };
+        let root = tempdir().unwrap();
+        let handle = StorageHandle::File(root.path().join("shared.bin"));
+        let storage = FileStorage::new();
+        const SIZE: usize = 128 * 1024;
+        storage.write_sync(&handle, &vec![0; SIZE]).unwrap();
+        let barrier = Barrier::new(4);
+        let done = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let reader = scope.spawn(|| {
+                while !done.load(Ordering::Acquire) {
+                    let bytes = storage.read_sync(&handle).unwrap();
+                    assert_eq!(bytes.len(), SIZE);
+                    assert!(bytes.iter().all(|byte| *byte == bytes[0]));
+                }
+            });
+            let writers: Vec<_> = (1..=4)
+                .map(|value| {
+                    let storage = &storage;
+                    let handle = &handle;
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        let bytes = vec![value; SIZE];
+                        barrier.wait();
+                        for _ in 0..16 {
+                            storage.write_sync(handle, &bytes).unwrap();
+                        }
+                    })
+                })
+                .collect();
+            let results: Vec<_> = writers.into_iter().map(|writer| writer.join()).collect();
+            done.store(true, Ordering::Release);
+            reader.join().unwrap();
+            for result in results {
+                result.unwrap();
+            }
+        });
+        let entries = storage
+            .read_directory_sync(&StorageHandle::File(root.path().to_path_buf()))
+            .unwrap();
+        assert_eq!(entries, vec![handle]);
     }
 
     #[test]
