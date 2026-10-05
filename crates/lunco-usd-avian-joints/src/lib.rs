@@ -801,13 +801,23 @@ fn seat_joint_bodies(
     } else {
         0.0
     };
-    let r1_seated = if locks_rotation { r1_target } else { r1 };
+    // q and -q describe the same attitude, but Avian's fixed-angle XPBD
+    // correction uses the quaternion vector part. Start locked frames in the
+    // same hemisphere so an equivalent authored sign cannot reverse feedback.
+    let opposite_hemisphere = locks_rotation && r1.dot(r1_target) < 0.0;
+    let r1_seated = if locks_rotation && angle > JOINT_SEAT_ANGLE_EPS {
+        r1_target
+    } else if opposite_hemisphere {
+        -r1
+    } else {
+        r1
+    };
     let anchor0_world = p0 + r0 * seat.local_pos0;
     let anchor1_world = p1 + r1_seated * seat.local_pos1;
     let delta = anchor0_world - anchor1_world;
     let p1_seated = p1 + delta;
     let seat_pos = delta.length() > JOINT_SEAT_EPS;
-    let seat_rot = angle > JOINT_SEAT_ANGLE_EPS;
+    let seat_rot = angle > JOINT_SEAT_ANGLE_EPS || opposite_hemisphere;
 
     if seat_pos || seat_rot {
         let worst = delta.length().max(angle);
@@ -822,12 +832,12 @@ fn seat_joint_bodies(
         );
         if worst > JOINT_SEAT_ERROR_THRESHOLD {
             error!("{detail}");
-        } else {
+        } else if seat_pos || angle > JOINT_SEAT_ANGLE_EPS {
             warn!("{detail}");
         }
         if let Ok((mut position, mut rotation)) = q_pose.get_mut(body1) {
             if seat_rot {
-                rotation.0 = r1_target;
+                rotation.0 = r1_seated;
             }
             if seat_pos {
                 position.0 += delta;
@@ -902,6 +912,83 @@ fn seat_joint_bodies(
         commands
             .entity(body1)
             .try_remove::<AuthoredInitialVelocity>();
+    }
+}
+
+#[cfg(test)]
+mod joint_pose_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn equivalent_locked_body_quaternions_prepare_the_same_native_feedback() {
+        let target = DQuat::from_rotation_y(-135.0_f64.to_radians());
+        let basis = DQuat::from_rotation_x(0.4);
+        // A tiny perturbation below seating tolerance must survive unchanged
+        // for both quaternion signs, while native feedback has the same sign.
+        let authored = DQuat::from_rotation_y(1.0e-8) * target;
+        let mut results = Vec::new();
+        for kind in [JointSeatKind::Fixed, JointSeatKind::Prismatic] {
+            for sign in [1.0, -1.0] {
+                let mut world = World::new();
+                let parent = world
+                    .spawn((
+                        Position(DVec3::ZERO),
+                        Rotation::IDENTITY,
+                        LinearVelocity::ZERO,
+                        AngularVelocity::ZERO,
+                    ))
+                    .id();
+                let child = world
+                    .spawn((
+                        Position(DVec3::ZERO),
+                        Rotation(authored * sign),
+                        LinearVelocity::ZERO,
+                        AngularVelocity::ZERO,
+                    ))
+                    .id();
+                let seat = JointSeat::new(
+                    kind,
+                    DVec3::ZERO,
+                    DVec3::ZERO,
+                    target * basis,
+                    basis,
+                    DVec3::Y,
+                );
+                world
+                    .run_system_once(
+                        move |mut poses: Query<(&mut Position, &mut Rotation)>,
+                              mut velocities: Query<(
+                            &mut LinearVelocity,
+                            &mut AngularVelocity,
+                        )>,
+                              authored_velocity: Query<&AuthoredInitialVelocity>,
+                              mut commands: Commands| {
+                            seat_joint_bodies(
+                                "test/locked",
+                                parent,
+                                child,
+                                seat,
+                                &mut poses,
+                                &mut velocities,
+                                &authored_velocity,
+                                &mut commands,
+                            );
+                        },
+                    )
+                    .unwrap();
+                let rotation = world.get::<Rotation>(child).unwrap();
+                assert!((rotation.0 - authored).length() < 1.0e-14);
+                let mut native =
+                    avian3d::dynamics::solver::xpbd::joints::FixedAngleConstraintShared::default();
+                native.prepare(&Rotation::IDENTITY, rotation, target * basis, basis);
+                assert!(native.rotation_difference.w > 0.0);
+                results.push(native.rotation_difference);
+            }
+        }
+        for result in &results[1..] {
+            assert!((*result - results[0]).length() < 1.0e-14);
+        }
     }
 }
 
