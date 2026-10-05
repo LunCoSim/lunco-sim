@@ -21,6 +21,7 @@ lunco-settings = { path = "../lunco-settings" }
 lunco-workspace = { path = "../lunco-workspace" }
 rumoca-compile.workspace = true
 rumoca-sim.workspace = true
+rumoca-solver.workspace = true
 serde.workspace = true
 web-time.workspace = true
 

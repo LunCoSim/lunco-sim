@@ -289,6 +289,7 @@ Primary entry points and simulation assembly targets.
 | **`lunco-modelica-library`** | — | Source-library runtime admission, artifacts, browser handoff, and the shared Modelica worker bridge. |
 | **`lunco-modelica-source-roots`** | — | Twin/workspace source-root inventory and demand-driven `LoadSourceRoot` admission. |
 | **`lunco-modelica-runner`** | — | Modelica experiment scheduling and shared batch/interactive run backend. |
+| **`rumoca-solver`**, **`rumoca-eval-solve`** | — | Pinned upstream solver crates under `third_party/rumoca`; scoped native run cancellation at evaluation and simulation-driver checkpoints. Other Rumoca crates remain at the same Git revision. |
 | **`lunco-modelica-worker`** | — | Headless Modelica worker engine and Bevy co-simulation bridge. It owns worker lifecycle internals, command dispatch, live stepping, and execution caches. |
 | **`lunco-modelica-execution`** | `lunica_worker`, `modelica_run`, `modelica_tester` | Modelica execution host. It assembles the worker engine, owns native/wasm host transport, and keeps the shared command/result protocol in `lunco-modelica-runtime`; `lunco-modelica-runner` owns experiment scheduling and run orchestration. |
 | **`lunco-modelica-assets`** | `build_modelica_library_assets`, `modelica_library_indexer`, `modelica_library_parse_bench` | Native Modelica source-library packaging and indexing tools. The indexer is shared by the CLI and the Modelica UI's background lifecycle adapter; the package remains independent of Bevy. |

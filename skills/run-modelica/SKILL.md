@@ -375,8 +375,9 @@ cannot receive its automatic plot selection. Registry deletion and bounded
 eviction also remove the retained document/owner attribution and plot visibility.
 Closing a Twin retires its document pins and archived plot selections. A run
 receives immutable source text at admission, and annotations are read from its
-current document; a same-name model in another Twin cannot supply either. Native cancellation
-is cooperative and does not interrupt a blocking solver call.
+current document; a same-name model in another Twin cannot supply either. Native cancellation uses the admitted run flag at evaluation and simulation-driver
+checkpoints. An executing numerical kernel returns before its next checkpoint;
+no cancelled trajectory publishes, and worker exit releases the scheduler slot.
 
 For a production lifecycle regression, admit a run from a Twin document and
 queue another behind it, replace the Twin, then query both exact run ids for

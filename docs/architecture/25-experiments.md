@@ -336,6 +336,12 @@ and cancelled workers cannot republish them after retirement. User overlays
 are released after compilation while admitted application libraries stay installed. The panel shows
 "⏳ Queued"; the Run button queues rather than disabling.
 
+Native solves install a scoped thread-local cancellation guard backed by the
+admitted run flag. The two pinned solver crates under `third_party/rumoca` check
+that flag at evaluation and simulation-driver boundaries. An executing numerical
+kernel returns before its next checkpoint; cancellation prevents trajectory
+publication and worker exit releases the scheduling slot.
+
 Native thread admission is fallible. A worker panic becomes a terminal
 `RunFailed` diagnostic, and its completion guard releases the scheduler slot
 on every exit. A poisoned compiler fails subsequent compilation visibly.

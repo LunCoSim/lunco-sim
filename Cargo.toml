@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "third_party/rumoca/rumoca-solver",
+    "third_party/rumoca/rumoca-eval-solve",
     "crates/lunco-core",
     "crates/lunco-runtime-context",
     "crates/lunco-geometry-core",
@@ -468,6 +470,7 @@ rumoca-sim         = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a8
 # Structural diagnostics need rumoca-sim's analysis API but not its native solver backends.
 rumoca-sim-diagnostics = { package = "rumoca-sim", git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538", default-features = false }
 rumoca-solver-rk45 = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
+rumoca-solver      = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
 rumoca-eval-solve  = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
 rumoca-tool-fmt    = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
 rumoca-tool-lint   = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
@@ -707,3 +710,7 @@ incremental = true
 inherits = "release"
 debug = "line-tables-only"
 strip = "none"
+
+[patch."https://github.com/LunCoSim/rumoca"]
+rumoca-solver = { path = "third_party/rumoca/rumoca-solver" }
+rumoca-eval-solve = { path = "third_party/rumoca/rumoca-eval-solve" }

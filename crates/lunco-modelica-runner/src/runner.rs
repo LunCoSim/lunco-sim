@@ -764,6 +764,7 @@ fn run_inner(
     cancel: Arc<AtomicBool>,
     tx: Sender<RunUpdate>,
 ) {
+    let _cancellation = rumoca_solver::SolverCancellationGuard::install(cancel.clone());
     let t_wall = web_time::Instant::now();
 
     if cancel.load(Ordering::SeqCst) {
@@ -1005,10 +1006,10 @@ pub fn drive_run(
 /// dense interpolation, so the solver step size is independent of the output
 /// spacing — the robust path for stiff long-horizon runs.
 ///
-/// The whole solve is one blocking call, so cancellation is honoured at the
-/// boundaries (before the solve, and before emitting the result) rather than
-/// mid-step; for the streamable/pausable behaviour use
-/// [`RuntimeMode::Interactive`](lunco_experiments::RuntimeMode::Interactive).
+/// Native admitted runs install their cancellation flag at the solver owner.
+/// Evaluation and driver checkpoints return before the trajectory can publish.
+/// An executing numerical kernel returns before its next checkpoint. Browser
+/// cancellation uses the worker transport's separate lifetime boundary.
 ///
 /// Platform-agnostic: called by both native ([`drive_run`] via [`run_inner`])
 /// and the wasm worker. On wasm the whole solve runs off the main thread in
@@ -1042,6 +1043,10 @@ fn run_batch_sim(
     let result = match rumoca_sim::simulate_with_diagnostics(dae, opts) {
         Ok(r) => r,
         Err(e) => {
+            if sink.is_cancelled() {
+                sink.emit(RunUpdate::Cancelled);
+                return;
+            }
             sink.emit(RunUpdate::Failed {
                 error: format!("simulate failed: {e}"),
                 partial: None,
