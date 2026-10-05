@@ -7,7 +7,8 @@ model CombustionChamber
   parameter Real oxidizer_to_fuel_ratio = 2.6;
   parameter Real characteristic_velocity_mps = 1550.0;
   parameter Real throat_area_m2 = 0.0045;
-  parameter Real effective_exhaust_velocity_mps = 2940.0;
+  input Real effective_exhaust_velocity_mps = 2940.0
+    "Nominal nozzle effective velocity, supplied by a connected design model";
   parameter Real combustion_efficiency = 0.96;
   parameter Real nominal_flow_kgs = 5.0;
   parameter Real chamber_temperature_full_k = 3300.0;
@@ -69,7 +70,11 @@ equation
     * combustion_efficiency * mixture_efficiency;
   ideal_chamber_pressure_pa = propellant_flow * characteristic_velocity_mps
     / max(minimum_throat_area_m2, throat_area_m2);
-  chamber_temperature_k = chamber_temperature_full_k * activity
+  // Reduced steady reacting temperature depends on mixture, not throttle.
+  // Flow controls chemical power; scaling temperature by duty would make
+  // an otherwise unchanged reacting mixture arbitrarily cold at low thrust.
+  // The full temperature and mixture-loss curve remain authored estimates.
+  chamber_temperature_k = chamber_temperature_full_k * mixture_efficiency
     * combustion_efficiency;
   thrust_n = propellant_flow * effective_exhaust_velocity_mps
     * combustion_efficiency * mixture_efficiency;
@@ -82,6 +87,6 @@ equation
   // in the propulsion model so consumers do not duplicate an engine constant.
   maximum_thrust_n = nominal_flow_kgs * effective_exhaust_velocity_mps
     * combustion_efficiency;
-  heat_release_w = propellant_flow * fuel_energy_j_kg
+  heat_release_w = fuel_flow_kgs * fuel_energy_j_kg
     * combustion_efficiency * mixture_efficiency;
 end CombustionChamber;

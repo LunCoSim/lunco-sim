@@ -1571,7 +1571,7 @@ def Xform "DescentLander" (
             # vacuum.
             float inputs:gamma = 1.2
             float inputs:p_chamber = 5500000.0
-            float inputs:p_exit = 8000.0
+            float inputs:characteristic_velocity_mps = 1800.0
             float inputs:p_ambient = 0.0
             float outputs:exit_radius_m
             float outputs:exit_pressure_pa

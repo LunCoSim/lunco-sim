@@ -28,11 +28,12 @@ model BellNozzle "A bell nozzle's geometry and what that geometry is worth."
   input Real length = 1.90 "Throat-to-exit length (m)";
   input Real contour = 0.55 "Contour exponent; 1 = cone, <1 = bell";
 
-  // Gas properties. Defaults are LOX/RP-1 combustion products, matching the
-  // plume chemistry the plume materials already declare in USD.
+  // Reduced ideal-gas assumptions. These are not a propellant-specific
+  // equilibrium solution; vehicles must author their own gas properties.
   input Real gamma = 1.2 "Ratio of specific heats of the exhaust";
   input Real p_chamber = 5.5e6 "Chamber pressure (Pa)";
-  input Real p_exit = 8.0e3 "Exit-plane static pressure (Pa) — design point";
+  input Real characteristic_velocity_mps = 1800.0
+    "Authored combustion characteristic velocity (m/s), not derived from pressure";
   input Real p_ambient = 0.0 "Ambient pressure (Pa); 0 on the Moon";
   input Real g0 = 9.80665 "Standard gravity, for the Isp definition (m/s^2)";
 
@@ -52,8 +53,12 @@ model BellNozzle "A bell nozzle's geometry and what that geometry is worth."
   // plus pressure term (what the exit plane pushes on). Vacuum-corrected via
   // `p_ambient`, which is 0 here — that is exactly why a lunar lander wants a
   // big expansion ratio and why this bell flares as hard as it does.
+  output Real exit_mach "Supersonic exit Mach number from the area ratio";
+  output Real exit_pressure_ratio "Exit static pressure / chamber stagnation pressure";
   output Real cf "Thrust coefficient (-)";
   output Real c_star "Characteristic velocity (m/s)";
+  output Real ideal_exhaust_velocity_mps
+    "Effective ideal exhaust velocity including exit pressure thrust (m/s)";
   output Real isp_vac "Specific impulse at this design point (s)";
   output Real thrust "Thrust at chamber pressure (N)";
   output Real exit_pressure_pa "Exit-plane pressure exposed to connected consumers (Pa)";
@@ -61,6 +66,42 @@ model BellNozzle "A bell nozzle's geometry and what that geometry is worth."
     "Chamber pressure exposed to connected consumers (Pa)";
   output Real ambient_pressure_pa
     "Ambient pressure exposed to connected consumers (Pa)";
+protected
+  function supersonicExitMach
+    "Invert the isentropic area-Mach relation on its supersonic branch"
+    input Real area_ratio;
+    input Real gas_gamma;
+    output Real mach;
+  protected
+    Real lower;
+    Real upper;
+    Real midpoint;
+    Real midpoint_area;
+  algorithm
+    assert(gas_gamma > 1.0, "BellNozzle requires gamma > 1");
+    assert(area_ratio >= 1.0, "BellNozzle exit area must be at least throat area");
+    lower := 1.0;
+    upper := 64.0;
+    assert(area_ratio <= (2.0 / (gas_gamma + 1.0)
+      * (1.0 + (gas_gamma - 1.0) / 2.0 * upper ^ 2))
+      ^ ((gas_gamma + 1.0) / (2.0 * (gas_gamma - 1.0))) / upper,
+      "BellNozzle area ratio exceeds the supersonic solve bracket");
+    // Fixed 48 bisections give < 2.3e-13 Mach resolution on this bracket.
+    // Explicit branch selection avoids convergence to the subsonic root.
+    for iteration in 1:48 loop
+      midpoint := (lower + upper) / 2.0;
+      midpoint_area := (2.0 / (gas_gamma + 1.0)
+        * (1.0 + (gas_gamma - 1.0) / 2.0 * midpoint ^ 2))
+        ^ ((gas_gamma + 1.0) / (2.0 * (gas_gamma - 1.0))) / midpoint;
+      if midpoint_area < area_ratio then
+        lower := midpoint;
+      else
+        upper := midpoint;
+      end if;
+    end for;
+    mach := (lower + upper) / 2.0;
+  end supersonicExitMach;
+
 equation
   throat_area = pi * throat_radius ^ 2;
   exit_area = pi * exit_radius ^ 2;
@@ -70,18 +111,26 @@ equation
   r_station_1 = throat_radius + (exit_radius - throat_radius) * (1.0 / 3.0) ^ contour;
   r_station_2 = throat_radius + (exit_radius - throat_radius) * (2.0 / 3.0) ^ contour;
 
-  // Momentum term. EXPLICIT — no implicit solve for exit Mach from area ratio,
-  // because the toolchain that compiles this asset tree (rumoca) is restricted
-  // to explicitly solved forms; the design-point `p_exit` is an input instead.
+  // NASA Glenn isentropic area-Mach and pressure relations:
+  // https://www.grc.nasa.gov/WWW/BGH/isentrop.html
+  // Assumes a choked throat, ideal gas and attached supersonic expansion.
+  // Separation, boundary-layer losses and combustion chemistry are not solved.
+  exit_mach = supersonicExitMach(expansion_ratio, gamma);
+  exit_pressure_ratio = (1.0 + (gamma - 1.0) / 2.0 * exit_mach ^ 2)
+    ^ (-gamma / (gamma - 1.0));
+  exit_pressure_pa = p_chamber * exit_pressure_ratio;
+  // Compute from a dimensionless ratio so a cold chamber remains finite.
+  // Ambient correction is omitted only at zero Pc, where design thrust is zero.
   cf = sqrt(2 * gamma ^ 2 / (gamma - 1)
             * (2 / (gamma + 1)) ^ ((gamma + 1) / (gamma - 1))
-            * (1 - (p_exit / p_chamber) ^ ((gamma - 1) / gamma)))
-       + (p_exit - p_ambient) * exit_area / (p_chamber * throat_area);
+            * (1 - exit_pressure_ratio ^ ((gamma - 1) / gamma)))
+       + (exit_pressure_ratio - (if p_chamber > 0.0 then p_ambient / p_chamber else 0.0))
+         * expansion_ratio;
 
-  c_star = p_chamber * throat_area / max(1e-9, p_chamber * throat_area / 1800.0);
-  isp_vac = cf * c_star / g0;
+  c_star = characteristic_velocity_mps;
+  ideal_exhaust_velocity_mps = cf * c_star;
+  isp_vac = ideal_exhaust_velocity_mps / g0;
   thrust = cf * p_chamber * throat_area;
-  exit_pressure_pa = p_exit;
   chamber_pressure_pa = p_chamber;
   ambient_pressure_pa = p_ambient;
 end BellNozzle;
