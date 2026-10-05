@@ -19,6 +19,8 @@ physics, and solver ownership in their existing typed owners.
 
 Read the focused contract when implementing one:
 [`references/tool-authoring-contract.md`](references/tool-authoring-contract.md).
+For queued pointer/menu calls, follow the canonical
+[`one-shot ownership contract`](../../docs/architecture/rhai-integration.md#how-to-load--run-a-scenario).
 
 ## Choose the tool's home
 
@@ -302,6 +304,13 @@ Verify all three layers, in order:
    surface.
 3. A minimal call succeeds from the actual execution context (`RunRhai` for a
    one-shot check or `RunScenario` for a persistent hook).
+
+For interaction tools, verify the registered scope as well as callability.
+Pass the captured Twin flow owner through `RunRhaiToolHook.owner_twin_id` when
+the UI flow belongs to a Twin. Include an authored replacement case that
+queues a call, closes its Twin, and proves a same-name tool in the replacement
+Twin receives no old call. Keep application-tool lifetime checks separate from
+Twin-flow checks.
 
 Discovery is not invocation proof. If the name is listed but a call reports
 `Module not found`, first allow the same process one update/maintenance pass

@@ -34,7 +34,8 @@ use lunco_scripting::scenario::{ScenarioExecutionGate, ScenarioPreparationAdmiss
 use lunco_scripting_bridge_core as bridge_core;
 #[cfg(feature = "rhai")]
 use lunco_scripting_rhai_world::world_bridge::{
-    PendingWorldScript, PendingWorldScripts, WorldScriptExecutionLimits,
+    PendingWorldScript, PendingWorldScripts, WorldScriptExecutionLimits, WorldScriptWorkspace,
+    WorldToolOwner,
 };
 #[cfg(feature = "rhai")]
 use lunco_telemetry_core::TelemetryValue;
@@ -87,8 +88,9 @@ pub struct RunRhaiToolHook {
     pub hook: String,
     /// Structured argument passed to the hook.
     pub args: TelemetryValue,
-    /// Twin owning a menu-originated flow. The UI host captures this identity
-    /// when the user selects the item; queued work is rejected if it is stale.
+    /// Twin owning an interaction flow, when explicitly supplied by its caller.
+    /// Twin-scoped tools also pin their registered owner when this is omitted.
+    /// A supplied owner must match a Twin-scoped tool's actual registration.
     #[serde(default)]
     #[reflect(default)]
     pub owner_twin_id: Option<u64>,
@@ -215,6 +217,7 @@ fn on_run_rhai(
     pending_request: Res<PendingApiRequest>,
     mut pending: ResMut<PendingWorldScripts>,
     limits: Res<WorldScriptExecutionLimits>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
 ) -> Result<Ack, String> {
     let id = active.get().unwrap_or(0);
@@ -224,12 +227,14 @@ fn on_run_rhai(
     let authority = guard.and_then(|g| g.0);
     let correlation_id =
         (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
+    let admitted_workspace = WorldScriptWorkspace::capture(workspace.as_deref())?;
     pending.enqueue(
         PendingWorldScript::Code {
             id,
             code: cmd.code.clone(),
             authority,
             correlation_id,
+            workspace: admitted_workspace,
         },
         *limits,
     )?;
@@ -247,15 +252,11 @@ fn on_run_rhai_tool(
     pending_request: Res<PendingApiRequest>,
     mut pending: ResMut<PendingWorldScripts>,
     limits: Res<WorldScriptExecutionLimits>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
 ) -> Result<Ack, String> {
     let cmd = trigger.event();
-    if !lunco_tools::has_function(&cmd.tool, lunco_tools::UI_CLICK_FN) {
-        return Err(format!(
-            "Rhai tool '{}' is not a registered on_click/1 tool",
-            cmd.tool
-        ));
-    }
+    let owner = WorldToolOwner::capture(&cmd.tool, "on_click", None, workspace.as_deref())?;
     let id = active.get().unwrap_or(0);
     let authority = guard.and_then(|g| g.0);
     let correlation_id =
@@ -268,7 +269,7 @@ fn on_run_rhai_tool(
             args: cmd.args.clone(),
             authority,
             correlation_id,
-            owner_twin_id: None,
+            owner,
         },
         *limits,
     )?;
@@ -290,34 +291,12 @@ fn on_run_rhai_tool_hook(
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
 ) -> Result<Ack, String> {
     let cmd = trigger.event();
-    if cmd.hook.is_empty()
-        || !cmd
-            .hook
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-    {
-        return Err(format!(
-            "invalid Rhai tool hook '{}'; expected an identifier",
-            cmd.hook
-        ));
-    }
-    let signature = format!("{}/1", cmd.hook);
-    if !lunco_tools::has_function(&cmd.tool, &signature) {
-        return Err(format!(
-            "Rhai tool '{}' has no {} handler",
-            cmd.tool, signature
-        ));
-    }
-    if let Some(raw) = cmd.owner_twin_id {
-        let owner = lunco_workspace::TwinId::new(raw);
-        if workspace.as_deref().is_none_or(|workspace| {
-            workspace.active_twin != Some(owner) || workspace.twin(owner).is_none()
-        }) {
-            return Err(format!(
-                "Rhai tool hook Twin owner {raw} is no longer active"
-            ));
-        }
-    }
+    let owner = WorldToolOwner::capture(
+        &cmd.tool,
+        &cmd.hook,
+        cmd.owner_twin_id,
+        workspace.as_deref(),
+    )?;
     let id = active.get().unwrap_or(0);
     let authority = guard.and_then(|g| g.0);
     let correlation_id =
@@ -330,7 +309,7 @@ fn on_run_rhai_tool_hook(
             args: cmd.args.clone(),
             authority,
             correlation_id,
-            owner_twin_id: cmd.owner_twin_id,
+            owner,
         },
         *limits,
     )?;

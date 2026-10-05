@@ -82,7 +82,8 @@ typed failure.
 
 `SceneTeardown` retires programs projected from the outgoing scene. `TwinClosed`
 retires longer-lived resources admitted by that Twin: asset-backed tutorial
-scenarios, their source handles and documents, timelines, tool libraries,
+scenarios, their source handles and documents, queued one-shot requests,
+timelines, tool libraries,
 Modelica compiler source sets, and Twin-owned HUD state. A Twin tutorial gets
 its own script host instead of replacing an application-owned `WorldRoot`
 scenario. Each script stores the stable Twin ID separately from the scene
@@ -98,6 +99,10 @@ currently active Twin does not make an unmarked application script Twin-owned.
 The application Tutorials menu captures the active Twin at selection time and
 starts that tutorial instance under that Twin's lifecycle owner; this does not
 change the scope or lifetime of the application tool module.
+
+Deferred snippet and tool-call admission, ownership validation, and terminal
+close results are defined in
+[`rhai-integration.md`](rhai-integration.md#how-to-load--run-a-scenario).
 
 Scene-time selection runs once at the completed load/restart edge, after the
 stage dependency load and queued structural projection have drained. A

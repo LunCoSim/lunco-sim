@@ -126,18 +126,31 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   World access in the bounded FIFO `Repl` cycle. At most one request executes
   per `Update`, each invocation is limited to 100,000 Rhai operations, and a
   full 64-request queue rejects new work with a terminal error. Stdout is
-  returned in the original deferred response.
+  returned in the original deferred response. Admission captures the active
+  workspace Twin, including an explicitly empty workspace. Deferred code is
+  rejected if that workspace identity changes before evaluation; its execution
+  context remains `Application/Repl/Evaluation`.
 - **Structured UI tools:** `RunRhaiTool { tool, args }` and
   `RunRhaiToolHook { tool, hook, args }` enqueue typed calls in a bounded UI
   queue. The exclusive drain runs after Bevy picking in `PreUpdate`, before
   fixed simulation, and admits a bounded batch per application frame (one by
   default). Its capacity is independent of the REPL queue, so general `RunRhai`
   work cannot delay or consume admission for pointer and menu hooks. These calls
-  receive an `Application/Ui/Evaluation` context by default. A workbench menu
-  action captures its provider Twin or the currently active Twin at selection
-  time and carries that stable owner into the queued hook; the owner must still
-  be active when the hook runs. The route uses generation zero until the
-  tutorial scenario is admitted against the committed scene. General
+  resolve the registered tool and capture its actual `ToolScope` from one
+  registry snapshot. A Twin registration supplies its stable owner even when
+  `owner_twin_id` is omitted. An explicit interaction owner and a typed Twin
+  caller must agree with that registration. Before dispatch, the owner must
+  still be active and the visible tool must still belong to the admitted scope;
+  a lower-scope definition or another Twin's same-name tool cannot receive the
+  old request. Application tools keep `Application/Ui/Evaluation` context
+  unless the caller supplies a Twin flow or has a typed Twin route. A workbench
+  menu captures that flow owner at selection time. Twin tool-flow routes use
+  generation zero until a scenario is admitted against the committed scene.
+  `TwinClosed` removes its queued tool calls and snippets immediately, without
+  waiting for Rhai readiness, and completes deferred results as
+  `CommandRejected`. Drain-time ownership rejection uses the same terminal
+  result and a concise warning. Application-owned calls retain their own
+  lifetime. General
   `RunRhai` remains in the bounded FIFO `Repl` cycle in `Update`. Tool
   arguments use `TelemetryValue` and are
   converted directly to native Rhai values at the backend boundary. Scene click

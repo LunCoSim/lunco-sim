@@ -202,12 +202,18 @@ pub fn all() -> Vec<Arc<dyn Tool>> {
 
 /// A registered tool by name, if any.
 pub fn get(name: &str) -> Option<Arc<dyn Tool>> {
-    visible().get(name).map(|(_, tool)| Arc::clone(tool))
+    get_with_scope(name).map(|(_, tool)| tool)
+}
+
+/// Resolve a tool and its lifecycle owner from the same registry snapshot.
+/// Queued consumers retain the scope and revalidate it before dispatch.
+pub fn get_with_scope(name: &str) -> Option<(ToolScope, Arc<dyn Tool>)> {
+    visible().remove(name)
 }
 
 /// The layer that currently owns the visible tool, if any.
 pub fn active_scope(name: &str) -> Option<ToolScope> {
-    visible().get(name).map(|(scope, _)| scope.clone())
+    get_with_scope(name).map(|(scope, _)| scope)
 }
 
 /// Sorted names of every registered tool.
@@ -367,6 +373,9 @@ mod tests {
         register_scoped(twin.clone(), Arc::new(ScopedDummy(name)));
         set_active_twin(Some("probe".into()));
         assert_eq!(active_scope(name), Some(twin.clone()));
+        let (scope, tool) = get_with_scope(name).expect("resolved Twin tool snapshot");
+        assert_eq!(scope, twin);
+        assert_eq!(tool.name(), name);
 
         unregister_scope(&twin);
         set_active_twin(None);

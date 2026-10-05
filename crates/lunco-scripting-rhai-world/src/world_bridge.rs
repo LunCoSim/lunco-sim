@@ -5266,6 +5266,213 @@ impl PendingWorldScripts {
         let count = maximum.min(self.ui_queue.len());
         self.ui_queue.drain(..count).collect()
     }
+
+    fn take_twin_owned(&mut self, twin: lunco_workspace::TwinId) -> Vec<PendingWorldScript> {
+        let mut retired = Vec::new();
+        for queue in [&mut self.queue, &mut self.ui_queue] {
+            for request in std::mem::take(queue) {
+                if request.twin_owner() == Some(twin) {
+                    retired.push(request);
+                } else {
+                    queue.push(request);
+                }
+            }
+        }
+        retired
+    }
+}
+
+/// Workspace admitted by a queued live-world snippet. Its execution stays in
+/// the application REPL scope; the snapshot prevents deferred code from acting
+/// on a replacement Twin or on a Twin opened after an empty workspace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorldScriptWorkspace {
+    /// A host without workspace lifecycle ownership.
+    Detached,
+    /// The active Twin at admission, or the explicitly empty workspace.
+    Mounted(Option<lunco_workspace::TwinId>),
+}
+
+impl WorldScriptWorkspace {
+    pub fn capture(workspace: Option<&lunco_workspace::WorkspaceResource>) -> Result<Self, String> {
+        if let Some(twin) = script_flow_twin(None)? {
+            validate_active_script_twin(lunco_workspace::TwinId::new(twin), workspace)?;
+        }
+        let admitted = match workspace {
+            Some(workspace) => Self::Mounted(workspace.active_twin),
+            None => Self::Detached,
+        };
+        admitted.validate(workspace)?;
+        Ok(admitted)
+    }
+
+    fn validate(
+        self,
+        workspace: Option<&lunco_workspace::WorkspaceResource>,
+    ) -> Result<(), String> {
+        match self {
+            Self::Detached => Ok(()),
+            Self::Mounted(twin)
+                if workspace.is_some_and(|workspace| {
+                    workspace.active_twin == twin
+                        && twin.is_none_or(|twin| workspace.twin(twin).is_some())
+                }) =>
+            {
+                Ok(())
+            }
+            Self::Mounted(_) => {
+                Err("queued Rhai snippet belongs to a replaced workspace Twin".to_owned())
+            }
+        }
+    }
+}
+
+/// The registration scope and optional Twin flow admitted for one tool call.
+/// An application tool gains Twin lifetime when the caller has a typed Twin
+/// route or explicitly names a Twin-owned flow. A Twin registration always
+/// supplies its own owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorldToolOwner {
+    scope: lunco_tools::ToolScope,
+    twin: Option<lunco_workspace::TwinId>,
+}
+
+impl WorldToolOwner {
+    pub fn capture(
+        tool: &str,
+        hook: &str,
+        requested_twin: Option<u64>,
+        workspace: Option<&lunco_workspace::WorkspaceResource>,
+    ) -> Result<Self, String> {
+        validate_tool_hook_identifiers(tool, hook)?;
+        let (scope, registered) = lunco_tools::get_with_scope(tool)
+            .ok_or_else(|| format!("script tool '{tool}' is not registered"))?;
+        if !registered
+            .functions()
+            .iter()
+            .any(|function| function == &format!("{hook}/1"))
+        {
+            return Err(format!("script tool '{tool}' has no {hook}/1 handler"));
+        }
+        Self::from_scope(scope, script_flow_twin(requested_twin)?, workspace)
+    }
+
+    fn from_scope(
+        scope: lunco_tools::ToolScope,
+        requested_twin: Option<u64>,
+        workspace: Option<&lunco_workspace::WorkspaceResource>,
+    ) -> Result<Self, String> {
+        let registered_twin = match &scope {
+            lunco_tools::ToolScope::Twin(identity) => Some(
+                identity
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|id| *id != 0)
+                    .ok_or_else(|| format!("Rhai tool has invalid Twin owner '{identity}'"))?,
+            ),
+            _ => None,
+        };
+        if let (Some(registered), Some(requested)) = (registered_twin, requested_twin) {
+            if registered != requested {
+                return Err(format!(
+                    "Rhai tool belongs to Twin {registered}, not requested Twin {requested}"
+                ));
+            }
+        }
+        let owner = Self {
+            scope,
+            twin: registered_twin
+                .or(requested_twin)
+                .map(lunco_workspace::TwinId::new),
+        };
+        owner.validate_twin(workspace)?;
+        Ok(owner)
+    }
+
+    fn validate_twin(
+        &self,
+        workspace: Option<&lunco_workspace::WorkspaceResource>,
+    ) -> Result<(), String> {
+        if let Some(twin) = self.twin {
+            validate_active_script_twin(twin, workspace)?;
+        }
+        Ok(())
+    }
+
+    fn validate(
+        &self,
+        tool: &str,
+        workspace: Option<&lunco_workspace::WorkspaceResource>,
+    ) -> Result<(), String> {
+        self.validate_twin(workspace)?;
+        self.validate_scope(tool, lunco_tools::active_scope(tool).as_ref())
+    }
+
+    fn validate_scope(
+        &self,
+        tool: &str,
+        current: Option<&lunco_tools::ToolScope>,
+    ) -> Result<(), String> {
+        if current != Some(&self.scope) {
+            return Err(format!(
+                "queued Rhai tool '{tool}' no longer belongs to {}",
+                self.scope.identity()
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn script_flow_twin(requested: Option<u64>) -> Result<Option<u64>, String> {
+    let caller = match bridge_core::execution_context().route {
+        Some(route) if route.scope == lunco_core::RuntimeScope::Twin => Some(
+            route
+                .owner_id
+                .filter(|owner| *owner != 0)
+                .ok_or_else(|| "Twin Rhai call has no assigned owner identity".to_owned())?,
+        ),
+        _ => None,
+    };
+    if let (Some(caller), Some(requested)) = (caller, requested) {
+        if caller != requested {
+            return Err(format!(
+                "Twin Rhai caller {caller} cannot dispatch a flow owned by Twin {requested}"
+            ));
+        }
+    }
+    Ok(caller.or(requested))
+}
+
+fn validate_active_script_twin(
+    twin: lunco_workspace::TwinId,
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+) -> Result<(), String> {
+    if twin.raw() == 0
+        || workspace.is_none_or(|workspace| {
+            workspace.active_twin != Some(twin) || workspace.twin(twin).is_none()
+        })
+    {
+        return Err(format!(
+            "Rhai call Twin owner {} is no longer active",
+            twin.raw()
+        ));
+    }
+    Ok(())
+}
+
+fn validate_tool_hook_identifiers(tool: &str, hook: &str) -> Result<(), String> {
+    if tool.is_empty()
+        || !tool
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        || hook.is_empty()
+        || !hook
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return Err(format!("invalid script-tool hook '{tool}::{hook}'"));
+    }
+    Ok(())
 }
 
 /// A queued world-bound script operation. Tool arguments remain native to the
@@ -5276,6 +5483,7 @@ pub enum PendingWorldScript {
         code: String,
         authority: Option<lunco_command_contracts::SessionId>,
         correlation_id: Option<u64>,
+        workspace: WorldScriptWorkspace,
     },
     Tool {
         id: u64,
@@ -5284,8 +5492,63 @@ pub enum PendingWorldScript {
         args: TelemetryValue,
         authority: Option<lunco_command_contracts::SessionId>,
         correlation_id: Option<u64>,
-        owner_twin_id: Option<u64>,
+        owner: WorldToolOwner,
     },
+}
+
+impl PendingWorldScript {
+    fn request_ids(&self) -> (u64, Option<u64>) {
+        match self {
+            Self::Code {
+                id, correlation_id, ..
+            }
+            | Self::Tool {
+                id, correlation_id, ..
+            } => (*id, *correlation_id),
+        }
+    }
+
+    fn twin_owner(&self) -> Option<lunco_workspace::TwinId> {
+        match self {
+            Self::Code {
+                workspace: WorldScriptWorkspace::Mounted(twin),
+                ..
+            } => *twin,
+            Self::Code {
+                workspace: WorldScriptWorkspace::Detached,
+                ..
+            } => None,
+            Self::Tool { owner, .. } => owner.twin,
+        }
+    }
+}
+
+/// Complete deferred requests from a closed Twin without waiting for Rhai
+/// readiness. Application-owned work remains queued under its own lifetime.
+pub fn retire_twin_world_scripts(world: &mut World, twin: lunco_workspace::TwinId) {
+    let retired = world
+        .resource_mut::<PendingWorldScripts>()
+        .take_twin_owned(twin);
+    if !retired.is_empty() {
+        warn!(
+            "[rhai] retiring {} queued requests from closed Twin {}",
+            retired.len(),
+            twin.raw()
+        );
+    }
+    for request in retired {
+        let (id, correlation_id) = request.request_ids();
+        lunco_api::executor::finish_command_result(
+            world,
+            (id != 0).then_some(id),
+            correlation_id,
+            Err(format!(
+                "queued Rhai request was retired because Twin {} closed",
+                twin.raw()
+            )),
+            lunco_api_core::ApiErrorCode::CommandRejected,
+        );
+    }
 }
 
 std::thread_local! {
@@ -5404,6 +5667,26 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
         .get_resource::<Time<Real>>()
         .map(|time| time.elapsed_secs_f64());
     for request in pending {
+        let workspace = world.get_resource::<lunco_workspace::WorkspaceResource>();
+        let ownership = match &request {
+            PendingWorldScript::Code {
+                workspace: admitted,
+                ..
+            } => admitted.validate(workspace),
+            PendingWorldScript::Tool { tool, owner, .. } => owner.validate(tool, workspace),
+        };
+        if let Err(error) = ownership {
+            warn!("[rhai] {error}");
+            let (id, correlation_id) = request.request_ids();
+            lunco_api::executor::finish_command_result(
+                world,
+                (id != 0).then_some(id),
+                correlation_id,
+                Err(error),
+                lunco_api_core::ApiErrorCode::CommandRejected,
+            );
+            continue;
+        }
         if !ui && let Some(wall_secs) = wall_secs {
             if let Some(mut cadence) =
                 world.get_resource_mut::<lunco_core_runtime::ApplicationCadence>()
@@ -5417,6 +5700,7 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
                 code,
                 authority,
                 correlation_id,
+                workspace: _,
             } => (
                 id,
                 correlation_id,
@@ -5432,7 +5716,7 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
                 args,
                 authority,
                 correlation_id,
-                owner_twin_id,
+                owner,
             } => (
                 id,
                 correlation_id,
@@ -5457,7 +5741,7 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
                             } else {
                                 lunco_core::RuntimeCycle::Repl
                             },
-                            owner_twin_id,
+                            &owner,
                         )
                     }
                     Err(error) => Err(error.clone()),
@@ -5552,6 +5836,12 @@ pub fn eval_tool_with_world_as(
     args: &TelemetryValue,
     authority: Option<lunco_command_contracts::SessionId>,
 ) -> Result<String, String> {
+    let owner = WorldToolOwner::capture(
+        tool,
+        hook,
+        None,
+        world.get_resource::<lunco_workspace::WorkspaceResource>(),
+    )?;
     let engine = world_script_engine(world)?
         .ok_or_else(|| "Rhai runtime preparation is still in progress".to_owned())?;
     eval_tool_with_engine(
@@ -5562,7 +5852,7 @@ pub fn eval_tool_with_world_as(
         args,
         authority,
         lunco_core::RuntimeCycle::Repl,
-        None,
+        &owner,
     )
 }
 
@@ -5575,19 +5865,13 @@ fn eval_tool_with_engine(
     args: &TelemetryValue,
     authority: Option<lunco_command_contracts::SessionId>,
     cycle: lunco_core::RuntimeCycle,
-    owner_twin_id: Option<u64>,
+    owner: &WorldToolOwner,
 ) -> Result<String, String> {
-    if tool.is_empty()
-        || !tool
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-        || hook.is_empty()
-        || !hook
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-    {
-        return Err(format!("invalid script-tool hook '{tool}::{hook}'"));
-    }
+    validate_tool_hook_identifiers(tool, hook)?;
+    owner.validate(
+        tool,
+        world.get_resource::<lunco_workspace::WorkspaceResource>(),
+    )?;
     if !lunco_tools::has_function(tool, &format!("{hook}/1")) {
         return Err(format!("script tool '{tool}' has no {hook}/1 handler"));
     }
@@ -5598,19 +5882,8 @@ fn eval_tool_with_engine(
 
     let mut context =
         application_execution_context(world, cycle, lunco_core::RuntimePhase::Evaluation);
-    if let Some(raw) = owner_twin_id {
-        let twin = lunco_workspace::TwinId::new(raw);
-        if world
-            .get_resource::<lunco_workspace::WorkspaceResource>()
-            .is_none_or(|workspace| {
-                workspace.active_twin != Some(twin) || workspace.twin(twin).is_none()
-            })
-        {
-            return Err(format!(
-                "Rhai tool hook Twin owner {raw} is no longer active"
-            ));
-        }
-        context.route = Some(lunco_core::RuntimeRoute::twin_owned(cycle, 0, raw));
+    if let Some(twin) = owner.twin {
+        context.route = Some(lunco_core::RuntimeRoute::twin_owned(cycle, 0, twin.raw()));
     }
     let _scope = bridge_core::WorldScope::enter(world, context);
     bridge_core::set_script_authority(authority);
@@ -5915,6 +6188,7 @@ mod tests {
                 code: "1 + 1".to_owned(),
                 authority: None,
                 correlation_id: None,
+                workspace: super::WorldScriptWorkspace::Detached,
             }],
             ui_queue: Vec::new(),
         });
@@ -5940,6 +6214,7 @@ mod tests {
                     code: format!("print({id});"),
                     authority: None,
                     correlation_id: None,
+                    workspace: super::WorldScriptWorkspace::Detached,
                 },
                 limits,
             )
@@ -5980,6 +6255,197 @@ mod tests {
             WorldScriptExecutionLimits::default().max_operations(),
             100_000
         );
+    }
+
+    fn queue_owner_twin(
+        workspace: &mut lunco_workspace::WorkspaceResource,
+        root: &std::path::Path,
+    ) -> lunco_workspace::TwinId {
+        let twin = match lunco_workspace::TwinMode::open(root).expect("empty fixture folder opens")
+        {
+            lunco_workspace::TwinMode::Twin(twin) | lunco_workspace::TwinMode::Folder(twin) => twin,
+            lunco_workspace::TwinMode::Orphan(_) => panic!("fixture must be a workspace folder"),
+        };
+        workspace.add_twin(twin)
+    }
+
+    #[test]
+    fn queued_tool_owner_preserves_application_lifetime_and_pins_twin_flows() {
+        use super::WorldToolOwner;
+        use lunco_tools::ToolScope;
+
+        let first_root = tempfile::tempdir().expect("first generic owner fixture");
+        let second_root = tempfile::tempdir().expect("second generic owner fixture");
+        let mut workspace = lunco_workspace::WorkspaceResource::new();
+        let first = queue_owner_twin(&mut workspace, first_root.path());
+        let second = queue_owner_twin(&mut workspace, second_root.path());
+        let application =
+            WorldToolOwner::from_scope(ToolScope::Application, None, Some(&workspace))
+                .expect("application tool needs no Twin owner");
+        let application_flow =
+            WorldToolOwner::from_scope(ToolScope::Application, Some(first.raw()), Some(&workspace))
+                .expect("application tool can serve an explicit Twin flow");
+        let twin = WorldToolOwner::from_scope(
+            ToolScope::Twin(first.raw().to_string()),
+            None,
+            Some(&workspace),
+        )
+        .expect("Twin registration supplies its owner without a request field");
+        assert_eq!(twin.twin, Some(first));
+        assert!(
+            WorldToolOwner::from_scope(
+                ToolScope::Twin(first.raw().to_string()),
+                Some(second.raw()),
+                Some(&workspace)
+            )
+            .is_err()
+        );
+        assert!(
+            WorldToolOwner::from_scope(ToolScope::Twin("invalid".into()), None, Some(&workspace))
+                .is_err()
+        );
+
+        workspace.close_twin(first);
+        assert_eq!(workspace.active_twin, Some(second));
+        assert!(twin.validate_twin(Some(&workspace)).is_err());
+        assert!(application_flow.validate_twin(Some(&workspace)).is_err());
+        assert!(application.validate_twin(Some(&workspace)).is_ok());
+        assert!(
+            application
+                .validate_scope("probe", Some(&ToolScope::Application))
+                .is_ok()
+        );
+        assert!(
+            application
+                .validate_scope("probe", Some(&ToolScope::Twin(second.raw().to_string())))
+                .is_err()
+        );
+        assert!(
+            twin.validate_scope("probe", Some(&ToolScope::Twin(second.raw().to_string())))
+                .is_err()
+        );
+        assert!(
+            twin.validate_scope("probe", Some(&ToolScope::Application))
+                .is_err()
+        );
+        assert!(application.validate_scope("probe", None).is_err());
+
+        let mut pending = PendingWorldScripts::default();
+        let limits = WorldScriptExecutionLimits::default();
+        pending
+            .enqueue(
+                PendingWorldScript::Code {
+                    id: 1,
+                    code: String::new(),
+                    authority: None,
+                    correlation_id: Some(11),
+                    workspace: super::WorldScriptWorkspace::Mounted(Some(first)),
+                },
+                limits,
+            )
+            .expect("Twin snippet admission");
+        pending
+            .enqueue_ui(
+                PendingWorldScript::Tool {
+                    id: 2,
+                    tool: "probe".into(),
+                    hook: "on_click".into(),
+                    args: TelemetryValue::String(String::new()),
+                    authority: None,
+                    correlation_id: Some(12),
+                    owner: twin,
+                },
+                limits,
+            )
+            .expect("Twin tool admission");
+        pending
+            .enqueue_ui(
+                PendingWorldScript::Tool {
+                    id: 3,
+                    tool: "application_probe".into(),
+                    hook: "on_click".into(),
+                    args: TelemetryValue::String(String::new()),
+                    authority: None,
+                    correlation_id: Some(13),
+                    owner: application,
+                },
+                limits,
+            )
+            .expect("application tool admission");
+        let retired = pending.take_twin_owned(first);
+        assert!(matches!(
+            retired.as_slice(),
+            [
+                PendingWorldScript::Code {
+                    id: 1,
+                    correlation_id: Some(11),
+                    ..
+                },
+                PendingWorldScript::Tool {
+                    id: 2,
+                    correlation_id: Some(12),
+                    ..
+                },
+            ]
+        ));
+        assert!(!pending.has_pending());
+        assert!(matches!(
+            pending.take_ui_batch(1).as_slice(),
+            [PendingWorldScript::Tool { id: 3, .. }]
+        ));
+        assert!(!pending.has_ui_pending());
+        assert!(pending.take_twin_owned(first).is_empty());
+    }
+
+    #[test]
+    fn queued_snippet_workspace_fence_rejects_replacement_and_empty_to_mounted() {
+        use super::WorldScriptWorkspace;
+
+        let first_root = tempfile::tempdir().expect("first generic owner fixture");
+        let second_root = tempfile::tempdir().expect("second generic owner fixture");
+        let mut workspace = lunco_workspace::WorkspaceResource::new();
+        let empty =
+            WorldScriptWorkspace::capture(Some(&workspace)).expect("empty workspace admission");
+        let first = queue_owner_twin(&mut workspace, first_root.path());
+        assert!(empty.validate(Some(&workspace)).is_err());
+        let admitted =
+            WorldScriptWorkspace::capture(Some(&workspace)).expect("active workspace admission");
+        assert!(admitted.validate(Some(&workspace)).is_ok());
+        assert!(admitted.validate(None).is_err());
+        workspace.close_twin(first);
+        let second = queue_owner_twin(&mut workspace, second_root.path());
+        assert_ne!(first, second);
+        assert!(admitted.validate(Some(&workspace)).is_err());
+        assert!(
+            WorldScriptWorkspace::Detached
+                .validate(Some(&workspace))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn queued_flow_owner_cannot_override_its_typed_twin_caller() {
+        let caller = 41;
+        let context = lunco_core::RuntimeExecutionContext {
+            route: Some(lunco_core::RuntimeRoute::twin_owned(
+                lunco_core::RuntimeCycle::Ui,
+                3,
+                caller,
+            )),
+            phase: lunco_core::RuntimePhase::Evaluation,
+            ..lunco_core::RuntimeExecutionContext::unclassified()
+        };
+        let _scope = lunco_scripting_bridge_core::ExecutionContextScope::enter(context);
+        assert_eq!(
+            super::script_flow_twin(None).expect("caller owner is preserved"),
+            Some(caller)
+        );
+        assert_eq!(
+            super::script_flow_twin(Some(caller)).expect("matching flow owner"),
+            Some(caller)
+        );
+        assert!(super::script_flow_twin(Some(caller + 1)).is_err());
+        assert!(super::WorldScriptWorkspace::capture(None).is_err());
     }
 
     #[test]

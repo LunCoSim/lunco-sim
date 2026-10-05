@@ -250,6 +250,7 @@ fn wind_down_twin_scenarios(trigger: On<lunco_workspace::TwinClosed>, mut comman
 }
 
 fn wind_down_twin_scenarios_now(world: &mut World, twin: lunco_workspace::TwinId) {
+    lunco_scripting_rhai_world::world_bridge::retire_twin_world_scripts(world, twin);
     let hosts: Vec<_> = {
         let mut query = world.query::<(Entity, &commands::TwinScenarioHost)>();
         query
@@ -315,7 +316,7 @@ fn ui_world_scripts_are_queued(
 mod tests {
     use bevy::prelude::{App, IntoScheduleConfigs, ResMut, Resource, Update};
     use lunco_scripting_rhai_world::world_bridge::{
-        PendingWorldScript, PendingWorldScripts, WorldScriptExecutionLimits,
+        PendingWorldScript, PendingWorldScripts, WorldScriptExecutionLimits, WorldScriptWorkspace,
     };
 
     use super::world_scripts_are_queued;
@@ -346,6 +347,7 @@ mod tests {
                     code: String::new(),
                     authority: None,
                     correlation_id: None,
+                    workspace: WorldScriptWorkspace::Detached,
                 },
                 WorldScriptExecutionLimits::default(),
             )
