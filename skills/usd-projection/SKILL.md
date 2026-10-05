@@ -122,8 +122,11 @@ read/parse and editor-preview initial serialization remain synchronous; wasm
 worker transport for this path is not installed, so the owner reports that
 boundary visibly. The live USD stage stays with its thread-affine owner.
 Referenced stage closures follow the same event boundary before a reference is
-authored onto the live stage. Each instance shares the prepared source snapshot
-and owns its admitted canonical recipe alongside the real source handle. Native
+authored onto the live stage. Each instance retains the real source handle and
+one shared `UsdReferenceSnapshot` containing the canonical recipe, unscoped plan
+and actual loaded source revision. The canonical stage caches only weak snapshot
+identities: warm sibling reuse must validate the exact scene origin, current
+source recipe/plan and live mount before skipping address I/O and composition. Native
 file-URI references prepare confined typed addresses and `StageRecipe::reanchor`
 composition on the shared bounded reference lane, used by incremental spawns
 and coarse rebuilds. Preserve authored layer bytes and absolute identifiers;

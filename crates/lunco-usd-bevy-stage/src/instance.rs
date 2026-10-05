@@ -7,10 +7,30 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use bevy::asset::Handle;
+use bevy::asset::{AssetPath, Handle};
 use bevy::prelude::Component;
 
 use crate::{UsdStageAsset, UsdStageProjectionPlan};
+
+/// Actual loaded source revision and confined address behind a native reference.
+#[derive(Debug)]
+pub struct UsdNativeReferenceSource {
+    pub recipe: Arc<lunco_usd_compose::recipe::StageRecipe>,
+    pub plan: Arc<UsdStageProjectionPlan>,
+    pub path: AssetPath<'static>,
+    pub origin: Option<AssetPath<'static>>,
+    pub address_paths: Arc<lunco_assets_core::asset_path::PreparedAssetPaths>,
+}
+
+/// Immutable canonical reference preparation shared by its live instances.
+/// The unscoped plan and actual source revision outlive temporary worker entries;
+/// the canonical stage holds only a weak reference to this snapshot.
+#[derive(Debug)]
+pub struct UsdReferenceSnapshot {
+    pub recipe: Arc<lunco_usd_compose::recipe::StageRecipe>,
+    pub plan: Arc<UsdStageProjectionPlan>,
+    pub native_source: Option<UsdNativeReferenceSource>,
+}
 
 /// Seed marker for a runtime-spawned USD instance root.
 #[derive(Component, Debug, Clone, Copy)]
@@ -35,9 +55,8 @@ pub struct UsdInstanceProjection {
     /// The prepared source asset retained for as long as this instance is live.
     /// Sibling instances can then reuse its loaded recipe and immutable plan.
     pub source_asset: Handle<UsdStageAsset>,
-    /// Exact admitted composition identity and closure retained with the live
-    /// instance. The transport asset may use a different USD root identity.
-    pub reference_recipe: Arc<lunco_usd_compose::recipe::StageRecipe>,
+    /// Shared canonical closure, unscoped plan and actual source revision.
+    pub reference_snapshot: Arc<UsdReferenceSnapshot>,
     /// An instance-scoped view over the source asset's shared prepared plan.
     pub plan: Arc<UsdStageProjectionPlan>,
     /// Exact authored asset identity, retained for promotion into the live
@@ -56,7 +75,7 @@ impl UsdInstanceProjection {
     /// Build one prepared projection for a referenced instance.
     pub fn new(
         source_asset: Handle<UsdStageAsset>,
-        reference_recipe: Arc<lunco_usd_compose::recipe::StageRecipe>,
+        reference_snapshot: Arc<UsdReferenceSnapshot>,
         plan: Arc<UsdStageProjectionPlan>,
         asset_path: impl Into<String>,
         reference_prim_path: Option<String>,
@@ -65,7 +84,7 @@ impl UsdInstanceProjection {
         Self {
             root: None,
             source_asset,
-            reference_recipe,
+            reference_snapshot,
             plan,
             asset_path: asset_path.into(),
             reference_prim_path,

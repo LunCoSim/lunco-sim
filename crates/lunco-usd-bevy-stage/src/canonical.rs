@@ -29,7 +29,12 @@ use openusd::usd::{CommittedChange, Stage, StageSinkId};
 
 use crate::read::UsdReadSource;
 use crate::view::StageView;
-use crate::{UsdRead, UsdStageAsset, UsdStageProjectionPlan};
+use crate::{UsdRead, UsdReferenceSnapshot, UsdStageAsset, UsdStageProjectionPlan};
+
+struct ReferenceRecipe {
+    recipe: Weak<StageRecipe>,
+    prepared: Weak<UsdReferenceSnapshot>,
+}
 
 /// One committed change, owned + `Send`, as drained from the stage sink.
 /// (`CommittedChange` borrows the stage; we copy the paths out so the inbox can
@@ -84,7 +89,7 @@ pub struct CanonicalStage {
     resolver_revision: std::cell::Cell<u64>,
     /// Immutable source recipes already merged into this resolver. Weak
     /// references keep revision identity without retaining unloaded assets.
-    reference_recipes: HashMap<String, Weak<StageRecipe>>,
+    reference_recipes: HashMap<String, ReferenceRecipe>,
     /// Bumped by the drain step on each observed change (debug / asserts).
     pub generation: u64,
     /// Prepared snapshot known to describe this live stage at the recorded
@@ -560,7 +565,7 @@ impl CanonicalStage {
         if self
             .reference_recipes
             .get(&recipe.root_id)
-            .and_then(Weak::upgrade)
+            .and_then(|known| known.recipe.upgrade())
             .is_some_and(|known| Arc::ptr_eq(&known, recipe))
         {
             return self.resolver_bytes.is_some();
@@ -568,9 +573,59 @@ impl CanonicalStage {
         if self.add_layer_bytes_from(&recipe.bytes).is_none() {
             return false;
         }
-        self.reference_recipes
-            .insert(recipe.root_id.clone(), Arc::downgrade(recipe));
+        self.reference_recipes.insert(
+            recipe.root_id.clone(),
+            ReferenceRecipe {
+                recipe: Arc::downgrade(recipe),
+                prepared: Weak::new(),
+            },
+        );
         true
+    }
+
+    /// Merge the admitted closure before publishing its weak preparation identity.
+    /// Only live instances or pending admissions retain the source snapshot.
+    pub fn add_reference_snapshot(&mut self, snapshot: &Arc<UsdReferenceSnapshot>) -> bool {
+        if !self.add_layer_recipe(&snapshot.recipe) {
+            return false;
+        }
+        self.reference_recipes.insert(
+            snapshot.recipe.root_id.clone(),
+            ReferenceRecipe {
+                recipe: Arc::downgrade(&snapshot.recipe),
+                prepared: Arc::downgrade(snapshot),
+            },
+        );
+        true
+    }
+
+    /// Existing typed transport address for preparation from this exact origin.
+    /// The caller obtains the real loaded handle and current source revision.
+    pub fn reference_source_path(
+        &self,
+        reference: &str,
+        origin: Option<&bevy::asset::AssetPath<'_>>,
+    ) -> Option<bevy::asset::AssetPath<'static>> {
+        let snapshot = self.reference_recipes.get(reference)?.prepared.upgrade()?;
+        let source = snapshot.native_source.as_ref()?;
+        (source.origin.as_ref() == origin).then(|| source.path.clone())
+    }
+
+    /// Reuse a live preparation only for the actual loaded source recipe and plan.
+    /// Native address and payload tables still require live mount admission.
+    pub fn reference_snapshot(
+        &self,
+        reference: &str,
+        origin: Option<&bevy::asset::AssetPath<'_>>,
+        source_recipe: &Arc<StageRecipe>,
+        source_plan: &Arc<UsdStageProjectionPlan>,
+    ) -> Option<Arc<UsdReferenceSnapshot>> {
+        let snapshot = self.reference_recipes.get(reference)?.prepared.upgrade()?;
+        let source = snapshot.native_source.as_ref()?;
+        (source.origin.as_ref() == origin
+            && Arc::ptr_eq(&source.recipe, source_recipe)
+            && Arc::ptr_eq(&source.plan, source_plan))
+        .then_some(snapshot)
     }
 
     /// Copy selected authored specs and fields from `source` into one existing
@@ -1655,6 +1710,131 @@ mod recipe_tests {
     }
 
     #[test]
+    fn prepared_reference_reuse_matches_source_revision_origin_and_live_snapshot() {
+        use crate::{UsdNativeReferenceSource, UsdReferenceSnapshot};
+        use bevy::asset::AssetPath;
+        use lunco_assets_core::asset_path::PreparedAssetPaths;
+
+        let scene = StageRecipe::from_source("scene.usda", FIXTURE);
+        let mut canonical = CanonicalStage::from_recipe(&scene).expect("create canonical stage");
+        let source_recipe = Arc::new(StageRecipe::from_source(
+            "twin://current/part.usda",
+            "#usda 1.0\n( defaultPrim = \"Root\" )\ndef Xform \"Root\" {}\n",
+        ));
+        let source_plan =
+            Arc::new(UsdStageProjectionPlan::from_recipe(&source_recipe).expect("source plan"));
+        let recipe = Arc::new(
+            source_recipe
+                .reanchor("file:///C:/shared/part.usda")
+                .expect("canonical reference"),
+        );
+        let plan = Arc::new(UsdStageProjectionPlan::from_recipe(&recipe).expect("canonical plan"));
+        let origin =
+            AssetPath::from(std::path::PathBuf::from("current/scene.usda")).with_source("twin");
+        let path =
+            AssetPath::from(std::path::PathBuf::from("current/part.usda")).with_source("twin");
+        let snapshot = Arc::new(UsdReferenceSnapshot {
+            recipe: Arc::clone(&recipe),
+            plan: Arc::clone(&plan),
+            native_source: Some(UsdNativeReferenceSource {
+                recipe: Arc::clone(&source_recipe),
+                plan: Arc::clone(&source_plan),
+                path: path.clone(),
+                origin: Some(origin.clone()),
+                address_paths: Arc::new(PreparedAssetPaths::for_origin(Some(origin.clone()))),
+            }),
+        });
+        assert!(canonical.add_reference_snapshot(&snapshot));
+        assert!(
+            canonical.has_layer_bytes(&recipe.root_id),
+            "publication must first admit the canonical closure"
+        );
+        let revision = canonical.layer_bytes_revision();
+        assert!(canonical.add_reference_snapshot(&snapshot));
+        assert_eq!(canonical.layer_bytes_revision(), revision);
+        assert_eq!(
+            canonical.reference_source_path(&recipe.root_id, Some(&origin)),
+            Some(path)
+        );
+        let sibling = canonical
+            .reference_snapshot(&recipe.root_id, Some(&origin), &source_recipe, &source_plan)
+            .expect("warm reference");
+        assert!(Arc::ptr_eq(&sibling, &snapshot));
+        assert!(Arc::ptr_eq(&sibling.recipe, &recipe));
+        assert!(Arc::ptr_eq(&sibling.plan, &plan));
+        let foreign_origin =
+            AssetPath::from(std::path::PathBuf::from("reopened/scene.usda")).with_source("twin");
+        assert!(
+            canonical
+                .reference_source_path(&recipe.root_id, Some(&foreign_origin))
+                .is_none()
+        );
+        assert!(
+            canonical
+                .reference_snapshot(
+                    &recipe.root_id,
+                    Some(&foreign_origin),
+                    &source_recipe,
+                    &source_plan
+                )
+                .is_none()
+        );
+        let next_recipe = Arc::new((*source_recipe).clone());
+        let next_plan = Arc::new((*source_plan).clone());
+        assert!(
+            canonical
+                .reference_snapshot(&recipe.root_id, Some(&origin), &next_recipe, &source_plan)
+                .is_none()
+        );
+        assert!(
+            canonical
+                .reference_snapshot(&recipe.root_id, Some(&origin), &source_recipe, &next_plan)
+                .is_none()
+        );
+
+        let instance = crate::UsdInstanceProjection::new(
+            bevy::asset::Handle::default(),
+            Arc::clone(&snapshot),
+            Arc::new(plan.for_instance("/Instance").expect("instance plan")),
+            recipe.root_id.clone(),
+            None,
+            None,
+        );
+        let second_instance = crate::UsdInstanceProjection::new(
+            bevy::asset::Handle::default(),
+            Arc::clone(&sibling),
+            Arc::new(plan.for_instance("/Sibling").expect("sibling plan")),
+            recipe.root_id.clone(),
+            None,
+            None,
+        );
+        drop(snapshot);
+        drop(sibling);
+        assert!(Arc::ptr_eq(
+            &instance.reference_snapshot,
+            &second_instance.reference_snapshot
+        ));
+        assert!(
+            canonical
+                .reference_snapshot(&recipe.root_id, Some(&origin), &source_recipe, &source_plan)
+                .is_some()
+        );
+        drop(instance);
+        drop(second_instance);
+        assert!(
+            canonical
+                .reference_source_path(&recipe.root_id, Some(&origin))
+                .is_none()
+        );
+        assert!(
+            canonical
+                .reference_snapshot(&recipe.root_id, Some(&origin), &source_recipe, &source_plan)
+                .is_none(),
+            "weak cache cannot retain historical preparation"
+        );
+    }
+
+    #[test]
     fn instance_readers_switch_to_the_live_stage_when_promoted() {
         let scene = StageRecipe::from_source(
             "scene.usda",
@@ -1674,10 +1854,16 @@ mod recipe_tests {
 
         let mut stages = CanonicalStages::default();
         stages.insert(handle.id(), canonical);
+        let reference_plan =
+            Arc::new(UsdStageProjectionPlan::from_recipe(&referenced).expect("prepare reference"));
         let projection = crate::UsdInstanceProjection::new(
             bevy::asset::Handle::default(),
-            Arc::new(referenced.clone()),
-            Arc::new(UsdStageProjectionPlan::from_recipe(&referenced).expect("prepare reference")),
+            Arc::new(crate::UsdReferenceSnapshot {
+                recipe: Arc::new(referenced.clone()),
+                plan: Arc::clone(&reference_plan),
+                native_source: None,
+            }),
+            reference_plan,
             "lunco://test/reference.usda",
             None,
             Some("Xform".into()),

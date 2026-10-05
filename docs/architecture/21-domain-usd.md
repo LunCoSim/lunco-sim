@@ -1023,9 +1023,12 @@ and `lunco-usd-prim-tree-ui` owns the reusable prim tree.
   live prim once for each changed path. A referenced spawn merges its immutable
   `StageRecipe` through the canonical stage's weak recipe-identity cache. Reuse
   of the same admitted recipe avoids another closure scan, while a new recipe
-  revision refreshes changed layer bytes. Each live instance retains its
-  canonical reference recipe and real source asset handle; the canonical
-  stage's identity cache does not retain unloaded assets. Cold source
+  revision refreshes changed layer bytes. Each live instance retains the real
+  source asset handle and a shared `UsdReferenceSnapshot` containing its canonical
+  recipe, unscoped prepared plan and actual loaded source revision. The canonical
+  stage's weak snapshot cache does not retain unloaded assets. Warm native
+  instances reuse the snapshot only after exact-origin, source-revision and live
+  mount checks; they do not repeat address I/O or canonical composition. Cold source
   preparation remains asynchronous, and only the affected instance is admitted
   at the ordered live-stage boundary. Its prepared read view shares the
   immutable source snapshot and stores only the instance namespace and root

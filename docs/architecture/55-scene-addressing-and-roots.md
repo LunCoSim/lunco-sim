@@ -187,7 +187,14 @@ prepare the address, retain the real Twin-source asset handle, and compose a
 `StageRecipe::reanchor` snapshot under the authored canonical root. Reanchoring
 uses the shared USD dependency reader, changes relative layer anchors, preserves
 explicit absolute identifiers and layer bytes, and produces no alias keys.
-The live instance owns that canonical recipe as well as its source handle.
+Each live instance retains the real source handle and a shared
+`UsdReferenceSnapshot`: the canonical recipe, unscoped prepared plan and actual
+loaded source recipe/plan revision. The canonical stage's existing reference
+cache holds only weak snapshot/recipe identities. A sibling obtains the actual
+loaded handle through the cached typed source address, then rechecks the exact
+scene origin, current source revisions and live native admission tables before
+sharing that snapshot. This path performs no filesystem work or composition;
+expired snapshots and changed sources require preparation on the reference lane.
 Completion checks the exact stage lifetime/generation, source origin, worker
 operation and live mount, plus the loaded source recipe/plan revision. Native
 tables merge into the same scene admission cache before instance publication.

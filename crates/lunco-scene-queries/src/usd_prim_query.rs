@@ -871,10 +871,14 @@ mod query_generation_tests {
         let stage_handle = Handle::<UsdStageAsset>::default();
         let mut projection = UsdInstanceProjection::new(
             Handle::default(),
-            Arc::new(lunco_usd_compose::recipe::StageRecipe::from_source(
-                "reference.usda",
-                "#usda 1.0\ndef Scope \"Root\" {}\n",
-            )),
+            Arc::new(lunco_usd_bevy_stage::UsdReferenceSnapshot {
+                recipe: Arc::new(lunco_usd_compose::recipe::StageRecipe::from_source(
+                    "reference.usda",
+                    "#usda 1.0\ndef Scope \"Root\" {}\n",
+                )),
+                plan: Arc::new(UsdStageProjectionPlan::default()),
+                native_source: None,
+            }),
             Arc::new(UsdStageProjectionPlan::default()),
             "reference.usda",
             None,

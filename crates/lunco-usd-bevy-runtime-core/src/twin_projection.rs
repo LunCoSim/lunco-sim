@@ -5049,7 +5049,7 @@ fn ensure_reference_layers_for_rebuild(
         if crate::native_references::is_native(&reference_id) {
             match crate::native_references::reference(world, scene_id, &reference_id) {
                 Ok(Some(prepared)) => {
-                    extra.extend(prepared.recipe.bytes.clone());
+                    extra.extend(prepared.snapshot.recipe.bytes.clone());
                     world
                         .resource_mut::<PendingRefSpawns>()
                         .retained_assets
@@ -5292,7 +5292,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
         }
         let recipe = prepared_native
             .as_ref()
-            .map(|prepared| Arc::clone(&prepared.recipe))
+            .map(|prepared| Arc::clone(&prepared.snapshot.recipe))
             .or_else(|| {
                 world
                     .resource::<Assets<UsdStageAsset>>()
@@ -5344,7 +5344,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
         }
         let source_plan = prepared_native
             .as_ref()
-            .map(|prepared| Arc::clone(&prepared.plan))
+            .map(|prepared| Arc::clone(&prepared.snapshot.plan))
             .or_else(|| {
                 world
                     .resource::<Assets<UsdStageAsset>>()
@@ -5361,6 +5361,16 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             still.push(item);
             continue;
         };
+        let reference_snapshot = prepared_native
+            .as_ref()
+            .map(|prepared| Arc::clone(&prepared.snapshot))
+            .unwrap_or_else(|| {
+                Arc::new(lunco_usd_bevy_stage::UsdReferenceSnapshot {
+                    recipe: Arc::clone(&recipe),
+                    plan: Arc::clone(&source_plan),
+                    native_source: None,
+                })
+            });
         let mut plan = match {
             let _span = bevy::log::info_span!("usd_reference_instance_plan_remap").entered();
             source_plan.for_instance(&item.prim_path)
@@ -5522,7 +5532,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                 .any(|op| !deferred_op_is_represented_by_instance_plan(op, &item.prim_path));
         let projection = UsdInstanceProjection::new(
             ref_handle,
-            Arc::clone(&recipe),
+            Arc::clone(&reference_snapshot),
             Arc::new(plan),
             item.asset_path.clone(),
             item.reference_prim_path.clone(),
@@ -5546,7 +5556,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             .entered();
             let prepared_paths = prepared_native
                 .as_ref()
-                .and_then(|prepared| prepared.plan.native_asset_paths_snapshot());
+                .and_then(|prepared| prepared.snapshot.plan.native_asset_paths_snapshot());
             match world.get_non_send_mut::<CanonicalStages>() {
                 Some(mut stages) => match stages.get_mut(item.scene_id) {
                     Some(cs) => {
@@ -5566,7 +5576,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                             Some(Err(format!(
                                 "native reference preparation owner mismatch: {error}"
                             )))
-                        } else if !cs.add_layer_recipe(&recipe) {
+                        } else if !cs.add_reference_snapshot(&reference_snapshot) {
                             Some(Err(
                                 "the owning stage cannot accept referenced layer bytes".to_owned()
                             ))
@@ -5895,7 +5905,11 @@ mod tests {
             .expect("remap source plan");
         let mut projection = UsdInstanceProjection::new(
             Handle::default(),
-            Arc::clone(&reference_recipe),
+            Arc::new(lunco_usd_bevy_stage::UsdReferenceSnapshot {
+                recipe: Arc::clone(&reference_recipe),
+                plan: Arc::clone(&source.projection_plan),
+                native_source: None,
+            }),
             Arc::new(plan),
             "reference.usda",
             None,
@@ -6992,10 +7006,14 @@ mod tests {
                 PendingInstanceProjection {
                     projection: UsdInstanceProjection::new(
                         Handle::default(),
-                        Arc::new(lunco_usd_compose::recipe::StageRecipe::from_source(
-                            "reference.usda",
-                            TINY,
-                        )),
+                        Arc::new(lunco_usd_bevy_stage::UsdReferenceSnapshot {
+                            recipe: Arc::new(lunco_usd_compose::recipe::StageRecipe::from_source(
+                                "reference.usda",
+                                TINY,
+                            )),
+                            plan: Arc::new(UsdStageProjectionPlan::default()),
+                            native_source: None,
+                        }),
                         Arc::new(UsdStageProjectionPlan::default()),
                         "",
                         None,
