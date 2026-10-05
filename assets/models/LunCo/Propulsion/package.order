@@ -6,5 +6,7 @@ RCSJet
 RCSFlowAggregator
 PropellantTank
 Turbopump
+PressureFedValve
 CombustionChamber
+PressureFedCombustionChamber
 PropellantStatus

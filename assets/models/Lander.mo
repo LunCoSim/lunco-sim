@@ -130,9 +130,9 @@ model Lander
     "Requested rate deadband, capped below the settled-touchdown rate tolerance";
 
   // Generic actuator demands. `throttle` is a normalized command for the
-  // main-engine valve network. Torque is a body-frame request consumed by the
+  // main-engine feed controller. Torque is a body-frame request consumed by the
   // USD-composed attitude actuator network.
-  output Real throttle "Main-engine valve-opening request, 0..1";
+  output Real throttle "Normalized main-engine thrust/flow request, 0..1";
   output Real torque_x "Requested body torque about X (N.m)";
   output Real torque_y "Requested body torque about Y (N.m)";
   output Real torque_z "Requested body torque about Z (N.m)";

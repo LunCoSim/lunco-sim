@@ -23,7 +23,7 @@ model PropellantTank
   output Real low_fuel "Low-fuel event signal";
   output Real depleted "Empty-tank event signal";
 
-  Real mass(start = initial_mass_kg);
+  Real mass(start = initial_mass_kg, fixed = true);
 
 equation
   der(mass) = outlet.mass_flow_kgs - max(0.0, auxiliary_mass_flow_kgs);

@@ -45,24 +45,28 @@ model CombustionChamber
     "Specific enthalpy arriving with the oxidizer stream, J/kg";
 
 equation
-  fuel_flow_kgs = max(0.0, fuel_in.mass_flow_kgs);
-  oxidizer_flow_kgs = max(0.0, oxidizer_in.mass_flow_kgs);
+  fuel_flow_kgs = noEvent(max(0.0, fuel_in.mass_flow_kgs));
+  oxidizer_flow_kgs = noEvent(max(0.0, oxidizer_in.mass_flow_kgs));
   fuel_specific_enthalpy_j_kg = inStream(fuel_in.specific_enthalpy_j_kg);
   oxidizer_specific_enthalpy_j_kg = inStream(oxidizer_in.specific_enthalpy_j_kg);
   fuel_in.specific_enthalpy_j_kg = reverse_flow_specific_enthalpy_j_kg;
   oxidizer_in.specific_enthalpy_j_kg = reverse_flow_specific_enthalpy_j_kg;
   propellant_flow = max(0.0, fuel_flow_kgs) + max(0.0, oxidizer_flow_kgs);
-  mixture_ratio = max(0.0, oxidizer_flow_kgs)
-    / max(minimum_flow_kgs, max(0.0, fuel_flow_kgs));
+  mixture_ratio = oxidizer_flow_kgs
+    / noEvent(max(minimum_flow_kgs, fuel_flow_kgs));
   mixture_ratio_error = mixture_ratio - oxidizer_to_fuel_ratio;
-  mixture_efficiency = max(0.0, min(1.0,
+  mixture_efficiency = noEvent(max(0.0, min(1.0,
     1.0 - abs(mixture_ratio_error)
-      / max(minimum_mixture_ratio, oxidizer_to_fuel_ratio)));
+      / max(minimum_mixture_ratio, oxidizer_to_fuel_ratio))));
   // Activity is combustion, not merely propellant passing through a feed.
   // A missing reactant makes mixture_efficiency and useful combustion zero.
-  activity = max(0.0, min(1.0, propellant_flow * mixture_efficiency
-    / max(minimum_flow_kgs, nominal_flow_kgs)));
-  chamber_pressure_pa = 0.5 * (fuel_in.pressure_pa + oxidizer_in.pressure_pa);
+  activity = noEvent(max(0.0, min(1.0, propellant_flow * mixture_efficiency
+    / max(minimum_flow_kgs, nominal_flow_kgs))));
+  // Liquid feed pressure is not combustion pressure. The choked gas throat
+  // relates useful combustion flow to pressure through characteristic velocity.
+  // A missing reactant therefore produces neither pressure nor useful exhaust.
+  chamber_pressure_pa = ideal_chamber_pressure_pa
+    * combustion_efficiency * mixture_efficiency;
   ideal_chamber_pressure_pa = propellant_flow * characteristic_velocity_mps
     / max(minimum_throat_area_m2, throat_area_m2);
   chamber_temperature_k = chamber_temperature_full_k * activity
