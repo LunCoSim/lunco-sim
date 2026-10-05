@@ -52,6 +52,12 @@ and content revision cache; a matching logical name alone never admits an
 editable checkout. A conflicting live logical name rejects visibly.
 Verified cache bytes and the cached-Twin catalog are application resources.
 
+Deferred ownership and document messages retain their exact admitted byte cost.
+Retiring one scene removes only its messages and budget. A change to the actual
+ready scene scope retries the remaining queue without requiring another network
+packet; unchanged waiting scopes do not serialize the queue each frame. Future
+Twin traffic remains bounded and cannot apply until that exact scope is ready.
+
 Client Twin merge uses a `ReplicatedJournal` isolated by exact mount and
 connection. Independent Twins may reuse journal EntryIds, so their slots cannot
 share the local persistent journal. Application traffic uses its explicitly bound

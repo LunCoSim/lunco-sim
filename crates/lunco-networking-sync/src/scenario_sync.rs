@@ -189,29 +189,9 @@ impl ClientScenarioLifecycle<'_> {
             self.spawns.retire(connection, owner);
             self.journal
                 .retire(lunco_core_session::ReplicationScope::Twin(owner));
-            self.deferred
-                .entries
-                .retain(|(_, envelope)| match envelope {
-                    SyncEnvelope::Ownership(message) => {
-                        message.scope
-                            != crate::scope::wire_scope(lunco_core_session::ReplicationScope::Twin(
-                                owner,
-                            ))
-                    }
-                    SyncEnvelope::JournalEntry(message) => {
-                        message.scope
-                            != crate::scope::wire_scope(lunco_core_session::ReplicationScope::Twin(
-                                owner,
-                            ))
-                    }
-                    SyncEnvelope::JournalBatch(messages) => !messages.iter().any(|message| {
-                        message.scope
-                            == crate::scope::wire_scope(lunco_core_session::ReplicationScope::Twin(
-                                owner,
-                            ))
-                    }),
-                    _ => true,
-                });
+            self.deferred.retire_scope(crate::scope::wire_scope(
+                lunco_core_session::ReplicationScope::Twin(owner),
+            ));
         }
         if let Some(scene) = self.scene.0.as_ref() {
             self.spawns.retire(scene.connection, scene.host_twin);
@@ -2004,8 +1984,132 @@ mod tests {
 /// Byte admission uses the transport's hard envelope budget.
 #[derive(Resource, Default)]
 pub(crate) struct DeferredSceneMessages {
-    pub entries: Vec<(SessionId, SyncEnvelope)>,
-    pub bytes: usize,
+    entries: Vec<DeferredSceneMessage>,
+    bytes: usize,
+    attempted_scope: Option<lunco_core_session::ReplicationScope>,
+}
+
+struct DeferredSceneMessage {
+    sender: SessionId,
+    envelope: SyncEnvelope,
+    bytes: usize,
+}
+
+impl DeferredSceneMessages {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub(crate) fn needs_retry(&self, scope: Option<lunco_core_session::ReplicationScope>) -> bool {
+        !self.is_empty() && scope.is_some() && scope != self.attempted_scope
+    }
+
+    pub(crate) fn take(
+        &mut self,
+        scope: Option<lunco_core_session::ReplicationScope>,
+    ) -> Vec<(SessionId, SyncEnvelope)> {
+        self.bytes = 0;
+        self.attempted_scope = scope;
+        std::mem::take(&mut self.entries)
+            .into_iter()
+            .map(|entry| (entry.sender, entry.envelope))
+            .collect()
+    }
+
+    pub(crate) fn admit(
+        &mut self,
+        sender: SessionId,
+        envelope: SyncEnvelope,
+    ) -> Result<(), String> {
+        let bytes = crate::codec::serialize_env(&envelope)
+            .ok_or_else(|| {
+                "cannot encode deferred scene message within the envelope budget".to_owned()
+            })?
+            .len();
+        let total = self
+            .bytes
+            .checked_add(bytes)
+            .filter(|total| *total <= crate::codec::MAX_ENVELOPE_BYTES)
+            .ok_or_else(|| "deferred scene replay exceeds envelope budget".to_owned())?;
+        self.entries.push(DeferredSceneMessage {
+            sender,
+            envelope,
+            bytes,
+        });
+        self.bytes = total;
+        Ok(())
+    }
+
+    pub(crate) fn retire_scope(&mut self, scope: crate::scope::WireSceneScope) {
+        let bytes = &mut self.bytes;
+        self.entries.retain(|entry| {
+            let owned = match &entry.envelope {
+                SyncEnvelope::Ownership(message) => message.scope == scope,
+                SyncEnvelope::JournalEntry(message) => message.scope == scope,
+                SyncEnvelope::JournalBatch(messages) => {
+                    messages.iter().any(|message| message.scope == scope)
+                }
+                _ => false,
+            };
+            if owned {
+                *bytes -= entry.bytes;
+            }
+            !owned
+        });
+    }
+}
+
+#[cfg(test)]
+mod deferred_scene_tests {
+    use super::*;
+
+    #[test]
+    fn retired_scope_releases_only_its_byte_budget_and_take_is_independent_of_new_traffic() {
+        let mut pending = DeferredSceneMessages::default();
+        let scope_a = crate::scope::WireSceneScope::Twin { mount_id: 1 };
+        let scope_b = crate::scope::WireSceneScope::Twin { mount_id: 2 };
+        let a = SyncEnvelope::JournalEntry(crate::journal_plane::JournalEntryMsg {
+            scope: scope_a,
+            json: "first".into(),
+        });
+        let b = SyncEnvelope::JournalEntry(crate::journal_plane::JournalEntryMsg {
+            scope: scope_b,
+            json: "replacement".into(),
+        });
+        let b_bytes = crate::codec::serialize_env(&b).unwrap().len();
+        pending.admit(SessionId::LOCAL, a).unwrap();
+        pending.admit(SessionId::LOCAL, b).unwrap();
+        assert!(pending.bytes > b_bytes);
+        pending.retire_scope(scope_a);
+        assert_eq!(pending.bytes, b_bytes);
+        let live = Some(lunco_core_session::ReplicationScope::Twin(
+            lunco_workspace::TwinId::new(2),
+        ));
+        assert!(
+            !pending.needs_retry(None),
+            "a missing scene must not re-encode the queue every frame"
+        );
+        assert!(
+            pending.needs_retry(live),
+            "scene admission retries without new traffic"
+        );
+        let ready = pending.take(live);
+        assert_eq!(ready.len(), 1);
+        assert!(
+            matches!(&ready[0].1, SyncEnvelope::JournalEntry(message) if message.scope == scope_b)
+        );
+        assert!(pending.is_empty());
+        assert_eq!(pending.bytes, 0);
+        assert!(!pending.needs_retry(live));
+
+        let over_limit = SyncEnvelope::JournalEntry(crate::journal_plane::JournalEntryMsg {
+            scope: scope_b,
+            json: "x".repeat(crate::codec::MAX_ENVELOPE_BYTES),
+        });
+        assert!(pending.admit(SessionId::LOCAL, over_limit).is_err());
+        assert!(pending.is_empty());
+        assert_eq!(pending.bytes, 0);
+    }
 }
 
 /// Connection whose version/author handshake has been admitted.

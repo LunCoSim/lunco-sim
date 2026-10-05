@@ -1172,7 +1172,13 @@ pub fn drain_sync_inbox(
         inbox.entries.clear();
         return;
     }
-    if inbox.entries.is_empty() {
+    let current_scope = ctx.scope.client_scope(
+        ctx.connection.0,
+        ctx.scenario.scene.0.as_ref(),
+        ctx.scenario.remote.host_twin,
+    );
+    let retry_scene = ctx.scenario.deferred.needs_retry(current_scope);
+    if inbox.entries.is_empty() && !retry_scene {
         return;
     }
     let mut drained: Vec<(SessionId, SyncEnvelope)> = std::mem::take(&mut inbox.entries);
@@ -1192,9 +1198,8 @@ pub fn drain_sync_inbox(
             }
         });
     }
-    if *role == NetworkRole::Client {
-        drained.splice(0..0, std::mem::take(&mut ctx.scenario.deferred.entries));
-        ctx.scenario.deferred.bytes = 0;
+    if *role == NetworkRole::Client && retry_scene {
+        drained.splice(0..0, ctx.scenario.deferred.take(current_scope));
     }
     // Order within a frame: possession/structural commands BEFORE control commands.
     // Only sort when a control command is actually present — otherwise every entry
@@ -1229,27 +1234,13 @@ pub fn drain_sync_inbox(
                         (
                             Some(connection),
                             Some(lunco_core_session::ReplicationScope::Twin(twin)),
-                        ) => {
-                            !ctx.scenario.spawns.is_retired(connection, twin)
-                                && (ctx.scenario.remote.host_twin.is_none()
-                                    || ctx.scenario.remote.host_twin == Some(twin))
-                        }
+                        ) => !ctx.scenario.spawns.is_retired(connection, twin),
                         _ => false,
                     };
                     if pending {
-                        let bytes = crate::codec::serialize_env(&env)
-                            .map(|bytes| bytes.len())
-                            .unwrap_or(crate::codec::MAX_ENVELOPE_BYTES);
-                        if ctx.scenario.deferred.bytes.saturating_add(bytes)
-                            > crate::codec::MAX_ENVELOPE_BYTES
-                        {
-                            error!(
-                                "[net] deferred scene replay exceeds envelope budget; disconnecting"
-                            );
+                        if let Err(error) = ctx.scenario.deferred.admit(sender, env) {
+                            error!("[net] {error}; disconnecting");
                             commands.trigger(lunco_core_session::NetDisconnectRequest {});
-                        } else {
-                            ctx.scenario.deferred.bytes += bytes;
-                            ctx.scenario.deferred.entries.push((sender, env));
                         }
                     } else {
                         warn!("[net] rejected scene message from a retired or mismatched owner");
