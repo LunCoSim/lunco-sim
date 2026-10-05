@@ -508,3 +508,10 @@ boundary—not to weaken the claim to make it scriptable.
 minimum and maximum in body-local metres (or null without a collider). Use this
 to compare admitted collision geometry with authored envelopes before changing
 proxy dimensions in response to a contact failure.
+
+Retained observers must wait for replacement-scene readiness before rebinding
+their dependency plan. Preserving VM state does not preserve Modelica participant
+identities or make partially projected entities readable. The lifecycle regression
+`retained_scenario_rebinds_dependencies_without_restarting` holds the incoming
+scene, proves no dependency callback runs during that hold, and admits exactly one
+replacement plan after release without calling `on_start` again.

@@ -2479,7 +2479,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     continue;
                 }
 
-                if external_progress_blocked && !st.started {
+                // Retained programs rebind to replacement participants just
+                // like a fresh program. Keep the outgoing VM state, but wait
+                // for the incoming scene owners to finish their admission.
+                if external_progress_blocked
+                    && (!st.started || st.scene_generation != scene_generation)
+                {
                     continue;
                 }
 
@@ -3909,6 +3914,19 @@ mod lifecycle_readiness_tests {
             .runtime
             .plan
             .query_reads = vec!["After".into()];
+        // A retained VM must not validate its replacement dependency plan
+        // while the new scene's Modelica participant projection is held.
+        world.insert_resource(lunco_readiness::ReadinessState {
+            world_hold: true,
+            ..Default::default()
+        });
+        ScenarioDriver::<DependencyRuntime>::prepare_compiles(&mut world, ScriptLanguage::Rhai);
+        ScenarioDriver::<DependencyRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        assert_eq!(*plan_calls.lock().unwrap(), 1);
+        assert!(world.resource::<ScenarioDriver<DependencyRuntime>>().fsm[&host].started);
+        world
+            .resource_mut::<lunco_readiness::ReadinessState>()
+            .world_hold = false;
         ScenarioDriver::<DependencyRuntime>::prepare_compiles(&mut world, ScriptLanguage::Rhai);
         ScenarioDriver::<DependencyRuntime>::run(&mut world, ScriptLanguage::Rhai);
         assert_eq!(*plan_calls.lock().unwrap(), 2);
