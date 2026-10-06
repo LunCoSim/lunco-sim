@@ -27,12 +27,12 @@ fn on_start(me, params) {
     }
     cmd("OpenFile", #{path: params.remote_path});
     cmd("OpenFile", #{path: params.application_path});
-    #{done: false, ticks: 0, phase: "opening", initial_ids: ids,
+    this = #{done: false, ticks: 0, phase: "opening", initial_ids: ids,
       remote_path: params.remote_path, remote_class: params.remote_class,
       application_class: params.application_class, dirty_source: params.dirty_source,
       remote: 0, application: 0, owner: (), dirty_generation: 0, after_leave: 0}
 }
-fn on_tick(me, ctx, dt) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.ticks += 1;
     if this.ticks > 4000 { this = finish(this, ["remote file gate timed out at " + this.phase]); return; }
