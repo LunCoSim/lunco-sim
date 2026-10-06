@@ -121,8 +121,28 @@ pub fn create_rectangular_handoff_collar_mesh(
         square_boundary_posting_spacing(handoff.half_extent, boundary_grid_resolution)
             .ok_or("collar boundary posting spacing is invalid")?
             * 0.25;
-    let outer_resolution = outer_edge_segments + 1;
-    let ring_count = radial_segments + 1;
+    let capacity_error = "collar mesh exceeds supported index capacity";
+    let outer_resolution = outer_edge_segments.checked_add(1).ok_or(capacity_error)?;
+    let ring_count = radial_segments.checked_add(1).ok_or(capacity_error)?;
+    // Every ring and both boundary perimeters must fit the mesh index space
+    // before allocating the resolution table, on native and wasm32 alike.
+    let perimeter_count = |resolution: usize| {
+        resolution
+            .checked_sub(1)
+            .and_then(|edges| edges.checked_mul(4))
+    };
+    let inner_count = perimeter_count(boundary_grid_resolution).ok_or(capacity_error)?;
+    let outer_count = perimeter_count(outer_resolution).ok_or(capacity_error)?;
+    let minimum_vertices = inner_count
+        .min(outer_count)
+        .checked_mul(ring_count)
+        .ok_or(capacity_error)?;
+    if inner_count > u32::MAX as usize
+        || outer_count > u32::MAX as usize
+        || minimum_vertices > u32::MAX as usize
+    {
+        return Err(capacity_error);
+    }
     let resolutions = (0..ring_count)
         .map(|ring| {
             collar_ring_resolution(
@@ -136,8 +156,8 @@ pub fn create_rectangular_handoff_collar_mesh(
         .collect::<Vec<_>>();
     let ring_vertex_counts = resolutions
         .iter()
-        .map(|resolution| 4 * (resolution - 1))
-        .collect::<Vec<_>>();
+        .map(|resolution| perimeter_count(*resolution).ok_or(capacity_error))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut vertex_count = 0usize;
     for &count in &ring_vertex_counts {
         vertex_count = vertex_count
@@ -153,7 +173,7 @@ pub fn create_rectangular_handoff_collar_mesh(
                 .and_then(|indices| sum.checked_add(indices))
         })
         .ok_or("collar mesh exceeds supported index capacity")?;
-    if vertex_count > u32::MAX as usize || index_count > u32::MAX as usize * 3 {
+    if vertex_count > u32::MAX as usize || index_count as u64 > u64::from(u32::MAX) * 3 {
         return Err("collar mesh exceeds supported index capacity");
     }
 
@@ -1182,6 +1202,24 @@ mod tests {
     fn collar_mesh_rejects_invalid_dimensions_and_non_finite_source_geometry() {
         let handoff = handoff();
         assert!(create_rectangular_handoff_collar_mesh(handoff, &EdgeToSphere, 1, 32, 4).is_err());
+        for (inner, outer, radial) in [
+            (5, usize::MAX, 4),
+            (5, 32, usize::MAX),
+            (usize::MAX, 32, 4),
+            (5, 32, u32::MAX as usize),
+        ] {
+            assert_eq!(
+                create_rectangular_handoff_collar_mesh(
+                    handoff,
+                    &EdgeToSphere,
+                    inner,
+                    outer,
+                    radial
+                )
+                .unwrap_err(),
+                "collar mesh exceeds supported index capacity"
+            );
+        }
         let mut invalid = handoff;
         invalid.collar_widths[2] = f64::NAN;
         assert!(create_rectangular_handoff_collar_mesh(invalid, &EdgeToSphere, 5, 32, 4).is_err());
