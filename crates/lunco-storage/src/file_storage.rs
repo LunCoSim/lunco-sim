@@ -94,6 +94,8 @@ pub struct DirectoryCacheTransaction {
 pub struct DirectoryCacheFile {
     pub handle: StorageHandle,
     pub bytes: u64,
+    /// Last publication or recorded use, for recency-bounded caches.
+    pub modified: std::time::SystemTime,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -122,6 +124,7 @@ impl DirectoryCacheTransaction {
                 Ok(DirectoryCacheFile {
                     handle: StorageHandle::File(entry.path()),
                     bytes: metadata.len(),
+                    modified: metadata.modified().map_err(StorageError::Io)?,
                 })
             })
         }))
@@ -162,6 +165,22 @@ impl FileStorage {
             directory,
             _lock: lock,
         })
+    }
+
+    /// Record a use of a native cache file by advancing its modification time,
+    /// so recency-bounded cache owners retain recently read entries.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn mark_cache_file_used(&self, handle: &StorageHandle) -> StorageResult<()> {
+        let StorageHandle::File(path) = handle else {
+            return Err(StorageError::Unsupported(
+                "cache use marking requires a native File handle".into(),
+            ));
+        };
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)?
+            .set_modified(std::time::SystemTime::now())?;
+        Ok(())
     }
 
     /// Read at most the caller's byte budget, rejecting oversized contents

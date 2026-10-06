@@ -403,6 +403,11 @@ impl PreparedSolveCache {
         {
             return Err(PreparedSolveCacheReadError::Identity);
         }
+        // Recency is retention metadata, not cache validity: a failed mark
+        // keeps the verified model and only ages this record sooner.
+        if let Err(error) = storage.mark_cache_file_used(handle) {
+            log::warn!("[modelica-runtime] prepared-solve cache use was not recorded: {error}");
+        }
         Ok(Some(record.model))
     }
 
@@ -491,9 +496,10 @@ impl PreparedSolveCache {
         limits: PreparedSolveDiskLimits,
     ) -> Result<(), PreparedSolveCacheWriteError> {
         use std::collections::BTreeSet;
-        // Keep the lexicographically first N-1 other valid-size keys. This is
-        // independent of OS enumeration order and does not track access times.
-        let mut keep = BTreeSet::new();
+        // Keep the N-1 most recently published or used other valid-size
+        // records; loads mark hits as used. Ties break by filename, so the
+        // choice is independent of OS enumeration order.
+        let mut recent = BTreeSet::new();
         for file in transaction.files()? {
             let file = file?;
             let StorageHandle::File(path) = file.handle else {
@@ -503,12 +509,13 @@ impl PreparedSolveCache {
                 && owned_cache_filename(&path)
                 && file.bytes <= limits.compressed_bytes as u64
             {
-                keep.insert(path);
-                if keep.len() >= limits.retained_entries {
-                    keep.pop_last();
+                recent.insert((std::cmp::Reverse(file.modified), path));
+                if recent.len() >= limits.retained_entries {
+                    recent.pop_last();
                 }
             }
         }
+        let keep: BTreeSet<_> = recent.into_iter().map(|(_, path)| path).collect();
         loop {
             // A bounded sorted batch avoids modifying a directory while its
             // enumerator is live. Each pass makes progress through actual deletes.
@@ -668,12 +675,19 @@ mod tests {
             compressed_bytes: 512,
             ..Default::default()
         };
-        for source in 1..=8 {
+        for source in 1..=8_u64 {
             let name = format!("{source:016x}-0000000000000000.bin.zst");
             storage
                 .write_sync(&StorageHandle::File(directory.join(name)), b"old")
                 .unwrap();
         }
+        // A later recorded use makes source 3 the most recent pre-existing record.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        storage
+            .mark_cache_file_used(&StorageHandle::File(
+                directory.join("0000000000000003-0000000000000000.bin.zst"),
+            ))
+            .unwrap();
         let oversized = directory.join("0000000000000000-0000000000000000.bin.zst");
         storage
             .write_sync(
@@ -718,8 +732,9 @@ mod tests {
             retained.contains(
                 &transaction
                     .directory()
-                    .join("0000000000000001-0000000000000000.bin.zst")
-            )
+                    .join("0000000000000003-0000000000000000.bin.zst")
+            ),
+            "the most recently used record survives regardless of filename order"
         );
         assert!(retained.contains(&transaction.directory().join(incoming.file_name().unwrap())));
         assert!(!bevy::tasks::block_on(

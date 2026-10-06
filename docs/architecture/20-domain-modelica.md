@@ -589,8 +589,10 @@ the guard releases the lock. The lock file is never removed or replaced.
 Heavy encoding happens before acquisition. Retention streams regular-file
 metadata, excluding symlinks and directories, and only owns exact lowercase
 `<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v5`.
-It preserves the lexicographically first N−1 other records within the compressed
-byte budget, deletes excess/oversized records in bounded sorted batches after
+It preserves the N−1 most recently published or used other records within the
+compressed byte budget (file modification time, filename as the tie-break, so
+enumeration order never decides); a verified disk hit records its use through
+`FileStorage::mark_cache_file_used`. It deletes excess/oversized records in bounded sorted batches after
 closing each enumerator, then atomically publishes the incoming record.
 Unrecognized files, nested directories, and other caches remain untouched.
 Independent cooperating processes serialize this transaction: each successful
