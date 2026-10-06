@@ -114,7 +114,7 @@ pub struct Experiment {
     pub inputs: BTreeMap<ParamPath, ParamValue>,
     pub bounds: RunBounds,
     pub status: RunStatus,
-    pub result: Option<RunResult>,
+    pub result: Option<Arc<RunResult>>,
     pub created_at: SystemTime,
     pub color_hint: u8,
 }
@@ -156,6 +156,10 @@ pub enum ParamValue {
     RealArray(Vec<f64>),
 }
 ```
+
+The registry retains each trajectory through one immutable `Arc<RunResult>`.
+Readers clone the Arc to capture the exact result without copying its series;
+streaming merges use copy-on-write, so an admitted snapshot stays unchanged.
 
 Registry: `BTreeMap<TwinId, Vec<Experiment>>` retains at most 20 terminal runs per presentation group, evicting the oldest terminal row. Pending, queued, and running rows are retained. Removal publishes `ExperimentRemoved` so source attribution and plot selections retire together.
 

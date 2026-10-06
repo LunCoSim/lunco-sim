@@ -23,7 +23,7 @@ pub use solver::{
     RuntimeProfile, SolverCaps, SolverError, SolverId, SolverParams, SolverRequest, SolverSpec,
 };
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 use web_time::SystemTime;
 
 use serde::{Deserialize, Serialize};
@@ -321,7 +321,8 @@ pub struct Experiment {
     pub inputs: BTreeMap<ParamPath, ParamValue>,
     pub bounds: RunBounds,
     pub status: RunStatus,
-    pub result: Option<RunResult>,
+    /// Shared immutable trajectory snapshot; streaming merges use copy-on-write.
+    pub result: Option<Arc<RunResult>>,
     pub created_at: SystemTime,
     /// Plot-color hint stable across the run's lifetime. Index into a
     /// palette chosen by the UI; allocated when the experiment is
@@ -552,7 +553,7 @@ impl ExperimentRegistry {
 
     pub fn set_result(&mut self, id: ExperimentId, result: RunResult) -> bool {
         if let Some(e) = self.get_mut(id) {
-            e.result = Some(result);
+            e.result = Some(Arc::new(result));
             true
         } else {
             false
@@ -564,9 +565,9 @@ impl ExperimentRegistry {
     pub fn merge_result(&mut self, id: ExperimentId, delta: RunResult) -> bool {
         if let Some(e) = self.get_mut(id) {
             if let Some(res) = &mut e.result {
-                res.merge_delta(delta);
+                Arc::make_mut(res).merge_delta(delta);
             } else {
-                e.result = Some(delta);
+                e.result = Some(Arc::new(delta));
             }
             true
         } else {
@@ -1031,5 +1032,65 @@ mod tests {
         assert_eq!(base.series["v"], vec![1.0, 1.1, 1.2, 1.3]);
         assert_eq!(base.meta.sample_count, 4);
         assert_eq!(base.meta.wall_time_ms, 20);
+    }
+}
+
+#[cfg(test)]
+mod result_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn retained_result_snapshot_stays_immutable_during_stream_merge() {
+        let mut registry = ExperimentRegistry::new();
+        let id = registry.insert_new(
+            TwinId("scope".into()),
+            ModelRef("Plant".into()),
+            Default::default(),
+            Default::default(),
+            RunBounds::default(),
+        );
+        registry.set_result(
+            id,
+            RunResult {
+                times: vec![0.0],
+                series: BTreeMap::from([("x".into(), vec![1.0])]),
+                meta: RunMeta {
+                    sample_count: 1,
+                    ..Default::default()
+                },
+            },
+        );
+        let snapshot = registry
+            .get(id)
+            .and_then(|run| run.result.clone())
+            .expect("result snapshot");
+        let copy = registry
+            .get(id)
+            .and_then(|run| run.result.clone())
+            .expect("shared snapshot");
+        assert!(Arc::ptr_eq(&snapshot, &copy));
+        registry.merge_result(
+            id,
+            RunResult {
+                times: vec![1.0],
+                series: BTreeMap::from([("x".into(), vec![2.0])]),
+                meta: RunMeta {
+                    sample_count: 1,
+                    ..Default::default()
+                },
+            },
+        );
+        assert_eq!(snapshot.times, [0.0]);
+        assert_eq!(snapshot.series["x"], [1.0]);
+        assert_eq!(
+            registry
+                .get(id)
+                .expect("retained run")
+                .result
+                .as_ref()
+                .expect("merged result")
+                .times,
+            [0.0, 1.0]
+        );
     }
 }
