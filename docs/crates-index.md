@@ -799,6 +799,16 @@ Its roots come from file-backed USD documents whose existing pinned owner is in
 the active runtime scope. Closing a Twin hides its retained documents; reopening
 the same folder cannot reassign their retired owner. Application roots return
 when no local or replicated Twin is active.
+`SceneFilePreparation` owns one native I/O task and one coalesced latest request,
+admitted through `AsyncWorkAdmission`. Inputs pin document identity/owner and
+generation, active replication, traversal limits and the immutable
+`TwinRootsSnapshot` revision. Publication revalidates those facts and the
+request sequence. Scope changes clear rows; a same-scope refresh keeps valid
+rows until replacement succeeds. Admission/preparation failure is visible and
+terminal for that request; changed inputs or explicit Refresh may admit new
+work. The permit remains held until completion is consumed or the task ends.
+Traversal budgets and errors are defined in the
+[dependency-closure contract](architecture/16-document-identity-and-collaboration.md#dependency-closure-separates-asset-traversal-from-usd-interpretation).
 
 **`lunco-viewport-core`**
 Small renderer-independent viewport geometry contract. It owns the physical-pixel

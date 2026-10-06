@@ -28,7 +28,9 @@ pub use dataset_artifact::{
     DatasetArtifactPlugin, DatasetTextArtifactReady, ReadDatasetTextArtifact,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use lunco_assets_core::closure::{transitive_file_closure, transitive_file_closure_with};
+pub use lunco_assets_core::closure::{
+    FileClosureError, FileClosureLimits, transitive_file_closure, transitive_file_closure_with,
+};
 pub use text_asset::{
     JsonAssetRecord, JsonAssetScopeChanged, JsonAssetScopeLoading, TextAsset, TextAssetCatalog,
     TextAssetEntry, TextAssetLoader, TextAssetPlugin,

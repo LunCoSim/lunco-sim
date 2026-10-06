@@ -128,6 +128,28 @@ struct TwinRootRegistry {
     identities: HashMap<String, String>,
     overlays: HashMap<PathBuf, Arc<Vec<u8>>>,
     next_mount: u64,
+    revision: u64,
+}
+
+/// Immutable live mount paths for background native readers. No overlay bytes
+/// or retired identity metadata are retained. Publication checks the revision
+/// against the live registry before consuming derived results.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TwinRootsSnapshot {
+    pub revision: u64,
+    roots: HashMap<String, PathBuf>,
+}
+impl TwinRootsSnapshot {
+    pub fn resolve_file(
+        &self,
+        name: &str,
+        relative: &Path,
+    ) -> Result<Option<PathBuf>, TwinRootsError> {
+        match self.roots.get(name) {
+            Some(root) => resolve_twin_relative_file(root, relative),
+            None => Ok(None),
+        }
+    }
 }
 
 struct TwinMount {
@@ -268,6 +290,29 @@ pub(crate) fn resolve_twin_relative_directory(
 }
 
 impl TwinRoots {
+    /// Capture current live authorities without reading filesystem metadata.
+    pub fn snapshot(&self) -> Result<TwinRootsSnapshot, TwinRootsError> {
+        let registry = self
+            .registry
+            .read()
+            .map_err(|_| TwinRootsError::RegistryPoisoned)?;
+        Ok(TwinRootsSnapshot {
+            revision: registry.revision,
+            roots: registry
+                .roots
+                .iter()
+                .map(|(name, mount)| (name.clone(), mount.root.clone()))
+                .collect(),
+        })
+    }
+
+    pub fn revision(&self) -> Result<u64, TwinRootsError> {
+        Ok(self
+            .registry
+            .read()
+            .map_err(|_| TwinRootsError::RegistryPoisoned)?
+            .revision)
+    }
     fn clear_overlays_for_names(overlays: &mut HashMap<PathBuf, Arc<Vec<u8>>>, names: &[String]) {
         overlays.retain(|path, _| {
             path.components()
@@ -377,6 +422,10 @@ impl TwinRoots {
             );
         }
         let admission = registry.next_mount;
+        registry.revision = registry
+            .revision
+            .checked_add(1)
+            .ok_or(TwinRootsError::AuthorityExhausted)?;
         registry.roots.insert(
             authority.clone(),
             TwinMount {
@@ -607,6 +656,12 @@ impl TwinRoots {
             .filter(|(_, mount)| mount.root == target)
             .map(|(name, _)| name.clone())
             .collect();
+        if !removed.is_empty() {
+            registry.revision = registry
+                .revision
+                .checked_add(1)
+                .ok_or(TwinRootsError::AuthorityExhausted)?;
+        }
         for name in &removed {
             registry.roots.remove(name);
         }
@@ -624,7 +679,13 @@ impl TwinRoots {
             .registry
             .write()
             .map_err(|_| TwinRootsError::RegistryPoisoned)?;
-        registry.roots.remove(name);
+        if registry.roots.contains_key(name) {
+            registry.revision = registry
+                .revision
+                .checked_add(1)
+                .ok_or(TwinRootsError::AuthorityExhausted)?;
+            registry.roots.remove(name);
+        }
         Self::clear_overlays_for_names(&mut registry.overlays, &[name.to_string()]);
         Ok(())
     }
@@ -768,6 +829,36 @@ impl AssetReader for TwinReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn twin_mount_snapshot_revision_retires_equal_root_reopens() {
+        let root = tempfile::tempdir().expect("generic root");
+        let roots = TwinRoots::default();
+        let empty = roots.snapshot().unwrap();
+        let authority = roots.register("generic", root.path()).unwrap();
+        let admitted = roots.snapshot().unwrap();
+        assert!(admitted.revision > empty.revision);
+        assert_eq!(roots.register("generic", root.path()).unwrap(), authority);
+        assert_eq!(roots.revision().unwrap(), admitted.revision);
+        roots.unregister_name(&authority).unwrap();
+        let retired = roots.snapshot().unwrap();
+        assert!(retired.revision > admitted.revision);
+        assert!(!retired.roots.contains_key(&authority));
+        assert_eq!(
+            admitted.roots.get(&authority),
+            Some(&canonical_root(root.path()).unwrap()),
+            "immutable preparation retains only its admitted path snapshot"
+        );
+        let reopened = roots.register("generic", root.path()).unwrap();
+        assert_ne!(reopened, authority);
+        assert!(roots.revision().unwrap() > retired.revision);
+        roots.unregister_name(&authority).unwrap();
+        assert_eq!(
+            roots.revision().unwrap(),
+            retired.revision + 1,
+            "retiring an already absent authority is idempotent"
+        );
+    }
 
     #[test]
     fn twin_uri_normalizes_windows_relative_paths() {

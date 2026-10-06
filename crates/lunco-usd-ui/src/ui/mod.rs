@@ -51,8 +51,8 @@ pub use loaded_stages::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use scene_files::{
-    SceneFileKind, SceneFileRescan, SceneFileRow, SceneFileView, SceneFilesSection,
-    produce_scene_file_view,
+    SceneFileKind, SceneFilePreparation, SceneFileRescan, SceneFileRow, SceneFileView,
+    SceneFilesSection, produce_scene_file_view,
 };
 
 /// Plugin that installs the USD Twin-browser section and the lifecycle
@@ -86,12 +86,13 @@ impl Plugin for UsdUiPlugin {
             .register(ConnectionsSection);
 
         // "What files is this scene made of" — the resolved reference closure,
-        // in the Files scope beside the raw folder tree. Its producer is gated on
-        // the scene-root set (the walk parses layers off disk), so it costs
-        // nothing per frame; see `scene_files.rs`.
+        // in the Files scope beside the raw folder tree. Its bounded worker
+        // refreshes immutable document/mount snapshots; paint only reads rows.
         #[cfg(not(target_arch = "wasm32"))]
         {
+            app.init_resource::<lunco_assets_core::FileClosureLimits>();
             app.init_resource::<SceneFileView>();
+            app.init_resource::<SceneFilePreparation>();
             app.init_resource::<SceneFileRescan>();
             app.add_systems(Update, produce_scene_file_view);
             app.world_mut()

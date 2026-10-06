@@ -185,6 +185,16 @@ human-readable names/paths, retain matching ancestors, and emit the existing
 typed navigation actions. Do not add a per-domain search resource or make the
 browser search generated ids.
 
+Native USD Scene Files reads the published `SceneFileView`; never traverse or
+stat files during paint or its main-thread input capture. Its single bounded
+worker pins source owners/generations and a `TwinRootsSnapshot`, coalesces the
+latest request, and rejects stale publication after source or mount retirement.
+Keep valid rows during same-scope refresh, clear them on scope change, and make
+preparation/admission errors visible without automatic retries. Verify the
+generic `scene_file_` lifetime/publication seams and the asset-owner closure
+budget/error test; see the
+[closure contract](../../docs/architecture/16-document-identity-and-collaboration.md#dependency-closure-separates-asset-traversal-from-usd-interpretation).
+
 For hierarchy rows, use `lunco_workbench_widgets::tree::{branch, leaf}` and
 `tree::{label, selectable_label}` for row text. The shared renderer resolves
 `Theme.typography.tree` and owns the

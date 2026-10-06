@@ -17,7 +17,7 @@
 //! has no resolver — so the plain walk reports a library-built scene as one
 //! file. This section uses [`lunco_assets_core::transitive_file_closure_with`] and
 //! supplies the resolver: `lunco://` against the shipped asset root, `twin://`
-//! against [`TwinRoots`]. USD dependency interpretation comes from
+//! against an immutable [`TwinRootsSnapshot`]. USD dependency interpretation comes from
 //! `lunco-usd-compose`; asset traversal and storage stay in `lunco-assets`.
 //! Anything it still cannot reach is COUNTED and shown, so a partial answer
 //! never reads as a complete one.
@@ -33,16 +33,16 @@
 //!
 //! # Cost
 //!
-//! The walk parses every USD layer it reaches, so it is change-gated hard: it runs
-//! when the SET of scene roots changes, or when the user asks for a refresh —
-//! never per frame, and never during paint (a `BrowserSection::render` gets a
-//! read-only view-model, like every other section under the WP-8 contract).
+//! One bounded native worker prepares an immutable document/mount snapshot when
+//! its inputs change or the user requests refresh. The latest request coalesces
+//! behind it. Publication checks exact owners, generations and mount revision;
+//! paint reads only the published rows. Scope retirement clears the old view.
 
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use egui;
-use lunco_assets_core::TwinRoots;
+use lunco_assets_core::{FileClosureLimits, TwinRootsSnapshot};
 use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::{DocumentRegistry, OpenFile};
 use lunco_workbench_browser::{
@@ -144,6 +144,59 @@ pub struct SceneFileView {
     /// with no such Twin mounted). Reported as a count so a partial listing is
     /// never mistaken for a complete one.
     pub unresolved: usize,
+    pub preparing: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SceneFileDocument {
+    owner: lunco_workspace::PinnedDocumentRuntimeOwner,
+    generation: u64,
+    path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SceneFileInputs {
+    documents: Vec<SceneFileDocument>,
+    scope: lunco_workspace::DocumentRuntimeOwner,
+    replication: Option<lunco_workspace::ReplicationOwner>,
+    mount_revision: Option<u64>,
+    limits: FileClosureLimits,
+}
+impl SceneFileInputs {
+    fn roots(&self) -> Vec<PathBuf> {
+        let mut roots: Vec<_> = self
+            .documents
+            .iter()
+            .map(|document| document.path.clone())
+            .collect();
+        roots.sort();
+        roots.dedup();
+        roots
+    }
+    fn same_scope(&self, other: &Self) -> bool {
+        self.scope == other.scope
+            && self.replication == other.replication
+            && self.mount_revision == other.mount_revision
+    }
+}
+
+struct SceneFileTask {
+    inputs: SceneFileInputs,
+    operation: u64,
+    task: bevy::tasks::Task<(
+        lunco_core_runtime::async_work::ExternalWorkPermit,
+        Result<SceneFileView, String>,
+    )>,
+}
+
+/// Sole owner of one preparation and one coalesced latest request.
+#[derive(Resource, Default)]
+pub struct SceneFilePreparation {
+    requested: Option<SceneFileInputs>,
+    desired: Option<(SceneFileInputs, u64)>,
+    pending: Option<SceneFileTask>,
+    operation: u64,
 }
 
 /// Set by the section's ↻ button to force one rebuild — the roots did not change,
@@ -160,7 +213,7 @@ pub struct SceneFileRescan(pub bool);
 fn resolve_scheme(
     reference: &str,
     assets_root: Option<&Path>,
-    twins: Option<&TwinRoots>,
+    twins: Option<&TwinRootsSnapshot>,
 ) -> Option<PathBuf> {
     if let Some(rel) = lunco_assets_core::parse_lunco_uri(reference) {
         if !lunco_assets_path::is_safe_relative_path(rel) {
@@ -211,7 +264,7 @@ fn label_for(path: &Path, assets_root: Option<&Path>, roots: &[PathBuf]) -> Stri
 }
 
 /// Snapshot current scoped document roots without filesystem reads.
-fn current_scene_file_roots(world: &World) -> Vec<PathBuf> {
+fn current_scene_file_documents(world: &World) -> Vec<SceneFileDocument> {
     let Some(registry) = world.get_resource::<DocumentRegistry<UsdDocument>>() else {
         return Vec::new();
     };
@@ -219,43 +272,41 @@ fn current_scene_file_roots(world: &World) -> Vec<PathBuf> {
         .get_resource::<lunco_workspace::WorkspaceResource>()
         .map(|workspace| &workspace.0);
     let replication = lunco_core_session::current_replication_owner_in(world);
-    let mut roots: Vec<_> = registry
+    let mut documents: Vec<_> = registry
         .ids()
-        .filter(|id| {
-            lunco_workspace::PinnedDocumentRuntimeOwner::for_document(*id, workspace)
-                .is_ok_and(|pin| pin.is_in_active_scope(workspace, replication.as_ref()))
-        })
-        .filter_map(|id| registry.host(id))
-        .filter_map(|host| match host.document().origin() {
-            DocumentOrigin::File { path, .. } => Some(path.clone()),
-            _ => None,
+        .filter_map(|id| {
+            let owner =
+                lunco_workspace::PinnedDocumentRuntimeOwner::for_document(id, workspace).ok()?;
+            if !owner.is_in_active_scope(workspace, replication.as_ref()) {
+                return None;
+            }
+            let host = registry.host(id)?;
+            match host.document().origin() {
+                DocumentOrigin::File { path, .. } => Some(SceneFileDocument {
+                    owner,
+                    generation: host.generation(),
+                    path: path.clone(),
+                }),
+                _ => None,
+            }
         })
         .collect();
-    roots.sort();
-    roots.dedup();
-    roots
+    documents.sort_by_key(|document| document.owner.document.raw());
+    documents
 }
 
-/// Producer for [`SceneFileView`]. Walks the resolved reference closure of
-/// file-backed USD documents in the current typed runtime scope.
-///
-/// Gated on the ROOT SET (plus an explicit rescan request): the walk parses every
-/// layer it reaches, which is filesystem work that must not ride the frame.
-pub fn produce_scene_file_view(world: &mut World, mut last_roots: Local<Vec<PathBuf>>) {
-    let roots = current_scene_file_roots(world);
-    let forced = std::mem::replace(&mut world.resource_mut::<SceneFileRescan>().0, false);
-    if !forced && *last_roots == roots {
-        return;
-    }
-    last_roots.clone_from(&roots);
-
+/// Native worker preparation of the resolved reference closure and row metadata.
+/// Only immutable input snapshots cross this boundary.
+fn prepare_scene_file_view(
+    inputs: &SceneFileInputs,
+    twins: Option<&TwinRootsSnapshot>,
+) -> Result<SceneFileView, String> {
+    let roots = inputs.roots();
     let assets_root = assets_root_for(&roots);
-    // Minimal hosts may omit the Twin asset source; unresolved Twin arcs are
-    // counted rather than requiring a registry solely for browser inspection.
-    let twins = world.get_resource::<TwinRoots>();
     let unresolved = std::sync::atomic::AtomicUsize::new(0);
     let files = lunco_assets_core::transitive_file_closure_with(
         &roots,
+        &inputs.limits,
         |reference| {
             let resolved = resolve_scheme(reference, assets_root.as_deref(), twins);
             if resolved.is_none() {
@@ -265,23 +316,226 @@ pub fn produce_scene_file_view(world: &mut World, mut last_roots: Local<Vec<Path
         },
         lunco_usd_compose::is_usd_layer,
         lunco_usd_compose::layer_dependency_arcs,
-    );
+    )
+    .map_err(|error| error.to_string())?;
 
+    use lunco_storage::Storage;
+    let storage = lunco_storage::FileStorage::new();
     let mut rows: Vec<SceneFileRow> = files
         .into_iter()
-        .map(|path| SceneFileRow {
-            label: label_for(&path, assets_root.as_deref(), &roots),
-            kind: SceneFileKind::of(&path),
-            missing: !path.exists(),
-            path,
+        .map(|path| {
+            let missing =
+                match storage.entry_kind_sync(&lunco_storage::StorageHandle::File(path.clone())) {
+                    Ok(_) => false,
+                    Err(lunco_storage::StorageError::NotFound) => true,
+                    Err(error) => {
+                        return Err(format!(
+                            "cannot inspect scene asset {}: {error}",
+                            path.display()
+                        ));
+                    }
+                };
+            Ok(SceneFileRow {
+                label: label_for(&path, assets_root.as_deref(), &roots),
+                kind: SceneFileKind::of(&path),
+                missing,
+                path,
+            })
         })
-        .collect();
+        .collect::<Result<_, String>>()?;
     rows.sort_by(|a, b| (a.kind, &a.label).cmp(&(b.kind, &b.label)));
 
+    Ok(SceneFileView {
+        roots,
+        rows,
+        unresolved: unresolved.into_inner(),
+        preparing: false,
+        error: None,
+    })
+}
+
+fn capture_scene_file_inputs(world: &World) -> Result<SceneFileInputs, String> {
+    let replication = lunco_core_session::current_replication_owner_in(world);
+    let scope = match replication.as_ref() {
+        Some(owner @ lunco_workspace::ReplicationOwner::Twin { .. }) => {
+            lunco_workspace::DocumentRuntimeOwner::Replicated(owner.clone())
+        }
+        _ => world
+            .get_resource::<lunco_workspace::WorkspaceResource>()
+            .and_then(|workspace| workspace.active_twin)
+            .map_or(
+                lunco_workspace::DocumentRuntimeOwner::Application,
+                lunco_workspace::DocumentRuntimeOwner::LocalTwin,
+            ),
+    };
+    let mount_revision = world
+        .get_resource::<lunco_assets_core::TwinRoots>()
+        .map(|roots| roots.revision())
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let limits = *world
+        .get_resource::<FileClosureLimits>()
+        .ok_or("scene file traversal limits are unavailable")?;
+    limits.validate().map_err(|error| error.to_string())?;
+    Ok(SceneFileInputs {
+        documents: current_scene_file_documents(world),
+        scope,
+        replication,
+        mount_revision,
+        limits,
+    })
+}
+
+fn scene_file_preparation_failed(world: &mut World, message: String) {
     let mut view = world.resource_mut::<SceneFileView>();
-    view.roots = roots;
-    view.rows = rows;
-    view.unresolved = unresolved.into_inner();
+    let changed = view.error.as_ref() != Some(&message);
+    view.preparing = false;
+    view.error = Some(message.clone());
+    if changed {
+        world.trigger(lunco_core::RuntimeError {
+            name: "scene-file-preparation-failed".into(),
+            message,
+        });
+    }
+}
+
+fn accepts_scene_file_result(
+    captured: &SceneFileInputs,
+    operation: u64,
+    current: &SceneFileInputs,
+    latest: u64,
+) -> bool {
+    captured == current && operation == latest
+}
+
+/// Poll one bounded native preparation; the latest immutable request wins only
+/// after its exact source pins, generations, scope and mount revision agree.
+pub fn produce_scene_file_view(world: &mut World) {
+    let forced = std::mem::replace(&mut world.resource_mut::<SceneFileRescan>().0, false);
+    let current = capture_scene_file_inputs(world);
+    world.resource_scope(|world, mut state: Mut<SceneFilePreparation>| {
+        let inputs = match current {
+            Ok(inputs) => inputs,
+            Err(error) => {
+                state.requested = None;
+                state.desired = None;
+                if let Some(pending) = state.pending.as_mut() {
+                    if bevy::tasks::futures_lite::future::block_on(
+                        bevy::tasks::futures_lite::future::poll_once(&mut pending.task),
+                    )
+                    .is_some()
+                    {
+                        state.pending = None;
+                    }
+                }
+                {
+                    let mut view = world.resource_mut::<SceneFileView>();
+                    view.roots.clear();
+                    view.rows.clear();
+                    view.unresolved = 0;
+                }
+                scene_file_preparation_failed(world, error);
+                return;
+            }
+        };
+        if forced || state.requested.as_ref() != Some(&inputs) {
+            let same_scope = state
+                .requested
+                .as_ref()
+                .is_some_and(|previous| previous.same_scope(&inputs));
+            if !same_scope || inputs.documents.is_empty() {
+                *world.resource_mut::<SceneFileView>() = SceneFileView::default();
+            }
+            world.resource_mut::<SceneFileView>().roots = inputs.roots();
+            let Some(operation) = state.operation.checked_add(1) else {
+                scene_file_preparation_failed(
+                    world,
+                    "scene file request sequence exhausted".into(),
+                );
+                return;
+            };
+            state.operation = operation;
+            state.requested = Some(inputs.clone());
+            state.desired = (!inputs.documents.is_empty()).then(|| (inputs.clone(), operation));
+            world.resource_mut::<SceneFileView>().preparing = state.desired.is_some();
+        }
+        if let Some(pending) = state.pending.as_mut() {
+            let result = bevy::tasks::futures_lite::future::block_on(
+                bevy::tasks::futures_lite::future::poll_once(&mut pending.task),
+            );
+            if let Some((_permit, result)) = result {
+                let pending = state.pending.take().expect("polled pending task");
+                if accepts_scene_file_result(
+                    &pending.inputs,
+                    pending.operation,
+                    &inputs,
+                    state.operation,
+                ) {
+                    match result {
+                        Ok(view) => *world.resource_mut::<SceneFileView>() = view,
+                        Err(error) => scene_file_preparation_failed(world, error),
+                    }
+                }
+            }
+        }
+        if state.pending.is_some() {
+            return;
+        }
+        let Some((desired, operation)) = state.desired.take() else {
+            return;
+        };
+        let admitted = (|| {
+            let mounts = world
+                .get_resource::<lunco_assets_core::TwinRoots>()
+                .map(|roots| roots.snapshot())
+                .transpose()
+                .map_err(|error| error.to_string())?;
+            if mounts.as_ref().map(|mounts| mounts.revision) != desired.mount_revision {
+                return Err(
+                    "Twin asset registry changed before scene file preparation admission"
+                        .to_owned(),
+                );
+            }
+            let pool = bevy::tasks::IoTaskPool::try_get()
+                .ok_or("scene file I/O task pool is unavailable")?;
+            let admission = world
+                .get_resource::<lunco_core_runtime::AsyncWorkAdmission>()
+                .ok_or("bounded async work admission is unavailable")?;
+            let scope_generation = match &desired.scope {
+                lunco_workspace::DocumentRuntimeOwner::Application => 0,
+                lunco_workspace::DocumentRuntimeOwner::LocalTwin(twin) => twin.raw(),
+                lunco_workspace::DocumentRuntimeOwner::Replicated(owner) => match owner.scope() {
+                    lunco_workspace::ReplicationScope::Application => 0,
+                    lunco_workspace::ReplicationScope::Twin(twin) => twin.raw(),
+                },
+            };
+            let permit = admission
+                .admit_external(
+                    lunco_core_runtime::AsyncWorkPriority::Interactive,
+                    lunco_core_runtime::AsyncWorkKey::new(
+                        lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
+                        scope_generation,
+                        0x7363656e652d66696c6573,
+                        desired.mount_revision.unwrap_or(0),
+                        operation,
+                    ),
+                )
+                .map_err(|error| format!("scene file preparation admission rejected: {error:?}"))?;
+            let inputs = desired.clone();
+            Ok(SceneFileTask {
+                inputs: desired,
+                operation,
+                task: pool.spawn(async move {
+                    let result = prepare_scene_file_view(&inputs, mounts.as_ref());
+                    (permit, result)
+                }),
+            })
+        })();
+        match admitted {
+            Ok(pending) => state.pending = Some(pending),
+            Err(error) => scene_file_preparation_failed(world, error),
+        }
+    });
 }
 
 /// Browser section listing the loaded scene's file closure.
@@ -339,6 +593,12 @@ impl BrowserSection for SceneFilesSection {
             .collect();
         let unresolved = view.unresolved;
         let no_roots = view.roots.is_empty();
+        if let Some(error) = &view.error {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+        if view.preparing {
+            ui.label("Preparing scene files…");
+        }
 
         if lunco_workbench_widgets::icon_button(
             ui,
@@ -469,7 +729,48 @@ impl BrowserSection for SceneFilesSection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_assets_core::TwinRoots;
     use lunco_storage::Storage;
+
+    #[test]
+    fn scene_file_publication_rejects_retired_owner_and_superseded_refresh() {
+        use lunco_workspace::{DocumentRuntimeOwner, PinnedDocumentRuntimeOwner, TwinId};
+        let inputs = SceneFileInputs {
+            documents: vec![SceneFileDocument {
+                owner: PinnedDocumentRuntimeOwner {
+                    document: lunco_doc::DocumentId(1),
+                    runtime: DocumentRuntimeOwner::LocalTwin(TwinId::new(1)),
+                },
+                generation: 1,
+                path: PathBuf::from("same-root/scene.node"),
+            }],
+            scope: DocumentRuntimeOwner::LocalTwin(TwinId::new(1)),
+            replication: None,
+            mount_revision: Some(1),
+            limits: FileClosureLimits::default(),
+        };
+        assert!(accepts_scene_file_result(&inputs, 1, &inputs, 1));
+        assert!(
+            !accepts_scene_file_result(&inputs, 1, &inputs, 2),
+            "an explicit refresh supersedes the old job"
+        );
+        let mut reopened = inputs.clone();
+        reopened.documents[0].owner.runtime = DocumentRuntimeOwner::LocalTwin(TwinId::new(2));
+        reopened.scope = DocumentRuntimeOwner::LocalTwin(TwinId::new(2));
+        assert_eq!(reopened.roots(), inputs.roots());
+        assert!(!inputs.same_scope(&reopened));
+        assert!(!accepts_scene_file_result(&inputs, 1, &reopened, 1));
+        let mut changed = inputs.clone();
+        changed.documents[0].generation += 1;
+        assert!(!accepts_scene_file_result(&inputs, 1, &changed, 1));
+        changed = inputs.clone();
+        changed.mount_revision = Some(2);
+        assert!(!accepts_scene_file_result(&inputs, 1, &changed, 1));
+        changed = inputs.clone();
+        changed.documents.clear();
+        changed.scope = DocumentRuntimeOwner::Application;
+        assert!(!accepts_scene_file_result(&inputs, 1, &changed, 1));
+    }
 
     #[test]
     fn scene_file_roots_retire_exact_twin_context_and_restore_application_scope() {
@@ -512,12 +813,19 @@ mod tests {
             document
         };
         admit(&mut world, &application, DocumentRuntimeOwner::Application);
-        assert_eq!(current_scene_file_roots(&world), vec![application.clone()]);
+        world.init_resource::<FileClosureLimits>();
+        assert_eq!(
+            capture_scene_file_inputs(&world).unwrap().roots(),
+            vec![application.clone()]
+        );
         let first = world
             .resource_mut::<WorkspaceResource>()
             .add_twin(folder(root.path()));
         let old_document = admit(&mut world, &retired, DocumentRuntimeOwner::LocalTwin(first));
-        assert_eq!(current_scene_file_roots(&world), vec![retired.clone()]);
+        assert_eq!(
+            capture_scene_file_inputs(&world).unwrap().roots(),
+            vec![retired.clone()]
+        );
         world.resource_mut::<WorkspaceResource>().close_twin(first);
         assert!(
             world
@@ -531,13 +839,19 @@ mod tests {
                 .document(old_document)
                 .is_some()
         );
-        assert_eq!(current_scene_file_roots(&world), vec![application.clone()]);
+        assert_eq!(
+            capture_scene_file_inputs(&world).unwrap().roots(),
+            vec![application.clone()]
+        );
         let reopened = world
             .resource_mut::<WorkspaceResource>()
             .add_twin(folder(root.path()));
         assert_ne!(first, reopened);
         assert!(
-            current_scene_file_roots(&world).is_empty(),
+            capture_scene_file_inputs(&world)
+                .unwrap()
+                .roots()
+                .is_empty(),
             "retained source cannot acquire a reopened Twin owner"
         );
         admit(
@@ -545,7 +859,10 @@ mod tests {
             &retired,
             DocumentRuntimeOwner::LocalTwin(reopened),
         );
-        assert_eq!(current_scene_file_roots(&world), vec![retired.clone()]);
+        assert_eq!(
+            capture_scene_file_inputs(&world).unwrap().roots(),
+            vec![retired.clone()]
+        );
         let inactive = world
             .resource_mut::<WorkspaceResource>()
             .add_twin(folder(other.path()));
@@ -554,14 +871,20 @@ mod tests {
             &other.path().join("inactive.usda"),
             DocumentRuntimeOwner::LocalTwin(inactive),
         );
-        assert_eq!(current_scene_file_roots(&world), vec![retired]);
+        assert_eq!(
+            capture_scene_file_inputs(&world).unwrap().roots(),
+            vec![retired]
+        );
         world
             .resource_mut::<WorkspaceResource>()
             .close_twin(inactive);
         world
             .resource_mut::<WorkspaceResource>()
             .close_twin(reopened);
-        assert_eq!(current_scene_file_roots(&world), vec![application]);
+        assert_eq!(
+            capture_scene_file_inputs(&world).unwrap().roots(),
+            vec![application]
+        );
     }
 
     #[test]
@@ -609,7 +932,11 @@ mod tests {
         let twins = TwinRoots::default();
         let assets = PathBuf::from("/proj/assets");
         assert_eq!(
-            resolve_scheme("lunco://vessels/rover.usda", Some(&assets), Some(&twins)),
+            resolve_scheme(
+                "lunco://vessels/rover.usda",
+                Some(&assets),
+                Some(&twins.snapshot().unwrap())
+            ),
             Some(assets.join("vessels/rover.usda"))
         );
         // The shipped library does not need a Twin source to be mounted.
@@ -618,7 +945,11 @@ mod tests {
             Some(assets.join("vessels/rover.usda"))
         );
         assert_eq!(
-            resolve_scheme("twin://nope/scene.usda", Some(&assets), Some(&twins)),
+            resolve_scheme(
+                "twin://nope/scene.usda",
+                Some(&assets),
+                Some(&twins.snapshot().unwrap())
+            ),
             None,
             "an unmounted twin is unreachable, not silently mis-rooted"
         );
@@ -626,7 +957,7 @@ mod tests {
             resolve_scheme(
                 "/absolute/from/source/root.usda",
                 Some(&assets),
-                Some(&twins)
+                Some(&twins.snapshot().unwrap())
             ),
             None
         );
@@ -647,7 +978,10 @@ mod tests {
             .register("moonbase", root.path())
             .expect("register root");
         let uri = format!("twin://{name}/scenes/base.usda");
-        assert_eq!(resolve_scheme(&uri, None, Some(&twins)), Some(scene));
+        assert_eq!(
+            resolve_scheme(&uri, None, Some(&twins.snapshot().unwrap())),
+            Some(scene)
+        );
     }
 
     #[test]
@@ -665,7 +999,7 @@ mod tests {
             &format!("twin://{name}/scenes/../../outside.usda"),
         ] {
             assert_eq!(
-                resolve_scheme(reference, Some(&assets), Some(&twins)),
+                resolve_scheme(reference, Some(&assets), Some(&twins.snapshot().unwrap())),
                 None,
                 "unsafe reference must be rejected: {reference}"
             );

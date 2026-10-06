@@ -22,7 +22,13 @@ fn follows_composition_and_asset_attribute_dependencies() {
     .unwrap();
     lunco_storage::write_file_sync(&model, b"model Drive end Drive;\n").unwrap();
 
-    let closure = transitive_file_closure(&[scene], is_usd_layer, layer_dependency_arcs);
+    let closure = transitive_file_closure(
+        &[scene],
+        &lunco_assets_core::FileClosureLimits::default(),
+        is_usd_layer,
+        layer_dependency_arcs,
+    )
+    .expect("valid fixture closure");
     assert!(closure.contains(&normalize(&rover)), "{closure:?}");
     assert!(closure.contains(&normalize(&model)), "{closure:?}");
 }
@@ -43,10 +49,12 @@ fn delegates_schemed_reference_resolution_to_the_asset_caller() {
 
     let closure = transitive_file_closure_with(
         &[PathBuf::from(&scene)],
+        &lunco_assets_core::FileClosureLimits::default(),
         |arc| lunco_assets_core::parse_lunco_uri(arc).map(|relative| assets.join(relative)),
         is_usd_layer,
         layer_dependency_arcs,
-    );
+    )
+    .expect("valid fixture closure");
     assert!(closure.contains(&normalize(&rover)), "{closure:?}");
 }
 

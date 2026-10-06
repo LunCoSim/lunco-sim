@@ -339,8 +339,8 @@ persistently-stale file nags once, and re-arms when the file re-syncs.
 
 A document's dependencies are found by walking `subLayers`, `references`,
 `payload`, and asset-valued attributes. There must be one filesystem traversal:
-`lunco_assets_core::transitive_file_closure*` owns its queue, canonical paths, and
-native reads. `lunco-usd-compose` supplies the format facts:
+`lunco_assets_core::transitive_file_closure*` owns its queue, normalized paths,
+bounded native storage reads, and fallible result. `lunco-usd-compose` supplies the format facts:
 
 ```rust
 is_usd_layer(path)
@@ -352,6 +352,19 @@ networking does not read or parse USD files, `lunco-usd-bevy` has no closure
 adapter, and a `.glb`, Modelica model, policy, or texture reaches the closure as a
 leaf once USD declares it. Stage pre-fetch remains its own async AssetServer
 operation; it reuses `child_layer_ids` because it needs only parseable layers.
+
+Every native closure call supplies the owner resource `FileClosureLimits`:
+4096 unique paths, 16 MiB per document and 64 MiB aggregate document source by
+default. Limits must be positive. Reads enforce the byte budget before parsing;
+missing/unreadable documents, invalid UTF-8, failed parsing and budget overflow
+reject the operation. Missing non-document leaves remain explicit paths. These
+limits bound path count and source bytes, not parser-internal allocation or
+binary payload sizes. The host also caps its indexed-file/dependency union at
+the same path budget before publishing a manifest. Metadata capture uses the
+existing Twin index; traversal, re-rooting, payload reads and hashing run in its
+existing manifest task. Failures publish `NetStatus.last_error` and a
+`scenario-manifest-preparation-failed` runtime diagnostic only for the admitted
+still-active Twin.
 
 ## 10a. Remaining gaps
 

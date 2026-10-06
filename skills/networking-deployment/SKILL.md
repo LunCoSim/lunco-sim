@@ -35,6 +35,13 @@ replication runtime; the deployment guide owns service and TLS facts.
 - Keep `--api` local unless the deployment contract explicitly requires a
   tunnel or authenticated remote boundary. Never expose the admin API merely
   to make WebTransport work.
+- Manifest admission captures indexed paths and `FileClosureLimits`; the
+  existing task performs dependency reads, re-rooting and hashing. An exact
+  still-active Twin build failure surfaces through `NetStatus.last_error` and
+  its runtime diagnostic, without publishing a partial manifest. Cover
+  `scenario_manifest_preparation_rejects_missing_documents_and_invalid_limits`
+  and the generic asset closure budget/error seam. See the
+  [closure contract](../../docs/architecture/16-document-identity-and-collaboration.md#dependency-closure-separates-asset-traversal-from-usd-interpretation).
 
 - Check exact transport and mount admission at both the wire producer and its
   real scene/document consumer. Preserve typed `ReplicationScope` internally;

@@ -61,7 +61,9 @@ pub mod twin_source;
 pub mod web_fetch;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use closure::{transitive_file_closure, transitive_file_closure_with};
+pub use closure::{
+    FileClosureError, FileClosureLimits, transitive_file_closure, transitive_file_closure_with,
+};
 pub use lunco_source::{
     ASSETS_DIR_NAME, LUNCO_SCHEME, id_to_disk_path, parse_lunco_uri, shipped_asset_root,
 };
@@ -72,8 +74,8 @@ pub use lunco_source::{
 };
 pub use scheme_registry::{SchemeRegistry, SchemeRegistryError};
 pub use twin_source::{
-    TWIN_SCHEME, TwinRoots, TwinRootsError, parse_twin_uri, split_twin_rel, stable_source_path,
-    twin_uri,
+    TWIN_SCHEME, TwinRoots, TwinRootsError, TwinRootsSnapshot, parse_twin_uri, split_twin_rel,
+    stable_source_path, twin_uri,
 };
 
 /// Explicit native asset-library root override.

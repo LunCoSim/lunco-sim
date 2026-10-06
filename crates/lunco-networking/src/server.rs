@@ -443,6 +443,7 @@ pub(crate) fn setup_host(app: &mut App, prepared: PreparedHost) {
     // `AsyncComputeTaskPool` is initialized before the first spawn.
     app.init_resource::<ScenarioManifestResource>();
     app.init_resource::<PendingScenarioManifest>();
+    app.init_resource::<lunco_assets_core::FileClosureLimits>();
     // Phase-3 host-only serving state: CID→path index (filled by
     // `drive_scenario_manifest`) + in-flight off-thread read jobs. These back the
     // in-session (QUIC) chunk path, which remains as the fallback when no HTTP
@@ -1227,12 +1228,10 @@ fn host_recv_inbox(
     }
 }
 
-/// One scenario file, resolved on the main thread (cheap path work only) so the
-/// blocking read + hash can run off-thread. `abs_path` is what the build task
-/// reads; `rel_path` is the scenario-root-relative, `/`-normalized manifest key.
+/// One indexed scenario file captured for native worker preparation.
+/// The worker derives its final root-relative manifest key after traversal.
 struct AssetDescriptor {
     abs_path: PathBuf,
-    rel_path: String,
     media_type: Option<String>,
 }
 
@@ -1240,13 +1239,11 @@ struct AssetDescriptor {
 /// it can cross the `AsyncComputeTaskPool` boundary.
 struct ScenarioBuildInput {
     owner: lunco_workspace::TwinId,
+    root: PathBuf,
+    limits: lunco_assets_core::FileClosureLimits,
     scenario_id: [u8; 16],
     name: String,
     default_scene: Option<String>,
-    /// Entry scene relative to the Twin root (pre-re-rooting), for a client that
-    /// has the Twin locally to load `twin://` host-identically. See
-    /// [`ScenarioManifestMsg::twin_scene`](lunco_networking_scenario::ScenarioManifestMsg::twin_scene).
-    twin_scene: Option<String>,
     descriptors: Vec<AssetDescriptor>,
     /// The host's journal head at build time — the base the asset snapshot
     /// corresponds to (journal-plane Layer B). Captured on the main thread by
@@ -1265,20 +1262,22 @@ struct ScenarioBuildInput {
 /// (`full_journal_msgs` on connect + `broadcast_journal_entries` thereafter).
 use lunco_twin::is_runtime_state;
 
-/// Main-thread step: walk the Twin tree and resolve the file list — path joins,
-/// extension→media-type, and **path dedup** only, no file I/O. A parent Twin's
-/// `files()` already recurses into child-Twin subdirs, so the same asset can
-/// surface via both the parent and the child walk; the `seen` set keeps the
-/// first and drops the duplicate (review: duplicate assets from overlapping
-/// parent/child walks). The blocking read + SHA-256 happens later in
-/// [`build_manifest_from_input`], off the main thread.
+/// Capture already-indexed folder paths and metadata without reading source
+/// bytes. The build task resolves dependencies, re-roots paths and hashes files.
 fn collect_scenario_input(
     owner: lunco_workspace::TwinId,
     twin: &Twin,
     journal_head: Option<lunco_twin_journal::EntryId>,
-) -> Option<ScenarioBuildInput> {
-    let manifest = twin.manifest.as_ref()?;
-    let scenario_id = manifest.uuid?.into_bytes();
+    limits: &lunco_assets_core::FileClosureLimits,
+) -> Result<Option<ScenarioBuildInput>, String> {
+    limits.validate().map_err(|error| error.to_string())?;
+    let Some(manifest) = twin.manifest.as_ref() else {
+        return Ok(None);
+    };
+    let Some(uuid) = manifest.uuid else {
+        return Ok(None);
+    };
+    let scenario_id = uuid.into_bytes();
     let name = manifest.name.clone();
 
     // 1. Folder walk → in-tree assets keyed by absolute path (dedup). A parent
@@ -1296,6 +1295,12 @@ fn collect_scenario_input(
             if is_runtime_state(&twin_rel) {
                 continue;
             }
+            if !by_abs.contains_key(&abs_path) && by_abs.len() >= limits.max_files {
+                return Err(format!(
+                    "scenario exceeds {} indexed files",
+                    limits.max_files
+                ));
+            }
             by_abs
                 .entry(abs_path)
                 .or_insert_with(|| media_type_for(&entry.relative_path));
@@ -1308,95 +1313,24 @@ fn collect_scenario_input(
         .and_then(|m| m.usd.as_ref())
         .and_then(|usd| usd.default_scene.clone());
 
-    // 2. Reference closure. A sandbox scene references its rovers/components from
-    //    OUTSIDE its own folder (`@../../vessels/rovers/ackermann_rover.usda@`),
-    //    which the folder walk never sees — so the client's `twin://` load
-    //    404'd on the sublayer and rendered an empty scene. Walk the entry
-    //    scene's transitive subLayers/references/payload graph and add every
-    //    reached file that lives outside the Twin root (in-tree deps are already
-    //    covered above). Seed from the entry scene (what Phase-4 auto-loads); with
-    //    no `default_scene`, seed from every in-tree USD layer.
-    let roots: Vec<PathBuf> = match &default_scene_raw {
-        Some(ds) => vec![twin.root.join(ds)],
-        None => by_abs
-            .keys()
-            .filter(|p| lunco_usd_compose::is_usd_layer(p))
-            .cloned()
-            .collect(),
-    };
-    // The host ships whatever the authored asset closure
-    // walker reached. Revisit before multiplayer hardening
-    // (REVIEW-2026-07-19.md finding #5).
-    for f in lunco_assets_core::transitive_file_closure(
-        &roots,
-        lunco_usd_compose::is_usd_layer,
-        lunco_usd_compose::layer_dependency_arcs,
-    ) {
-        if f.starts_with(&twin.root) {
-            continue; // in-tree — already enumerated by the folder walk
-        }
-        let mt = media_type_for(&f);
-        by_abs.entry(f).or_insert(mt);
-    }
-
-    // 3. Re-root at the common ancestor of the Twin root and every asset, so an
-    //    out-of-tree file gets a `..`-free manifest key (the client's `twin://`
-    //    resolver rejects `..` — `twin_source::TwinReader::resolve`). A
-    //    self-contained scenario (no external refs) keeps `manifest_root ==
-    //    twin.root`, so its paths stay byte-identical to before — moonbase and
-    //    every terrain twin are unaffected.
-    let mut manifest_root = twin.root.clone();
-    for abs in by_abs.keys() {
-        if let Some(parent) = abs.parent() {
-            manifest_root = common_ancestor(&manifest_root, parent);
-        }
-    }
-
-    // 4. Descriptors, keyed relative to the manifest root. Once re-rooted, a
-    //    reference like `@../../vessels/…@` in the entry scene canonicalizes back
-    //    INSIDE the scenario root on the client (its loader mirrors this path
-    //    math), so it resolves against the now-shipped cached file.
-    let mut descriptors = Vec::with_capacity(by_abs.len());
-    for (abs_path, media_type) in by_abs {
-        let Ok(rel) = abs_path.strip_prefix(&manifest_root) else {
-            continue;
-        };
-        let rel_path = lunco_assets_path::slashed(rel);
-        descriptors.push(AssetDescriptor {
-            abs_path,
-            rel_path,
-            media_type,
-        });
-    }
-
-    // 5. Two entry-scene forms:
-    //    - `twin_scene` = the Twin-relative path (raw `default_scene`), so a
-    //      client holding the Twin locally loads through its own mount authority
-    //      with the same logical source → matching per-prim gids.
-    //    - `default_scene` = re-rooted to the manifest root, so a client WITHOUT
-    //      a local checkout resolves it against the cache dir mounted as that
-    //      Twin's root.
-    let twin_scene = default_scene_raw.clone();
-    let default_scene = default_scene_raw.map(|ds| {
-        twin.root
-            .join(&ds)
-            .strip_prefix(&manifest_root)
-            .ok()
-            .map(lunco_assets_path::slashed)
-            .unwrap_or(ds)
-    });
-
-    Some(ScenarioBuildInput {
+    Ok(Some(ScenarioBuildInput {
         owner,
+        root: twin.root.clone(),
+        limits: *limits,
         scenario_id,
         name,
-        default_scene,
-        twin_scene,
-        descriptors,
+        default_scene: default_scene_raw,
+        descriptors: by_abs
+            .into_iter()
+            .map(|(abs_path, media_type)| AssetDescriptor {
+                abs_path,
+                media_type,
+            })
+            .collect(),
         journal_head: journal_head
             .as_ref()
             .map(lunco_networking_sync::scenario_sync::scenario_journal_head),
-    })
+    }))
 }
 
 /// Extension → manifest media type (USD text/binary, glTF binary, images).
@@ -1427,7 +1361,7 @@ fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
 
 /// Off-thread step: read + SHA-256-hash every descriptor and assemble the
 /// manifest. **Fail-closed**: if any file can't be read, the whole build
-/// returns `None` rather than emitting a manifest over the readable subset — a
+/// returns an error rather than emitting a manifest over the readable subset — a
 /// partial manifest hashes to a `revision` that matches its own truncated asset
 /// list, so it looks complete and a client would never request the dropped CID,
 /// leaving that asset permanently absent on every peer (review: silently dropped
@@ -1438,47 +1372,129 @@ fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
 /// ever sees relative paths; abs paths are the host's private serving index.
 type ScenarioBuildOutput = (ScenarioManifestMsg, Vec<(Vec<u8>, PathBuf)>);
 
-fn build_manifest_from_input(input: ScenarioBuildInput) -> Option<ScenarioBuildOutput> {
+fn build_manifest_from_input(input: ScenarioBuildInput) -> Result<ScenarioBuildOutput, String> {
     let ScenarioBuildInput {
         owner,
+        root,
+        limits,
         scenario_id,
         name,
-        default_scene,
-        twin_scene,
+        default_scene: default_scene_raw,
         descriptors,
         journal_head,
     } = input;
+    let mut by_abs: BTreeMap<_, _> = descriptors
+        .into_iter()
+        .map(|descriptor| (descriptor.abs_path, descriptor.media_type))
+        .collect();
+    // Include out-of-tree dependencies from the entry scene, or all indexed
+    // USD documents when no entry scene is selected.
+    let roots: Vec<PathBuf> = match &default_scene_raw {
+        Some(ds) => vec![root.join(ds)],
+        None => by_abs
+            .keys()
+            .filter(|p| lunco_usd_compose::is_usd_layer(p))
+            .cloned()
+            .collect(),
+    };
+    for f in lunco_assets_core::transitive_file_closure(
+        &roots,
+        &limits,
+        lunco_usd_compose::is_usd_layer,
+        lunco_usd_compose::layer_dependency_arcs,
+    )
+    .map_err(|error| error.to_string())?
+    {
+        if f.starts_with(&root) {
+            continue; // in-tree — already enumerated by the folder walk
+        }
+        if !by_abs.contains_key(&f) && by_abs.len() >= limits.max_files {
+            return Err(format!(
+                "scenario exceeds {} admitted files",
+                limits.max_files
+            ));
+        }
+        let mt = media_type_for(&f);
+        by_abs.entry(f).or_insert(mt);
+    }
+
+    // Re-root the union so every manifest key is free of parent traversal.
+    let mut manifest_root = root.clone();
+    for abs in by_abs.keys() {
+        if let Some(parent) = abs.parent() {
+            manifest_root = common_ancestor(&manifest_root, parent);
+        }
+    }
+
+    // 4. Descriptors, keyed relative to the manifest root. Once re-rooted, a
+    //    reference like `@../../vessels/…@` in the entry scene canonicalizes back
+    //    INSIDE the scenario root on the client (its loader mirrors this path
+    //    math), so it resolves against the now-shipped cached file.
+    let mut descriptors = Vec::with_capacity(by_abs.len());
+    for (abs_path, media_type) in by_abs {
+        let rel = abs_path.strip_prefix(&manifest_root).map_err(|error| {
+            format!(
+                "cannot address scenario asset {}: {error}",
+                abs_path.display()
+            )
+        })?;
+        let rel_path = lunco_assets_path::slashed(rel);
+        descriptors.push((
+            AssetDescriptor {
+                abs_path,
+                media_type,
+            },
+            rel_path,
+        ));
+    }
+
+    // 5. Two entry-scene forms:
+    //    - `twin_scene` = the Twin-relative path (raw `default_scene`), so a
+    //      client holding the Twin locally loads through its own mount authority
+    //      with the same logical source → matching per-prim gids.
+    //    - `default_scene` = re-rooted to the manifest root, so a client WITHOUT
+    //      a local checkout resolves it against the cache dir mounted as that
+    //      Twin's root.
+    let twin_scene = default_scene_raw.clone();
+    let default_scene = default_scene_raw
+        .map(|ds| {
+            let path = root.join(&ds);
+            path.strip_prefix(&manifest_root)
+                .map(lunco_assets_path::slashed)
+                .map_err(|error| {
+                    format!("cannot address scenario entry {}: {error}", path.display())
+                })
+        })
+        .transpose()?;
+
     let mut assets = Vec::with_capacity(descriptors.len());
     let mut cid_paths = Vec::with_capacity(descriptors.len());
-    for d in descriptors {
-        let bytes = match std::fs::read(&d.abs_path) {
+    for (d, rel_path) in descriptors {
+        let bytes = match lunco_storage::read_file_sync(&d.abs_path) {
             Ok(b) => b,
-            Err(e) => {
-                warn!(
-                    "[net] scenario manifest build aborted: unreadable asset {:?}: {e}",
-                    d.abs_path
-                );
-                return None;
+            Err(error) => {
+                return Err(format!(
+                    "cannot read scenario asset {}: {error}",
+                    d.abs_path.display()
+                ));
             }
         };
         let cid = cid_for_content(&bytes).to_bytes();
         cid_paths.push((cid.clone(), d.abs_path));
         assets.push(ScenarioAsset {
-            path: d.rel_path,
+            path: rel_path,
             cid,
             size: bytes.len() as u64,
             media_type: d.media_type,
         });
     }
-    // Nothing to distribute → publish nothing. An empty asset list still hashes
-    // to a fixed non-empty `revision`, so without this guard a client would
-    // treat "scenario at revision R with zero assets" as a real scenario and
-    // could act on it; `None` instead routes callers down the bare-host path.
+    // A distributable scenario requires at least one asset. Report an empty
+    // build instead of publishing a successful zero-asset revision.
     if assets.is_empty() {
-        return None;
+        return Err("scenario contains no distributable assets".into());
     }
     let revision = scenario_revision(&assets);
-    Some((
+    Ok((
         // `asset_base_url` is stamped at publish time (`drive_scenario_manifest`) —
         // this build is pure and knows nothing about how the host is reachable.
         ScenarioManifestMsg {
@@ -1509,7 +1525,8 @@ pub(crate) struct PendingScenarioManifest {
     // Admission remains until withdrawal even if preparation fails: actor
     // messages from this mount still need an explicit retirement on close.
     owner: Option<lunco_workspace::TwinId>,
-    task: Option<Task<Option<ScenarioBuildOutput>>>,
+    task: Option<Task<Result<ScenarioBuildOutput, String>>>,
+    preparation_error: Option<String>,
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
@@ -1539,6 +1556,7 @@ impl HostScenarioLifecycle<'_> {
         }
         self.replay.0.clear();
         self.pending.task = None;
+        self.pending.preparation_error = None;
         self.pending.owner = None;
         self.scenario.owner = None;
         self.scenario.manifest = None;
@@ -1611,13 +1629,15 @@ fn spawn_manifest_build(
     twin: &Twin,
     roots: Option<&lunco_assets_core::TwinRoots>,
     journal_head: Option<lunco_twin_journal::EntryId>,
+    limits: &lunco_assets_core::FileClosureLimits,
     pending: &mut PendingScenarioManifest,
 ) {
     pending.owner = Some(owner);
     pending.task = None;
+    pending.preparation_error = None;
     let Some(roots) = roots else {
-        warn!("[net] cannot build a scenario manifest without the Twin asset registry");
-        pending.task = None;
+        pending.preparation_error =
+            Some("cannot build a scenario manifest without the Twin asset registry".into());
         return;
     };
     let logical_name = match roots
@@ -1626,18 +1646,24 @@ fn spawn_manifest_build(
     {
         Ok(name) => name,
         Err(error) => {
-            warn!("[net] cannot admit scenario source identity: {error}");
-            pending.task = None;
+            pending.preparation_error =
+                Some(format!("cannot admit scenario source identity: {error}"));
             return;
         }
     };
-    let Some(mut input) = collect_scenario_input(owner, twin, journal_head) else {
-        warn!(
-            "[net] cannot build a scenario manifest for {}: a twin.toml UUID is required",
-            twin.root.display()
-        );
-        pending.task = None;
-        return;
+    let mut input = match collect_scenario_input(owner, twin, journal_head, limits) {
+        Ok(Some(input)) => input,
+        Ok(None) => {
+            pending.preparation_error = Some(format!(
+                "cannot build a scenario manifest for {}: a twin.toml UUID is required",
+                twin.root.display()
+            ));
+            return;
+        }
+        Err(error) => {
+            pending.preparation_error = Some(error);
+            return;
+        }
     };
     input.name = logical_name;
     let pool = AsyncComputeTaskPool::get();
@@ -1667,6 +1693,7 @@ fn spawn_initial_scenario_manifest(
     workspace: Option<Res<WorkspaceResource>>,
     roots: Option<Res<lunco_assets_core::TwinRoots>>,
     journal: Option<Res<JournalResource>>,
+    limits: Res<lunco_assets_core::FileClosureLimits>,
     mut pending: ResMut<PendingScenarioManifest>,
 ) {
     let Some(workspace) = workspace else { return };
@@ -1683,6 +1710,7 @@ fn spawn_initial_scenario_manifest(
             twin,
             roots.as_deref(),
             journal_head(&journal, twin),
+            &limits,
             &mut pending,
         );
     }
@@ -1695,6 +1723,8 @@ fn spawn_initial_scenario_manifest(
 fn drive_scenario_manifest(
     workspace: Option<Res<WorkspaceResource>>,
     role: Res<lunco_core_session::NetworkRole>,
+    mut status: ResMut<NetStatus>,
+    mut commands: Commands,
     mut pending: ResMut<PendingScenarioManifest>,
     mut scenario: ResMut<ScenarioManifestResource>,
     mut asset_paths: ResMut<lunco_networking_sync::scenario_sync::HostAssetPaths>,
@@ -1706,6 +1736,16 @@ fn drive_scenario_manifest(
     {
         pending.task = None;
         pending.owner = None;
+        pending.preparation_error = None;
+        return;
+    }
+    if let Some(message) = pending.preparation_error.take() {
+        status.last_error = message.clone();
+        warn!("[net] {message}");
+        commands.trigger(lunco_core::RuntimeError {
+            name: "scenario-manifest-preparation-failed".into(),
+            message,
+        });
         return;
     }
     let owner = pending.owner;
@@ -1717,7 +1757,8 @@ fn drive_scenario_manifest(
     };
     pending.task = None;
     match result {
-        Some((manifest, cid_paths)) => {
+        Ok((manifest, cid_paths)) => {
+            status.last_error.clear();
             info!(
                 "[net] scenario manifest built: {} assets",
                 manifest.assets.len()
@@ -1740,7 +1781,14 @@ fn drive_scenario_manifest(
             scenario.owner = owner;
             scenario.manifest = Some(manifest);
         }
-        None => warn!("[net] scenario manifest build failed; no new manifest published"),
+        Err(message) => {
+            status.last_error = message.clone();
+            warn!("[net] {message}");
+            commands.trigger(lunco_core::RuntimeError {
+                name: "scenario-manifest-preparation-failed".into(),
+                message,
+            });
+        }
     }
 }
 
@@ -1751,6 +1799,7 @@ fn on_twin_added_host(
     workspace: Res<WorkspaceResource>,
     roots: Option<Res<lunco_assets_core::TwinRoots>>,
     journal: Option<Res<JournalResource>>,
+    limits: Res<lunco_assets_core::FileClosureLimits>,
     mut state: HostScenarioLifecycle,
     mut commands: Commands,
 ) {
@@ -1770,6 +1819,7 @@ fn on_twin_added_host(
             twin,
             roots.as_deref(),
             journal_head(&journal, twin),
+            &limits,
             &mut state.pending,
         );
     }
@@ -1790,6 +1840,7 @@ fn ingest_asset_offers(
     workspace: Option<Res<WorkspaceResource>>,
     roots: Option<Res<lunco_assets_core::TwinRoots>>,
     journal: Option<Res<JournalResource>>,
+    limits: Res<lunco_assets_core::FileClosureLimits>,
     mut pending: ResMut<PendingScenarioManifest>,
 ) {
     if !role.is_host() || offers.0.is_empty() {
@@ -1848,6 +1899,7 @@ fn ingest_asset_offers(
             twin,
             roots.as_deref(),
             journal_head(&journal, twin),
+            &limits,
             &mut pending,
         );
     }
@@ -1864,6 +1916,7 @@ fn service_manifest_rebuild_request(
     workspace: Option<Res<WorkspaceResource>>,
     roots: Option<Res<lunco_assets_core::TwinRoots>>,
     journal: Option<Res<JournalResource>>,
+    limits: Res<lunco_assets_core::FileClosureLimits>,
     mut pending: ResMut<PendingScenarioManifest>,
 ) {
     if !role.is_host() || !req.0 {
@@ -1881,6 +1934,7 @@ fn service_manifest_rebuild_request(
         twin,
         roots.as_deref(),
         journal_head(&journal, twin),
+        &limits,
         &mut pending,
     );
 }
@@ -1993,6 +2047,37 @@ fn drain_and_send_asset_chunks(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scenario_manifest_preparation_rejects_missing_documents_and_invalid_limits() {
+        let root = tempfile::tempdir().unwrap();
+        let input = |limits| ScenarioBuildInput {
+            owner: lunco_workspace::TwinId::new(1),
+            root: root.path().to_path_buf(),
+            limits,
+            scenario_id: [1; 16],
+            name: "generic".into(),
+            default_scene: Some("missing.usda".into()),
+            descriptors: Vec::new(),
+            journal_head: None,
+        };
+        let error =
+            build_manifest_from_input(input(lunco_assets_core::FileClosureLimits::default()))
+                .err()
+                .unwrap();
+        assert!(
+            error.contains("missing.usda") && error.contains("cannot read asset document"),
+            "{error}"
+        );
+        // Invalid limits are rejected before any filesystem access.
+        let error = build_manifest_from_input(input(lunco_assets_core::FileClosureLimits {
+            max_document_bytes: 0,
+            ..Default::default()
+        }))
+        .err()
+        .unwrap();
+        assert!(error.contains("must be positive"), "{error}");
+    }
 
     /// The content plane assumes a path's bytes are immutable between manifest
     /// builds. `history/journal.json` grows on every authored edit, so a client
