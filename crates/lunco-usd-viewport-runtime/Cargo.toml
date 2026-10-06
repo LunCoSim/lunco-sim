@@ -32,6 +32,7 @@ lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-viewport-core = { path = "../lunco-usd-viewport-core" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-workspace = { path = "../lunco-workspace" }
+lunco-core-session = { path = "../lunco-core-session" }
 openusd = { workspace = true }
 
 [dev-dependencies]

@@ -116,6 +116,23 @@ synchronously at allocation. Deferred document-open delivery cannot rebind them
 to a replacement Twin. Duplicate installation validates the captured context,
 and owner retirement cancels its pending work and status handle.
 
+File opening captures local root IDs and the exact replicated mount before it
+leaves the caller. Its existing async task resolves native canonical identity
+through storage and reads the source; local root ownership takes precedence.
+Browser mounted files use the same validated OPFS identity as their storage
+reader, while picked bytes and private WebStorage/session sources have explicit
+Application lifetime. Installation rejects a retired owner. A dirty resident
+source cannot be relabeled by reopening its path under another owner; a clean
+explicit reopen can install newly read source and its new admitted lifetime.
+Modelica editor file opens capture resident origins, owners, and source
+generations before dispatch. The file worker resolves aliases; installation
+validates those captured facts before rebinding a clean resident source.
+Dirty sources and sources changed or installed by another owner after admission
+cannot be overwritten by a pending read.
+Workspace folder association remains a display/authoring lens. Active document
+scope and Modelica teardown read the stored runtime owner. Deferred document-open
+events require prior admission registration when a Workspace exists.
+
 Fast Run admission records an `ExperimentOrigin` in the sole
 `ExperimentOrigins` registry. Local document work pins its exact document and
 runtime lifetime through `PinnedDocumentRuntimeOwner`; replicated work pins the

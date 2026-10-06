@@ -146,7 +146,12 @@ generation while it remains the recorded snapshot generation; any later live
 edit invalidates that equivalence, so consumers require complete change history
 or perform their normal live-stage reconciliation.
 
-Default Twin scene admission uses `AsyncWorkAdmission` to parse the exact
+Default Twin scene admission captures the exact Workspace `TwinId` and live
+asset mount, and validates both before installing source or projection. The
+producer registers the document's stored runtime owner before lifecycle events;
+file opens, private restore, new documents, forks and retirement follow the
+[document source contract](55-scene-addressing-and-roots.md#document-source-admission-and-lifetime).
+It uses `AsyncWorkAdmission` to parse the exact
 `UsdSourceText` revision and serialize the restored persistent document
 snapshot off the main schedule. The file-backed registry still owns path
 identity, clean reload, dirty preservation, and lifecycle events through

@@ -22,8 +22,8 @@
 //! `File(path)` handle addresses the native FS on desktop and OPFS on web with no
 //! enum change (and no exhaustiveness churn across the workspace). A relative
 //! path (`scenarios/<id>/rover.glb`) is the intended input on web; absolute /
-//! prefix / `..` components are ignored (OPFS has no ambient root or parent
-//! traversal).
+//! root markers select the same private tree; parent traversal, native prefixes,
+//! and invalid names are rejected by the shared canonical identity boundary.
 //!
 //! # Non-blocking
 //!
@@ -199,15 +199,16 @@ async fn segments_root() -> StorageResult<web_sys::FileSystemDirectoryHandle> {
 }
 
 /// Split a `File` handle into `(intermediate dir names, final file name)`,
-/// keeping only `Normal` path components (OPFS has no absolute root or `..`).
+/// using the same validated identity as mounted-file admission.
 fn split_handle(handle: &StorageHandle) -> StorageResult<(Vec<String>, String)> {
     let path = handle
         .as_file_path()
         .ok_or_else(|| unsupported("OpfsStorage addresses File handles only"))?;
-    let mut comps: Vec<String> = path
+    let canonical = crate::canonicalize_file_path(path)?;
+    let mut comps: Vec<String> = canonical
         .components()
         .filter_map(|c| match c {
-            std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+            std::path::Component::Normal(s) => s.to_str().map(str::to_owned),
             _ => None,
         })
         .collect();

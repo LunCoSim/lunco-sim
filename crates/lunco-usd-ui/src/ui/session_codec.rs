@@ -38,6 +38,26 @@ struct SavedUsdPreviewView {
 }
 
 fn restore_usd_document(world: &mut World, snapshot: &DocumentSnapshot) -> Option<u64> {
+    if let DocumentOrigin::File { path, .. } = &snapshot.origin {
+        let registry = world.get_resource::<DocumentRegistry<UsdDocument>>()?;
+        if let Some(doc) = registry.doc_for_file(path)
+            && registry
+                .host(doc)
+                .is_some_and(|host| host.document().is_dirty())
+            && world
+                .get_resource::<lunco_workspace::WorkspaceResource>()
+                .is_some_and(|workspace| {
+                    workspace.document(doc).is_none_or(|entry| {
+                        entry.runtime_context != lunco_workspace::DocumentRuntimeOwner::Application
+                    })
+                })
+        {
+            warn!(
+                "[WorkspaceState] refusing to rebind dirty USD document {doc} to private Application restore"
+            );
+            return None;
+        }
+    }
     let mut registry = world.get_resource_mut::<DocumentRegistry<UsdDocument>>()?;
     let (id, outcome): (DocumentId, Option<lunco_doc::OpenOutcome>) = match &snapshot.origin {
         DocumentOrigin::File { path, writable } => {
@@ -67,6 +87,19 @@ fn restore_usd_document(world: &mut World, snapshot: &DocumentSnapshot) -> Optio
         if let Some(host) = registry.host_mut(id) {
             host.document_mut().mark_restored_dirty();
         }
+    }
+    let origin = registry.host(id)?.document().origin().clone();
+    let dirty = registry.host(id)?.document().is_dirty();
+    drop(registry);
+    if let Some(mut workspace) = world.get_resource_mut::<lunco_workspace::WorkspaceResource>() {
+        workspace.add_document(lunco_workspace::DocumentEntry {
+            id,
+            kind: lunco_workspace::DocumentKindId::new(KIND),
+            title: origin.display_name(),
+            origin,
+            runtime_context: lunco_workspace::DocumentRuntimeOwner::Application,
+            dirty,
+        });
     }
     Some(id.raw())
 }

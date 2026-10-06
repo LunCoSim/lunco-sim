@@ -171,34 +171,23 @@ fn sync_workspace_on_doc_opened(
     trigger: On<lunco_doc_bevy::DocumentOpened>,
     registry: Res<DocumentRegistry<ModelicaDocument>>,
     workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+    mut commands: Commands,
 ) {
-    let Some(mut workspace) = workspace else {
+    let Some(workspace) = workspace else {
         return;
     };
     let id = trigger.event().doc;
-    let Some(host) = registry.host(id) else {
+    if registry.host(id).is_none() {
         return;
-    };
-    let document = host.document();
-    let origin = document.origin().clone();
+    }
     if workspace.document(id).is_some() {
         return;
     }
-    let runtime_context = if origin.is_untitled() {
-        workspace.active_twin
-    } else {
-        None
-    };
-    workspace.add_document(lunco_workspace::DocumentEntry {
-        id,
-        kind: lunco_workspace::DocumentKindId::new("modelica"),
-        origin: origin.clone(),
-        runtime_context: runtime_context.map_or(
-            lunco_workspace::DocumentRuntimeOwner::Application,
-            lunco_workspace::DocumentRuntimeOwner::LocalTwin,
-        ),
-        title: origin.display_name(),
-        dirty: document.is_dirty(),
+    let message = format!("Modelica document {id} has no admitted runtime owner");
+    bevy::log::warn!("{message}");
+    commands.trigger(lunco_core::RuntimeError {
+        name: "modelica-document-admission-missing".to_owned(),
+        message,
     });
 }
 

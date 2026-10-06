@@ -310,7 +310,7 @@ pub(crate) fn clear_scene_pointer_move_hooks_on_twin_closed(
         .documents()
         .iter()
         .filter(|entry| {
-            lunco_workspace::document_belongs_to_twin_root(entry, event.twin, &event.root)
+            entry.runtime_context == lunco_workspace::DocumentRuntimeOwner::LocalTwin(event.twin)
         })
         .map(|entry| entry.id)
         .collect();

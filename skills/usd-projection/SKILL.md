@@ -217,8 +217,14 @@ preserved, so an inactive Twin is not accidentally anchored on the active one.
 Once the document is admitted, the viewport derives its document-backed
 `UsdPreviewId::for_document` with `LayerId::root()`, opens the session's primary
 `UsdPreviewView` as an instance-backed dock tab, and focuses that exact tab.
-Pending browser reads are cancelled on `TwinClosed`, and repeated clicks
-coalesce/reuse the same document, preview session, and view tab. Explicit
+File reads capture `FileDocumentAdmission` before dispatch and validate the
+resolved runtime owner before publication. A retired owner cannot install a
+late source; repeated requests coalesce only with the same admission snapshot.
+Indexed Twin source requests and leases retire by exact `TwinId`, and stored
+document ownership fences deletion after a source rebind. Preview admission
+rejects retired document owners; private restored snapshots explicitly belong
+to Application. See the [source lifetime contract](../../docs/architecture/55-scene-addressing-and-roots.md#document-source-admission-and-lifetime).
+Repeated admitted clicks reuse the same document, preview session and view tab. Explicit
 `FocusUsdPreview` and `FocusUsdPreviewView` commands foreground their matching
 instance tab as well; replacing or closing a session removes its view tabs with
 the presentation resources.

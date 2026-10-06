@@ -55,7 +55,7 @@
 
 use lunco_usd_document::document::UsdDocument;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use crate::scene::{
@@ -95,15 +95,15 @@ use lunco_usd_document::document::UsdOp;
 struct PendingTwinDoc {
     /// In-flight raw-source load of `twin://<name>/<rel>`.
     handle: Handle<UsdSourceText>,
+    twin: lunco_workspace::TwinId,
     /// Twin name (the `twin://` first segment).
     name: String,
     /// Scene path relative to the twin root (the `twin://` remainder).
     rel: String,
     /// On-disk absolute path — the document origin (Save target + dedup key).
     abs_path: PathBuf,
-    /// Workspace Twin root that owns this pending projection request. The
-    /// document receives a scene lease only after the source is ready and is
-    /// retired with this root if the Twin closes first.
+    /// Captured transport root, checked with the exact Twin ID and mount before
+    /// publication. The admitted Twin ID owns retirement of this request.
     root: PathBuf,
     doc: Option<DocumentId>,
     failure_reported: bool,
@@ -340,6 +340,7 @@ impl PendingTwinDocs {
     pub(crate) fn push(
         &mut self,
         handle: Handle<UsdSourceText>,
+        twin: lunco_workspace::TwinId,
         ready: bool,
         name: String,
         rel: String,
@@ -351,6 +352,7 @@ impl PendingTwinDocs {
         }
         self.items.push(PendingTwinDoc {
             handle,
+            twin,
             name,
             rel,
             abs_path,
@@ -422,10 +424,10 @@ impl PendingTwinDocs {
     }
 
     /// Release pending projection work for a closed Twin.
-    pub(crate) fn release_root(&mut self, root: &Path) -> Vec<AsyncWorkKey> {
+    pub(crate) fn release_twin(&mut self, twin: lunco_workspace::TwinId) -> Vec<AsyncWorkKey> {
         let mut cancelled = Vec::new();
         self.items.retain(|item| {
-            let keep = !lunco_doc::same_file(&item.root, root);
+            let keep = item.twin != twin;
             if !keep && let Some(key) = item.work_key {
                 cancelled.push(key);
             }
@@ -1148,7 +1150,7 @@ pub(crate) fn fail_pending_instance_projection(
 /// Clear asynchronous referenced-spawn work owned by the outgoing scene.
 ///
 /// Pending default-scene document loads are owned by their admitted Twin and
-/// are released through [`PendingTwinDocs::release_root`] when that Twin closes.
+/// are released through [`PendingTwinDocs::release_twin`] when that Twin closes.
 pub(crate) fn reset_scene_projection_state(
     mut pending_refs: ResMut<PendingRefSpawns>,
     mut pending_document_projections: Option<ResMut<PendingDocumentProjectionAdmissions>>,
@@ -1361,7 +1363,7 @@ pub(crate) fn drain_pending_twin_docs(
     wake: Res<TwinProjectionWake>,
     sources: Res<Assets<UsdSourceText>>,
     twin_roots: Res<TwinRoots>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
     runtime_saves: Res<lunco_usd_bevy_runtime_persistence::RuntimeSaveJobs>,
     mut empty_reason: ResMut<EmptyViewportReason>,
     mut commands: Commands,
@@ -1378,6 +1380,24 @@ pub(crate) fn drain_pending_twin_docs(
         else {
             continue;
         };
+        if !workspace.as_deref().is_some_and(|workspace| {
+            workspace
+                .twin(item.twin)
+                .is_some_and(|twin| twin.root == item.root)
+        }) || !twin_roots
+            .root_for(&item.name)
+            .is_ok_and(|root| root.as_ref() == Some(&item.root))
+        {
+            item.stage = TwinDocPreparationStage::Finished;
+            if let Some(key) = item.work_key.take() {
+                admission.cancel_queued(key);
+            }
+            warn!(
+                "[usd-e1b] refusing source completion for retired Twin {}",
+                item.twin.raw()
+            );
+            continue;
+        }
         item.work_key = None;
         item.capacity_revision = None;
         match (&item.stage, completion.result) {
@@ -1391,6 +1411,26 @@ pub(crate) fn drain_pending_twin_docs(
                         .map(|UsdSourceText(source)| source.as_str());
                     if current_source != Some(prepared.source_text()) {
                         item.stage = TwinDocPreparationStage::AwaitingSource;
+                        continue;
+                    }
+                    let runtime = lunco_workspace::DocumentRuntimeOwner::LocalTwin(item.twin);
+                    if let Some(doc) = registry.doc_for_file(&item.abs_path)
+                        && registry
+                            .host(doc)
+                            .is_some_and(|host| host.document().is_dirty())
+                        && workspace.as_deref().is_some_and(|workspace| {
+                            workspace
+                                .document(doc)
+                                .is_none_or(|entry| entry.runtime_context != runtime)
+                        })
+                    {
+                        report_twin_doc_load_failed(
+                            &mut empty_reason,
+                            &mut commands,
+                            &lunco_assets_core::twin_uri(&item.name, &item.rel),
+                            "dirty resident USD source belongs to a different runtime owner",
+                        );
+                        item.stage = TwinDocPreparationStage::Finished;
                         continue;
                     }
                     let (doc, outcome) =
@@ -1412,6 +1452,19 @@ pub(crate) fn drain_pending_twin_docs(
                         ),
                         OpenOutcome::Allocated | OpenOutcome::Refreshed => {}
                     }
+                    if let Some(workspace) = workspace.as_deref_mut()
+                        && let Some(host) = registry.host(doc)
+                    {
+                        let origin = host.document().origin().clone();
+                        workspace.add_document(lunco_workspace::DocumentEntry {
+                            id: doc,
+                            kind: lunco_workspace::DocumentKindId::new("usd"),
+                            title: origin.display_name(),
+                            origin,
+                            runtime_context: runtime,
+                            dirty: host.document().is_dirty(),
+                        });
+                    }
                     if let Some(ws) = workspace.as_deref() {
                         lunco_usd_bevy_runtime_persistence::restore_doc_runtime_with_pending(
                             ws,
@@ -1430,7 +1483,7 @@ pub(crate) fn drain_pending_twin_docs(
                         item.stage = TwinDocPreparationStage::Finished;
                         continue;
                     };
-                    backed.track(doc, item.root.clone(), item.name.clone(), item.rel.clone());
+                    backed.track(doc, item.twin, item.name.clone(), item.rel.clone());
                     item.doc = Some(doc);
                     item.stage = TwinDocPreparationStage::AwaitingPersistentSource {
                         doc,
@@ -1519,6 +1572,19 @@ pub(crate) fn drain_pending_twin_docs(
     let capacity_revision = admission.capacity_revision();
     let mut still = Vec::new();
     for mut item in items {
+        if !workspace.as_deref().is_some_and(|workspace| {
+            workspace
+                .twin(item.twin)
+                .is_some_and(|twin| twin.root == item.root)
+        }) || !twin_roots
+            .root_for(&item.name)
+            .is_ok_and(|root| root.as_ref() == Some(&item.root))
+        {
+            if let Some(key) = item.work_key.take() {
+                admission.cancel_queued(key);
+            }
+            continue;
+        }
         let twin_path = lunco_assets_core::twin_uri(&item.name, &item.rel);
         if item.stage == TwinDocPreparationStage::Finished {
             continue;
@@ -6320,6 +6386,7 @@ mod tests {
             .add_systems(lunco_core::SceneTeardown, reset_scene_projection_state);
         app.world_mut().resource_mut::<PendingTwinDocs>().push(
             Handle::default(),
+            lunco_workspace::TwinId::new(1),
             false,
             "incoming".into(),
             "scene.usda".into(),
@@ -6342,6 +6409,7 @@ mod tests {
         let handle = Handle::<UsdSourceText>::default();
         app.world_mut().resource_mut::<PendingTwinDocs>().push(
             handle.clone(),
+            lunco_workspace::TwinId::new(1),
             false,
             "incoming".into(),
             "scene.usda".into(),
@@ -6378,6 +6446,7 @@ mod tests {
         let handle = Handle::<UsdSourceText>::default();
         pending.push(
             handle.clone(),
+            lunco_workspace::TwinId::new(1),
             false,
             "incoming".into(),
             "scene.usda".into(),
@@ -6412,6 +6481,7 @@ mod tests {
         let handle = Handle::<UsdSourceText>::default();
         pending.push(
             handle.clone(),
+            lunco_workspace::TwinId::new(1),
             true,
             "incoming".into(),
             "scene.usda".into(),
@@ -6429,6 +6499,7 @@ mod tests {
         let handle = Handle::<UsdSourceText>::default();
         pending.push(
             handle.clone(),
+            lunco_workspace::TwinId::new(1),
             false,
             "incoming".into(),
             "scene.usda".into(),

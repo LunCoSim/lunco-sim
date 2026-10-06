@@ -27,13 +27,24 @@ pub(crate) struct OpenPackageClassRequested {
 pub(crate) fn on_open_package_class_requested(
     trigger: On<OpenPackageClassRequested>,
     mut commands: Commands,
+    registry: Res<ModelicaDocuments>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
 ) {
     let tree_id = trigger.tree_id.clone();
     let pinned = trigger.pinned;
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    let admission = crate::ui::document_openings::FileOpenAdmission::capture(
+        &registry,
+        workspace.as_deref().map(|workspace| &workspace.0),
+        replication.as_ref(),
+    );
     commands.queue(move |world: &mut World| {
         let class = ClassRef::parse_tree_id(&tree_id).or_else(|| resolve_mem_id(world, &tree_id));
         if let Some(class) = class {
-            open_class(world, class, pinned);
+            open_class(world, class, pinned, admission);
         } else {
             bevy::log::warn!("[PackageBrowser] unparseable tree id `{tree_id}`");
         }
@@ -429,7 +440,25 @@ fn find_category_scan_target<'a>(
 ///   sibling-class references.
 /// - [`Library::Untitled`]: focus the existing tab for the doc id;
 ///   there's no source to load.
-pub(crate) fn open_class(world: &mut World, class: ClassRef, pinned: bool) {
+pub(crate) fn capture_file_admission(
+    world: &World,
+) -> crate::ui::document_openings::FileOpenAdmission {
+    let replication = lunco_core_session::current_replication_owner_in(world);
+    crate::ui::document_openings::FileOpenAdmission::capture(
+        world.resource::<ModelicaDocuments>(),
+        world
+            .get_resource::<lunco_workspace::WorkspaceResource>()
+            .map(|workspace| &workspace.0),
+        replication.as_ref(),
+    )
+}
+
+pub(crate) fn open_class(
+    world: &mut World,
+    class: ClassRef,
+    pinned: bool,
+    admission: crate::ui::document_openings::FileOpenAdmission,
+) {
     let _ = pinned; // VS Code preview/pin semantics — wired through later.
     match &class.library {
         Library::Source { .. } => {
@@ -439,13 +468,17 @@ pub(crate) fn open_class(world: &mut World, class: ClassRef, pinned: bool) {
             // `DocumentOpenings` busy state. Pass the absolute qualified
             // name so its `library_fs::resolve_class_path_indexed`
             // can find the owning .mo file.
-            crate::ui::panels::canvas_diagram::drill_into_class(world, &class.qualified());
+            crate::ui::panels::canvas_diagram::drill_into_class(
+                world,
+                &class.qualified(),
+                admission.file,
+            );
         }
         Library::Bundled => {
             open_bundled_class(world, &class);
         }
         Library::UserFile { path } => {
-            open_user_file_class(world, path.clone(), &class);
+            open_user_file_class(world, path.clone(), &class, admission);
         }
         Library::Untitled(doc_id) => {
             focus_existing_doc_tab(world, *doc_id, class.qualified());
@@ -514,18 +547,24 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
             filename: filename_for_task.clone(),
         };
         let result = match crate::models::get_model(&filename_for_task) {
-            Ok(Some(source_text)) => Ok(lunco_modelica_document::ModelicaDocument::with_origin(
-                reserved_doc_id,
-                source_text,
-                origin,
+            Ok(Some(source_text)) => Ok((
+                lunco_modelica_document::ModelicaDocument::with_origin(
+                    reserved_doc_id,
+                    source_text,
+                    origin,
+                ),
+                lunco_workspace::DocumentRuntimeOwner::Application,
             )),
             Ok(None) => Err(format!("Bundled model not found: {filename_for_task}")),
             Err(error) => Err(error),
         };
-        crate::package_tree::cache::FileLoadResult {
-            doc_id: reserved_doc_id,
-            result,
-        }
+        (
+            crate::package_tree::cache::FileLoadResult {
+                doc_id: reserved_doc_id,
+                result,
+            },
+            None,
+        )
     });
     // Mint a `StatusBus` handle BEFORE inserting into `DocumentOpenings`
     // so the canvas overlay sees the doc as busy from the very first
@@ -550,7 +589,12 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
         );
 }
 
-fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
+fn open_user_file_class(
+    world: &mut World,
+    path: PathBuf,
+    class: &ClassRef,
+    admission: crate::ui::document_openings::FileOpenAdmission,
+) {
     use crate::model_tabs_types::ModelViewMode;
     use crate::ui::MODEL_VIEW_KIND;
     use bevy::tasks::AsyncComputeTaskPool;
@@ -574,62 +618,13 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
     } else {
         Some(ModelViewMode::Text)
     };
-    let already_open = world.resource::<ModelicaDocuments>().find_by_path(&path);
-    if let Some(doc) = already_open {
-        if read_only_library {
-            if let Some(host) = world.resource_mut::<ModelicaDocuments>().host_mut(doc) {
-                host.document_mut()
-                    .set_origin(lunco_doc::DocumentOrigin::File {
-                        path: path.clone(),
-                        writable: false,
-                    });
-            }
-        }
-        // Re-Opening an already-open file reloads it from disk so external
-        // edits (an editor, a tool, an agent writing the `.mo`) are picked up
-        // — previously this just focused the stale tab. Read synchronously
-        // (user-initiated, small file) and apply through the op pipeline so
-        // canvas/plots/compile reproject; skip if the buffer already matches.
-        if let Ok(disk) = lunco_modelica_runtime::source_asset::read_text_sync(&path) {
-            let differs = world
-                .resource::<ModelicaDocuments>()
-                .host(doc)
-                .map(|h| h.document().source() != disk)
-                .unwrap_or(false);
-            if differs {
-                use lunco_modelica_document::ModelicaOp;
-                match crate::ui::panels::canvas_diagram::apply_one_op_as(
-                    world,
-                    doc,
-                    ModelicaOp::ReplaceSource { new: disk },
-                    lunco_twin_journal::AuthorTag::for_tool("open-file-reload"),
-                ) {
-                    Ok(_) => bevy::log::info!("[OpenFile] reloaded `{}` from disk", path.display()),
-                    Err(e) => bevy::log::warn!(
-                        "[OpenFile] reload-from-disk failed for {}: {e:?}",
-                        path.display()
-                    ),
-                }
-            }
-        }
-        let tab_id = world
-            .resource_mut::<crate::model_tabs::ModelTabs>()
-            .ensure_for(doc, drilled);
-        if let Some(mode) = initial_mode {
-            world
-                .resource_mut::<crate::model_tabs::ModelTabs>()
-                .set_view_mode(tab_id, mode);
-        }
-        world
-            .commands()
-            .trigger(lunco_workbench_core::commands::OpenTab {
-                kind: MODEL_VIEW_KIND,
-                instance: tab_id,
-            });
-        return;
-    }
-
-    let reserved_doc_id = world.resource_mut::<ModelicaDocuments>().reserve_id();
+    let reserved_doc_id = world
+        .resource::<ModelicaDocuments>()
+        .iter()
+        .find_map(|(id, host)| {
+            (host.document().origin().canonical_path() == Some(path.as_path())).then_some(id)
+        })
+        .unwrap_or_else(|| world.resource::<ModelicaDocuments>().reserve_id());
     let tab_id = world
         .resource_mut::<crate::model_tabs::ModelTabs>()
         .ensure_for(reserved_doc_id, drilled);
@@ -651,26 +646,36 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
         .unwrap_or("Opened")
         .to_string();
     let path_for_task = path;
+    let mut admission = admission;
     let task = AsyncComputeTaskPool::get().spawn(async move {
-        let origin = lunco_doc::DocumentOrigin::File {
-            path: path_for_task.clone(),
-            writable: !read_only_library,
-        };
-        // `lunco-storage`, not `std::fs`: on wasm the picked file's text is in
-        // browser storage, and this is the same call site on both targets.
-        let result = lunco_modelica_runtime::source_asset::read_text_sync(&path_for_task)
-            .map(|source_text| {
+        admission.resolve_residents();
+        let file_admission = admission.file.clone();
+        let result = lunco_modelica_runtime::source_asset::read_admitted_file(
+            &path_for_task,
+            file_admission,
+        )
+        .await
+        .map(|(resolved, source_text)| {
+            let origin = lunco_doc::DocumentOrigin::File {
+                path: resolved.path,
+                writable: !read_only_library,
+            };
+            (
                 lunco_modelica_document::ModelicaDocument::with_origin(
                     reserved_doc_id,
                     source_text,
                     origin,
-                )
-            })
-            .map_err(|e| format!("Failed to read {}: {e}", path_for_task.display()));
-        crate::package_tree::cache::FileLoadResult {
-            doc_id: reserved_doc_id,
-            result,
-        }
+                ),
+                resolved.runtime,
+            )
+        });
+        (
+            crate::package_tree::cache::FileLoadResult {
+                doc_id: reserved_doc_id,
+                result,
+            },
+            Some(admission),
+        )
     });
     // Mint a `StatusBus` handle BEFORE inserting; handed off to the
     // projection stage in `drive_file_load_openings`. See the matching

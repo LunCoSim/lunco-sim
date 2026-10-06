@@ -49,7 +49,16 @@ pub(crate) fn find_open_doc_with_class(
     qualified: &str,
 ) -> Option<lunco_doc::DocumentId> {
     let registry = world.resource::<ModelicaDocuments>();
+    let workspace = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .map(|workspace| &workspace.0);
+    let replication = lunco_core_session::current_replication_owner_in(world);
     registry.iter().find_map(|(doc_id, host)| {
+        if !lunco_workspace::PinnedDocumentRuntimeOwner::for_document(doc_id, workspace)
+            .is_ok_and(|pin| pin.is_in_active_scope(workspace, replication.as_ref()))
+        {
+            return None;
+        }
         host.document().strict_ast().and_then(|ast| {
             lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, qualified)
                 .map(|_| doc_id)

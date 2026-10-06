@@ -10,15 +10,22 @@ pub struct ScanResult {
 }
 
 /// Output of a bundled or user-file load task. `result` is the
-/// outcome — `Ok(doc)` for a successful read, `Err(msg)` for any IO
+/// outcome — `Ok((doc, runtime))` for admitted source, `Err(msg)` for any IO
 /// or decode failure that should be surfaced as a load-failed
 /// overlay (`StatusBus` → `BusyOutcome::Failed`). Display name /
 /// library / dedup key live on the matching
 /// `ui::document_openings::OpeningState::FileLoad` for
 /// the duration of the load.
+/// Successful loads include the exact source runtime admitted by the loader.
 pub struct FileLoadResult {
     pub doc_id: lunco_doc::DocumentId,
-    pub result: Result<lunco_modelica_document::ModelicaDocument, String>,
+    pub result: Result<
+        (
+            lunco_modelica_document::ModelicaDocument,
+            lunco_workspace::DocumentRuntimeOwner,
+        ),
+        String,
+    >,
 }
 
 #[derive(Resource)]

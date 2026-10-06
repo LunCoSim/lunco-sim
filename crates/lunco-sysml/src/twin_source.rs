@@ -28,6 +28,7 @@ pub const SYSML_TWIN_SOURCE_LOAD_FAILED: &str = "sysml-twin-source-load-failed";
 /// One source file requested from a mounted Twin.
 struct PendingSysmlSource {
     handle: Handle<SysmlSource>,
+    twin_id: lunco_workspace::TwinId,
     twin_name: String,
     relative_path: String,
     absolute_path: PathBuf,
@@ -45,7 +46,7 @@ pub struct PendingSysmlSources {
     items: Vec<PendingSysmlSource>,
     ready: HashSet<bevy::asset::AssetId<SysmlSource>>,
     failed: HashMap<bevy::asset::AssetId<SysmlSource>, String>,
-    owned_documents: HashMap<DocumentId, PathBuf>,
+    owned_documents: HashMap<DocumentId, lunco_workspace::TwinId>,
 }
 
 impl PendingSysmlSources {
@@ -61,9 +62,8 @@ impl PendingSysmlSources {
         }
     }
 
-    fn release_root(&mut self, root: &Path) {
-        self.items
-            .retain(|item| !lunco_doc::same_file(&item.twin_root, root));
+    fn release_twin(&mut self, twin: lunco_workspace::TwinId) {
+        self.items.retain(|item| item.twin_id != twin);
         let live: HashSet<_> = self.items.iter().map(|item| item.handle.id()).collect();
         self.ready.retain(|id| live.contains(id));
         self.failed.retain(|id, _| live.contains(id));
@@ -143,7 +143,7 @@ fn load_twin_sysml_source(
     if pending
         .items
         .iter()
-        .any(|item| item.twin_root == twin_root && item.relative_path == request.relative_path)
+        .any(|item| item.twin_id == twin_id && item.relative_path == request.relative_path)
     {
         return Ok(lunco_command_contracts::Ack::new(
             lunco_command_contracts::OpId::new(),
@@ -151,7 +151,9 @@ fn load_twin_sysml_source(
     }
 
     let uri = twin_uri(&request.name, &request.relative_path);
-    let handle = asset_server.load::<SysmlSource>(uri);
+    let path = lunco_assets_core::asset_path::load_asset_path(&uri, None, None, None)
+        .map_err(|error| format!("invalid Twin SysML source address: {error}"))?;
+    let handle = asset_server.load::<SysmlSource>(path);
     let id = handle.id();
     if assets
         .as_deref()
@@ -164,6 +166,7 @@ fn load_twin_sysml_source(
         .is_some_and(|state| state.is_failed());
     pending.items.push(PendingSysmlSource {
         handle,
+        twin_id,
         twin_name: request.name.clone(),
         relative_path: request.relative_path.clone(),
         absolute_path: twin_root.join(relative),
@@ -210,6 +213,8 @@ pub(crate) fn drain_pending_sysml_sources(
     mut pending: ResMut<PendingSysmlSources>,
     mut registry: ResMut<DocumentRegistry<SysmlDocument>>,
     assets: Res<Assets<SysmlSource>>,
+    mut workspace: Option<ResMut<WorkspaceResource>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     mut commands: Commands,
 ) {
     if pending.items.is_empty() {
@@ -221,6 +226,22 @@ pub(crate) fn drain_pending_sysml_sources(
     let mut still_pending = Vec::new();
 
     for item in items {
+        let current = workspace.as_deref().is_some_and(|workspace| {
+            workspace
+                .twin(item.twin_id)
+                .is_some_and(|twin| twin.root == item.twin_root)
+        }) && roots.as_deref().is_some_and(|roots| {
+            roots
+                .root_for(&item.twin_name)
+                .is_ok_and(|root| root.as_ref() == Some(&item.twin_root))
+        });
+        if !current {
+            warn!(
+                "[sysml] refusing retired Twin source `{}/{}`",
+                item.twin_name, item.relative_path
+            );
+            continue;
+        }
         let id = item.handle.id();
         if let Some(error) = failed.get(&id) {
             report_source_error(
@@ -246,8 +267,43 @@ pub(crate) fn drain_pending_sysml_sources(
             continue;
         };
 
+        let runtime = lunco_workspace::DocumentRuntimeOwner::LocalTwin(item.twin_id);
+        if let Some(document) = registry.doc_for_file(&item.absolute_path)
+            && registry
+                .host(document)
+                .is_some_and(|host| host.document().is_dirty())
+            && workspace.as_deref().is_some_and(|workspace| {
+                workspace
+                    .document(document)
+                    .is_none_or(|entry| entry.runtime_context != runtime)
+            })
+        {
+            report_source_error(
+                &mut commands,
+                &item.twin_name,
+                format!(
+                    "{} has dirty source belonging to a different runtime owner",
+                    item.relative_path
+                ),
+            );
+            continue;
+        }
         let (document, outcome) =
             registry.open_file(item.absolute_path.clone(), source.text.to_string());
+        if outcome != OpenOutcome::KeptUnparsable
+            && let Some(workspace) = workspace.as_deref_mut()
+            && let Some(host) = registry.host(document)
+        {
+            let origin = host.document().origin().clone();
+            workspace.add_document(DocumentEntry {
+                id: document,
+                kind: lunco_workspace::DocumentKindId::new("sysml"),
+                title: origin.display_name(),
+                origin,
+                runtime_context: runtime,
+                dirty: host.document().is_dirty(),
+            });
+        }
         info!(
             "[sysml] opened Twin source `{}/{}` as document {:?} ({outcome:?})",
             item.twin_name, item.relative_path, document
@@ -267,47 +323,56 @@ pub(crate) fn drain_pending_sysml_sources(
                 );
             }
             OpenOutcome::Allocated => {
-                pending
-                    .owned_documents
-                    .insert(document, item.twin_root.clone());
+                pending.owned_documents.insert(document, item.twin_id);
             }
-            OpenOutcome::Refreshed => {}
+            OpenOutcome::Refreshed => {
+                if let Some(owner) = pending.owned_documents.get_mut(&document) {
+                    *owner = item.twin_id;
+                }
+            }
         }
     }
     pending.items = still_pending;
 }
 
 /// Close clean documents allocated by the Twin source loader when that Twin
-/// closes. Dirty documents remain available as loose user work.
+/// closes. Stored runtime metadata fences retirement after a source rebind.
+/// Dirty documents retain their source owner and remain available for recovery.
 pub(crate) fn release_twin_sysml_sources(
     trigger: On<TwinClosed>,
     mut pending: ResMut<PendingSysmlSources>,
     mut registry: ResMut<DocumentRegistry<SysmlDocument>>,
+    workspace: Option<Res<WorkspaceResource>>,
 ) {
-    let root = &trigger.event().root;
-    pending.release_root(root);
+    let twin_id = trigger.event().twin;
+    pending.release_twin(twin_id);
     let owned: Vec<_> = pending
         .owned_documents
         .iter()
-        .filter(|(_, document_root)| lunco_doc::same_file(document_root, root))
+        .filter(|(_, owner)| **owner == twin_id)
         .map(|(document, _)| *document)
         .collect();
     for document in owned {
+        pending.owned_documents.remove(&document);
+        if !workspace.as_deref().is_some_and(|workspace| {
+            workspace.document(document).is_some_and(|entry| {
+                entry.runtime_context == lunco_workspace::DocumentRuntimeOwner::LocalTwin(twin_id)
+            })
+        }) {
+            continue;
+        }
         let remove = registry
             .host(document)
             .map(|host| !host.document().is_dirty())
             .unwrap_or(true);
         if remove {
             registry.remove(document);
-            pending.owned_documents.remove(&document);
         } else {
             warn!(
                 "[sysml] retaining dirty Twin-owned document {:?} after Twin close",
                 document
             );
-            // The user now owns this loose document. Do not retain an automatic
-            // lease that could delete it later if it becomes clean.
-            pending.owned_documents.remove(&document);
+            // Retire the automatic lease without changing the source owner.
         }
     }
 }
@@ -341,28 +406,14 @@ pub(crate) fn sync_workspace_on_sysml_doc_opened(
         return;
     };
     let document = trigger.event().doc;
-    let Some(host) = registry.host(document) else {
-        return;
-    };
-    if workspace.document(document).is_some() {
+    if !registry.contains(document) {
         return;
     }
-    let origin = host.document().origin().clone();
-    let runtime_context = origin
-        .is_untitled()
-        .then_some(workspace.active_twin)
-        .flatten();
-    workspace.add_document(DocumentEntry {
-        id: document,
-        kind: lunco_workspace::DocumentKindId::new("sysml"),
-        origin: origin.clone(),
-        runtime_context: runtime_context.map_or(
-            lunco_workspace::DocumentRuntimeOwner::Application,
-            lunco_workspace::DocumentRuntimeOwner::LocalTwin,
-        ),
-        title: origin.display_name(),
-        dirty: host.document().is_dirty(),
-    });
+    if workspace.document(document).is_none() {
+        warn!("[sysml] document {document} opened without an admitted runtime owner");
+        return;
+    }
+    workspace.active_document = Some(document);
 }
 
 pub(crate) fn sync_workspace_on_sysml_doc_changed(
@@ -415,6 +466,75 @@ fn report_source_error(commands: &mut Commands, twin_name: &str, detail: impl In
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn automatic_source_retirement_respects_rebound_document_owner() {
+        let old = lunco_workspace::TwinId::new(1);
+        let successor = lunco_workspace::TwinId::new(2);
+        for runtime in [
+            lunco_workspace::DocumentRuntimeOwner::LocalTwin(old),
+            lunco_workspace::DocumentRuntimeOwner::LocalTwin(successor),
+            lunco_workspace::DocumentRuntimeOwner::Application,
+        ] {
+            let mut app = App::new();
+            app.init_resource::<DocumentRegistry<SysmlDocument>>()
+                .init_resource::<PendingSysmlSources>()
+                .insert_resource(WorkspaceResource(lunco_workspace::Workspace::new()))
+                .add_observer(release_twin_sysml_sources);
+            let document = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<SysmlDocument>>()
+                .allocate(
+                    "package Fixture {}".into(),
+                    lunco_doc::PathlessOrigin::untitled("Fixture.sysml"),
+                );
+            app.world_mut()
+                .resource_mut::<DocumentRegistry<SysmlDocument>>()
+                .host_mut(document)
+                .unwrap()
+                .document_mut()
+                .mark_saved();
+            let origin = app
+                .world()
+                .resource::<DocumentRegistry<SysmlDocument>>()
+                .host(document)
+                .unwrap()
+                .document()
+                .origin()
+                .clone();
+            app.world_mut()
+                .resource_mut::<WorkspaceResource>()
+                .add_document(DocumentEntry {
+                    id: document,
+                    kind: lunco_workspace::DocumentKindId::new("sysml"),
+                    title: origin.display_name(),
+                    origin,
+                    runtime_context: runtime.clone(),
+                    dirty: false,
+                });
+            app.world_mut()
+                .resource_mut::<PendingSysmlSources>()
+                .owned_documents
+                .insert(document, old);
+            app.world_mut().trigger(TwinClosed {
+                twin: old,
+                root: PathBuf::from("same-transport-root"),
+                was_active: false,
+            });
+            assert_eq!(
+                app.world()
+                    .resource::<DocumentRegistry<SysmlDocument>>()
+                    .contains(document),
+                runtime != lunco_workspace::DocumentRuntimeOwner::LocalTwin(old)
+            );
+            assert!(
+                app.world()
+                    .resource::<PendingSysmlSources>()
+                    .owned_documents
+                    .is_empty()
+            );
+        }
+    }
 
     #[test]
     fn document_notifications_preserve_idle_change_detection() {

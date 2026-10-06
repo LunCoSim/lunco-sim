@@ -460,18 +460,50 @@ pub fn delete_file_sync(path: &Path) -> StorageResult<()> {
 /// Resolve a native file path through the storage boundary.
 ///
 /// This is used for path identity/security checks that must agree with the
-/// backend used for the subsequent read or write. On wasm there is no native
-/// path to canonicalize, so the explicit handle spelling is returned.
+/// native backend used for the subsequent read or write. The browser counterpart
+/// validates the actual OPFS logical identity.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn canonicalize_file_path(path: &Path) -> StorageResult<PathBuf> {
     std::fs::canonicalize(path).map_err(StorageError::Io)
 }
 
-/// Wasm counterpart of [`canonicalize_file_path`]. Browser storage keys are
-/// logical paths, not native filesystem paths.
+/// Canonical OPFS identity. Absolute-root markers address the same private
+/// tree as relative paths; parent traversal and non-UTF-8 names are rejected.
 #[cfg(target_arch = "wasm32")]
 pub fn canonicalize_file_path(path: &Path) -> StorageResult<PathBuf> {
-    Ok(path.to_path_buf())
+    opfs_file_identity(path)
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn opfs_file_identity(path: &Path) -> StorageResult<PathBuf> {
+    let mut canonical = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(name) => {
+                let name = name
+                    .to_str()
+                    .filter(|name| !name.chars().any(char::is_control))
+                    .ok_or_else(|| {
+                        StorageError::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "invalid OPFS path component",
+                        ))
+                    })?;
+                canonical.push(name);
+            }
+            std::path::Component::RootDir | std::path::Component::CurDir => {}
+            _ => {
+                return Err(StorageError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "OPFS parent traversal or native prefix is invalid",
+                )));
+            }
+        }
+    }
+    if canonical.as_os_str().is_empty() {
+        return Err(StorageError::NotFound);
+    }
+    Ok(canonical)
 }
 
 /// Ensure a directory exists through the active storage backend.
@@ -711,4 +743,19 @@ pub trait Storage: Send + Sync {
     // on this I/O trait. Keeping `rfd` out of `lunco-storage` keeps the crate (and
     // the 8 crates that depend on it, incl. the headless server) free of the
     // native file-dialog → wayland/winit pull.
+}
+
+#[cfg(test)]
+mod opfs_identity_tests {
+    #[test]
+    fn mounted_opfs_identity_rejects_traversal_and_matches_storage_names() {
+        use std::path::{Path, PathBuf};
+        assert_eq!(
+            super::opfs_file_identity(Path::new("/cache/twin # % Мир/model.mo")).unwrap(),
+            PathBuf::from("cache/twin # % Мир/model.mo")
+        );
+        assert!(super::opfs_file_identity(Path::new("cache/a/../b/model.mo")).is_err());
+        assert!(super::opfs_file_identity(Path::new("cache/invalid\0.mo")).is_err());
+        assert!(super::opfs_file_identity(Path::new("/")).is_err());
+    }
 }

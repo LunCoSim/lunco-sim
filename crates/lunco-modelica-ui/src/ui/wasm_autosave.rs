@@ -240,7 +240,18 @@ fn restore_from_localstorage(world: &mut World) {
         // drilled? Looked up before `full_key` is moved into `AutosaveKeys`.
         let tab_drilled = session_tabs.get(&full_key).cloned();
         let mut registry = world.resource_mut::<crate::ui::document_context::ModelicaDocuments>();
-        let doc_id = registry.restore(source, origin);
+        let doc_id = registry.restore(source, origin.clone());
+        drop(registry);
+        if let Some(mut workspace) = world.get_resource_mut::<lunco_workspace::WorkspaceResource>()
+        {
+            lunco_modelica_core::doc_ops::register_document_context(
+                &mut workspace,
+                doc_id,
+                origin,
+                lunco_workspace::DocumentRuntimeOwner::Application,
+                true,
+            );
+        }
         // Remember the full key so a later close can clear localStorage
         // even after the registry host is gone.
         world

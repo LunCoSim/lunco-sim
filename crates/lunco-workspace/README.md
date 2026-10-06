@@ -32,15 +32,14 @@ stays reusable from headless CI and API-only servers.
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Key idea — Twin is a *view*, not a container.** All open documents
-live in the Workspace. A Twin doesn't own a list; it answers "does
-this document belong to me?" by checking whether the doc's storage
-handle lies under its folder (or has been context-pinned to it while
-Untitled). Opening an Untitled scratch doc while the Rover Twin is
-active puts the doc in the Workspace with
-`runtime_context = DocumentRuntimeOwner::LocalTwin(rover_id)`; on Save into `rover-twin/models/`, path ownership
-takes over and the pin becomes irrelevant. One code path, no
-ceremonial moves.
+**Twin folders provide the authoring and display lens.** All open documents
+live in the Workspace. `twin_for` answers folder association; each document's
+`runtime_context` records its exact admitted source lifetime independently.
+Scratch creation and file loading register that lifetime before async work or
+deferred lifecycle delivery. Saving changes the authored origin without
+transferring resident source to another session. Only a clean explicit file
+reopen can install newly read source and its newly admitted owner. Active scope
+and teardown use the stored runtime owner.
 
 ## Types
 

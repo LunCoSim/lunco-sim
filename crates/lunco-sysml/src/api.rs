@@ -76,7 +76,8 @@ struct PendingSysmlOpens {
 
 struct PendingSysmlOpen {
     path: std::path::PathBuf,
-    task: bevy::tasks::Task<Result<String, String>>,
+    admission: lunco_workspace::FileDocumentAdmission,
+    task: bevy::tasks::Task<Result<(lunco_workspace::ResolvedFileDocument, String), String>>,
 }
 
 register_commands!(
@@ -109,7 +110,13 @@ impl Plugin for SysmlApiPlugin {
 /// Route a filesystem `.sysml`/`.kerml` open through the async storage path.
 /// Other URI schemes and extensions belong to their owning domain observers.
 #[on_command(OpenFile)]
-fn on_open_sysml_file(trigger: On<OpenFile>, mut pending: ResMut<PendingSysmlOpens>) {
+fn on_open_sysml_file(
+    trigger: On<OpenFile>,
+    mut pending: ResMut<PendingSysmlOpens>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+) {
     let raw = &trigger.event().path;
     let path = match lunco_storage::file_uri_to_path(raw) {
         Ok(Some(path)) => path,
@@ -127,21 +134,32 @@ fn on_open_sysml_file(trigger: On<OpenFile>, mut pending: ResMut<PendingSysmlOpe
     if !matches!(extension.as_deref(), Some("sysml" | "kerml")) {
         return;
     }
-    if pending.tasks.iter().any(|load| load.path == path) {
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    let admission = lunco_workspace::FileDocumentAdmission::capture(
+        workspace.as_deref().map(|workspace| &workspace.0),
+        replication.as_ref(),
+    );
+    if pending
+        .tasks
+        .iter()
+        .any(|load| load.path == path && load.admission == admission)
+    {
         return;
     }
     let task_path = path.clone();
+    let task_admission = admission.clone();
     let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-        let storage = lunco_storage::FileStorage::new();
-        let handle = lunco_storage::StorageHandle::File(task_path.clone());
-        let bytes = storage
-            .read(&handle)
-            .await
-            .map_err(|error| format!("failed to read {}: {error:?}", task_path.display()))?;
-        String::from_utf8(bytes)
-            .map_err(|error| format!("invalid UTF-8 in {}: {error}", task_path.display()))
+        let (resolved, bytes) = task_admission.read(&task_path).await?;
+        let source = String::from_utf8(bytes)
+            .map_err(|error| format!("invalid UTF-8 in {}: {error}", resolved.path.display()))?;
+        Ok((resolved, source))
     });
-    pending.tasks.push(PendingSysmlOpen { path, task });
+    pending.tasks.push(PendingSysmlOpen {
+        path,
+        admission,
+        task,
+    });
 }
 
 /// Finish pending source reads on the ECS thread and let the registry decide
@@ -149,6 +167,9 @@ fn on_open_sysml_file(trigger: On<OpenFile>, mut pending: ResMut<PendingSysmlOpe
 fn drain_pending_sysml_opens(
     mut pending: ResMut<PendingSysmlOpens>,
     mut registry: ResMut<DocumentRegistry<SysmlDocument>>,
+    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
 ) {
     if pending.tasks.is_empty() {
         return;
@@ -161,8 +182,51 @@ fn drain_pending_sysml_opens(
         ) {
             None => waiting.push(load),
             Some(Err(error)) => error!("[sysml] {error}"),
-            Some(Ok(source)) => {
-                let (doc, outcome) = registry.open_file(load.path.clone(), source);
+            Some(Ok((resolved, source))) => {
+                let replication = lunco_core_session::current_replication_owner(
+                    connection.as_deref(),
+                    replica.as_deref(),
+                );
+                if !resolved.runtime.is_current(
+                    workspace.as_deref().map(|workspace| &workspace.0),
+                    replication.as_ref(),
+                ) {
+                    warn!(
+                        "[sysml] {} belongs to a retired runtime owner",
+                        resolved.path.display()
+                    );
+                    continue;
+                }
+                if let Some(doc) = registry.doc_for_file(&resolved.path)
+                    && registry
+                        .host(doc)
+                        .is_some_and(|host| host.document().is_dirty())
+                    && workspace.as_deref().is_some_and(|workspace| {
+                        workspace
+                            .document(doc)
+                            .is_none_or(|entry| entry.runtime_context != resolved.runtime)
+                    })
+                {
+                    warn!(
+                        "[sysml] refusing to rebind dirty document {doc} to a different runtime owner"
+                    );
+                    continue;
+                }
+                let (doc, outcome) = registry.open_file(resolved.path, source);
+                if outcome != OpenOutcome::KeptUnparsable
+                    && let Some(workspace) = workspace.as_deref_mut()
+                    && let Some(host) = registry.host(doc)
+                {
+                    let origin = host.document().origin().clone();
+                    workspace.add_document(lunco_workspace::DocumentEntry {
+                        id: doc,
+                        kind: lunco_workspace::DocumentKindId::new("sysml"),
+                        title: origin.display_name(),
+                        origin,
+                        runtime_context: resolved.runtime,
+                        dirty: host.document().is_dirty(),
+                    });
+                }
                 match outcome {
                     OpenOutcome::Allocated => {
                         info!("[sysml] opened {} as {doc}", load.path.display())
@@ -188,15 +252,44 @@ fn drain_pending_sysml_opens(
 fn on_new_sysml_document(
     trigger: On<NewDocument>,
     mut registry: ResMut<DocumentRegistry<SysmlDocument>>,
+    workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
 ) {
     if trigger.event().kind != "sysml" {
         return;
     }
     let next = registry.ids().count() + 1;
-    registry.allocate(
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    let runtime = workspace.as_deref().map_or(
+        lunco_workspace::DocumentRuntimeOwner::Application,
+        |workspace| workspace.new_document_runtime_owner(replication.as_ref()),
+    );
+    if !runtime.is_current(
+        workspace.as_deref().map(|workspace| &workspace.0),
+        replication.as_ref(),
+    ) {
+        warn!("[sysml] document creation owner is retired");
+        return;
+    }
+    let doc = registry.allocate(
         "package Untitled {\n}\n".to_owned(),
         lunco_doc::PathlessOrigin::untitled(format!("Untitled-{next}.sysml")),
     );
+    if let Some(mut workspace) = workspace {
+        if let Some(host) = registry.host(doc) {
+            let origin = host.document().origin().clone();
+            workspace.add_document(lunco_workspace::DocumentEntry {
+                id: doc,
+                kind: lunco_workspace::DocumentKindId::new("sysml"),
+                title: origin.display_name(),
+                origin,
+                runtime_context: runtime,
+                dirty: host.document().is_dirty(),
+            });
+        }
+    }
 }
 
 /// Lower one Rhai/API batch into the generic reversible SysML document host.

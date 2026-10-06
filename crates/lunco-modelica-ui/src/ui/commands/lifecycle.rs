@@ -672,13 +672,25 @@ pub fn on_duplicate_model_from_read_only(
 }
 
 #[on_command(OpenClass)]
-pub fn on_open_class(trigger: On<OpenClass>, mut commands: Commands) {
+pub fn on_open_class(
+    trigger: On<OpenClass>,
+    mut commands: Commands,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+) {
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    let admission = lunco_workspace::FileDocumentAdmission::capture(
+        workspace.as_deref().map(|workspace| &workspace.0),
+        replication.as_ref(),
+    );
     let ev = trigger.event();
     let qualified = ev.qualified.clone();
     let action = ev.action.clone();
     commands.queue(move |world: &mut World| match action {
         ClassAction::View => {
-            crate::ui::panels::canvas_diagram::drill_into_class(world, &qualified);
+            crate::ui::panels::canvas_diagram::drill_into_class(world, &qualified, admission);
         }
         ClassAction::Duplicate { name } => {
             spawn_duplicate_class_task(world, qualified, name);
@@ -846,8 +858,22 @@ pub fn on_open_in_new_view(trigger: On<OpenInNewView>, mut commands: Commands) {
 }
 
 #[on_command(OpenFile)]
-pub fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
+pub fn on_open_file(
+    trigger: On<OpenFile>,
+    mut commands: Commands,
+    registry: Res<ModelicaDocuments>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+) {
     let path = trigger.event().path.clone();
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    let admission = crate::ui::document_openings::FileOpenAdmission::capture(
+        &registry,
+        workspace.as_deref().map(|workspace| &workspace.0),
+        replication.as_ref(),
+    );
     commands.queue(move |world: &mut World| {
         // `mem://` lookups need the in-memory cache to resolve a
         // DocumentId; tree-id parser can't see it, so handle here.
@@ -887,6 +913,29 @@ pub fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
             return;
         }
 
+        // Browser-picked bytes belong to the application; a displayed filename
+        // is a save identity, not proof of a native scene-root relationship.
+        #[cfg(target_arch = "wasm32")]
+        if filesystem_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("mo"))
+        {
+            if let Some(content) = lunco_workbench_file_dialog::take_picked_content(&path) {
+                let requested_path = std::path::PathBuf::from(&path);
+                let resolved = lunco_workspace::ResolvedFileDocument {
+                    path: requested_path.clone(),
+                    runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+                };
+                let _ = open_file_result_tx().send(OpenFileResult {
+                    requested_path,
+                    admission,
+                    read_result: Ok((resolved, content)),
+                });
+                return;
+            }
+        }
+
         // Everything else (bundled://, file://, raw .mo path) flows
         // through the typed ClassRef + single `open_class` entry.
         if let Some(native_path) = native_file_path {
@@ -901,11 +950,12 @@ pub fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
                 world,
                 crate::class_ref::ClassRef::user_file(native_path, Vec::<String>::new()),
                 true,
+                admission,
             );
             return;
         }
         if let Some(class) = crate::class_ref::ClassRef::parse_tree_id(&path) {
-            crate::ui::panels::package_browser::open_class(world, class, true);
+            crate::ui::panels::package_browser::open_class(world, class, true, admission);
             return;
         }
 
@@ -919,41 +969,22 @@ pub fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
 
         let path_buf = std::path::PathBuf::from(&path);
 
-        // wasm has no filesystem: the web file picker already read the
-        // chosen file's text browser-side and stashed it under its
-        // name. Pull it back and feed the same result channel.
-        #[cfg(target_arch = "wasm32")]
-        {
-            let read_result = match lunco_workbench_file_dialog::take_picked_content(&path) {
-                Some(content) => Ok(content),
-                None => Err("no picked content for this path (wasm has no filesystem)".to_string()),
-            };
-            let _ = open_file_result_tx().send(OpenFileResult {
-                path: path_buf,
-                read_result,
-            });
-        }
-
-        // Native: read the file off the main thread. A 150 KB source library
-        // package file synchronously read on the input path is ~30 ms
-        // of stutter; spawn on AsyncCompute and re-enter the World via
-        // a one-shot channel drained on the Update tick.
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let path_for_task = path_buf.clone();
-            let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-                lunco_modelica_runtime::source_asset::read_text_sync(&path_for_task)
-            });
-            bevy::tasks::AsyncComputeTaskPool::get()
-                .spawn(async move {
-                    let read_result = task.await;
-                    let _ = open_file_result_tx().send(OpenFileResult {
-                        path: path_buf,
-                        read_result,
-                    });
-                })
-                .detach();
-        }
+        bevy::tasks::AsyncComputeTaskPool::get()
+            .spawn(async move {
+                let mut admission = admission;
+                admission.resolve_residents();
+                let read_result = lunco_modelica_runtime::source_asset::read_admitted_file(
+                    &path_buf,
+                    admission.file.clone(),
+                )
+                .await;
+                let _ = open_file_result_tx().send(OpenFileResult {
+                    requested_path: path_buf,
+                    admission,
+                    read_result,
+                });
+            })
+            .detach();
     });
 }
 
@@ -969,8 +1000,9 @@ fn open_file_result_tx() -> &'static std::sync::mpsc::Sender<OpenFileResult> {
 }
 
 struct OpenFileResult {
-    path: std::path::PathBuf,
-    read_result: Result<String, String>,
+    admission: crate::ui::document_openings::FileOpenAdmission,
+    requested_path: std::path::PathBuf,
+    read_result: Result<(lunco_workspace::ResolvedFileDocument, String), String>,
 }
 
 static OPEN_FILE_RESULT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<OpenFileResult>> =
@@ -992,34 +1024,94 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
         rx.try_iter().collect()
     };
     for result in pending {
-        let path = result.path;
-        let read_only_library = lunco_assets_runtime::library::owns_filesystem_path(&path);
-        let source = match result.read_result {
-            Ok(s) => s,
+        let (resolved, source) = match result.read_result {
+            Ok(result) => result,
             Err(e) => {
-                bevy::log::warn!("[OpenFile] {} read failed: {}", path.display(), e);
+                let message = format!("{} read failed: {e}", result.requested_path.display());
+                bevy::log::warn!("[OpenFile] {message}");
+                world.commands().trigger(lunco_core::RuntimeError {
+                    name: "modelica-file-open-failed".to_owned(),
+                    message,
+                });
                 continue;
             }
         };
+        let replication = lunco_core_session::current_replication_owner_in(world);
+        if !resolved.runtime.is_current(
+            world
+                .get_resource::<lunco_workspace::WorkspaceResource>()
+                .map(|workspace| &workspace.0),
+            replication.as_ref(),
+        ) {
+            let message = format!(
+                "{} file open cancelled: its admitted runtime owner retired",
+                resolved.path.display()
+            );
+            bevy::log::warn!("[OpenFile] {message}");
+            world.commands().trigger(lunco_core::RuntimeError {
+                name: "modelica-file-open-cancelled".to_owned(),
+                message,
+            });
+            continue;
+        }
+        let path = resolved.path;
+        let read_only_library = lunco_assets_runtime::library::owns_filesystem_path(&path);
         let stem = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("Opened")
             .to_string();
+        let resident = world
+            .resource::<ModelicaDocuments>()
+            .iter()
+            .find_map(|(id, host)| {
+                (host.document().origin().canonical_path() == Some(path.as_path())).then_some(id)
+            })
+            .or_else(|| {
+                result
+                    .admission
+                    .resident_for_path(&path)
+                    .filter(|id| world.resource::<ModelicaDocuments>().host(*id).is_some())
+            });
+        if let Some(document) = resident {
+            let Some(host) = world.resource::<ModelicaDocuments>().host(document) else {
+                continue;
+            };
+            let source = host.document();
+            let dirty = source.is_dirty();
+            let generation = source.generation_owned();
+            let resident_path = source
+                .origin()
+                .canonical_path()
+                .map(std::path::Path::to_path_buf);
+            let owner = world
+                .get_resource::<lunco_workspace::WorkspaceResource>()
+                .and_then(|workspace| {
+                    workspace
+                        .document(document)
+                        .map(|entry| workspace.runtime_owner_for(entry))
+                });
+            if let Err(reason) = result.admission.validate_resident(
+                document,
+                resident_path.as_deref(),
+                owner.as_ref(),
+                generation,
+                dirty,
+                &resolved.runtime,
+            ) {
+                let message = format!("File reopen {document} refused: {reason}");
+                bevy::log::warn!("[OpenFile] {message}");
+                world.commands().trigger(lunco_core::RuntimeError {
+                    name: "modelica-file-open-failed".to_owned(),
+                    message,
+                });
+                continue;
+            }
+        }
         let mut registry = world.resource_mut::<ModelicaDocuments>();
-        // ONE DOCUMENT PER FILE. The path IS the identity: re-opening a `.mo`
-        // reuses its document and refreshes the content from what we just read.
-        //
-        // This used to allocate a second document unconditionally, so opening the
-        // same file twice minted a SECOND document — two tabs, two undo stacks,
-        // both saving over each other, last writer silently winning. The rule
-        // already existed (`find_by_path`, used by the package browser); this
-        // entry point just never called it.
-        //
-        // Mirrors `DocumentRegistry::open_file` (lunco-doc-bevy), which USD now
-        // uses; Modelica cannot share it verbatim until its registry's
-        // entity-link map is decomposed out of the shared core.
-        let doc_id = match registry.find_by_path(&path) {
+        // Canonical source identity reuses one document. Same-owner dirty
+        // source is preserved; a clean reopen installs the newly read revision.
+        let doc_id = match resident {
             Some(doc) => {
                 let dirty = registry.host(doc).is_some_and(|h| h.document().is_dirty());
                 if dirty {
@@ -1058,6 +1150,24 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
                     .0
             }
         };
+        let resident_dirty = registry
+            .host(doc_id)
+            .is_some_and(|host| host.document().is_dirty());
+        drop(registry);
+        if let Some(mut workspace) = world.get_resource_mut::<lunco_workspace::WorkspaceResource>()
+        {
+            let origin = DocumentOrigin::File {
+                path: path.clone(),
+                writable: !read_only_library,
+            };
+            lunco_modelica_core::doc_ops::register_document_context(
+                &mut workspace,
+                doc_id,
+                origin,
+                resolved.runtime,
+                resident_dirty,
+            );
+        }
         let mut tabs = world.resource_mut::<ModelTabs>();
         let tab_id = tabs.ensure_for(doc_id, None);
         if let Some(tab) = tabs.get_mut(tab_id) {

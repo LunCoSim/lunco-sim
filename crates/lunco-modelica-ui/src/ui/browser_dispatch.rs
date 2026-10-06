@@ -76,7 +76,8 @@ pub fn drain_browser_actions(world: &mut World) {
                 // by their owning browser section, so they never become an
                 // empty Modelica tab.
                 let class = crate::class_ref::ClassRef::user_file(abs, Vec::<String>::new());
-                crate::ui::panels::package_browser::open_class(world, class, false);
+                let admission = crate::ui::panels::package_browser::capture_file_admission(world);
+                crate::ui::panels::package_browser::open_class(world, class, false, admission);
             }
             BrowserAction::OpenModelicaClass {
                 relative_path,
@@ -93,7 +94,8 @@ pub fn drain_browser_actions(world: &mut World) {
                 let qualified_parts: Vec<String> =
                     qualified_path.split('.').map(String::from).collect();
                 let class = crate::class_ref::ClassRef::user_file(abs, qualified_parts);
-                crate::ui::panels::package_browser::open_class(world, class, false);
+                let admission = crate::ui::panels::package_browser::capture_file_admission(world);
+                crate::ui::panels::package_browser::open_class(world, class, false, admission);
             }
             BrowserAction::OpenLoadedClass {
                 doc_id,

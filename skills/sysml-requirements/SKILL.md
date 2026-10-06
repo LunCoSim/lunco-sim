@@ -538,6 +538,13 @@ let facts = query("AnalyzeSysml", #{
 if facts.ok != true { throw(facts.errors); }
 ```
 
+Indexed SysML source loads retain the exact Workspace `TwinId` and live mount
+through installation. File opens use the shared worker-side
+`FileDocumentAdmission::read` and register the resolved runtime owner before
+document events. Retirement checks stored document ownership after source
+replacement; saving a file does not reassign its lifetime. See the
+[source admission contract](../../docs/architecture/55-scene-addressing-and-roots.md#document-source-admission-and-lifetime).
+
 For a mounted Twin, `AnalyzeSysml` reads the identity-fenced snapshot prepared
 by the authored Twin lifecycle policy. Non-empty source sets resolve against
 the embedded standard library on the async analysis worker; an empty optional

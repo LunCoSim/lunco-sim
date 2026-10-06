@@ -513,7 +513,6 @@ pub fn retire_closed_twin_playback(
     queue_retire_runtime_projection(
         &mut commands,
         lunco_workspace::DocumentRuntimeOwner::LocalTwin(trigger.event().twin),
-        Some((trigger.event().twin, trigger.event().root.clone())),
     );
 }
 
@@ -524,14 +523,12 @@ pub fn retire_replication_playback(
     queue_retire_runtime_projection(
         &mut commands,
         lunco_workspace::DocumentRuntimeOwner::Replicated(trigger.event().owner.clone()),
-        None,
     );
 }
 
 fn queue_retire_runtime_projection(
     commands: &mut Commands,
     owner: lunco_workspace::DocumentRuntimeOwner,
-    local_root: Option<(lunco_workspace::TwinId, std::path::PathBuf)>,
 ) {
     // Apply after earlier playback spawn/attribution commands have committed.
     commands.queue(move |world: &mut World| {
@@ -553,12 +550,7 @@ fn queue_retire_runtime_projection(
                 workspace
                     .documents()
                     .iter()
-                    .filter(|entry| {
-                        entry.runtime_context == owner
-                            || local_root.as_ref().is_some_and(|(twin, root)| {
-                                lunco_workspace::document_belongs_to_twin_root(entry, *twin, root)
-                            })
-                    })
+                    .filter(|entry| entry.runtime_context == owner)
                     .map(|entry| entry.id),
             );
         }

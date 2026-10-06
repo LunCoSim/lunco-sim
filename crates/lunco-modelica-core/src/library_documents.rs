@@ -11,27 +11,35 @@ use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica_document::ModelicaDocument;
 use rumoca_compile::parsing::ast::StoredDefinition;
 
-/// Build a read-only document containing one class from a source-library file.
+/// Read one source-library class with immutable file admission, then construct
+/// its read-only document and exact runtime owner.
 ///
 /// The parsed source bundle is preferred because it avoids reparsing a large
 /// package wrapper for every drill-in. Native can repair a bundle miss by
 /// parsing the source once; WebAssembly reports the missing bundle so the
 /// worker-owned loader can finish and the caller can retry visibly.
-pub fn load_library_class(
+pub async fn load_library_class(
     id: DocumentId,
     path: &Path,
     qualified: &str,
-) -> Result<ModelicaDocument, String> {
+    admission: lunco_workspace::FileDocumentAdmission,
+) -> Result<(ModelicaDocument, lunco_workspace::DocumentRuntimeOwner), String> {
     #[cfg(target_arch = "wasm32")]
     lunco_modelica_library::source_library::ensure_library_source_unpacked();
 
-    let full_source = if let Some(bytes) = lunco_assets_runtime::library::library_read(path) {
-        String::from_utf8(bytes)
-            .map_err(|e| format!("non-utf8 source `{}`: {e}", path.display()))?
-    } else {
-        lunco_modelica_runtime::source_asset::read_text_sync(path)?
-    };
-
+    let (resolved, full_source) =
+        if let Some(bytes) = lunco_assets_runtime::library::library_read(path) {
+            (
+                lunco_workspace::ResolvedFileDocument {
+                    path: path.to_path_buf(),
+                    runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+                },
+                String::from_utf8(bytes).map_err(|e| format!("non-UTF-8 source: {e}"))?,
+            )
+        } else {
+            lunco_modelica_runtime::source_asset::read_admitted_file(path, admission).await?
+        };
+    let path = resolved.path.as_path();
     let short_name = qualified.rsplit('.').next().unwrap_or(qualified);
     let parent_pkg = qualified.rsplit_once('.').map_or("", |(parent, _)| parent);
     let key = path.to_string_lossy().to_string();
@@ -86,12 +94,15 @@ pub fn load_library_class(
     } else {
         format!("within {parent_pkg};\n{class_slice}")
     };
-    Ok(ModelicaDocument::with_origin(
-        id,
-        source,
-        DocumentOrigin::File {
-            path: path.to_path_buf(),
-            writable: false,
-        },
+    Ok((
+        ModelicaDocument::with_origin(
+            id,
+            source,
+            DocumentOrigin::File {
+                path: path.to_path_buf(),
+                writable: false,
+            },
+        ),
+        resolved.runtime,
     ))
 }

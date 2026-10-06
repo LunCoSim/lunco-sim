@@ -109,6 +109,11 @@ path safety, then request the selected asset through `AssetServer`; domain
 loaders must not scan Twin folders or select manifest paths in Rust. The asset
 layer still owns the shared index and `twin://` resolution.
 
+File-backed USD and SysML opens share `Workspace`'s `FileDocumentAdmission::read`
+for worker-side identity and storage admission. Runtime ownership is captured
+before dispatch and validated before publication; see the
+[document source contract](55-scene-addressing-and-roots.md#document-source-admission-and-lifetime).
+
 The indexed Twin policy loader follows the same inventory boundary and uses
 bounded worker admission on native. Its activation
 and lifecycle hooks remain on the scripting owner's lifecycle lane; see

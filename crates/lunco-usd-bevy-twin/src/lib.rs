@@ -3,11 +3,11 @@
 //! This package owns the identity and lifetime seam between a document in the
 //! document registry and a `twin://` USD stage asset. It does not load stages,
 //! compose layers, or project entities. Those runtime mechanisms remain in
-//! `lunco-usd-commands`; UI packages consume this contract without importing
-//! that command/runtime package's visual adapters.
+//! `lunco-usd-bevy-runtime-core`; UI packages consume this contract without
+//! importing that runtime package's visual adapters.
 
+use lunco_workspace::TwinId;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -35,7 +35,7 @@ pub struct LiveRebuildExempt;
 
 /// One `twin://` projection identity and its ownership/cursor state.
 struct TwinSceneRef {
-    roots: Vec<PathBuf>,
+    owners: Vec<TwinId>,
     name: String,
     rel: String,
     preview_leases: usize,
@@ -226,22 +226,18 @@ impl DocBackedTwinScenes {
             .is_some_and(|scene| scene.preview_leases != 0)
     }
 
-    /// Track a document under a workspace Twin root.
-    pub fn track(&mut self, doc: DocumentId, root: PathBuf, name: String, rel: String) {
+    /// Track a document under its admitted local workspace Twin lifetime.
+    pub fn track(&mut self, doc: DocumentId, twin: TwinId, name: String, rel: String) {
         if let Some(scene) = self.map.get_mut(&doc) {
-            if !scene
-                .roots
-                .iter()
-                .any(|existing| lunco_doc::same_file(existing, &root))
-            {
-                scene.roots.push(root);
+            if !scene.owners.iter().any(|existing| *existing == twin) {
+                scene.owners.push(twin);
             }
             return;
         }
         self.map.insert(
             doc,
             TwinSceneRef {
-                roots: vec![root],
+                owners: vec![twin],
                 name,
                 rel,
                 preview_leases: 0,
@@ -254,7 +250,7 @@ impl DocBackedTwinScenes {
         );
     }
 
-    /// Track an editor preview without assigning a workspace Twin root.
+    /// Track an editor preview without assigning a workspace Twin lifetime.
     pub fn track_preview(&mut self, doc: DocumentId, name: String, rel: String) {
         if self.map.contains_key(&doc) {
             return;
@@ -262,7 +258,7 @@ impl DocBackedTwinScenes {
         self.map.insert(
             doc,
             TwinSceneRef {
-                roots: Vec::new(),
+                owners: Vec::new(),
                 name,
                 rel,
                 preview_leases: 0,
@@ -290,22 +286,20 @@ impl DocBackedTwinScenes {
             return None;
         }
         scene.preview_leases -= 1;
-        if scene.preview_leases == 0 && scene.roots.is_empty() {
+        if scene.preview_leases == 0 && scene.owners.is_empty() {
             let scene = self.map.remove(&doc)?;
             return Some((scene.name, scene.rel));
         }
         None
     }
 
-    /// Release a workspace Twin root and return documents with no remaining
+    /// Release an exact workspace Twin lifetime and return documents with no remaining
     /// owner and no user-facing lease.
-    pub fn release_root(&mut self, root: &Path) -> Vec<DocumentId> {
+    pub fn release_twin(&mut self, twin: TwinId) -> Vec<DocumentId> {
         let mut released = Vec::new();
         self.map.retain(|doc, scene| {
-            scene
-                .roots
-                .retain(|existing| !lunco_doc::same_file(existing, root));
-            if scene.roots.is_empty() && scene.preview_leases == 0 {
+            scene.owners.retain(|existing| *existing != twin);
+            if scene.owners.is_empty() && scene.preview_leases == 0 {
                 released.push(*doc);
                 false
             } else {
@@ -323,7 +317,7 @@ impl DocBackedTwinScenes {
         let synthetic = self
             .map
             .remove(&doc)
-            .and_then(|scene| scene.roots.is_empty().then_some((scene.name, scene.rel)));
+            .and_then(|scene| scene.owners.is_empty().then_some((scene.name, scene.rel)));
         self.user_owned.remove(&doc);
         synthetic
     }
@@ -333,7 +327,7 @@ impl DocBackedTwinScenes {
     pub fn detach_projection(&mut self, doc: DocumentId) {
         if let Some(scene) = self.map.get_mut(&doc) {
             if scene.preview_leases > 0 {
-                scene.roots.clear();
+                scene.owners.clear();
                 return;
             }
         }
@@ -419,41 +413,31 @@ mod tests {
 
     #[test]
     fn twin_scene_lease_closes_only_unclaimed_documents() {
-        let root = PathBuf::from("/twins/moonbase");
+        let twin = TwinId::new(1);
         let scene_only = DocumentId::new(1);
         let user_owned = DocumentId::new(2);
         let mut backed = DocBackedTwinScenes::default();
-        backed.track(
-            scene_only,
-            root.clone(),
-            "moonbase".into(),
-            "scene.usda".into(),
-        );
-        backed.track(
-            user_owned,
-            root.clone(),
-            "moonbase".into(),
-            "edited.usda".into(),
-        );
+        backed.track(scene_only, twin, "moonbase".into(), "scene.usda".into());
+        backed.track(user_owned, twin, "moonbase".into(), "edited.usda".into());
         assert!(backed.claim_user(user_owned));
 
-        assert_eq!(backed.release_root(&root), vec![scene_only]);
+        assert_eq!(backed.release_twin(twin), vec![scene_only]);
         assert!(backed.coords_of(scene_only).is_none());
         assert!(backed.coords_of(user_owned).is_none());
     }
 
     #[test]
     fn closing_one_of_multiple_twin_leases_keeps_the_document_backed() {
-        let root_a = PathBuf::from("/twins/a");
-        let root_b = PathBuf::from("/twins/b");
+        let twin_a = TwinId::new(1);
+        let twin_b = TwinId::new(2);
         let doc = DocumentId::new(1);
         let mut backed = DocBackedTwinScenes::default();
-        backed.track(doc, root_a.clone(), "shared".into(), "scene.usda".into());
-        backed.track(doc, root_b.clone(), "shared".into(), "scene.usda".into());
+        backed.track(doc, twin_a, "shared".into(), "scene.usda".into());
+        backed.track(doc, twin_b, "shared".into(), "scene.usda".into());
 
-        assert!(backed.release_root(&root_a).is_empty());
+        assert!(backed.release_twin(twin_a).is_empty());
         assert!(backed.coords_of(doc).is_some());
-        assert_eq!(backed.release_root(&root_b), vec![doc]);
+        assert_eq!(backed.release_twin(twin_b), vec![doc]);
         assert!(backed.coords_of(doc).is_none());
     }
 

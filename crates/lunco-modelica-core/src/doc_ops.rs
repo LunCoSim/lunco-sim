@@ -44,13 +44,30 @@ pub fn register_scratch_context(
     replication: Option<&lunco_workspace::ReplicationOwner>,
 ) {
     let runtime_context = workspace.new_document_runtime_owner(replication);
+    register_document_context(
+        workspace,
+        document,
+        lunco_doc::DocumentOrigin::untitled(display_name),
+        runtime_context,
+        false,
+    );
+}
+
+/// Register exact source provenance before deferred document lifecycle events.
+pub fn register_document_context(
+    workspace: &mut lunco_workspace::Workspace,
+    document: lunco_doc::DocumentId,
+    origin: lunco_doc::DocumentOrigin,
+    runtime_context: lunco_workspace::DocumentRuntimeOwner,
+    dirty: bool,
+) {
     workspace.add_document(lunco_workspace::DocumentEntry {
         id: document,
         kind: lunco_workspace::DocumentKindId::new("modelica"),
-        origin: lunco_doc::DocumentOrigin::untitled(display_name.clone()),
+        title: origin.display_name(),
+        origin,
         runtime_context,
-        title: display_name,
-        dirty: false,
+        dirty,
     });
 }
 

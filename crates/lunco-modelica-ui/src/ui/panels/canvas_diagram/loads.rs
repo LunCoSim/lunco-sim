@@ -24,10 +24,19 @@ pub(crate) struct DrillIntoClassRequested {
 pub(crate) fn on_drill_into_class_requested(
     trigger: On<DrillIntoClassRequested>,
     mut commands: Commands,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
 ) {
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    let admission = lunco_workspace::FileDocumentAdmission::capture(
+        workspace.as_deref().map(|workspace| &workspace.0),
+        replication.as_ref(),
+    );
     let qualified = trigger.qualified.clone();
     commands.queue(move |world: &mut World| {
-        drill_into_class(world, &qualified);
+        drill_into_class(world, &qualified, admission);
     });
 }
 
@@ -47,7 +56,15 @@ pub struct DrillInBinding {
     /// hits the source-library parsed bundle, so a class whose
     /// containing file the engine session has already parsed
     /// installs in milliseconds. Driven by [`drive_drill_in_loads`].
-    pub task: bevy::tasks::Task<Result<lunco_modelica_document::ModelicaDocument, String>>,
+    pub task: bevy::tasks::Task<
+        Result<
+            (
+                lunco_modelica_document::ModelicaDocument,
+                lunco_workspace::DocumentRuntimeOwner,
+            ),
+            String,
+        >,
+    >,
     /// RAII guard registered with [`lunco_status_core::status_bus::StatusBus`].
     /// Dropped together with the binding (on install or on document
     /// removal) — the bus then clears the
@@ -257,8 +274,14 @@ pub fn drive_drill_in_loads(
     mut tabs: bevy::prelude::ResMut<crate::model_tabs::ModelTabs>,
     mut egui_q: bevy::prelude::Query<&mut bevy_egui::EguiContext>,
     mut canvas_state: bevy::prelude::ResMut<super::CanvasDiagramState>,
+    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+    mut commands: Commands,
 ) {
     use bevy::prelude::*;
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     // Keep egui awake while loads are in flight so the "Loading…"
     // overlay actually animates. Mirrors the duplicate-loads driver
     // — without this the canvas paints once and sleeps until input.
@@ -269,29 +292,51 @@ pub fn drive_drill_in_loads(
     }
     let doc_ids = openings.doc_ids();
     for doc_id in doc_ids {
-        let polled: Option<Result<lunco_modelica_document::ModelicaDocument, String>> =
-            if let Some(OpeningState::DrillIn(b)) = openings.get_mut(doc_id) {
-                bevy::tasks::futures_lite::future::block_on(
-                    bevy::tasks::futures_lite::future::poll_once(&mut b.task),
-                )
-            } else {
-                None
-            };
+        let polled: Option<
+            Result<
+                (
+                    lunco_modelica_document::ModelicaDocument,
+                    lunco_workspace::DocumentRuntimeOwner,
+                ),
+                String,
+            >,
+        > = if let Some(OpeningState::DrillIn(b)) = openings.get_mut(doc_id) {
+            bevy::tasks::futures_lite::future::block_on(
+                bevy::tasks::futures_lite::future::poll_once(&mut b.task),
+            )
+        } else {
+            None
+        };
         let Some(result) = polled else { continue };
         let Some(OpeningState::DrillIn(b)) = openings.remove(doc_id) else {
             continue;
         };
         let qualified = b.qualified;
         let mut busy = b.busy;
-        let doc = match result {
-            Ok(doc) => {
+        let (doc, runtime) = match result {
+            Ok((doc, runtime)) => {
+                if !runtime.is_current(
+                    workspace.as_deref().map(|workspace| &workspace.0),
+                    replication.as_ref(),
+                ) {
+                    let message = format!(
+                        "Library file load for {qualified} cancelled: source runtime owner retired"
+                    );
+                    warn!("{message}");
+                    commands.trigger(lunco_core::RuntimeError {
+                        name: "modelica-file-open-cancelled".into(),
+                        message,
+                    });
+                    busy.set_outcome(lunco_status_core::status_bus::BusyOutcome::Cancelled);
+                    continue;
+                }
                 // Success path: hand the parse-phase busy handle to
                 // the canvas state so the bus keeps a `Document(d)`
                 // entry continuously through the parse→project
                 // transition. Released by `complete_projection_handoff`
                 // once the projection spawn mints its own.
                 canvas_state.stash_projection_handoff(doc_id, busy);
-                doc
+                (doc, runtime)
             }
             Err(msg) => {
                 warn!(
@@ -327,14 +372,18 @@ pub fn drive_drill_in_loads(
             });
             (path, has_components)
         };
+        let origin = doc.origin().clone();
         if let Err(error) = registry.install_prebuilt(doc_id, doc) {
             bevy::log::warn!(
                 "[CanvasDiagram] drill-in document {doc_id} could not be installed: {error}"
             );
             continue;
         }
-        // by the upstream `drill_into_class` call before this
-        // driver runs.
+        if let Some(workspace) = workspace.as_deref_mut() {
+            lunco_modelica_core::doc_ops::register_document_context(
+                workspace, doc_id, origin, runtime, false,
+            );
+        }
         let land_in_icon_view = crate::ui::class_display::is_icon_only_class(&qualified)
             || has_components == Some(false);
         if land_in_icon_view {
@@ -358,7 +407,11 @@ pub fn drive_drill_in_loads(
 /// and the source is applied via `ReplaceSource` when the read
 /// completes. This matches what users expect: the tab opens, a
 /// spinner says "loading", content lands when it's ready.
-pub fn drill_into_class(world: &mut World, qualified: &str) {
+pub fn drill_into_class(
+    world: &mut World,
+    qualified: &str,
+    admission: lunco_workspace::FileDocumentAdmission,
+) {
     // Opening a Modelica class is a workbench navigation action, not merely a
     // tab allocation. A generated network can be opened from the simulation
     // Build perspective; switch to the Modelica perspective before creating
@@ -392,7 +445,7 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
     let file_path = crate::library_fs::resolve_class_path_indexed(qualified)
         .or_else(|| crate::library_fs::locate_library_file(qualified));
     if let Some(file_path) = file_path {
-        open_drill_in_tab(world, qualified, &file_path);
+        open_drill_in_tab(world, qualified, &file_path, admission);
         return;
     }
     // Open-document fallback: find a host whose parsed AST resolves the
@@ -449,10 +502,12 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
             .any(|m| m.filename.trim_end_matches(".mo") == stem)
     }) {
         bevy::log::info!("[CanvasDiagram] drill-in: opening bundled `{stem}`");
+        let admission = crate::ui::panels::package_browser::capture_file_admission(world);
         crate::ui::panels::package_browser::open_class(
             world,
             crate::class_ref::ClassRef::bundled([stem]),
             true,
+            admission,
         );
         return;
     }
@@ -474,7 +529,12 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
 ///
 /// If a tab for the same file path is already open (from a
 /// previous drill-in), we focus it instead of making a second.
-fn open_drill_in_tab(world: &mut World, qualified: &str, file_path: &std::path::Path) {
+fn open_drill_in_tab(
+    world: &mut World,
+    qualified: &str,
+    file_path: &std::path::Path,
+    admission: lunco_workspace::FileDocumentAdmission,
+) {
     // Find or allocate the doc. Reuse an existing one only if the
     // same `(file, drilled-in class)` was opened before — keying on
     // file alone collapsed sibling source library classes (e.g. `Integrator`
@@ -501,6 +561,25 @@ fn open_drill_in_tab(world: &mut World, qualified: &str, file_path: &std::path::
             same_file.then_some(state.doc)
         })
     };
+    if let Some(document) = existing_doc {
+        let replication = lunco_core_session::current_replication_owner_in(world);
+        let workspace = world
+            .get_resource::<lunco_workspace::WorkspaceResource>()
+            .map(|workspace| &workspace.0);
+        let live = lunco_workspace::PinnedDocumentRuntimeOwner::for_document(document, workspace)
+            .is_ok_and(|pin| pin.is_current(workspace, replication.as_ref()));
+        if !live {
+            let message = format!(
+                "Library document {document} belongs to a retired runtime owner; reopen its source explicitly"
+            );
+            warn!("{message}");
+            world.commands().trigger(lunco_core::RuntimeError {
+                name: "modelica-file-open-failed".into(),
+                message,
+            });
+            return;
+        }
+    }
     let (doc_id, needs_load) = if let Some(id) = existing_doc {
         (id, false)
     } else {
@@ -531,7 +610,9 @@ fn open_drill_in_tab(world: &mut World, qualified: &str, file_path: &std::path::
                 doc_id,
                 &path_for_task,
                 &qualified_for_task,
+                admission,
             )
+            .await
         });
         let busy = {
             let mut bus = world.resource_mut::<lunco_status_core::status_bus::StatusBus>();

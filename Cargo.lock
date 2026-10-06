@@ -9638,6 +9638,7 @@ dependencies = [
  "lunco-command-contracts",
  "lunco-core",
  "lunco-core-runtime",
+ "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-hash",
@@ -10344,6 +10345,7 @@ dependencies = [
  "lunco-assets-core",
  "lunco-doc",
  "lunco-usd-bevy-stage",
+ "lunco-workspace",
 ]
 
 [[package]]
@@ -10357,6 +10359,7 @@ dependencies = [
  "lunco-assets-runtime",
  "lunco-command-contracts",
  "lunco-core",
+ "lunco-core-session",
  "lunco-cosim-core",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -10795,6 +10798,7 @@ dependencies = [
  "lunco-assets-runtime",
  "lunco-command-contracts",
  "lunco-core",
+ "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-render",

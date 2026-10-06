@@ -53,16 +53,23 @@ pub(crate) fn clear_scene_on_twin_closed(
     mut admission: ResMut<lunco_core_runtime::AsyncWorkAdmission>,
     mut backed: ResMut<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
+    workspace: Option<Res<WorkspaceResource>>,
     mut coordinator: ResMut<lunco_core::SceneTransitionCoordinator>,
     mut mount_state: Option<ResMut<lunco_core::SceneMountState>>,
     mut commands: Commands,
 ) {
-    let root = trigger.event().root.clone();
-    for key in pending_twin.release_root(&root) {
+    let twin = trigger.event().twin;
+    for key in pending_twin.release_twin(twin) {
         admission.cancel_queued(key);
     }
-    for doc in backed.release_root(&root) {
-        registry.remove(doc);
+    for doc in backed.release_twin(twin) {
+        if workspace.as_deref().is_some_and(|workspace| {
+            workspace.document(doc).is_some_and(|entry| {
+                entry.runtime_context == lunco_workspace::DocumentRuntimeOwner::LocalTwin(twin)
+            })
+        }) {
+            registry.remove(doc);
+        }
     }
     if !trigger.event().was_active {
         return;
@@ -157,6 +164,7 @@ fn on_open_twin_scene(
     let source_id = handle.id();
     pending_twin.push(
         handle,
+        twin_id,
         source_ready,
         request.name.clone(),
         request.relative_path.clone(),

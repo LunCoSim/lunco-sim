@@ -172,18 +172,23 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
         if !is_persistable_snapshot(snap) {
             return None;
         }
-        // `restore` registers the document and fires
-        // `DocumentOpened` — which adds the Workspace entry — but it does
-        // NOT open a model-view tab. In normal use the package browser
-        // opens the tab via `OpenTab` after a click (see
-        // `open_bundled_class`); on session restore there is no click, so
-        // we open it here ourselves. Without this the restored doc lives
-        // in the registry with no visible tab and the centre shows only
-        // Welcome. The saved camera is applied in `apply_view_state`.
+        // Private snapshots restore with explicit Application lifetime before
+        // their deferred document-open event. Restore the tab separately and
+        // apply its persisted camera through `apply_view_state`.
         let origin = restore_origin(&snap.origin);
         let new_id = world
             .get_resource_mut::<ModelicaDocuments>()?
-            .restore(snap.source.clone(), origin);
+            .restore(snap.source.clone(), origin.clone());
+        if let Some(mut workspace) = world.get_resource_mut::<lunco_workspace::WorkspaceResource>()
+        {
+            lunco_modelica_core::doc_ops::register_document_context(
+                &mut workspace,
+                new_id,
+                origin,
+                lunco_workspace::DocumentRuntimeOwner::Application,
+                snap.dirty,
+            );
+        }
         let tab_id = world.resource_mut::<ModelTabs>().ensure_for(new_id, None);
         world.commands().trigger(OpenTab {
             kind: MODEL_VIEW_KIND,

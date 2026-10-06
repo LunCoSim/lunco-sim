@@ -27,17 +27,109 @@ use std::collections::HashMap;
 use crate::package_tree::cache::FileLoadResult;
 use crate::ui::panels::canvas_diagram::loads::{DrillInBinding, DuplicateBinding};
 
+/// File-open facts captured before dispatch, without filesystem identity reads.
+/// Canonical worker results use these pins to distinguish an explicit resident
+/// reload from source that another request installed after admission.
+#[derive(Clone, Debug)]
+pub struct FileOpenAdmission {
+    pub(crate) file: lunco_workspace::FileDocumentAdmission,
+    residents: Vec<ResidentFileSource>,
+}
+
+#[derive(Clone, Debug)]
+struct ResidentFileSource {
+    document: DocumentId,
+    path: std::path::PathBuf,
+    canonical: Option<std::path::PathBuf>,
+    runtime: Option<lunco_workspace::DocumentRuntimeOwner>,
+    generation: u64,
+}
+
+impl FileOpenAdmission {
+    pub(crate) fn capture(
+        registry: &crate::ui::document_context::ModelicaDocuments,
+        workspace: Option<&lunco_workspace::Workspace>,
+        replication: Option<&lunco_workspace::ReplicationOwner>,
+    ) -> Self {
+        let residents = registry
+            .iter()
+            .filter_map(|(document, host)| {
+                let source = host.document();
+                Some(ResidentFileSource {
+                    document,
+                    path: source.origin().canonical_path()?.to_path_buf(),
+                    canonical: None,
+                    runtime: workspace
+                        .and_then(|workspace| workspace.document(document))
+                        .map(|entry| entry.runtime_context.clone()),
+                    generation: source.generation_owned(),
+                })
+            })
+            .collect();
+        Self {
+            file: lunco_workspace::FileDocumentAdmission::capture(workspace, replication),
+            residents,
+        }
+    }
+
+    /// Resolve captured aliases on the same file-loading worker. A vanished
+    /// unrelated resident cannot match the successfully read source identity.
+    pub(crate) fn resolve_residents(&mut self) {
+        for resident in &mut self.residents {
+            resident.canonical = lunco_storage::canonicalize_file_path(&resident.path).ok();
+        }
+    }
+
+    pub(crate) fn resident_for_path(&self, path: &std::path::Path) -> Option<DocumentId> {
+        self.residents
+            .iter()
+            .find(|resident| resident.canonical.as_deref() == Some(path))
+            .map(|resident| resident.document)
+    }
+
+    pub(crate) fn validate_resident(
+        &self,
+        document: DocumentId,
+        path: Option<&std::path::Path>,
+        runtime: Option<&lunco_workspace::DocumentRuntimeOwner>,
+        generation: u64,
+        dirty: bool,
+        incoming: &lunco_workspace::DocumentRuntimeOwner,
+    ) -> Result<(), String> {
+        let admitted = self
+            .residents
+            .iter()
+            .find(|resident| resident.document == document);
+        if let Some(admitted) = admitted {
+            if Some(admitted.path.as_path()) != path
+                || admitted.runtime.as_ref() != runtime
+                || admitted.generation != generation
+            {
+                return Err("resident source changed after file-open admission".into());
+            }
+        } else if runtime != Some(incoming) {
+            return Err(
+                "different-owner resident source was installed after file-open admission".into(),
+            );
+        }
+        if dirty && runtime != Some(incoming) {
+            return Err("dirty resident source belongs to a different runtime owner".into());
+        }
+        Ok(())
+    }
+}
+
 /// One in-flight document open. Each variant carries the typed
 /// `Task<...>` plus the metadata that variant's driver needs to
 /// finish the install (drilled-class name, display name, busy
 /// handle for the status bus, etc.).
 pub enum OpeningState {
     /// Bundled or user-file read driven by the Package Browser. The
-    /// task returns a fully-built [`FileLoadResult`]; the driver
-    /// installs `result.doc` against `result.doc_id`.
+    /// Task returns a fully-built [`FileLoadResult`] and resolved resident
+    /// source pins for user files; bundled sources have Application lifetime.
     FileLoad {
         display_name: String,
-        task: Task<FileLoadResult>,
+        task: Task<(FileLoadResult, Option<FileOpenAdmission>)>,
         /// RAII guard registered with [`lunco_status_core::status_bus::StatusBus`]
         /// at insert time. Same role as [`DrillInBinding::busy`] and
         /// [`DuplicateBinding::busy`]: keeps a `(Document(doc_id),
@@ -285,8 +377,7 @@ pub fn track_simulate_busy(
 
 /// Drive [`OpeningState::FileLoad`] entries: poll each pending
 /// file-read task, install the resulting document into the registry,
-/// and clear the entry. Mirrors the previous `cache.file_tasks`
-/// drain that lived in `handle_package_loading_tasks`.
+/// and clear the entry after validating its admitted runtime lifetime.
 pub fn drive_file_load_openings(
     mut openings: ResMut<DocumentOpenings>,
     mut registry: ResMut<crate::ui::document_context::ModelicaDocuments>,
@@ -295,33 +386,148 @@ pub fn drive_file_load_openings(
     mut tabs: ResMut<crate::model_tabs::ModelTabs>,
     mut bus: ResMut<lunco_status_core::status_bus::StatusBus>,
     mut commands: Commands,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
 ) {
     use bevy::tasks::futures_lite::future;
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     let doc_ids = openings.doc_ids();
     for doc_id in doc_ids {
         let ready = match openings.get_mut(doc_id) {
             Some(OpeningState::FileLoad { task, .. }) => future::block_on(future::poll_once(task)),
             _ => None,
         };
-        let Some(ready) = ready else { continue };
+        let Some((ready, admission)) = ready else {
+            continue;
+        };
         let Some(OpeningState::FileLoad { busy, .. }) = openings.remove(doc_id) else {
             continue;
         };
         match ready.result {
-            Ok(doc) => {
+            Ok((doc, runtime)) => {
+                if !runtime.is_current(Some(&workspace.0), replication.as_ref()) {
+                    let message = format!(
+                        "File open {} cancelled: its admitted runtime owner retired",
+                        ready.doc_id
+                    );
+                    bevy::log::warn!("[ModelicaOpen] {message}");
+                    bus.push(
+                        "open",
+                        lunco_status_core::status_bus::StatusLevel::Warn,
+                        message,
+                    );
+                    let mut busy = busy;
+                    busy.set_outcome(lunco_status_core::status_bus::BusyOutcome::Cancelled);
+                    if registry.host(ready.doc_id).is_none() {
+                        close_pending_file_tabs(ready.doc_id, &mut tabs, &mut commands);
+                    }
+                    continue;
+                }
+                let origin = doc.origin().clone();
+                // Worker outcomes carry canonical file paths, so another pending
+                // open of the same file can reuse its newly installed identity.
+                let actual_id = origin
+                    .canonical_path()
+                    .and_then(|path| {
+                        registry.ids().find(|id| {
+                            registry.host(*id).is_some_and(|host| {
+                                host.document().origin().canonical_path() == Some(path)
+                            })
+                        })
+                    })
+                    .or_else(|| {
+                        origin.canonical_path().and_then(|path| {
+                            admission
+                                .as_ref()
+                                .and_then(|admission| admission.resident_for_path(path))
+                                .filter(|id| registry.host(*id).is_some())
+                        })
+                    })
+                    .unwrap_or(ready.doc_id);
+                if let Some(host) = registry.host(actual_id) {
+                    let resident_owner = workspace
+                        .document(actual_id)
+                        .map(|entry| workspace.runtime_owner_for(entry));
+                    let conflict = admission.as_ref().and_then(|admission| {
+                        admission
+                            .validate_resident(
+                                actual_id,
+                                host.document().origin().canonical_path(),
+                                resident_owner.as_ref(),
+                                host.document().generation_owned(),
+                                host.document().is_dirty(),
+                                &runtime,
+                            )
+                            .err()
+                    });
+                    if let Some(reason) = conflict {
+                        let message = format!("File reopen {actual_id} refused: {reason}");
+                        bevy::log::warn!("[ModelicaOpen] {message}");
+                        bus.push(
+                            "open",
+                            lunco_status_core::status_bus::StatusLevel::Error,
+                            message.clone(),
+                        );
+                        let mut busy = busy;
+                        busy.set_outcome(lunco_status_core::status_bus::BusyOutcome::Failed(
+                            message,
+                        ));
+                        if registry.host(ready.doc_id).is_none() {
+                            close_pending_file_tabs(ready.doc_id, &mut tabs, &mut commands);
+                        }
+                        continue;
+                    }
+                }
+                if let Some(host) = registry.host_mut(actual_id) {
+                    if host.document().is_dirty() {
+                        let message = format!(
+                            "Document {actual_id} has unsaved edits; file reload kept its resident source"
+                        );
+                        bevy::log::warn!("[ModelicaOpen] {message}");
+                        bus.push(
+                            "open",
+                            lunco_status_core::status_bus::StatusLevel::Warn,
+                            message,
+                        );
+                    } else {
+                        lunco_doc::FileBacked::reload_base(host.document_mut(), doc.source());
+                        host.document_mut().set_origin(origin.clone());
+                        registry.mark_changed(actual_id);
+                    }
+                } else if let Err(error) = registry.install_prebuilt(actual_id, doc) {
+                    let message = format!("Failed to install file document {actual_id}: {error}");
+                    bevy::log::warn!("[ModelicaOpen] {message}");
+                    bus.push(
+                        "open",
+                        lunco_status_core::status_bus::StatusLevel::Error,
+                        message.clone(),
+                    );
+                    let mut busy = busy;
+                    busy.set_outcome(lunco_status_core::status_bus::BusyOutcome::Failed(message));
+                    if registry.host(ready.doc_id).is_none() {
+                        close_pending_file_tabs(ready.doc_id, &mut tabs, &mut commands);
+                    }
+                    continue;
+                }
+                lunco_modelica_core::doc_ops::register_document_context(
+                    &mut workspace,
+                    actual_id,
+                    origin,
+                    runtime,
+                    registry
+                        .host(actual_id)
+                        .is_some_and(|host| host.document().is_dirty()),
+                );
+                for (_, tab) in tabs.iter_mut_for_doc(ready.doc_id) {
+                    tab.doc = actual_id;
+                }
                 // Success: hand the parse-phase handle to the canvas
                 // state so the bus stays busy across the file-load →
                 // projection boundary; the projection spawn releases
                 // it via `complete_projection_handoff`.
-                canvas_state.stash_projection_handoff(ready.doc_id, busy);
-                if let Err(error) = registry.install_prebuilt(ready.doc_id, doc) {
-                    bevy::log::warn!(
-                        "[ModelicaOpen] failed to install prebuilt document {}: {error}",
-                        ready.doc_id
-                    );
-                    continue;
-                }
-                workspace.active_document = Some(ready.doc_id);
+                canvas_state.stash_projection_handoff(actual_id, busy);
+                workspace.active_document = Some(actual_id);
             }
             Err(msg) => {
                 // Failure: surface the error to the user via the
@@ -347,18 +553,105 @@ pub fn drive_file_load_openings(
                 let mut busy = busy;
                 busy.set_outcome(lunco_status_core::status_bus::BusyOutcome::Failed(msg));
                 drop(busy);
-                let orphan_tab_ids: Vec<crate::model_tabs_types::TabId> = tabs
-                    .iter_mut_for_doc(ready.doc_id)
-                    .map(|(id, _)| id)
-                    .collect();
-                for tab_id in orphan_tab_ids {
-                    commands.trigger(lunco_workbench_core::commands::CloseTab {
-                        kind: crate::ui::MODEL_VIEW_KIND,
-                        instance: tab_id,
-                    });
-                    tabs.close_tab(tab_id);
+                if registry.host(ready.doc_id).is_none() {
+                    close_pending_file_tabs(ready.doc_id, &mut tabs, &mut commands);
                 }
             }
         }
+    }
+}
+
+fn close_pending_file_tabs(
+    document: DocumentId,
+    tabs: &mut crate::model_tabs::ModelTabs,
+    commands: &mut Commands,
+) {
+    let tab_ids: Vec<_> = tabs.iter_mut_for_doc(document).map(|(id, _)| id).collect();
+    for tab_id in tab_ids {
+        commands.trigger(lunco_workbench_core::commands::CloseTab {
+            kind: crate::ui::MODEL_VIEW_KIND,
+            instance: tab_id,
+        });
+        tabs.close_tab(tab_id);
+    }
+}
+
+#[cfg(test)]
+mod file_open_admission_tests {
+    use super::*;
+    use lunco_workspace::{DocumentRuntimeOwner, TwinId};
+
+    #[test]
+    fn canonical_file_reopen_keeps_admitted_source_fences() {
+        let old = DocumentRuntimeOwner::LocalTwin(TwinId::new(1));
+        let incoming = DocumentRuntimeOwner::LocalTwin(TwinId::new(2));
+        let id = DocumentId::new(1);
+        let stored = std::path::PathBuf::from("alias/model.mo");
+        let canonical = std::path::PathBuf::from("canonical/model.mo");
+        let admission = FileOpenAdmission {
+            file: lunco_workspace::FileDocumentAdmission::capture(None, None),
+            residents: vec![ResidentFileSource {
+                document: id,
+                path: stored.clone(),
+                canonical: Some(canonical.clone()),
+                runtime: Some(old.clone()),
+                generation: 7,
+            }],
+        };
+        assert_eq!(admission.resident_for_path(&canonical), Some(id));
+        assert!(
+            admission
+                .validate_resident(id, Some(&stored), Some(&old), 7, false, &incoming)
+                .is_ok()
+        );
+        assert!(
+            admission
+                .validate_resident(id, Some(&stored), Some(&old), 7, true, &incoming)
+                .unwrap_err()
+                .contains("dirty resident")
+        );
+        assert!(
+            admission
+                .validate_resident(id, Some(&stored), Some(&old), 8, false, &incoming)
+                .unwrap_err()
+                .contains("changed after")
+        );
+        assert!(
+            admission
+                .validate_resident(id, Some(&stored), Some(&incoming), 7, false, &incoming)
+                .unwrap_err()
+                .contains("changed after")
+        );
+        assert!(
+            admission
+                .validate_resident(id, None, Some(&old), 7, false, &incoming)
+                .unwrap_err()
+                .contains("changed after")
+        );
+        assert!(
+            admission
+                .validate_resident(
+                    DocumentId::new(2),
+                    Some(&canonical),
+                    Some(&old),
+                    0,
+                    false,
+                    &incoming
+                )
+                .unwrap_err()
+                .contains("installed after")
+        );
+        assert!(
+            admission
+                .validate_resident(
+                    DocumentId::new(2),
+                    Some(&canonical),
+                    Some(&incoming),
+                    0,
+                    false,
+                    &incoming
+                )
+                .is_ok()
+        );
     }
 }

@@ -462,6 +462,7 @@ fn setup_web_workbench(
     sources: Res<Assets<ModelicaSource>>,
     server: Res<AssetServer>,
     started: Option<Res<WebWorkbenchStarted>>,
+    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
 ) {
     if started.is_some() {
         return;
@@ -495,6 +496,17 @@ fn setup_web_workbench(
     // Open the initial source through the generic file identity boundary so
     // the entity spawns with a valid document id and read-only origin.
     let (doc_id, _) = doc_registry.open_file_with_writable(model_path, source, false);
+    if let Some(workspace) = workspace.as_deref_mut() {
+        if let Some(host) = doc_registry.host(doc_id) {
+            lunco_modelica_core::doc_ops::register_document_context(
+                workspace,
+                doc_id,
+                host.document().origin().clone(),
+                lunco_workspace::DocumentRuntimeOwner::Application,
+                false,
+            );
+        }
+    }
 
     let entity = commands
         .spawn((

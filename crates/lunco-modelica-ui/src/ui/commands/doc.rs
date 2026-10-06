@@ -426,39 +426,9 @@ pub fn on_save_active_document_as(trigger: On<SaveActiveDocumentAs>, mut command
             bevy::log::warn!("[SaveActiveDocumentAs] no active document");
             return;
         };
-        let path = std::path::PathBuf::from(&ev.path);
-        let source = {
-            let registry = world.resource::<ModelicaDocuments>();
-            let Some(host) = registry.host(doc) else {
-                return;
-            };
-            host.document().source().to_string()
-        };
-        // Through `lunco-storage` — atomic tmp+rename on native, localStorage on
-        // wasm — so "Save As" is a real, working command in the browser instead
-        // of a `std::fs::write` that always fails there.
-        if let Err(e) = lunco_modelica_runtime::source_asset::write_text_sync(&path, &source) {
-            bevy::log::warn!(
-                "[SaveActiveDocumentAs] write failed {}: {}",
-                path.display(),
-                e
-            );
-            return;
-        }
-        let mut registry = world.resource_mut::<ModelicaDocuments>();
-        if let Some(host) = registry.host_mut(doc) {
-            host.document_mut()
-                .set_origin(lunco_doc::DocumentOrigin::File {
-                    path: path.clone(),
-                    writable: true,
-                });
-        }
-        registry.mark_document_saved(doc);
-        bevy::log::info!(
-            "[SaveActiveDocumentAs] saved {} ({} bytes)",
-            path.display(),
-            source.len(),
-        );
-        world.commands().trigger(DocumentSaved::local(doc));
+        world.commands().trigger(SaveAsDocument {
+            doc_id: doc,
+            path: ev.path,
+        });
     });
 }

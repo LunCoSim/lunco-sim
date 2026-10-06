@@ -10,6 +10,7 @@ lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-doc = { path = "../lunco-doc" }
+lunco-workspace = { path = "../lunco-workspace" }
 
 [lints]
 workspace = true

@@ -97,7 +97,7 @@ use lunco_workbench_core::{
     source::OpenTwinSource,
     tabs::PendingTabCloses,
 };
-use lunco_workspace::{TwinClosed, WorkspaceResource, document_belongs_to_twin_root};
+use lunco_workspace::{DocumentRuntimeOwner, TwinClosed, WorkspaceResource};
 use openusd::sdf::Path as SdfPath;
 
 use lunco_doc_bevy::DocumentRegistry;
@@ -2888,7 +2888,6 @@ register_commands!(
 fn on_twin_closed_for_viewport(trigger: On<TwinClosed>, mut commands: Commands) {
     let event = trigger.event();
     let closed_twin = event.twin;
-    let closed_root = event.root.clone();
     commands.queue(move |world: &mut World| {
         world
             .resource_mut::<UsdViewportState>()
@@ -2905,7 +2904,9 @@ fn on_twin_closed_for_viewport(trigger: On<TwinClosed>, mut commands: Commands) 
                 workspace
                     .documents()
                     .iter()
-                    .filter(|entry| document_belongs_to_twin_root(entry, closed_twin, &closed_root))
+                    .filter(|entry| {
+                        entry.runtime_context == DocumentRuntimeOwner::LocalTwin(closed_twin)
+                    })
                     .map(|entry| entry.id)
                     .collect()
             })
@@ -3002,6 +3003,31 @@ fn mount_preview_session(world: &mut World, preview: UsdPreviewId) {
     else {
         return;
     };
+    let replication = lunco_core_session::current_replication_owner_in(world);
+    let workspace = world.get_resource::<WorkspaceResource>();
+    let owner = lunco_workspace::PinnedDocumentRuntimeOwner::for_document(
+        doc,
+        workspace.map(|workspace| &workspace.0),
+    );
+    match owner {
+        Ok(owner)
+            if owner.is_current(
+                workspace.map(|workspace| &workspace.0),
+                replication.as_ref(),
+            ) => {}
+        Ok(_) => {
+            report_preview_error(
+                world,
+                "usd-preview-open-failed",
+                format!("document {doc} belongs to a retired runtime owner"),
+            );
+            return;
+        }
+        Err(error) => {
+            report_preview_error(world, "usd-preview-open-failed", error);
+            return;
+        }
+    }
     let Some((name, rel)) = viewport_twin_coords(world, doc) else {
         return;
     };

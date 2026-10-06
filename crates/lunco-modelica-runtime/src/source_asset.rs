@@ -1,6 +1,6 @@
 //! Modelica source as a Bevy `Asset`.
 //!
-//! Domain code consuming `.mo` files must go through `AssetServer::load(...)`;
+//! Runtime source assets load through `AssetServer::load(...)`;
 //! this keeps native and wasm source loading on one platform-portable path and
 //! gives callers hot reload and `AssetEvent`s without coupling them to the
 //! compiler worker.
@@ -74,10 +74,17 @@ pub fn read_text_sync(path: &std::path::Path) -> Result<String, String> {
     Ok(normalize_modelica_source(&text).into_owned())
 }
 
-/// Write UTF-8 source through the platform-portable storage backend.
-pub fn write_text_sync(path: &std::path::Path, text: &str) -> Result<(), String> {
-    lunco_storage::write_file_sync(path, text.as_bytes())
-        .map_err(|e| format!("write failed `{}`: {e}", path.display()))
+/// Read a file against the immutable mount snapshot captured by its caller.
+/// Native identity and bytes resolve on the caller's I/O task. Browser mounted
+/// files use OPFS; private editor keys use WebStorage with Application lifetime.
+pub async fn read_admitted_file(
+    path: &std::path::Path,
+    admission: lunco_workspace::FileDocumentAdmission,
+) -> Result<(lunco_workspace::ResolvedFileDocument, String), String> {
+    let (resolved, bytes) = admission.read(path).await?;
+    let text = String::from_utf8(bytes).map_err(|error| format!("non-UTF-8 source: {error}"))?;
+    let text = normalize_modelica_source(&text).into_owned();
+    Ok((resolved, text))
 }
 
 /// Registers the `.mo` asset type and loader.

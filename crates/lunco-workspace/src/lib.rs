@@ -19,14 +19,14 @@
 //! identically in the windowed editor and a `--no-ui` API-only server.
 //! Recents *persistence* (config-dir I/O) is left to the consumer.
 //!
-//! # Twin is a view, not a container
+//! # Folder views and runtime source lifetime
 //!
 //! Documents live in the Workspace — *all* of them, Twin-attached or not.
-//! Twins don't own documents; they're *lenses* over the document list
-//! (by path — [`lunco_twin::Twin::owns`] — or by explicit "context"
-//! pinning for Untitled buffers). This keeps Untitled docs, loose files,
-//! and Twin-owned files on one uniform surface and makes "Save-As moves
-//! an Untitled into a Twin's folder" a zero-allocation flip of one field.
+//! Twin folders provide the authoring and display lens through [`Workspace::twin_for`].
+//! Each document also records its exact runtime owner at source admission.
+//! Saving or moving a file changes its authored origin without transferring
+//! resident source to another session. Active scope and retirement use the
+//! stored runtime owner; a clean explicit reopen can admit newly read source.
 //!
 //! # Minimal surface v1
 //!
@@ -57,29 +57,6 @@ pub use session::{
 pub use lunco_doc::{DocumentId, DocumentOrigin};
 pub use lunco_storage::StorageHandle;
 pub use lunco_twin::{DocumentKindId, FileKind, Twin, TwinMode, TwinSettingValue};
-
-/// Whether a workspace document belongs to a Twin root.
-///
-/// This is the lifecycle boundary used after [`Workspace::close_twin`] has
-/// removed the Twin from the workspace. Path ownership remains observable
-/// from the document origin, while an Untitled document is owned by its
-/// explicit context pin. Keeping this predicate here prevents UI and domain
-/// registries from inventing independent path/context rules.
-pub fn document_belongs_to_twin_root(
-    entry: &DocumentEntry,
-    twin: TwinId,
-    root: &std::path::Path,
-) -> bool {
-    entry.origin.canonical_path().is_some_and(|path| {
-        path.strip_prefix(root).is_ok()
-            || path
-                .canonicalize()
-                .ok()
-                .zip(root.canonicalize().ok())
-                .is_some_and(|(path, root)| path.strip_prefix(root).is_ok())
-    }) || matches!(entry.origin, DocumentOrigin::Untitled { .. })
-        && entry.runtime_context == DocumentRuntimeOwner::LocalTwin(twin)
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TwinId
@@ -192,6 +169,122 @@ impl DocumentRuntimeOwner {
             _ => None,
         }
     }
+
+    /// Validate an admitted lifetime without reading source bytes or paths.
+    pub fn is_current(
+        &self,
+        workspace: Option<&Workspace>,
+        replication: Option<&ReplicationOwner>,
+    ) -> bool {
+        match self {
+            Self::Application => true,
+            Self::LocalTwin(id) => workspace.is_some_and(|workspace| workspace.twin(*id).is_some()),
+            Self::Replicated(owner) => replication == Some(owner),
+        }
+    }
+}
+
+/// Immutable ownership candidates captured before a file load leaves its caller.
+/// The loader resolves native identity through storage away from the UI thread.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileDocumentAdmission {
+    local_roots: Vec<(TwinId, std::path::PathBuf)>,
+    replication: Option<ReplicationOwner>,
+}
+
+/// Canonical source identity and exact runtime lifetime resolved by its loader.
+#[derive(Debug)]
+pub struct ResolvedFileDocument {
+    pub path: std::path::PathBuf,
+    pub runtime: DocumentRuntimeOwner,
+}
+
+impl FileDocumentAdmission {
+    pub fn capture(workspace: Option<&Workspace>, replication: Option<&ReplicationOwner>) -> Self {
+        fn collect_roots(twin: &Twin, id: TwinId, roots: &mut Vec<(TwinId, std::path::PathBuf)>) {
+            roots.push((id, twin.root.clone()));
+            for child in twin.children() {
+                collect_roots(child, id, roots);
+            }
+        }
+        let mut local_roots = Vec::new();
+        if let Some(workspace) = workspace {
+            for (id, twin) in workspace.twins() {
+                collect_roots(twin, id, &mut local_roots);
+            }
+        }
+        Self {
+            local_roots,
+            replication: replication.cloned(),
+        }
+    }
+
+    /// Run on the existing storage/loader worker, before reading the source.
+    /// Unresolved identity fails admission instead of becoming application work.
+    pub fn resolve(self, path: &std::path::Path) -> Result<ResolvedFileDocument, String> {
+        let path = lunco_storage::canonicalize_file_path(path)
+            .map_err(|error| format!("file identity could not be resolved: {error}"))?;
+        for (id, root) in self.local_roots {
+            #[cfg(target_arch = "wasm32")]
+            let root = lunco_storage::canonicalize_file_path(&root).map_err(|error| {
+                format!("local Twin {id:?} root identity could not be resolved: {error}")
+            })?;
+            if path.starts_with(root) {
+                return Ok(ResolvedFileDocument {
+                    path,
+                    runtime: DocumentRuntimeOwner::LocalTwin(id),
+                });
+            }
+        }
+        if let Some(ReplicationOwner::Twin { scene }) = self.replication {
+            #[cfg(not(target_arch = "wasm32"))]
+            let root = &scene.root;
+            #[cfg(target_arch = "wasm32")]
+            let root = lunco_storage::canonicalize_file_path(&scene.root).map_err(|error| {
+                format!("replicated scene root identity could not be resolved: {error}")
+            })?;
+            if path.starts_with(root) {
+                return Ok(ResolvedFileDocument {
+                    path,
+                    runtime: DocumentRuntimeOwner::Replicated(ReplicationOwner::Twin { scene }),
+                });
+            }
+        }
+        Ok(ResolvedFileDocument {
+            path,
+            runtime: DocumentRuntimeOwner::Application,
+        })
+    }
+    /// Read through the backend that owns the captured file identity. Mounted
+    /// browser sources use OPFS; private unmounted editor keys use WebStorage.
+    pub async fn read(
+        self,
+        path: &std::path::Path,
+    ) -> Result<(ResolvedFileDocument, Vec<u8>), String> {
+        let resolved = self.resolve(path)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let bytes = {
+            use lunco_storage::Storage;
+            lunco_storage::FileStorage::new()
+                .read(&StorageHandle::File(resolved.path.clone()))
+                .await
+                .map_err(|error| format!("read failed `{}`: {error}", resolved.path.display()))?
+        };
+        #[cfg(target_arch = "wasm32")]
+        let mut resolved = resolved;
+        #[cfg(target_arch = "wasm32")]
+        let bytes = if resolved.runtime == DocumentRuntimeOwner::Application {
+            resolved.path = path.to_path_buf();
+            lunco_storage::read_file_sync(path)
+                .map_err(|error| format!("read failed `{}`: {error}", path.display()))?
+        } else {
+            lunco_storage::OpfsStorage::new()
+                .read(&StorageHandle::File(resolved.path.clone()))
+                .await
+                .map_err(|error| format!("read failed `{}`: {error}", resolved.path.display()))?
+        };
+        Ok((resolved, bytes))
+    }
 }
 
 /// Document and exact runtime owner captured when work is admitted.
@@ -236,14 +329,7 @@ impl PinnedDocumentRuntimeOwner {
                     .is_some_and(|entry| workspace.runtime_owner_for(entry) == self.runtime)
             },
         );
-        registered
-            && match &self.runtime {
-                DocumentRuntimeOwner::Application => true,
-                DocumentRuntimeOwner::LocalTwin(id) => {
-                    workspace.is_some_and(|workspace| workspace.twin(*id).is_some())
-                }
-                DocumentRuntimeOwner::Replicated(owner) => replication == Some(owner),
-            }
+        registered && self.runtime.is_current(workspace, replication)
     }
     pub fn is_in_active_scope(
         &self,
@@ -292,19 +378,10 @@ impl PinnedDocumentRuntimeOwner {
 ///
 /// # Twin association
 ///
-/// Two ways a DocumentEntry can be associated with a Twin:
-///
-/// 1. **By path** — a Persistent document whose `origin` path lies
-///    under a registered Twin's folder. Resolved on demand via
-///    [`Workspace::twin_for`].
-/// 2. **By context pin** — an Untitled document explicitly pinned to
-///    a Twin at creation ("New Model" from the Rover Twin's toolbar
-///    creates an Untitled with `runtime_context = DocumentRuntimeOwner::LocalTwin(rover_id)`). This
-///    survives until the doc is saved; on Save-As the context becomes
-///    advisory and the by-path rule takes over.
-///
-/// Documents with neither are "loose" — shown under a Loose group in
-/// the Twin Browser.
+/// Folder association is resolved by [`Workspace::twin_for`] for display and
+/// authoring. Runtime source ownership is captured independently at admission;
+/// saving or reopening a folder does not transfer resident source into a new
+/// session. Only a clean explicit file reopen can admit newly read source.
 #[derive(Debug, Clone)]
 pub struct DocumentEntry {
     /// Identity allocated by whichever registry owns the Document.
@@ -315,8 +392,8 @@ pub struct DocumentEntry {
     pub kind: DocumentKindId,
     /// Persistence state of the Document (Untitled vs File, writable).
     pub origin: DocumentOrigin,
-    /// Context captured at creation for Untitled documents. File documents
-    /// resolve local ownership through their canonical Workspace path.
+    /// Exact runtime context captured at source admission, independent of the
+    /// current folder lens. A clean explicit file reopen can admit new source.
     pub runtime_context: DocumentRuntimeOwner,
     /// Display title for the tab ("Rover.mo", "● Untitled-1", …).
     /// The Workspace doesn't enforce a format — consumers set and
@@ -397,25 +474,24 @@ impl Workspace {
 
     /// Close a Twin. Documents rooted in that Twin's folder keep their
     /// entries — a closed Twin just drops the lens, not the docs.
-    /// Re-opening the Twin re-associates by path.
+    /// Reopening restores the folder lens; retired runtime source pins remain retired.
     pub fn close_twin(&mut self, id: TwinId) {
-        let closed_root = self.twin(id).map(|twin| twin.root.clone());
         let active_document_belongs_to_closed_twin = self
             .active_document
             .and_then(|doc| self.document(doc))
-            .zip(closed_root.as_deref())
-            .is_some_and(|(entry, root)| document_belongs_to_twin_root(entry, id, root));
+            .is_some_and(|entry| {
+                self.runtime_owner_for(entry) == DocumentRuntimeOwner::LocalTwin(id)
+            });
         self.twins.retain(|(tid, _)| *tid != id);
         if self.active_twin == Some(id) {
             self.active_twin = self.twins.first().map(|(tid, _)| *tid);
-            if active_document_belongs_to_closed_twin {
-                self.active_document = self.active_twin.and_then(|active| {
-                    self.documents
-                        .iter()
-                        .find(|entry| self.twin_for(entry) == Some(active))
-                        .map(|entry| entry.id)
-                });
-            }
+        }
+        if active_document_belongs_to_closed_twin {
+            self.active_document = self
+                .documents
+                .iter()
+                .find(|entry| self.document_is_in_active_scope(entry))
+                .map(|entry| entry.id);
         }
     }
 
@@ -425,7 +501,9 @@ impl Workspace {
     /// Workspace's intentionally global document registry.
     pub fn document_is_in_active_scope(&self, entry: &DocumentEntry) -> bool {
         match self.active_twin {
-            Some(active) => self.twin_for(entry) == Some(active),
+            Some(active) => {
+                self.runtime_owner_for(entry) == DocumentRuntimeOwner::LocalTwin(active)
+            }
             None => self.runtime_owner_for(entry) == DocumentRuntimeOwner::Application,
         }
     }
@@ -457,10 +535,8 @@ impl Workspace {
 
     // ── Documents ───────────────────────────────────────────────────
 
-    /// Register an open Document. Does not attempt deduplication —
-    /// callers are responsible for checking if the id is already open
-    /// (typical pattern: consult [`document`](Self::document) first,
-    /// focus the existing tab if found, otherwise add).
+    /// Register or update explicitly admitted document metadata by exact id.
+    /// The producer validates any source replacement before passing its owner.
     pub fn add_document(&mut self, entry: DocumentEntry) {
         let has_path = matches!(&entry.origin, DocumentOrigin::File { .. });
         if has_path {
@@ -468,10 +544,15 @@ impl Workspace {
                 self.recents.push_loose(p.to_path_buf());
             }
         }
-        // Document-entry assumption: caller already chose an id; no
-        // conflict check here, same as how a domain document registry
-        // trusts its own allocator.
-        self.documents.push(entry);
+        if let Some(resident) = self
+            .documents
+            .iter_mut()
+            .find(|resident| resident.id == entry.id)
+        {
+            *resident = entry;
+        } else {
+            self.documents.push(entry);
+        }
     }
 
     /// Close a Document by id. Returns the removed entry for callers
@@ -511,10 +592,9 @@ impl Workspace {
 
     /// Resolve which Twin (if any) "owns" a document entry.
     ///
-    /// Ordering: a path-based match on any registered Twin always wins
-    /// over a context pin — once a document has been saved into a
-    /// Twin's folder, the pin is stale. The pin is consulted only for
-    /// Untitled documents (which have no path to match).
+    /// Display and authoring use a path-based folder lens for File documents
+    /// and the creation pin for pathless documents. Runtime lifetime remains
+    /// independent and is read through `runtime_owner_for`.
     pub fn twin_for(&self, entry: &DocumentEntry) -> Option<TwinId> {
         if let DocumentOrigin::File { path, .. } = &entry.origin {
             let handle = StorageHandle::File(path.clone());
@@ -548,17 +628,10 @@ impl Workspace {
         }
     }
 
-    /// Resolve document lifetime through the canonical local path lens or the
-    /// explicitly admitted Untitled context. Remote IDs never enter `twin_for`.
+    /// Read the admitted source lifetime. Folder changes affect `twin_for`, not
+    /// already admitted work; a file loader explicitly rebinds clean disk source.
     pub fn runtime_owner_for(&self, entry: &DocumentEntry) -> DocumentRuntimeOwner {
-        if matches!(entry.origin, DocumentOrigin::File { .. }) {
-            self.twin_for(entry).map_or(
-                DocumentRuntimeOwner::Application,
-                DocumentRuntimeOwner::LocalTwin,
-            )
-        } else {
-            entry.runtime_context.clone()
-        }
+        entry.runtime_context.clone()
     }
 
     /// Documents this Twin claims, per [`twin_for`](Self::twin_for).
@@ -606,6 +679,148 @@ mod tests {
         assert_eq!(ws.twins().count(), 0);
         assert_eq!(ws.documents().len(), 0);
         assert!(ws.active_twin.is_none());
+    }
+
+    #[test]
+    fn file_admission_pins_canonical_owner_and_rejects_retired_lifetimes() {
+        let temp = tempfile::tempdir().expect("temporary roots");
+        let local_root = temp.path().join("local");
+        let remote_root = temp.path().join("remote # % Мир");
+        let local_path = local_root.join("local.mo");
+        let remote_path = remote_root.join("source # %.mo");
+        let loose_path = temp.path().join("loose.mo");
+        write(&local_path, "model Local end Local;");
+        write(&remote_path, "model Remote end Remote;");
+        write(&loose_path, "model Loose end Loose;");
+        let mut workspace = Workspace::new();
+        let local = workspace.add_twin(load_twin(&local_root));
+        let remote = ReplicationOwner::Twin {
+            scene: ReplicatedSceneOwner {
+                connection: bevy::prelude::Entity::from_bits(11),
+                host_twin: TwinId::new(7),
+                authority: "remote-owner".into(),
+                root: lunco_storage::canonicalize_file_path(&remote_root)
+                    .expect("admitted remote root"),
+                owns_mount: true,
+            },
+        };
+        let unrelated_root = temp.path().join("unrelated");
+        write(
+            &unrelated_root.join("twin.toml"),
+            "name=\"unrelated\"\nversion=\"0.1.0\"\n",
+        );
+        workspace.add_twin(load_twin(&unrelated_root));
+        let snapshot = FileDocumentAdmission::capture(Some(&workspace), Some(&remote));
+        std::fs::remove_dir_all(&unrelated_root).expect("retire unrelated storage fixture");
+        assert_eq!(
+            snapshot
+                .clone()
+                .resolve(&loose_path)
+                .expect("unrelated deleted root does not block loose source")
+                .runtime,
+            DocumentRuntimeOwner::Application
+        );
+        let admitted = snapshot
+            .clone()
+            .resolve(&remote_path)
+            .expect("canonical remote file");
+        assert_eq!(
+            admitted.path,
+            lunco_storage::canonicalize_file_path(&remote_path).expect("canonical source")
+        );
+        assert_eq!(
+            admitted.runtime,
+            DocumentRuntimeOwner::Replicated(remote.clone())
+        );
+        assert!(admitted.runtime.is_current(Some(&workspace), Some(&remote)));
+        assert!(!admitted.runtime.is_current(Some(&workspace), None));
+        let mut replacement = remote.clone();
+        let ReplicationOwner::Twin { scene } = &mut replacement else {
+            panic!("fixture owner");
+        };
+        scene.connection = bevy::prelude::Entity::from_bits(12);
+        assert!(
+            !admitted
+                .runtime
+                .is_current(Some(&workspace), Some(&replacement))
+        );
+        let doc = DocumentId::new(100);
+        workspace.add_document(DocumentEntry {
+            id: doc,
+            kind: DocumentKindId::new("modelica"),
+            origin: DocumentOrigin::File {
+                path: admitted.path,
+                writable: true,
+            },
+            runtime_context: admitted.runtime,
+            title: "Remote".into(),
+            dirty: false,
+        });
+        let source =
+            PinnedDocumentRuntimeOwner::for_document(doc, Some(&workspace)).expect("remote source");
+        assert_eq!(
+            source.runtime,
+            DocumentRuntimeOwner::Replicated(remote.clone())
+        );
+        assert!(!source.is_current(Some(&workspace), Some(&replacement)));
+        assert_eq!(
+            snapshot
+                .clone()
+                .resolve(&loose_path)
+                .expect("loose source")
+                .runtime,
+            DocumentRuntimeOwner::Application
+        );
+        assert!(
+            snapshot
+                .clone()
+                .resolve(&remote_root.join("missing.mo"))
+                .expect_err("missing identity must reject")
+                .contains("identity could not be resolved")
+        );
+
+        workspace.close_twin(local);
+        let replacement_local = workspace.add_twin(load_twin(&local_root));
+        let admitted_local = snapshot.resolve(&local_path).expect("delayed local source");
+        assert_eq!(
+            admitted_local.runtime,
+            DocumentRuntimeOwner::LocalTwin(local)
+        );
+        assert_ne!(local, replacement_local);
+        assert!(
+            !admitted_local
+                .runtime
+                .is_current(Some(&workspace), Some(&remote))
+        );
+
+        workspace.add_document(DocumentEntry {
+            id: DocumentId::new(101),
+            kind: DocumentKindId::new("modelica"),
+            origin: DocumentOrigin::writable_file(&local_path),
+            runtime_context: admitted_local.runtime,
+            title: "Retired".into(),
+            dirty: true,
+        });
+        workspace.active_twin = Some(replacement_local);
+        assert!(
+            !workspace.document_is_in_active_scope(
+                workspace
+                    .document(DocumentId::new(101))
+                    .expect("retained source")
+            )
+        );
+        let remote_as_local = workspace.add_twin(load_twin(&remote_root));
+        let preferred = FileDocumentAdmission::capture(Some(&workspace), Some(&remote))
+            .resolve(&remote_path)
+            .expect("local path precedence");
+        assert_eq!(
+            preferred.runtime,
+            DocumentRuntimeOwner::LocalTwin(remote_as_local)
+        );
+        assert_eq!(
+            workspace.runtime_owner_for(workspace.document(doc).expect("remote entry")),
+            DocumentRuntimeOwner::Replicated(remote)
+        );
     }
 
     #[test]
@@ -711,7 +926,7 @@ version = "0.1.0"
             id: DocumentId::new(1),
             kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::writable_file(&a_file),
-            runtime_context: DocumentRuntimeOwner::Application,
+            runtime_context: DocumentRuntimeOwner::LocalTwin(a),
             title: "a.mo".into(),
             dirty: false,
         });
@@ -719,7 +934,7 @@ version = "0.1.0"
             id: DocumentId::new(2),
             kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::writable_file(&b_file),
-            runtime_context: DocumentRuntimeOwner::Application,
+            runtime_context: DocumentRuntimeOwner::LocalTwin(b),
             title: "b.mo".into(),
             dirty: false,
         });
@@ -734,7 +949,7 @@ version = "0.1.0"
     }
 
     #[test]
-    fn closing_active_twin_drops_old_active_document_selection() {
+    fn closing_twin_drops_its_selected_document_in_any_folder_lens() {
         let tmp = tempfile::tempdir().unwrap();
         let a_root = tmp.path().join("a");
         let b_root = tmp.path().join("b");
@@ -745,37 +960,41 @@ version = "0.1.0"
         write(&a_file, "");
         write(&b_file, "");
 
-        let mut ws = Workspace::new();
-        let a = ws.add_twin(load_twin(&a_root));
-        let b = ws.add_twin(load_twin(&b_root));
-        ws.add_document(DocumentEntry {
-            id: DocumentId::new(1),
-            kind: DocumentKindId::new("modelica"),
-            origin: DocumentOrigin::writable_file(&a_file),
-            runtime_context: DocumentRuntimeOwner::Application,
-            title: "a.mo".into(),
-            dirty: false,
-        });
-        ws.add_document(DocumentEntry {
-            id: DocumentId::new(2),
-            kind: DocumentKindId::new("modelica"),
-            origin: DocumentOrigin::writable_file(&b_file),
-            runtime_context: DocumentRuntimeOwner::Application,
-            title: "b.mo".into(),
-            dirty: false,
-        });
-        ws.active_document = Some(DocumentId::new(1));
+        for closing_active in [true, false] {
+            let mut ws = Workspace::new();
+            let a = ws.add_twin(load_twin(&a_root));
+            let b = ws.add_twin(load_twin(&b_root));
+            ws.add_document(DocumentEntry {
+                id: DocumentId::new(1),
+                kind: DocumentKindId::new("modelica"),
+                origin: DocumentOrigin::writable_file(&a_file),
+                runtime_context: DocumentRuntimeOwner::LocalTwin(a),
+                title: "a.mo".into(),
+                dirty: false,
+            });
+            ws.add_document(DocumentEntry {
+                id: DocumentId::new(2),
+                kind: DocumentKindId::new("modelica"),
+                origin: DocumentOrigin::writable_file(&b_file),
+                runtime_context: DocumentRuntimeOwner::LocalTwin(b),
+                title: "b.mo".into(),
+                dirty: false,
+            });
+            if !closing_active {
+                ws.active_twin = Some(b);
+            }
+            ws.active_document = Some(DocumentId::new(1));
 
-        ws.close_twin(a);
+            ws.close_twin(a);
 
-        assert_eq!(ws.active_twin, Some(b));
-        assert_eq!(ws.active_document, Some(DocumentId::new(2)));
+            assert_eq!(ws.active_twin, Some(b));
+            assert_eq!(ws.active_document, Some(DocumentId::new(2)));
+        }
     }
 
     #[test]
     fn twin_for_path_match_trumps_pin() {
-        // Document is on disk inside Twin A but pinned to Twin B. The
-        // path match wins — the pin only matters when a path is absent.
+        // Folder display uses A while source runtime remains pinned to B.
         let tmp = tempfile::tempdir().unwrap();
         let a_root = tmp.path().join("a");
         let b_root = tmp.path().join("b");
@@ -800,7 +1019,10 @@ version = "0.1.0"
             dirty: false,
         });
         assert_eq!(ws.twin_for(&ws.documents()[0]), Some(a));
-        let _ = b; // silence unused in release
+        assert_eq!(
+            ws.runtime_owner_for(&ws.documents()[0]),
+            DocumentRuntimeOwner::LocalTwin(b)
+        );
     }
 
     #[test]

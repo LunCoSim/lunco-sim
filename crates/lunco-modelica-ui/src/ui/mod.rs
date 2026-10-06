@@ -362,7 +362,7 @@ fn clear_modelica_state_on_twin_closed(
         .documents()
         .iter()
         .filter(|entry| {
-            lunco_workspace::document_belongs_to_twin_root(entry, event.twin, &event.root)
+            entry.runtime_context == lunco_workspace::DocumentRuntimeOwner::LocalTwin(event.twin)
         })
         .map(|entry| entry.id)
         .collect();

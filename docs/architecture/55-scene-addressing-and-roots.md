@@ -145,6 +145,26 @@ root. These conversions belong to the asset owner. Load addresses and script
 import registry keys retain their mount lifetime instead of being normalized
 to a reusable logical name.
 
+### Document source admission and lifetime
+
+A file location is the transport and save identity, independent of the document's
+runtime owner. `FileDocumentAdmission::capture` records the current canonical
+Workspace roots and exact replicated owner before dispatch. Its shared `read`
+resolves the native or OPFS source identity and reads through storage on the
+existing worker. USD and SysML validate the returned `DocumentRuntimeOwner`
+before installing source, and register its actual origin, runtime owner and dirty
+state before document events. A pending read cannot publish into a successor
+Twin; identical requests coalesce only with identical captured admission facts.
+Dirty resident source cannot be rebound to another owner.
+
+New documents capture their creation context at dispatch; forks retain the
+source document's admitted owner. Private session snapshots explicitly belong to
+Application. Saving or opening a folder never reassigns runtime lifetime from
+the path. Indexed Twin source loads and automatic leases carry exact `TwinId`
+plus their captured live mount. Retirement checks the stored document owner
+before removing a host, including after a clean source replacement. Preview
+admission likewise checks the stored owner before rehoming a document projection.
+
 ### Native payload and source admission
 
 USD scene, document-source, preview, schema, reference, and transitive-layer

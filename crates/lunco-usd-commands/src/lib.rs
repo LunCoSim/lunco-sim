@@ -5,8 +5,8 @@
 //!
 //! - **Open**: observes [`OpenFile`]
 //!   and handles paths with a USD extension. Modelica observes the same
-//!   command for `.mo`; future SysML / mission crates will join the
-//!   chorus. Each observer is responsible for its own extension gate so
+//!   command for `.mo`, and SysML handles `.sysml`/`.kerml`.
+//!   Each observer is responsible for its own extension gate so
 //!   an `OpenFile { path: "/foo.mo" }` doesn't end up parsed as USD.
 //! - **New**: observes [`NewDocument`]
 //!   gated on `kind == "usd"`. Lets File→New surface "USD Stage" once
@@ -58,7 +58,10 @@ use lunco_usd_core::edit_session::{
 };
 use lunco_usd_data::usd_data::UsdDataExt;
 use lunco_usd_document::document::{LayerId, PreparedUsdSource, UsdOp};
-use lunco_workspace::{StorageHandle, TwinClosed, WorkspaceResource};
+use lunco_workspace::{
+    DocumentRuntimeOwner, FileDocumentAdmission, ResolvedFileDocument, StorageHandle,
+    WorkspaceResource,
+};
 use openusd::schemas::lux::tokens as ltok;
 
 /// Plugin that registers the USD document kind, the typed-command
@@ -117,30 +120,36 @@ fn sync_workspace_on_doc_opened(
         return;
     };
     let doc = trigger.event().doc;
-    let Some(host) = registry.host(doc) else {
-        return;
-    };
-    if workspace.document(doc).is_some() {
-        workspace.active_document = Some(doc);
+    if !registry.contains(doc) {
         return;
     }
-    let origin = host.document().origin().clone();
-    let runtime_context = origin
-        .is_untitled()
-        .then_some(workspace.active_twin)
-        .flatten();
-    workspace.add_document(lunco_workspace::DocumentEntry {
-        id: doc,
-        kind: DocumentKindId::new(USD_DOCUMENT_KIND),
-        title: origin.display_name(),
-        origin,
-        runtime_context: runtime_context.map_or(
-            lunco_workspace::DocumentRuntimeOwner::Application,
-            lunco_workspace::DocumentRuntimeOwner::LocalTwin,
-        ),
-        dirty: host.document().is_dirty(),
-    });
+    if workspace.document(doc).is_none() {
+        bevy::log::warn!("[usd] document {doc} opened without an admitted runtime owner");
+        return;
+    }
     workspace.active_document = Some(doc);
+}
+
+fn register_usd_document_runtime(
+    world: &mut World,
+    doc: DocumentId,
+    runtime: DocumentRuntimeOwner,
+) {
+    let Some(host) = world.resource::<DocumentRegistry<UsdDocument>>().host(doc) else {
+        return;
+    };
+    let origin = host.document().origin().clone();
+    let dirty = host.document().is_dirty();
+    if let Some(mut workspace) = world.get_resource_mut::<WorkspaceResource>() {
+        workspace.add_document(lunco_workspace::DocumentEntry {
+            id: doc,
+            kind: DocumentKindId::new(USD_DOCUMENT_KIND),
+            title: origin.display_name(),
+            origin,
+            runtime_context: runtime,
+            dirty,
+        });
+    }
 }
 
 /// Reflect USD edits into the shared Workspace dirty mirror.
@@ -264,7 +273,6 @@ impl Plugin for UsdCommandsPlugin {
         // into calls on this pipeline.
         app.init_resource::<PendingUsdLoads>();
         app.init_resource::<PendingUsdDiscards>();
-        app.add_observer(cancel_pending_usd_loads_on_twin_closed);
         app.add_systems(
             Update,
             (drain_pending_usd_file_loads, drain_pending_usd_discards),
@@ -339,11 +347,8 @@ register_commands!(
 /// only identity and lifecycle state are committed on the owner thread.
 struct PendingUsdLoad {
     path: PathBuf,
-    /// Root of the Twin that emitted a browser request, if any. A closed Twin
-    /// cancels its pending reads before they can create a stale document or
-    /// focus a preview for a replaced workspace.
-    twin_root: Option<PathBuf>,
-    task: Task<Result<PreparedUsdSource, String>>,
+    admission: FileDocumentAdmission,
+    task: Task<Result<(ResolvedFileDocument, PreparedUsdSource), String>>,
 }
 
 #[derive(Resource, Default)]
@@ -370,8 +375,20 @@ struct PendingUsdDiscards {
 /// the same async-load pipeline the Twin browser uses. Modelica's
 /// `on_open_file` ignores non-`.mo` paths, so the observers coexist.
 #[on_command(OpenFile)]
-fn on_open_file_for_usd(trigger: On<OpenFile>, mut commands: Commands) {
+fn on_open_file_for_usd(
+    trigger: On<OpenFile>,
+    mut commands: Commands,
+    workspace: Option<Res<WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+) {
     let path = trigger.event().path.clone();
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    let admission = FileDocumentAdmission::capture(
+        workspace.as_deref().map(|workspace| &workspace.0),
+        replication.as_ref(),
+    );
     commands.queue(move |world: &mut World| {
         let path = match lunco_storage::file_uri_to_path(&path) {
             Ok(Some(path)) => path,
@@ -385,83 +402,40 @@ fn on_open_file_for_usd(trigger: On<OpenFile>, mut commands: Commands) {
         if !is_usd_path(&path.to_string_lossy()) {
             return;
         }
-        let twin_root = world
-            .get_resource::<WorkspaceResource>()
-            .and_then(|workspace| {
-                workspace
-                    .twins()
-                    .map(|(_, twin)| twin.root.clone())
-                    .filter(|root| path.strip_prefix(root).is_ok())
-                    .max_by_key(|root| root.components().count())
-            });
-        spawn_usd_load(world, path, twin_root);
+        spawn_usd_load(world, path, admission);
     });
 }
 
 /// Spawn the async file-read for `abs_path` and queue the result in
 /// [`PendingUsdLoads`]. Callers should have already established that the
-/// path looks like a USD file. Shared by the [`OpenFile`] observer and
-/// the UI's `browser_dispatch::drain_browser_actions_for_usd`.
-pub fn spawn_usd_load(world: &mut World, abs_path: PathBuf, twin_root: Option<PathBuf>) {
-    if let Some(existing) = world
-        .resource_mut::<PendingUsdLoads>()
+/// path looks like a USD file and capture its admission before dispatch.
+/// Browser actions reach this pipeline through the [`OpenFile`] observer.
+pub fn spawn_usd_load(world: &mut World, abs_path: PathBuf, admission: FileDocumentAdmission) {
+    if world
+        .resource::<PendingUsdLoads>()
         .tasks
-        .iter_mut()
-        .find(|load| load.path == abs_path)
+        .iter()
+        .any(|load| load.path == abs_path && load.admission == admission)
     {
-        existing.twin_root = twin_root;
         return;
     }
     let pool = AsyncComputeTaskPool::get();
     let path_for_task = abs_path.clone();
+    let task_admission = admission.clone();
     let task = pool.spawn(async move {
-        // Read through the storage abstraction — `std::fs` is clippy-banned
-        // in domain crates and absent on wasm; `lunco-storage` owns it.
-        // `FileStorage`'s read future wraps synchronous fs, so awaiting on
-        // the task thread parks no reactor.
-        let storage = lunco_storage::FileStorage::new();
-        let handle = lunco_storage::StorageHandle::File(path_for_task.clone());
-        match storage.read(&handle).await {
-            Ok(bytes) => {
-                let source = String::from_utf8(bytes)
-                    .map_err(|e| format!("invalid UTF-8 in {}: {e}", path_for_task.display()))?;
-                Ok(PreparedUsdSource::parse(source))
-            }
-            Err(e) => Err(format!("failed to read {}: {e:?}", path_for_task.display())),
-        }
+        let (resolved, bytes) = task_admission.read(&path_for_task).await?;
+        let source = String::from_utf8(bytes)
+            .map_err(|error| format!("invalid UTF-8 in {}: {error}", resolved.path.display()))?;
+        Ok((resolved, PreparedUsdSource::parse(source)))
     });
     world
         .resource_mut::<PendingUsdLoads>()
         .tasks
         .push(PendingUsdLoad {
             path: abs_path,
-            twin_root,
+            admission,
             task,
         });
-}
-
-/// Cancel browser reads owned by a Twin that has just left the workspace.
-/// Dropping the task is the cancellation boundary; no later completion can
-/// allocate a document or focus the editor for the retired Twin.
-fn cancel_pending_usd_loads_on_twin_closed(
-    trigger: On<TwinClosed>,
-    mut pending: ResMut<PendingUsdLoads>,
-) {
-    let closed_root = &trigger.event().root;
-    pending.tasks.retain(|load| {
-        !pending_load_belongs_to_closed_twin(load.twin_root.as_deref(), &load.path, closed_root)
-    });
-}
-
-/// Whether a pending browser read belongs to the Twin being retired. The
-/// explicit owner is authoritative; the path check also covers requests
-/// emitted by a scene-closure section that already resolved an absolute path.
-fn pending_load_belongs_to_closed_twin(
-    owner_root: Option<&Path>,
-    path: &Path,
-    closed_root: &Path,
-) -> bool {
-    owner_root.is_some_and(|root| root == closed_root) || path.strip_prefix(closed_root).is_ok()
 }
 
 /// Poll outstanding [`PendingUsdLoads`] and finish the open once each
@@ -481,12 +455,43 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
             Some(Err(err)) => {
                 bevy::log::warn!("[UsdOpenFile] {}", err);
             }
-            Some(Ok(prepared)) => {
+            Some(Ok((resolved, prepared))) => {
+                let replication = lunco_core_session::current_replication_owner_in(world);
+                let workspace = world.get_resource::<WorkspaceResource>();
+                if !resolved.runtime.is_current(
+                    workspace.map(|workspace| &workspace.0),
+                    replication.as_ref(),
+                ) {
+                    bevy::log::warn!(
+                        "[UsdOpenFile] {} belongs to a retired runtime owner",
+                        resolved.path.display()
+                    );
+                    continue;
+                }
+                let registry = world.resource::<DocumentRegistry<UsdDocument>>();
+                if let Some(doc) = registry.doc_for_file(&resolved.path)
+                    && registry
+                        .host(doc)
+                        .is_some_and(|host| host.document().is_dirty())
+                    && workspace.is_some_and(|workspace| {
+                        workspace
+                            .document(doc)
+                            .is_none_or(|entry| entry.runtime_context != resolved.runtime)
+                    })
+                {
+                    bevy::log::warn!(
+                        "[UsdOpenFile] refusing to rebind dirty document {doc} to a different runtime owner"
+                    );
+                    continue;
+                }
                 // Idempotent re-open: the registry owns one document per file and
                 // decides whether the freshly parsed source can replace its base.
                 let (doc, outcome) = world
                     .resource_mut::<DocumentRegistry<UsdDocument>>()
-                    .open_prepared_file(load.path.clone(), prepared, true);
+                    .open_prepared_file(resolved.path.clone(), prepared, true);
+                if outcome != OpenOutcome::KeptUnparsable {
+                    register_usd_document_runtime(world, doc, resolved.runtime);
+                }
                 claim_user_document_if_projected(world, doc);
                 // A re-open that couldn't take the disk bytes is not an error,
                 // but it is a surprise the user should see. Keep the warning
@@ -535,8 +540,31 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
 fn on_fork_usd_document(
     trigger: On<ForkDocument>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
+    workspace: Option<ResMut<WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
 ) -> Result<Ack, String> {
     let command = trigger.event();
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    let runtime = match workspace.as_deref() {
+        Some(workspace) => workspace
+            .document(command.source_doc_id)
+            .map(|entry| entry.runtime_context.clone())
+            .ok_or_else(|| {
+                format!(
+                    "source document {} has no admitted runtime owner",
+                    command.source_doc_id
+                )
+            })?,
+        None => DocumentRuntimeOwner::Application,
+    };
+    if !runtime.is_current(
+        workspace.as_deref().map(|workspace| &workspace.0),
+        replication.as_ref(),
+    ) {
+        return Err("the source document's runtime owner is retired".to_owned());
+    }
     let doc = registry
         .fork(command.source_doc_id, command.name.clone())
         .map_err(|reject| reject.to_string())?;
@@ -544,6 +572,20 @@ fn on_fork_usd_document(
         .host(doc)
         .map(|host| host.generation())
         .ok_or_else(|| format!("forked document {doc} was not installed"))?;
+    if let Some(mut workspace) = workspace {
+        let host = registry
+            .host(doc)
+            .ok_or_else(|| format!("forked document {doc} is unavailable"))?;
+        let origin = host.document().origin().clone();
+        workspace.add_document(lunco_workspace::DocumentEntry {
+            id: doc,
+            kind: DocumentKindId::new(USD_DOCUMENT_KIND),
+            title: origin.display_name(),
+            origin,
+            runtime_context: runtime,
+            dirty: host.document().is_dirty(),
+        });
+    }
     Ok(Ack::with_data(
         OpId::new(),
         lunco_api_core::api_value!({
@@ -779,11 +821,34 @@ fn drain_pending_usd_discards(world: &mut World) {
 // ─────────────────────────────────────────────────────────────────────
 
 #[on_command(NewDocument)]
-fn on_new_document(trigger: On<NewDocument>, mut commands: Commands) {
+fn on_new_document(
+    trigger: On<NewDocument>,
+    mut commands: Commands,
+    workspace: Option<Res<WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+) {
     if trigger.event().kind != USD_DOCUMENT_KIND {
         return;
     }
-    commands.queue(|world: &mut World| {
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    let runtime = workspace
+        .as_deref()
+        .map_or(DocumentRuntimeOwner::Application, |workspace| {
+            workspace.new_document_runtime_owner(replication.as_ref())
+        });
+    commands.queue(move |world: &mut World| {
+        let current_replication = lunco_core_session::current_replication_owner_in(world);
+        if !runtime.is_current(
+            world
+                .get_resource::<WorkspaceResource>()
+                .map(|workspace| &workspace.0),
+            current_replication.as_ref(),
+        ) {
+            bevy::log::warn!("[NewUsd] document creation owner retired before allocation");
+            return;
+        }
         let doc_id = {
             let mut registry = world.resource_mut::<DocumentRegistry<UsdDocument>>();
             let next = registry.ids().count() + 1;
@@ -792,6 +857,7 @@ fn on_new_document(trigger: On<NewDocument>, mut commands: Commands) {
                 lunco_doc::PathlessOrigin::untitled(format!("UntitledStage-{}.usda", next)),
             )
         };
+        register_usd_document_runtime(world, doc_id, runtime);
         claim_user_document_if_projected(world, doc_id);
         bevy::log::info!("[NewUsd] created untitled USD stage as {}", doc_id);
     });
@@ -3401,51 +3467,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pending_browser_load_is_cancelled_with_its_closed_twin() {
-        let root = Path::new("/twins/rover");
-        let path = root.join("scenes/rover.usda");
-        assert!(pending_load_belongs_to_closed_twin(Some(root), &path, root));
-        assert!(pending_load_belongs_to_closed_twin(None, &path, root));
-        assert!(!pending_load_belongs_to_closed_twin(
-            Some(Path::new("/twins/other")),
-            &path,
-            Path::new("/twins/new")
-        ));
-    }
-
-    #[test]
-    fn duplicate_usd_loads_share_one_pending_read_and_owner() {
-        let root = PathBuf::from("/twins/rover");
-        let path = root.join("scene.usda");
+    fn pending_usd_request_dedup_retains_distinct_admitted_owners() {
+        let path = std::env::temp_dir().join("pending-source.usda");
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(UsdCommandsPlugin);
         app.update();
-
-        spawn_usd_load(app.world_mut(), path.clone(), None);
-        spawn_usd_load(app.world_mut(), path, Some(root.clone()));
-
+        let application = FileDocumentAdmission::capture(None, None);
+        let connection = app.world_mut().spawn_empty().id();
+        let remote = lunco_workspace::ReplicationOwner::Application { connection };
+        let replicated = FileDocumentAdmission::capture(None, Some(&remote));
+        spawn_usd_load(app.world_mut(), path.clone(), application.clone());
+        spawn_usd_load(app.world_mut(), path.clone(), application.clone());
+        spawn_usd_load(app.world_mut(), path, replicated.clone());
         let pending = app.world().resource::<PendingUsdLoads>();
-        assert_eq!(pending.tasks.len(), 1);
-        assert_eq!(pending.tasks[0].twin_root.as_deref(), Some(root.as_path()));
-    }
-
-    #[test]
-    fn closed_twin_drops_its_pending_browser_read() {
-        let root = PathBuf::from("/twins/rover");
-        let path = root.join("scene.usda");
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(UsdCommandsPlugin);
-        app.update();
-        spawn_usd_load(app.world_mut(), path, Some(root.clone()));
-        assert_eq!(app.world().resource::<PendingUsdLoads>().tasks.len(), 1);
-
-        app.world_mut().trigger(TwinClosed {
-            twin: lunco_workspace::TwinId::new(1),
-            root,
-            was_active: false,
-        });
-        assert!(app.world().resource::<PendingUsdLoads>().tasks.is_empty());
+        assert_eq!(pending.tasks.len(), 2);
+        assert_eq!(pending.tasks[0].admission, application);
+        assert_eq!(pending.tasks[1].admission, replicated);
     }
 }

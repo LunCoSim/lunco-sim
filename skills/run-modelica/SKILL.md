@@ -652,6 +652,14 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 - **Unified opening**: prefer `Open{uri}`. `OpenClass` resolves a Modelica
   class through the source-aware document/library path; `OpenFile` resolves a
   filesystem URI.
+- **File lifetime**: native file opens pin canonical local/replicated root ownership
+  before installation; browser mounted files read OPFS, while picker/private saves
+  have Application lifetime. Closing the admitted owner retires file work even
+  when the source remains in the editor registry. Dirty source cannot transfer
+  owners through a path reopen; save or close it before a clean explicit reopen.
+  Alias reopens resolve source and resident identities on the file worker. Their
+  captured owner/generation must still match at install, so a late read cannot
+  replace a concurrently changed or newly installed different-owner source.
 - **Live ≠ batch**: `SnapshotVariables` reads the *live* stepping model;
   `GetExperimentResult` reads a *stored batch run*. They are different objects.
 - **Blank plot/diagram in `luncosim`** → the Modelica perspective

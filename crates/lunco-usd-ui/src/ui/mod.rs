@@ -29,7 +29,7 @@ use lunco_workbench_core::PanelId;
 use lunco_workbench_core::presentation::ViewportPlaceholder;
 
 use lunco_usd_bevy_twin::UsdDocumentUserOwned;
-use lunco_usd_core::commands::{EmptyViewportReason, USD_DOCUMENT_KIND, UsdDocumentReady};
+use lunco_usd_core::commands::{EmptyViewportReason, UsdDocumentReady};
 use lunco_usd_document::document::UsdDocument;
 use lunco_workspace::WorkspaceResource;
 
@@ -97,7 +97,6 @@ impl Plugin for UsdUiPlugin {
         app.add_observer(register_workspace_stage_on_doc_opened);
         app.add_observer(register_workspace_stage_on_doc_user_owned);
         app.add_observer(drop_workspace_stage_on_doc_closed);
-        app.add_observer(sync_workspace_on_doc_opened);
         app.add_observer(sync_workspace_on_doc_saved);
         app.add_observer(sync_workspace_on_doc_closed);
         app.add_observer(on_usd_document_ready_status);
@@ -266,48 +265,6 @@ fn on_save_as_document_ui(
         host.document_mut().mark_saved();
     }
     commands.trigger(DocumentSaved::local(doc));
-}
-
-/// Keep the generic Workspace document list in step with the USD registry.
-///
-/// USD stages are documents just like Modelica models. The previous viewport
-/// registration made a newly-created stage visible to USD panels but left the
-/// shared File menu without an active document, so Save/Save-As could never
-/// complete the first-use workflow.
-fn sync_workspace_on_doc_opened(
-    trigger: On<DocumentOpened>,
-    registry: Res<DocumentRegistry<UsdDocument>>,
-    workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
-) {
-    let Some(mut workspace) = workspace else {
-        return;
-    };
-    let doc = trigger.event().doc;
-    let Some(host) = registry.host(doc) else {
-        return;
-    };
-    if workspace.document(doc).is_some() {
-        workspace.active_document = Some(doc);
-        return;
-    }
-    let origin = host.document().origin().clone();
-    let runtime_context = if origin.is_untitled() {
-        workspace.active_twin
-    } else {
-        None
-    };
-    workspace.add_document(lunco_workspace::DocumentEntry {
-        id: doc,
-        kind: lunco_workspace::DocumentKindId::new(USD_DOCUMENT_KIND),
-        title: origin.display_name(),
-        origin,
-        runtime_context: runtime_context.map_or(
-            lunco_workspace::DocumentRuntimeOwner::Application,
-            lunco_workspace::DocumentRuntimeOwner::LocalTwin,
-        ),
-        dirty: host.document().is_dirty(),
-    });
-    workspace.active_document = Some(doc);
 }
 
 /// Reflect USD Save and Save-As origin changes into the generic Workspace.
@@ -502,7 +459,7 @@ mod tests {
             .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
             .track(
                 doc_id,
-                "/tmp/twin".into(),
+                lunco_workspace::TwinId::new(1),
                 "twin".into(),
                 "twin-scene.usda".into(),
             );
