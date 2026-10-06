@@ -469,6 +469,35 @@ instance-qualified names for diagnostics, but those names and their runtime
 root suffix are excluded from the structural cache key. Parameter bindings,
 solver instances, live state, and telemetry remain per entity.
 
+`lunco-modelica-runtime::ModelicaCacheLimits` owns shared in-memory entry
+capacities, captured before worker admission. Both capacities must be positive;
+defaults retain at most 64 compiled artifacts and 64 prepared solve models per
+worker. Insert the resource before `ModelicaExecutionPlugin` to change its
+immutable snapshot. `worker/cache.rs` owns one bounded FIFO mechanism for both
+caches: distinct insertions evict the oldest admitted key, while hits and
+same-key replacement preserve order. Source/library/solver/parameter identity
+is unchanged. Prepared solve results are shared through `Arc`, including native
+preparation followers; lookup and retention do not deep-copy the model.
+
+The native worker validates capacities before starting its compiler actor or
+preparation pool. Browser transport posts `ConfigureCacheLimits` before any
+work to every initial or respawned worker; the worker has no runtime state until
+that configuration is admitted. Missing, invalid, or repeated worker-side
+configuration is a terminal worker-wide failure. Panic reset preserves admitted
+capacities. Changing a running host's snapshot rejects instead of changing cache
+lifetimes underneath active work.
+Worker replacement or configuration-post failure also terminates the pipeline
+and reports a worker-wide error; queued work cannot remain behind a dead slot.
+
+Eviction releases only the shared cache reference. Active compiled participants,
+steppers and in-flight preparations retain their own valid references; Twin
+close continues to retire their exact mutable owners. These entry caps bound
+the number of retained immutable graphs, not bytes per graph, total live model
+memory, or persistent disk-cache retention. Generic `immutable_reuse_cache_`
+tests cover FIFO bounds, replacement, exact solve keys, live-reference survival
+and invalid admission. Browser configuration also requires a worker-bundle
+compile check.
+
 Native prepared-solve disk reads use the cache-owned `PreparedSolveDiskLimits`
 resource, captured before the worker starts. Insert it before
 `ModelicaExecutionPlugin` to configure compressed bytes, decoded bytes, and the

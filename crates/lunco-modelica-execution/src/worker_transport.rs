@@ -67,6 +67,8 @@ use lunco_modelica_runtime::{ModelicaChannels, ModelicaCommand, ModelicaResult};
 /// (multiplexing on a magic-byte prefix) is uglier and harder to extend.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub enum WireMessage {
+    /// Required immutable cache configuration, posted first to every worker.
+    ConfigureCacheLimits(lunco_modelica_runtime::ModelicaCacheLimits),
     /// Forward a Bevy-side `ModelicaCommand` to the worker for processing.
     /// 99 %+ of traffic is this variant.
     Command(ModelicaCommand),
@@ -236,6 +238,8 @@ pub enum WireResult {
 /// `experiments.max_parallel` setting (auto = 1 on wasm); each extra worker
 /// is a full wasm instance with its own source library copy, so it's clamped hard.
 struct WorkerPool {
+    /// Snapshot supplied by the execution host before any worker is spawned.
+    cache_limits: Option<lunco_modelica_runtime::ModelicaCacheLimits>,
     /// The generic Web Worker pool (spawn / handshake / post / respawn). `None`
     /// until [`install_worker`] builds it; `Some` once the pool is up.
     inner: Option<WorkerTransport>,
@@ -315,6 +319,7 @@ fn is_reseed_pending(idx: usize) -> bool {
 fn pool() -> &'static Mutex<WorkerPool> {
     POOL.get_or_init(|| {
         Mutex::new(WorkerPool {
+            cache_limits: None,
             inner: None,
             running: Vec::new(),
             run_to_worker: HashMap::new(),
@@ -377,12 +382,50 @@ pub fn wire_protocol_mismatch() -> bool {
 
 /// Serialize and post a `WireMessage` to worker `idx`.
 fn post_msg_to(idx: usize, msg: &WireMessage, label: &str) -> Result<(), String> {
-    let bytes = bincode::serde::encode_to_vec(msg, bincode::config::standard()).map_err(|e| {
+    let bytes = encode_message(msg, label)?;
+    post_bytes_to(idx, &bytes, label)
+}
+
+fn encode_message(msg: &WireMessage, label: &str) -> Result<Vec<u8>, String> {
+    bincode::serde::encode_to_vec(msg, bincode::config::standard()).map_err(|e| {
         let error = format!("{label}: serialize failed: {e}");
         bevy::log::error!("[worker_transport] {error}");
         error
-    })?;
-    post_bytes_to(idx, &bytes, label)
+    })
+}
+
+fn cache_configuration_bytes(
+    limits: Option<lunco_modelica_runtime::ModelicaCacheLimits>,
+) -> Result<Vec<u8>, String> {
+    let limits =
+        limits.ok_or_else(|| "Modelica worker cache limits have not been configured".to_owned())?;
+    encode_message(
+        &WireMessage::ConfigureCacheLimits(limits),
+        "worker cache configuration",
+    )
+}
+
+fn fail_worker_startup(error: String) {
+    bevy::log::error!("[worker_transport] {error}");
+    fail_worker_pipeline(error.clone());
+    if let Some(sender) = RESULT_TX.get() {
+        let _ = sender.send(ModelicaResult::worker_failure(error));
+    }
+}
+
+/// Admit one immutable host snapshot before initial spawn or any respawn.
+pub fn configure_cache_limits(
+    limits: lunco_modelica_runtime::ModelicaCacheLimits,
+) -> Result<(), String> {
+    limits.validate()?;
+    let mut pool = pool().lock_or_recover();
+    if let Some(admitted) = pool.cache_limits {
+        if admitted != limits {
+            return Err("Modelica worker cache limits are immutable after host admission".into());
+        }
+    }
+    pool.cache_limits = Some(limits);
+    Ok(())
 }
 
 /// Process-wide sender for `ModelicaResult` values arriving from the worker.
@@ -572,6 +615,8 @@ pub fn install_worker(worker_url: &str) -> Result<(), JsValue> {
             // Already installed — keep the existing pool (idempotent).
             return Ok(());
         }
+        let config =
+            cache_configuration_bytes(p.cache_limits).map_err(|error| JsValue::from_str(&error))?;
         // Build the generic pool with the Modelica handlers + boot-handshake wire
         // id, then spawn `want` workers (worker 0 fatal, later failures cap it).
         let mut inner = WorkerTransport::new(
@@ -582,6 +627,16 @@ pub fn install_worker(worker_url: &str) -> Result<(), JsValue> {
         );
         inner.ensure(want)?;
         let n = inner.len();
+        for idx in 0..n {
+            if let Err(error) = inner.post(idx, &config) {
+                for spawned in 0..n {
+                    if let Some(worker) = inner.worker(spawned) {
+                        worker.terminate();
+                    }
+                }
+                return Err(error);
+            }
+        }
         p.running = vec![None; n];
         p.library = vec![LibraryState::Absent; n];
         p.inner = Some(inner);
@@ -644,11 +699,17 @@ fn route_wire_result(idx: usize, data: JsValue) {
         .map(|(m, _)| m)
     {
         Ok(WireResult::Result(result)) => {
+            if let Some(error) = &result.worker_failure {
+                fail_worker_pipeline(error.clone());
+            }
             if let Some(tx) = RESULT_TX.get() {
                 let _ = tx.send(result);
             }
         }
         Ok(WireResult::LibraryReady { docs }) => {
+            if PIPELINE_FAILURE.with(|failure| failure.borrow().is_some()) {
+                return;
+            }
             // The worker decoded the compressed bundle off-thread and now has source library in
             // its own session. Open the compile gate and drain everything queued
             // behind it. (Idempotent — a respawned worker re-seeded posts this again.)
@@ -746,7 +807,7 @@ pub fn ensure_pool_spawned() {
         return;
     };
     if let Err(e) = install_worker(url) {
-        bevy::log::error!("[worker_transport] lazy worker pool spawn failed: {e:?}");
+        fail_worker_startup(format!("Modelica worker pool startup failed: {e:?}"));
         return;
     }
     // Seed the freshly-spawned pool when the generated source library envelope is already
@@ -841,18 +902,39 @@ fn handle_worker_error(idx: usize) {
     respawn_worker(idx);
 }
 
-/// Replace the (dead) worker at `idx` with a fresh one and re-install source library into
-/// it. Best-effort: logs and leaves the slot empty if the URL/source library aren't
-/// cached yet (can only happen before first source library install, when no run exists).
+/// Replace the dead worker and admit the same immutable configuration before re-seeding.
+/// A failed replacement terminates the pipeline so queued work cannot wait on a dead slot.
 fn respawn_worker(idx: usize) {
     {
         let mut p = pool().lock_or_recover();
+        let config = match cache_configuration_bytes(p.cache_limits) {
+            Ok(config) => config,
+            Err(error) => {
+                drop(p);
+                fail_worker_startup(error);
+                return;
+            }
+        };
         let Some(inner) = p.inner.as_mut() else {
-            bevy::log::error!("[worker_transport] cannot respawn worker {idx}: pool not installed");
+            drop(p);
+            fail_worker_startup(format!(
+                "cannot respawn Modelica worker {idx}: pool not installed"
+            ));
             return;
         };
         if let Err(e) = inner.respawn(idx) {
-            bevy::log::error!("[worker_transport] respawn of worker {idx} failed: {e:?}");
+            drop(p);
+            fail_worker_startup(format!("Modelica worker {idx} respawn failed: {e:?}"));
+            return;
+        }
+        if let Err(error) = inner.post(idx, &config) {
+            if let Some(worker) = inner.worker(idx) {
+                worker.terminate();
+            }
+            drop(p);
+            fail_worker_startup(format!(
+                "worker {idx} cache configuration could not be posted: {error:?}"
+            ));
             return;
         }
         if let Some(r) = p.running.get_mut(idx) {
@@ -898,7 +980,12 @@ pub fn pump_worker_respawns() {
         }
     };
     if let Some(idx) = ready {
-        let _ = post_bytes_to(idx, &bytes, "respawn source library reinstall (deferred)");
+        if let Err(error) =
+            post_bytes_to(idx, &bytes, "respawn source library reinstall (deferred)")
+        {
+            fail_worker_startup(error);
+            return;
+        }
         // The re-seed envelope is `provide_to_main = false` (main already holds
         // the decoded bundle), and its `LibraryReady` flips this worker back to
         // `Ready`.

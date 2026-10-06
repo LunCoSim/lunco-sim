@@ -39,6 +39,10 @@ impl Plugin for ModelicaExecutionPlugin {
     fn build(&self, app: &mut App) {
         let (tx_cmd, rx_cmd) = unbounded();
         let (tx_res, rx_res) = unbounded();
+        app.init_resource::<lunco_modelica_runtime::ModelicaCacheLimits>();
+        let cache_limits = *app
+            .world()
+            .resource::<lunco_modelica_runtime::ModelicaCacheLimits>();
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -57,6 +61,7 @@ impl Plugin for ModelicaExecutionPlugin {
                                 rx_cmd,
                                 tx_res,
                                 disk_limits,
+                                cache_limits,
                             )
                         }))
                     {
@@ -88,6 +93,12 @@ impl Plugin for ModelicaExecutionPlugin {
 
         #[cfg(target_arch = "wasm32")]
         {
+            if let Err(error) = worker_transport::configure_cache_limits(cache_limits) {
+                worker_transport::fail_worker_pipeline(error.clone());
+                let _ = tx_res.send(lunco_modelica_runtime::ModelicaResult::worker_failure(
+                    error,
+                ));
+            }
             if let Err(error) = lunco_modelica_runner::install_worker_run_transport(
                 lunco_modelica_runner::WorkerRunTransport {
                     register_run_sender: worker_transport::register_run_sender,

@@ -21,9 +21,10 @@ use lunco_modelica_ast::ast_extract::{InputDefaultIssue, strip_input_defaults_wi
 use lunco_modelica_compiler::{ModelicaCompiler, PreparedSourceRoot};
 use lunco_modelica_runtime::{
     CompileRequested, InFlightModelicaStep, LoadSourceRootPayload, MAX_MACRO_STEP_DT,
-    ModelicaChannels, ModelicaCommand, ModelicaLiveSolverSnapshot, ModelicaModel, ModelicaNotice,
-    ModelicaResult, ModelicaRuntimeProfile, ModelicaSolverCapabilities, ModelicaSolverParameters,
-    NoticeLevel, SimSampleBatch, SimSampleStream,
+    ModelicaCacheLimits, ModelicaChannels, ModelicaCommand, ModelicaLiveSolverSnapshot,
+    ModelicaModel, ModelicaNotice, ModelicaResult, ModelicaRuntimeProfile,
+    ModelicaSolverCapabilities, ModelicaSolverParameters, NoticeLevel, SimSampleBatch,
+    SimSampleStream,
 };
 use lunco_modelica_solver::simulation_session::LiveStepper;
 use lunco_signal::{SimSnapshot, SimStream};
@@ -34,7 +35,7 @@ const PREPARED_SOLVE_CACHE_VERSION: u32 = 5;
 mod cache;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cache::PreparedSolveDiskLimits;
-use cache::{PreparedSolveCache, PreparedSolveKey};
+use cache::{CompiledArtifactCache, PreparedSolveCache, PreparedSolveKey};
 mod bridge;
 mod compile;
 pub use bridge::{
@@ -251,7 +252,7 @@ fn build_stepper(
     prepared: &mut PreparedSolveCache,
 ) -> Result<(LiveStepper, ModelicaLiveSolverSnapshot), rumoca_sim::SimulationDiagnosticError> {
     let plan = live_build_plan(profile, parameter_overrides, source_key, library_revision)?;
-    if !prepared.models.contains_key(&plan.key) {
+    if !prepared.contains_key(&plan.key) {
         #[cfg(not(target_arch = "wasm32"))]
         return Err(rumoca_sim::SimulationDiagnosticError::Solver(
             "native solver model reached stepper construction before asynchronous preparation committed"
@@ -270,7 +271,7 @@ fn build_stepper(
                 plan.spec.id,
                 lower_started.elapsed(),
             );
-            prepared.models.insert(plan.key.clone(), model);
+            prepared.insert(plan.key.clone(), std::sync::Arc::new(model));
         }
     } else {
         bevy::log::info!(
@@ -279,7 +280,6 @@ fn build_stepper(
         );
     }
     let model = prepared
-        .models
         .get(&plan.key)
         .expect("prepared solver model inserted or found above");
     let stepper = lunco_modelica_solver::simulation_session::live_from_solve_model(
@@ -541,7 +541,7 @@ impl SolvePreparationPool {
                 .send(WorkerPreparationResult::Solve(SolvePreparationResult {
                     id,
                     key,
-                    result: std::sync::Arc::new(result),
+                    result: std::sync::Arc::new(result.map(std::sync::Arc::new)),
                 }))
                 .is_err()
             {
@@ -670,8 +670,9 @@ impl StepRequest {
 struct SolvePreparationResult {
     id: u64,
     key: PreparedSolveKey,
-    result:
-        std::sync::Arc<Result<rumoca_ir_solve::SolveModel, rumoca_sim::SimulationDiagnosticError>>,
+    result: std::sync::Arc<
+        Result<std::sync::Arc<rumoca_ir_solve::SolveModel>, rumoca_sim::SimulationDiagnosticError>,
+    >,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -964,9 +965,7 @@ fn complete_preparation(
     }
     match preparation.result.as_ref() {
         Ok(model) => {
-            prepared_solve_cache
-                .models
-                .insert(work.plan.key.clone(), model.clone());
+            prepared_solve_cache.insert(work.plan.key.clone(), model.clone());
             let entity = work.entity;
             let session_id = work.session_id;
             let model_name = work.model_name.clone();
@@ -1353,7 +1352,7 @@ fn commit_ready_compiler_completions(
                     plan,
                     intent: pending.intent,
                 };
-                if prepared_solve_cache.models.contains_key(&work.plan.key) {
+                if prepared_solve_cache.contains_key(&work.plan.key) {
                     finish_compile_work(
                         work,
                         steppers,
@@ -1535,7 +1534,7 @@ fn shared_compile_hash(
 /// cheaply (rumoca stores the large graph behind an `Arc`); parameter
 /// overrides and solver selection remain per-instance operations.
 fn compile_shared(
-    artifacts: &mut HashMap<u64, Box<rumoca_compile::compile::DaeCompilationResult>>,
+    artifacts: &mut CompiledArtifactCache,
     compiler: &mut ModelicaCompiler,
     model_name: &str,
     unit: &CompileUnit,
@@ -1592,7 +1591,7 @@ trait CompileBackend {
 #[cfg(target_arch = "wasm32")]
 struct InlineCompileBackend<'a> {
     compiler: &'a mut Option<ModelicaCompiler>,
-    artifacts: &'a mut HashMap<u64, Box<rumoca_compile::compile::DaeCompilationResult>>,
+    artifacts: &'a mut CompiledArtifactCache,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1880,7 +1879,7 @@ fn cached_solve_is_prepared(
         cached.unit_key,
         Some(cached.library_revision),
     )
-    .map(|plan| prepared_solve_cache.models.contains_key(&plan.key))
+    .map(|plan| prepared_solve_cache.contains_key(&plan.key))
     // A selection error is reported when the queued Step reaches its owner
     // boundary; it does not need async preparation capacity.
     .unwrap_or(true)
@@ -1944,7 +1943,7 @@ fn submit_cached_solve_preparation(
             return;
         }
     };
-    if prepared_solve_cache.models.contains_key(&work.plan.key) {
+    if prepared_solve_cache.contains_key(&work.plan.key) {
         finish_compile_work(
             work,
             steppers,
@@ -2689,7 +2688,15 @@ pub fn modelica_worker(
     rx: Receiver<ModelicaCommand>,
     tx: Sender<ModelicaResult>,
     disk_limits: PreparedSolveDiskLimits,
+    cache_limits: ModelicaCacheLimits,
 ) {
+    let (compiled_capacity, prepared_capacity) = match cache_limits.validate() {
+        Ok(capacities) => capacities,
+        Err(error) => {
+            let _ = tx.send(ModelicaResult::worker_failure(error));
+            return;
+        }
+    };
     let mut steppers: HashMap<Entity, (u64, String, LiveStepper)> = HashMap::default();
     let mut current_sessions: HashMap<Entity, u64> = HashMap::default();
     // Which models declared the realtime promise, from `Compile`. Half of the
@@ -2710,7 +2717,7 @@ pub fn modelica_worker(
     // is keyed by the structural source revision, solver, and authored
     // overrides so two USD instances do not lower identical networks twice
     // during scene startup.
-    let mut prepared_solve_cache = PreparedSolveCache::new();
+    let mut prepared_solve_cache = PreparedSolveCache::new(prepared_capacity);
     // Immutable DAE lowering is dispatched to this bounded pool; the native
     // Rumoca session itself is owned by a separate single-thread actor.
     let mut solve_preparation_pool = match SolvePreparationPool::new(disk_limits) {
@@ -2720,13 +2727,14 @@ pub fn modelica_worker(
             return;
         }
     };
-    let mut compiler = match CompilerActor::new(solve_preparation_pool.tx.clone()) {
-        Ok(compiler) => compiler,
-        Err(error) => {
-            let _ = tx.send(ModelicaResult::worker_failure(error));
-            return;
-        }
-    };
+    let mut compiler =
+        match CompilerActor::new(solve_preparation_pool.tx.clone(), compiled_capacity) {
+            Ok(compiler) => compiler,
+            Err(error) => {
+                let _ = tx.send(ModelicaResult::worker_failure(error));
+                return;
+            }
+        };
     // Lock-free publish stream per entity (Phase A of the multi-sim
     // refactor — see `sim_stream.rs`). The UI side holds a clone of
     // the same `Arc<ArcSwap<SimSnapshot>>`; every successful Step
@@ -3650,20 +3658,12 @@ fn is_squashable(last: &ModelicaCommand, next: &ModelicaCommand) -> bool {
 }
 
 // =============================================================================
-// WebAssembly Web Worker state (wasm32 only - no native thread support in browser)
+// WebAssembly Web Worker state
 // =============================================================================
 //
-// Why this exists:
-//   - std::thread::spawn panics on wasm32-unknown-unknown (no OS thread support)
-//   - Web Workers are not available from Rust/wasm-bindgen without additional
-//     tooling (wasm-bindgen-rayon, etc.)
-//   - Instead, we process one simulation command per frame in a Bevy system.
-//     This keeps the UI responsive while still running full Modelica simulation.
-//
-// Trade-offs:
-//   - One command per frame limits throughput (fine for interactive use)
-//   - No back-pressure: commands pile up in the channel if the worker falls behind
-//   - All state lives in a Resource, so it resets on page reload (by design)
+// The browser transport dispatches ordered messages inside a dedicated Web
+// Worker. Each worker admits its host's immutable cache configuration before
+// constructing this state; the main-thread Bevy host does not run its solver.
 
 /// Simulation state owned by the wasm Web Worker.
 /// Mirrors the local variables in `modelica_worker` on desktop.
@@ -3672,13 +3672,12 @@ fn is_squashable(last: &ModelicaCommand, next: &ModelicaCommand) -> bool {
 /// one of these directly. The fields stay private — only the type itself
 /// crosses crate boundaries.
 #[cfg(target_arch = "wasm32")]
-#[derive(Default)]
 pub struct ModelicaWorkerState {
     steppers: HashMap<Entity, (u64, String, LiveStepper)>,
     sim_streams: HashMap<Entity, SimStream>,
     current_sessions: HashMap<Entity, u64>,
     cached_models: HashMap<Entity, CachedModel>,
-    compiled_artifacts: HashMap<u64, Box<rumoca_compile::compile::DaeCompilationResult>>,
+    compiled_artifacts: CompiledArtifactCache,
     prepared_solve_cache: PreparedSolveCache,
     compiler: Option<ModelicaCompiler>,
     /// Models that declared the realtime promise — the same per-entity fact the
@@ -3694,6 +3693,36 @@ pub struct ModelicaWorkerState {
 
 #[cfg(target_arch = "wasm32")]
 impl ModelicaWorkerState {
+    pub fn new(limits: ModelicaCacheLimits) -> Result<Self, String> {
+        let (compiled_capacity, prepared_capacity) = limits.validate()?;
+        Ok(Self {
+            steppers: HashMap::new(),
+            sim_streams: HashMap::new(),
+            current_sessions: HashMap::new(),
+            cached_models: HashMap::new(),
+            compiled_artifacts: CompiledArtifactCache::new(compiled_capacity),
+            prepared_solve_cache: PreparedSolveCache::new(prepared_capacity),
+            compiler: None,
+            realtime_models: Default::default(),
+            library_gen: 0,
+            latest_source_root_operations: HashMap::new(),
+        })
+    }
+
+    /// Drop inconsistent runtime state after a panic, retaining admitted limits.
+    pub fn reset(&mut self) {
+        self.steppers.clear();
+        self.sim_streams.clear();
+        self.current_sessions.clear();
+        self.cached_models.clear();
+        self.compiled_artifacts.clear();
+        self.prepared_solve_cache.clear();
+        self.compiler = None;
+        self.realtime_models.clear();
+        self.library_gen = 0;
+        self.latest_source_root_operations.clear();
+    }
+
     /// Lazily-built shared compiler. Same instance the regular
     /// Compile path uses, so RunFast hits the same warm caches.
     pub fn compiler(&mut self) -> &mut ModelicaCompiler {

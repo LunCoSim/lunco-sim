@@ -13,7 +13,64 @@ use lunco_assets_core::modelica_dir;
 use lunco_storage::{FileStorage, StorageError, StorageHandle, write_file_sync};
 #[cfg(not(target_arch = "wasm32"))]
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::hash::Hash;
+use std::num::NonZeroUsize;
+use std::sync::Arc;
+
+/// Count-bounded FIFO reuse. Only distinct insertions change admission order;
+/// replacing or reading a key does not reorder it. Values are owned once and
+/// borrowed on lookup, so eviction releases only the cache's reference.
+pub(super) struct BoundedReuseCache<K, V> {
+    entries: HashMap<K, V>,
+    admission_order: VecDeque<K>,
+    capacity: NonZeroUsize,
+}
+
+impl<K: Clone + Eq + Hash, V> BoundedReuseCache<K, V> {
+    pub(super) fn new(capacity: NonZeroUsize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            admission_order: VecDeque::new(),
+            capacity,
+        }
+    }
+
+    pub(super) fn contains_key(&self, key: &K) -> bool {
+        self.entries.contains_key(key)
+    }
+
+    pub(super) fn get(&self, key: &K) -> Option<&V> {
+        self.entries.get(key)
+    }
+
+    pub(super) fn insert(&mut self, key: K, value: V) {
+        if !self.entries.contains_key(&key) {
+            if self.entries.len() == self.capacity.get() {
+                // Each distinct insertion has exactly one queue entry.
+                let oldest = self
+                    .admission_order
+                    .pop_front()
+                    .expect("nonempty bounded cache has an admitted oldest key");
+                self.entries.remove(&oldest);
+            }
+            self.admission_order.push_back(key.clone());
+        }
+        self.entries.insert(key, value);
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.entries.clear();
+        self.admission_order.clear();
+    }
+}
+
+pub(super) type CompiledArtifactCache =
+    BoundedReuseCache<u64, Box<rumoca_compile::compile::DaeCompilationResult>>;
 
 /// Native optional solve-cache read budgets, captured when the worker starts.
 /// Insert this resource before `ModelicaExecutionPlugin` to change the budgets.
@@ -117,17 +174,31 @@ struct PreparedSolveDiskRecord {
     model: rumoca_ir_solve::SolveModel,
 }
 
-#[derive(Default)]
 pub(super) struct PreparedSolveCache {
-    pub(super) models: HashMap<PreparedSolveKey, rumoca_ir_solve::SolveModel>,
+    models: BoundedReuseCache<PreparedSolveKey, Arc<rumoca_ir_solve::SolveModel>>,
 }
 
 impl PreparedSolveCache {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn new() -> Self {
+    pub(super) fn new(capacity: NonZeroUsize) -> Self {
         Self {
-            models: HashMap::default(),
+            models: BoundedReuseCache::new(capacity),
         }
+    }
+
+    pub(super) fn contains_key(&self, key: &PreparedSolveKey) -> bool {
+        self.models.contains_key(key)
+    }
+
+    pub(super) fn get(&self, key: &PreparedSolveKey) -> Option<&Arc<rumoca_ir_solve::SolveModel>> {
+        self.models.get(key)
+    }
+
+    pub(super) fn insert(
+        &mut self,
+        key: PreparedSolveKey,
+        model: Arc<rumoca_ir_solve::SolveModel>,
+    ) {
+        self.models.insert(key, model);
     }
 
     pub(super) fn key(
@@ -491,7 +562,12 @@ mod tests {
         };
         let (_command_tx, command_rx) = crossbeam_channel::unbounded();
         let (result_tx, result_rx) = crossbeam_channel::unbounded();
-        super::super::modelica_worker(command_rx, result_tx, invalid);
+        super::super::modelica_worker(
+            command_rx,
+            result_tx,
+            invalid,
+            lunco_modelica_runtime::ModelicaCacheLimits::default(),
+        );
         let result = result_rx.try_recv().unwrap();
         assert!(
             result
@@ -520,5 +596,127 @@ mod tests {
         ] {
             assert!(limits.validate().is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod reuse_tests {
+    use super::*;
+    use lunco_modelica_runtime::ModelicaCacheLimits;
+
+    #[test]
+    fn immutable_reuse_cache_bounds_entries_and_preserves_fifo_on_reads_and_replacement() {
+        let mut cache = BoundedReuseCache::new(NonZeroUsize::new(2).unwrap());
+        cache.insert(1, "first");
+        cache.insert(2, "second");
+        assert_eq!(cache.get(&1), Some(&"first"));
+        cache.insert(1, "replacement");
+        assert_eq!(cache.len(), 2);
+        cache.insert(3, "third");
+        assert!(!cache.contains_key(&1));
+        assert_eq!(cache.get(&2), Some(&"second"));
+        assert_eq!(cache.get(&3), Some(&"third"));
+        for key in 4..1000 {
+            cache.insert(key, "new graph");
+        }
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.admission_order.len(), 2);
+        assert!(cache.contains_key(&998));
+        assert!(cache.contains_key(&999));
+        cache.clear();
+        assert_eq!(cache.len(), 0);
+        assert!(cache.admission_order.is_empty());
+        cache.insert(7, "fresh admission");
+        cache.insert(8, "second admission");
+        cache.insert(9, "third admission");
+        assert!(!cache.contains_key(&7));
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn immutable_reuse_cache_eviction_preserves_live_arc_without_copying_graph() {
+        let mut cache = BoundedReuseCache::new(NonZeroUsize::new(1).unwrap());
+        let graph = Arc::new(vec![1_u64, 2, 3]);
+        let weak = Arc::downgrade(&graph);
+        cache.insert(1, graph);
+        let live = Arc::clone(cache.get(&1).unwrap());
+        assert_eq!(Arc::strong_count(&live), 2);
+        cache.insert(2, Arc::new(vec![4]));
+        assert_eq!(Arc::strong_count(&live), 1);
+        assert_eq!(&*live, &[1, 2, 3]);
+        assert!(weak.upgrade().is_some());
+        drop(live);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn immutable_reuse_cache_keeps_exact_solve_key_and_shared_model_identity() {
+        let mut cache = PreparedSolveCache::new(NonZeroUsize::new(2).unwrap());
+        let key = PreparedSolveKey {
+            source_key: 1,
+            library_revision: 2,
+            solver_id: "generic-solver".into(),
+            parameter_overrides: vec![("gain".into(), 3.0_f64.to_bits())],
+        };
+        let graph = Arc::new(rumoca_ir_solve::SolveModel::default());
+        cache.insert(key.clone(), Arc::clone(&graph));
+        assert!(Arc::ptr_eq(cache.get(&key).unwrap(), &graph));
+        let mut parameter_key = key.clone();
+        parameter_key.parameter_overrides[0].1 = 4.0_f64.to_bits();
+        assert!(!cache.contains_key(&parameter_key));
+        cache.insert(parameter_key.clone(), Arc::clone(&graph));
+        let mut library_key = key.clone();
+        library_key.library_revision += 1;
+        cache.insert(library_key.clone(), Arc::clone(&graph));
+        assert!(!cache.contains_key(&key));
+        assert!(cache.contains_key(&parameter_key));
+        assert!(cache.contains_key(&library_key));
+        cache.clear();
+        assert!(!cache.contains_key(&library_key));
+        assert_eq!(Arc::strong_count(&graph), 1);
+    }
+
+    #[test]
+    fn immutable_reuse_cache_limits_reject_zero_capacity() {
+        for limits in [
+            ModelicaCacheLimits {
+                compiled_artifact_entries: 0,
+                ..Default::default()
+            },
+            ModelicaCacheLimits {
+                prepared_solve_entries: 0,
+                ..Default::default()
+            },
+        ] {
+            assert!(limits.validate().is_err());
+        }
+        let (compiled, prepared) = ModelicaCacheLimits::default().validate().unwrap();
+        assert_eq!(compiled.get(), 64);
+        assert_eq!(prepared.get(), 64);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn immutable_reuse_cache_limits_fail_worker_before_thread_admission() {
+        let (_command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (result_tx, result_rx) = crossbeam_channel::unbounded();
+        super::super::modelica_worker(
+            command_rx,
+            result_tx,
+            PreparedSolveDiskLimits::default(),
+            ModelicaCacheLimits {
+                compiled_artifact_entries: 0,
+                ..Default::default()
+            },
+        );
+        let result = result_rx.try_recv().unwrap();
+        assert!(
+            result
+                .worker_failure
+                .as_deref()
+                .unwrap()
+                .contains("capacity must be positive")
+        );
+        assert!(result.error.is_none());
     }
 }

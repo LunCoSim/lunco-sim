@@ -86,12 +86,36 @@ mod wasm {
         ModelicaWorkerState, panic_result_for_command, process_worker_command,
     };
 
+    enum WorkerStateSlot {
+        Unconfigured,
+        Ready(ModelicaWorkerState),
+        Failed(String),
+    }
+
+    impl WorkerStateSlot {
+        fn ready(&mut self) -> Result<&mut ModelicaWorkerState, String> {
+            match self {
+                Self::Ready(state) => Ok(state),
+                Self::Unconfigured => {
+                    Err("Modelica worker cache limits have not been configured".into())
+                }
+                Self::Failed(error) => Err(error.clone()),
+            }
+        }
+
+        fn reset(&mut self) {
+            if let Self::Ready(state) = self {
+                state.reset();
+            }
+        }
+    }
+
     thread_local! {
         /// Per-worker dispatch state. Outlives any single message because rumoca
         /// session caches and the lazy `ModelicaCompiler` are expensive to
         /// rebuild.
-        static STATE: RefCell<ModelicaWorkerState> =
-            RefCell::new(ModelicaWorkerState::default());
+        static STATE: RefCell<WorkerStateSlot> =
+            RefCell::new(WorkerStateSlot::Unconfigured);
 
         /// Holds the `onmessage` closure for the lifetime of the worker; dropping
         /// it would un-register the JS-side handler.
@@ -254,6 +278,7 @@ mod wasm {
         let compile = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             STATE.with(|s| {
                 let mut state = s.try_borrow_mut().expect("worker state borrow");
+                let state = state.ready()?;
                 let result = state
                     .compiler()
                     .compile_str_multi(model_name, source, filename, extras);
@@ -432,14 +457,41 @@ mod wasm {
                 {
                     Ok(c) => c,
                     Err(e) => {
-                        web_sys::console::error_1(
-                            &format!("[lunica_worker] decode message failed: {e}").into(),
-                        );
+                        let error = format!("Modelica worker message decode failed: {e}");
+                        STATE.with(|state| {
+                            *state.borrow_mut() = WorkerStateSlot::Failed(error.clone())
+                        });
+                        post_result(&scope_for_cb, ModelicaResult::worker_failure(error));
                         return;
                     }
                 };
 
+            if !matches!(&envelope, WireMessage::ConfigureCacheLimits(_)) {
+                let admitted = STATE.with(|state| state.borrow_mut().ready().map(|_| ()));
+                if let Err(error) = admitted {
+                    STATE
+                        .with(|state| *state.borrow_mut() = WorkerStateSlot::Failed(error.clone()));
+                    post_result(&scope_for_cb, ModelicaResult::worker_failure(error));
+                    return;
+                }
+            }
+
             match envelope {
+                WireMessage::ConfigureCacheLimits(limits) => {
+                    let result = STATE.with(|slot| {
+                        let mut slot = slot.borrow_mut();
+                        let admitted = if matches!(&*slot, WorkerStateSlot::Unconfigured) {
+                            ModelicaWorkerState::new(limits)
+                        } else {
+                            Err("Modelica worker cache limits must be configured exactly once before work".into())
+                        };
+                        match admitted {
+                            Ok(state) => { *slot = WorkerStateSlot::Ready(state); Ok(()) }
+                            Err(error) => { *slot = WorkerStateSlot::Failed(error.clone()); Err(error) }
+                        }
+                    });
+                    if let Err(error) = result { post_result(&scope_for_cb, ModelicaResult::worker_failure(error)); }
+                }
                 WireMessage::Command(cmd) => {
                     let scope = scope_for_cb.clone();
                     let label = command_label(&cmd);
@@ -472,20 +524,17 @@ mod wasm {
                             // a previous panic doesn't crash this one too.
                             match s.try_borrow_mut() {
                                 Ok(mut state) => {
-                                    process_worker_command(&mut state, cmd, |result| {
-                                        post_result(&scope, result);
-                                    });
+                                    match state.ready() {
+                                        Ok(state) => process_worker_command(state, cmd, |result| post_result(&scope, result)),
+                                        Err(error) => post_result(&scope, ModelicaResult::worker_failure(error)),
+                                    }
                                 }
                                 Err(e) => {
                                     post_log(
                                         &scope,
-                                        format!("STATE borrow refused: {e} — resetting"),
+                                        format!("STATE borrow refused: {e} — dispatch aborted"),
                                     );
-                                    // Replace the cell wholesale so the
-                                    // next command starts fresh. Loses
-                                    // cached compilers but avoids a
-                                    // wedge.
-                                    s.replace(ModelicaWorkerState::default());
+                                    post_result(&scope, ModelicaResult::worker_failure(format!("worker state borrow refused: {e}")));
                                 }
                             }
                         });
@@ -526,7 +575,7 @@ mod wasm {
                             // in an inconsistent state. Better to lose
                             // caches than wedge every subsequent compile.
                             STATE.with(|s| {
-                                s.replace(ModelicaWorkerState::default());
+                                s.borrow_mut().reset();
                             });
                             post_log(&scope, "STATE reset after panic — caches cleared");
                         }

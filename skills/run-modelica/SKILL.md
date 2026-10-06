@@ -169,6 +169,16 @@ solve-cache reads and writes run with DAE lowering in the preparation pool; the
 native owner thread does not perform cache I/O or fall back to synchronous
 lowering. Wasm keeps compilation inside its Modelica Web Worker.
 
+Shared immutable RAM caches use the captured
+`lunco_modelica_runtime::ModelicaCacheLimits` resource: positive compiled and
+prepared entry capacities, each defaulting to 64 per worker. Follow the
+[Modelica cache contract](../../docs/architecture/20-domain-modelica.md) for
+configuration timing, FIFO reuse, and browser startup/respawn admission. Entry
+caps bound graph count rather than heap bytes; eviction preserves live owners.
+Run the generic `immutable_reuse_cache_` tests and compile the browser worker
+bundle when changing configuration transport. Do not infer Twin teardown from
+shared immutable cache contents.
+
 Native optional solve-cache reads capture the cache-owned
 `lunco_modelica_worker::worker::PreparedSolveDiskLimits` resource before
 `ModelicaExecutionPlugin` starts the worker. Defaults are 64 MiB compressed,

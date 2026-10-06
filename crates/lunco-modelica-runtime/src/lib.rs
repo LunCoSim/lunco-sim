@@ -3,7 +3,7 @@
 //! This package owns the ECS state and serialized worker protocol shared by
 //! the compiler host, USD co-simulation, headless status surfaces, and UI
 //! adapters. Rumoca compilation, DAE caching, and worker scheduling remain in
-//! `lunco-modelica-core`; consumers that only exchange runtime state do not
+//! `lunco-modelica-worker`; consumers that only exchange runtime state do not
 //! depend on that implementation closure.
 
 use bevy::prelude::*;
@@ -24,6 +24,37 @@ pub const MAX_MACRO_STEP_DT: f64 = lunco_core_runtime::SECS_PER_TICK / 3.0 * 32.
 
 /// Default communication period for a live Modelica participant.
 pub const DEFAULT_COMMUNICATION_PERIOD_SECS: f64 = 0.1;
+
+/// Immutable shared-cache entry limits captured before each worker starts.
+/// These bound retained graph count, not the heap size of one graph or live
+/// participant state. Insert before `ModelicaExecutionPlugin` to configure them.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelicaCacheLimits {
+    pub compiled_artifact_entries: usize,
+    pub prepared_solve_entries: usize,
+}
+
+impl Default for ModelicaCacheLimits {
+    fn default() -> Self {
+        Self {
+            compiled_artifact_entries: 64,
+            prepared_solve_entries: 64,
+        }
+    }
+}
+
+impl ModelicaCacheLimits {
+    /// Validate the runtime DTO once at admission and return positive capacities.
+    pub fn validate(&self) -> Result<(std::num::NonZeroUsize, std::num::NonZeroUsize), String> {
+        let compiled =
+            std::num::NonZeroUsize::new(self.compiled_artifact_entries).ok_or_else(|| {
+                "Modelica compiled-artifact cache capacity must be positive".to_owned()
+            })?;
+        let prepared = std::num::NonZeroUsize::new(self.prepared_solve_entries)
+            .ok_or_else(|| "Modelica prepared-solve cache capacity must be positive".to_owned())?;
+        Ok((compiled, prepared))
+    }
+}
 
 const COMMUNICATION_EPS: f64 = 1e-9;
 

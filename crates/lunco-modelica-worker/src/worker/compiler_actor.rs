@@ -4,12 +4,14 @@
 //! mailbox with every compile request. The simulation worker sends immutable
 //! source units and commits returned artifacts on its own ordered lane.
 
+use super::cache::CompiledArtifactCache;
 use super::{
     BackendCompileResult, CompileUnit, ModelicaCompiler, PreparedSourceRoot,
     WorkerPreparationResult, compile_shared,
 };
 use crossbeam_channel::{Receiver, Sender};
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::thread::JoinHandle;
 
 pub(super) enum CompilerCompletion {
@@ -69,12 +71,15 @@ pub(super) struct CompilerActor {
 }
 
 impl CompilerActor {
-    pub(super) fn new(results: Sender<WorkerPreparationResult>) -> Result<Self, String> {
+    pub(super) fn new(
+        results: Sender<WorkerPreparationResult>,
+        cache_capacity: NonZeroUsize,
+    ) -> Result<Self, String> {
         let (tx, rx) = crossbeam_channel::unbounded();
         let thread = std::thread::Builder::new()
             .name("modelica-rumoca-owner".to_owned())
             .stack_size(16 * 1024 * 1024)
-            .spawn(move || compiler_actor_loop(rx, results))
+            .spawn(move || compiler_actor_loop(rx, results, cache_capacity))
             .map_err(|error| format!("cannot start Modelica compiler actor: {error}"))?;
         Ok(Self {
             tx: Some(tx),
@@ -177,9 +182,13 @@ impl Drop for CompilerActor {
     }
 }
 
-fn compiler_actor_loop(rx: Receiver<Request>, results: Sender<WorkerPreparationResult>) {
+fn compiler_actor_loop(
+    rx: Receiver<Request>,
+    results: Sender<WorkerPreparationResult>,
+    cache_capacity: NonZeroUsize,
+) {
     let mut compiler: Option<ModelicaCompiler> = None;
-    let mut compiled_artifacts = HashMap::new();
+    let mut compiled_artifacts = CompiledArtifactCache::new(cache_capacity);
     let mut terminal_error: Option<String> = None;
 
     while let Ok(request) = rx.recv() {
@@ -274,7 +283,7 @@ fn compiler_actor_loop(rx: Receiver<Request>, results: Sender<WorkerPreparationR
 
 fn compile_artifact(
     compiler: &mut Option<ModelicaCompiler>,
-    compiled_artifacts: &mut HashMap<u64, Box<rumoca_compile::compile::DaeCompilationResult>>,
+    compiled_artifacts: &mut CompiledArtifactCache,
     terminal_error: &mut Option<String>,
     model_name: &str,
     mut unit: CompileUnit,
@@ -341,7 +350,7 @@ fn compile_artifact(
 
 fn install_source_root(
     compiler: &mut Option<ModelicaCompiler>,
-    compiled_artifacts: &mut HashMap<u64, Box<rumoca_compile::compile::DaeCompilationResult>>,
+    compiled_artifacts: &mut CompiledArtifactCache,
     terminal_error: &mut Option<String>,
     prepared: PreparedSourceRoot,
 ) -> SourceRootCommit {
@@ -411,7 +420,7 @@ fn install_source_root(
 
 fn unload_source_root(
     compiler: &mut Option<ModelicaCompiler>,
-    compiled_artifacts: &mut HashMap<u64, Box<rumoca_compile::compile::DaeCompilationResult>>,
+    compiled_artifacts: &mut CompiledArtifactCache,
     terminal_error: &mut Option<String>,
     root_id: &str,
 ) -> (bool, Option<String>, HashMap<String, f64>, u64) {
@@ -469,7 +478,8 @@ mod tests {
     #[test]
     fn source_root_and_compile_share_one_fifo_owner() {
         let (results_tx, results_rx) = crossbeam_channel::unbounded();
-        let mut actor = CompilerActor::new(results_tx).expect("test compiler actor");
+        let mut actor = CompilerActor::new(results_tx, NonZeroUsize::new(2).unwrap())
+            .expect("test compiler actor");
         let root_id = actor
             .submit_source_root(
                 PreparedSourceRoot::prepare(

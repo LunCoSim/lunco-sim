@@ -344,7 +344,8 @@ the integrator state.
    contract in [the Modelica architecture](20-domain-modelica.md).
    The worker keeps the per-entity `CachedModel` for instant Reset and a worker-owned
    structural artifact cache that shares immutable DAE compilation across
-   scene instances. The prepared live solve IR is reused by structural source
+   scene instances. Both RAM caches follow the bounded FIFO entry contract in
+   [the Modelica architecture](20-domain-modelica.md). The prepared live solve IR is reused by structural source
    identity in RAM and persisted by structural source key plus the compiler-owned library
    admission revision, solver, and parameter overrides. The persistent key
    includes solver identity because Rumoca's lowering mode can change the solve
