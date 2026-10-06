@@ -74,6 +74,15 @@ growth; memory reads check length before cloning. OPFS checks the immutable
 Oversized inputs return `StorageError::SizeLimitExceeded { max_bytes }`.
 Optional cache and artifact readers use these methods before decoding records.
 
+Native worker consumers use `FileStorage::read_chunks_bounded(handle, max_bytes,
+consume)` to process regular-file bytes through a fixed 64 KiB buffer. It returns
+the actual byte count and rejects growth past the caller's `u64` budget before
+passing the rejected chunk to the consumer. Empty files work with a zero remaining
+budget. It follows regular-file symlinks like ordinary Storage reads, but checks
+regular-file metadata before and after opening; these checks do not claim safety
+against concurrent hostile filesystem replacement. This method performs synchronous
+I/O and belongs on an existing worker, never the UI thread.
+
 `OpfsStorage` exposes asynchronous `read_directory` with the same File-handle
 mapping and sorted direct-child results as native storage. Callers bound catalog
 processing and metadata reads; directory enumeration returns the complete list.

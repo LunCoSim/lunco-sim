@@ -174,6 +174,44 @@ impl FileStorage {
         self.read_contents(handle, Some(max_bytes))
     }
 
+    /// Native worker I/O: consume regular-file bytes in fixed-size chunks without
+    /// materializing the payload. The actual-byte limit also covers file growth.
+    /// Regular-file symlinks retain the ordinary Storage read contract. Metadata
+    /// checks before and after opening reject devices/directories/FIFOs; this is
+    /// not a race-free admission against concurrent hostile filesystem changes.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_chunks_bounded(
+        &self,
+        handle: &StorageHandle,
+        max_bytes: u64,
+        consume: impl FnMut(&[u8]),
+    ) -> StorageResult<u64> {
+        let StorageHandle::File(path) = handle else {
+            return Err(StorageError::Unsupported(
+                "streaming reads require a native File handle".into(),
+            ));
+        };
+        let metadata = std::fs::metadata(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StorageError::NotFound
+            } else {
+                StorageError::Io(error)
+            }
+        })?;
+        if !metadata.is_file() {
+            return Err(StorageError::Unsupported(
+                "streaming reads require a regular file".into(),
+            ));
+        }
+        let file = std::fs::File::open(path)?;
+        if !file.metadata()?.is_file() {
+            return Err(StorageError::Unsupported(
+                "streaming reads require a regular file".into(),
+            ));
+        }
+        read_chunks_bounded(file, max_bytes, consume)
+    }
+
     /// Stream regular direct files into a deterministic bounded snapshot.
     pub async fn read_directory_bounded(
         &self,
@@ -253,6 +291,35 @@ impl FileStorage {
                 "FileStorage does not handle web / remote variants".into(),
             )),
         }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_chunks_bounded(
+    mut reader: impl std::io::Read,
+    max_bytes: u64,
+    mut consume: impl FnMut(&[u8]),
+) -> StorageResult<u64> {
+    let mut buffer = [0_u8; 65_536];
+    let mut total = 0_u64;
+    loop {
+        // At most one sentinel byte beyond the actual budget; a rejected chunk
+        // is never passed to the consumer. No file-size metadata chooses the limit.
+        let wanted = (max_bytes - total)
+            .saturating_add(1)
+            .min(buffer.len() as u64) as usize;
+        let count = match reader.read(&mut buffer[..wanted]) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if count == 0 {
+            return Ok(total);
+        }
+        if count as u64 > max_bytes - total {
+            return Err(StorageError::StreamingSizeLimitExceeded { max_bytes });
+        }
+        total += count as u64;
+        consume(&buffer[..count]);
     }
 }
 
@@ -547,6 +614,82 @@ impl Storage for FileStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn streaming_file_reads_bound_actual_bytes_and_preserve_regular_links() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("part # % Мир.bin");
+        let handle = StorageHandle::File(path.clone());
+        let storage = FileStorage::new();
+        let bytes = vec![42; 131_073];
+        storage.write_sync(&handle, &bytes).unwrap();
+        let mut seen = 0;
+        let count = storage
+            .read_chunks_bounded(&handle, bytes.len() as u64, |chunk| {
+                assert!(chunk.len() <= 65_536);
+                assert!(chunk.iter().all(|byte| *byte == 42));
+                seen += chunk.len();
+            })
+            .unwrap();
+        assert_eq!(count, bytes.len() as u64);
+        assert_eq!(seen, bytes.len());
+        assert!(matches!(
+            storage.read_chunks_bounded(&handle, 3, |_| panic!("rejected chunk was delivered")),
+            Err(StorageError::StreamingSizeLimitExceeded { max_bytes: 3 })
+        ));
+        assert!(matches!(
+            storage.read_chunks_bounded(&StorageHandle::File(root.path().to_path_buf()), 3, |_| {}),
+            Err(StorageError::Unsupported(_))
+        ));
+        #[cfg(unix)]
+        {
+            let link = root.path().join("link.bin");
+            std::os::unix::fs::symlink(&path, &link).unwrap();
+            assert_eq!(
+                storage
+                    .read_chunks_bounded(&StorageHandle::File(link), bytes.len() as u64, |_| {})
+                    .unwrap(),
+                count
+            );
+        }
+        storage.write_sync(&handle, b"").unwrap();
+        assert_eq!(
+            storage
+                .read_chunks_bounded(&handle, 0, |_| panic!("empty file delivered bytes"))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn streaming_reader_enforces_growth_limit_without_metadata_or_payload_allocation() {
+        struct GrowingReader {
+            reads: usize,
+            consumed: usize,
+        }
+        impl std::io::Read for GrowingReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.reads += 1;
+                let size = if self.reads == 1 { 1 } else { buffer.len() };
+                buffer[..size].fill(42);
+                self.consumed += size;
+                Ok(size)
+            }
+        }
+        let mut reader = GrowingReader {
+            reads: 0,
+            consumed: 0,
+        };
+        let mut delivered = 0;
+        assert!(matches!(
+            read_chunks_bounded(&mut reader, 3, |chunk| delivered += chunk.len()),
+            Err(StorageError::StreamingSizeLimitExceeded { max_bytes: 3 })
+        ));
+        assert_eq!(reader.consumed, 4);
+        assert_eq!(delivered, 1);
+    }
     use futures_lite::future::block_on;
     use tempfile::tempdir;
 

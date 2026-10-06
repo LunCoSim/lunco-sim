@@ -82,6 +82,10 @@ pub enum StorageError {
     #[error("contents exceed the {max_bytes}-byte read limit")]
     SizeLimitExceeded { max_bytes: usize },
 
+    /// Streamed contents exceed the caller's actual-byte budget (not metadata).
+    #[error("contents exceed the {max_bytes}-byte streaming limit")]
+    StreamingSizeLimitExceeded { max_bytes: u64 },
+
     /// Handle is read-only (source library libraries, remote snapshots, etc.).
     #[error("handle is read-only")]
     ReadOnly,

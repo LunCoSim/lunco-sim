@@ -117,6 +117,7 @@ pub fn fnv1a64(bytes: &[u8]) -> u64 {
 #[cfg(feature = "cid")]
 pub mod content {
     use multihash_codetable::{Code, MultihashDigest};
+    use sha2::{Digest, Sha256};
 
     /// Re-exported so consumers address content without depending on the `cid`
     /// crate directly.
@@ -125,9 +126,31 @@ pub mod content {
     /// IPLD codec for a raw byte block (`--raw-leaves` single-block identity).
     pub const RAW_CODEC: u64 = 0x55;
 
+    /// Incremental raw-block content identity, independent of chunk boundaries.
+    /// Owns only the fixed-size SHA-256 state; callers own byte admission and I/O.
+    #[derive(Default)]
+    pub struct ContentHasher(Sha256);
+
+    impl ContentHasher {
+        pub fn update(&mut self, bytes: &[u8]) {
+            self.0.update(bytes);
+        }
+
+        pub fn finish(self) -> Cid {
+            let digest = self.0.finalize();
+            // SHA-256 always yields 32 bytes, within the codetable's digest capacity.
+            let hash = Code::Sha2_256
+                .wrap(&digest)
+                .expect("SHA-256 digest fits its multihash");
+            Cid::new_v1(RAW_CODEC, hash)
+        }
+    }
+
     /// Build the CIDv1 (`raw` + sha2-256) content address of `bytes`.
     pub fn cid(bytes: &[u8]) -> Cid {
-        Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(bytes))
+        let mut hasher = ContentHasher::default();
+        hasher.update(bytes);
+        hasher.finish()
     }
 
     /// Parse canonical CID bytes (`Cid::to_bytes()`, as carried on the wire /
@@ -182,5 +205,22 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(content::cid_from_bytes(&a.to_bytes()), Some(a));
         assert_ne!(content::cid(b"hello"), content::cid(b"world"));
+    }
+
+    #[cfg(feature = "cid")]
+    #[test]
+    fn content_chunks_preserve_the_raw_sha256_cid() {
+        use multihash_codetable::{Code, MultihashDigest};
+        for bytes in [b"".as_slice(), b"lunco", &[42; 131_073]] {
+            let expected = content::Cid::new_v1(content::RAW_CODEC, Code::Sha2_256.digest(bytes));
+            for chunk_size in [1, 7, 65_536] {
+                let mut hasher = content::ContentHasher::default();
+                for chunk in bytes.chunks(chunk_size) {
+                    hasher.update(chunk);
+                }
+                assert_eq!(hasher.finish(), expected);
+            }
+            assert_eq!(content::cid(bytes), expected);
+        }
     }
 }

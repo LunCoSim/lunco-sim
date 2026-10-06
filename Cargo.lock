@@ -7767,6 +7767,7 @@ version = "0.1.0"
 dependencies = [
  "cid",
  "multihash-codetable",
+ "sha2 0.11.0",
 ]
 
 [[package]]

@@ -15,11 +15,12 @@ description = "The workspace hashing substrate — two tiers behind one field-st
 # there (and to `ipfs add --raw-leaves --cid-version 1`).
 cid = { workspace = true, optional = true }
 multihash-codetable = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 
 [features]
 default = []
 # Content-addressing tier: `content::cid()` / `content::cid_from_bytes()`.
-cid = ["dep:cid", "dep:multihash-codetable"]
+cid = ["dep:cid", "dep:multihash-codetable", "dep:sha2"]
 
 [lints]
 workspace = true
