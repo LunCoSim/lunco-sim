@@ -775,7 +775,7 @@ pub async fn resolve_asset_directory_on_worker(
                 let path = lunco_storage::canonicalize_file_path(&base.join(&relative))
                     .map_err(|error| invalid(error.to_string()))?;
                 match storage
-                    .read_directory(&lunco_storage::StorageHandle::File(path.clone()))
+                    .read_directory_bounded(&lunco_storage::StorageHandle::File(path.clone()), 0)
                     .await
                 {
                     Ok(_) => {

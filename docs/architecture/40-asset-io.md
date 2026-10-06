@@ -58,7 +58,8 @@ and shared typed paths; authored/query reads retain the raw string. See the
 Directory payloads use `resolve_asset_directory_on_worker` and its typed
 `AssetDirectory` transport in the existing consumer worker. Native containment
 and mounted OPFS admission stay at the asset owner; a missing mounted directory
-cannot become an engine HTTP lookup.
+cannot become an engine HTTP lookup. Browser directory presence uses a bounded
+listing with zero retained entries; it does not allocate every child path.
 
 Native projection uses the shared worker-prepared `PreparedAssetPaths` table;
 see [native admission and revision ownership](55-scene-addressing-and-roots.md#native-payload-and-source-admission).
