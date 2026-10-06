@@ -202,11 +202,19 @@ list.
 
 The same rule now covers the scripting asset surface itself. The production
 `scripting_asset_contracts` scene validates the active prelude and policies
-through `ScriptingCatalog` and `ValidateAsset`, and exercises the shipped Rhai
+through `ScriptingCatalog` and one-shot `ValidateAsset` preparation, and exercises the shipped Rhai
 tool libraries through their registered modules. Rust no longer enumerates or
 opens `assets/scripting/` from a package integration test; standalone probes in
 `assets/scripting/tests/` are run by `scripts/api/run_rhai_test.sh` when a live
 bridge is required.
+
+The file-query gates `test_sysml_native_values`, `test_sysml_policy_isolation`,
+and `test_sysml_requirement_constraint_checks` live in
+`assets/scenarios/tests/`. Run them with `RunScenarioAsset` in an owned loaded
+scene. They prepare requests serially through the `asset_preflight` module,
+poll exact operation IDs, and execute semantic and negative assertions once
+after all reports are Ready. Native constructor assertions remain native
+coverage; moving a caller does not establish a new passing runtime result.
 
 The same boundary applies to authored physics and editor outcomes: when a
 public USD/query/event surface can observe the claim, the acceptance assertion

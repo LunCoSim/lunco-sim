@@ -1,3 +1,5 @@
+import "lunco://scripting/tools/asset_preflight" as preflight;
+
 // The authored Rhai lint policy owns this contract. The Rust validator supplies
 // generic file facts; this observer exercises the public ValidateAsset surface.
 
@@ -17,16 +19,22 @@ fn simulation_dependencies(me, ctx) {
 fn on_start(me, ctx) {
     this.done = false;
     this.elapsed = 0.0;
+    this.preflight = preflight::create(["lunco://scenarios/tests/fixtures/invalid_build_profile_gate.rhai"]);
 }
 
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed < 0.1 { return; }
+    this.preflight = preflight::advance(this.preflight);
+    if this.preflight.error != () || this.elapsed > 30.0 {
+        this.done = true;
+        report_verdict([if this.preflight.error != () { this.preflight.error } else { "preflight preparation timed out" }], "RHAI LINT POLICY", "RHAI_LINT_POLICY");
+        return;
+    }
+    if !this.preflight.done { return; }
 
-    let report = query("ValidateAsset", #{
-        path: "lunco://scenarios/tests/fixtures/invalid_build_profile_gate.rhai"
-    });
+    let report = this.preflight.reports["lunco://scenarios/tests/fixtures/invalid_build_profile_gate.rhai"];
     this.done = true;
     report_verdict([
         t_true(report != (), "ValidateAsset returned no Rhai report"),

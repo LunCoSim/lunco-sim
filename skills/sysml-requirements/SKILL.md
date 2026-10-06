@@ -563,8 +563,16 @@ not call it from a high-rate `on_tick` hook. Revision-stamped async analysis
 and admission are part of the cross-domain runtime contract in
 [`62-deterministic-runtime-and-async-boundaries.md`](../../docs/architecture/62-deterministic-runtime-and-async-boundaries.md).
 
-`ValidateSysml` and `AnalyzeSysml` accept either a filesystem path or a
-`twin://` URI. `AnalyzeSysml` supports `elements`, `references`,
+Single-file `ValidateSysml` and `AnalyzeSysml` use the one-shot preparation
+protocol: initial source/selection parameters return `pending` and an
+`operation_id`; poll with only that ID. Consume `ready.report` with its actual
+`source_revisions`, or the terminal `failed.diagnostic`. Consumed or retired IDs
+reject. Logical engine/Twin files use their registered reader; native paths and
+standard file URIs use captured bounded file admission. Mounted source-set
+`twin://<authority>` queries retain the direct prepared-snapshot contract.
+See [validate-assets](../validate-assets/SKILL.md#api--against-a-running-luncosim).
+
+`AnalyzeSysml` supports `elements`, `references`,
 `relationships`, `constraints`, `attributes`, `requirements`, `verifications`,
 and `diagnostics` tables. `attribute_names` narrows the attribute table to
 qualified or local names; ambiguous local names remain visible to the policy
@@ -576,7 +584,11 @@ Unpaged full analysis can exceed Rhai's bounded-value budget on Twin-scale
 sources, so prefer selected tables, selected names, or bounded pages.
 
 For editable Rhai runtime policy, `sysml_analysis(path)` provides a native
-snapshot for small bounded sources. For Twin-scale sources use selected
+snapshot for small bounded sources. Native synchronous constructors retain
+bounded source reads; browser constructors require an exact prepared mounted
+snapshot and reject other file sources explicitly. Ready file reports already
+contain the requested semantic facts: consume those fields rather than issuing
+an implicit synchronous file query. For Twin-scale sources use selected
 `AnalyzeSysml` pages or `sysml_requirements::source()`, which pages the
 requirement/verification tables, checks revision consistency, and retains only
 the compact identities and verification links needed for policy joins.

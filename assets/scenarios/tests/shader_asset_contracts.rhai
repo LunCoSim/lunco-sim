@@ -1,3 +1,5 @@
+import "lunco://scripting/tools/asset_preflight" as preflight;
+
 // The shader schema is authored in WGSL, and the material binding is authored
 // in USD. Keep this acceptance contract beside those assets: Rust owns only
 // the generic ParamSchema mechanism and ValidateAsset exposes its result.
@@ -7,8 +9,8 @@
 // oversized uniform block therefore fails through the same boundary used by
 // the editor and the production pre-flight command.
 
-fn shader_report(path) {
-    query("ValidateAsset", #{ path: path })
+fn shader_report(path, reports) {
+    reports[path]
 }
 
 fn shader_param(report, name) {
@@ -26,8 +28,8 @@ fn has_param(report, name, type_name) {
     field != () && field.type == type_name
 }
 
-fn schema_checks(path, fields) {
-    let report = shader_report(path);
+fn schema_checks(path, fields, reports) {
+    let report = shader_report(path, reports);
     let failures = [];
     failures.push(t_true(report != (), path + " returned no ValidateAsset report"));
     failures.push(t_true(report != () && report.kind == "wgsl",
@@ -143,12 +145,20 @@ fn simulation_dependencies(me, ctx) {
 fn on_start(me, ctx) {
     this.done = false;
     this.elapsed = 0.0;
+    this.preflight = preflight::create(["lunco://shaders/blueprint.wgsl", "lunco://shaders/solar_panel.wgsl", "lunco://shaders/terrain_layered.wgsl", "lunco://shaders/terrain_geomorph.wgsl", "lunco://shaders/terrain_debug.wgsl", "lunco://shaders/regolith.wgsl", "lunco://shaders/terrain_shadow.wgsl"]);
 }
 
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed < 0.1 { return; }
+    this.preflight = preflight::advance(this.preflight);
+    if this.preflight.error != () || this.elapsed > 30.0 {
+        this.done = true;
+        report_verdict([if this.preflight.error != () { this.preflight.error } else { "preflight preparation timed out" }], "SHADER ASSET CONTRACTS", "SHADER_ASSET_CONTRACTS");
+        return;
+    }
+    if !this.preflight.done { return; }
 
     let failures = [];
     for failure in schema_checks("lunco://shaders/blueprint.wgsl", [
@@ -165,11 +175,11 @@ fn on_tick(me, ctx) {
         #{ name: "site_weight_ao", type: "F32" },
         #{ name: "site_base_color", type: "Vec4" },
         #{ name: "site_photometry", type: "Vec4" },
-    ]) { failures.push(failure); }
+    ], this.preflight.reports) { failures.push(failure); }
     for failure in schema_checks("lunco://shaders/solar_panel.wgsl", [
         #{ name: "seamless_u", type: "F32" },
         #{ name: "v_scale", type: "F32" },
-    ]) { failures.push(failure); }
+    ], this.preflight.reports) { failures.push(failure); }
     for failure in schema_checks("lunco://shaders/terrain_layered.wgsl", [
         #{ name: "micro_albedo", type: "F32" },
         #{ name: "weight_albedo", type: "F32" },
@@ -183,7 +193,7 @@ fn on_tick(me, ctx) {
         #{ name: "authored_surface_on", type: "F32" },
         #{ name: "authored_normal_on", type: "F32" },
         #{ name: "terrain_geometry_on", type: "F32" },
-    ]) { failures.push(failure); }
+    ], this.preflight.reports) { failures.push(failure); }
     for failure in schema_checks("lunco://shaders/terrain_geomorph.wgsl", [
         #{ name: "micro_albedo", type: "F32" },
         #{ name: "weight_albedo", type: "F32" },
@@ -191,19 +201,19 @@ fn on_tick(me, ctx) {
         #{ name: "derived_surface_on", type: "F32" },
         #{ name: "authored_surface_on", type: "F32" },
         #{ name: "terrain_geometry_on", type: "F32" },
-    ]) { failures.push(failure); }
+    ], this.preflight.reports) { failures.push(failure); }
     for failure in schema_checks("lunco://shaders/terrain_debug.wgsl", [
         #{ name: "mode", type: "F32" },
         #{ name: "opacity", type: "F32" },
         #{ name: "safe_rad", type: "F32" },
         #{ name: "cliff_rad", type: "F32" },
         #{ name: "lod", type: "F32" },
-    ]) { failures.push(failure); }
+    ], this.preflight.reports) { failures.push(failure); }
     for path in [
         "lunco://shaders/regolith.wgsl",
         "lunco://shaders/terrain_shadow.wgsl",
     ] {
-        let report = shader_report(path);
+        let report = shader_report(path, this.preflight.reports);
         failures.push(t_true(report != () && report.ok == true,
             path + " failed standalone WGSL schema validation"));
         failures.push(t_true(has_param(report, "shadow_cache_on", "F32"),

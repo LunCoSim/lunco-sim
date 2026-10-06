@@ -1,3 +1,5 @@
+import "lunco://scripting/tools/asset_preflight" as preflight;
+
 // Validate the generic direction contract through the production USD lint
 // policy. Invalid test inputs stay in a read-only preflight fixture, not the
 // mounted simulation stage.
@@ -26,19 +28,23 @@ fn simulation_dependencies(me, ctx) {
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
+    this.preflight = preflight::create(["lunco://scenes/fixtures/direction_contract_errors.usda", "lunco://components/power/solar_panel.usda"]);
 }
 
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed < 0.1 { return; }
+    this.preflight = preflight::advance(this.preflight);
+    if this.preflight.error != () || this.elapsed > 30.0 {
+        this.done = true;
+        report_verdict([if this.preflight.error != () { this.preflight.error } else { "preflight preparation timed out" }], "DIRECTION TARGET CONTRACT", "DIRECTION_TARGET_CONTRACT");
+        return;
+    }
+    if !this.preflight.done { return; }
 
-    let fixture = query("ValidateAsset", #{
-        path: "lunco://scenes/fixtures/direction_contract_errors.usda"
-    });
-    let component = query("ValidateAsset", #{
-        path: "lunco://components/power/solar_panel.usda"
-    });
+    let fixture = this.preflight.reports["lunco://scenes/fixtures/direction_contract_errors.usda"];
+    let component = this.preflight.reports["lunco://components/power/solar_panel.usda"];
     this.done = true;
     if fixture == () || component == () {
         report_verdict(["ValidateAsset returned no direction contract report"],

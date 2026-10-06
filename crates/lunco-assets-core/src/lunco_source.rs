@@ -93,6 +93,35 @@ pub fn id_to_disk_path(id: &str, assets_root: Option<&Path>) -> std::io::Result<
 /// filesystem: asset-root selection and diagnostic paths stay owned here.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_asset_bytes(id: &str, assets_root: Option<&Path>) -> std::io::Result<Vec<u8>> {
+    read_asset_bytes_inner(id, assets_root, None)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_native_asset(path: PathBuf, max_bytes: Option<usize>) -> std::io::Result<Vec<u8>> {
+    use lunco_storage::Storage;
+    let storage = lunco_storage::FileStorage::new();
+    let handle = lunco_storage::StorageHandle::File(path);
+    let result = bevy::tasks::futures_lite::future::block_on(async {
+        match max_bytes {
+            Some(limit) => storage.read_bounded(&handle, limit).await,
+            None => storage.read(&handle).await,
+        }
+    });
+    result.map_err(|error| match error {
+        lunco_storage::StorageError::NotFound => {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "asset file was not found")
+        }
+        lunco_storage::StorageError::Io(error) => error,
+        error => std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()),
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_asset_bytes_inner(
+    id: &str,
+    assets_root: Option<&Path>,
+    max_bytes: Option<usize>,
+) -> std::io::Result<Vec<u8>> {
     let Some(rel) = parse_lunco_uri(id) else {
         let path = id_to_disk_path(id, assets_root)?.ok_or_else(|| {
             std::io::Error::new(
@@ -100,7 +129,7 @@ pub fn read_asset_bytes(id: &str, assets_root: Option<&Path>) -> std::io::Result
                 format!("asset `{id}` has no resolvable native root"),
             )
         })?;
-        return std::fs::read(path);
+        return read_native_asset(path, max_bytes);
     };
     let default_root;
     let root = match assets_root {
@@ -118,17 +147,9 @@ pub fn read_asset_bytes(id: &str, assets_root: Option<&Path>) -> std::io::Result
         )
     })?;
     for root in roots {
-        #[cfg(not(target_arch = "wasm32"))]
         match existing_path_within_root(&root, &relative)? {
-            Some(path) => return std::fs::read(path),
+            Some(path) => return read_native_asset(path, max_bytes),
             None => continue,
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let candidate = root.join(relative);
-            if candidate.exists() {
-                return std::fs::read(candidate);
-            }
         }
     }
     Err(std::io::Error::new(
@@ -182,6 +203,27 @@ pub fn read_asset_bytes_with_twin_root(
     assets_root: Option<&Path>,
     twin_root: Option<&Path>,
 ) -> std::io::Result<Vec<u8>> {
+    read_asset_bytes_with_twin_root_inner(id, assets_root, twin_root, None)
+}
+
+/// Bounded native read through the same Twin/library source resolution.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_asset_bytes_bounded_with_twin_root(
+    id: &str,
+    assets_root: Option<&Path>,
+    twin_root: Option<&Path>,
+    max_bytes: usize,
+) -> std::io::Result<Vec<u8>> {
+    read_asset_bytes_with_twin_root_inner(id, assets_root, twin_root, Some(max_bytes))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_asset_bytes_with_twin_root_inner(
+    id: &str,
+    assets_root: Option<&Path>,
+    twin_root: Option<&Path>,
+    max_bytes: Option<usize>,
+) -> std::io::Result<Vec<u8>> {
     if let Some((_name, rel)) = crate::parse_twin_uri(id) {
         let root = twin_root.ok_or_else(|| {
             std::io::Error::new(
@@ -212,9 +254,9 @@ pub fn read_asset_bytes_with_twin_root(
                     format!("Twin asset `{id}` was not found in its authored tree or cache"),
                 )
             })?;
-        return std::fs::read(path);
+        return read_native_asset(path, max_bytes);
     }
-    read_asset_bytes(id, assets_root)
+    read_asset_bytes_inner(id, assets_root, max_bytes)
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

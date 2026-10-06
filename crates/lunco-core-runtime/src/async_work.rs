@@ -5,15 +5,12 @@
 //! a result into simulation state.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     sync::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
-
-#[cfg(not(target_arch = "wasm32"))]
-use std::collections::HashSet;
 
 use bevy::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
@@ -66,6 +63,8 @@ pub enum AsyncWorkKind {
     SessionInputArchiveExport,
     /// Encode, validate, or read optional completed experiment artifacts.
     ExperimentArtifact,
+    /// One-shot asset validation through an existing async source reader.
+    ValidationPreparation,
 }
 
 /// Stable identity for one preparation operation.
@@ -105,7 +104,7 @@ impl AsyncWorkKey {
 /// Why a work request was not admitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AsyncWorkRejection {
-    /// The bounded waiting queue is full; the owner may retry after capacity changes.
+    /// The bounded waiting queue or external-task capacity is full.
     QueueFull,
     /// The same stable operation identity is queued or already running.
     DuplicateKey,
@@ -155,7 +154,6 @@ struct QueueKey {
 
 #[derive(Default)]
 struct SharedWorkState {
-    #[cfg(not(target_arch = "wasm32"))]
     active_keys: Mutex<HashSet<AsyncWorkKey>>,
     in_flight: [AtomicUsize; 3],
     submitted: AtomicU64,
@@ -169,7 +167,6 @@ struct SharedWorkState {
 #[derive(Default)]
 struct QueuedWorkState {
     jobs: BTreeMap<QueueKey, AsyncWork>,
-    #[cfg(not(target_arch = "wasm32"))]
     keys: HashSet<AsyncWorkKey>,
     #[cfg(not(target_arch = "wasm32"))]
     required_streak: u8,
@@ -205,6 +202,52 @@ impl Default for AsyncWorkAdmission {
 }
 
 impl AsyncWorkAdmission {
+    /// Reserve shared capacity for an existing async reader or task transport.
+    /// The owner retains this permit through preparation and unconsumed results.
+    /// On wasm this admits cooperative page-executor work, not a Web Worker.
+    pub fn admit_external(
+        &self,
+        priority: AsyncWorkPriority,
+        key: AsyncWorkKey,
+    ) -> Result<ExternalWorkPermit, AsyncWorkRejection> {
+        let queued = self.queued.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut active = self
+            .shared
+            .active_keys
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let rejection = if queued.keys.contains(&key) || active.contains(&key) {
+            Some(AsyncWorkRejection::DuplicateKey)
+        } else if self
+            .shared
+            .in_flight
+            .iter()
+            .map(|count| count.load(Ordering::Acquire))
+            .sum::<usize>()
+            >= self.max_in_flight
+        {
+            Some(AsyncWorkRejection::QueueFull)
+        } else {
+            None
+        };
+        if let Some(error) = rejection {
+            self.shared.rejected.fetch_add(1, Ordering::Relaxed);
+            self.shared.revision.fetch_add(1, Ordering::Release);
+            return Err(error);
+        }
+        active.insert(key);
+        self.shared.in_flight[priority.index()].fetch_add(1, Ordering::AcqRel);
+        self.shared.submitted.fetch_add(1, Ordering::Relaxed);
+        self.shared.revision.fetch_add(1, Ordering::Release);
+        Ok(ExternalWorkPermit {
+            _completion: WorkCompletionGuard {
+                key,
+                priority,
+                shared: Arc::clone(&self.shared),
+            },
+        })
+    }
+
     /// Admit one immutable job without waiting for queue capacity.
     pub fn submit(
         &mut self,
@@ -476,14 +519,12 @@ impl AsyncWorkAdmission {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 struct WorkCompletionGuard {
     key: AsyncWorkKey,
     priority: AsyncWorkPriority,
     shared: Arc<SharedWorkState>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Drop for WorkCompletionGuard {
     fn drop(&mut self) {
         let mut active = self
@@ -499,6 +540,11 @@ impl Drop for WorkCompletionGuard {
             .capacity_revision
             .fetch_add(1, Ordering::Release);
     }
+}
+
+/// Capacity owned by an external preparation transport until its result retires.
+pub struct ExternalWorkPermit {
+    _completion: WorkCompletionGuard,
 }
 
 /// Plugin installing the shared queue and its bounded PostUpdate dispatcher.
@@ -562,6 +608,36 @@ mod tests {
 
     fn key(identity: u64) -> AsyncWorkKey {
         AsyncWorkKey::new(AsyncWorkKind::RhaiCompilation, 4, identity as u128, 12, 0)
+    }
+
+    #[test]
+    fn external_permits_bound_results_and_release_exact_identity() {
+        let mut admission = AsyncWorkAdmission::default();
+        admission.set_limits(2, 1).unwrap();
+        let permit = Arc::new(
+            admission
+                .admit_external(AsyncWorkPriority::Interactive, key(91))
+                .unwrap(),
+        );
+        assert!(matches!(
+            admission.admit_external(AsyncWorkPriority::Interactive, key(91)),
+            Err(AsyncWorkRejection::DuplicateKey)
+        ));
+        assert!(matches!(
+            admission.admit_external(AsyncWorkPriority::Interactive, key(92)),
+            Err(AsyncWorkRejection::QueueFull)
+        ));
+        let worker = Arc::clone(&permit);
+        drop(permit);
+        assert_eq!(admission.snapshot().in_flight, [0, 1, 0]);
+        drop(worker);
+        assert_eq!(admission.snapshot().in_flight, [0, 0, 0]);
+        let replacement = admission
+            .admit_external(AsyncWorkPriority::Interactive, key(91))
+            .unwrap();
+        assert_eq!(admission.snapshot().in_flight, [0, 1, 0]);
+        drop(replacement);
+        assert_eq!(admission.snapshot().finished, 2);
     }
 
     #[test]

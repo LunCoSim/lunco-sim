@@ -119,9 +119,11 @@ a general-purpose sketch solver.
   full chained-end syntax as a parser capability; do not invent an endpoint
   mapping mini-language. The normative notation is in the
   [OMG SysML v2 language specification](https://www.omg.org/spec/SysML/2.0/Language/PDF).
-- Production Rhai test `test_sysml_policy_isolation.rhai` passes three checks:
-  source validation applies structural lint, while `AnalyzeSysml` remains
-  available to independent policies over the same successfully parsed source.
+- `assets/scenarios/tests/test_sysml_policy_isolation.rhai` asserts structural
+  source lint and independent `AnalyzeSysml` facts after one-shot preparation.
+  Invoke it with `RunScenarioAsset` in an owned loaded scene. This updated
+  invocation has not yet been exercised in a production host; the earlier
+  synchronous-query result does not verify the current scenario.
 
 Prior checks prove generic analysis transport, Rhai-owned selection, a numerical
 `Segment3D` run, and compile/step viability for the coincidence component. The

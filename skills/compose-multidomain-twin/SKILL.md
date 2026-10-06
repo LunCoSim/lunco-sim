@@ -89,6 +89,11 @@ shader, or referenced USD asset:
 query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 ```
 
+Retain the returned `operation_id` and poll `ValidateTwin` with only that ID.
+Read `ready.report`; `failed.diagnostic` is terminal. Mounted browser callers
+use the current assigned `twin://<authority>` instead of a native folder. See
+[validate-assets](../validate-assets/SKILL.md#api--against-a-running-luncosim).
+
 The inspector reports only collisions in the same resolver scope and includes
 every owner/source so the repair is made in the authored Twin. `RunLint` can
 run the same check against the active Twin with

@@ -67,8 +67,8 @@ pub use lunco_source::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use lunco_source::{
-    existing_path_within_root, read_asset_bytes, read_asset_bytes_with_twin_root,
-    read_asset_file_bytes, read_asset_file_string,
+    existing_path_within_root, read_asset_bytes, read_asset_bytes_bounded_with_twin_root,
+    read_asset_bytes_with_twin_root, read_asset_file_bytes, read_asset_file_string,
 };
 pub use scheme_registry::{SchemeRegistry, SchemeRegistryError};
 pub use twin_source::{

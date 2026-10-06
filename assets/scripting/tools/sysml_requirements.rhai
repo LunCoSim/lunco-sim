@@ -249,16 +249,31 @@ fn component_binding(report, component_name) {
     #{ok: true, component: found, verification: verification}
 }
 
+// Additional synchronous selections belong to an already-prepared mounted
+// source set. File workflows prepare their selected facts once and supply Ready.
+fn _source_set_query(params) {
+    let path = params.path;
+    if type_of(path) != "string" || !path.starts_with("twin://")
+        || path.sub_string(7).contains("/") || path.sub_string(7).contains("\\") {
+        return #{ok: false, errors: ["File fact selections require one-shot AnalyzeSysml preparation and Ready semantic facts"]};
+    }
+    query("AnalyzeSysml", params)
+}
+
 fn _lazy_attribute(report, name) {
     if report == () || report.path == () || report.path == "" {
         return #{ok: false, error: "SysML source report has no resolvable path"};
     }
-    let selected = query("AnalyzeSysml", #{path: report.path,
+    let selected = _source_set_query(#{path: report.path,
         tables: ["attributes"], attribute_names: [name]});
     if selected == () || selected.analysis == () {
         return #{ok: false, error: _report_error(selected,
             "AnalyzeSysml returned no selected attribute facts")};
     }
+    _selected_attribute(selected, name)
+}
+
+fn _selected_attribute(selected, name) {
     let found = ();
     for entry in selected.analysis.attributes {
         if entry.qualified_name == name || entry.name == name {
@@ -278,6 +293,12 @@ fn _lazy_attribute(report, name) {
 fn attribute(report, name) {
     if type_of(report) != "map" || name == () || name == "" {
         return #{ok: false, error: "SysML attribute name is missing"};
+    }
+    if report.analysis != () && report.analysis.attributes != () {
+        let selected = _selected_attribute(report, name);
+        if selected.ok != true { return selected; }
+        if selected.record != () { return selected; }
+        return #{ok: false, error: "SysML attribute is missing from prepared selected facts: " + name};
     }
     if name.contains("::") {
         if report.attributes_qualified != () && report.attributes_qualified[name] != () {
@@ -323,9 +344,8 @@ fn native_value(report, name) {
         name
     };
     // Compact policy reports may carry selected `attributes` without the
-    // original analysis table. Only attempt the no-query fast path when that
-    // immutable table is actually present; otherwise resolve this one typed
-    // attribute through the same generic API used by unloaded summaries.
+    // original analysis table. Consume that table when present; a compact
+    // mounted-source report uses the existing typed native source constructor.
     if report.analysis != () {
         let value = sysml_value_from_report(report, qualified);
         if value.ok != true { return value; }
@@ -1918,7 +1938,7 @@ fn _paged_twin_source(path, tables) {
     let requirements = [];
     let verifications = [];
     loop {
-        let page = query("AnalyzeSysml", #{path: path, tables: tables,
+        let page = _source_set_query(#{path: path, tables: tables,
             offset: offset, limit: page_limit});
         if page == () || page.analysis == () {
             return #{ok: false, path: path, error: _report_error(page,
@@ -2006,7 +2026,7 @@ fn _source_projection(names, requirement_names, verification_names,
     let analyzed = if include_twin_contract {
         _paged_twin_source(request.path, tables)
     } else {
-        query("AnalyzeSysml", request)
+        _source_set_query(request)
     };
     if analyzed == () || analyzed.analysis == () {
         return #{ok: false, error: _report_error(analyzed,
@@ -2140,7 +2160,7 @@ fn referenced_attribute(report, owner_handle, reference_feature) {
         || owner_handle == () || reference_feature == () || reference_feature == "" {
         return #{ok: false, error: "SysML attribute reference is incomplete"};
     }
-    let links = query("AnalyzeSysml", #{
+    let links = _source_set_query(#{
         path: report.path,
         tables: ["references"],
         reference_from_owner_handles: [owner_handle],
@@ -2159,7 +2179,7 @@ fn referenced_attribute(report, owner_handle, reference_feature) {
             "SysML attribute reference does not resolve to a feature"
         } else { "SysML attribute reference resolves ambiguously" }};
     }
-    let selected = query("AnalyzeSysml", #{
+    let selected = _source_set_query(#{
         path: report.path,
         tables: ["attributes"],
         attribute_handles: [targets[0]]
@@ -2273,7 +2293,7 @@ fn provenance_for_requirement(report, requirement_handle) {
             error: "SysML provenance requires a source-scoped requirement element handle"};
     }
 
-    let requirement_links = query("AnalyzeSysml", #{
+    let requirement_links = _source_set_query(#{
         path: report.path,
         tables: ["references"],
         reference_target_handles: [handle_record],
@@ -2295,7 +2315,7 @@ fn provenance_for_requirement(report, requirement_handle) {
         return #{ok: false, error: "requirement evidence reference has no owning element"};
     }
 
-    let source_links = query("AnalyzeSysml", #{
+    let source_links = _source_set_query(#{
         path: report.path,
         tables: ["references"],
         reference_from_owner_handles: [evidence_owner]
@@ -2313,7 +2333,7 @@ fn provenance_for_requirement(report, requirement_handle) {
         if source_handle == () {
             return #{ok: false, error: "evidence source reference has no resolved target"};
         }
-        let source_attributes = query("AnalyzeSysml", #{
+        let source_attributes = _source_set_query(#{
             path: report.path,
             tables: ["attributes"],
             attribute_names: ["locator", "role"],

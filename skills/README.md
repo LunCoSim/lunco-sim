@@ -208,7 +208,7 @@ parse check into runtime evidence.
   SysML/KerML diagnostics and
   `if`/`when` in Modelica — **and runs the authored lint rules**, which is what
   reports a part that would fall off a vehicle. On a *loaded* scene use the verb:
-  `cmd("RunLint", #{})` + `query("GetDiagnostics", #{scope: "loaded_stages"})`, or `query("ValidateTwin", #{path: "..."})` for a Twin-wide namespace pre-flight; nothing lints on its own. Rules
+  `cmd("RunLint", #{})` + `query("GetDiagnostics", #{scope: "loaded_stages"})`, or `query("ValidateTwin", #{path: "..."})` for a Twin-wide namespace pre-flight (retain its operation ID and poll to consume the prepared report); nothing lints on its own. Rules
   are rhai (`assets/scripting/policy/lint_*.rhai`), one linter per domain, so a
   new rule is an edit, not a rebuild. See
   [**validate-assets**](validate-assets/SKILL.md) and

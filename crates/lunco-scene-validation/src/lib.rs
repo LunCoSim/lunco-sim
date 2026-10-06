@@ -10,6 +10,8 @@
 //! the same validation plugin and CLI entry point.
 
 pub mod lint_command;
+mod preparation;
+pub use preparation::QueryPreparationLimits;
 /// Typed, policy-neutral semantic SysML snapshot for authored Rhai tools.
 pub mod sysml_analysis;
 /// Static discovery of authored scene tests and their execution kind.

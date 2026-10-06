@@ -30,17 +30,38 @@ impl ApiQueryProvider for AnalyzeSysmlProvider {
     }
 
     fn execute(&self, world: &World, params: &HookValue) -> ApiQueryResult {
-        let Some(path) = lunco_api::api_param_str(params, "path") else {
-            return Err(ApiQueryError::new(
-                ApiErrorCode::DeserializationError,
-                "AnalyzeSysml requires params.path (string): a filesystem path or twin:// URI",
-            ));
+        use crate::preparation::{PreparationPoll, QueryKind};
+        let prepared = if lunco_api::api_param_str(params, "path")
+            .is_some_and(crate::validate::is_twin_source_set)
+        {
+            None
+        } else {
+            match crate::preparation::poll(world, QueryKind::AnalyzeSysml, params)? {
+                PreparationPoll::Pending(value) | PreparationPoll::Terminal(value) => {
+                    return Ok(Some(value));
+                }
+                PreparationPoll::Ready {
+                    operation_id,
+                    report,
+                    params,
+                    revisions,
+                } => Some((operation_id, report, params, revisions)),
+            }
         };
-        // Semantic fact discovery is policy-neutral. Structural quality is
-        // reported by ValidateSysml; this query only fails for source
-        // resolution/parsing diagnostics so other Rhai policies can inspect
-        // the same resolved facts independently.
-        let report = validate_sysml_reference(world, path, false);
+        let (operation_id, report, admitted_params, revisions) = match prepared {
+            Some((id, report, params, revisions)) => (Some(id), report, params, revisions),
+            None => (
+                None,
+                validate_sysml_reference(
+                    world,
+                    lunco_api::api_param_str(params, "path").expect("source-set path"),
+                    false,
+                ),
+                params.clone(),
+                HookValue::Unit,
+            ),
+        };
+        let params = &admitted_params;
         let selection = SysmlFactSelection {
             tables: parse_tables(params)?,
             page: parse_page(params)?,
@@ -60,29 +81,45 @@ impl ApiQueryProvider for AnalyzeSysmlProvider {
             )?,
             reference_from_features: parse_name_selection(params, "reference_from_features")?,
         };
-        let facts = report.sysml_analysis.as_deref().map_or_else(
-            || HookValue::Unit,
-            |analysis| lunco_sysml_ast::lint_facts::selected_sysml_facts(analysis, &selection),
-        );
-
-        // `HookValue` is the language-neutral in-process ABI. No JSON staging
-        // is used: numeric literals, identity, collections and source spans
-        // arrive as typed Rhai values for policy-level selection.
-        Ok(Some(HookValue::map([
-            ("path", HookValue::str(report.path)),
-            ("kind", HookValue::str(report.kind)),
-            ("ok", HookValue::Bool(report.ok)),
-            (
-                "errors",
-                HookValue::Array(report.errors.into_iter().map(HookValue::str).collect()),
-            ),
-            (
-                "warnings",
-                HookValue::Array(report.warnings.into_iter().map(HookValue::str).collect()),
-            ),
-            ("analysis", facts),
-        ])))
+        let value = sysml_report_facts(&report, &selection);
+        Ok(Some(operation_id.map_or_else(
+            || value.clone(),
+            |id| crate::preparation::report_envelope(id, value.clone(), revisions),
+        )))
     }
+}
+
+/// Project an already admitted semantic snapshot through the shared typed ABI.
+/// Synchronous native source constructors and prepared queries share this reader.
+pub fn sysml_report_facts(
+    report: &crate::validate::ValidationReport,
+    selection: &SysmlFactSelection,
+) -> HookValue {
+    let facts = report.sysml_analysis.as_deref().map_or_else(
+        || HookValue::Unit,
+        |analysis| lunco_sysml_ast::lint_facts::selected_sysml_facts(analysis, selection),
+    );
+    HookValue::map([
+        ("path", HookValue::str(report.path.clone())),
+        ("kind", HookValue::str(report.kind.clone())),
+        ("ok", HookValue::Bool(report.ok)),
+        (
+            "errors",
+            HookValue::Array(report.errors.iter().cloned().map(HookValue::str).collect()),
+        ),
+        (
+            "warnings",
+            HookValue::Array(
+                report
+                    .warnings
+                    .iter()
+                    .cloned()
+                    .map(HookValue::str)
+                    .collect(),
+            ),
+        ),
+        ("analysis", facts),
+    ])
 }
 
 fn parse_page(params: &HookValue) -> Result<Option<SysmlFactPage>, ApiQueryError> {

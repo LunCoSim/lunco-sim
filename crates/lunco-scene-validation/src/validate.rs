@@ -1,41 +1,11 @@
-//! `ValidateAsset` and `ValidateTwin` — read-only pre-flight checks for asset
-//! files and Twin-wide resolver namespaces.
+//! File/Twin preflight facts with one-shot runtime preparation and native CLI.
 //!
-//! ## The light-path contract
-//!
-//! This is the PARSE-ONLY tier: no solver instance, no scene load, no
-//! `AssetServer`, no GPU, no ECS state read or written. Every check here is a
-//! pure function over file bytes (plus, for `.usda`, the referenced layers the
-//! composer opens), so it is safe to call from anywhere — the HTTP API of a
-//! running instance, or `luncosim --validate <path>` before any app exists.
-//! Asset authors get "will this load?" in milliseconds instead of finding out
-//! by spawning it into a live sim.
-//!
-//! Per extension:
-//! - `.mo` — the same `lunco_modelica_ast::parse_to_syntax` + AST extraction
-//!   the USD-cosim dispatcher runs (`lunco-usd-sim-cosim/src/lib.rs`); the
-//!   reloadable `lint.modelica` policy decides which AST constructs are
-//!   actionable. NO compile, NO `ModelicaCommand` dispatch.
-//! - `.usda` — parse the layer (`usda_to_data`), compose the file
-//!   (`compose_file_to_stage`), then run the SAME `WheelParams::read` the
-//!   spawner runs on every `PhysxVehicleWheelAPI` prim — a wheel that would
-//!   refuse to spawn fails validation here, with the exact attribute names.
-//!   Control bindings are checked against the same authority the loader uses
-//!   (`lunco_control_core::parse_user_intent`): `ControlBinding` load is deliberately
-//!   TOLERANT — an unknown intent warns and is skipped — so a typo silently
-//!   costs one control at runtime. This is where that becomes a hard error, on
-//!   purpose: tolerant load, strict pre-flight.
-//! - `.wgsl` — reflect the `Material` param schema (`ParamSchema::parse`).
-//!   Full naga module validation is deliberately absent: naga is not a direct
-//!   dependency of this crate and the light path adds none.
-//! - `.sysml`/`.kerml` — the shared SysML parser/resolver, with no document
-//!   mutation or requirement execution.
-//! - `.rhai` — `rhai::Engine::compile` only; nothing is executed.
-//!
-//! Registered as [`ApiQueryProvider`]s (they return data, like
-//! `lunco_scene_queries::usd_prim_query`), so one implementation answers rhai `query()`,
-//! Python, raw HTTP and MCP:
-//! `{"type":"ExecuteCommand","command":"ValidateAsset","params":{"path":"lunco://models/X.mo"}}`.
+//! Runtime file queries admit a typed source once, read and prepare pure facts
+//! through the existing asynchronous asset boundary, then consume the exact
+//! operation. Authored lint policy runs serially after source/runtime/mount and
+//! policy binding checks. Browser tasks use its cooperative page executor.
+//! Native CLI and source-session constructors retain their bounded synchronous
+//! transport. Validation does not launch a solver, scene, physics, or rendering.
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
@@ -82,7 +52,7 @@ pub struct ValidationReport {
 }
 
 impl ValidationReport {
-    fn new(path: &str, kind: &str) -> Self {
+    pub(crate) fn new(path: &str, kind: &str) -> Self {
         Self {
             path: path.to_string(),
             kind: kind.to_string(),
@@ -96,13 +66,13 @@ impl ValidationReport {
         }
     }
 
-    fn error(mut self, msg: impl Into<String>) -> Self {
+    pub(crate) fn error(mut self, msg: impl Into<String>) -> Self {
         self.errors.push(msg.into());
         self.ok = false;
         self
     }
 
-    fn finish(mut self) -> Self {
+    pub(crate) fn finish(mut self) -> Self {
         self.ok = self.errors.is_empty();
         self
     }
@@ -123,6 +93,7 @@ pub struct ValidationFinding {
 /// cwd-relative — the CLI case) wins; otherwise `lunco://x` and bare library
 /// paths resolve against `<cwd>/assets` exactly as the `AssetServer` would.
 /// Native-only by construction — there is no local filesystem on wasm.
+#[cfg(not(target_arch = "wasm32"))]
 fn resolve(reference: &str) -> Result<PathBuf, String> {
     let as_given = Path::new(reference);
     if as_given.is_file() {
@@ -147,6 +118,7 @@ fn resolve(reference: &str) -> Result<PathBuf, String> {
 /// policy. This is an explicit validation entry point for the CLI and API; a
 /// startup subsystem that only needs loader acceptance should use
 /// [`validate_asset_loadability`].
+#[cfg(not(target_arch = "wasm32"))]
 pub fn validate_asset(reference: &str) -> ValidationReport {
     validate_asset_with_policy(reference, true)
 }
@@ -154,42 +126,126 @@ pub fn validate_asset(reference: &str) -> ValidationReport {
 /// Check whether the runtime loader accepts one asset, without running authored
 /// lint policies. Use this from automatic discovery/startup paths that need to
 /// hide assets which cannot load; policy lint remains an explicit user action.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn validate_asset_loadability(reference: &str) -> ValidationReport {
     validate_asset_with_policy(reference, false)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn validate_asset_with_policy(reference: &str, apply_authored_policy: bool) -> ValidationReport {
     let path = match resolve(reference) {
         Ok(p) => p,
         Err(e) => return ValidationReport::new(reference, "unknown").error(e),
     };
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
-    let text = match lunco_assets_core::read_asset_file_string(&path) {
-        Ok(t) => t,
-        Err(e) => {
-            return ValidationReport::new(reference, "unknown")
-                .error(format!("cannot read {}: {e}", path.display()));
+    let mut bytes = match read_native_bytes_bounded(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => return ValidationReport::new(reference, "unknown").error(error.to_string()),
+    };
+    let recipe = if is_usd_path(&path) {
+        let id = match lunco_storage::file_path_to_uri(&path) {
+            Ok(id) => id,
+            Err(error) => return ValidationReport::new(reference, "usd").error(error.to_string()),
+        };
+        match lunco_usd_compose::recipe_from_bytes_with_roots(
+            &id,
+            std::mem::take(&mut bytes),
+            Some(engine_assets_root().as_path()),
+            None,
+            lunco_usd_compose::recipe::StageClosureLimits::default(),
+        ) {
+            Ok(recipe) => Some(recipe),
+            Err(error) => return ValidationReport::new(reference, "usd").error(error.to_string()),
         }
+    } else {
+        None
     };
-    let report = match ext.as_str() {
-        "mo" => validate_modelica(reference, &path, &text),
-        "usda" => validate_usda(reference, &path, &text),
-        "sysml" | "kerml" => validate_sysml(reference, &path, &text),
-        "wgsl" => validate_wgsl(reference, &text),
-        "rhai" => validate_rhai(reference, &text),
-        other => ValidationReport::new(reference, "unknown").error(format!(
-            "unsupported extension `.{other}` — supported: .mo, .usda, .sysml, .kerml, .wgsl, .rhai"
-        )),
-    };
+    let (report, text) = validate_prepared_bytes(reference, &path, bytes, recipe);
     if apply_authored_policy {
         apply_lint_policy(report, &text)
     } else {
         report
     }
+}
+
+pub(crate) fn is_usd_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "usd" | "usda" | "usdc"
+            )
+        })
+}
+
+/// Pure facts over the actual read bytes and their composed closure. Transport
+/// and authored policy execution belong to the admitting caller.
+pub(crate) fn validate_prepared_bytes(
+    reference: &str,
+    path: &Path,
+    bytes: Vec<u8>,
+    recipe: Option<lunco_usd_compose::recipe::StageRecipe>,
+) -> (ValidationReport, String) {
+    if is_usd_path(path) {
+        let report = ValidationReport::new(reference, "usd");
+        let Some(recipe) = recipe else {
+            return (
+                report.error("USD validation requires its prepared layer closure"),
+                String::new(),
+            );
+        };
+        let stage = match CanonicalStage::from_recipe(&recipe) {
+            Ok(stage) => stage,
+            Err(error) => return (report.error(format!("compose: {error}")), String::new()),
+        };
+        let mut report = validate_usd_stage(report, &stage);
+        report.errors.extend(
+            recipe
+                .dependency_diagnostics
+                .iter()
+                .map(ToString::to_string),
+        );
+        return (report.finish(), String::new());
+    }
+    let text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(error) => {
+            return (
+                ValidationReport::new(reference, "unknown")
+                    .error(format!("source is not UTF-8: {error}")),
+                String::new(),
+            );
+        }
+    };
+    let ext = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let report = match ext.as_str() {
+        "mo" => validate_modelica(reference, path, &text),
+        "sysml" | "kerml" => validate_sysml(reference, path, &text),
+        "wgsl" => validate_wgsl(reference, &text),
+        "rhai" => validate_rhai(reference, &text),
+        other => ValidationReport::new(reference, "unknown").error(format!(
+            "unsupported extension `.{other}` — supported: .mo, .usd, .usda, .usdc, .sysml, .kerml, .wgsl, .rhai"
+        )),
+    };
+    (report, text)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_native_bytes_bounded(path: &Path) -> Result<Vec<u8>, String> {
+    bevy::tasks::futures_lite::future::block_on(lunco_storage::FileStorage::new().read_bounded(
+        &lunco_storage::StorageHandle::File(path.to_path_buf()),
+        lunco_usd_compose::recipe::StageClosureLimits::default().max_bytes,
+    ))
+    .map_err(|error| error.to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_native_text_bounded(path: &Path) -> Result<String, String> {
+    String::from_utf8(read_native_bytes_bounded(path)?).map_err(|error| error.to_string())
 }
 
 // ─── .sysml / .kerml ───────────────────────────────────────────────────────
@@ -269,6 +325,7 @@ pub struct TwinValidationReport {
     pub findings: Vec<TwinValidationFinding>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn twin_validation_error(
     reference: &str,
     policy: &str,
@@ -290,6 +347,7 @@ fn twin_validation_error(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn resolve_twin_root(reference: &str) -> Result<PathBuf, String> {
     let as_given = Path::new(reference);
     if as_given.is_dir() {
@@ -313,6 +371,7 @@ fn resolve_twin_root(reference: &str) -> Result<PathBuf, String> {
 /// both call the same Twin inspector and authored `lint.twin` policy. The
 /// explicit folder argument keeps this API independent of an active ECS
 /// workspace and makes it suitable for CI.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn validate_twin(reference: &str, requested_policy: &str) -> TwinValidationReport {
     let policy = match crate::twin_lint::policy_name(requested_policy) {
         Ok(policy) => policy,
@@ -340,6 +399,20 @@ pub fn validate_twin(reference: &str, requested_policy: &str) -> TwinValidationR
         }
     };
     let snapshot = crate::twin_lint::inspect_twin(&twin);
+    finish_twin_report(
+        reference,
+        policy,
+        snapshot,
+        crate::twin_lint::TwinInspectionInput::capture(&twin).registry_errors,
+    )
+}
+
+pub(crate) fn finish_twin_report(
+    reference: &str,
+    policy: &str,
+    snapshot: crate::twin_lint::TwinNamespaceSnapshot,
+    registry_errors: Vec<String>,
+) -> TwinValidationReport {
     let lint_findings = lunco_lint::run_lint("twin", crate::twin_lint::facts(&snapshot, policy));
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
@@ -359,29 +432,8 @@ pub fn validate_twin(reference: &str, requested_policy: &str) -> TwinValidationR
             message: finding.message,
         });
     }
-    if twin.manifest.as_ref().is_some_and(|manifest| {
-        manifest.sysml.is_some()
-            || manifest.verification.is_some()
-            || !manifest.components.is_empty()
-    }) {
-        if let Err(source_errors) = twin.discover_sysml_sources_checked() {
-            errors.extend(
-                source_errors
-                    .into_iter()
-                    .map(|error| format!("Twin SysML source set: {error}")),
-            );
-        }
-        errors.extend(
-            twin.verification_registry_errors()
-                .into_iter()
-                .map(|error| format!("Twin verification registry: {error}")),
-        );
-        errors.extend(
-            twin.component_registry_errors()
-                .into_iter()
-                .map(|error| format!("Twin component registry: {error}")),
-        );
-    }
+    errors.extend(registry_errors);
+    errors.extend(snapshot.read_errors.iter().cloned());
     TwinValidationReport {
         path: reference.to_string(),
         twin: snapshot.twin.clone(),
@@ -413,7 +465,7 @@ pub fn validate_twin(reference: &str, requested_policy: &str) -> TwinValidationR
 ///
 /// Findings never fail a file that the loader would accept: `error` severities
 /// join `errors` (and flip `ok`), everything else joins `warnings`.
-fn apply_lint_policy(mut report: ValidationReport, text: &str) -> ValidationReport {
+pub(crate) fn apply_lint_policy(mut report: ValidationReport, text: &str) -> ValidationReport {
     if report.kind == "unknown" {
         return report;
     }
@@ -518,26 +570,7 @@ fn validate_modelica(reference: &str, path: &Path, text: &str) -> ValidationRepo
 
 // ─── .usda ──────────────────────────────────────────────────────────────────
 
-/// Parse the layer, compose the file, then run the spawner's own
-/// `WheelParams::read` over every `PhysxVehicleWheelAPI` prim.
-fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
-    let mut report = ValidationReport::new(reference, "usd");
-
-    // The layer's own syntax first: a compose error on a referenced layer
-    // should not mask a typo in THIS file.
-    if let Err(e) = lunco_usd_authoring::author::usda_to_data(text) {
-        return report.error(format!("usda parse: {e}"));
-    }
-
-    let engine_assets = engine_assets_root();
-    let stage = match lunco_usd_bevy_stage::compose::compose_file_to_stage_with_assets(
-        path,
-        Some(engine_assets.as_path()),
-    ) {
-        Ok(s) => s,
-        Err(e) => return report.error(format!("compose: {e}")),
-    };
-    let stage = CanonicalStage::from_stage(stage, path.to_string_lossy().to_string());
+fn validate_usd_stage(mut report: ValidationReport, stage: &CanonicalStage) -> ValidationReport {
     let view = stage.view();
 
     // The physics projection the `lint.usd` rules read — the SAME complete facts
@@ -682,6 +715,7 @@ fn validate_rhai(reference: &str, text: &str) -> ValidationReport {
 /// One-shot CLI leg (`luncosim --validate <path>…`): print each report
 /// human-readably, return the process exit code (0 = all ok, 1 = any failed).
 /// No Bevy `App` is ever constructed on this path.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run_cli(paths: &[String]) -> i32 {
     let mut failed = false;
     for p in paths {
@@ -701,7 +735,7 @@ pub fn run_cli(paths: &[String]) -> i32 {
 
 // ─── API registration ───────────────────────────────────────────────────────
 
-/// `ValidateAsset { path }` → [`ValidationReport`].
+/// `ValidateAsset { path }` admits once; `{ operation_id }` consumes its report.
 struct ValidateAssetProvider;
 
 impl ApiQueryProvider for ValidateAssetProvider {
@@ -709,15 +743,21 @@ impl ApiQueryProvider for ValidateAssetProvider {
         "ValidateAsset"
     }
 
-    fn execute(&self, _world: &World, params: &ApiValue) -> ApiQueryResult {
-        let Some(path) = api_param_str(params, "path") else {
-            return Err(ApiQueryError::new(
-                ApiErrorCode::DeserializationError,
-                "ValidateAsset requires params.path (string): a lunco:// or filesystem path",
-            ));
-        };
-        let report = validate_asset(path);
-        Ok(Some(lunco_api_core::api_value_from_serializable(&report)?))
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        use crate::preparation::{PreparationPoll, QueryKind};
+        match crate::preparation::poll(world, QueryKind::Asset, params)? {
+            PreparationPoll::Pending(value) | PreparationPoll::Terminal(value) => Ok(Some(value)),
+            PreparationPoll::Ready {
+                operation_id,
+                report,
+                revisions,
+                ..
+            } => Ok(Some(crate::preparation::report_envelope(
+                operation_id,
+                lunco_api_core::api_value_from_serializable(&report)?,
+                revisions,
+            ))),
+        }
     }
 }
 
@@ -732,13 +772,34 @@ impl ApiQueryProvider for ValidateSysmlProvider {
     }
 
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
-        let Some(path) = api_param_str(params, "path") else {
-            return Err(ApiQueryError::new(
-                ApiErrorCode::DeserializationError,
-                "ValidateSysml requires params.path (string): a filesystem path or twin:// URI",
-            ));
+        use crate::preparation::{PreparationPoll, QueryKind};
+        let prepared = if api_param_str(params, "path").is_some_and(is_twin_source_set) {
+            None
+        } else {
+            match crate::preparation::poll(world, QueryKind::Sysml, params)? {
+                PreparationPoll::Pending(value) | PreparationPoll::Terminal(value) => {
+                    return Ok(Some(value));
+                }
+                PreparationPoll::Ready {
+                    operation_id,
+                    report,
+                    revisions,
+                    ..
+                } => Some((operation_id, report, revisions)),
+            }
         };
-        let report = validate_sysml_reference(world, path, true);
+        let (operation_id, report, revisions) = match prepared {
+            Some((id, report, revisions)) => (Some(id), report, revisions),
+            None => (
+                None,
+                validate_sysml_reference(
+                    world,
+                    api_param_str(params, "path").expect("source-set path"),
+                    true,
+                ),
+                ApiValue::Unit,
+            ),
+        };
         let analysis = report.sysml_analysis.as_deref();
         let source_files: Vec<_> = analysis
             .into_iter()
@@ -749,7 +810,7 @@ impl ApiQueryProvider for ValidateSysmlProvider {
             .map(|analysis| ApiValue::UInt(analysis.source_revision()))
             .unwrap_or(ApiValue::Unit);
         let findings = lunco_api_core::api_value_from_serializable(&report.findings)?;
-        Ok(Some(api_value!({
+        let value = api_value!({
             "path": report.path,
             "kind": report.kind,
             "ok": report.ok,
@@ -758,8 +819,18 @@ impl ApiQueryProvider for ValidateSysmlProvider {
             "findings": findings,
             "source_files": ApiValue::Array(source_files),
             "source_revision": source_revision,
-        })))
+        });
+        Ok(Some(operation_id.map_or_else(
+            || value.clone(),
+            |id| crate::preparation::report_envelope(id, value.clone(), revisions),
+        )))
     }
+}
+
+pub(crate) fn is_twin_source_set(reference: &str) -> bool {
+    reference
+        .strip_prefix("twin://")
+        .is_some_and(|name| !name.is_empty() && !name.contains(['/', '\\']))
 }
 
 pub fn analyze_sysml_reference(world: &World, reference: &str) -> ValidationReport {
@@ -776,45 +847,52 @@ pub(crate) fn validate_sysml_reference(
             return validate_sysml_twin(world, name, reference, apply_structural_policy);
         }
     }
-    let Some((name, relative)) = lunco_assets_core::parse_twin_uri(reference) else {
-        return validate_asset_with_policy(reference, apply_structural_policy);
-    };
-    let Some(roots) = world.get_resource::<lunco_assets_core::TwinRoots>() else {
-        return ValidationReport::new(reference, "sysml")
-            .error("SysML twin:// source query requires the TwinRoots asset registry");
-    };
-    let path = match roots.resolve_file(name, Path::new(relative)) {
-        Ok(Some(path)) => path,
-        Ok(None) => {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let Some((name, relative)) = lunco_assets_core::parse_twin_uri(reference) else {
+            return validate_asset_with_policy(reference, apply_structural_policy);
+        };
+        let Some(roots) = world.get_resource::<lunco_assets_core::TwinRoots>() else {
             return ValidationReport::new(reference, "sysml")
-                .error(format!("Twin `{name}` is not mounted"));
+                .error("SysML twin:// source query requires the TwinRoots asset registry");
+        };
+        let path = match roots.resolve_file(name, Path::new(relative)) {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                return ValidationReport::new(reference, "sysml")
+                    .error(format!("Twin `{name}` is not mounted"));
+            }
+            Err(error) => {
+                return ValidationReport::new(reference, "sysml")
+                    .error(format!("cannot resolve {reference}: {error}"));
+            }
+        };
+        let text = match read_native_text_bounded(&path) {
+            Ok(text) => text,
+            Err(error) => {
+                return ValidationReport::new(reference, "sysml")
+                    .error(format!("cannot read {}: {error}", path.display()));
+            }
+        };
+        let kind = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or_default();
+        if !matches!(kind.to_ascii_lowercase().as_str(), "sysml" | "kerml") {
+            return ValidationReport::new(reference, "unknown")
+                .error("SysML twin:// source path must end in .sysml or .kerml");
         }
-        Err(error) => {
-            return ValidationReport::new(reference, "sysml")
-                .error(format!("cannot resolve {reference}: {error}"));
+        let report = validate_sysml(reference, &path, &text);
+        if apply_structural_policy {
+            apply_lint_policy(report, &text)
+        } else {
+            report
         }
-    };
-    let text = match lunco_assets_core::read_asset_file_string(&path) {
-        Ok(text) => text,
-        Err(error) => {
-            return ValidationReport::new(reference, "sysml")
-                .error(format!("cannot read {}: {error}", path.display()));
-        }
-    };
-    let kind = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .unwrap_or_default();
-    if !matches!(kind.to_ascii_lowercase().as_str(), "sysml" | "kerml") {
-        return ValidationReport::new(reference, "unknown")
-            .error("SysML twin:// source path must end in .sysml or .kerml");
     }
-    let report = validate_sysml(reference, &path, &text);
-    if apply_structural_policy {
-        apply_lint_policy(report, &text)
-    } else {
-        report
-    }
+    #[cfg(target_arch = "wasm32")]
+    ValidationReport::new(reference, "sysml").error(
+        "Single-file SysML facts are not prepared; use the one-shot AnalyzeSysml/ValidateSysml query or a mounted twin:// source-set snapshot",
+    )
 }
 
 fn validate_sysml_twin(
@@ -823,6 +901,8 @@ fn validate_sysml_twin(
     reference: &str,
     apply_structural_policy: bool,
 ) -> ValidationReport {
+    #[cfg(all(target_arch = "wasm32", not(feature = "sysml-runtime")))]
+    let _ = apply_structural_policy;
     let Some(workspace) = world.get_resource::<lunco_workspace::WorkspaceResource>() else {
         return ValidationReport::new(reference, "sysml").error(
             "SysML twin:// source query requires the mounted WorkspaceResource; open the Twin first",
@@ -843,7 +923,7 @@ fn validate_sysml_twin(
                 .error(format!("cannot resolve {reference}: {error}"));
         }
     };
-    let Some((_twin_id, twin)) = workspace
+    let Some((_twin_id, _twin)) = workspace
         .twins()
         .find(|(_, twin)| lunco_doc::same_file(&twin.root, &root))
     else {
@@ -854,7 +934,7 @@ fn validate_sysml_twin(
 
     #[cfg(feature = "sysml-runtime")]
     if let Some(analyses) = world.get_resource::<lunco_sysml::TwinSysmlAnalyses>() {
-        return match analyses.state_for(name, _twin_id, &twin.root) {
+        return match analyses.state_for(name, _twin_id, &_twin.root) {
             Some(lunco_sysml::TwinSysmlAnalysisState::Ready(analysis)) => {
                 let policy_source = analysis
                     .files()
@@ -885,86 +965,93 @@ fn validate_sysml_twin(
         };
     }
 
-    let relative_sources = match twin.discover_sysml_sources_checked() {
-        Ok(sources) => sources,
-        Err(errors) => {
-            let mut report = ValidationReport::new(reference, "sysml");
-            report.errors.extend(
-                errors
-                    .into_iter()
-                    .map(|error| format!("Twin `{name}` SysML source set: {error}")),
-            );
-            return report.finish();
-        }
-    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let relative_sources = match _twin.discover_sysml_sources_checked() {
+            Ok(sources) => sources,
+            Err(errors) => {
+                let mut report = ValidationReport::new(reference, "sysml");
+                report.errors.extend(
+                    errors
+                        .into_iter()
+                        .map(|error| format!("Twin `{name}` SysML source set: {error}")),
+                );
+                return report.finish();
+            }
+        };
 
-    let mut sources = Vec::with_capacity(relative_sources.len());
-    let mut policy_source = String::new();
-    let mut revision_input = Vec::new();
-    for relative in relative_sources {
-        let text = match roots.overlay_bytes(name, &relative) {
-            Ok(Some(bytes)) => match String::from_utf8((*bytes).clone()) {
-                Ok(text) => text,
+        let mut sources = Vec::with_capacity(relative_sources.len());
+        let mut policy_source = String::new();
+        let mut revision_input = Vec::new();
+        for relative in relative_sources {
+            let text = match roots.overlay_bytes(name, &relative) {
+                Ok(Some(bytes)) => match String::from_utf8((*bytes).clone()) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        return ValidationReport::new(reference, "sysml").error(format!(
+                            "Twin `{name}` SysML overlay `{}` is not UTF-8: {error}",
+                            relative.display()
+                        ));
+                    }
+                },
+                Ok(None) => {
+                    let path = match roots.resolve_file(name, &relative) {
+                        Ok(Some(path)) => path,
+                        Ok(None) => {
+                            return ValidationReport::new(reference, "sysml").error(format!(
+                                "Twin `{name}` SysML source `{}` cannot be resolved by TwinRoots",
+                                relative.display()
+                            ));
+                        }
+                        Err(error) => {
+                            return ValidationReport::new(reference, "sysml").error(format!(
+                                "cannot resolve Twin `{name}` SysML source `{}`: {error}",
+                                relative.display()
+                            ));
+                        }
+                    };
+                    match read_native_text_bounded(&path) {
+                        Ok(text) => text,
+                        Err(error) => {
+                            return ValidationReport::new(reference, "sysml")
+                                .error(format!("cannot read {}: {error}", path.display()));
+                        }
+                    }
+                }
                 Err(error) => {
                     return ValidationReport::new(reference, "sysml").error(format!(
-                        "Twin `{name}` SysML overlay `{}` is not UTF-8: {error}",
+                        "cannot read Twin `{name}` SysML source `{}`: {error}",
                         relative.display()
                     ));
                 }
-            },
-            Ok(None) => {
-                let path = match roots.resolve_file(name, &relative) {
-                    Ok(Some(path)) => path,
-                    Ok(None) => {
-                        return ValidationReport::new(reference, "sysml").error(format!(
-                            "Twin `{name}` SysML source `{}` cannot be resolved by TwinRoots",
-                            relative.display()
-                        ));
-                    }
-                    Err(error) => {
-                        return ValidationReport::new(reference, "sysml").error(format!(
-                            "cannot resolve Twin `{name}` SysML source `{}`: {error}",
-                            relative.display()
-                        ));
-                    }
-                };
-                match lunco_assets_core::read_asset_file_string(&path) {
-                    Ok(text) => text,
-                    Err(error) => {
-                        return ValidationReport::new(reference, "sysml")
-                            .error(format!("cannot read {}: {error}", path.display()));
-                    }
-                }
-            }
-            Err(error) => {
-                return ValidationReport::new(reference, "sysml").error(format!(
-                    "cannot read Twin `{name}` SysML source `{}`: {error}",
-                    relative.display()
-                ));
-            }
-        };
-        let logical = lunco_assets_core::twin_uri(name, &relative);
-        revision_input.extend_from_slice(logical.as_bytes());
-        revision_input.push(0);
-        revision_input.extend_from_slice(text.as_bytes());
-        policy_source.push_str(&text);
-        policy_source.push('\n');
-        sources.push((logical, text));
+            };
+            let logical = lunco_assets_core::twin_uri(name, &relative);
+            revision_input.extend_from_slice(logical.as_bytes());
+            revision_input.push(0);
+            revision_input.extend_from_slice(text.as_bytes());
+            policy_source.push_str(&text);
+            policy_source.push('\n');
+            sources.push((logical, text));
+        }
+        let analysis = lunco_sysml_ast::SysmlAnalysis::build_cached(
+            sources,
+            true,
+            lunco_hash::fnv1a64(&revision_input),
+        );
+        let report = finish_sysml_report(reference, analysis);
+        if apply_structural_policy {
+            apply_lint_policy(report, &policy_source)
+        } else {
+            report
+        }
     }
-    let analysis = lunco_sysml_ast::SysmlAnalysis::build_cached(
-        sources,
-        true,
-        lunco_hash::fnv1a64(&revision_input),
-    );
-    let report = finish_sysml_report(reference, analysis);
-    if apply_structural_policy {
-        apply_lint_policy(report, &policy_source)
-    } else {
-        report
-    }
+    #[cfg(target_arch = "wasm32")]
+    ValidationReport::new(reference, "sysml").error(format!(
+        "Twin `{name}` SysML source set has no prepared analysis for its current owner; install the SysML runtime and prepare the mounted source set",
+    ))
 }
 
-/// `ValidateTwin { path, policy? }` → [`TwinValidationReport`].
+/// `ValidateTwin { path, policy? }` admits once; `{ operation_id }` consumes its report.
 struct ValidateTwinProvider;
 
 impl ApiQueryProvider for ValidateTwinProvider {
@@ -972,25 +1059,15 @@ impl ApiQueryProvider for ValidateTwinProvider {
         "ValidateTwin"
     }
 
-    fn execute(&self, _world: &World, params: &ApiValue) -> ApiQueryResult {
-        let Some(path) = api_param_str(params, "path") else {
-            return Err(ApiQueryError::new(
-                ApiErrorCode::DeserializationError,
-                "ValidateTwin requires params.path (string): a Twin folder path",
-            ));
-        };
-        let policy = match params.get("policy") {
-            None => "warn",
-            Some(ApiValue::Str(policy)) => policy.as_str(),
-            Some(_) => {
-                return Err(ApiQueryError::new(
-                    ApiErrorCode::DeserializationError,
-                    "ValidateTwin: `policy` must be a string",
-                ));
-            }
-        };
-        let report = validate_twin(path, policy);
-        Ok(Some(lunco_api_core::api_value_from_serializable(&report)?))
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        use crate::preparation::{PreparationPoll, QueryKind};
+        match crate::preparation::poll(world, QueryKind::Twin, params)? {
+            PreparationPoll::Pending(value) | PreparationPoll::Terminal(value) => Ok(Some(value)),
+            PreparationPoll::Ready { .. } => Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "Twin preparation returned an asset report",
+            )),
+        }
     }
 }
 
@@ -999,6 +1076,12 @@ impl ApiQueryProvider for ValidateTwinProvider {
 /// `ValidateTwin`.
 pub fn register(app: &mut App) {
     app.init_resource::<ApiQueryRegistry>();
+    app.init_resource::<crate::preparation::QueryPreparations>();
+    app.init_resource::<crate::preparation::QueryPreparationLimits>();
+    if !app.is_plugin_added::<lunco_core_runtime::AsyncWorkAdmissionPlugin>() {
+        app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
+    }
+    app.add_systems(Update, crate::preparation::retire);
     app.world_mut()
         .resource_mut::<ApiQueryRegistry>()
         .register(ValidateAssetProvider);
@@ -1010,7 +1093,7 @@ pub fn register(app: &mut App) {
         .register(ValidateTwinProvider);
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

@@ -456,6 +456,24 @@ pub fn policy_status_value(world: &World) -> HookValue {
 /// need a subset select tables and identities through the generic `query`
 /// surface, keeping report policy out of this Rust adapter.
 fn sysml_report_value(path: &str) -> Dynamic {
+    #[cfg(feature = "sysml")]
+    let report = bridge_core::with_world(|world| {
+        let report = lunco_scene_validation::validate::analyze_sysml_reference(world, path);
+        lunco_hooks_rhai::hook_to_dynamic(
+            &lunco_scene_validation::sysml_analysis::sysml_report_facts(
+                &report,
+                &Default::default(),
+            ),
+        )
+    })
+    .unwrap_or_else(|| {
+        sysml_value_error(
+            path,
+            "",
+            "SysML source reports require an active world scope",
+        )
+    });
+    #[cfg(not(feature = "sysml"))]
     let report = bridge_core::query(
         &RhaiBuilder,
         "AnalyzeSysml",

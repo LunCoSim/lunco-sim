@@ -1,3 +1,5 @@
+import "lunco://scripting/tools/asset_preflight" as preflight;
+
 // Production authored acceptance for the SysML/KerML neutral constraint IR.
 // This runs inside the normal Rhai world bridge, so it exercises the same
 // native SysmlModel methods that Twin policies use, including Rumoca lowering
@@ -44,6 +46,7 @@ fn on_start(me, ctx) {
     this.document_generation = ();
     this.initial_document_ids = [];
     this.elapsed = 0.0;
+    this.preflight = preflight::requests();
 }
 
 fn on_tick(me, ctx) {
@@ -56,6 +59,10 @@ fn on_tick(me, ctx) {
         return;
     }
 
+    let prepared_requirements = preflight::read("AnalyzeSysml", #{path: "lunco://scripting/tests/fixtures/sysml_requirement_constraint.sysml", tables: ["requirements", "verifications"]}, this.preflight);
+    this.preflight = prepared_requirements.state;
+    if this.preflight.error != () { finish(this, [this.preflight.error]); return; }
+    if !prepared_requirements.ready { return; }
     let checks = [];
     if this.document_phase == 0 {
         let documents = query("ListOpenDocuments");
@@ -248,9 +255,7 @@ fn on_tick(me, ctx) {
         && invalid_result.diagnostics.len() > 0,
         "provider-invalid observations are errors, not failed relations"));
 
-    let requirement_path = "lunco://scripting/tests/fixtures/sysml_requirement_constraint.sysml";
-    let analyzed_requirements = query("AnalyzeSysml", #{path: requirement_path,
-        tables: ["requirements", "verifications"]});
+    let analyzed_requirements = prepared_requirements.report;
     let requirement_source = if analyzed_requirements != ()
         && analyzed_requirements.analysis != () {
         #{ok: analyzed_requirements.ok, path: analyzed_requirements.path,

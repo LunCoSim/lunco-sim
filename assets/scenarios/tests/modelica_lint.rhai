@@ -1,3 +1,5 @@
+import "lunco://scripting/tools/asset_preflight" as preflight;
+
 // Complete runtime Modelica lint and diagnostics API acceptance.
 //
 // The engine exposes source identity through ListBundled, parse/lint facts
@@ -22,6 +24,8 @@ fn on_start(me, ctx) {
     this.phase = "assets";
     this.failures = [];
     this.diagnostics_doc = ();
+    this.preflight = ();
+    this.inventory = ();
 }
 
 fn on_tick(me, ctx) {
@@ -77,7 +81,22 @@ fn on_tick(me, ctx) {
 
     if this.elapsed < 0.1 { return; }
 
-    let inventory = query("ListBundled", #{});
+    if this.preflight == () {
+        this.inventory = query("ListBundled", #{});
+        let paths = [];
+        if this.inventory != () && this.inventory.sources != () {
+            for source in this.inventory.sources { paths.push(source.uri); }
+        }
+        this.preflight = preflight::create(paths);
+    }
+    this.preflight = preflight::advance(this.preflight);
+    if this.preflight.error != () || this.elapsed > 120.0 {
+        this.done = true;
+        report_verdict([if this.preflight.error != () { this.preflight.error } else { "Modelica source preflight timed out" }], "MODELICA LINT", "MODELICA_LINT");
+        return;
+    }
+    if !this.preflight.done { return; }
+    let inventory = this.inventory;
     let failures = [];
     let search = query("FindModel", #{ query: "rocket", limit: 20 });
     let bundled_example_found = false;
@@ -97,7 +116,7 @@ fn on_tick(me, ctx) {
         failures.push(t_true(inventory.sources.len() > inventory.bundled.len(),
             "Modelica source inventory is unexpectedly incomplete"));
         for source in inventory.sources {
-            let report = query("ValidateAsset", #{ path: source.uri });
+            let report = this.preflight.reports[source.uri];
             if report == () {
                 failures.push(t_true(false,
                     "ValidateAsset returned no report for " + source.path));

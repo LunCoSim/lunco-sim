@@ -203,6 +203,38 @@ or vehicle-specific Rust input handler. Because projected runtime owners do not 
 in a file by themselves, this diagnostic is available from live `RunLint`, not
 from `ValidateAsset`'s file-only preflight.
 
+## Runtime query preparation
+
+`lunco-scene-validation` owns one-shot preparation for `ValidateAsset`,
+`ValidateTwin`, and single-file `ValidateSysml`/`AnalyzeSysml`. Initial typed
+parameters admit one operation. Its `pending` result carries an `operation_id`;
+poll the same query with only that ID. `ready` carries the actual report and
+read-source revisions; `failed` carries a terminal diagnostic. Terminal results
+are consumed once. Unknown, consumed, and retired IDs reject; there is no
+name-only result cache or automatic retry.
+
+Logical sources use the registered asset reader and the shared USD closure
+owner. Native file ingress uses captured `FileDocumentAdmission::read_bounded`.
+`QueryPreparationLimits` exposes the existing `StageClosureLimits`; queries read
+serially by default, and Twin preparation passes the remaining aggregate byte
+budget into every recipe before dependency allocation. USD crate bytes still
+fail the current text-layer dependency inspector explicitly.
+
+The shared `AsyncWorkAdmission` permit lasts through the running task and its
+unconsumed result. Retirement drops the owning task/result. Publication checks
+exact document runtime ownership, mount incarnation, indexed source input,
+and policy identity; the report identifies the bytes actually read. Pure facts prepare asynchronously;
+policy hooks run serially after the operation-state lock is released. Browser
+preparation uses Bevy's cooperative executor, without an off-main CPU guarantee.
+Native CLI and bounded native SysML constructors retain their synchronous
+contract over the shared validators. Browser synchronous constructors require
+an already-prepared exact mounted snapshot or reject visibly.
+
+Mounted SysML source-set queries continue reading their revision-fenced analysis
+snapshot directly. File callers must use preparation. Authored scenarios use
+`lunco://scripting/tools/asset_preflight` to retain IDs and Ready reports in their
+own state and run assertions once after preparation completes.
+
 ## Twin-wide namespace inspection
 
 `RunLint { scope: "twin" }` and `ValidateTwin` share the read-only inspector in
@@ -230,14 +262,16 @@ The default policy is a warning. CI can make collisions fail with `error`:
 
 ```rhai
 cmd("RunLint", #{scope: "twin", policy: "warn"});
-query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
+let preparation = query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
+// At the next caller-owned boundary, poll with only preparation.operation_id.
 ```
 
 The equivalent HTTP/MCP calls use `ExecuteCommand` with `command` set to
 `RunLint` or `ValidateTwin`. `RunLint` reads the active Workspace Twin;
-`ValidateTwin` takes an explicit local folder and is independent of ECS state.
-Both return actionable `twin-namespace-collision` findings through the normal
-lint policy and keep source-read failures visible as warnings.
+`ValidateTwin` admits a current mounted Twin address on either platform or a
+native directory/file URI, then uses the operation protocol above. Prepared
+source-read failures fail its report; namespace collision severity remains
+controlled by the authored policy.
 
 ## Explicit authoring/preflight only
 

@@ -35,7 +35,9 @@ use std::{
 };
 
 use anyhow::{Result, anyhow, ensure};
-use bevy::asset::{Handle, LoadContext, ReadAssetBytesError, io::AssetReaderError};
+use bevy::asset::{
+    AssetPath, AssetServer, Handle, LoadContext, ReadAssetBytesError, io::AssetReaderError,
+};
 use openusd::usd::Stage;
 
 use crate::asset::UsdLayerReadReceipt;
@@ -92,12 +94,111 @@ pub async fn fetch_layer_closure_with_limits(
     limits: StageClosureLimits,
     roots: Option<&lunco_assets_core::TwinRoots>,
 ) -> Result<FetchedStageClosure> {
+    let origin = load_context.path().clone().into_owned();
+    fetch_layer_closure_inner(
+        &mut ClosureReader::Loader(load_context),
+        root_asset_path,
+        root_bytes,
+        limits,
+        roots,
+        origin,
+    )
+    .await
+}
+
+/// Prepare a fresh closure through the registered readers used by the loader.
+/// One-shot queries retain their own result without installing a cached stage.
+pub async fn fetch_layer_closure_from_asset_reader(
+    asset_server: &AssetServer,
+    origin: AssetPath<'static>,
+    root_bytes: Vec<u8>,
+    roots: Option<&lunco_assets_core::TwinRoots>,
+    limits: StageClosureLimits,
+) -> Result<StageRecipe> {
+    let root_id = lunco_assets_core::asset_path::anchor_of(&origin);
+    Ok(fetch_layer_closure_inner(
+        &mut ClosureReader::Registered(asset_server),
+        &root_id,
+        root_bytes,
+        limits,
+        roots,
+        origin,
+    )
+    .await?
+    .recipe)
+}
+
+/// Read once through the authoritative source selected by a typed path.
+pub async fn read_registered_asset_bytes(
+    asset_server: &AssetServer,
+    path: &AssetPath<'_>,
+    max_bytes: usize,
+) -> Result<Vec<u8>, ReadAssetBytesError> {
+    let source = asset_server.get_source(path.source().clone())?;
+    let reader = source.reader().read(path.path()).await?;
+    use bevy::tasks::futures_lite::io::AsyncReadExt;
+    let limit = u64::try_from(max_bytes)
+        .ok()
+        .and_then(|limit| limit.checked_add(1))
+        .ok_or_else(|| ReadAssetBytesError::Io {
+            path: path.path().to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "asset byte limit overflows the reader bound",
+            ),
+        })?;
+    let mut reader = reader.take(limit);
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .await
+            .map_err(|source| ReadAssetBytesError::Io {
+                path: path.path().to_path_buf(),
+                source,
+            })?;
+        if count == 0 {
+            break;
+        }
+        if count > max_bytes.saturating_sub(bytes.len()) {
+            return Err(ReadAssetBytesError::Io {
+                path: path.path().to_path_buf(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("asset exceeds the {max_bytes}-byte preparation budget"),
+                ),
+            });
+        }
+        bytes
+            .try_reserve_exact(count)
+            .map_err(|error| ReadAssetBytesError::Io {
+                path: path.path().to_path_buf(),
+                source: std::io::Error::other(format!("asset buffer allocation failed: {error}")),
+            })?;
+        bytes.extend_from_slice(&buffer[..count]);
+    }
+    Ok(bytes)
+}
+
+enum ClosureReader<'a, 'b> {
+    Loader(&'a mut LoadContext<'b>),
+    Registered(&'a AssetServer),
+}
+
+async fn fetch_layer_closure_inner(
+    transport: &mut ClosureReader<'_, '_>,
+    root_asset_path: &str,
+    root_bytes: Vec<u8>,
+    limits: StageClosureLimits,
+    roots: Option<&lunco_assets_core::TwinRoots>,
+    origin: AssetPath<'static>,
+) -> Result<FetchedStageClosure> {
     ensure!(
         limits.max_parallel_reads > 0,
         "USD layer closure parallel read limit must be greater than zero"
     );
     let root_id = lunco_usd_compose::canonicalize_at(root_asset_path, None)?;
-    let origin = load_context.path().clone().into_owned();
     check_stage_closure_limits(&limits, 1, 0, 0, root_bytes.len())?;
 
     // 1. Pre-fetch BFS — keyed by the SAME canonical id the resolver will use.
@@ -163,28 +264,59 @@ pub async fn fetch_layer_closure_with_limits(
 
         let mut next_frontier = Vec::new();
         for request_batch in requests.chunks(limits.max_parallel_reads) {
-            let reads = request_batch.iter().map(
-                |(referring_id, child_id, child_path, child_depth, dependency_order)| {
-                    let mut child_context = load_context.begin_labeled_asset();
-                    let referring_id = referring_id.clone();
-                    let child_id = child_id.clone();
-                    let child_path = child_path.clone();
-                    let child_depth = *child_depth;
-                    let dependency_order = *dependency_order;
-                    async move {
-                        let fetched = child_context.read_asset_bytes(child_path).await;
-                        (
-                            dependency_order,
-                            referring_id,
-                            child_id,
-                            child_depth,
-                            child_context,
-                            fetched,
-                        )
-                    }
-                },
-            );
-            let read_results = join_all_ordered(reads).await;
+            let read_results = match transport {
+                ClosureReader::Loader(load_context) => {
+                    let reads = request_batch.iter().map(
+                        |(referring_id, child_id, child_path, child_depth, dependency_order)| {
+                            let mut child_context = load_context.begin_labeled_asset();
+                            let referring_id = referring_id.clone();
+                            let child_id = child_id.clone();
+                            let child_path = child_path.clone();
+                            let child_depth = *child_depth;
+                            let dependency_order = *dependency_order;
+                            async move {
+                                let fetched = child_context.read_asset_bytes(child_path).await;
+                                (
+                                    dependency_order,
+                                    referring_id,
+                                    child_id,
+                                    child_depth,
+                                    Some(child_context),
+                                    fetched,
+                                )
+                            }
+                        },
+                    );
+                    join_all_ordered(reads).await
+                }
+                ClosureReader::Registered(asset_server) => {
+                    let reads =
+                        request_batch.iter().map(
+                            |(
+                                referring_id,
+                                child_id,
+                                child_path,
+                                child_depth,
+                                dependency_order,
+                            )| async {
+                                (
+                                    *dependency_order,
+                                    referring_id.clone(),
+                                    child_id.clone(),
+                                    *child_depth,
+                                    None,
+                                    read_registered_asset_bytes(
+                                        asset_server,
+                                        child_path,
+                                        limits.max_bytes.saturating_sub(total_bytes),
+                                    )
+                                    .await,
+                                )
+                            },
+                        );
+                    join_all_ordered(reads).await
+                }
+            };
             let mut completed = Vec::with_capacity(read_results.len());
 
             for (dependency_order, referring_id, child_id, child_depth, child_context, result) in
@@ -209,7 +341,7 @@ pub async fn fetch_layer_closure_with_limits(
                             child_id,
                             child_depth,
                             fetched,
-                            child_context.finish(UsdLayerReadReceipt),
+                            child_context.map(|context| context.finish(UsdLayerReadReceipt)),
                         ));
                     }
                     Err(error) if is_missing_asset_read(&error) => {
@@ -244,8 +376,11 @@ pub async fn fetch_layer_closure_with_limits(
             // Finish every child context before mutably registering its labeled
             // receipt with the parent LoadContext.
             for (label, child_id, child_depth, fetched, loaded_receipt) in completed {
-                source_dependencies
-                    .push(load_context.add_loaded_labeled_asset(label, loaded_receipt));
+                if let (ClosureReader::Loader(load_context), Some(receipt)) =
+                    (&mut *transport, loaded_receipt)
+                {
+                    source_dependencies.push(load_context.add_loaded_labeled_asset(label, receipt));
+                }
                 bytes.insert(child_id.clone(), fetched);
                 next_frontier.push((child_id, child_depth));
             }

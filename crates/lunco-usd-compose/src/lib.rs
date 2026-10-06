@@ -265,9 +265,27 @@ pub fn recipe_from_source_with_roots(
     assets_root: Option<&Path>,
     twin_root: Option<&Path>,
 ) -> Result<recipe::StageRecipe> {
+    recipe_from_bytes_with_roots(
+        root_id,
+        source.as_bytes().to_vec(),
+        assets_root,
+        twin_root,
+        StageClosureLimits::default(),
+    )
+}
+
+/// Resolve a native text-layer closure from bytes already read by its source
+/// owner. OpenUSD interprets the layer; binary input fails the text dependency
+/// inspection boundary with an explicit diagnostic.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn recipe_from_bytes_with_roots(
+    root_id: &str,
+    root_bytes: Vec<u8>,
+    assets_root: Option<&Path>,
+    twin_root: Option<&Path>,
+    limits: StageClosureLimits,
+) -> Result<recipe::StageRecipe> {
     let root_id = canonicalize_at(root_id, None)?;
-    let root_bytes = source.as_bytes().to_vec();
-    let limits = StageClosureLimits::default();
     check_stage_closure_limits(&limits, 1, 0, 0, root_bytes.len())?;
     let mut total_bytes = root_bytes.len();
     let mut bytes = HashMap::from([(root_id.to_owned(), root_bytes)]);
@@ -284,10 +302,11 @@ pub fn recipe_from_source_with_roots(
             }
             let child_depth = depth + 1;
             check_stage_closure_limits(&limits, seen.len(), child_depth, 0, total_bytes)?;
-            let child = lunco_assets_core::read_asset_bytes_with_twin_root(
+            let child = lunco_assets_core::read_asset_bytes_bounded_with_twin_root(
                 &child_id,
                 assets_root,
                 twin_root,
+                limits.max_bytes.saturating_sub(total_bytes),
             );
             let child = match child {
                 Ok(child) => child,

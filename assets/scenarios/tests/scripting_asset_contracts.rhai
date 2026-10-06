@@ -1,3 +1,5 @@
+import "lunco://scripting/tools/asset_preflight" as preflight;
+
 // The scripting surface is authored content. This scene checks it through the
 // same public catalog, query, and validation boundaries used by the editor and
 // API; Rust keeps only the generic Rhai bridge and reflection mechanisms.
@@ -37,8 +39,8 @@ fn tool_has_function(tools, tool_name, function_name) {
     false
 }
 
-fn validate_rhai(path, failures) {
-    let report = query("ValidateAsset", #{ path: path });
+fn validate_rhai(path, failures, reports) {
+    let report = reports[path];
     failures.push(t_true(report != (), path + " returned no validation report"));
     failures.push(t_true(report != () && report.kind == "rhai",
         path + " was not classified as Rhai"));
@@ -54,12 +56,20 @@ fn simulation_dependencies(me, ctx) {
 fn on_start(me, ctx) {
     this.done = false;
     this.elapsed = 0.0;
+    this.preflight = preflight::create(["lunco://scripting/prelude/_intro.rhai", "lunco://scripting/prelude/authoring.rhai", "lunco://scripting/prelude/auto_tests.rhai", "lunco://scripting/prelude/control.rhai", "lunco://scripting/prelude/coordinates.rhai", "lunco://scripting/prelude/links.rhai", "lunco://scripting/prelude/math.rhai", "lunco://scripting/prelude/mission.rhai", "lunco://scripting/prelude/nav.rhai", "lunco://scripting/prelude/ports.rhai", "lunco://scripting/prelude/readiness.rhai", "lunco://scripting/prelude/tasks.rhai", "lunco://scripting/prelude/terrain.rhai", "lunco://scripting/prelude/vessel.rhai", "lunco://scripting/policy/lint_modelica.rhai", "lunco://scripting/policy/lint_rhai.rhai", "lunco://scripting/policy/lint_twin.rhai", "lunco://scripting/policy/lint_usd.rhai", "lunco://scripting/policy/source_classification.rhai", "lunco://schemas/lunco/generatedSchema.usda"]);
 }
 
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed < 0.1 { return; }
+    this.preflight = preflight::advance(this.preflight);
+    if this.preflight.error != () || this.elapsed > 30.0 {
+        this.done = true;
+        report_verdict([if this.preflight.error != () { this.preflight.error } else { "preflight preparation timed out" }], "SCRIPTING ASSET CONTRACTS", "SCRIPTING_ASSET_CONTRACTS");
+        return;
+    }
+    if !this.preflight.done { return; }
 
     let failures = [];
     let catalog = query("ScriptingCatalog", #{});
@@ -188,12 +198,10 @@ fn on_tick(me, ctx) {
         "lunco://scripting/policy/lint_usd.rhai",
         "lunco://scripting/policy/source_classification.rhai"
     ] {
-        validate_rhai(path, failures);
+        validate_rhai(path, failures, this.preflight.reports);
     }
 
-    let schema = query("ValidateAsset", #{
-        path: "lunco://schemas/lunco/generatedSchema.usda"
-    });
+    let schema = this.preflight.reports["lunco://schemas/lunco/generatedSchema.usda"];
     failures.push(t_true(schema != () && schema.kind == "usd" && schema.ok == true,
         "generated USD schema was not available through the runtime asset pipeline"));
 

@@ -321,10 +321,11 @@ yourself rather than relying on `save_to_file`.
 
 ### Validate an asset without loading it
 
-`ValidateAsset` is the parse-only pre-flight ("does this file compile?"):
-no cosim, no scene load, no GPU — safe against any running luncosim, even
-mid-simulation. Unlike the commands below it is a **query provider**, so the
-report comes back in the response body; no secondary result request is needed.
+`ValidateAsset` prepares fresh file facts without mounting a scene. Its initial
+query returns `pending` with an `operation_id`; poll the same query with only
+that ID. The consumed `ready` result contains `report` and actual
+`source_revisions`; `failed` contains a terminal diagnostic. Retired or consumed
+IDs reject. Do not resubmit the initial path while waiting.
 
 ```bash
 curl -s -X POST http://127.0.0.1:4101/api/commands \
@@ -332,10 +333,7 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
   -d '{"type":"ExecuteCommand","command":"ValidateAsset","params":{"path":"lunco://models/LunCo/Electrical/Battery.mo"}}'
 ```
 
-**Answered by luncosim binaries only** — it lives in `lunco-scene-validation`,
-which lunica does not link, so lunica returns `CommandNotFound`. With no
-instance (or only lunica) up, the same checks run as a one-shot CLI that builds
-no app at all:
+The native CLI uses the same validators without constructing an app:
 
 ```bash
 "$LUNCOSIM_BIN" --validate assets/models/LunCo/Electrical/Battery.mo
@@ -355,9 +353,10 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
   -d '{"type":"ExecuteCommand","command":"ValidateTwin","params":{"path":"/work/rover-twin","policy":"error"}}'
 ```
 
-It returns the indexed entries, resolver scopes, collisions, source-read
-errors, and structured `twin-namespace-collision` findings in the same response
-body. For the active Twin after `OpenFolder`/`OpenTwin`, use
+Poll the returned `operation_id`; `ready.report` contains indexed entries,
+resolver scopes, collisions, source-read errors, and namespace findings. For a
+mounted browser Twin pass its current `twin://<assigned-authority>` instead of
+a native folder. For the active Twin after `OpenFolder`/`OpenTwin`, use
 `cmd("RunLint", #{scope: "twin", policy: "warn"})` and read
 `query("GetDiagnostics", #{scope: "twin"})` after `complete:true`.
 

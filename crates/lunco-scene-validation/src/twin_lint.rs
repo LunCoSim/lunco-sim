@@ -80,19 +80,97 @@ pub fn policy_name(policy: &str) -> Result<&'static str, String> {
     }
 }
 
-/// Inspect one indexed Twin without mutating its manifest, files, or runtime.
+/// Immutable indexed facts admitted before any source I/O.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TwinInspectionInput {
+    pub root: PathBuf,
+    pub name: String,
+    pub files: Vec<PathBuf>,
+    modelica_roots: Vec<PathBuf>,
+    engine_tools: Vec<NamespaceEntry>,
+    pub registry_errors: Vec<String>,
+}
+
+impl TwinInspectionInput {
+    pub(crate) fn capture(twin: &lunco_workspace::Twin) -> Self {
+        let mut engine_tools = Vec::new();
+        let mut known_tools = HashSet::new();
+        for tool in lunco_tools::index() {
+            if tool.scope.starts_with("twin:") {
+                continue;
+            }
+            known_tools.insert(tool.name.clone());
+            engine_tools.push(tool_entry(
+                tool.name.clone(),
+                "engine tool library",
+                "engine scripting tool source".to_string(),
+            ));
+        }
+        for tool in lunco_tools::all() {
+            if known_tools.contains(tool.name()) {
+                continue;
+            }
+            engine_tools.push(tool_entry(
+                tool.name().to_owned(),
+                format!("runtime {} tool", tool.backend()),
+                if tool.source().is_some() {
+                    "runtime source registration"
+                } else {
+                    "runtime native registration"
+                }
+                .to_string(),
+            ));
+        }
+        let mut registry_errors = twin
+            .verification_registry_errors()
+            .into_iter()
+            .map(|error| format!("Twin verification registry: {error}"))
+            .collect::<Vec<_>>();
+        registry_errors.extend(
+            twin.component_registry_errors()
+                .into_iter()
+                .map(|error| format!("Twin component registry: {error}")),
+        );
+        Self {
+            root: twin.root.clone(),
+            name: twin_name(twin),
+            files: twin
+                .files()
+                .iter()
+                .map(|file| file.relative_path.clone())
+                .collect(),
+            modelica_roots: modelica_roots(twin),
+            engine_tools,
+            registry_errors,
+        }
+    }
+}
+
+/// Native live-lint adapter. Runtime preflight uses the same pure inspector with
+/// asynchronously prepared source bytes and recipes.
 pub fn inspect_twin(twin: &lunco_workspace::Twin) -> TwinNamespaceSnapshot {
+    inspect_input(
+        &TwinInspectionInput::capture(twin),
+        |relative| read_twin_text(twin, relative),
+        |relative, entries, errors| inspect_usd_file(twin, relative, entries, errors),
+    )
+}
+
+pub(crate) fn inspect_input(
+    input: &TwinInspectionInput,
+    read_text: impl Fn(&Path) -> Result<String, String>,
+    inspect_usd: impl Fn(&Path, &mut Vec<NamespaceEntry>, &mut Vec<String>),
+) -> TwinNamespaceSnapshot {
     let mut entries = Vec::new();
     let mut read_errors = Vec::new();
-    let twin_name = twin_name(twin);
+    let twin_name = input.name.clone();
 
-    let modelica_roots = modelica_roots(twin);
-    for file in twin.files() {
-        let rel = &file.relative_path;
+    let modelica_roots = &input.modelica_roots;
+    for rel in &input.files {
         if !has_extension(rel, "mo") {
             continue;
         }
-        let source = match read_twin_text(twin, rel) {
+        let source = match read_text(rel) {
             Ok(source) => source,
             Err(error) => {
                 read_errors.push(format!("{}: {error}", slashed(rel)));
@@ -113,8 +191,7 @@ pub fn inspect_twin(twin: &lunco_workspace::Twin) -> TwinNamespaceSnapshot {
         }
     }
 
-    for file in twin.files() {
-        let rel = &file.relative_path;
+    for rel in &input.files {
         add_asset_entry(rel, &mut entries);
         if has_extension(rel, "wgsl") {
             entries.push(NamespaceEntry {
@@ -130,30 +207,21 @@ pub fn inspect_twin(twin: &lunco_workspace::Twin) -> TwinNamespaceSnapshot {
                     .to_string(),
             });
         }
-        if has_extension(rel, "usda") || has_extension(rel, "usd") {
-            inspect_usd_file(twin, rel, &mut entries, &mut read_errors);
+        if crate::validate::is_usd_path(rel) {
+            inspect_usd(rel, &mut entries, &mut read_errors);
         }
     }
 
-    // The source files are the durable Twin owner. The live registry is the
-    // authoritative view of engine tools. Its active Twin overlay is already
-    // represented by the indexed Twin source files above, so counting those
-    // registrations here would report every Twin tool as colliding with
-    // itself.
-    let mut known_tools = HashSet::new();
-    for tool in lunco_tools::index() {
-        if tool.scope.starts_with("twin:") {
-            continue;
-        }
-        known_tools.insert(tool.name.clone());
-        entries.push(tool_entry(
-            tool.name.clone(),
-            "engine tool library",
-            "engine scripting tool source".to_string(),
-        ));
-    }
-    for file in twin.files() {
-        let rel = &file.relative_path;
+    entries.extend(input.engine_tools.iter().cloned().filter(|entry| {
+        entry.owner == "engine tool library"
+            || !input.files.iter().any(|relative| {
+                relative.parent() == Some(Path::new("tools"))
+                    && has_extension(relative, "rhai")
+                    && relative.file_stem().and_then(|stem| stem.to_str())
+                        == Some(entry.name.as_str())
+            })
+    }));
+    for rel in &input.files {
         if rel.parent() != Some(Path::new("tools")) || !has_extension(rel, "rhai") {
             continue;
         }
@@ -165,26 +233,6 @@ pub fn inspect_twin(twin: &lunco_workspace::Twin) -> TwinNamespaceSnapshot {
             name.to_string(),
             format!("Twin `{twin_name}` tool library"),
             slashed(rel),
-        ));
-    }
-
-    for tool in lunco_tools::all() {
-        if known_tools.contains(tool.name())
-            || entries
-                .iter()
-                .any(|entry| entry.namespace == RHAI_NAMESPACE && entry.name == tool.name())
-        {
-            continue;
-        }
-        let source = if tool.source().is_some() {
-            "runtime source registration"
-        } else {
-            "runtime native registration"
-        };
-        entries.push(tool_entry(
-            tool.name().to_string(),
-            format!("runtime {} tool", tool.backend()),
-            source.to_string(),
         ));
     }
 
@@ -200,7 +248,7 @@ pub fn inspect_twin(twin: &lunco_workspace::Twin) -> TwinNamespaceSnapshot {
 
     TwinNamespaceSnapshot {
         twin: twin_name,
-        root: twin.root.to_string_lossy().into_owned(),
+        root: input.root.to_string_lossy().into_owned(),
         entries,
         collisions,
         read_errors,
@@ -313,6 +361,14 @@ fn inspect_usd_file(
     };
     let canonical =
         lunco_usd_bevy_stage::canonical::CanonicalStage::from_stage(stage, slashed(rel));
+    inspect_usd_stage(&canonical, rel, entries);
+}
+
+pub(crate) fn inspect_usd_stage(
+    canonical: &lunco_usd_bevy_stage::canonical::CanonicalStage,
+    rel: &Path,
+    entries: &mut Vec<NamespaceEntry>,
+) {
     let view = canonical.view();
     let scope = format!("composed USD stage `{}`", slashed(rel));
     if let Some(default_prim) = view.default_prim() {
@@ -432,10 +488,11 @@ fn read_twin_text(twin: &lunco_workspace::Twin, rel: &Path) -> Result<String, St
     #[cfg(not(target_arch = "wasm32"))]
     {
         let id = format!("twin://namespace-lint/{}", slashed(rel));
-        let bytes = lunco_assets_core::read_asset_bytes_with_twin_root(
+        let bytes = lunco_assets_core::read_asset_bytes_bounded_with_twin_root(
             &id,
             None,
             Some(twin.root.as_path()),
+            lunco_usd_compose::recipe::StageClosureLimits::default().max_bytes,
         )
         .map_err(|error| error.to_string())?;
         String::from_utf8(bytes).map_err(|error| error.to_string())

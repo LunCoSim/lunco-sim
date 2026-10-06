@@ -12,9 +12,10 @@ description: >
 # Validate an asset (pre-flight)
 
 `ValidateAsset` answers one question — **does this file parse, and would the
-engine accept it?** — without a scene, a cosim, a GPU, or a window. It is the
-cheapest possible check and it is safe to run against a live luncosim
-**mid-simulation**: it only reads files.
+engine accept it?** — without mounting a scene or starting simulation. Runtime
+queries prepare fresh source facts asynchronously, then apply the authored lint
+policy serially in the captured runtime context. Browser preparation uses the
+cooperative executor; it does not promise a separate CPU worker.
 
 Implementation: [`crates/lunco-scene-validation/src/validate.rs`](../../crates/lunco-scene-validation/src/validate.rs).
 Related: [`author-usd-component`](../author-usd-component/SKILL.md) (author the
@@ -76,13 +77,24 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
   -d '{"type":"ExecuteCommand","command":"ValidateAsset","params":{"path":"lunco://models/LunCo/Electrical/Battery.mo"}}'
 ```
 
-Only one param: **`path`** (string). It is a **query provider**, so the data
-comes back in the response body — no secondary result request is needed.
+The initial request admits one operation and returns
+`{"state":"pending","operation_id":N}`. Poll the same query with only
+`{"operation_id":N}` until it returns `ready` or `failed`. `ready` contains
+`report` and `source_revisions` from the actual reads; `failed` contains its
+actual `diagnostic`. Both terminal results are consumed once. Unknown,
+consumed, or retired operation IDs reject visibly. Never resubmit `path` while
+waiting: that would admit a different operation.
 
-**Answered by luncosim binaries only.** `ValidateAsset` is registered in
-`SpawnCommandPlugin` (`crates/lunco-scene-commands/src/commands.rs`), which
-`lunica` does not link — asking lunica gives `CommandNotFound`. Use the CLI form
-when only lunica is up.
+```bash
+curl -s -X POST http://127.0.0.1:4101/api/commands \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"ExecuteCommand","command":"ValidateAsset","params":{"operation_id":1}}'
+```
+
+Use the returned ID in place of `1`. Admission is bounded by the shared
+`AsyncWorkAdmission`; running tasks and unconsumed results retain their permit.
+`lunco-scene-validation` registers the providers. The CLI remains a native
+synchronous entry point over the same validators.
 
 ## The report
 
@@ -90,6 +102,8 @@ when only lunica is up.
 {"path":"…", "kind":"modelica|usd|sysml|wgsl|rhai|unknown",
  "ok":true, "errors":[], "warnings":[], "info":{}}
 ```
+
+Runtime `ready.report` contains this shape; native CLI reports use it directly.
 
 `ok == errors.is_empty()`. **Warnings never fail a file.** `path` echoes what you
 passed, *not* the resolved disk path — if you need to know which file was read,
@@ -110,10 +124,13 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
   -d '{"type":"ExecuteCommand","command":"ValidateTwin","params":{"path":"/work/rover-twin","policy":"error"}}'
 ```
 
-`path` is required and must be a local Twin/folder path. `policy` is optional:
-`warn` (the default) makes namespace collisions warnings; `error` makes only
-those collisions fail the report. Unreadable sources remain visible as warning
-findings. The query does not rename files or choose a winner. Its Rhai policy
+`path` is required: use the current `twin://<assigned-authority>` for a
+mounted Twin on either platform; native callers may also supply a directory or
+standard file URI. Browser native-directory inspection is not available.
+Poll its returned operation ID using the same protocol as `ValidateAsset`.
+`policy` is optional: `warn` (the default) makes namespace collisions warnings;
+`error` makes those collisions fail the report. Source-read failures fail the
+prepared report. The query does not rename files or choose a winner. Its Rhai policy
 is `assets/scripting/policy/lint_twin.rhai`, so a running session can replace
 `lint.twin` for the next explicit check.
 
@@ -124,9 +141,11 @@ cmd("RunLint", #{scope: "twin", policy: "warn"});
 query("GetDiagnostics", #{scope: "twin"});
 ```
 
-`RunLint` and `ValidateTwin` share the same Rust namespace facts and Rhai
-policy; the former uses the active Workspace Twin, while the latter is
-independent of ECS state and is suitable for CI.
+`RunLint` and `ValidateTwin` share namespace facts and Rhai policy. Runtime
+`ValidateTwin` captures indexed source identity, owner, mount, and policy at
+admission and rejects publication after retirement or source changes. Use the
+async query for browser Twin preflight; synchronous Twin `RunLint` inspection
+has a separate platform boundary.
 
 For a composed document, `ValidateAsset` is still the file-level gate. Use the
 live Rhai `model_authoring` facades for the next question: whether the exact
@@ -143,13 +162,15 @@ the stage, or silently save. See the [model-authoring guide](../../docs/scriptin
 |---|---|---|
 | `.mo` | rumoca `parse_to_syntax` + AST facts + authored `lint.modelica` policy | yes |
 | `.sysml`/`.kerml` | SysML parser/resolver + typed requirement/verification facts + authored `lint.sysml` policy | yes |
-| `.usda` | layer parse → **compose the reference closure** → strict `WheelParams::read` on every `PhysxVehicleWheelAPI` prim | yes |
+| `.usd`/`.usda`/`.usdc` | byte-layer preparation → **compose the reference closure** → strict `WheelParams::read` on every `PhysxVehicleWheelAPI` prim | yes |
 | `.wgsl` | `ParamSchema::parse` — reflect the `struct Material` uniform + `//!@` annotations | **no** — warnings only |
 | `.rhai` | `rhai::Engine::new().compile()`, nothing executed | yes |
 | anything else | `unsupported extension` error | yes |
 
-Extension gate is literal: **`.usda` only** — `.usd` and `.usdc` are rejected as
-unsupported, not parsed.
+USD extensions enter the same byte-layer owner. Text layers compose normally.
+Binary USDC currently fails the dependency inspector's UTF-8/text-layer
+boundary with a diagnostic; recognizing its extension does not establish
+binary composition support.
 
 For a Twin source set, use `ValidateSysml` for source status, diagnostics, and
 source identity; use `AnalyzeSysml` when a policy needs typed semantic facts.
@@ -183,7 +204,7 @@ not a tick script.
 Three stages, first failure short-circuits:
 
 1. `usda_to_data` — this file's own syntax.
-2. `compose_file_to_stage` — **fetches the whole layer closure**
+2. Shared USD recipe preparation — **fetches the whole layer closure**
    (`subLayers` + `references` + `payload`, including arcs inside variant
    blocks). A dangling `@lunco://…@` is a hard error here. This is the single
    best reason to run it: [bare paths silently no-load at runtime](../use-asset-library/SKILL.md#the-lunco-scheme),
@@ -224,26 +245,25 @@ is the reflected param schema (`info.shader_params` with `name`/`type`/`offset`/
   It still works as a scene shader. See
   [`use-asset-library` § Shaders](../use-asset-library/SKILL.md#add-a-shader-wgsl).
 
-## Path resolution — the trap
+## Source admission and path resolution
 
-`resolve()` (`validate.rs`) tries, in order:
+Runtime logical `lunco://` and current `twin://` addresses use the registered
+Bevy asset reader and the shared USD dependency-closure reader. Literal `#`,
+`%`, and Unicode path characters retain their typed asset identity. Native
+paths and standard file URIs use captured `FileDocumentAdmission` and bounded
+storage reads on the preparation task, then validate exact ownership before
+publication. A raw native path is checked as given before native engine-root
+resolution; prefer a root-qualified logical address to avoid CWD ambiguity.
 
-1. **`Path::new(ref).is_file()`** — absolute, or **relative to the current
-   working directory**.
-2. `lunco_assets_core::engine_asset_local_path(ref)` — the runtime `lunco://` root,
-   selected from the executable/package ancestry and then the current-directory
-   ancestry.
+Browser callers use registered logical sources; unsupported unmounted USD
+file sources reject explicitly. Native CLI resolution remains native path
+first, then the engine asset owner; it has no live Twin mount registry.
 
-Consequences:
-
-- ❌ `models/X.mo` is ambiguous: it resolves to `<cwd>/models/X.mo` if that
-  exists, **shadowing** `<runtime-assets>/models/X.mo`.
-- ✅ `lunco://` keeps the same runtime root when launched from a subdirectory.
-- ✅ Run from the repo root and pass either `assets/models/X.mo` (unambiguous
-  filesystem) or `lunco://models/X.mo` (unambiguous scheme).
-- ❌ **`twin://` cannot be resolved at all**, even with an instance running —
-  the resolver only knows the engine root. Pass the twin file's real filesystem
-  path instead.
+The host may configure the public `QueryPreparationLimits` resource. Its
+`StageClosureLimits` bound files, depth, and bytes; query reads are serial by
+default. Twin preparation passes its remaining aggregate budget into each
+closure before any dependency read. A completed query records actual source
+content revisions, rather than treating dispatch-time paths as fresh reads.
 
 ## The rules are authored — the lint layer
 
