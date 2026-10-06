@@ -257,6 +257,7 @@ mod wasm {
             lunco_experiments::ParamValue,
         >,
         bounds: &lunco_experiments::RunBounds,
+        result_limits: lunco_experiments::RunResultLimits,
     ) {
         use lunco_modelica_runner::apply_value_bindings_to_dae;
         let started = web_time::Instant::now();
@@ -350,17 +351,13 @@ mod wasm {
 
         // Drive the run through the SHARED `drive_run` — the EXACT same entry
         // point native (`lunco_modelica_runner`) uses. It honours
-        // `bounds.runtime`: Batch → the dense-output `simulate_with_diagnostics`
+        // `bounds.runtime`: Batch → the budget-admitted dense-output `simulate_solve_model`
         // solve (robust on stiff models), Interactive → the streamable
         // `run_stepping_loop`. `WorkerSink` is the only worker-specific part
-        // (postMessage + the cancel registry). Previously the worker open-coded a
-        // stepper-only path, so stiff models (orbital-datacenter eclipse switch)
-        // ran natively via Batch but failed in the browser with
-        // `BDF step: step size too small at t=0`; routing through `drive_run`
-        // closes that divergence and also brings the worker the batch
-        // output-decimation.
+        // (postMessage + the cancel registry). The admitted limits and output
+        // grid use the same mechanism on both platforms.
         let mut sink = WorkerSink { scope, run_id };
-        lunco_modelica_runner::drive_run(&run_dae, bounds, started, &mut sink);
+        lunco_modelica_runner::drive_run(&run_dae, bounds, result_limits, started, &mut sink);
         post_log(
             scope,
             format!("run_fast: done in {:.2}s", started.elapsed().as_secs_f64()),
@@ -680,6 +677,7 @@ mod wasm {
                     overrides,
                     inputs,
                     bounds,
+                    result_limits,
                 } => {
                     let scope = scope_for_cb.clone();
                     run_fast_in_worker(
@@ -692,6 +690,7 @@ mod wasm {
                         &overrides,
                         &inputs,
                         &bounds,
+                        result_limits,
                     );
                 }
                 WireMessage::CancelRun { run_id } => {

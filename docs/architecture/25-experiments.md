@@ -175,6 +175,16 @@ that result boundary. The artifact loader validates against its read admission
 limits; optional invalid artifacts emit a diagnostic without
 publishing their trajectory as a successful result.
 
+Each native run and browser `RunFast` request carries those captured limits.
+Batch execution lowers once, admits the actual `SolveModel.visible_names`
+dimensions against the maintained output-grid iterator, then passes that model
+to `simulate_solve_model`. The scoped solver budget checks every central
+visible-sample append, including additional event samples, and reserves storage
+fallibly before changing column lengths. The recorded time vector shares the
+same boundary. Interactive runs admit their actual state columns and check
+each retained output sample. Budget failure is a terminal Failed update and
+releases the scheduler slot; nested solves restore the caller's budget.
+
 
 Registry: `BTreeMap<TwinId, Vec<Experiment>>` retains at most 20 terminal runs per presentation group, evicting the oldest terminal row. Pending, queued, and running rows are retained. Removal publishes `ExperimentRemoved` so source attribution and plot selections retire together.
 
@@ -260,6 +270,7 @@ WireMessage::RunFast {
     overrides: BTreeMap<ParamPath, ParamValue>,
     inputs: BTreeMap<ParamPath, ParamValue>,
     bounds: RunBounds,
+    result_limits: RunResultLimits,
 }
 WireMessage::CancelRun { run_id: ExperimentId }
 

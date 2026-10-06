@@ -66,3 +66,6 @@ pub use solver::{
 };
 
 pub use runtime::cancellation::{SolverCancellationGuard, solver_cancellation_requested};
+pub use runtime::output_budget::{
+    SolverOutputBudget, SolverOutputBudgetGuard, validate_solver_output_dimensions,
+};

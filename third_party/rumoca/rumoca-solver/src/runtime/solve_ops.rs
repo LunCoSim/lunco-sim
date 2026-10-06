@@ -109,6 +109,18 @@ pub fn push_visible_values(data: &mut [Vec<f64>], values: &[f64]) -> Result<(), 
             "visible trace storage does not match solve layout",
         ));
     }
+    let samples = data.first().map_or(0, Vec::len);
+    if data.iter().any(|series| series.len() != samples) {
+        return Err(RuntimeSolveError::solve_ir(
+            "visible trace columns have inconsistent sample counts",
+        ));
+    }
+    super::output_budget::admit_visible_append(data)?;
+    for series in data.iter_mut() {
+        series.try_reserve(1).map_err(|error| {
+            RuntimeSolveError::solve_ir(format!("visible trace allocation failed: {error}"))
+        })?;
+    }
     for (series, value) in data.iter_mut().zip(values.iter().copied()) {
         series.push(value);
     }

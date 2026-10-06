@@ -676,6 +676,11 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   scalar values and 256 MiB artifact bytes. Failed partial streams may retain
   explicit missing-value holes. A malformed optional artifact warns without
   replacing a valid runtime result.
+  Native and browser Fast Runs capture the same limits at admission. Actual
+  lowered output dimensions and the requested grid are checked before batch
+  trajectory allocation; event samples also consume the scoped recorder budget.
+  Exercise `modelica_output_budget.rhai` with the documented default value cap
+  and `max_parallel=1` to prove visible rejection and valid successor completion.
 - **Live ≠ batch**: `SnapshotVariables` reads the *live* stepping model;
   `GetExperimentResult` reads a *stored batch run*. They are different objects.
 - **Blank plot/diagram in `luncosim`** → the Modelica perspective

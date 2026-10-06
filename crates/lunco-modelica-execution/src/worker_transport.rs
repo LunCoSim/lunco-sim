@@ -131,6 +131,7 @@ pub enum WireMessage {
         inputs:
             std::collections::BTreeMap<lunco_experiments::ParamPath, lunco_experiments::ParamValue>,
         bounds: lunco_experiments::RunBounds,
+        result_limits: lunco_experiments::RunResultLimits,
     },
     /// Best-effort cancel of an in-flight Fast Run. Worker observes
     /// the flag between solver steps. v1: cancel granularity is
@@ -1085,6 +1086,7 @@ pub fn dispatch_run_fast(
     >,
     inputs: std::collections::BTreeMap<lunco_experiments::ParamPath, lunco_experiments::ParamValue>,
     bounds: lunco_experiments::RunBounds,
+    result_limits: lunco_experiments::RunResultLimits,
 ) -> bool {
     if let Some(error) = pipeline_failure() {
         send_run_failure(run_id, format!("Modelica worker pipeline failed: {error}"));
@@ -1109,6 +1111,7 @@ pub fn dispatch_run_fast(
         overrides,
         inputs,
         bounds,
+        result_limits,
     };
     if !primary_library_ready() {
         // Queue whole-message; worker assignment happens at flush time.

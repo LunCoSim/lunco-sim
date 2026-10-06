@@ -635,6 +635,55 @@ fn visible_values_for_names_preserves_requested_order() {
 }
 
 #[test]
+fn recorded_event_budget_failure_preserves_time_and_value_lengths() {
+    let model = solve::SolveModel {
+        visible_names: vec!["x".into()],
+        visible_value_rows: spanned_block(vec![const_visible_value_row(2.0)], "recorded_budget.mo"),
+        ..Default::default()
+    };
+    let runtime = SolveRuntime::new(&model).unwrap();
+    let _guard = rumoca_solver::SolverOutputBudgetGuard::install(
+        rumoca_solver::SolverOutputBudget::new(4).unwrap(),
+    );
+    let mut times = Vec::new();
+    let mut data = vec![Vec::new()];
+    runtime
+        .record_visible_sample_if_new(&mut times, &mut data, &[], &[], 0.0)
+        .unwrap();
+    runtime
+        .record_visible_sample_if_new(&mut times, &mut data, &[], &[], 1.0)
+        .unwrap();
+    // Replacing an existing event sample consumes no additional storage.
+    runtime
+        .record_visible_sample_if_new(&mut times, &mut data, &[], &[], 1.0)
+        .unwrap();
+    assert!(
+        runtime
+            .record_visible_sample_if_new(&mut times, &mut data, &[], &[], 2.0)
+            .unwrap_err()
+            .to_string()
+            .contains("output budget")
+    );
+    assert_eq!(times, vec![0.0, 1.0]);
+    assert_eq!(data, vec![vec![2.0, 2.0]]);
+    let empty_model = solve::SolveModel::default();
+    let empty_runtime = SolveRuntime::new(&empty_model).unwrap();
+    let _empty_guard = rumoca_solver::SolverOutputBudgetGuard::install(
+        rumoca_solver::SolverOutputBudget::new(1).unwrap(),
+    );
+    let mut empty_times = Vec::new();
+    empty_runtime
+        .record_visible_sample_if_new(&mut empty_times, &mut [], &[], &[], 0.0)
+        .unwrap();
+    assert!(
+        empty_runtime
+            .record_visible_sample_if_new(&mut empty_times, &mut [], &[], &[], 1.0)
+            .is_err()
+    );
+    assert_eq!(empty_times, vec![0.0]);
+}
+
+#[test]
 fn visible_values_fast_path_reads_direct_sources() {
     let model = solve::SolveModel {
         visible_names: vec!["y2".to_string(), "p1".to_string(), "time".to_string()],

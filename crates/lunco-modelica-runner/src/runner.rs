@@ -556,6 +556,7 @@ fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
         overrides,
         inputs,
         bounds,
+        src.result_limits,
     );
     if !dispatched {
         // No worker installed — free the slot so the queue isn't stuck.
@@ -729,7 +730,7 @@ fn run_inner(
     }
 
     // Announce that this job has left the queue and is now executing. The
-    // batch path is one blocking `simulate_with_diagnostics` call that emits
+    // batch path is one blocking `simulate_solve_model` call that emits
     // no mid-solve `Progress`, so without this the registry status would sit
     // at `Queued` (set at dispatch) for the entire compile + solve and only
     // flip straight to `Done` — making a long-grinding run look stuck in a
@@ -855,7 +856,7 @@ fn run_inner(
     // platform-specific piece is the `RunSink` impl (native = crossbeam
     // channel + atomic cancel; worker = postMessage + cancel registry).
     let mut sink = ChannelSink { tx, cancel };
-    drive_run(&run_dae, &bounds, t_wall, &mut sink);
+    drive_run(&run_dae, &bounds, source.result_limits, t_wall, &mut sink);
 }
 
 /// THE single simulation entry point, shared by the native runner
@@ -879,6 +880,7 @@ fn run_inner(
 pub fn drive_run(
     dae: &Dae,
     bounds: &RunBounds,
+    limits: lunco_experiments::RunResultLimits,
     started: web_time::Instant,
     sink: &mut impl RunSink,
 ) {
@@ -886,6 +888,23 @@ pub fn drive_run(
         sink.emit(RunUpdate::Cancelled);
         return;
     }
+    let output_budget = match limits
+        .validate()
+        .map_err(|error| error.to_string())
+        .and_then(|()| {
+            rumoca_solver::SolverOutputBudget::new(limits.max_values)
+                .map_err(|error| error.to_string())
+        }) {
+        Ok(budget) => budget,
+        Err(error) => {
+            sink.emit(RunUpdate::Failed {
+                error,
+                partial: None,
+            });
+            return;
+        }
+    };
+    let _output_budget = rumoca_solver::SolverOutputBudgetGuard::install(output_budget);
     let output_dt = match lunco_modelica_core::sim_target::validate_run_bounds(bounds) {
         Ok(dt) => dt,
         Err(error) => {
@@ -930,7 +949,7 @@ pub fn drive_run(
                 bounds.dt,
                 bounds.n_intervals
             );
-            run_batch_sim(dae, &batch_opts, started, sink);
+            run_batch_sim(dae, &batch_opts, output_budget, started, sink);
         }
         lunco_experiments::RuntimeMode::Interactive => {
             let mut stepper =
@@ -950,13 +969,13 @@ pub fn drive_run(
                 bounds.t_end,
                 bounds.dt
             );
-            run_stepping_loop(&mut stepper, bounds, started, sink);
+            run_stepping_loop(&mut stepper, bounds, limits, started, sink);
         }
     }
 }
 
 /// Drive a [`Dae`] to `t_end` through the non-interactive dense-output batch
-/// solver ([`rumoca_sim::simulate_with_diagnostics`]) and emit the trajectory
+/// solver ([`rumoca_sim::simulate_solve_model`]) and emit the trajectory
 /// as a single [`RunUpdate::Completed`]. Unlike [`run_stepping_loop`], the
 /// solver owns its own adaptive time loop and the output samples are taken by
 /// dense interpolation, so the solver step size is independent of the output
@@ -973,6 +992,7 @@ pub fn drive_run(
 fn run_batch_sim(
     dae: &Dae,
     opts: &rumoca_sim::SimOptions,
+    budget: rumoca_solver::SolverOutputBudget,
     started: web_time::Instant,
     sink: &mut impl RunSink,
 ) {
@@ -996,7 +1016,34 @@ fn run_batch_sim(
             return;
         }
     };
-    let result = match rumoca_sim::simulate_with_diagnostics(dae, opts) {
+    let model = match rumoca_sim::lower_for_simulation_with_overrides(dae, opts) {
+        Ok(model) => model,
+        Err(error) => {
+            sink.emit(RunUpdate::Failed {
+                error: format!("solve lowering failed: {error}"),
+                partial: None,
+            });
+            return;
+        }
+    };
+    let admission = budget
+        .sample_capacity(model.visible_names.len())
+        .and_then(|capacity| {
+            rumoca_solver::timeline::output_sample_count(
+                opts.t_start,
+                opts.t_end,
+                output_dt,
+                capacity,
+            )
+        });
+    if let Err(error) = admission {
+        sink.emit(RunUpdate::Failed {
+            error: error.to_string(),
+            partial: None,
+        });
+        return;
+    }
+    let result = match rumoca_sim::simulate_solve_model(&model, opts) {
         Ok(r) => r,
         Err(e) => {
             if sink.is_cancelled() {
@@ -1016,17 +1063,10 @@ fn run_batch_sim(
         return;
     }
 
-    // Decimate to the requested output grid. rumoca's batch solver builds the
-    // grid from `opts.dt` correctly, but ALSO records an extra sample at every
-    // root/event crossing. Models with chattering discontinuities (e.g. an
-    // orbit `mod(time, period)` eclipse switch, or `if`-gated thresholds that
-    // re-trigger near a boundary) flood the trajectory with millions of event
-    // samples — a 2-orbit run of the orbital-datacenter model returned ~5M
-    // samples for a requested 1.1k-point grid (~4 GB across 75 vars; OOMs the
-    // wasm worker outright). Collapse back to the requested grid before storing
-    // / sending: for each grid time keep the nearest available sample. Guarded
-    // so the well-behaved exact-grid case (smooth models already return the
-    // grid) is left untouched.
+    // The batch solver records the requested grid plus root/event crossings.
+    // Every sample has already passed the recorder budget. Select the nearest
+    // available sample per requested grid point before storing or sending the
+    // trajectory; smooth exact-grid results retain all their samples.
     let keep = match batch_keep_indices(&result.times, opts.t_start, opts.t_end, output_dt) {
         Ok(keep) => keep,
         Err(error) => {
@@ -1249,7 +1289,7 @@ impl std::fmt::Display for RunConfigurationError {
 ///
 /// Carrying `bounds.t_start/t_end` through is load-bearing on BOTH runtimes, and
 /// silently so:
-/// * the non-interactive batch solve (`simulate_with_diagnostics`) integrates
+/// * the non-interactive batch solve (`simulate_solve_model`) integrates
 ///   `opts.t_start..opts.t_end`. Left at the `SimOptions::default()` `0.0..1.0`,
 ///   a run stops at t=1 with a fine output grid that pins the solver onto
 ///   closely spaced stop-times and collapses ("step size too small") in the
@@ -1342,6 +1382,7 @@ fn emit_partial_failure(
 pub fn run_stepping_loop(
     stepper: &mut rumoca_sim::SimulationSession,
     bounds: &RunBounds,
+    limits: lunco_experiments::RunResultLimits,
     started: web_time::Instant,
     sink: &mut impl RunSink,
 ) {
@@ -1382,8 +1423,25 @@ pub fn run_stepping_loop(
         }
     };
 
+    // Interactive storage grows per retained sample rather than preallocating
+    // the batch grid; its first sample is after a step, not at t_start.
+    if let Err(error) = limits.validate_dimensions(names.len(), 1) {
+        sink.emit(RunUpdate::Failed {
+            error: error.to_string(),
+            partial: None,
+        });
+        return;
+    }
     let mut all_times: Vec<f64> = Vec::new();
-    let mut all_series: Vec<Vec<f64>> = vec![Vec::new(); names.len()];
+    let mut all_series: Vec<Vec<f64>> = Vec::new();
+    if let Err(error) = all_series.try_reserve_exact(names.len()) {
+        sink.emit(RunUpdate::Failed {
+            error: format!("output column allocation failed: {error}"),
+            partial: None,
+        });
+        return;
+    }
+    all_series.resize_with(names.len(), Vec::new);
     let mut last_emit_idx = 0;
     let mut last_progress_emit = web_time::Instant::now();
 
@@ -1499,6 +1557,49 @@ pub fn run_stepping_loop(
                 return;
             }
         };
+        let samples = match all_times.len().checked_add(1) {
+            Some(samples) => samples,
+            None => {
+                emit_partial_failure(
+                    sink,
+                    &names,
+                    &all_times,
+                    &all_series,
+                    started,
+                    "interactive output sample count overflow".into(),
+                    "output storage exhausted".into(),
+                );
+                return;
+            }
+        };
+        let admission = limits
+            .validate_dimensions(names.len(), samples)
+            .map_err(|error| error.to_string())
+            .and_then(|()| {
+                all_times
+                    .try_reserve(1)
+                    .map_err(|error| format!("output time allocation failed: {error}"))
+            })
+            .and_then(|()| {
+                for series in &mut all_series {
+                    series
+                        .try_reserve(1)
+                        .map_err(|error| format!("output series allocation failed: {error}"))?;
+                }
+                Ok(())
+            });
+        if let Err(error) = admission {
+            emit_partial_failure(
+                sink,
+                &names,
+                &all_times,
+                &all_series,
+                started,
+                error,
+                "output storage exhausted".into(),
+            );
+            return;
+        }
         all_times.push(t);
         for (i, name) in names.iter().enumerate() {
             // CQ-522: a missing variable is an honest gap, not 0.0 — match
@@ -2157,6 +2258,7 @@ mod tests {
         drive_run(
             &Dae::default(),
             &exp.bounds,
+            lunco_experiments::RunResultLimits::default(),
             web_time::Instant::now(),
             &mut sink,
         );

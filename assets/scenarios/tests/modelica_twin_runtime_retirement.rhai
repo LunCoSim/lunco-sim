@@ -64,7 +64,7 @@ fn on_tick(me, params) {
     if this.phase == "owner_a" {
         let twin = query("ReadActiveTwinContract", #{});
         if twin.name != "Runtime owner A" { return; }
-        let a = editor::new_scratch("model OwnerProbe Real x(start=1, fixed=true); Real z[64](each start=1, each fixed=true); equation der(x)=0; for i in 1:64 loop der(z[i])=-i*z[i]; end for; end OwnerProbe;", "Outgoing owned worker");
+        let a = editor::new_scratch("model OwnerProbe Real x(start=1, fixed=true); Real z[16](each start=1, each fixed=true); equation der(x)=0; for i in 1:16 loop der(z[i])=-i*z[i]; end for; end OwnerProbe;", "Outgoing owned worker");
         let library = editor::new_scratch("package OutgoingOnly model Part Real y; equation y=42; end Part; end OutgoingOnly;", "Outgoing sibling overlay");
         if a.ok != true || library.ok != true { this = finish(this, ["outgoing documents rejected"]); return; }
         this.a = a.doc_id; this.library = library.doc_id; this.docs.push(this.a); this.docs.push(this.library);

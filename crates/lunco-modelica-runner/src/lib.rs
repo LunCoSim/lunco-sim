@@ -60,6 +60,7 @@ pub struct WorkerRunTransport {
         std::collections::BTreeMap<lunco_experiments::ParamPath, lunco_experiments::ParamValue>,
         std::collections::BTreeMap<lunco_experiments::ParamPath, lunco_experiments::ParamValue>,
         RunBounds,
+        lunco_experiments::RunResultLimits,
     ) -> bool,
     /// Route cancellation to the worker owning the run.
     pub dispatch_cancel_run: fn(ExperimentId),

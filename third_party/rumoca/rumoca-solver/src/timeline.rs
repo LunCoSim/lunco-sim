@@ -1,38 +1,98 @@
 use rumoca_ir_solve as solve;
 
 pub fn build_output_times(t_start: f64, t_end: f64, dt: f64) -> Vec<f64> {
-    if !dt.is_finite() || dt <= 0.0 {
-        if sample_time_match_with_tol(t_start, t_end) {
-            return vec![t_start];
-        }
-        return vec![t_start, t_end];
-    }
+    OutputTimes::new(t_start, t_end, dt).collect()
+}
 
-    let mut times = Vec::new();
-    let mut k = 0usize;
-    loop {
-        let t_raw = t_start + (k as f64) * dt;
-        if t_raw > t_end && !sample_time_match_with_tol(t_raw, t_end) {
-            break;
+/// Count the same requested grid without allocating it. Admission terminates
+/// as soon as the caller's sample capacity is exceeded.
+pub fn output_sample_count(
+    t_start: f64,
+    t_end: f64,
+    dt: f64,
+    max_samples: usize,
+) -> Result<usize, crate::RuntimeSolveError> {
+    let mut times = OutputTimes::new(t_start, t_end, dt);
+    let mut count = 0usize;
+    for _ in times.by_ref() {
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| crate::RuntimeSolveError::solve_ir("output sample count overflow"))?;
+        if count > max_samples {
+            return Err(crate::RuntimeSolveError::solve_ir(format!(
+                "requested output grid exceeds configured output budget ({max_samples} samples)"
+            )));
         }
-        // Snap to t_end when within tolerance so the endpoint is always exact.
-        let t = if sample_time_match_with_tol(t_raw, t_end) {
-            t_end
+    }
+    if times.overflowed {
+        return Err(crate::RuntimeSolveError::solve_ir(
+            "output grid index overflow",
+        ));
+    }
+    Ok(count)
+}
+
+struct OutputTimes {
+    start: f64,
+    end: f64,
+    dt: f64,
+    index: usize,
+    last: Option<f64>,
+    finished: bool,
+    overflowed: bool,
+}
+impl OutputTimes {
+    fn new(start: f64, end: f64, dt: f64) -> Self {
+        Self {
+            start,
+            end,
+            dt,
+            index: 0,
+            last: None,
+            finished: false,
+            overflowed: false,
+        }
+    }
+}
+impl Iterator for OutputTimes {
+    type Item = f64;
+    fn next(&mut self) -> Option<f64> {
+        if self.finished {
+            return None;
+        }
+        if !self.dt.is_finite() || self.dt <= 0.0 {
+            if self.index == 0 {
+                self.index = 1;
+                self.finished = sample_time_match_with_tol(self.start, self.end);
+                return Some(self.start);
+            }
+            self.finished = true;
+            return Some(self.end);
+        }
+        let raw = self.start + self.index as f64 * self.dt;
+        if raw > self.end && !sample_time_match_with_tol(raw, self.end) {
+            self.finished = true;
+            return self
+                .last
+                .filter(|last| !sample_time_match_with_tol(*last, self.end))
+                .map(|_| self.end);
+        }
+        let time = if sample_time_match_with_tol(raw, self.end) {
+            self.end
         } else {
-            t_raw
+            raw
         };
-        times.push(t);
-        if t >= t_end {
-            return times;
+        self.last = Some(time);
+        if time >= self.end {
+            self.finished = true;
+        } else if let Some(index) = self.index.checked_add(1) {
+            self.index = index;
+        } else {
+            self.finished = true;
+            self.overflowed = true;
         }
-        k += 1;
+        Some(time)
     }
-    if let Some(&last) = times.last()
-        && !sample_time_match_with_tol(last, t_end)
-    {
-        times.push(t_end);
-    }
-    times
 }
 
 pub fn sample_time_match_with_tol(a: f64, b: f64) -> bool {
@@ -304,5 +364,29 @@ mod tests {
     fn build_output_times_handles_zero_span_and_invalid_dt() {
         assert_eq!(build_output_times(1.0, 1.0, 0.0), vec![1.0]);
         assert_eq!(build_output_times(1.0, 2.0, 0.0), vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn output_grid_count_matches_endpoint_iterator_without_allocation() {
+        for (start, end, dt) in [
+            (0.0, 1.0, 0.1),
+            (0.0, 1.0, 0.3),
+            (0.0, 0.1, 0.1 / 200_000.0),
+            (1.0, 1.0, 0.0),
+            (1.0, 2.0, 0.0),
+        ] {
+            let grid = build_output_times(start, end, dt);
+            assert_eq!(
+                output_sample_count(start, end, dt, grid.len()).unwrap(),
+                grid.len()
+            );
+            assert!(output_sample_count(start, end, dt, grid.len() - 1).is_err());
+        }
+        assert!(
+            output_sample_count(0.0, 1.0, 1e-100, 3)
+                .unwrap_err()
+                .to_string()
+                .contains("output budget")
+        );
     }
 }

@@ -1685,6 +1685,14 @@ impl SolveRuntime {
     ) -> Result<(), RuntimeSolveError> {
         let mut values = self.visible_scratch.borrow_mut();
         self.visible_values_into(solver_y, params, t, &mut values)?;
+        if data
+            .iter()
+            .any(|series| series.len() != recorded_times.len())
+        {
+            return Err(RuntimeSolveError::solve_ir(
+                "recorded sample times and visible columns have inconsistent lengths",
+            ));
+        }
         if recorded_times
             .last()
             .is_some_and(|last| sample_time_match_with_tol(*last, t))
@@ -1695,9 +1703,15 @@ impl SolveRuntime {
             replace_last_visible_values(data, &values)?;
             return Ok(());
         }
+        let samples = recorded_times
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| RuntimeSolveError::solve_ir("recorded sample count overflow"))?;
+        rumoca_solver::validate_solver_output_dimensions(data.len(), samples)?;
         reserve_runtime_vec_capacity(recorded_times, 1, "recorded sample times")?;
+        push_visible_values(data, &values)?;
         recorded_times.push(t);
-        push_visible_values(data, &values)
+        Ok(())
     }
 
     pub fn visible_values(
