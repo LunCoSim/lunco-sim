@@ -604,10 +604,9 @@ pub fn is_worker_active() -> bool {
 /// Fast Runs by `run_id`. Tolerant of partial failure: as long as worker 0
 /// starts it returns `Ok`; a later worker failing just shrinks the pool.
 pub fn install_worker(worker_url: &str) -> Result<(), JsValue> {
-    let want =
-        lunco_settings::load_section_from_disk::<lunco_modelica_runner::ExperimentSettings>()
-            .resolved_max_parallel()
-            .clamp(1, MAX_WORKERS);
+    let want = lunco_settings::load_section_from_disk::<lunco_experiments::ExperimentSettings>()
+        .resolved_max_parallel()
+        .clamp(1, MAX_WORKERS);
 
     let n = {
         let mut p = pool().lock_or_recover();

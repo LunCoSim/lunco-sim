@@ -15,10 +15,14 @@ web-time = { workspace = true }
 # Bevy-free.
 bevy = { workspace = true, optional = true }
 lunco-workspace = { path = "../lunco-workspace", optional = true }
+lunco-settings = { path = "../lunco-settings", optional = true }
 
 [features]
 default = ["bevy"]
-bevy = ["dep:bevy", "dep:lunco-workspace"]
+bevy = ["dep:bevy", "dep:lunco-workspace", "dep:lunco-settings", "dep:web-sys"]
 
 [lints]
 workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { workspace = true, features = ["Window", "Navigator"], optional = true }

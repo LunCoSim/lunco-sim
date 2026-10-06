@@ -160,6 +160,21 @@ pub enum ParamValue {
 The registry retains each trajectory through one immutable `Arc<RunResult>`.
 Readers clone the Arc to capture the exact result without copying its series;
 streaming merges use copy-on-write, so an admitted snapshot stays unchanged.
+Complete trajectories enter the registry through `set_complete_result`, which
+validates finite, nondecreasing times, matching series/metadata lengths, finite
+series values, and the configured scalar-value budget. Equal event timestamps
+remain valid. Failed partial trajectories use `set_partial_result`; streaming
+hole padding remains explicit and is not mistaken for a complete result.
+
+`lunco-experiments` owns the persisted Bevy `ExperimentSettings` section
+(`experiments`). Its `result_limits` defaults to 8,000,000 scalar values and
+256 MiB of artifact bytes. `RunResultLimits` is also available to Bevy-free
+hosts. Zero limits and dimension overflow are errors. The completed-run channel uses the scalar limit captured in its immutable
+source and pending handle at run admission; later settings edits do not alter
+that result boundary. The artifact loader validates against its read admission
+limits; optional invalid artifacts emit a diagnostic without
+publishing their trajectory as a successful result.
+
 
 Registry: `BTreeMap<TwinId, Vec<Experiment>>` retains at most 20 terminal runs per presentation group, evicting the oldest terminal row. Pending, queued, and running rows are retained. Removal publishes `ExperimentRemoved` so source attribution and plot selections retire together.
 

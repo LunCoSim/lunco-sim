@@ -1223,6 +1223,9 @@ fn dispatch_experiment(
             filename,
             extras,
             runtime: attribution.runtime.clone(),
+            result_limits: world
+                .resource::<lunco_experiments::ExperimentSettings>()
+                .result_limits,
         };
 
         // Bounds use the current document AST and draft through the shared
@@ -1323,13 +1326,18 @@ fn dispatch_experiment(
         world
             .resource_mut::<lunco_experiments::ExperimentRegistry>()
             .set_status(exp_id, lunco_experiments::RunStatus::Queued);
+        let result_limits = source_snapshot.result_limits;
         let handle = runner_res.0.run_fast(&exp, source_snapshot);
         // Store the handle so a draining system can pump updates into
         // registry status.
         world
             .resource_mut::<lunco_modelica_runner::PendingHandles>()
             .0
-            .push(lunco_modelica_runner::PendingRun { handle, origin });
+            .push(lunco_modelica_runner::PendingRun {
+                handle,
+                origin,
+                result_limits,
+            });
         bevy::log::info!(
             "[dispatch_experiment] dispatched run {:?} '{}' for class '{}'",
             exp_id,

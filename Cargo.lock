@@ -7696,9 +7696,11 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "crossbeam-channel",
+ "lunco-settings",
  "lunco-workspace",
  "serde",
  "uuid",
+ "web-sys",
  "web-time",
 ]
 
@@ -8662,13 +8664,10 @@ dependencies = [
  "lunco-modelica-core",
  "lunco-modelica-document",
  "lunco-modelica-solver",
- "lunco-settings",
  "lunco-workspace",
  "rumoca-compile",
  "rumoca-sim",
  "rumoca-solver",
- "serde",
- "web-sys",
  "web-time",
 ]
 

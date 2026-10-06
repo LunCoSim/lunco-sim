@@ -393,6 +393,7 @@ mod tests {
         let mk_handle = |id, hits: Arc<AtomicUsize>| {
             let (_tx, rx) = crossbeam_channel::unbounded();
             lunco_modelica_runner::PendingRun {
+                result_limits: Default::default(),
                 origin: sources.get(&id).expect("source").clone(),
                 handle: lunco_experiments::RunHandle {
                     run_id: id,

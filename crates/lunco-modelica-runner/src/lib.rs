@@ -26,7 +26,7 @@ pub use run_bounds::{bounds_from_annotation, resolve_setup_bounds, resolve_setup
 pub use runner::pump_wasm_forwarders;
 pub use runner::{
     DEFAULT_TOLERANCE, DetectedInput, DetectedParam, ExperimentDraft, ExperimentDrafts,
-    ExperimentSettings, ModelSource, ModelicaRunner, PendingHandles, PendingRun, PlaybackEntities,
+    ModelSource, ModelicaRunner, PendingHandles, PendingRun, PlaybackEntities,
     RunConfigurationError, RunSink, apply_experiment_settings, apply_value_bindings_to_dae,
     detect_top_level_inputs, detect_top_level_literal_parameters, drain_pending_handles, drive_run,
     stepper_options_from_bounds,
@@ -106,8 +106,6 @@ impl Plugin for ModelicaRunnerPlugin {
                 .after(lunco_experiments::ExperimentRegistryMaintenanceSet)
                 .run_if(on_message::<lunco_experiments::ExperimentRemoved>),
         );
-        use lunco_settings::AppSettingsExt;
-        app.register_settings_section::<ExperimentSettings>();
         app.add_systems(Update, (apply_experiment_settings, drain_pending_handles));
     }
 }
@@ -248,6 +246,7 @@ mod tests {
             let flag = Arc::new(AtomicBool::new(false));
             let cancel = flag.clone();
             pending.0.push(PendingRun {
+                result_limits: Default::default(),
                 origin: origins.get(&id).expect("admitted origin").clone(),
                 handle: RunHandle {
                     run_id: id,
@@ -323,6 +322,7 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(false));
         let cancel = flag.clone();
         let pending = PendingRun {
+            result_limits: Default::default(),
             origin: origins.get(&id).expect("origin").clone(),
             handle: RunHandle {
                 run_id: id,

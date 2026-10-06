@@ -390,7 +390,7 @@ hand-rolled and duplicated:
 
 | Job | Where (pre-E) | Algorithm | Stability contract |
 |---|---|---|---|
-| **Fast change / cache keys** | `lunco-terrain-surface/derived_layers.rs` `cache_key`; scattered `DefaultHasher` in `networking/shared.rs`, `modelica/experiments_runner.rs`, `modelica/.../render.rs`, `lunco-theme` | FNV-1a word-fold **or** std `DefaultHasher` | frozen to *nothing* — bump a format version to invalidate |
+| **Fast change / cache keys** | `lunco-terrain-surface/derived_layers.rs` `cache_key`; scattered `DefaultHasher` in `networking/shared.rs`, `lunco-modelica-runner/src/runner.rs`, `modelica/.../render.rs`, `lunco-theme` | FNV-1a word-fold **or** std `DefaultHasher` | frozen to *nothing* — bump a format version to invalidate |
 | **Cross-peer identity** | `lunco-core/identity.rs` `fnv1a64`→`fold_53`; reference copy in `networking/proto-tests` | byte-wise FNV-1a | frozen to the **wire** (two peers must agree) |
 | **Content addressing (CID)** | `lunco-networking-scenario/src/lib.rs` `cid_for_content` | CIDv1 `raw`(0x55)+sha2-256 | frozen to **IPFS** (`ipfs add --raw-leaves --cid-version 1`) |
 
@@ -449,7 +449,7 @@ collision-resistant for adversarial/wire content and has no IPFS framing.
 - **Next:** **Substrate B `lunco-precompute`** keys its `bake_or_load` disk cache
   with the fast tier and content-addresses persisted blobs with the CID tier —
   one substrate for both, instead of every consumer re-deriving. The remaining
-  ad-hoc `DefaultHasher` cache-key sites (`modelica/experiments_runner.rs`) should
+  ad-hoc `DefaultHasher` cache-key sites (`lunco-modelica-runner/src/runner.rs`) should
   migrate to `fnv1a64` for cross-run reproducibility.
 
 ### Stability note

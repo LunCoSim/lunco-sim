@@ -771,6 +771,7 @@ fn write_run_result_artifact(
 fn load_run_result_artifacts(
     mut registry: ResMut<lunco_experiments::ExperimentRegistry>,
     workspace: Res<lunco_workspace::WorkspaceResource>,
+    settings: Res<lunco_experiments::ExperimentSettings>,
 ) {
     let Some(active) = workspace.active_twin else {
         return;
@@ -795,7 +796,14 @@ fn load_run_result_artifacts(
         match serde_json::from_slice::<lunco_experiments::RunResult>(&bytes) {
             Ok(result) => {
                 let wall = result.meta.wall_time_ms;
-                registry.set_result(id, result);
+                if let Err(error) = registry.set_complete_result(id, result, settings.result_limits)
+                {
+                    warn!(
+                        "[experiment] result artifact rejected for {}: {error}",
+                        id.as_artifact_stem()
+                    );
+                    continue;
+                }
                 registry.set_status(
                     id,
                     lunco_experiments::RunStatus::Done { wall_time_ms: wall },

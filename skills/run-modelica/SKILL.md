@@ -664,6 +664,12 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   Alias reopens resolve source and resident identities on the file worker. Their
   captured owner/generation must still match at install, so a late read cannot
   replace a concurrently changed or newly installed different-owner source.
+- **Complete result admission**: finite ordered times, matching series/metadata
+  lengths, and finite values are required before a trajectory is marked Done.
+  `experiments.result_limits` supplies the shared budgets; defaults are 8,000,000
+  scalar values and 256 MiB artifact bytes. Failed partial streams may retain
+  explicit missing-value holes. A malformed optional artifact warns without
+  replacing a valid runtime result.
 - **Live ≠ batch**: `SnapshotVariables` reads the *live* stepping model;
   `GetExperimentResult` reads a *stored batch run*. They are different objects.
 - **Blank plot/diagram in `luncosim`** → the Modelica perspective

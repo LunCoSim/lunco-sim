@@ -18,6 +18,13 @@ mod origins;
 #[cfg(feature = "bevy")]
 pub use origins::{ExperimentOrigin, ExperimentOrigins};
 
+mod result_limits;
+pub use result_limits::{RunResultError, RunResultLimits};
+#[cfg(feature = "bevy")]
+mod settings;
+#[cfg(feature = "bevy")]
+pub use settings::ExperimentSettings;
+
 pub mod solver;
 pub use solver::{
     RuntimeProfile, SolverCaps, SolverError, SolverId, SolverParams, SolverRequest, SolverSpec,
@@ -551,13 +558,25 @@ impl ExperimentRegistry {
         std::mem::take(&mut self.removed)
     }
 
-    pub fn set_result(&mut self, id: ExperimentId, result: RunResult) -> bool {
+    /// Store a failed run's explicit partial trajectory, which may contain holes.
+    pub fn set_partial_result(&mut self, id: ExperimentId, result: RunResult) -> bool {
         if let Some(e) = self.get_mut(id) {
             e.result = Some(Arc::new(result));
             true
         } else {
             false
         }
+    }
+
+    /// Admit a complete trajectory before it can become retained result data.
+    pub fn set_complete_result(
+        &mut self,
+        id: ExperimentId,
+        result: RunResult,
+        limits: RunResultLimits,
+    ) -> Result<bool, RunResultError> {
+        result.validate_complete(limits)?;
+        Ok(self.set_partial_result(id, result))
     }
 
     /// Merge a partial result into the experiment's existing result
@@ -584,7 +603,7 @@ impl ExperimentRegistry {
     // exactly these methods, and cross-peer replay applies the same op the same
     // way. Direct `get_mut(...).field = ...` poking bypasses journaling, so
     // definition edits should go through here. (Run *outputs* — `set_status` /
-    // `set_result` — are intentionally NOT definition edits: they ride the
+    // `set_complete_result` / `set_partial_result` — are intentionally NOT definition edits: they ride the
     // content/presence planes, not the journal.)
 
     /// Rename an experiment. Returns `false` if the id is unknown.
@@ -765,6 +784,8 @@ pub struct ExperimentsPlugin;
 #[cfg(feature = "bevy")]
 impl Plugin for ExperimentsPlugin {
     fn build(&self, app: &mut App) {
+        use lunco_settings::AppSettingsExt;
+        app.register_settings_section::<ExperimentSettings>();
         app.init_resource::<ExperimentRegistry>()
             .init_resource::<ExperimentOrigins>()
             .add_message::<RunRequested>()
@@ -855,7 +876,7 @@ mod tests {
             Default::default(),
             RunBounds::default(),
         );
-        registry.set_result(
+        registry.set_partial_result(
             with_result,
             RunResult {
                 times: vec![0.0],
@@ -1049,7 +1070,7 @@ mod result_snapshot_tests {
             Default::default(),
             RunBounds::default(),
         );
-        registry.set_result(
+        registry.set_partial_result(
             id,
             RunResult {
                 times: vec![0.0],

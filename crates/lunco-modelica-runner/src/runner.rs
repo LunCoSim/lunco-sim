@@ -37,13 +37,11 @@ use std::sync::{Arc, Mutex};
 use bevy::prelude::*;
 use crossbeam_channel::{Sender, TryRecvError, unbounded};
 use lunco_experiments::{
-    Experiment, ExperimentId, ExperimentRegistry, ExperimentRunner, ModelRef, ParamPath,
-    ParamValue, RunBounds, RunCancelled, RunCompleted, RunFailed, RunHandle, RunMeta, RunProgress,
-    RunResult, RunStatus, RunUpdate,
+    Experiment, ExperimentId, ExperimentRegistry, ExperimentRunner, ExperimentSettings, ModelRef,
+    ParamPath, ParamValue, RunBounds, RunCancelled, RunCompleted, RunFailed, RunHandle, RunMeta,
+    RunProgress, RunResult, RunStatus, RunUpdate,
 };
-use lunco_settings::SettingsSection;
 use rumoca_compile::compile::Dae;
-use serde::{Deserialize, Serialize};
 // Used by `apply_value_bindings_to_dae` on both platforms: native and wasm
 // inject run values at the DAE level.
 use rumoca_compile::parsing::ir_core::{
@@ -58,62 +56,7 @@ pub struct ModelSource {
     pub filename: String,
     pub extras: Vec<(String, String)>,
     pub runtime: lunco_workspace::DocumentRuntimeOwner,
-}
-
-/// Platform default for the number of runs allowed to execute
-/// concurrently (the "auto" setting). Both branches leave one logical core
-/// for the UI/main thread and clamp low; the user can override via
-/// `experiments.max_parallel`.
-///
-/// Native: `available_parallelism() - 1`. Wasm: `hardwareConcurrency - 1`,
-/// clamped tighter because each pooled worker is a full second wasm instance
-/// carrying its own copy of the (large) source library bundle — so concurrency there
-/// trades real memory, not just CPU. `hardwareConcurrency` is logical cores
-/// (or 0/absent when the browser hides it → fall back to 1).
-fn default_max_parallel() -> usize {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        std::thread::available_parallelism()
-            .map(|n| n.get().saturating_sub(1).clamp(1, 4))
-            .unwrap_or(2)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let cores = web_sys::window()
-            .map(|w| w.navigator().hardware_concurrency())
-            .filter(|n| n.is_finite() && *n >= 1.0)
-            .map(|n| n as usize)
-            .unwrap_or(1);
-        cores.saturating_sub(1).clamp(1, 4)
-    }
-}
-
-/// Persisted experiment-execution settings (`settings.json` key
-/// `experiments`). Owned here, the feature that consumes it.
-#[derive(Resource, Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
-pub struct ExperimentSettings {
-    /// Max Fast Runs allowed to execute concurrently. `None` (or `0`) means
-    /// "auto" — the platform default ([`default_max_parallel`]). A user
-    /// value is clamped to at least 1. Kept conservative by default because
-    /// each concurrent run holds a full DAE + result buffer and (cache-cold)
-    /// a rumoca compile; raise it to use more cores.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_parallel: Option<usize>,
-}
-
-impl SettingsSection for ExperimentSettings {
-    const KEY: &'static str = "experiments";
-}
-
-impl ExperimentSettings {
-    /// Resolve to a concrete cap: the user value (clamped ≥1) when set and
-    /// non-zero, else the platform default.
-    pub fn resolved_max_parallel(&self) -> usize {
-        match self.max_parallel {
-            Some(n) if n >= 1 => n,
-            _ => default_max_parallel(),
-        }
-    }
+    pub result_limits: lunco_experiments::RunResultLimits,
 }
 
 /// Push the persisted `experiments.max_parallel` into the live runner.
@@ -217,7 +160,7 @@ fn publish_cached_dae(
 impl Default for RunnerState {
     fn default() -> Self {
         Self {
-            max_parallel: default_max_parallel(),
+            max_parallel: ExperimentSettings::default().resolved_max_parallel(),
             in_flight: HashSet::new(),
             pending: VecDeque::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -358,6 +301,18 @@ impl ExperimentRunner for ModelicaRunner {
                 withdraw_queued_run(&state, run_id);
             }
         });
+
+        if let Err(error) = source.result_limits.validate() {
+            let _ = tx.send(RunUpdate::Failed {
+                error: error.to_string(),
+                partial: None,
+            });
+            return RunHandle {
+                run_id,
+                progress_rx: rx,
+                cancel: cancel_hook,
+            };
+        }
 
         if let Err(error) = lunco_modelica_core::sim_target::validate_run_bounds(&exp.bounds) {
             let _ = tx.send(RunUpdate::Failed {
@@ -1782,6 +1737,7 @@ pub struct PendingHandles(pub Vec<PendingRun>);
 pub struct PendingRun {
     pub handle: RunHandle,
     pub origin: lunco_experiments::ExperimentOrigin,
+    pub result_limits: lunco_experiments::RunResultLimits,
 }
 impl std::ops::Deref for PendingRun {
     type Target = RunHandle;
@@ -1855,7 +1811,7 @@ pub fn drain_pending_handles(
                     let n_samples = result.times.len();
                     let n_vars = result.series.len();
                     bevy::log::info!(
-                        "[experiments] run {:?} done: {} samples, {} vars, {} ms",
+                        "[experiments] run {:?} received trajectory: {} samples, {} vars, {} ms",
                         handle.run_id,
                         n_samples,
                         n_vars,
@@ -1866,7 +1822,29 @@ pub fn drain_pending_handles(
                     // reactively by `ui::core_observers::project_completed_run`
                     // off the `RunCompleted` message below — core only writes
                     // the result + status into the registry here.
-                    registry.set_result(handle.run_id, result);
+                    if let Err(error) =
+                        registry.set_complete_result(handle.run_id, result, handle.result_limits)
+                    {
+                        let error = format!("complete result rejected: {error}");
+                        bevy::log::warn!("[experiments] run {:?} {error}", handle.run_id);
+                        let partial = registry
+                            .get(handle.run_id)
+                            .is_some_and(|run| run.result.is_some());
+                        registry.set_status(
+                            handle.run_id,
+                            RunStatus::Failed {
+                                error: error.clone(),
+                                partial,
+                            },
+                        );
+                        ev_failed.write(RunFailed {
+                            experiment_id: handle.run_id,
+                            origin: handle.origin.clone(),
+                            error,
+                        });
+                        terminal = true;
+                        break;
+                    }
                     registry.set_status(handle.run_id, RunStatus::Done { wall_time_ms: wall });
                     ev_completed.write(RunCompleted {
                         experiment_id: handle.run_id,
@@ -1878,7 +1856,7 @@ pub fn drain_pending_handles(
                     bevy::log::warn!("[experiments] run {:?} failed: {error}", handle.run_id);
                     let had_partial = partial.is_some();
                     if let Some(p) = partial {
-                        registry.set_result(handle.run_id, p);
+                        registry.set_partial_result(handle.run_id, p);
                     }
                     registry.set_status(
                         handle.run_id,
@@ -1920,41 +1898,6 @@ pub fn drain_pending_handles(
 mod tests {
     use super::*;
 
-    // ── Step 2: settings / cap resolution ──
-
-    #[test]
-    fn default_max_parallel_is_at_least_one() {
-        assert!(default_max_parallel() >= 1);
-    }
-
-    #[test]
-    fn resolved_max_parallel_honours_setting_and_falls_back() {
-        assert_eq!(
-            ExperimentSettings {
-                max_parallel: Some(3)
-            }
-            .resolved_max_parallel(),
-            3
-        );
-        assert_eq!(
-            ExperimentSettings {
-                max_parallel: Some(1)
-            }
-            .resolved_max_parallel(),
-            1
-        );
-        // None and the 0 sentinel both fall back to the platform auto
-        // default, which is always a valid (≥1) cap.
-        assert!(ExperimentSettings { max_parallel: None }.resolved_max_parallel() >= 1);
-        assert!(
-            ExperimentSettings {
-                max_parallel: Some(0)
-            }
-            .resolved_max_parallel()
-                >= 1
-        );
-    }
-
     #[test]
     fn set_max_parallel_floors_at_one() {
         let r = ModelicaRunner::new();
@@ -1984,6 +1927,7 @@ mod tests {
             filename: format!("{model}.mo"),
             extras: Vec::new(),
             runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+            result_limits: Default::default(),
         }
     }
 
@@ -2377,6 +2321,7 @@ mod tests {
             .insert_resource(origins)
             .insert_resource(PendingHandles(vec![
                 PendingRun {
+                    result_limits: Default::default(),
                     origin: origin.clone(),
                     handle: RunHandle {
                         run_id: connected.id,
@@ -2385,6 +2330,7 @@ mod tests {
                     },
                 },
                 PendingRun {
+                    result_limits: Default::default(),
                     origin,
                     handle: RunHandle {
                         run_id: disconnected.id,
@@ -2443,13 +2389,86 @@ mod tests {
         );
     }
 
-    /// CQ-525 regression: [`dae_cache_key`] MUST fold the model source body (and
-    /// extras), not just `(model_name, filename)`. Before CQ-525 an edit that
-    /// kept the model name produced an identical key, so the compile-once cache
-    /// served a *stale* DAE and correctness leaned entirely on an external
-    /// whole-cache clear. This pins that property so a future "simplification"
-    /// of the key back to identity-only fails loudly here instead of silently
-    /// resurrecting the stale-DAE bug.
+    #[test]
+    fn completion_uses_captured_limits_after_settings_change() {
+        let mut registry = ExperimentRegistry::new();
+        let exp = mint_exp(&mut ExperimentRegistry::new(), "CapturedLimits");
+        let id = exp.id;
+        let origin = lunco_experiments::ExperimentOrigin::LocalDocument(
+            lunco_workspace::PinnedDocumentRuntimeOwner {
+                document: lunco_doc::DocumentId::new(1),
+                runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+            },
+        );
+        let mut origins = lunco_experiments::ExperimentOrigins::default();
+        origins
+            .import(&mut registry, origin.clone(), exp)
+            .expect("admitted fixture");
+        registry.set_status(id, RunStatus::Queued);
+        let limits = lunco_experiments::RunResultLimits {
+            max_values: 6,
+            max_artifact_bytes: 1024,
+        };
+        let (tx, rx) = unbounded();
+        tx.send(RunUpdate::Completed(RunResult {
+            times: vec![0.0, 1.0, 2.0],
+            series: BTreeMap::from([("x".into(), vec![1.0, 2.0, 3.0])]),
+            meta: RunMeta {
+                sample_count: 3,
+                ..Default::default()
+            },
+        }))
+        .expect("worker outcome");
+        let mut app = App::new();
+        app.insert_resource(registry)
+            .insert_resource(origins)
+            .insert_resource(ExperimentSettings {
+                result_limits: lunco_experiments::RunResultLimits {
+                    max_values: 1,
+                    ..limits
+                },
+                ..Default::default()
+            })
+            .insert_resource(PendingHandles(vec![PendingRun {
+                origin,
+                result_limits: limits,
+                handle: RunHandle {
+                    run_id: id,
+                    progress_rx: rx,
+                    cancel: Box::new(|| {}),
+                },
+            }]))
+            .add_message::<RunProgress>()
+            .add_message::<RunCompleted>()
+            .add_message::<RunFailed>()
+            .add_message::<RunCancelled>()
+            .add_systems(Update, drain_pending_handles);
+        app.update();
+        assert!(matches!(
+            app.world()
+                .resource::<ExperimentRegistry>()
+                .get(id)
+                .expect("retained result")
+                .status,
+            RunStatus::Done { .. }
+        ));
+        assert_eq!(
+            app.world_mut()
+                .resource_mut::<Messages<RunCompleted>>()
+                .drain()
+                .count(),
+            1
+        );
+        assert_eq!(
+            app.world_mut()
+                .resource_mut::<Messages<RunFailed>>()
+                .drain()
+                .count(),
+            0
+        );
+    }
+
+    /// Cache identity includes the exact source body and every extra source.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn dae_cache_key_folds_source_body_and_extras() {
@@ -2459,6 +2478,7 @@ mod tests {
             filename: "M.mo".into(),
             extras: vec![],
             runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+            result_limits: Default::default(),
         };
 
         // Identical input → identical key (the cache must still HIT on a re-run

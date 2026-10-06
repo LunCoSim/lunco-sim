@@ -39,6 +39,7 @@ fn on_run_modelica_solve(
     mut sources: Option<ResMut<ExperimentOrigins>>,
     mut pending: Option<ResMut<PendingHandles>>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    settings: Res<lunco_experiments::ExperimentSettings>,
 ) -> Result<Ack, String> {
     let request = trigger.event();
     if request.doc_id.is_unassigned() {
@@ -115,6 +116,7 @@ fn on_run_modelica_solve(
         filename,
         extras: Vec::new(),
         runtime: attribution.runtime.clone(),
+        result_limits: settings.result_limits,
     };
     let twin_id = TwinId(match attribution.runtime.local_twin() {
         Some(twin) => format!("workspace:{}", twin.raw()),
@@ -152,8 +154,13 @@ fn on_run_modelica_solve(
         lunco_modelica_core::experiment_journal::record_create(journal, &experiment);
     }
     experiments.set_status(experiment_id, lunco_experiments::RunStatus::Queued);
+    let result_limits = source_snapshot.result_limits;
     let handle = runner.0.run_fast(&experiment, source_snapshot);
-    pending.0.push(PendingRun { handle, origin });
+    pending.0.push(PendingRun {
+        handle,
+        origin,
+        result_limits,
+    });
 
     Ok(Ack::with_data(
         OpId::new(),

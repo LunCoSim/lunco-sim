@@ -170,7 +170,7 @@ mod tests {
             .import(&mut registry, source(1), conflict.clone())
             .expect_err("Create cannot edit even an unadmitted row");
         assert!(error.contains("creation conflicts"));
-        registry.set_result(
+        registry.set_partial_result(
             id,
             crate::RunResult {
                 times: vec![0.0],

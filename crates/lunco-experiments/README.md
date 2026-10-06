@@ -16,6 +16,8 @@ See `docs/architecture/25-experiments.md` for the design rationale.
 | `Experiment` / `ExperimentId` | one batch run + its stable id (`live()` = the interactive realtime cosim) |
 | `ExperimentRegistry` | per-`TwinId` store of runs (capped at 20, LRU-evicts finished) |
 | `RunBounds` / `RunStatus` / `RunResult` / `RunMeta` | the run window, lifecycle state, results (`merge_delta` for streaming), metadata |
+| `RunResultLimits` / `RunResultError` | complete-trajectory structure and result-size admission |
+| `ExperimentSettings` (Bevy) | shared persisted execution/persistence settings |
 | `ParamPath` / `ParamValue` | typed parameter overrides |
 | `SolverId` / `SolverSpec` / `SolverCaps` | a registered solver, what it can do, and its id |
 | `RuntimeProfile` / `SolverRequest` | where the model runs (`live`, `predicted`) and `resolve()`'s input |
@@ -27,7 +29,7 @@ See `docs/architecture/25-experiments.md` for the design rationale.
 
 This crate has **no rumoca / Modelica dependency**. The simulation backend
 plugs in via the `ExperimentRunner` trait; the Modelica binding lives in
-`lunco-modelica-core` (`experiments_runner.rs`). Future backends (FMU, codegen,
+`lunco-modelica-runner`. Future backends (FMU, codegen,
 remote) plug in the same way.
 
 ## Features
