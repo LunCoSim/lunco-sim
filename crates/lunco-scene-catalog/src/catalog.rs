@@ -681,6 +681,7 @@ pub fn dispatch_catalog_listing(
         include_shaders.then_some("wgsl"),
         include_programs.then_some("mo"),
         include_programs.then_some("py"),
+        include_programs.then_some("rhai"),
     ]
     .into_iter()
     .flatten()

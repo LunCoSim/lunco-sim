@@ -106,6 +106,23 @@ root Twins open at once, each with its own recursive tree. That's how
 users compose views across projects that live in different folders on
 disk.
 
+`OpenTwin`, `OpenFolder`, and `CreateTwin` replace the workspace only after
+the candidate scan succeeds. Replacement drains each outgoing `TwinClosed`
+handler and closes every open document through `CloseDocument` before
+registering the new Twin or publishing `TwinAdded`. This includes loose files,
+library editor documents, and untitled drafts; replicated documents follow
+their replication session. Reopening the same Twin follows
+the same teardown and fresh admission; it does not reuse resident documents.
+`AddTwin` and `AddFolderToWorkspace` remain explicitly additive. A rejected
+replacement leaves the current Twin and its documents intact.
+
+Individual Twin closure retires the documents whose admitted runtime owner is
+that Twin, with other open Twins left intact. Domain owners cancel or fence pending
+work at `TwinClosed`; a late result cannot reopen a retired editor session.
+Shared source libraries, immutable asset caches, user settings, and application
+registrations retain their application lifetime. Scene restart refreshes scene
+execution without closing the Twin's editable documents.
+
 ## 1a. Three modes: File, Folder, Twin
 
 LunCoSim mirrors VS Code's tri-modal model. Users opt into progressively

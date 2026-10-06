@@ -1,0 +1,5 @@
+name = "Twin Session Replacement"
+version = "0.1.0"
+
+[usd]
+default_scene = "replacement.usda"

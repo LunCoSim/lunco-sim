@@ -199,6 +199,187 @@ name convention, or ECS-only grouping state is introduced.
   A canvas layout is committed only if the graph's visible topology or
   presentation facts changed. Stage replacement and first admission retain the
   full projection path.
+- Connections defaults to **Active scene**, bound to `SceneMountState.active_root`.
+  Initial view admission waits for that mount's projected USD root identity;
+  a pending empty path cannot become a saved scope.
+  Editor preview focus never replaces the loaded scene's diagram. **Editor
+  document** explicitly selects the focused preview; **Edit connections** opens
+  the exact root-layer URI through `OpenUsdSourceDocument` for document authoring.
+  Its document owner resolves registered schemes on a worker and reuses the
+  existing file-read/parser/registry lifecycle without replacing the scene.
+  Scene inspection selects entity targets from its mount-scoped index;
+  document inspection uses preview-scoped `SelectUsdPrim`. Closing/replacing
+  either owner retires its graph and temporary placements.
+- Both inputs share one composed-USD projector and incremental stage-change
+  path. Full admission traverses USD, including prims without ECS projections;
+  scope views default to the scope node and its direct USD children.
+  **Include nested models** adds internal prims and connections on demand.
+  Clickable breadcrumbs, Back, searchable **Find**, and double-click
+  navigate the composed USD ancestry. Declared unconnected ports remain visible. Causal links have
+  arrows; acausal links and joints do not. Full property names distinguish
+  input/output forwarding, and reciprocal acausal links render once. Missing
+  interfaces are not fabricated. USD may reference runtime-provided outputs
+  such as position, yaw and piloted state. The composed USD reader recognizes
+  their provider schemas and retains exact referenced property identities even
+  in inert document previews. Source revisions refresh these references;
+  neither view requires duplicate authored attributes or Modelica compilation.
+  Runtime validation still owns endpoint availability and types; displaying an
+  authored interface reference does not admit it to simulation.
+  Missing/unrecognized interfaces publish their exact
+  source/target paths to the shared Recent events bus, outside the diagram.
+- Layout policy is `assets/scripting/policy/diagram_layout.rhai`, installed by
+  the application policy manifest at `diagram.layout`. The Connections owner
+  supplies immutable view keys, typed interface roles, program backends,
+  dimensions, causal ranks, edge facts and scope; policy returns one finite
+  `f64` x/y placement per node, with optional display label and schematic accent
+  role. Rust validates exact identities, completeness, rendering range, bounded
+  nonempty labels and known theme roles before applying the result. Labels and
+  accents affect only the view; source names and program facts remain intact.
+  The worker inherits Application/Visualization/Preparation with no simulation
+  clock or live-world access. One pending job per view document is revision
+  fenced; stale results cannot replace navigation or a new source. Graph/scope
+  and policy registry changes request work, never paint or continuous polling.
+  The shipped policy places system inputs left and outputs right around causal layers with one graph-wide packing height; indexed neighbor-order sweeps align branches, and disconnected hierarchy prims occupy a shelf below the connected graph. Geometric interval coloring gives overlapping feedback routes independent lanes; disjoint spans reuse lanes.
+  Saved placements apply afterward and wire routing refreshes. A missing or
+  faulty policy warns visibly and retains the standard graph layout; corrupt
+  optional view data does not interfere with scene loading. The application installs the policy when this feature owner is linked;
+  absent/failed policy registration remains a visible presentation diagnostic.
+  `test_diagram_layout.rhai` exercises the installed policy and bad input facts.
+- Named diagram definitions are separate `.lunco-view.toml` project documents.
+  `lunco-doc::diagram_view` owns their typed source binding, named scopes, and
+  per-view expansion and `f64` node positions, with `DocumentHost` undo/redo. The Connections
+  adapter owns TOML persistence through `lunco-storage` on bounded workers;
+  missing/corrupt files recover valid sections and entries with visible warnings;
+  unusable scopes/positions use root inspection and automatic layout. Unsupported
+  versions or mismatched source bindings use the loaded USD's automatic diagram.
+  Duplicate file ownership and stale load results reject visibly. View files
+  can be committed alongside the scene. They never contain ports, connections,
+  or copied prim facts, and moving nodes never modifies authored USD. Independent
+  views of the same source therefore cannot overwrite one another's layout.
+  Logical source URIs are preferred for relocatable project definitions.
+- The two-row header keeps source/editing mode and primary actions above USD
+  navigation. Named views, files and layout history live under **View**.
+  Editing shows the exact source/edit target and USD dirty state independently
+  of the named layout's dirty marker.
+  **New view** captures the current scope with independent automatic layout;
+  the named-view selector restores its scope and placement. **Save views** saves
+  all named definitions to the chosen repository path; **Load views** validates
+  and replaces the view document. Layout Undo/Redo is separate from source USD
+  Undo/Redo. Ports and edges refresh dynamically from the source revision. Missing
+  authored scopes warn and show the loaded source root so inspection remains
+  usable; their intended scope stays in the file. Removed-node placements remain in the definition and can resolve again
+  if that source identity returns. Pan and zoom remain session presentation state.
+  `Canvas.movable_layout` enables arrangement in read-only scene inspection.
+  `InspectConnectionDiagram` exposes the actual source, named definitions,
+  displayed nodes/ports, and their logical screen coordinates for automation.
+  Same-prim feedback remains a causal edge in overview. Drilling into a system
+  presents its USD `inputs:`, `outputs:` and `connectors:` as separate interface
+  terminals alongside child prims. Forwarding and feedback retain every property
+  identity; terminal cards do not claim a runtime provider. Each card has a
+  stable view key (`/Prim#inputs`, `/Prim#outputs`, `/Prim#connectors` for
+  terminals), while its origin stays `/Prim`. Placement and Rhai layout use view
+  keys; selection and authoring use USD origins. Terminals cannot delete their
+  system. Dragging supports input-to-input and output-to-output forwarding at
+  these boundaries, as well as ordinary causal and acausal connections.
+  `InspectConnectionDiagram` exposes node `key` and `role` alongside `path`.
+  Feedback routes clear the complete endpoint cards and parallel feedback uses
+  separate lanes. `connections[]` reports exact origins, keys and properties.
+  Cards expose authored program facets through the shared composed-USD program
+  resolver, including backend, source and invalid-source diagnostics. Hidden
+  program children appear on their nearest displayed ancestor; drilling into
+  that ancestor exposes the program prim itself.
+- Double-click dispatches `OpenConnectionNode` through `diagram.open.plan`.
+  The owner supplies the exact origin, child availability and own attached
+  program facts. Installed Rhai chooses USD scope for systems, Modelica schema
+  for leaf Modelica programs, or source for Rhai/Python. Rust validates the
+  selected source and delegates to existing document owners. Missing policy,
+  invalid metadata and missing cards reject visibly. Navigation inherits
+  Application/Visualization/Preparation with no simulation clock and runs only
+  on a gesture. `test_diagram_drop.rhai` covers production policy decisions;
+  `connection_diagram_views.rhai` covers navigation and invalid identities.
+  Modelica `OpenFile` resolves registered asset URIs through `SchemeRegistry`
+  on its existing worker, then reuses the file document and read-only ownership.
+  The contextual Connections inspector opens exact programs with
+  `OpenConnectionNode.program_path`, including hidden descendants of a system.
+  The owner validates identity against composed program facets; Rhai receives
+  explicit node/program intent and selects the source editor. The inspector
+  shows USD path/type, ports, connected peers, program sources and Focus/Enter
+  system actions beside the graph; compact widths use a floating details panel.
+  Selection does not change header height. Backend badges remain visible at
+  overview zoom. Details exposes source, counts and composed variants.
+  View contains descendant expansion, schema mode, layout history and view files.
+  `SelectConnectionElement` validates exact card/port identities and shares
+  source-scoped scene/document selection. Selected ports emphasize only their
+  incident links; selected nodes emphasize all their incident links, while
+  unrelated wires use shared disabled opacity. Cached graph adjacency serves
+  endpoint details without USD traversal in paint. Causal arrows and undirected
+  acausal/joint labels remain distinct. Find searches prims, ports and program
+  sources and reveals exact results, navigating hidden prims through composed
+  ancestry. `NavigateConnectionDiagram` validates scope and records view,
+  expansion and viewport; Back restores those facts after asynchronous layout.
+  Port dragging, click-to-connect and the inspector's Connect to picker share
+  the same USD endpoint/type validation. Valid drag targets show rings;
+  incompatible targets explain rejection before release. Rejected gestures emit
+  no authoring operation. The picker emits existing `ApplyUsdOps` directly;
+  topology admission, history and persistence remain document-owned. Distinct
+  ports on the same prim may connect when valid, preserving feedback semantics.
+  `connection_diagram_gestures.rhai` verifies native port dragging, viewport
+  preservation across authoring, undo and rejected directions. Composed edits
+  retain the exploration viewport while their asynchronous layout settles.
+  `connection_diagram_explore.rhai` verifies port tracing, Back recovery and
+  invalid identities through production commands and the diagram query.
+  Acausal connectors use hollow diamonds and explicit labels; they never imply
+  signal direction. Help explains navigation, authoring gestures and hierarchy
+  versus port wiring. Variant facts explain configuration-dependent topology
+  without inferring connections.
+  Selection offers Focus and source/system actions without changing header height. Focus/Fit
+  dispatch `FrameConnectionDiagram`: exact current view keys are validated,
+  then the render boundary consumes a typed frame request through the shared
+  canvas viewport. Focus uses at most natural card scale; Fit shows the complete
+  system. Framing does not change source topology, scope, selection or saved
+  placements. Missing cards reject without moving the viewport. The inspection
+  query exposes viewport and card dimensions for production verification in
+  `connection_diagram_focus.rhai`. Open shares the double-click policy path.
+- Library and Twin file rows carry a shared source drag identity. The Models
+  palette carries its typed `ProgramAttachSpec`, preserving authored ports and
+  `{host}` bindings. In a document diagram, drop USD onto empty space to add
+  a reference under the current scope, or onto a prim to add its child. Drop
+  Modelica/Rhai onto a prim to attach a program. Native file drops use the same
+  command; multiple native files reject visibly rather than discarding entries.
+  `DropConnectionAsset` forwards the source batch to `ApplyUsdOps` and
+  reports its terminal journal result; placement is written to the named view
+  only after source success. Preview composition remains inert until explicit
+  scene admission. Browser source drops do not infer ports from program text.
+- Drop-policy review: `lunco-luncosim-edit-ui` owns `diagram.drop.plan`, with
+  immutable source, scope, target and composed paths as inputs. Its typed Map
+  selects reference/program, parent and a unique identifier. Application policy
+  installation binds `diagram_drop.rhai`; it runs on an explicit UI gesture,
+  never a frame poll. Missing/invalid policy rejects the command. Rust validates
+  the plan and delegates the atomic edit to the USD document owner. Production
+  coverage is `test_diagram_drop.rhai` and `connection_diagram_authoring.rhai`.
+  `connection_diagram_views.rhai` checks boundary feedback, independent terminal
+  placement and invalid identities through the production API.
+  `connection_diagram_wiring.rhai` verifies referenced sink edits, composed
+  topology, undo and rejection of missing composed targets.
+  `connection_diagram_context.rhai` verifies variant-dependent wiring, causal
+  port sides, consumed labels/colors, attached Modelica opening and missing
+  program rejection.
+- Document Diagram and **Authored schema** permit mouse port connections through
+  typed journaled USD operations. Writes retain declared property types and
+  existing connection lists; deleting a link removes only that link, including
+  reciprocal acausal opinions. Authored schema applies explicit registered
+  presentation markers over the same source facts. Neither view requires
+  Modelica compilation. Document edits affect its preview; save and scene reload
+  explicitly admit those changes to simulation.
+- Ownership review: `lunco-doc::diagram_view` owns view definitions and their
+  reversible edits; `lunco-usd-document` owns topology and its journal; the Connections producer owns cached presentation facts;
+  `lunco-canvas` owns gesture handling. Selection and topology application stay
+  at their existing typed owners. These are generic UI projections and gestures,
+  with layout choice authored through `diagram.layout`. Pure
+  projector and canvas interpreter tests cover hierarchy, mixed connection kinds,
+  missing endpoints, large cyclic/chain graphs, and read-only layout gestures;
+  the production API session verifies the active-scene/document UX.
+
 - The primary `UsdPreviewView` is also an instance-backed workbench tab. The
   `OpenUsdPreview`, `FocusUsdPreview`, and `FocusUsdPreviewView` boundaries
   foreground that exact tab; replacing or closing a session closes its view
@@ -337,7 +518,7 @@ The existing implementation provides the substrate the perspective composes:
 | Mount section | Read socket/plug contracts and offer snap or attach actions |
 | Behaviour editor | Edit a program's authored source through the scripting command path |
 | Component attach | Reference an asset, place it, and author the joint as one typed command |
-| Program attach | Discover `.mo`/`.py` sources and lower source, ports, defaults, and wires through `AttachProgram` |
+| Program attach | Discover `.mo`/`.py`/`.rhai` sources and lower source, ports, defaults, and wires through `AttachProgram`; drag onto Connections with `DropConnectionAsset` |
 
 The perspective must remain a composition of these surfaces. The Editor
 perspective opens with the USD prim tree in the upper-left pane so the authored
@@ -428,7 +609,8 @@ Typed command results are the operation's evidence boundary:
 `applied`, `rejected`, `failed`, or `pending`. A caller that receives
 `pending` polls `command_result(id)` before deciding whether the edit
 finished. `SetConnection` may create the sink attribute in the selected
-layer, but every source must resolve to a composed property of the requested
+layer, including an over opinion on a referenced descendant. The sink prim
+must exist in the document's loaded composition; every source must resolve to a composed property of the requested
 type (or to an exact projected runtime port). Missing prims, malformed source
 paths, type mismatches, and unavailable runtime endpoints are terminal errors,
 not silently dropped graph edges.
@@ -1226,6 +1408,43 @@ component-subtree removal through the same one-change-set boundary. It never
 guesses a joint from a component name and never silently deletes external
 Modelica/electrical/data links. Undo restores the complete topology.
 
+## Diagram grouping
+
+Connections groups are view projections over composed USD, owned by
+`lunco-luncosim-edit-ui::connection_canvas`. The optional Application policy
+`diagram.group.plan` receives immutable component types, attached program source
+identities, exact typed ports, topology and standard `Usd.CollectionAPI` membership.
+It returns disjoint `{id, label, members}` groups. The installed
+`diagram_groups.rhai` prioritizes collections, repeated connected branches, then
+identical component families; shared buses and explicit system terminals remain
+outside inferred branches. Rust validates the partition and consumes it through
+the existing bounded, revision-fenced layout worker. Policy errors are reported
+in Recent events; usable manual groups survive and other cards use normal layout.
+Closing/replacing a source discards its group projection with the owning session.
+
+Expanded groups have frames and draggable headers. Double-clicking a frame
+collapses it; double-clicking a summary expands it. Prim double-click retains
+USD system/source navigation. The Groups menu supports manual grouping of selected
+prims, disclosure, ungrouping and disabling grouping in the current named view.
+Group moves persist every member placement in one undoable view-document edit.
+Collapsed summary ports each retain one exact original USD endpoint: authoring,
+disconnect and endpoint inspection resolve that identity before generating USD
+operations. Internal and self connections remain in the full graph and contribute
+to the summary counts. Expand a group to connect an additional member port or drop
+an asset onto an exact prim. The diagram query reports the full topology and the
+number of rendered edges separately.
+
+Existing `.lunco-view.toml` documents persist independent manual membership,
+collapsed/excluded group identities and the grouping switch per named view.
+Automatic membership stays derived from topology and Rhai policy. Corrupt group
+entries are skipped with warnings while usable placements and other groups are
+retained; absent optional group fields mean enabled grouping with no overrides.
+No grouping metadata or layout is written into USD. Production policy verification
+is `assets/scripting/tests/test_diagram_groups.rhai`;
+`assets/scenarios/tests/diagram_groups.rhai` verifies live disclosure, full link
+counts, group displacement, missing-member rejection and undo. The persistence adapter's
+focused test covers partial corruption and round-trip recovery.
+
 ## Measurement and review evidence
 
 Human review does not need a vehicle-specific measurement component or a Rust
@@ -1261,9 +1480,8 @@ document/path identity tuple.
 
 ## Remaining design work
 
-1. Keep canvas layout as an authored decision only if layout persistence is
-   required; otherwise keep it UI-local. Do not journal every drag frame by
-   default.
+1. Keep source topology and named view definitions in their respective document
+   journals. Record node placement on gesture completion, not every drag frame.
 2. Keep per-document `DocumentHost` undo authoritative for `Ctrl+Z`. Reserve
    the twin journal's broader undo manager for a separate future twin-wide or
    cross-author command; never wire both to one undo verb.

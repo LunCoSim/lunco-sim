@@ -50,8 +50,8 @@ use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_bevy_stage::{StageView, UsdRead, UsdStageAsset};
 use lunco_usd_core::commands::{
     ApplyUsdOp, ApplyUsdOps, ApplyUsdTransientOps, AttachComponent, AttachProgram,
-    CommitUsdProposal, CreateUsdProposal, DetachComponent, ReviewUsdProposal, USD_DOCUMENT_KIND,
-    UsdDocumentReady, UsdProposalReviewAction, is_usd_path,
+    CommitUsdProposal, CreateUsdProposal, DetachComponent, OpenUsdSourceDocument,
+    ReviewUsdProposal, USD_DOCUMENT_KIND, UsdDocumentReady, UsdProposalReviewAction, is_usd_path,
 };
 use lunco_usd_core::edit_session::{
     UsdEditSessions, UsdProposalId, UsdProposalState, validate_proposal,
@@ -328,6 +328,7 @@ register_commands!(
     on_set_dome_light,
     on_new_document,
     on_open_file_for_usd,
+    on_open_usd_source_document,
     on_save_document,
     on_save_as_document,
 );
@@ -368,6 +369,8 @@ enum PreparedUsdLoad {
 struct PendingUsdLoad {
     request: UsdLoadRequest,
     task: Task<Result<PreparedUsdLoad, String>>,
+    /// API command awaiting this open's terminal result, if any.
+    command_id: Option<u64>,
 }
 
 #[derive(Resource, Default)]
@@ -425,6 +428,95 @@ fn on_open_file_for_usd(
     });
 }
 
+/// Resolve through the shared asset owner on a worker, then use the document
+/// owner's single file-preparation and lifecycle path.
+#[on_command(OpenUsdSourceDocument)]
+fn on_open_usd_source_document(
+    trigger: On<OpenUsdSourceDocument>,
+    resolver: Res<lunco_assets_core::SchemeRegistry>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    workspace: Option<Res<WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+    mut pending: ResMut<PendingUsdLoads>,
+    command: Res<ActiveCommandId>,
+    mut results: ResMut<CommandResults>,
+) {
+    let queued =
+        (|| -> Result<(), String> {
+            let source = trigger.event().source.clone();
+            if !is_usd_path(&source) {
+                return Err("Choose an exact USD source".into());
+            }
+            if let Some((name, _)) = lunco_assets_core::parse_twin_uri(&source)
+                && !roots
+                    .as_ref()
+                    .is_some_and(|roots| roots.root_for(name).ok().flatten().is_some())
+            {
+                return Err("The source Twin is not mounted".into());
+            }
+            let key = PathBuf::from(&source);
+            if pending.tasks.iter().any(
+                |load| matches!(&load.request, UsdLoadRequest::File { path, .. } if path == &key),
+            ) {
+                return Err("This USD source is already opening".into());
+            }
+            let replication = lunco_core_session::current_replication_owner(
+                connection.as_deref(),
+                replica.as_deref(),
+            );
+            let admission = FileDocumentAdmission::capture(
+                workspace.as_deref().map(|workspace| &workspace.0),
+                replication.as_ref(),
+            );
+            let resolver = resolver.clone();
+            let task_admission = admission.clone();
+            let task = AsyncComputeTaskPool::get().spawn(async move {
+                let path = if lunco_assets_core::has_scheme(&source) {
+                    resolver
+                        .local_path(&source)
+                        .map_err(|error| error.to_string())?
+                        .ok_or_else(|| format!("USD source has no editable local file: {source}"))?
+                } else {
+                    PathBuf::from(source)
+                };
+                prepare_usd_file(task_admission, path).await
+            });
+            pending.tasks.push(PendingUsdLoad {
+                request: UsdLoadRequest::File {
+                    path: key,
+                    admission,
+                },
+                task,
+                command_id: command.get(),
+            });
+            if let Some(id) = command.get() {
+                results.insert(id, lunco_core::CommandOutcome::Pending);
+            }
+            Ok(())
+        })();
+    if let Err(error) = queued {
+        warn!("[UsdOpenSource] {error}");
+        if let Some(id) = command.get() {
+            results.record(id, Err(error));
+        }
+    }
+}
+
+/// Read and parse an admitted USD file on a worker.
+async fn prepare_usd_file(
+    admission: FileDocumentAdmission,
+    path: PathBuf,
+) -> Result<PreparedUsdLoad, String> {
+    let (resolved, bytes) = admission.read(&path).await?;
+    let source = String::from_utf8(bytes)
+        .map_err(|error| format!("invalid UTF-8 in {}: {error}", resolved.path.display()))?;
+    Ok(PreparedUsdLoad::File(
+        resolved,
+        PreparedUsdSource::parse(source),
+    ))
+}
+
 /// Spawn the async file-read for `abs_path` and queue the result in
 /// [`PendingUsdLoads`]. Callers should have already established that the
 /// path looks like a USD file and capture its admission before dispatch.
@@ -440,16 +532,7 @@ pub fn spawn_usd_load(world: &mut World, abs_path: PathBuf, admission: FileDocum
     }
     let pool = AsyncComputeTaskPool::get();
     let path_for_task = abs_path.clone();
-    let task_admission = admission.clone();
-    let task = pool.spawn(async move {
-        let (resolved, bytes) = task_admission.read(&path_for_task).await?;
-        let source = String::from_utf8(bytes)
-            .map_err(|error| format!("invalid UTF-8 in {}: {error}", resolved.path.display()))?;
-        Ok(PreparedUsdLoad::File(
-            resolved,
-            PreparedUsdSource::parse(source),
-        ))
-    });
+    let task = pool.spawn(prepare_usd_file(admission.clone(), path_for_task));
     world
         .resource_mut::<PendingUsdLoads>()
         .tasks
@@ -459,6 +542,7 @@ pub fn spawn_usd_load(world: &mut World, abs_path: PathBuf, admission: FileDocum
                 admission,
             },
             task,
+            command_id: None,
         });
 }
 
@@ -524,7 +608,17 @@ fn on_browser_usd_file(
     pending.tasks.push(PendingUsdLoad {
         request: identity,
         task,
+        command_id: None,
     });
+}
+
+/// Publish the terminal failure of an API-requested USD open.
+fn record_usd_load_error(world: &mut World, command_id: Option<u64>, error: String) {
+    if let Some(id) = command_id {
+        world
+            .resource_mut::<CommandResults>()
+            .record(id, Err(error));
+    }
 }
 
 /// Poll outstanding [`PendingUsdLoads`] and finish the open once each
@@ -543,6 +637,7 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
             None => still_pending.push(load),
             Some(Err(err)) => {
                 bevy::log::warn!("[UsdOpenFile] {}", err);
+                record_usd_load_error(world, load.command_id, err.clone());
                 if matches!(load.request, UsdLoadRequest::Browser { .. }) {
                     world.trigger(lunco_core::RuntimeError {
                         name: "usd-browser-open-failed".to_owned(),
@@ -557,10 +652,12 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
                     workspace.map(|workspace| &workspace.0),
                     replication.as_ref(),
                 ) {
-                    bevy::log::warn!(
-                        "[UsdOpenFile] {} belongs to a retired runtime owner",
+                    let error = format!(
+                        "{} belongs to a retired runtime owner",
                         resolved.path.display()
                     );
+                    bevy::log::warn!("[UsdOpenFile] {error}");
+                    record_usd_load_error(world, load.command_id, error);
                     continue;
                 }
                 let registry = world.resource::<DocumentRegistry<UsdDocument>>();
@@ -574,9 +671,11 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
                             .is_none_or(|entry| entry.runtime_context != resolved.runtime)
                     })
                 {
-                    bevy::log::warn!(
-                        "[UsdOpenFile] refusing to rebind dirty document {doc} to a different runtime owner"
+                    let error = format!(
+                        "refusing to rebind dirty document {doc} to a different runtime owner"
                     );
+                    bevy::log::warn!("[UsdOpenFile] {error}");
+                    record_usd_load_error(world, load.command_id, error);
                     continue;
                 }
                 // Idempotent re-open: the registry owns one document per file and
@@ -614,6 +713,18 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
                     OpenOutcome::Allocated => {}
                 }
                 world.trigger(UsdDocumentReady { doc, outcome });
+                if let Some(id) = load.command_id {
+                    world.resource_mut::<CommandResults>().record(
+                        id,
+                        Ok(Ack::with_data(
+                            OpId::new(),
+                            lunco_api_core::ApiValue::map([(
+                                "doc_id",
+                                lunco_api_core::ApiValue::UInt(doc.raw()),
+                            )]),
+                        )),
+                    );
+                }
             }
             Some(Ok(PreparedUsdLoad::Browser { id, document })) => {
                 if let Err(error) = world

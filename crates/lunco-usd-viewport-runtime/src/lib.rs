@@ -2885,9 +2885,28 @@ register_commands!(
 /// closed would keep the old project's stage visible in the replacement Twin.
 /// Previews backed by another still-open Twin remain mounted; only those whose
 /// authority disappeared are closed.
-fn on_twin_closed_for_viewport(trigger: On<TwinClosed>, mut commands: Commands) {
+fn on_twin_closed_for_viewport(
+    trigger: On<TwinClosed>,
+    workspace: Option<Res<WorkspaceResource>>,
+    mut commands: Commands,
+) {
     let event = trigger.event();
     let closed_twin = event.twin;
+    // Snapshot ownership at the close edge: workspace teardown closes these
+    // documents in a deferred command that may run before this one.
+    let closed_docs: HashSet<DocumentId> = workspace
+        .as_deref()
+        .map(|workspace| {
+            workspace
+                .documents()
+                .iter()
+                .filter(|entry| {
+                    entry.runtime_context == DocumentRuntimeOwner::LocalTwin(closed_twin)
+                })
+                .map(|entry| entry.id)
+                .collect()
+        })
+        .unwrap_or_default();
     commands.queue(move |world: &mut World| {
         world
             .resource_mut::<UsdViewportState>()
@@ -2898,19 +2917,6 @@ fn on_twin_closed_for_viewport(trigger: On<TwinClosed>, mut commands: Commands) 
         world
             .resource_mut::<UsdViewportState>()
             .clear_auto_preview_suppressions();
-        let closed_docs: HashSet<DocumentId> = world
-            .get_resource::<WorkspaceResource>()
-            .map(|workspace| {
-                workspace
-                    .documents()
-                    .iter()
-                    .filter(|entry| {
-                        entry.runtime_context == DocumentRuntimeOwner::LocalTwin(closed_twin)
-                    })
-                    .map(|entry| entry.id)
-                    .collect()
-            })
-            .unwrap_or_default();
         let docs: Vec<_> = world
             .resource::<UsdViewportState>()
             .preview_docs()

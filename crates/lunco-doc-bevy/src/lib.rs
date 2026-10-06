@@ -371,7 +371,7 @@ pub struct NewDocument {
 /// stays in the workbench.
 #[Command(default)]
 pub struct OpenFile {
-    /// Filesystem path or URI (`bundled://`, `mem://`). Empty triggers
+    /// Filesystem path or registered asset URI, including `bundled://` and `mem://`. Empty triggers
     /// the picker (workbench only).
     pub path: String,
 }

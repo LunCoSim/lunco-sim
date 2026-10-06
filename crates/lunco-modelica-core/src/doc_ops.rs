@@ -9,10 +9,30 @@
 //! panel) stays in `ops.rs` and calls back into these helpers.
 
 use bevy::prelude::*;
+use lunco_core::{on_command, register_commands};
+use lunco_doc_bevy::CloseDocument;
 
 use lunco_modelica_document::{ModelicaDocument, ModelicaOp};
 
 type ModelicaDocuments = lunco_doc_bevy::DocumentRegistry<ModelicaDocument>;
+
+/// Retire a Modelica document and linked execution entities in every host.
+/// Scene-only despawns leave editable sources resident; an explicit document
+/// close, including Twin teardown, releases both through this owner.
+#[on_command(CloseDocument)]
+fn close_document(
+    trigger: On<CloseDocument>,
+    mut registry: ResMut<ModelicaDocuments>,
+    mut commands: Commands,
+) {
+    let doc = trigger.event().doc_id;
+    for entity in registry.entities_linked_to(doc) {
+        commands.entity(entity).try_despawn();
+    }
+    registry.remove_document(doc);
+}
+
+register_commands!(close_document);
 
 /// Allocate an untitled Modelica document through the canonical document
 /// registry. UI and headless API hosts share this path; presentation adapters

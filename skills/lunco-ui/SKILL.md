@@ -70,6 +70,116 @@ Large inspection surfaces must virtualize their fixed-height browser rows and re
 only for expanded/visible bodies; the normal sample path reads those values
 through the registry rather than rerunning backend list/metadata callbacks.
 
+For USD topology, extend the existing Connections projector in
+`crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/`. Default to the active
+`SceneMountState` mount; Editor document focus is an explicit alternate source.
+Read composed USD, including prims without ECS projections, independently of
+Modelica compilation. Cache facts and consume stage deltas, never traverse in
+paint. Start at the loaded root with direct hierarchy children; use cached
+USD ancestry for drill-in and explicit descendant expansion. Preserve full property identities; causal edges have
+arrows, acausal/joint edges do not. Never fabricate missing interfaces.
+Scene selection uses mount-scoped entity targets, documents use `SelectUsdPrim`.
+Use `Edit connections` / `OpenUsdSourceDocument` to establish the document
+boundary without replacing the scene. The USD document owner resolves the exact
+registered source on a worker and reuses its file-preparation lifecycle.
+Use the composed USD reader's runtime-provider schema contract to display exact
+authored interface references before runtime projection. Runtime owners validate
+availability and types; the diagram does not admit connections to simulation.
+Publish endpoint
+failures with exact identities in Recent events, not in the diagram toolbar.
+Use `diagram.layout` for authored Rhai layout policy over immutable graph
+facts, including independent view keys and typed interface roles. Run it on bounded workers with source/scope revision fencing and the
+Application/Visualization/Preparation context; validate complete finite
+placements before rendering and apply saved placements afterward. The policy
+may return a bounded display label and schematic accent role; consume both in
+the view without modifying USD identities. Breadcrumbs,
+Back and searchable Find system share cached USD ancestry. Double-click uses
+`OpenConnectionNode` and `diagram.open.plan`: systems open USD child topology,
+leaf Modelica programs use the existing schema editor, and Rhai/Python use
+source. Navigation must preserve exact source identity and reject missing cards.
+Modelica `OpenFile` resolves registered asset URIs on its worker through
+`SchemeRegistry`, preserving the document owner and read-only library state.
+Exercise the installed policy with `assets/scripting/tests/test_diagram_layout.rhai`.
+Use `diagram.group.plan` for optional Rhai grouping over immutable program-source,
+typed-port, topology and standard CollectionAPI facts; Rust validates and renders
+its disjoint partition on the existing layout worker. Expanded frames and collapsed
+summary cards preserve full USD topology. Resolve summary ports to their exact
+original endpoint before authoring or inspecting a connection. Use the typed
+`SetConnectionGroup`, `SetConnectionGroupCollapsed`, `RemoveConnectionGroup`,
+`MoveConnectionGroup` and `SetConnectionGrouping` commands; group movement is one
+journaled edit for all member placements. Manual membership, disclosure, exclusions
+and the grouping switch belong to each existing named view. Salvage usable groups
+and placements independently when an optional view file is damaged. Verify installed
+policies through `assets/scripting/tests/test_diagram_groups.rhai` as well as the
+layout gate; exercise collapse/expand, movement and rejection in the production API.
+Persist named scopes and layouts in separate `.lunco-view.toml` project
+artifacts using `lunco-doc::diagram_view` / `DocumentHost`, through typed view
+commands. Each view has independent placement; USD files only own topology.
+`Save views` / `Load views` use bounded asynchronous `lunco-storage` work and
+recover valid entries from missing/corrupted optional view files with warnings
+and automatic layout. Different sources or unsupported versions use the loaded
+USD automatic view; duplicate file owners and stale loads reject.
+Mouse port connections use journaled `ApplyUsdOps`, retain declared types and
+unrelated links, and Save/Undo stay source-document-owned. Layout Undo/Redo
+belongs to the view document. `Canvas.movable_layout` permits node arrangement
+in read-only scene views. Consume `InspectConnectionDiagram` for exact source,
+view IDs, layouts, rendered ports, and logical screen coordinates. Verify scene
+inspection preserves same-prim feedback as edges. Drilling into a system
+shows input/output/acausal interface terminals and child prims. `nodes[].key`
+is the independent placement identity; `nodes[].path` stays the exact USD
+prim for authoring and selection. `nodes[].role` identifies boundary terminals;
+never infer runtime ownership from port names. `connections[]` retains exact
+USD endpoints alongside their presentation keys. Verify input/input and
+output/output boundary forwarding and rejection of terminal deletion. Verify
+navigation, independent named layouts, file roundtrip, and mouse gestures in an
+owned production API session, plus pure document/projector/interpreter tests.
+Drag Library/Twin sources into a document diagram: USD becomes a reference;
+Modelica/Rhai must land on an existing host prim. Models-palette drags retain
+their typed authored port contract. Inspect `nodes[].programs` for backend,
+source and resolver issues, including hidden children attributed to their
+nearest visible ancestor. Drop naming/routing belongs to `diagram.drop.plan`
+in `assets/scripting/policy/diagram_drop.rhai`; Rust validates its typed plan
+and uses the existing journal batch. Verify terminal outcomes and placement
+after source success with `connection_diagram_authoring.rhai`, including
+missing-host and unsupported-source rejection. Exercise the installed policy
+with `assets/scripting/tests/test_diagram_drop.rhai`.
+Use `connection_diagram_wiring.rhai` for composed sink authoring, undo and
+missing-target rejection in an owned document preview.
+The contextual Connections inspector opens exact program facets with
+`OpenConnectionNode.program_path`; an omitted program path retains normal
+policy-driven double-click navigation. Show USD path/type, ports, peers and
+Modelica/Rhai sources together beside the graph, using a floating panel on
+compact widths. `SelectConnectionElement` validates exact cards/ports and
+shares source-scoped scene/document selection. Selected nodes emphasize
+incident links; selected ports emphasize exact endpoint matches, and unrelated
+wires use shared disabled opacity. Use cached graph adjacency for peer rows.
+Find searches prims, ports and program sources; reveal may navigate to the
+exact hidden prim's parent. `NavigateConnectionDiagram` keeps view, scope,
+expansion and viewport history; Back restores them after layout completes.
+Verify tracing, navigation restoration and invalid identities with
+`connection_diagram_explore.rhai`. Keep the header to source/mode and primary
+actions, then navigation. Put named views, schema options and repository files
+under View, variants under Details, and gestures under Help. Show USD dirty
+state independently from view dirty state. Port dragging, click-to-connect
+and the inspector Connect to picker must share endpoint/type validation; valid
+targets show rings and invalid targets explain rejection before release. The
+shared canvas validator rejects before EdgeCreated; ApplyUsdOps owns admission
+and journaling. Distinct same-prim ports may author valid feedback.
+Composed edits preserve the viewport through asynchronous layout. Verify native
+dragging, undo and rejected directions with `connection_diagram_gestures.rhai`
+in a visible Connections document. Supply `doc_id`, exact `source`/`sink` view
+keys, `source_port`/`sink_port` and a same-direction `invalid_port` on the sink;
+place the two cards within the focused viewport before running the gate.
+Show acausal connectors as hollow diamonds with explicit
+labels and separate counts; zero causal outputs does not mean a physical model
+is disconnected. Show prim type and no authored ports for geometry/cameras.
+Use `FrameConnectionDiagram` for Focus/Fit over the current view key; the render
+boundary consumes its request through the shared viewport. Focus preserves
+scope and topology and fits at most natural scale. Open uses the existing
+double-click command. Verify exact card centering, complete-system fit and
+missing-card rejection with `connection_diagram_focus.rhai`; inspect viewport
+and node dimensions through the existing diagram query.
+
 The Editor's `authoring_review` panel is the shared human-facing evidence
 surface for authored/runtime inspection. Its target chain must keep `selected`,
 `controlled`, and the active camera target as separate rows; do not collapse

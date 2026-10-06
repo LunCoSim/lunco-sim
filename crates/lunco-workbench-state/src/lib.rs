@@ -784,10 +784,9 @@ fn capture_documents(world: &mut World) -> Vec<(u64, DocumentSnapshot)> {
             out.extend(codec.capture(world));
         }
     });
-    // A Workspace intentionally keeps closed-Twin documents as loose session
-    // state. Per-Twin hot-exit must nevertheless persist only the active
-    // scope; otherwise the next Twin restores documents from an unrelated
-    // project and recreates the ownership leak this state is meant to avoid.
+    // Additive workspaces can hold documents from several Twins. Per-Twin
+    // hot-exit captures only the active scope so another project cannot
+    // restore unrelated documents.
     if let Some(workspace) = world.get_resource::<WorkspaceResource>() {
         out.retain(|(raw_id, _)| {
             workspace
@@ -1395,10 +1394,20 @@ impl Plugin for WorkspaceStatePlugin {
 }
 
 fn clear_runtime_surface_layouts_on_twin_closed(
-    _trigger: On<lunco_workspace::TwinClosed>,
+    trigger: On<lunco_workspace::TwinClosed>,
     mut layouts: ResMut<RuntimeSurfaceLayouts>,
+    mut pending: ResMut<PendingWorkspaceRestore>,
 ) {
-    layouts.clear();
+    if pending
+        .0
+        .as_ref()
+        .is_some_and(|pending| pending.twin == trigger.event().twin)
+    {
+        pending.0 = None;
+    }
+    if trigger.event().was_active {
+        layouts.clear();
+    }
 }
 
 #[cfg(test)]

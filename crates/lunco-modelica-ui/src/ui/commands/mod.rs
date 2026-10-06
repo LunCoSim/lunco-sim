@@ -104,7 +104,6 @@ register_commands!(
     diagram::on_add_canvas_plot,
     plot::on_add_signal_to_plot,
     crate::ui::panels::canvas_diagram::on_auto_arrange_diagram,
-    lifecycle::on_close_document,
     lifecycle::on_create_new_scratch_model,
     lifecycle::on_duplicate_model_from_read_only,
     nav::on_fit_canvas,

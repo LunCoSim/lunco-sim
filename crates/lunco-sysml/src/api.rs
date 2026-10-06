@@ -13,8 +13,8 @@ use lunco_command_contracts::Ack;
 use lunco_core::{Command, on_command, register_commands};
 use lunco_doc::{Document, DocumentId, FileBacked, OpenOutcome};
 use lunco_doc_bevy::{
-    DocumentRegistry, DocumentSaved, NewDocument, OpenFile, RedoDocument, SaveAsDocument,
-    SaveDocument, UndoDocument,
+    CloseDocument, DocumentRegistry, DocumentSaved, NewDocument, OpenFile, RedoDocument,
+    SaveAsDocument, SaveDocument, UndoDocument,
 };
 use lunco_storage::Storage;
 
@@ -99,6 +99,7 @@ struct PendingSysmlOpen {
 }
 
 register_commands!(
+    on_close_sysml_document,
     on_open_sysml_file,
     on_new_sysml_document,
     on_apply_sysml_ops,
@@ -243,6 +244,16 @@ fn on_browser_sysml_file(
         request: identity,
         task,
     });
+}
+
+/// Close the SysML document for every shared `CloseDocument` request,
+/// including Twin teardown and workspace replacement.
+#[on_command(CloseDocument)]
+fn on_close_sysml_document(
+    trigger: On<CloseDocument>,
+    mut registry: ResMut<DocumentRegistry<SysmlDocument>>,
+) {
+    registry.remove_document(trigger.event().doc_id);
 }
 
 /// Finish pending source reads on the ECS thread and let the registry decide

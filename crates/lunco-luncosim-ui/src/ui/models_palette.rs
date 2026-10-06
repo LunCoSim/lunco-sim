@@ -15,6 +15,7 @@ use lunco_usd_core::program::{ProgramAttachSpec, ProgramInput, ProgramOutput};
 use lunco_usd_document::document::LayerId;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use serde::Deserialize;
+use std::sync::Arc;
 
 const PROGRAM_CONTRACTS_KIND: &str = "lunco.program-contracts.v1";
 
@@ -58,7 +59,7 @@ struct ProgramOutputContract {
     connections: Vec<String>,
 }
 
-/// A discovered `.mo` or `.py` source that can be offered by the palette.
+/// A discovered program source that can be offered by the palette.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ProgramChoice {
     /// Asset-server address of the source.
@@ -76,6 +77,7 @@ impl ProgramChoice {
         match self.extension.as_str() {
             "mo" => "Modelica",
             "py" => "Python",
+            "rhai" => "Rhai",
             _ => "Program",
         }
     }
@@ -156,7 +158,7 @@ impl ProgramChoice {
 pub(crate) struct ProgramCatalog {
     pub ready: bool,
     pub error: Option<String>,
-    pub entries: Vec<ProgramChoice>,
+    pub entries: Arc<Vec<ProgramChoice>>,
     contracts_ready: bool,
     contracts_error: Option<String>,
     contracts: Vec<ProgramContract>,
@@ -184,7 +186,7 @@ pub(crate) fn drain_program_catalog(
         Ok((manifest_ready, assets)) => {
             catalog.ready = manifest_ready;
             catalog.error = None;
-            catalog.entries = assets
+            let mut entries: Vec<_> = assets
                 .into_iter()
                 .filter_map(|asset| {
                     let extension = asset.rel.rsplit_once('.')?.1.to_string();
@@ -196,14 +198,13 @@ pub(crate) fn drain_program_catalog(
                     })
                 })
                 .collect();
-            catalog
-                .entries
-                .sort_by(|a, b| a.asset_path.cmp(&b.asset_path));
+            entries.sort_by(|a, b| a.asset_path.cmp(&b.asset_path));
+            catalog.entries = Arc::new(entries);
             apply_program_contracts(&mut catalog);
         }
         Err(error) => {
             catalog.ready = false;
-            catalog.entries.clear();
+            catalog.entries = Arc::default();
             catalog.error = Some(error.to_string());
         }
     }
@@ -281,7 +282,7 @@ pub(crate) fn sync_program_contracts(
 }
 
 fn apply_program_contracts(catalog: &mut ProgramCatalog) {
-    for choice in &mut catalog.entries {
+    for choice in Arc::make_mut(&mut catalog.entries) {
         choice.contract = catalog
             .contracts
             .iter()
@@ -301,7 +302,7 @@ pub(crate) fn clear_program_catalog_on_twin_closed(
 ) {
     catalog.ready = false;
     catalog.error = None;
-    catalog.entries.clear();
+    catalog.entries = Arc::default();
     catalog.contracts_ready = false;
     catalog.contracts_error = None;
     catalog.contracts.clear();
@@ -311,7 +312,13 @@ pub(crate) fn clear_program_catalog_on_twin_closed(
 // Panel
 // ─────────────────────────────────────────────────────────────────────
 
-pub(crate) struct ModelsPalette;
+#[derive(Default)]
+pub(crate) struct ModelsPalette {
+    filter: String,
+    previous_filter: String,
+    catalog: Option<Arc<Vec<ProgramChoice>>>,
+    visible: Vec<usize>,
+}
 
 impl Panel for ModelsPalette {
     fn id(&self) -> PanelId {
@@ -329,6 +336,9 @@ impl Panel for ModelsPalette {
     fn transparent_background(&self) -> bool {
         true
     }
+    fn scroll_policy(&self) -> lunco_workbench_core::PanelScrollPolicy {
+        lunco_workbench_core::PanelScrollPolicy::SelfManaged
+    }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let Some(tokens) = ctx
@@ -338,7 +348,7 @@ impl Panel for ModelsPalette {
             return;
         };
         ctx.panel_content_frame()
-            .show(ui, |ui| models_palette_content(ui, ctx, &tokens));
+            .show(ui, |ui| models_palette_content(ui, ctx, &tokens, self));
     }
 }
 
@@ -346,6 +356,7 @@ fn models_palette_content(
     ui: &mut egui::Ui,
     ctx: &mut PanelCtx,
     tokens: &lunco_theme::DesignTokens,
+    palette: &mut ModelsPalette,
 ) {
     ui.heading("Models");
 
@@ -395,46 +406,80 @@ fn models_palette_content(
         ui.colored_label(tokens.warning, format!("Model contract catalog: {error}"));
     }
     if entries.is_empty() {
-        ui.label(egui::RichText::new("No .mo or .py sources discovered.").weak());
+        ui.label(egui::RichText::new("No program sources discovered.").weak());
     }
 
-    for choice in &entries {
-        let selected = pending.as_ref() == Some(choice);
-        #[cfg(feature = "python")]
-        let (label, enabled) = (
-            format!("{}  ({})", choice.label, choice.language_label()),
-            true,
-        );
-        #[cfg(not(feature = "python"))]
-        let (label, enabled) = {
-            let mut label = format!("{}  ({})", choice.label, choice.language_label());
-            let enabled = if choice.is_python() {
-                label.push_str(" [requires Python backend]");
-                false
-            } else {
-                true
-            };
-            (label, enabled)
-        };
-        let button = egui::Button::new(label)
-            .selected(selected)
-            .min_size(egui::vec2(ui.available_width(), 24.0));
-        if ui.add_enabled(enabled, button).clicked() {
-            ctx.set_resource(if selected {
-                AttachState::Idle
-            } else {
-                AttachState::Pending(choice.clone())
-            });
-        }
-    }
-
-    ui.add_space(8.0);
-    ui.label(
-        egui::RichText::new(
-        "Select a document-backed USD body. The attachment is authored in the USD scene layer and uses the normal projection; sources without declared ports require explicit wiring before they step.",
-        )
-        .weak(),
+    ui.add(
+        egui::TextEdit::singleline(&mut palette.filter)
+            .hint_text("Find a program or language…")
+            .desired_width(ui.available_width()),
     );
+    if palette.previous_filter != palette.filter
+        || !palette
+            .catalog
+            .as_ref()
+            .is_some_and(|previous| Arc::ptr_eq(previous, &entries))
+    {
+        let filter = palette.filter.trim().to_lowercase();
+        palette.visible = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(i, choice)| {
+                (choice.label.to_lowercase().contains(&filter)
+                    || choice.language_label().to_lowercase().contains(&filter))
+                .then_some(i)
+            })
+            .collect();
+        palette.previous_filter = palette.filter.clone();
+        palette.catalog = Some(Arc::clone(&entries));
+    }
+    ui.label(
+        egui::RichText::new("Drag onto a prim in Connections. USD owns the attachment and ports.")
+            .weak(),
+    );
+    let row_height = ui.spacing().interact_size.y;
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show_rows(ui, row_height, palette.visible.len(), |ui, rows| {
+            for row in rows {
+                let choice = &entries[palette.visible[row]];
+                let selected = pending.as_ref() == Some(choice);
+                #[cfg(feature = "python")]
+                let (label, enabled) = (
+                    format!("{}  ({})", choice.label, choice.language_label()),
+                    true,
+                );
+                #[cfg(not(feature = "python"))]
+                let (label, enabled) = {
+                    let mut label = format!("{}  ({})", choice.label, choice.language_label());
+                    let enabled = if choice.is_python() {
+                        label.push_str(" [requires Python backend]");
+                        false
+                    } else {
+                        true
+                    };
+                    (label, enabled)
+                };
+                let button = egui::Button::new(label)
+                    .wrap_mode(egui::TextWrapMode::Truncate)
+                    .sense(egui::Sense::click_and_drag())
+                    .selected(selected)
+                    .min_size(egui::vec2(ui.available_width(), row_height));
+                let response = ui
+                    .add_enabled(enabled, button)
+                    .on_hover_text(&choice.asset_path);
+                if enabled {
+                    response.dnd_set_drag_payload(choice.attachment_spec("{host}"));
+                }
+                if response.clicked() {
+                    ctx.set_resource(if selected {
+                        AttachState::Idle
+                    } else {
+                        AttachState::Pending(choice.clone())
+                    });
+                }
+            }
+        });
 }
 
 // ─────────────────────────────────────────────────────────────────────

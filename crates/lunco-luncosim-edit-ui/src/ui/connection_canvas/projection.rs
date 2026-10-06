@@ -1,37 +1,39 @@
 //! Pure projector: a composed USD stage → a `lunco_canvas::Scene`.
 //!
-//! Two stages, split so the interesting half is testable without a live
-//! stage:
+//! Collection and pure projection are split so layout is testable without a
+//! live stage:
 //!
 //! - [`collect_graph`] reads the complete live `StageView` over the canonical
 //!   stage into plain [`PrimNode`] / [`Wire`] structs. Thin glue over the same
 //!   read API + connection-string split the co-sim wiring derivation uses
 //!   (`lunco_usd_sim_cosim::rewire_usd_connections`).
+//! - [`project_diagram`] scopes complete composed topology to USD ancestry.
 //! - [`project_schema`] is an explicit presentation projection for the Lunica
 //!   Schema perspective. It is driven by authored USD properties and never
 //!   changes the collected topology used by simulation.
 //! - [`build_scene`] is a **pure function** `(nodes, wires) → Scene`: it filters
-//!   to the prims that actually participate in the graph, assigns a
+//!   the selected hierarchy and wiring participants, assigns a
 //!   left-to-right dataflow layering, lays out ports, and emits nodes + edges.
 //!   No USD, no Bevy — unit-tested directly.
 //!
 //! # What becomes a node vs an edge
 //!
-//! - **Node** — normally an active prim that has connectors (`inputs:*` /
-//!   `outputs:*`) or is a rigid body (`PhysicsRigidBodyAPI`). A scene may
+//! - **Node** — a USD hierarchy boundary or a prim that has connectors (`inputs:*` /
+//!   `outputs:*` / `connectors:*`) or is a rigid body (`PhysicsRigidBodyAPI`). A scene may
 //!   author `lunco:ui:schemaNode = true` on system boundaries; the explicit
 //!   [`project_schema`] function can then select those boundaries for the
 //!   readable schema projection.
-//! - **Dataflow edge** — one per authored `inputs:<c>.connect` (the co-sim wire:
-//!   sink `inputs:` ← source `outputs:`). Drawn source-output → sink-input.
+//! - **Causal edge** — a property connection between `inputs:`/`outputs:`,
+//!   including boundary forwarding. Drawn from USD source to target.
+//! - **Acausal edge** — a `connectors:*` property connection, drawn undirected.
 //! - **Joint edge** — one per prim carrying both `physics:body0` and
-//!   `physics:body1`; the joint prim itself is rendered as the edge (not a node),
-//!   connecting its two bodies.
+//!   `physics:body1`, connecting its two bodies. The joint prim also remains a
+//!   node for hierarchy navigation and its own signal interfaces.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
-use lunco_canvas::{Edge, Node, Port, PortId, PortRef, Pos, Rect, Scene, empty_node_data};
+use lunco_canvas::{Edge, Node, Port, PortId, PortRef, Pos, Rect, Scene};
 use lunco_usd_bevy_stage::{StageView, UsdRead};
 use openusd::sdf::Path as SdfPath;
 
@@ -44,17 +46,19 @@ pub(crate) const EDGE_KIND: &str = "usd.wire";
 // rows march down. Wide enough to fit a prim leaf name + type label.
 const NODE_W: f32 = 250.0;
 const NODE_H: f32 = 96.0;
-const PORT_ROW_H: f32 = 19.0;
-const COL_SPACING: f32 = 360.0;
+pub(super) const PORT_ROW_H: f32 = 19.0;
+pub(super) const COL_SPACING: f32 = 360.0;
 const ROW_SPACING: f32 = 230.0;
 const ROW_GAP: f32 = 56.0;
-const MARGIN: f32 = 40.0;
+pub(super) const MARGIN: f32 = 40.0;
 
 /// Whether a wire is a co-sim dataflow connection or a physics joint.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum WireKind {
     /// Authored `inputs:<c>.connect` — a co-sim signal wire.
     Dataflow,
+    /// Authored `connectors:*` connection — an undirected Modelica network.
+    Acausal,
     /// A joint prim's `physics:body0` ↔ `physics:body1`.
     Joint,
 }
@@ -63,9 +67,66 @@ pub(crate) enum WireKind {
 /// factory downcasts it.
 #[derive(Clone, Debug)]
 pub(crate) struct UsdPrimNodeData {
+    pub group_id: Option<String>,
+    pub group_ports: BTreeMap<String, super::groups::GroupEndpoint>,
+    pub programs: Vec<ProgramFacet>,
+    pub accent: Option<DiagramAccent>,
     pub type_name: String,
     /// Applies `PhysicsRigidBodyAPI` — drawn with the body accent.
     pub is_body: bool,
+    /// USD property types used by the document authoring boundary.
+    pub port_types: BTreeMap<String, String>,
+    pub port_sources: BTreeMap<String, Vec<String>>,
+    /// Stable presentation identity; origin remains the exact USD prim.
+    pub view_key: String,
+    pub boundary: Option<BoundaryRole>,
+}
+
+/// Presentation roles resolved through the existing schematic theme tokens.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum DiagramAccent {
+    Model,
+    Block,
+    Record,
+    Package,
+    Class,
+    Warning,
+}
+impl DiagramAccent {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Model => "model",
+            Self::Block => "block",
+            Self::Record => "record",
+            Self::Package => "package",
+            Self::Class => "class",
+            Self::Warning => "warning",
+        }
+    }
+}
+
+/// The selected system's property groups, presented as interface terminals.
+/// These describe USD direction, not a guessed runtime provider.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) enum BoundaryRole {
+    Inputs,
+    Outputs,
+    Connectors,
+}
+impl BoundaryRole {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Inputs => "inputs",
+            Self::Outputs => "outputs",
+            Self::Connectors => "connectors",
+        }
+    }
+}
+
+pub(super) fn diagram_key(node: &Node) -> Option<&str> {
+    node.data
+        .downcast_ref::<UsdPrimNodeData>()
+        .map(|data| data.view_key.as_str())
 }
 
 /// Typed payload carried in `Edge.data` for `"usd.wire"` edges.
@@ -77,6 +138,11 @@ pub(crate) struct UsdWireData {
 /// A prim read out of the stage, before layout.
 #[derive(Clone, Debug)]
 pub(crate) struct PrimNode {
+    pub collections: BTreeMap<String, Result<Vec<String>, String>>,
+    pub programs: Vec<ProgramFacet>,
+    pub variants: Result<BTreeMap<String, String>, String>,
+    pub usd_origin: Option<String>,
+    pub boundary: Option<BoundaryRole>,
     pub path: String,
     /// Standard USD `ui:displayName`, when authored; the path leaf is the
     /// deterministic fallback for assets that do not provide one.
@@ -91,24 +157,42 @@ pub(crate) struct PrimNode {
     /// properties, not an engine-side classification of the prim.
     pub schema_column: Option<i32>,
     pub schema_row: Option<i32>,
+
+    pub port_sources: BTreeMap<String, Vec<String>>,
+    /// Explicit USD references to interfaces supplied by a registered runtime provider.
+    pub referenced_ports: BTreeSet<String>,
     /// Connector leaf names (no `inputs:` prefix).
     pub inputs: Vec<String>,
     /// Connector leaf names (no `outputs:` prefix).
     pub outputs: Vec<String>,
+    /// Acausal connector leaves, kept separate from causal inputs/outputs.
+    pub connectors: Vec<String>,
+    /// Declared types keyed by complete USD property identity.
+    pub port_types: BTreeMap<String, String>,
+}
+
+/// Resolved authored program facts; this never starts an executor or reads source bytes.
+#[derive(Clone, Debug, Hash)]
+pub(crate) struct ProgramFacet {
+    pub path: String,
+    pub backend: String,
+    pub source: String,
+    pub issue: Option<String>,
 }
 
 /// A link read out of the stage, before resolution against the node set.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash)]
 pub(crate) struct Wire {
     pub kind: WireKind,
     /// Prim whose authored relation produced this wire. This keeps incremental
     /// projection correct for joints, whose endpoints are not the joint prim.
     pub owner_path: String,
     pub source_path: String,
-    /// Dataflow only — the producing connector leaf. Empty for joints.
+    /// Full source USD property name (`outputs:`, `inputs:`, or `connectors:`).
+    /// Empty for joints.
     pub source_conn: String,
     pub target_path: String,
-    /// Dataflow only — the consuming connector leaf. Empty for joints.
+    /// Full target USD property name. Empty for joints.
     pub target_conn: String,
 }
 
@@ -124,11 +208,10 @@ pub(crate) struct PrimProjection {
 ///
 /// `prim_paths` are the scene's prim path strings — supplied by the caller from
 /// the ECS `UsdPrimPath` entities, exactly the enumeration
-/// `rewire_usd_connections` uses (a live `StageView::prim_paths()` traversal can
-/// miss composed children, so we key off the entities that were actually
-/// spawned). `inputs:<c>` attrs are sinks, their `connections()` are the
-/// producers, split at the last `.` into `(prim, connector-leaf)`. A prim
-/// carrying both joint bodies becomes a joint wire and is NOT itself a node.
+/// `rewire_usd_connections` uses. The caller supplies complete composed prim
+/// paths, including prims without ECS projections. `inputs:<c>` attrs are sinks, their `connections()` are the
+/// producers, split at the last `.` into `(prim, property-name)`. A prim
+/// carrying both joint bodies also contributes a mechanical joint wire.
 pub(crate) fn collect_graph(
     view: &StageView<'_>,
     prim_paths: &[String],
@@ -160,7 +243,7 @@ pub(crate) fn collect_prim(view: &StageView<'_>, path: &str) -> Option<PrimProje
     let mut wires = Vec::new();
 
     // A prim with both bodies is a joint: render it as an edge between the
-    // two bodies, not as a node.
+    // two bodies. Keep the joint prim available for referenced value ports.
     let body0 = view.rel_target(&p, "physics:body0");
     let body1 = view.rel_target(&p, "physics:body1");
     if let (Some(a), Some(b)) = (body0, body1) {
@@ -172,7 +255,6 @@ pub(crate) fn collect_prim(view: &StageView<'_>, path: &str) -> Option<PrimProje
             target_path: b,
             target_conn: String::new(),
         });
-        return Some(PrimProjection { node: None, wires });
     }
 
     let type_name = view.type_name(&p).unwrap_or_default();
@@ -187,35 +269,104 @@ pub(crate) fn collect_prim(view: &StageView<'_>, path: &str) -> Option<PrimProje
     let schema_row = view.scalar::<i32>(&p, "lunco:ui:schemaRow");
     let mut inputs: Vec<String> = Vec::new();
     let mut outputs: Vec<String> = Vec::new();
+    let mut connectors = Vec::new();
+    let mut port_types = BTreeMap::new();
+    let mut port_sources = BTreeMap::new();
 
     for attr in view.attr_names(&p) {
-        if let Some(conn) = attr.strip_prefix("inputs:") {
+        let kind = if let Some(conn) = attr.strip_prefix("inputs:") {
             inputs.push(conn.to_string());
-            for src in view.connections(&p, &attr) {
-                // `/A.outputs:netForce` → prim `/A`, connector `netForce`.
-                let Some((src_prim, leaf)) = src.rsplit_once('.') else {
-                    continue;
-                };
-                let src_conn = leaf
-                    .strip_prefix("outputs:")
-                    .or_else(|| leaf.strip_prefix("inputs:"))
-                    .unwrap_or(leaf)
-                    .to_string();
-                wires.push(Wire {
-                    kind: WireKind::Dataflow,
-                    owner_path: path.to_string(),
-                    source_path: src_prim.to_string(),
-                    source_conn: src_conn,
-                    target_path: path.to_string(),
-                    target_conn: conn.to_string(),
-                });
-            }
+            WireKind::Dataflow
         } else if let Some(conn) = attr.strip_prefix("outputs:") {
             outputs.push(conn.to_string());
+            WireKind::Dataflow
+        } else if let Some(conn) = attr.strip_prefix("connectors:") {
+            connectors.push(conn.to_string());
+            WireKind::Acausal
+        } else {
+            continue;
+        };
+        if let Some(type_name) = view.attr_type_name(&p, &attr) {
+            port_types.insert(attr.clone(), type_name);
+        }
+        let sources = view.connections(&p, &attr);
+        port_sources.insert(attr.clone(), sources.clone());
+        for source in sources {
+            let Some((source_path, property)) = source.rsplit_once('.') else {
+                continue;
+            };
+            let valid_property = match kind {
+                WireKind::Dataflow => {
+                    property.starts_with("inputs:") || property.starts_with("outputs:")
+                }
+                WireKind::Acausal => property.starts_with("connectors:"),
+                WireKind::Joint => false,
+            };
+            if !valid_property {
+                continue;
+            }
+            wires.push(Wire {
+                kind,
+                owner_path: path.to_string(),
+                source_path: source_path.to_string(),
+                source_conn: property.to_string(),
+                target_path: path.to_string(),
+                target_conn: attr.clone(),
+            });
         }
     }
 
+    let programs = if view.has_api_schema(&p, "LunCoProgramAPI") {
+        use lunco_usd_bevy_core::program::{ProgramSource, resolve_program};
+        vec![match resolve_program(view, &p) {
+            Ok(program) => ProgramFacet {
+                path: path.into(),
+                backend: format!("{:?}", program.backend),
+                source: match program.source {
+                    ProgramSource::Id(id) | ProgramSource::Asset(id) => id,
+                    ProgramSource::Code(_) => "Inline source".into(),
+                },
+                issue: None,
+            },
+            Err(issue) => ProgramFacet {
+                path: path.into(),
+                backend: "Invalid program".into(),
+                source: issue.property,
+                issue: Some(issue.message),
+            },
+        }]
+    } else {
+        Vec::new()
+    };
     let node = PrimNode {
+        collections: view
+            .api_schemas(&p)
+            .into_iter()
+            .filter_map(|schema| {
+                let name = schema.strip_prefix("CollectionAPI:")?;
+                Some((
+                    name.to_string(),
+                    view.collection_members(&p, name)
+                        .map(|paths| paths.into_iter().map(|p| p.to_string()).collect())
+                        .map_err(|error| error.to_string()),
+                ))
+            })
+            .collect(),
+        programs,
+        variants: view
+            .stage()
+            .prim(p.clone())
+            .variant_sets()
+            .get_all_variant_selections()
+            .map(|selections| {
+                selections
+                    .into_iter()
+                    .map(|(name, selection)| (name.to_string(), selection.to_string()))
+                    .collect()
+            })
+            .map_err(|error| error.to_string()),
+        usd_origin: None,
+        boundary: None,
         path: path.to_string(),
         display_name,
         type_name,
@@ -224,8 +375,13 @@ pub(crate) fn collect_prim(view: &StageView<'_>, path: &str) -> Option<PrimProje
         schema_node,
         schema_column,
         schema_row,
+
         inputs,
         outputs,
+        connectors,
+        port_types,
+        port_sources,
+        referenced_ports: BTreeSet::new(),
     };
     Some(PrimProjection {
         node: Some(node),
@@ -337,39 +493,199 @@ pub(crate) fn project_schema(
         .cloned()
         .collect();
 
+    let connected: BTreeSet<_> = wires
+        .iter()
+        .flat_map(|wire| {
+            [
+                (&wire.source_path, &wire.source_conn),
+                (&wire.target_path, &wire.target_conn),
+            ]
+        })
+        .collect();
     for node in &mut nodes {
-        node.inputs.retain(|name| {
-            wires.iter().any(|wire| {
-                wire.kind == WireKind::Dataflow
-                    && wire.target_path == node.path
-                    && wire.target_conn == *name
-            })
-        });
-        node.outputs.retain(|name| {
-            wires.iter().any(|wire| {
-                wire.kind == WireKind::Dataflow
-                    && wire.source_path == node.path
-                    && wire.source_conn == *name
-            })
-        });
+        node.inputs
+            .retain(|name| connected.contains(&(&node.path, &format!("inputs:{name}"))));
+        node.outputs
+            .retain(|name| connected.contains(&(&node.path, &format!("outputs:{name}"))));
+        node.connectors
+            .retain(|name| connected.contains(&(&node.path, &format!("connectors:{name}"))));
     }
 
     (nodes, wires)
 }
 
+/// Inspect the composed topology within an explicit hierarchy scope. Unlike
+/// the authored schema presentation, this retains unconnected interface ports.
+pub(crate) fn project_diagram(
+    nodes: &[PrimNode],
+    wires: &[Wire],
+    root: &str,
+    include_descendants: bool,
+) -> (Vec<PrimNode>, Vec<Wire>) {
+    let programs: Vec<_> = nodes
+        .iter()
+        .flat_map(|node| node.programs.iter().cloned())
+        .collect();
+    let mut nodes: Vec<_> = nodes
+        .iter()
+        .filter(|node| {
+            let parent = node
+                .path
+                .rsplit_once('/')
+                .map(|(parent, _)| if parent.is_empty() { "/" } else { parent });
+            super::path_is_within(&node.path, root)
+                && (node.path == root || parent == Some(root) || include_descendants)
+        })
+        .cloned()
+        .collect();
+    // Attribute hidden program descendants to their nearest displayed USD ancestor.
+    let visible: HashMap<_, _> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, node)| (node.path.clone(), i))
+        .collect();
+    for node in nodes.iter_mut() {
+        node.programs.clear();
+    }
+    for program in programs {
+        let mut ancestor = program.path.as_str();
+        loop {
+            if let Some(index) = visible.get(ancestor) {
+                nodes[*index].programs.push(program);
+                break;
+            }
+            let Some((parent, _)) = ancestor.rsplit_once('/') else {
+                break;
+            };
+            if parent.is_empty() {
+                break;
+            }
+            ancestor = parent;
+        }
+    }
+    let paths: BTreeSet<_> = nodes.iter().map(|node| node.path.as_str()).collect();
+    let mut physical = BTreeSet::new();
+    let mut wires: Vec<Wire> = wires
+        .iter()
+        .filter(|wire| {
+            if !paths.contains(wire.source_path.as_str())
+                || !paths.contains(wire.target_path.as_str())
+            {
+                return false;
+            }
+            if wire.kind != WireKind::Acausal {
+                return true;
+            }
+            let a = (&wire.source_path, &wire.source_conn);
+            let b = (&wire.target_path, &wire.target_conn);
+            let (a, b) = if a <= b { (a, b) } else { (b, a) };
+            physical.insert((a, b))
+        })
+        .cloned()
+        .collect();
+    // The selected system is an interface, rather than a second copy of its
+    // children. Separate input/output terminals retain exact property names.
+    if let Some(index) = nodes.iter().position(|node| node.path == root) {
+        let system = nodes.remove(index);
+        let mut boundaries = BTreeMap::new();
+        for role in [
+            BoundaryRole::Inputs,
+            BoundaryRole::Outputs,
+            BoundaryRole::Connectors,
+        ] {
+            let prefix = format!("{}:", role.name());
+            let has_ports = match role {
+                BoundaryRole::Inputs => !system.inputs.is_empty(),
+                BoundaryRole::Outputs => !system.outputs.is_empty(),
+                BoundaryRole::Connectors => !system.connectors.is_empty(),
+            } || system
+                .referenced_ports
+                .iter()
+                .any(|port| port.starts_with(&prefix));
+            if !has_ports {
+                continue;
+            }
+            let mut terminal = system.clone();
+            terminal.path = format!("{root}#{}", role.name());
+            terminal.usd_origin = Some(root.into());
+            terminal.boundary = Some(role);
+            terminal.display_name = Some(format!(
+                "{} · {}",
+                system
+                    .display_name
+                    .as_deref()
+                    .unwrap_or_else(|| root.rsplit('/').next().unwrap_or(root)),
+                role.name()
+            ));
+            terminal.programs.clear();
+            terminal.is_body = false;
+            terminal.type_name = "System interface".into();
+            if role != BoundaryRole::Inputs {
+                terminal.inputs.clear();
+            }
+            if role != BoundaryRole::Outputs {
+                terminal.outputs.clear();
+            }
+            if role != BoundaryRole::Connectors {
+                terminal.connectors.clear();
+            }
+            terminal
+                .referenced_ports
+                .retain(|port| port.starts_with(&prefix));
+            terminal
+                .port_types
+                .retain(|port, _| port.starts_with(&prefix));
+            terminal
+                .port_sources
+                .retain(|port, _| port.starts_with(&prefix));
+            boundaries.insert(prefix, terminal.path.clone());
+            nodes.push(terminal);
+        }
+        // A system may itself run a program or participate in a joint. Retain
+        // its structural card for those facts, without duplicating its ports.
+        if (boundaries.is_empty() && nodes.is_empty())
+            || !system.programs.is_empty()
+            || wires.iter().any(|wire| {
+                wire.kind == WireKind::Joint
+                    && (wire.source_path == root || wire.target_path == root)
+            })
+        {
+            let mut host = system;
+            host.inputs.clear();
+            host.outputs.clear();
+            host.connectors.clear();
+            host.referenced_ports.clear();
+            nodes.push(host);
+        }
+        for wire in &mut wires {
+            if wire.kind == WireKind::Joint {
+                continue;
+            }
+            for (path, property) in [
+                (&mut wire.source_path, &wire.source_conn),
+                (&mut wire.target_path, &wire.target_conn),
+            ] {
+                if path == root {
+                    if let Some((prefix, _)) = property.split_once(':') {
+                        if let Some(key) = boundaries.get(&format!("{prefix}:")) {
+                            *path = key.clone();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (nodes, wires)
+}
+
 /// Turn read prims + wires into a laid-out canvas [`Scene`]. Pure.
 ///
-/// Keeps only prims that participate in the graph (have connectors or are
-/// bodies), lays them out left-to-right by dataflow rank, and emits one canvas
-/// node per prim (ports from the union of its own connectors and any connector a
-/// wire names on it) and one edge per resolvable wire.
+/// Lays out the supplied USD prims left-to-right by dataflow rank, and emits one canvas
+/// node per prim with its declared interfaces and one edge per resolvable wire.
 pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
     // Relevant = wiring-visible prims. Traversal order is preserved (stable,
     // deterministic layout across rebuilds).
-    let relevant: Vec<PrimNode> = nodes
-        .into_iter()
-        .filter(|n| !n.inputs.is_empty() || !n.outputs.is_empty() || n.is_body)
-        .collect();
+    let relevant = nodes;
     let n = relevant.len();
 
     let index: HashMap<String, usize> = relevant
@@ -385,33 +701,48 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
         .filter(|w| index.contains_key(&w.source_path) && index.contains_key(&w.target_path))
         .collect();
 
-    // Port sets: seed from each prim's own connectors, then union in every
-    // connector a dataflow wire references (so both endpoints of every edge have
-    // a port to attach to even if the stage read missed the attr).
-    let mut in_ports: Vec<BTreeSet<String>> = vec![BTreeSet::new(); n];
-    let mut out_ports: Vec<BTreeSet<String>> = vec![BTreeSet::new(); n];
-    for (i, node) in relevant.iter().enumerate() {
-        in_ports[i].extend(node.inputs.iter().cloned());
-        out_ports[i].extend(node.outputs.iter().cloned());
-    }
-    for w in &wires {
-        if w.kind == WireKind::Dataflow {
-            out_ports[index[&w.source_path]].insert(w.source_conn.clone());
-            in_ports[index[&w.target_path]].insert(w.target_conn.clone());
-        }
-    }
-
-    // Collapse real dataflow cycles into strongly connected components, then
-    // rank the resulting DAG.  The old fixed-point relaxation promoted every
-    // member of a feedback loop until the clamp, which made a cyclic Modelica
-    // schema appear as one giant column.  SCC condensation is a graph-layout
-    // operation, not a classification heuristic: authored USD connections are
-    // still the sole source of topology.
+    // Port declarations are authoritative. Do not manufacture an interface for
+    // a malformed connection; the topology lint owns those diagnostics.
+    let in_ports: Vec<BTreeSet<String>> = relevant
+        .iter()
+        .map(|node| {
+            node.inputs
+                .iter()
+                .cloned()
+                .chain(
+                    node.referenced_ports
+                        .iter()
+                        .filter_map(|name| name.strip_prefix("inputs:").map(str::to_string)),
+                )
+                .collect()
+        })
+        .collect();
+    let out_ports: Vec<BTreeSet<String>> = relevant
+        .iter()
+        .map(|node| {
+            node.outputs
+                .iter()
+                .cloned()
+                .chain(
+                    node.referenced_ports
+                        .iter()
+                        .filter_map(|name| name.strip_prefix("outputs:").map(str::to_string)),
+                )
+                .collect()
+        })
+        .collect();
+    let acausal_ports: Vec<BTreeSet<String>> = relevant
+        .iter()
+        .map(|node| node.connectors.iter().cloned().collect())
+        .collect();
+    // Condense causal cycles before ranking so feedback networks remain
+    // bounded and keep their downstream models in separate columns.
     let rank = dataflow_ranks(n, &wires, &index);
 
     let node_heights: Vec<f32> = (0..n)
         .map(|i| {
-            let port_count = in_ports[i].len().max(out_ports[i].len()) as f32;
+            let port_count =
+                (in_ports[i].len() + acausal_ports[i].len()).max(out_ports[i].len()) as f32;
             (NODE_H).max(46.0 + port_count * PORT_ROW_H)
         })
         .collect();
@@ -423,7 +754,7 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
     // card below it.
     let mut rows_per_column: HashMap<i32, u32> = HashMap::new();
     let mut columns_rows: Vec<(i32, i32)> = Vec::with_capacity(n);
-    let mut row_heights: HashMap<(i32, i32), f32> = HashMap::new();
+    let mut row_heights: BTreeMap<(i32, i32), f32> = BTreeMap::new();
     for i in 0..n {
         let column = relevant[i].schema_column.unwrap_or(rank[i]).max(0);
         let row = relevant[i].schema_row.unwrap_or_else(|| {
@@ -438,19 +769,32 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
             .and_modify(|height| *height = height.max(node_heights[i]))
             .or_insert(node_heights[i]);
     }
-    let mut positions: Vec<Pos> = vec![Pos::default(); n];
-    for i in 0..n {
-        let (column, row) = columns_rows[i];
-        let mut y = MARGIN;
-        for previous_row in 0..row {
-            y += row_heights
-                .get(&(column, previous_row))
-                .copied()
-                .unwrap_or(ROW_SPACING)
-                + ROW_GAP;
+    // Prefix sums visit each occupied row once. Sparse authored row numbers
+    // are accounted for arithmetically, without looping over empty rows.
+    let mut row_positions = HashMap::with_capacity(row_heights.len());
+    let mut previous_column = None;
+    let mut next_row = 0i64;
+    let mut y = MARGIN;
+    for (&(column, row), &height) in &row_heights {
+        if previous_column != Some(column) {
+            y = MARGIN;
+            next_row = 0;
+            previous_column = Some(column);
         }
-        positions[i] = Pos::new(MARGIN + column as f32 * COL_SPACING, y);
+        y += (i64::from(row) - next_row) as f32 * (ROW_SPACING + ROW_GAP);
+        row_positions.insert((column, row), y);
+        y += height + ROW_GAP;
+        next_row = i64::from(row) + 1;
     }
+    let positions: Vec<_> = columns_rows
+        .iter()
+        .map(|&(column, row)| {
+            Pos::new(
+                MARGIN + column as f32 * COL_SPACING,
+                row_positions[&(column, row)],
+            )
+        })
+        .collect();
 
     let mut scene = Scene::new();
     let mut node_ids = Vec::with_capacity(n);
@@ -462,17 +806,46 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
         let ins: Vec<&String> = in_ports[i].iter().collect();
         for (k, name) in ins.iter().enumerate() {
             ports.push(Port {
-                id: PortId::new((*name).clone()),
-                local_offset: Pos::new(0.0, port_y(k, ins.len(), node_heights[i])),
+                id: PortId::new(format!("inputs:{name}")),
+                local_offset: Pos::new(
+                    if node.boundary == Some(BoundaryRole::Inputs) {
+                        NODE_W
+                    } else {
+                        0.0
+                    },
+                    port_y(k, ins.len(), node_heights[i]),
+                ),
                 kind: "input".into(),
             });
         }
         let outs: Vec<&String> = out_ports[i].iter().collect();
         for (k, name) in outs.iter().enumerate() {
             ports.push(Port {
-                id: PortId::new((*name).clone()),
-                local_offset: Pos::new(NODE_W, port_y(k, outs.len(), node_heights[i])),
+                id: PortId::new(format!("outputs:{name}")),
+                local_offset: Pos::new(
+                    if node.boundary == Some(BoundaryRole::Outputs) {
+                        0.0
+                    } else {
+                        NODE_W
+                    },
+                    port_y(k, outs.len(), node_heights[i]),
+                ),
                 kind: "output".into(),
+            });
+        }
+
+        for (k, name) in acausal_ports[i].iter().enumerate() {
+            ports.push(Port {
+                id: PortId::new(format!("connectors:{name}")),
+                local_offset: Pos::new(
+                    0.0,
+                    port_y(
+                        k + ins.len(),
+                        ins.len() + acausal_ports[i].len(),
+                        node_heights[i],
+                    ),
+                ),
+                kind: "acausal".into(),
             });
         }
         // Hidden joint anchors — `~jr` (right) sources a joint edge, `~jl` (left)
@@ -501,12 +874,21 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
             rect,
             kind: NODE_KIND.into(),
             data: Arc::new(UsdPrimNodeData {
+                group_id: None,
+                group_ports: Default::default(),
+                programs: node.programs.clone(),
+                accent: None,
                 type_name: node.type_name.clone(),
                 is_body: node.is_body,
+                port_types: node.port_types.clone(),
+
+                port_sources: node.port_sources.clone(),
+                view_key: node.path.clone(),
+                boundary: node.boundary,
             }),
             ports,
             label: node.display_name.clone().unwrap_or(leaf),
-            origin: Some(node.path.clone()),
+            origin: Some(node.usd_origin.as_ref().unwrap_or(&node.path).clone()),
             resizable: false,
             visual_rect: None,
         });
@@ -515,42 +897,29 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
 
     for w in &wires {
         let (s, t) = (index[&w.source_path], index[&w.target_path]);
-        let from_world = match w.kind {
-            WireKind::Dataflow => {
-                output_port_world(s, &w.source_conn, &positions, &node_heights, &out_ports)
-            }
-            WireKind::Joint => Pos::new(
-                positions[s].x + NODE_W,
-                positions[s].y + node_heights[s] * 0.5,
-            ),
+        let (source_port, target_port) = if w.kind == WireKind::Joint {
+            ("~jr", "~jl")
+        } else {
+            (w.source_conn.as_str(), w.target_conn.as_str())
         };
-        let to_world = match w.kind {
-            WireKind::Dataflow => {
-                input_port_world(t, &w.target_conn, &positions, &node_heights, &in_ports)
-            }
-            WireKind::Joint => Pos::new(positions[t].x, positions[t].y + node_heights[t] * 0.5),
+        let endpoint = |node, name| {
+            let node = scene.node(node)?;
+            let port = node.ports.iter().find(|port| port.id.as_str() == name)?;
+            Some(port.world_pos(node.rect))
         };
-        let (from, to) = match w.kind {
-            WireKind::Dataflow => (
-                PortRef {
-                    node: node_ids[s],
-                    port: PortId::new(w.source_conn.clone()),
-                },
-                PortRef {
-                    node: node_ids[t],
-                    port: PortId::new(w.target_conn.clone()),
-                },
-            ),
-            WireKind::Joint => (
-                PortRef {
-                    node: node_ids[s],
-                    port: PortId::new("~jr"),
-                },
-                PortRef {
-                    node: node_ids[t],
-                    port: PortId::new("~jl"),
-                },
-            ),
+        let (Some(_), Some(_)) = (
+            endpoint(node_ids[s], source_port),
+            endpoint(node_ids[t], target_port),
+        ) else {
+            continue;
+        };
+        let from = PortRef {
+            node: node_ids[s],
+            port: PortId::new(source_port),
+        };
+        let to = PortRef {
+            node: node_ids[t],
+            port: PortId::new(target_port),
         };
         let eid = scene.alloc_edge_id();
         scene.insert_edge(Edge {
@@ -560,64 +929,17 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
             kind: EDGE_KIND.into(),
             data: Arc::new(UsdWireData { kind: w.kind }),
             origin: None,
-            waypoints: if w.kind == WireKind::Dataflow {
-                orthogonal_waypoints(from_world, to_world)
-            } else {
-                Vec::new()
-            },
+            waypoints: Vec::new(),
             waypoints_authored: false,
         });
     }
 
-    let _ = empty_node_data; // (kept in scope for symmetry with scene.rs helpers)
+    route_edges(&mut scene);
     scene
 }
 
-fn output_port_world(
-    node: usize,
-    name: &str,
-    positions: &[Pos],
-    node_heights: &[f32],
-    ports: &[BTreeSet<String>],
-) -> Pos {
-    let index = ports[node]
-        .iter()
-        .position(|port| port == name)
-        .unwrap_or(0);
-    Pos::new(
-        positions[node].x + NODE_W,
-        positions[node].y + port_y(index, ports[node].len(), node_heights[node]),
-    )
-}
-
-fn input_port_world(
-    node: usize,
-    name: &str,
-    positions: &[Pos],
-    node_heights: &[f32],
-    ports: &[BTreeSet<String>],
-) -> Pos {
-    let index = ports[node]
-        .iter()
-        .position(|port| port == name)
-        .unwrap_or(0);
-    Pos::new(
-        positions[node].x,
-        positions[node].y + port_y(index, ports[node].len(), node_heights[node]),
-    )
-}
-
-/// Route a signal with two orthogonal segments. The midpoint is deterministic
-/// from the endpoints, so the graph stays stable across rebuilds and can still
-/// be edited by the canvas later. Reverse-direction edges use an outside lane
-/// to keep feedback from being mistaken for forward dataflow.
+/// Route forward dataflow through the gap between endpoint columns.
 fn orthogonal_waypoints(from: Pos, to: Pos) -> Vec<Pos> {
-    if to.x <= from.x {
-        // Feedback travels above the cards, where it cannot be mistaken for a
-        // forward command or cross the port labels inside the graph.
-        let lane_y = from.y.min(to.y) - 48.0;
-        return vec![Pos::new(from.x, lane_y), Pos::new(to.x, lane_y)];
-    }
     let mid_x = from.x + (to.x - from.x) * 0.5;
     vec![Pos::new(mid_x, from.y), Pos::new(mid_x, to.y)]
 }
@@ -641,30 +963,41 @@ fn dataflow_ranks(node_count: usize, wires: &[Wire], index: &HashMap<String, usi
         else {
             continue;
         };
-        if !graph[source].contains(&target) {
-            graph[source].push(target);
-            reverse[target].push(source);
-        }
+        graph[source].push(target);
+        reverse[target].push(source);
     }
 
+    // Iterative DFS keeps long authored chains off the process call stack.
     fn visit(node: usize, graph: &[Vec<usize>], seen: &mut [bool], order: &mut Vec<usize>) {
         if seen[node] {
             return;
         }
         seen[node] = true;
-        for &next in &graph[node] {
-            visit(next, graph, seen, order);
+        let mut stack = vec![(node, 0)];
+        while let Some((current, next)) = stack.last_mut() {
+            if let Some(&child) = graph[*current].get(*next) {
+                *next += 1;
+                if !seen[child] {
+                    seen[child] = true;
+                    stack.push((child, 0));
+                }
+            } else {
+                order.push(*current);
+                stack.pop();
+            }
         }
-        order.push(node);
     }
 
     fn assign(node: usize, component: usize, reverse: &[Vec<usize>], components: &mut [usize]) {
-        if components[node] != usize::MAX {
-            return;
-        }
+        let mut stack = vec![node];
         components[node] = component;
-        for &next in &reverse[node] {
-            assign(next, component, reverse, components);
+        while let Some(current) = stack.pop() {
+            for &next in &reverse[current] {
+                if components[next] == usize::MAX {
+                    components[next] = component;
+                    stack.push(next);
+                }
+            }
         }
     }
 
@@ -732,8 +1065,131 @@ fn port_y(k: usize, count: usize, height: f32) -> f32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn document_connections_preserve_authored_types_and_lists() {
+        use super::super::{build_ops, connect_op, edge_sink};
+        use lunco_canvas::SceneEvent;
+        use lunco_usd_document::document::{LayerId, UsdOp};
+        let a = prim("/A", &[], &["out"], false);
+        let mut b = prim("/B", &["in"], &[], false);
+        b.port_sources.insert(
+            "inputs:in".into(),
+            vec!["/Other.outputs:out".into(), "/A.outputs:out".into()],
+        );
+        let scene = build_scene(vec![a, b], vec![dataflow("/A", "out", "/B", "in")]);
+        let (edge_id, edge) = scene.edges().next().unwrap();
+        let op = connect_op(&scene, &edge.from, &edge.to, &LayerId::root()).unwrap();
+        assert!(
+            matches!(op, UsdOp::SetConnection { type_name, sources, .. } if type_name == "double" && sources.len() == 2)
+        );
+        let sinks = HashMap::from([(*edge_id, edge_sink(&scene, *edge_id).unwrap())]);
+        let ops = build_ops(
+            &scene,
+            &HashMap::new(),
+            &sinks,
+            &[SceneEvent::EdgeDeleted { id: *edge_id }],
+            &LayerId::root(),
+        )
+        .unwrap();
+        assert!(
+            matches!(&ops[0], UsdOp::SetConnection { sources, .. } if sources == &vec!["/Other.outputs:out".to_string()])
+        );
+        let mut invalid = scene.clone();
+        invalid.node_mut(edge.to.node).unwrap().data = Arc::new(UsdPrimNodeData {
+            group_id: None,
+            group_ports: Default::default(),
+            programs: Vec::new(),
+            accent: None,
+            type_name: "Xform".into(),
+            is_body: false,
+            port_types: BTreeMap::from([("inputs:in".into(), "float".into())]),
+            port_sources: Default::default(),
+            view_key: "/Sink".into(),
+            boundary: None,
+        });
+        assert!(connect_op(&invalid, &edge.from, &edge.to, &LayerId::root()).is_err());
+    }
+
+    #[test]
+    fn diagram_scope_keeps_acausal_ports_and_excludes_siblings() {
+        let mut a = prim("/System/A", &[], &["signal"], false);
+        a.connectors = vec!["p".into()];
+        let mut b = prim("/System/B", &["signal"], &[], false);
+        b.connectors = vec!["p".into()];
+        let mut physical = dataflow("/System/A", "p", "/System/B", "p");
+        physical.kind = WireKind::Acausal;
+        physical.source_conn = "connectors:p".into();
+        physical.target_conn = "connectors:p".into();
+        let mut reciprocal = physical.clone();
+        std::mem::swap(&mut reciprocal.source_path, &mut reciprocal.target_path);
+        std::mem::swap(&mut reciprocal.source_conn, &mut reciprocal.target_conn);
+        let (nodes, wires) = project_diagram(
+            &[a, b, prim("/SystemTwo/C", &["signal"], &[], false)],
+            &[
+                physical,
+                reciprocal,
+                dataflow("/System/A", "signal", "/System/B", "signal"),
+            ],
+            "/System",
+            true,
+        );
+        let scene = build_scene(nodes, wires);
+        assert_eq!(scene.node_count(), 2);
+        assert_eq!(scene.edge_count(), 2);
+        for (_, edge) in scene.edges() {
+            assert!(scene.edge_endpoint_positions(edge).is_some());
+            if edge.data.downcast_ref::<UsdWireData>().unwrap().kind == WireKind::Acausal {
+                assert_eq!(edge.from.port.as_str(), "connectors:p");
+                assert_eq!(edge.to.port.as_str(), "connectors:p");
+            }
+        }
+        let (nodes, wires) = project_diagram(&[], &[], "/Missing", true);
+        assert_eq!(build_scene(nodes, wires).node_count(), 0);
+        assert_eq!(
+            super::super::diagram_roots(&[prim("/Assembly/Sub/Controller", &["in"], &[], false)]),
+            BTreeSet::from([
+                "/".into(),
+                "/Assembly".into(),
+                "/Assembly/Sub".into(),
+                "/Assembly/Sub/Controller".into()
+            ])
+        );
+        let mut forwarding = dataflow("/A", "x", "/A/B", "x");
+        forwarding.source_conn = "inputs:x".into();
+        let forwarding_scene = build_scene(
+            vec![
+                prim("/A", &["x"], &["x"], false),
+                prim("/A/B", &["x"], &[], false),
+            ],
+            vec![forwarding],
+        );
+        let edge = forwarding_scene.edges().next().unwrap().1;
+        assert_eq!(edge.from.port.as_str(), "inputs:x");
+        assert!(forwarding_scene.edge_endpoint_positions(edge).is_some());
+        let chain: Vec<_> = (0..20_000)
+            .map(|i| prim(&format!("/Model{i}"), &["in"], &["out"], false))
+            .collect();
+        let index = chain
+            .iter()
+            .enumerate()
+            .map(|(i, node)| (node.path.clone(), i))
+            .collect();
+        let links: Vec<_> = chain
+            .windows(2)
+            .map(|pair| dataflow(&pair[0].path, "out", &pair[1].path, "in"))
+            .collect();
+        let ranks = dataflow_ranks(chain.len(), &links, &index);
+        assert_eq!(ranks[0], 0);
+        assert_eq!(ranks[19_999], 19_999);
+    }
+
     fn prim(path: &str, ins: &[&str], outs: &[&str], is_body: bool) -> PrimNode {
         PrimNode {
+            collections: Default::default(),
+            programs: Vec::new(),
+            variants: Ok(BTreeMap::new()),
+            usd_origin: None,
+            boundary: None,
             path: path.to_string(),
             display_name: None,
             type_name: "Xform".to_string(),
@@ -742,8 +1198,20 @@ mod tests {
             schema_node: false,
             schema_column: None,
             schema_row: None,
+
+            port_sources: BTreeMap::new(),
+            referenced_ports: BTreeSet::new(),
             inputs: ins.iter().map(|s| s.to_string()).collect(),
             outputs: outs.iter().map(|s| s.to_string()).collect(),
+            connectors: Vec::new(),
+            port_types: ins
+                .iter()
+                .map(|name| (format!("inputs:{name}"), "double".into()))
+                .chain(
+                    outs.iter()
+                        .map(|name| (format!("outputs:{name}"), "double".into())),
+                )
+                .collect(),
         }
     }
 
@@ -752,24 +1220,23 @@ mod tests {
             kind: WireKind::Dataflow,
             owner_path: tgt.to_string(),
             source_path: src.to_string(),
-            source_conn: sc.to_string(),
+            source_conn: format!("outputs:{sc}"),
             target_path: tgt.to_string(),
-            target_conn: tc.to_string(),
+            target_conn: format!("inputs:{tc}"),
         }
     }
 
-    /// A prim with neither connectors nor a body is not part of the wiring and
-    /// must be dropped (an xform, a light, the terrain).
+    /// Hierarchy nodes remain available even without wiring interfaces.
     #[test]
-    fn irrelevant_prims_are_dropped() {
+    fn usd_hierarchy_prims_are_kept() {
         let nodes = vec![
             prim("/Osc", &[], &["signal"], false),
             prim("/Terrain", &[], &[], false),
         ];
         let scene = build_scene(nodes, vec![]);
-        assert_eq!(scene.node_count(), 1);
+        assert_eq!(scene.node_count(), 2);
         let leaves: Vec<_> = scene.nodes().map(|(_, n)| n.label.clone()).collect();
-        assert_eq!(leaves, vec!["Osc".to_string()]);
+        assert_eq!(leaves, vec!["Osc".to_string(), "Terrain".to_string()]);
     }
 
     /// A body prim with no connectors is kept (it can still be a joint endpoint).
@@ -777,6 +1244,122 @@ mod tests {
     fn body_without_connectors_is_kept() {
         let scene = build_scene(vec![prim("/Chassis", &[], &[], true)], vec![]);
         assert_eq!(scene.node_count(), 1);
+    }
+
+    #[test]
+    fn diagram_preserves_feedback_and_exposes_system_boundaries() {
+        let (empty, links) =
+            project_diagram(&[prim("/Empty", &[], &[], false)], &[], "/Empty", false);
+        assert_eq!(
+            build_scene(empty, links).node_count(),
+            1,
+            "empty systems retain an authoring target"
+        );
+        let nodes = vec![
+            prim("/System", &[], &[], false),
+            prim("/System/Rover", &["control"], &["position"], true),
+            prim(
+                "/System/Rover/Controller",
+                &["position", "control"],
+                &["drive"],
+                false,
+            ),
+        ];
+        let mut wires = vec![
+            dataflow("/System/Rover", "position", "/System/Rover", "control"),
+            dataflow(
+                "/System/Rover",
+                "position",
+                "/System/Rover/Controller",
+                "position",
+            ),
+        ];
+        let mut input_forward = dataflow(
+            "/System/Rover",
+            "control",
+            "/System/Rover/Controller",
+            "control",
+        );
+        input_forward.source_conn = "inputs:control".into();
+        wires.push(input_forward);
+        let mut output_forward = dataflow(
+            "/System/Rover/Controller",
+            "drive",
+            "/System/Rover",
+            "position",
+        );
+        output_forward.target_conn = "outputs:position".into();
+        wires.push(output_forward);
+        let (overview, links) = project_diagram(&nodes, &wires, "/System", false);
+        assert_eq!(links.len(), 1, "feedback remains an edge in the overview");
+        assert_eq!(build_scene(overview, links).edge_count(), 1);
+        let (detail, links) = project_diagram(&nodes, &wires, "/System/Rover", false);
+        assert_eq!(
+            links.len(),
+            4,
+            "drilling preserves both authored connections"
+        );
+        assert!(unresolved_links(&detail, &links).is_empty());
+        let scene = build_scene(detail, links);
+        assert_eq!(scene.edge_count(), 4);
+        let boundary: Vec<_> = scene
+            .nodes()
+            .filter(|(_, n)| n.origin.as_deref() == Some("/System/Rover"))
+            .collect();
+        assert_eq!(boundary.len(), 2);
+        assert_ne!(diagram_key(boundary[0].1), diagram_key(boundary[1].1));
+        for (_, edge) in scene.edges() {
+            assert_ne!(edge.from.node, edge.to.node);
+        }
+        use super::super::{build_ops, connect_op};
+        use lunco_usd_document::document::{LayerId, UsdOp};
+        for (_, edge) in scene.edges() {
+            let op = connect_op(&scene, &edge.from, &edge.to, &LayerId::root()).unwrap();
+            assert!(
+                matches!(op, UsdOp::SetConnection { path, sources, .. } if !path.contains('#') && sources.iter().all(|source| !source.contains('#')))
+            );
+        }
+        let terminal = boundary[0].0;
+        assert!(
+            build_ops(
+                &scene,
+                &HashMap::new(),
+                &HashMap::new(),
+                &[lunco_canvas::SceneEvent::NodeDeleted {
+                    id: *terminal,
+                    orphaned_edges: Vec::new()
+                }],
+                &LayerId::root()
+            )
+            .is_err()
+        );
+        let overview = build_scene(
+            vec![prim("/Rover", &["control"], &["position"], true)],
+            vec![dataflow("/Rover", "position", "/Rover", "control")],
+        );
+        let (_, edge) = overview.edges().next().unwrap();
+        let card = overview.node(edge.from.node).unwrap();
+        assert!(
+            edge.waypoints[1].y < card.rect.min.y && edge.waypoints[2].y < card.rect.min.y,
+            "feedback clears the complete card"
+        );
+        let mut invalid = wires.clone();
+        invalid[0].source_conn = "outputs:absent".into();
+        let (detail, links) = project_diagram(&nodes, &invalid, "/System/Rover", false);
+        assert_eq!(unresolved_links(&detail, &links).len(), 1);
+    }
+
+    #[test]
+    fn referenced_interface_does_not_require_duplicate_authored_attribute() {
+        let mut body = prim("/Body", &[], &[], true);
+        body.referenced_ports.insert("outputs:position_y".into());
+        let sink = prim("/Controller", &["height"], &[], false);
+        let nodes = vec![body, sink];
+        let wires = vec![dataflow("/Body", "position_y", "/Controller", "height")];
+        assert!(unresolved_links(&nodes, &wires).is_empty());
+        assert!(!nodes[0].port_types.contains_key("outputs:position_y"));
+        let scene = build_scene(nodes, wires);
+        assert_eq!(scene.edge_count(), 1);
     }
 
     /// The dataflow edge resolves to a real output port on the source and input
@@ -799,28 +1382,17 @@ mod tests {
         }
     }
 
-    /// A connector referenced only by a wire (the stage read missed the sink's
-    /// `inputs:` attr) still gets a port, so the edge never dangles. `/Amp`
-    /// declares no inputs but survives the relevance filter via its output.
+    /// A malformed wire cannot manufacture a missing authored input port.
     #[test]
-    fn wire_only_connector_still_gets_a_port() {
-        let nodes = vec![
-            prim("/Osc", &[], &["signal"], false),
-            prim("/Amp", &[], &["scaled"], false),
-        ];
-        let wires = vec![dataflow("/Osc", "signal", "/Amp", "signal")];
-        let scene = build_scene(nodes, wires);
-        let amp = scene
-            .nodes()
-            .find(|(_, n)| n.label == "Amp")
-            .map(|(_, n)| n)
-            .expect("Amp node");
-        assert!(
-            amp.ports
-                .iter()
-                .any(|p| p.id.as_str() == "signal" && p.kind.as_str() == "input"),
-            "sink must expose the wired input port"
+    fn missing_connector_is_not_fabricated() {
+        let scene = build_scene(
+            vec![
+                prim("/Osc", &[], &["signal"], false),
+                prim("/Amp", &[], &["scaled"], false),
+            ],
+            vec![dataflow("/Osc", "signal", "/Amp", "signal")],
         );
+        assert_eq!(scene.edge_count(), 0);
     }
 
     /// Layering: a pure source sits left of its sink (strictly smaller x).
@@ -1072,5 +1644,161 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["/Second", "/Second/Plant"]
         );
+    }
+}
+
+/// Refresh unauthored wire geometry after automatic or saved layout changes.
+pub(super) fn route_edges(scene: &mut Scene) {
+    let mut lanes: Vec<Vec<(f32, f32)>> = Vec::new();
+    let routes: Vec<_> = scene
+        .edges()
+        .filter(|(_, edge)| {
+            !edge.waypoints_authored
+                && edge
+                    .data
+                    .downcast_ref::<UsdWireData>()
+                    .is_some_and(|data| data.kind != WireKind::Joint)
+        })
+        .filter_map(|(id, edge)| {
+            let (from, to) = scene.edge_endpoint_positions(edge)?;
+            let source = scene.node(edge.from.node)?;
+            let target = scene.node(edge.to.node)?;
+            let route = if to.x <= from.x || edge.from.node == edge.to.node {
+                // Feedback must clear the entire cards, not merely the port row.
+                let span = (
+                    source.rect.min.x.min(target.rect.min.x) - 24.0,
+                    source.rect.max.x.max(target.rect.max.x) + 24.0,
+                );
+                // Interval coloring gives overlapping feedback spans independent
+                // lanes while reusing lanes for disjoint spans.
+                let lane = lanes
+                    .iter()
+                    .position(|intervals| {
+                        intervals
+                            .iter()
+                            .all(|other| span.1 < other.0 || span.0 > other.1)
+                    })
+                    .unwrap_or(lanes.len());
+                if lane == lanes.len() {
+                    lanes.push(Vec::new());
+                }
+                lanes[lane].push(span);
+                let top = scene
+                    .nodes()
+                    .filter(|(_, node)| node.rect.max.x >= span.0 && node.rect.min.x <= span.1)
+                    .map(|(_, node)| node.rect.min.y)
+                    .fold(source.rect.min.y.min(target.rect.min.y), f32::min);
+                let y = top - 48.0 - lane as f32 * 12.0;
+                let stub = |node: &Node, pos: Pos| {
+                    if pos.x < node.rect.center().x {
+                        node.rect.min.x - 24.0
+                    } else {
+                        node.rect.max.x + 24.0
+                    }
+                };
+                let sx = stub(source, from);
+                let tx = stub(target, to);
+                vec![
+                    Pos::new(sx, from.y),
+                    Pos::new(sx, y),
+                    Pos::new(tx, y),
+                    Pos::new(tx, to.y),
+                ]
+            } else {
+                orthogonal_waypoints(from, to)
+            };
+            Some((*id, route))
+        })
+        .collect();
+    for (id, route) in routes {
+        if let Some(edge) = scene.edge_mut(id) {
+            edge.waypoints = route;
+        }
+    }
+}
+
+/// Explain exact unresolved property identities; hidden descendants are excluded
+/// by the scope projector before this boundary.
+pub(super) fn unresolved_links(nodes: &[PrimNode], wires: &[Wire]) -> Vec<String> {
+    let ports: BTreeMap<_, BTreeSet<_>> = nodes
+        .iter()
+        .map(|node| {
+            let names = node
+                .inputs
+                .iter()
+                .map(|name| format!("inputs:{name}"))
+                .chain(node.outputs.iter().map(|name| format!("outputs:{name}")))
+                .chain(
+                    node.connectors
+                        .iter()
+                        .map(|name| format!("connectors:{name}")),
+                )
+                .chain(node.referenced_ports.iter().cloned())
+                .collect();
+            (node.path.as_str(), names)
+        })
+        .collect();
+    wires
+        .iter()
+        .filter(|wire| wire.kind != WireKind::Joint)
+        .filter_map(|wire| {
+            let source_missing = !ports
+                .get(wire.source_path.as_str())
+                .is_some_and(|names| names.contains(&wire.source_conn));
+            let target_missing = !ports
+                .get(wire.target_path.as_str())
+                .is_some_and(|names| names.contains(&wire.target_conn));
+            if !source_missing && !target_missing {
+                return None;
+            }
+            Some(format!(
+                "{}.{} → {}.{}: {} property is not in the composed USD port declarations",
+                wire.source_path,
+                wire.source_conn,
+                wire.target_path,
+                wire.target_conn,
+                if source_missing { "source" } else { "target" }
+            ))
+        })
+        .collect()
+}
+
+/// The USD connection property is an explicit interface reference. Recognized
+/// runtime providers need not author a duplicate USD attribute: an inert stage
+/// can display their references before ECS projection or Modelica preparation.
+pub(super) fn resolve_referenced_interfaces(
+    view: &StageView<'_>,
+    nodes: &mut [PrimNode],
+    wires: &[Wire],
+) {
+    let index: HashMap<_, _> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, node)| (node.path.clone(), i))
+        .collect();
+    for node in nodes.iter_mut() {
+        node.referenced_ports.clear();
+    }
+    let mut providers = HashMap::new();
+    for wire in wires.iter().filter(|wire| wire.kind != WireKind::Joint) {
+        for (path, property) in [
+            (&wire.source_path, &wire.source_conn),
+            (&wire.target_path, &wire.target_conn),
+        ] {
+            let Some(&i) = index.get(path) else {
+                continue;
+            };
+            if nodes[i].port_sources.contains_key(property) {
+                continue;
+            }
+            let provider = providers.entry(path.clone()).or_insert_with(|| {
+                SdfPath::new(path)
+                    .ok()
+                    .and_then(|path| lunco_usd_bevy_stage::read::runtime_port_provider(view, &path))
+            });
+            if provider.is_some() {
+                nodes[i].referenced_ports.insert(property.clone());
+            }
+        }
     }
 }

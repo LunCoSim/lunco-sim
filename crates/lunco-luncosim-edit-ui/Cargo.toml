@@ -7,6 +7,7 @@ description = "LunCoSim's egui panels for in-scene editing"
 
 [dependencies]
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-mesh = { path = "../lunco-usd-bevy-mesh" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
@@ -36,10 +37,14 @@ lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
 lunco-workbench-help-ui = { path = "../lunco-workbench-help-ui" }
 lunco-canvas = { path = "../lunco-canvas", features = ["ui"] }
 serde = { workspace = true }
+toml = { workspace = true }
+lunco-storage = { path = "../lunco-storage" }
 lunco-settings = { path = "../lunco-settings" }
 avian3d = { workspace = true }
 big_space.workspace = true
 lunco-core = { path = "../lunco-core" }
+lunco-hooks = { path = "../lunco-hooks" }
+lunco-status-core = { path = "../lunco-status-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-interaction-core = { path = "../lunco-interaction-core" }

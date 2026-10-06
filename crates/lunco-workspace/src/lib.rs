@@ -502,9 +502,9 @@ impl Workspace {
         id
     }
 
-    /// Close a Twin. Documents rooted in that Twin's folder keep their
-    /// entries — a closed Twin just drops the lens, not the docs.
-    /// Reopening restores the folder lens; retired runtime source pins remain retired.
+    /// Remove a Twin's workspace identity. The host must emit `TwinClosed`
+    /// and drain its teardown before admitting a replacement; that edge closes
+    /// the domain documents and removes their workspace entries.
     pub fn close_twin(&mut self, id: TwinId) {
         let active_document_belongs_to_closed_twin = self
             .active_document
@@ -1085,36 +1085,6 @@ version = "0.1.0"
             ws.runtime_owner_for(&ws.documents()[0]),
             DocumentRuntimeOwner::LocalTwin(b)
         );
-    }
-
-    #[test]
-    fn close_twin_orphans_docs_but_keeps_them_open() {
-        let tmp = tempfile::tempdir().unwrap();
-        write(
-            &tmp.path().join("twin.toml"),
-            "name=\"t\"\nversion=\"0.1.0\"\n",
-        );
-        let model = tmp.path().join("m.mo");
-        write(&model, "");
-
-        let twin = load_twin(tmp.path());
-        let mut ws = Workspace::new();
-        let tid = ws.add_twin(twin);
-        ws.add_document(DocumentEntry {
-            id: DocumentId::new(1),
-            kind: DocumentKindId::new("modelica"),
-            origin: DocumentOrigin::writable_file(&model),
-            runtime_context: DocumentRuntimeOwner::Application,
-            title: "m.mo".into(),
-            dirty: false,
-        });
-        assert_eq!(ws.documents_in_twin(tid).count(), 1);
-
-        ws.close_twin(tid);
-        assert_eq!(ws.twins().count(), 0);
-        // Doc still open, now loose (no Twin to resolve it).
-        assert_eq!(ws.documents().len(), 1);
-        assert_eq!(ws.loose_documents().count(), 1);
     }
 
     #[test]

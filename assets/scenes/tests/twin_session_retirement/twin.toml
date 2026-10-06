@@ -1,0 +1,5 @@
+name = "Twin Session Retirement"
+version = "0.1.0"
+
+[usd]
+default_scene = "twin_session_retirement.usda"

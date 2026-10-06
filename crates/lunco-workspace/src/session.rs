@@ -65,9 +65,8 @@ pub struct TwinAdded {
     pub twin: TwinId,
 }
 
-/// A Twin was just closed (removed from the Workspace). Documents
-/// that were associated with it are *not* closed automatically — they
-/// become loose docs until the Workspace is explicitly told otherwise.
+/// A Twin was removed from the Workspace. Its documents and pending work
+/// are retired through their owning lifecycle handlers before replacement.
 #[derive(Event, Clone, Debug)]
 pub struct TwinClosed {
     /// The id that used to identify the Twin.
@@ -172,6 +171,38 @@ fn on_unregister_document(
     }
 }
 
+/// Close the documents admitted to the closed Twin's runtime through their
+/// domain owners, then remove the workspace metadata. Ownership is the exact
+/// `LocalTwin` pin captured at admission and is read at the close edge, before
+/// deferred teardown can remove registries; other Twins' documents, loose
+/// application documents, and replicated documents stay open.
+fn on_twin_closed(
+    trigger: On<TwinClosed>,
+    workspace: Res<WorkspaceResource>,
+    mut commands: Commands,
+) {
+    let closed = crate::DocumentRuntimeOwner::LocalTwin(trigger.event().twin);
+    let docs: Vec<_> = workspace
+        .documents()
+        .iter()
+        .filter(|entry| workspace.runtime_owner_for(entry) == closed)
+        .map(|entry| entry.id)
+        .collect();
+    commands.queue(move |world: &mut World| {
+        close_documents(world, docs);
+    });
+}
+
+/// Apply domain cleanup before retiring workspace metadata.
+pub(crate) fn close_documents(world: &mut World, docs: Vec<DocumentId>) {
+    for doc in docs {
+        world.trigger(lunco_doc_bevy::CloseDocument { doc_id: doc });
+        world.flush();
+        world.trigger(UnregisterDocument { doc });
+        world.flush();
+    }
+}
+
 /// Plugin: install the [`WorkspaceResource`] and the register/unregister
 /// command-event observers. Add it once; it's idempotent at the call site
 /// (guard with `is_plugin_added`). Recents persistence is wired separately
@@ -182,7 +213,8 @@ impl Plugin for WorkspacePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorkspaceResource>()
             .add_observer(on_register_document)
-            .add_observer(on_unregister_document);
+            .add_observer(on_unregister_document)
+            .add_observer(on_twin_closed);
         // Twin edit-journal history persistence — load on open, save on
         // `DocumentSaved` + debounced periodic — to `<twin>/history/journal.json`,
         // for twins that opted in with `[journal] persist = true`. ONE plugin,
@@ -202,8 +234,72 @@ impl Plugin for WorkspacePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DocumentKindId;
+    use crate::{DocumentKindId, DocumentRuntimeOwner};
     use lunco_doc::DocumentOrigin;
+
+    #[test]
+    fn twin_close_retires_owned_documents_through_domain_commands() {
+        #[derive(Resource, Default)]
+        struct Closed(Vec<DocumentId>);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(WorkspacePlugin)
+            .init_resource::<Closed>()
+            .add_observer(
+                |event: On<lunco_doc_bevy::CloseDocument>, mut closed: ResMut<Closed>| {
+                    closed.0.push(event.doc_id);
+                },
+            );
+        let twin = crate::TwinId::new(1);
+        let other = crate::TwinId::new(2);
+        let root = std::path::PathBuf::from("closed-twin");
+        for (raw, origin, runtime_context) in [
+            (
+                1,
+                DocumentOrigin::writable_file(root.join("scene.usda")),
+                DocumentRuntimeOwner::LocalTwin(twin),
+            ),
+            (
+                2,
+                DocumentOrigin::untitled("draft"),
+                DocumentRuntimeOwner::LocalTwin(twin),
+            ),
+            (
+                3,
+                DocumentOrigin::writable_file(root.join("loose.mo")),
+                DocumentRuntimeOwner::Application,
+            ),
+            (
+                4,
+                DocumentOrigin::writable_file("other/model.mo"),
+                DocumentRuntimeOwner::LocalTwin(other),
+            ),
+        ] {
+            app.world_mut()
+                .resource_mut::<WorkspaceResource>()
+                .add_document(DocumentEntry {
+                    id: DocumentId::new(raw),
+                    kind: DocumentKindId::new("test"),
+                    origin,
+                    runtime_context,
+                    title: "test".into(),
+                    dirty: false,
+                });
+        }
+        app.world_mut().trigger(TwinClosed {
+            twin,
+            root,
+            was_active: true,
+        });
+        app.world_mut().flush();
+        assert_eq!(
+            app.world().resource::<Closed>().0,
+            vec![DocumentId::new(1), DocumentId::new(2)]
+        );
+        let workspace = app.world().resource::<WorkspaceResource>();
+        let remaining: Vec<_> = workspace.documents().iter().map(|entry| entry.id).collect();
+        assert_eq!(remaining, vec![DocumentId::new(3), DocumentId::new(4)]);
+    }
 
     #[test]
     fn resource_defaults_empty() {

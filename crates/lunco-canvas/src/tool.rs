@@ -66,12 +66,13 @@ pub struct CanvasOps<'a> {
     pub selection: &'a mut Selection,
     pub viewport: &'a mut Viewport,
     pub events: &'a mut Vec<SceneEvent>,
-    /// When `true`, tools must not mutate `scene` — no drag-to-move,
-    /// no drag-to-connect, no delete-on-key. Pan/zoom/selection
-    /// stay fine (those mutate `viewport` / `selection`, not the
-    /// authored scene). Surfaced as a [`crate::Canvas::read_only`] field
+    /// When `true`, tools must not change topology. Node movement requires
+    /// `movable_layout`; pan/zoom/selection stay available.
+    /// Surfaced as a [`crate::Canvas::read_only`] field
     /// that the embedding app flips per tab (e.g. source-library tabs).
     pub read_only: bool,
+    /// Node placement belongs to the embedding view rather than domain topology.
+    pub movable_layout: bool,
     /// Optional drag-to-grid snap. When `Some`, the default tool
     /// quantises in-flight drag translations to multiples of `step`
     /// world units — user sees icons click into alignment *during*
@@ -123,6 +124,11 @@ pub trait Tool: Send + Sync {
     /// override to show ghost connections, rubber-band rectangles,
     /// drop-target glows.
     fn preview(&self) -> Option<ToolPreview> {
+        None
+    }
+
+    /// Exact origin of an active connection gesture, for host guidance.
+    fn connection_origin(&self) -> Option<PortRef> {
         None
     }
 
@@ -322,8 +328,13 @@ enum PressTarget {
     Empty,
 }
 
+/// Domain validator shared by preview and commit.
+pub type ConnectionValidator = fn(&Scene, &PortRef, &PortRef) -> Result<(), String>;
+
 /// Built-in Modelica/graph-editor tool: select, drag, connect, delete.
 pub struct DefaultTool {
+    validator: Option<ConnectionValidator>,
+    snap_target: Option<Pos>,
     state: State,
     /// Tracks the last observed pointer position in world coords so
     /// the preview layer can render ghost edges / rubber-bands from
@@ -336,12 +347,46 @@ impl Default for DefaultTool {
     fn default() -> Self {
         Self {
             state: State::Idle,
+            validator: None,
+            snap_target: None,
             last_pointer_world: None,
         }
     }
 }
 
 impl Tool for DefaultTool {
+    fn connection_origin(&self) -> Option<PortRef> {
+        match &self.state {
+            State::ConnectingFromPort { from, .. } => Some(from.clone()),
+            _ => None,
+        }
+    }
+    fn tick(&mut self, ops: &mut CanvasOps, _dt: f32) {
+        self.snap_target = None;
+        if let State::ConnectingFromPort {
+            from,
+            pointer_world,
+            ..
+        } = &self.state
+        {
+            if let Some((node, NodeHitKind::Port(port))) =
+                ops.scene.hit_node(*pointer_world, PORT_HIT_RADIUS)
+            {
+                let to = PortRef { node, port };
+                if self
+                    .validator
+                    .is_none_or(|validate| validate(ops.scene, from, &to).is_ok())
+                {
+                    self.snap_target = ops.scene.node(node).and_then(|n| {
+                        n.ports
+                            .iter()
+                            .find(|p| p.id == to.port)
+                            .map(|p| p.world_pos(n.rect))
+                    });
+                }
+            }
+        }
+    }
     fn cancel_in_flight(&mut self) {
         self.state = State::Idle;
     }
@@ -555,7 +600,7 @@ impl Tool for DefaultTool {
                 from_world: *from_world,
                 bends: points.clone(),
                 to_world: *pointer_world,
-                snap_target: None,
+                snap_target: self.snap_target,
             }),
             State::RubberBand {
                 origin_world,
@@ -583,6 +628,25 @@ impl DefaultTool {
         Self::default()
     }
 
+    /// Install the owner validator; rejected gestures never emit EdgeCreated.
+    pub fn with_validator(validator: ConnectionValidator) -> Self {
+        Self {
+            validator: Some(validator),
+            ..Self::default()
+        }
+    }
+
+    fn commit_connection(&self, from: PortRef, to: PortRef, points: Vec<Pos>, ops: &mut CanvasOps) {
+        if let Some(validate) = self.validator {
+            if let Err(reason) = validate(ops.scene, &from, &to) {
+                ops.events.push(SceneEvent::ConnectionRejected { reason });
+                return;
+            }
+        }
+        ops.events
+            .push(SceneEvent::EdgeCreated { from, to, points });
+    }
+
     /// Handle a primary click while already in `ConnectingFromPort`
     /// state — implements Dymola/OMEdit click-to-bend during wire
     /// creation. Click on a different node's port = commit; click
@@ -608,13 +672,12 @@ impl DefaultTool {
                     // Clicked the source port again — cancel.
                     return;
                 }
-                if nid != from.node {
+                if nid != from.node || self.validator.is_some() {
                     let to = PortRef {
                         node: nid,
                         port: pid,
                     };
-                    ops.events
-                        .push(SceneEvent::EdgeCreated { from, to, points });
+                    self.commit_connection(from, to, points, ops);
                     return;
                 }
                 // Same-node port — keep drawing.
@@ -839,12 +902,8 @@ impl DefaultTool {
                         ops.events
                             .push(SceneEvent::SelectionChanged(ops.selection.clone()));
                     }
-                    // Read-only tab: refuse to enter the drag state.
-                    // The user can still click to select, but any
-                    // drag motion falls back to rubber-band selection
-                    // below. Prevents authored scene mutation at the
-                    // source, not via after-the-fact snap-back.
-                    if ops.read_only {
+                    // Presentation views may move nodes without editing topology.
+                    if ops.read_only && !ops.movable_layout {
                         self.state = State::Idle;
                         return;
                     }
@@ -1161,6 +1220,8 @@ impl DefaultTool {
                         // append bends; a click on a target port
                         // commits the wire. Esc cancels. Read-only
                         // tabs bail (mirrors the drag path).
+                        ops.events
+                            .push(SceneEvent::PortActivated { port: from.clone() });
                         if ops.read_only {
                             return;
                         }
@@ -1261,19 +1322,21 @@ impl DefaultTool {
                 // body if close enough). Empty-space release cancels.
                 let target_node_and_port = match ops.scene.hit_node(world, PORT_HIT_RADIUS) {
                     Some((nid, NodeHitKind::Port(pid))) => Some((nid, pid)),
-                    Some((nid, NodeHitKind::Body)) => {
+                    Some((nid, NodeHitKind::Body)) if self.validator.is_none() => {
                         nearest_port_on_node(ops.scene, nid, world).map(|pid| (nid, pid))
                     }
+                    Some((_, NodeHitKind::Body)) => None,
                     None => None,
                 };
                 if let Some((target_node, target_port)) = target_node_and_port {
-                    if target_node != from.node {
+                    if target_node != from.node
+                        || (self.validator.is_some() && target_port != from.port)
+                    {
                         let to = PortRef {
                             node: target_node,
                             port: target_port,
                         };
-                        ops.events
-                            .push(SceneEvent::EdgeCreated { from, to, points });
+                        self.commit_connection(from, to, points, ops);
                     }
                 }
                 // Note: when release lands on pure empty space,
@@ -1674,6 +1737,7 @@ mod tests {
                 viewport,
                 events,
                 read_only: false,
+                movable_layout: false,
                 snap: None,
                 show_edges,
             };
@@ -1797,6 +1861,79 @@ mod tests {
         assert!(!ev.iter().any(|e| matches!(e, SceneEvent::NodeMoved { .. })));
         // But the click did select.
         assert!(sel.contains(SelectItem::Node(NodeId(0))));
+    }
+
+    #[test]
+    fn read_only_layout_moves_nodes_but_blocks_topology_edits() {
+        let (mut tool, mut scene, mut selection, mut viewport, mut events) = env();
+        for input in [
+            down(Pos::new(20.0, 15.0), false, false),
+            mv(Pos::new(70.0, 45.0)),
+            mv(Pos::new(80.0, 55.0)),
+            up(Pos::new(80.0, 55.0)),
+        ] {
+            tool.handle(
+                &input,
+                &mut CanvasOps {
+                    scene: &mut scene,
+                    selection: &mut selection,
+                    viewport: &mut viewport,
+                    events: &mut events,
+                    read_only: true,
+                    movable_layout: true,
+                    snap: None,
+                    show_edges: true,
+                },
+            );
+        }
+        assert_eq!(
+            scene.node(NodeId(0)).unwrap().rect.min,
+            Pos::new(60.0, 40.0)
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, SceneEvent::NodeMoved { .. }))
+        );
+        let count = scene.node_count();
+        let input = InputEvent::Key {
+            name: "Delete",
+            modifiers: Modifiers::default(),
+        };
+        tool.handle(
+            &input,
+            &mut CanvasOps {
+                scene: &mut scene,
+                selection: &mut selection,
+                viewport: &mut viewport,
+                events: &mut events,
+                read_only: true,
+                movable_layout: true,
+                snap: None,
+                show_edges: true,
+            },
+        );
+        assert_eq!(scene.node_count(), count);
+        for input in [
+            down(Pos::new(100.0, 55.0), false, false),
+            mv(Pos::new(100.0, 15.0)),
+            up(Pos::new(100.0, 15.0)),
+        ] {
+            tool.handle(
+                &input,
+                &mut CanvasOps {
+                    scene: &mut scene,
+                    selection: &mut selection,
+                    viewport: &mut viewport,
+                    events: &mut events,
+                    read_only: true,
+                    movable_layout: true,
+                    snap: None,
+                    show_edges: true,
+                },
+            );
+        }
+        assert_eq!(scene.edge_count(), 0);
     }
 
     #[test]

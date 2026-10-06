@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**247 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**262 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -24,7 +24,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Scene editing & authoring**
 
 - [`lunco-luncosim-edit-core`](#lunco-luncosim-edit-core) (1 command)
-- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (11 commands)
+- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (25 commands)
 - [`lunco-scene-commands`](#lunco-scene-commands) (5 commands)
 
 **USD / scenes**
@@ -110,7 +110,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-telemetry`](#lunco-telemetry) (1 command)
 - [`lunco-usd-bevy-camera`](#lunco-usd-bevy-camera) (5 commands)
 - [`lunco-usd-bevy-runtime-core`](#lunco-usd-bevy-runtime-core) (5 commands)
-- [`lunco-usd-core`](#lunco-usd-core) (9 commands)
+- [`lunco-usd-core`](#lunco-usd-core) (10 commands)
 - [`lunco-usd-viewport-core`](#lunco-usd-viewport-core) (18 commands)
 - [`lunco-viz`](#lunco-viz) (1 command)
 - [`lunco-workbench-core`](#lunco-workbench-core) (9 commands)
@@ -175,6 +175,109 @@ actually call, with the fields the deserializer actually accepts. See the
 | `doc_id` | `u64` |  USD document whose pointer movement should stop reaching a hook. |
 | `interaction_id` | `String` |  Identity supplied when the active interaction subscribed. |
 
+#### `ConnectionViewFile`
+
+ Save or load named views asynchronously; damaged optional layouts recover with warnings.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/view_files.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `path` | `String` |   |
+| `save` | `bool` |   |
+| `scope` | `String` |   |
+| `include_descendants` | `bool` |   |
+
+#### `CreateConnectionView`
+
+ Create an independent named scope and layout in the bound diagram view document.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/view_files.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `name` | `String` |   |
+| `scope` | `String` |   |
+
+#### `DropConnectionAsset`
+
+ Add a referenced USD asset or source-backed program through the bound USD document.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/drop_assets.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `source` | `String` |   |
+| `program` | `Option < lunco_usd_core :: program :: ProgramAttachSpec >` |  Optional Models-palette contract; browser source drops have no inferred ports. |
+| `target_path` | `Option < String >` |   |
+| `x` | `f64` |   |
+| `y` | `f64` |   |
+
+#### `FrameConnectionDiagram`
+
+ Frame the complete Connections system, or center a card at its natural scale.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/navigation.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `key` | `Option < String >` |  Exact current view key; omitted fits the complete system. |
+
+#### `MoveConnectionGroup`
+
+ Move all member placements in one reversible view-document transaction.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/groups.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `group_id` | `String` |   |
+| `dx` | `f64` |   |
+| `dy` | `f64` |   |
+
+#### `MoveConnectionViewNode`
+
+ Place a diagram card by its stable view key without modifying USD.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/view_files.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `view` | `String` |   |
+| `path` | `String` |  InspectConnectionDiagram node key; boundary keys include their interface role. |
+| `x` | `f64` |   |
+| `y` | `f64` |   |
+
+#### `NavigateConnectionDiagram`
+
+ Navigate to a composed USD scope, or restore the previous view and viewport.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/navigation.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `scope` | `Option < String >` |   |
+| `back` | `bool` |   |
+
+#### `OpenConnectionNode`
+
+ Open a diagram card's USD internals or attached source according to authored policy.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/navigation.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `key` | `String` |  Stable node key returned by InspectConnectionDiagram. |
+| `program_path` | `Option < String >` |  Exact attached program prim to open; omitted opens the card's topology or own model. |
+
 #### `ReleaseDiagnosticVisual`
 
  Release one opaque diagnostic lease.
@@ -184,6 +287,30 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `lease` | `u64` |  Opaque handle returned by `AcquireDiagnosticVisual`. |
+
+#### `RemoveConnectionGroup`
+
+ Remove a manual group, or suppress one policy-generated group in this view.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/groups.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `group_id` | `String` |   |
+
+#### `SelectConnectionElement`
+
+ Select an exact card or authored port; reveal can navigate to a hidden prim's parent.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/navigation.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `key` | `String` |   |
+| `port` | `Option < String >` |   |
+| `reveal` | `bool` |   |
 
 #### `SelectEntity`
 
@@ -225,6 +352,42 @@ actually call, with the fields the deserializer actually accepts. See the
 | `path` | `String` |  Absolute composed USD prim path within that preview's stage. |
 | `extend` | `bool` |   |
 | `toggle` | `bool` |   |
+
+#### `SetConnectionGroup`
+
+ Author a manual view group; the document validates disjoint membership.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/groups.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `group_id` | `String` |   |
+| `label` | `String` |   |
+| `members` | `Vec < String >` |   |
+
+#### `SetConnectionGroupCollapsed`
+
+ Persist disclosure independently for this named view.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/groups.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `group_id` | `String` |   |
+| `collapsed` | `bool` |   |
+
+#### `SetConnectionGrouping`
+
+ Enable or disable automatic and manual group presentation for one view.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/groups.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `enabled` | `bool` |   |
 
 #### `SetDiagnosticLayers`
 
@@ -269,6 +432,17 @@ actually call, with the fields the deserializer actually accepts. See the
 | `doc_id` | `u64` |  USD document which owns the view-layer prim. |
 | `entity_id` | `u64` |  Stable API identity of the projected preview prim. |
 | `translation` | `[f64 ; 3]` |  Target translation in the active physics frame. |
+
+#### `UndoConnectionView`
+
+ Undo or redo a view-document edit independently of source-document history.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/view_files.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |   |
+| `redo` | `bool` |   |
 
 #### `UpdateDiagnosticVisual`
 
@@ -651,8 +825,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Read a file's text and echo it to the log between `-- BEGIN --` /
  `-- END --` markers. A diagnostic for API callers that cannot see the host
- filesystem — it does NOT open a document (use `Open` for that). Goes through
- `lunco-storage`, so it works in the browser build too.
+ filesystem. The admitted asynchronous read uses the same native/OPFS
+ backend and exact runtime lifetime as document sources.
 
 - *defined in:* `crates/lunco-modelica-ui/src/ui/commands/lifecycle.rs`
 
@@ -1175,7 +1349,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `path` | `String` |  Filesystem path or URI (`bundled://`, `mem://`). Empty triggers  the picker (workbench only). |
+| `path` | `String` |  Filesystem path or registered asset URI, including `bundled://` and `mem://`. Empty triggers  the picker (workbench only). |
 
 #### `RedoDocument`
 
@@ -2703,7 +2877,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `tool` | `String` |  Registered tool namespace, for example `waypoint_editor`. |
 | `hook` | `String` |  One-argument function in that namespace, without `/1`. |
 | `args` | `TelemetryValue` |  Structured argument passed to the hook. |
-| `owner_twin_id` | `Option < u64 >` |  Twin owning a menu-originated flow. The UI host captures this identity  when the user selects the item; queued work is rejected if it is stale. |
+| `owner_twin_id` | `Option < u64 >` |  Twin owning an interaction flow, when explicitly supplied by its caller.  Twin-scoped tools also pin their registered owner when this is omitted.  A supplied owner must match a Twin-scoped tool's actual registration. |
 
 #### `RunScenario`
 
@@ -3179,6 +3353,16 @@ actually call, with the fields the deserializer actually accepts. See the
 | `doc_id` | `DocumentId` |  Target document. |
 | `spec` | `crate :: attach :: DetachSpec` |  Exact component attachment to remove. |
 
+#### `OpenUsdSourceDocument`
+
+ Open an addressable USD source as an editable document without loading a scene.
+
+- *defined in:* `crates/lunco-usd-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `source` | `String` |  Exact registered asset URI or native file path. |
+
 #### `ReviewUsdProposal`
 
  Change review state without applying any USD operation.
@@ -3515,13 +3699,13 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SaveAll`
 
- Save every open document in the current session.
+ Save documents in the exact admitted active source scope.
 
  Documents with a writable canonical path are written via their
  owning domain's [`SaveDocument`](lunco_doc_bevy::SaveDocument)
- observer. Untitled documents are written into the active Twin using
- their workspace title; with no active Twin their domain's normal Save-As
- picker is used.
+ observer. Untitled documents in a local active Twin are written under that
+ root using their workspace title. Other admitted drafts use their domain's
+ Save-As action. Retired and different-scope documents are excluded.
 
 - *defined in:* `crates/lunco-workbench-file-ops/src/lib.rs`
 - *fields:* none — call with `SaveAll` (no params)
@@ -3530,7 +3714,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Promote the current session into a Twin at `folder`.
 
- Writes `twin.toml`, saves every open document into the new root, and
+ Writes `twin.toml`, saves documents in the admitted active source scope, and
  declares the first open USD document as the default scene. Empty
  `folder` triggers a folder picker.
 
@@ -3545,7 +3729,7 @@ actually call, with the fields the deserializer actually accepts. See the
  Request a system "Open File" dialog.
 
  Dispatches [`ShowOpenFilePicker`] which triggers the picker via
- [`lunco_workbench_file_dialog::PickHandle`]. On success, the file dialog resolves to
+ [`lunco_workbench_file_dialog::request_pick`]. On success, the file dialog resolves to
  [`OpenFile`] with the chosen path.
 
 - *defined in:* `crates/lunco-workbench-file-ops/src/lib.rs`
@@ -3556,7 +3740,7 @@ actually call, with the fields the deserializer actually accepts. See the
  Request a system "Open Folder" dialog.
 
  Dispatches [`ShowOpenFolderPicker`] which triggers the picker via
- [`lunco_workbench_file_dialog::PickHandle`]. On success, the file dialog resolves to
+ [`lunco_workbench_file_dialog::request_pick`]. On success, the file dialog resolves to
  [`OpenFolder`] with the chosen path.
 
 - *defined in:* `crates/lunco-workbench-file-ops/src/lib.rs`
@@ -3829,7 +4013,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 247 commands from the runtime schema; scanned 968 .rs files for docs (0 parse failure(s) skipped).
+<!-- 262 commands from the runtime schema; scanned 988 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

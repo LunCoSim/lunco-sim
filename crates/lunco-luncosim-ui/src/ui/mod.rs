@@ -338,7 +338,7 @@ impl Plugin for LunCoSimUiPlugin {
                 app.register_panel(rhai_editor_panel::RhaiEditorPanel);
                 app.init_resource::<rhai_editor_panel::RhaiEditorVm>();
                 app.add_systems(Update, rhai_editor_panel::produce_rhai_editor_vm);
-                app.register_panel(models_palette::ModelsPalette);
+                app.register_panel(models_palette::ModelsPalette::default());
                 app.init_resource::<models_palette::ProgramCatalog>();
                 app.add_systems(
                     Update,

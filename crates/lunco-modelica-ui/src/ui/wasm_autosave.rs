@@ -125,7 +125,7 @@ fn drive_modal_gesture_flag(
 /// autosaved this session (plus those restored at startup).
 ///
 /// `forget_on_closed` needs the display name to rebuild a document's
-/// `localStorage` key, but `CloseDocument`'s `on_close_document`
+/// `localStorage` key, but the Modelica core `CloseDocument` owner
 /// observer removes the doc from the registry *before* the
 /// `DocumentClosed` event fires — so the origin is unreachable by
 /// then. This map captures the name while the document still exists,
@@ -455,7 +455,7 @@ fn forget_on_closed(
         return;
     };
     let doc = trigger.event().doc;
-    // `CloseDocument`'s `on_close_document` observer removes the doc
+    // The Modelica core `CloseDocument` observer removes the doc
     // from the registry *before* `DocumentClosed` fires, so the
     // origin is unreachable here. Use the full storage key captured in
     // `AutosaveKeys` while the doc still existed. Absent ⇒ the doc was

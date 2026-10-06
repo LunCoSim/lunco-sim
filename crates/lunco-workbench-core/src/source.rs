@@ -4,6 +4,12 @@ use bevy::ecs::reflect::ReflectEvent;
 use bevy::reflect::std_traits::ReflectDefault;
 use lunco_core::Command;
 
+/// Registered or native source identity carried between browser and authoring panels.
+#[derive(Clone, Debug)]
+pub struct SourceDragPayload {
+    pub source: String,
+}
+
 /// Open a registered asset as read-only text in the source viewer.
 #[Command(default)]
 pub struct OpenSourceView {

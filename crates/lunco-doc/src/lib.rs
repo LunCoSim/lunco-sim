@@ -66,6 +66,7 @@ pub use lunco_command_contracts::{Ack, Mutation, OpId, Reject, SessionId};
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub mod diagnostics;
+pub mod diagram_view;
 pub mod domain_engine;
 pub mod refindex;
 

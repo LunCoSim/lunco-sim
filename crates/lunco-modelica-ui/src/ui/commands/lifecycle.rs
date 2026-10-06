@@ -1325,33 +1325,12 @@ pub fn on_open(trigger: On<Open>, mut commands: Commands) {
     commands.trigger(OpenFile { path: uri });
 }
 
-#[on_command(CloseDocument)]
-pub fn on_close_document(
-    trigger: On<CloseDocument>,
-    mut registry: ResMut<ModelicaDocuments>,
-    mut commands: Commands,
-) {
-    let doc = trigger.event().doc_id;
-    if registry.host(doc).is_none() {
-        return;
-    }
-    // Despawn any `ModelicaModel` entity backing this doc *before*
-    // dropping the document. The despawn fires `RemovedComponents`,
-    // which `cleanup_removed_simulators` picks up to purge the doc's
-    // signal histories + plot bindings from the SignalRegistry /
-    // VisualizationRegistry — otherwise stale variables (der(C2.v),
-    // …) linger in the Graphs X/Y picker after the doc is closed.
-    // That system is entity-scoped only; dropping the document is this
-    // observer's job, because only an explicit close means the user is
-    // done with the source (a scene reload despawns these entities too).
-    for entity in registry.entities_linked_to(doc) {
-        commands.entity(entity).try_despawn();
-    }
-    registry.remove_document(doc);
-}
-
 pub fn on_document_closed_cleanup(
     trigger: On<CloseDocument>,
+    mut openings: ResMut<crate::ui::document_openings::DocumentOpenings>,
+    mut dialogs: ResMut<CloseDialogState>,
+    mut modals: ResMut<lunco_ui::modal::ModalQueue>,
+    mut pending_save_close: ResMut<PendingCloseAfterSave>,
     mut model_tabs: ResMut<ModelTabs>,
     mut cache: ResMut<PackageTreeCache>,
     mut workbench: ResMut<WorkbenchState>,
@@ -1360,24 +1339,21 @@ pub fn on_document_closed_cleanup(
     mut experiments: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut drafts: Option<ResMut<lunco_modelica_runner::ExperimentDrafts>>,
     mut canvas_state: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
-    mut bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
-    mut openings: Option<ResMut<crate::ui::document_openings::DocumentOpenings>>,
 ) {
     let doc = trigger.event().doc_id;
-    if let Some(openings) = openings.as_mut() {
-        drop(openings.cancel(doc));
-    }
+    retire_editor_document_work(
+        doc,
+        &mut openings,
+        &mut dialogs,
+        &mut modals,
+        &mut pending_save_close,
+    );
     model_tabs.close(doc);
     cache.in_memory_models.retain(|e| e.doc != doc);
     // Drop the per-doc canvas entry (viewport, selection, in-flight
     // projection task) so a later tab reusing the id starts fresh.
     if let Some(canvas) = canvas_state.as_mut() {
         canvas.drop_doc(doc);
-    }
-    // Drop the bus's terminal-outcome cache for this doc so `last_outcome`
-    // doesn't accumulate dead entries across long sessions.
-    if let Some(b) = bus.as_mut() {
-        b.clear_outcomes_for(lunco_status_core::status_bus::BusyScope::Document(doc.0));
     }
     // TODO(backlog): this active_document reset is generic workspace behavior that
     // belongs in a lunco-workspace CloseDocument observer (the StatusBus and
@@ -1404,6 +1380,27 @@ pub fn on_document_closed_cleanup(
     if let Some(d) = drafts.as_mut() {
         d.forget_doc(doc);
     }
+}
+
+/// Cancel work and prompts before retiring their editor document.
+fn retire_editor_document_work(
+    doc: DocumentId,
+    openings: &mut crate::ui::document_openings::DocumentOpenings,
+    dialogs: &mut CloseDialogState,
+    modals: &mut lunco_ui::modal::ModalQueue,
+    pending_save_close: &mut PendingCloseAfterSave,
+) {
+    drop(openings.cancel(doc));
+    pending_save_close.take(doc);
+    dialogs.pending.retain(|(pending, _)| *pending != doc);
+    dialogs.requested.retain(|(pending, _), id| {
+        if *pending == doc {
+            modals.cancel(*id);
+            false
+        } else {
+            true
+        }
+    });
 }
 
 pub fn finish_close_after_save(
@@ -1566,7 +1563,9 @@ pub fn render_close_dialogs(
     let mut survivors = Vec::with_capacity(pending.len());
     for (doc, originating_tab) in pending {
         let Some(host) = registry.host(doc) else {
-            dialogs.requested.remove(&(doc, originating_tab));
+            if let Some(id) = dialogs.requested.remove(&(doc, originating_tab)) {
+                modals.cancel(id);
+            }
             continue;
         };
 
@@ -1917,5 +1916,72 @@ mod file_diagnostic_lifecycle_tests {
         for index in [1, 2, 4] {
             assert!(app.world().get_entity(entities[index]).is_ok());
         }
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_retirement_tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_retirement_cancels_preparation_and_modal_owners() {
+        use crate::ui::document_openings::{DocumentOpenings, OpeningState};
+        use lunco_status_core::status_bus::{BusyScope, StatusBus};
+        use lunco_ui::modal::{ModalBody, ModalButton, ModalQueue, ModalRequest};
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let doc = DocumentId::fresh();
+        let foreign = DocumentId::fresh();
+        let mut openings = DocumentOpenings::default();
+        let mut bus = StatusBus::default();
+        let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async {
+            std::future::pending::<(
+                crate::package_tree::cache::FileLoadResult,
+                Option<crate::ui::document_openings::FileOpenAdmission>,
+            )>()
+            .await
+        });
+        openings.insert(
+            doc,
+            OpeningState::FileLoad {
+                display_name: "pending".into(),
+                task,
+                busy: bus.begin(BusyScope::Document(doc.0), "opening", "Opening"),
+            },
+        );
+        let mut dialogs = CloseDialogState::default();
+        let mut modals = ModalQueue::default();
+        let id = modals.request(ModalRequest {
+            title: "pending document".into(),
+            body: ModalBody::Text(String::new()),
+            buttons: vec![ModalButton::Cancel("Cancel".into())],
+            dismiss_on_esc: true,
+        });
+        dialogs.pending.push((doc, 1));
+        dialogs.requested.insert((doc, 1), id);
+        let mut saves = PendingCloseAfterSave::default();
+        saves.queue(doc, 1);
+        saves.queue(foreign, 2);
+        retire_editor_document_work(doc, &mut openings, &mut dialogs, &mut modals, &mut saves);
+        assert!(openings.doc_ids().is_empty());
+        assert!(dialogs.pending.is_empty());
+        assert!(dialogs.requested.is_empty());
+        assert!(!modals.is_active());
+        assert!(saves.take(doc).is_empty());
+        assert_eq!(saves.take(foreign), vec![2]);
+        let orphan = modals.request(ModalRequest {
+            title: "retired document".into(),
+            body: ModalBody::Text(String::new()),
+            buttons: vec![ModalButton::Cancel("Cancel".into())],
+            dismiss_on_esc: true,
+        });
+        dialogs.pending.push((doc, 1));
+        dialogs.requested.insert((doc, 1), orphan);
+        app.init_resource::<ModelicaDocuments>()
+            .insert_resource(dialogs)
+            .insert_resource(modals)
+            .add_systems(Update, render_close_dialogs);
+        app.update();
+        assert!(!app.world().resource::<ModalQueue>().is_active());
     }
 }

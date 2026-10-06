@@ -372,8 +372,10 @@ fn close_source_state_on_twin_closed(
         }
     }
 
-    pending_requests.opens.retain(|request| {
-        !matches!(request, SourceOpenRequest::Twin { root, .. } if root.as_path() == closed_root.as_path())
+    pending_requests.opens.retain(|request| match request {
+        SourceOpenRequest::Twin { root, .. } => root != closed_root,
+        SourceOpenRequest::Path(path) => !Path::new(path).starts_with(closed_root),
+        _ => true,
     });
     pending_requests
         .saves
@@ -391,6 +393,7 @@ fn source_tab_belongs_to_root(state: &SourceTabState, root: &Path) -> bool {
         .origin
         .as_ref()
         .is_some_and(|origin| origin.twin_root.as_path() == root)
+        || state.path.starts_with(root)
 }
 
 fn open_inline(world: &mut World, uri: String, text: String) {
@@ -811,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn only_twin_owned_source_tabs_are_retired_on_close() {
+    fn lifecycle_retirement_covers_path_and_explicit_origin() {
         let state = SourceTabState {
             path: PathBuf::from("/tmp/alpha/scripts/entry.rhai"),
             text: String::new(),
@@ -825,13 +828,73 @@ mod tests {
             error: None,
             request: 0,
         };
-        let loose = SourceTabState {
+        let path_opened = SourceTabState {
             origin: None,
             ..state.clone()
         };
 
         assert!(source_tab_belongs_to_root(&state, Path::new("/tmp/alpha")));
         assert!(!source_tab_belongs_to_root(&state, Path::new("/tmp/beta")));
-        assert!(!source_tab_belongs_to_root(&loose, Path::new("/tmp/alpha")));
+        assert!(source_tab_belongs_to_root(
+            &path_opened,
+            Path::new("/tmp/alpha")
+        ));
+        assert!(!source_tab_belongs_to_root(
+            &path_opened,
+            Path::new("/tmp/beta")
+        ));
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<EditorTabs<SourceTabState>>()
+            .init_resource::<PendingSourceRequests>()
+            .init_resource::<PendingSourceReads>()
+            .init_resource::<PendingSourceWrites>()
+            .add_observer(close_source_state_on_twin_closed);
+        let tab = app
+            .world_mut()
+            .resource_mut::<EditorTabs<SourceTabState>>()
+            .ensure_pinned(|_| false, || path_opened.clone());
+        app.world_mut()
+            .resource_mut::<PendingSourceRequests>()
+            .opens
+            .extend([
+                SourceOpenRequest::Path("/tmp/alpha/scripts/queued.rhai".into()),
+                SourceOpenRequest::Path("/tmp/beta/scripts/queued.rhai".into()),
+            ]);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let task = bevy::tasks::AsyncComputeTaskPool::get()
+                .spawn(async { std::future::pending::<Result<String, String>>().await });
+            app.world_mut()
+                .resource_mut::<PendingSourceReads>()
+                .tasks
+                .push(PendingSourceRead {
+                    tab,
+                    request: 1,
+                    task,
+                });
+        }
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: lunco_workspace::TwinId::new(1),
+            root: "/tmp/alpha".into(),
+            was_active: true,
+        });
+        app.world_mut().flush();
+        assert!(
+            app.world()
+                .resource::<EditorTabs<SourceTabState>>()
+                .get(tab)
+                .is_none()
+        );
+        assert!(
+            app.world()
+                .resource::<PendingSourceReads>()
+                .tasks
+                .is_empty()
+        );
+        assert_eq!(
+            app.world().resource::<PendingSourceRequests>().opens.len(),
+            1
+        );
     }
 }

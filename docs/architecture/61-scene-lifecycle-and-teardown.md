@@ -98,6 +98,25 @@ generation, so its final `on_stop` still routes to the outgoing Twin after the
 workspace has switched. Pending asset and compiler work is canceled or fenced
 at that same owner boundary.
 
+`TwinClosed` closes every document whose stored runtime owner is that
+`LocalTwin`: the workspace owner dispatches `CloseDocument` to the domain owners,
+then removes the metadata. Workspace replacement drains these handlers before
+`TwinAdded` and also closes loose and library editor documents without deleting
+shared source caches; replicated documents follow their replication session.
+USD previews snapshot document ownership at the close edge, before deferred
+registry removal. Modelica core owns document closure and linked-entity
+retirement in both headless and UI hosts. File reads capture a
+`FileDocumentAdmission`, and completions whose admitted runtime owner has
+retired are rejected. Pending workspace restore is canceled at that same Twin
+edge. Closing a non-active Twin does not clear the active simulation scene.
+
+SysML document closure uses the same domain command for clean files and dirty
+drafts; its Twin source loader owns only pending asset handles. Modelica document
+closure cancels parse preparations, save-close continuations, and document-owned
+modals before dropping editor state. Source text tabs are not workspace
+documents: tabs and queued filesystem opens under the closed Twin root are
+retired, including files opened directly by path without an explicit Twin origin.
+
 Core and application scripts keep their own owner scope and stable generation
 across Twin scene transitions. Scene teardown clears the old guided presentation
 but only closes programs explicitly marked as scene-owned; Twin teardown only

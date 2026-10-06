@@ -12,6 +12,13 @@ A stateful 2D scene editor substrate for LunCoSim.
 - **Visual Registry** — Maps data kinds to specific `NodeVisual` or `EdgeVisual` implementations.
 - **Domain-Agnostic** — The data model (`Scene`, `Node`, `Edge`) is pure data and serializable.
 
+Hosts may install `DefaultTool::with_validator` to admit endpoints before
+`EdgeCreated`. The same validator serves drag and click gestures; rejected
+connections emit `ConnectionRejected`. Port activation remains available in
+read-only views. `Selection::set_port` focuses an exact endpoint without
+selecting its wires for editing; `EdgesLayer::trace_selection` emphasizes
+incident connections using the host's shared theme.
+
 ## Architecture
 
 The canvas is designed around three main extension seams:

@@ -23,15 +23,25 @@
 //!
 //! The producer runs on the **main thread** (the stage is `!Send`) only while
 //! its workbench panel is visible. Initial admission reads the complete
-//! preview; later typed scene-change batches
+//! scene or document; later typed scene-change batches
 //! refresh only affected prim subtrees. A layout is rebuilt only when the
 //! projected graph changes, so unrelated edits, pan / zoom / drag, and
-//! selection preserve the current canvas. Node *positions* are session-only
-//! for v1 — a structural graph edit re-lays-out; persisting a
-//! `lunco:canvasPos` is a follow-up.
+//! selection preserve the current canvas. Rhai chooses automatic placement on
+//! bounded workers; named view documents retain independent manual placements. The Diagram mode inspects
+//! full USD topology with cached hierarchy navigation; Authored schema mode
+//! edits explicitly marked boundaries through the document command owner.
 
+mod drop_assets;
+mod groups;
+mod inspection;
+mod layout;
+mod navigation;
 mod projection;
+mod toolbar;
+mod view_files;
 mod visuals;
+pub use layout::{LayoutJobs, update_layouts};
+pub use view_files::{init_view_commands, poll_view_files, view_files_pending};
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -43,17 +53,17 @@ use lunco_workbench_core::{
     Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot, WorkbenchSnapshot,
 };
 
-use lunco_doc::DocumentId;
-use lunco_modelica_ui_core::FocusDocumentByName;
+use lunco_doc::diagram_view::DiagramViewDocument;
+use lunco_doc::{Document, DocumentHost, DocumentId};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneChangeBatch};
-use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages};
+use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_document::document::{LayerId, UsdOp};
 use lunco_usd_viewport_core::{UsdPreviewId, UsdPreviewSession, UsdViewportState};
 
 use projection::{
     EDGE_KIND, NODE_KIND, PrimNode, UsdPrimNodeData, UsdWireData, Wire, WireKind, build_scene,
-    collect_graph, collect_prim, project_schema, replace_affected_projection, schema_roots,
-    wire_owners_affected_by_paths,
+    collect_graph, collect_prim, project_diagram, project_schema, replace_affected_projection,
+    schema_roots, wire_owners_affected_by_paths,
 };
 
 pub use lunco_usd_ui::USD_CONNECTION_CANVAS_PANEL_ID as USD_CANVAS_PANEL_ID;
@@ -67,7 +77,10 @@ fn build_registry() -> VisualRegistry {
         Some(d) => visuals::node_visual(d),
         None => visuals::UsdPrimNodeVisual {
             type_name: String::new(),
+            programs: String::new(),
+            accent: None,
             is_body: false,
+            is_boundary: false,
         },
     });
     reg.register_edge_kind(EDGE_KIND, |data: &lunco_canvas::NodeData| match data
@@ -81,10 +94,19 @@ fn build_registry() -> VisualRegistry {
     reg
 }
 
-/// One preview lease's canvas plus the bindings the producer resolves so the
+/// One scene mount or preview lease canvas plus its resolved bindings so the
 /// write-back path knows which document and authored layer to use.
 pub struct UsdCanvasSessionState {
     canvas: Canvas,
+    canvas_rect: Option<lunco_canvas::Rect>,
+    source_root: Option<Entity>,
+    source_uri: Option<String>,
+    entities: HashMap<String, Entity>,
+    view_document: Option<DocumentHost<DiagramViewDocument>>,
+    selected_view: String,
+    new_view_name: String,
+    view_file_path: String,
+    saved_view_generation: u64,
     /// Stage currently projected — used to detect a scene swap.
     stage_id: Option<AssetId<UsdStageAsset>>,
     /// Editable document backing `stage_id`, if resolvable. A preview lease is
@@ -104,18 +126,38 @@ pub struct UsdCanvasSessionState {
     /// Frame-to-fit request. Set by the producer on a stage swap; consumed by
     /// the panel's first render, which alone knows the real widget size (the
     /// producer only has a nominal guess).
-    needs_fit: bool,
+    frame_request: Option<navigation::FrameTarget>,
+    layout_revision: u64,
+    layout_request: Option<lunco_hooks::HookValue>,
+    navigation_history: Vec<navigation::NavigationEntry>,
+    navigation_restore: Option<(lunco_canvas::Pos, f32)>,
+    details_open: bool,
+    inspection: inspection::ConnectionIndex,
+    expanded_scene: Option<Scene>,
+    group_plan: Vec<groups::Group>,
+    scope_search: String,
     /// Complete collected topology retained so changing the active authored
     /// schema root is a presentation operation, not a stage reload.
     source_nodes: Vec<PrimNode>,
     source_wires: Vec<Wire>,
-    /// All entity-backed prim paths, including paths irrelevant to the graph.
+    /// All composed prim paths, including prims without ECS projections.
     /// Structural deltas use this index to re-read only the affected subtree.
     source_prim_paths: BTreeSet<String>,
     /// Changes received while the preview projection is settling.
     pending_changes: CanvasStageChanges,
     schema_roots: Vec<String>,
     active_schema_root: Option<String>,
+    /// Explicit full-topology inspection versus authored schema editing.
+    diagram_mode: bool,
+    diagram_root: String,
+    include_descendants: bool,
+    /// Cached hierarchy choices, derived only when source topology changes.
+    diagram_roots: BTreeSet<String>,
+    /// Projected links that cannot resolve against authored node interfaces.
+    unresolved_links: Vec<String>,
+    published_diagnostic: String,
+    published_layout_revision: u64,
+    published_error: Option<String>,
     /// Last rejected graph edit. Keep it next to the graph so an invalid drag
     /// cannot disappear as a no-op between frames.
     last_error: Option<String>,
@@ -129,9 +171,24 @@ impl Default for UsdCanvasSessionState {
         // diagrams, but it prevents a composed flight stack from ever fitting
         // in one frame.  The connection view owns this scale policy because
         // it knows the scene is a document-sized graph, not a small sketch.
-        canvas.viewport.config.zoom_min = 0.04;
+        canvas.viewport.config.zoom_min = 0.001;
+        canvas.tool = Box::new(lunco_canvas::DefaultTool::with_validator(
+            validate_connection,
+        ));
+        let mut edges = lunco_canvas::EdgesLayer::new(canvas.registry.clone());
+        edges.trace_selection = true;
+        canvas.layers[1] = Box::new(edges);
         Self {
             canvas,
+            canvas_rect: None,
+            source_root: None,
+            source_uri: None,
+            entities: HashMap::new(),
+            view_document: None,
+            selected_view: "Overview".into(),
+            new_view_name: String::new(),
+            view_file_path: String::new(),
+            saved_view_generation: 0,
             stage_id: None,
             doc: None,
             edit_target: None,
@@ -139,13 +196,30 @@ impl Default for UsdCanvasSessionState {
             canonical_generation: None,
             topo_hash: 0,
             built: false,
-            needs_fit: false,
+            frame_request: None,
+            layout_revision: 0,
+            layout_request: None,
+            navigation_history: Vec::new(),
+            navigation_restore: None,
+            details_open: true,
+            inspection: Default::default(),
+            expanded_scene: None,
+            group_plan: Vec::new(),
+            scope_search: String::new(),
             source_nodes: Vec::new(),
             source_wires: Vec::new(),
             source_prim_paths: BTreeSet::new(),
             pending_changes: CanvasStageChanges::default(),
             schema_roots: Vec::new(),
             active_schema_root: None,
+            diagram_mode: true,
+            diagram_root: "/".into(),
+            include_descendants: false,
+            diagram_roots: BTreeSet::new(),
+            unresolved_links: Vec::new(),
+            published_diagnostic: String::new(),
+            published_layout_revision: 0,
+            published_error: None,
             last_error: None,
         }
     }
@@ -153,7 +227,24 @@ impl Default for UsdCanvasSessionState {
 
 impl UsdCanvasSessionState {
     fn clear(&mut self) {
+        self.layout_revision = self.layout_revision.wrapping_add(1);
+        self.layout_request = None;
+        self.navigation_history.clear();
+        self.navigation_restore = None;
+        self.inspection = Default::default();
+        self.expanded_scene = None;
+        self.group_plan.clear();
+        self.scope_search.clear();
+        self.source_root = None;
+        self.source_uri = None;
+        self.entities.clear();
+        self.view_document = None;
+        self.selected_view = "Overview".into();
+        self.view_file_path.clear();
+        self.new_view_name.clear();
+        self.saved_view_generation = 0;
         self.canvas.scene = Scene::default();
+        self.canvas_rect = None;
         self.canvas.selection.clear();
         self.stage_id = None;
         self.doc = None;
@@ -162,22 +253,114 @@ impl UsdCanvasSessionState {
         self.canonical_generation = None;
         self.topo_hash = 0;
         self.built = false;
-        self.needs_fit = false;
+        self.frame_request = None;
         self.source_nodes.clear();
         self.source_wires.clear();
         self.source_prim_paths.clear();
         self.pending_changes = CanvasStageChanges::default();
         self.schema_roots.clear();
         self.active_schema_root = None;
+        self.diagram_mode = true;
+        self.diagram_root = "/".into();
+        self.include_descendants = false;
+        self.diagram_roots.clear();
+        self.unresolved_links.clear();
+        self.published_diagnostic.clear();
         self.last_error = None;
+    }
+
+    /// Reproject cached facts after explicit navigation; never reread USD in paint.
+    fn rebuild_view(&mut self) {
+        self.expanded_scene = None;
+        self.group_plan.clear();
+        let (nodes, wires) = self.project_view();
+        self.topo_hash = topology_hash(&nodes, &wires);
+        self.unresolved_links = projection::unresolved_links(&nodes, &wires);
+        self.canvas.scene = build_scene(nodes, wires);
+        layout::request(self);
+        self.restore_placements();
+        self.canvas.selection.clear();
+        self.inspection = Default::default();
+        self.frame_request = self
+            .canvas
+            .scene
+            .bounds()
+            .map(|_| navigation::FrameTarget::System);
+    }
+
+    fn restore_placements(&mut self) {
+        if let Some(full) = self.expanded_scene.take() {
+            self.canvas.scene = full;
+        }
+        let Some(definition) = self
+            .view_document
+            .as_ref()
+            .and_then(|host| host.document().data().views.get(&self.selected_view))
+        else {
+            return;
+        };
+        let placements = &definition.positions;
+        let ids: Vec<_> = self.canvas.scene.nodes().map(|(id, _)| *id).collect();
+        for id in ids {
+            let Some(node) = self.canvas.scene.node_mut(id) else {
+                continue;
+            };
+            if let Some(path) = projection::diagram_key(node) {
+                if let Some(pos) = placements.get(path) {
+                    if pos.x.abs() > f64::from(f32::MAX) || pos.y.abs() > f64::from(f32::MAX) {
+                        self.last_error = Some(format!(
+                            "View position for {path} exceeds the canvas rendering range"
+                        ));
+                        continue;
+                    }
+                    // Explicit validated f64 -> f32 canvas rendering boundary.
+                    let canvas_position = lunco_canvas::Pos::new(pos.x as f32, pos.y as f32);
+                    node.rect = lunco_canvas::Rect::from_min_size(
+                        canvas_position,
+                        node.rect.width(),
+                        node.rect.height(),
+                    );
+                }
+            }
+        }
+        projection::route_edges(&mut self.canvas.scene);
+        groups::project(self);
+    }
+
+    fn project_view(&self) -> (Vec<PrimNode>, Vec<Wire>) {
+        if self.diagram_mode {
+            project_diagram(
+                &self.source_nodes,
+                &self.source_wires,
+                &self.diagram_root,
+                self.include_descendants,
+            )
+        } else {
+            self.active_schema_root
+                .as_deref()
+                .map(|root| project_schema(&self.source_nodes, &self.source_wires, root))
+                .unwrap_or_default()
+        }
     }
 }
 
-/// Session-keyed connection canvases. Canvas interaction state (pan, zoom,
+/// Active scene and session-keyed connection canvases. Interaction state (pan, zoom,
 /// graph selection, and chosen schema root) belongs to its preview lease.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct UsdCanvasState {
+    scene: UsdCanvasSessionState,
+    show_scene: bool,
     sessions: HashMap<UsdPreviewId, UsdCanvasSessionState>,
+}
+
+impl Default for UsdCanvasState {
+    fn default() -> Self {
+        Self {
+            scene: Default::default(),
+            show_scene: true,
+            sessions: Default::default(),
+        }
+    }
 }
 
 /// Order-stable hash of the projected topology (paths + connectors + wires).
@@ -196,6 +379,16 @@ fn topology_hash(nodes: &[projection::PrimNode], wires: &[projection::Wire]) -> 
         n.schema_row.hash(&mut h);
         n.inputs.hash(&mut h);
         n.outputs.hash(&mut h);
+        n.connectors.hash(&mut h);
+        n.port_types.hash(&mut h);
+
+        n.port_sources.hash(&mut h);
+        n.programs.hash(&mut h);
+        n.collections.hash(&mut h);
+        n.variants.hash(&mut h);
+        n.usd_origin.hash(&mut h);
+        n.boundary.hash(&mut h);
+        n.referenced_ports.hash(&mut h);
     }
     for w in wires {
         w.kind.hash(&mut h);
@@ -241,6 +434,24 @@ fn path_is_within(path: &str, root: &str) -> bool {
             .is_some_and(|remainder| remainder.starts_with('/'))
 }
 
+/// Build subsystem choices from graph participants and their USD ancestry.
+/// Every composed prim can expose its own interface schema or child topology.
+fn diagram_roots(nodes: &[PrimNode]) -> BTreeSet<String> {
+    let mut roots = BTreeSet::from(["/".to_string()]);
+    for node in nodes {
+        roots.insert(node.path.clone());
+        let mut path = node.path.as_str();
+        while let Some((parent, _)) = path.rsplit_once('/') {
+            if parent.is_empty() {
+                break;
+            }
+            roots.insert(parent.to_string());
+            path = parent;
+        }
+    }
+    roots
+}
+
 fn indexed_subtree(paths: &BTreeSet<String>, root: &str) -> Vec<String> {
     // USD child paths form a contiguous lexical range after their exact root.
     paths
@@ -272,7 +483,7 @@ fn sort_graph(nodes: &mut [PrimNode], wires: &mut [Wire]) {
     });
 }
 
-/// View-model producer (WP-8): reads each open preview's composed stage and
+/// View-model producer (WP-8): reads active scene and open preview composed stages and
 /// rebuilds its canvas scene when the topology changes. Runs on the main thread
 /// because `StageView` is `!Send`.
 pub fn produce_usd_canvas(
@@ -282,16 +493,24 @@ pub fn produce_usd_canvas(
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
     viewport_state: Option<Res<UsdViewportState>>,
+    mounts: Res<lunco_core::SceneMountState>,
     workbench: Option<Res<WorkbenchSnapshot>>,
     mut views: ResMut<UsdCanvasState>,
     mut scene_change_reader: MessageReader<UsdSceneChangeBatch>,
 ) {
-    let Some(viewport) = viewport_state.as_deref() else {
-        views.sessions.clear();
-        return;
-    };
-    let open: std::collections::HashSet<_> = viewport.sessions().map(|s| s.id()).collect();
+    let viewport = viewport_state.as_deref();
+    let open: HashSet<_> = viewport
+        .into_iter()
+        .flat_map(|v| v.sessions())
+        .map(|s| s.id())
+        .collect();
     views.sessions.retain(|preview, _| open.contains(preview));
+    let live = mounts
+        .active_root()
+        .and_then(|root| q.get(root).ok().map(|(_, path)| (root, path)));
+    if live.is_none() {
+        views.scene.clear();
+    }
     if !workbench
         .as_deref()
         .is_some_and(|snapshot| snapshot.is_panel_visible(USD_CANVAS_PANEL_ID))
@@ -309,10 +528,32 @@ pub fn produce_usd_canvas(
             .info_paths
             .extend(change.info_prim_paths.iter().cloned());
     }
-    for session in viewport.sessions() {
+    if let Some((root, path)) = live {
+        produce_usd_canvas_session(
+            None,
+            path.stage_handle.clone(),
+            root,
+            None,
+            0,
+            true,
+            &q,
+            &path_changes,
+            &q_parents,
+            &stages,
+            &mut canonical,
+            &mut views.scene,
+            changes_by_stage.get(&path.stage_handle.id()),
+        );
+    }
+    for session in viewport.into_iter().flat_map(|v| v.sessions()) {
         let state = views.sessions.entry(session.id()).or_default();
         produce_usd_canvas_session(
-            session,
+            Some(session.doc()),
+            session.stage_handle().clone(),
+            session.scene_root(),
+            Some(session.edit_target().clone()),
+            session.projected_generation(),
+            session.projection_ready(),
             &q,
             &path_changes,
             &q_parents,
@@ -325,7 +566,12 @@ pub fn produce_usd_canvas(
 }
 
 fn produce_usd_canvas_session(
-    session: &UsdPreviewSession,
+    doc: Option<DocumentId>,
+    handle: Handle<UsdStageAsset>,
+    preview_root: Entity,
+    edit_target: Option<LayerId>,
+    generation: u64,
+    ready: bool,
     q: &Query<(Entity, &UsdPrimPath)>,
     path_changes: &Query<(Entity, &UsdPrimPath), Changed<UsdPrimPath>>,
     q_parents: &Query<&ChildOf>,
@@ -334,15 +580,14 @@ fn produce_usd_canvas_session(
     state: &mut UsdCanvasSessionState,
     changes: Option<&CanvasStageChanges>,
 ) {
-    let doc = session.doc();
-    let handle = session.stage_handle().clone();
-    let preview_root = session.scene_root();
     let stage_id = handle.id();
 
     // A lease replacement invalidates the complete interaction model before a
     // new stage becomes available; a loading document cannot show or edit the
     // previous document's graph.
-    let identity_changed = state.doc != Some(doc) || state.stage_id != Some(stage_id);
+    let identity_changed = state.doc != doc
+        || state.stage_id != Some(stage_id)
+        || state.source_root != Some(preview_root);
     if identity_changed {
         state.clear();
     }
@@ -350,11 +595,48 @@ fn produce_usd_canvas_session(
     if let Some(changes) = changes {
         accumulated_changes.merge(changes);
     }
-    if !session.projection_ready() {
+    if !ready {
         state.pending_changes = accumulated_changes;
         return;
     }
-    state.edit_target = Some(session.edit_target().clone());
+    // The mount publishes its root entity before USD projection assigns the
+    // root path. Admit the view only after that authoritative identity exists.
+    let Ok((_, root_prim)) = q.get(preview_root) else {
+        state.pending_changes = accumulated_changes;
+        return;
+    };
+    if root_prim.path.is_empty() {
+        state.pending_changes = accumulated_changes;
+        return;
+    }
+    state.source_uri = stages
+        .get(&handle)
+        .and_then(|asset| asset.recipe.as_ref())
+        .map(|recipe| recipe.root_id.clone());
+    if state.view_document.is_none() {
+        if let Some(uri) = state.source_uri.as_ref() {
+            state.diagram_root = root_prim.path.clone();
+            let mut host = DocumentHost::new(DiagramViewDocument::new(uri.clone()));
+            let definition = lunco_doc::diagram_view::DiagramView {
+                scope: state.diagram_root.clone(),
+                include_descendants: false,
+                positions: Default::default(),
+                ..Default::default()
+            };
+            if let Err(error) = host.apply(lunco_doc::Mutation::local(
+                lunco_doc::diagram_view::DiagramViewOp::SetView {
+                    name: "Overview".into(),
+                    view: Some(definition),
+                },
+            )) {
+                state.last_error = Some(error.to_string());
+            }
+            state.saved_view_generation = host.document().generation();
+            state.view_document = Some(host);
+        }
+    }
+    state.edit_target = edit_target;
+    state.source_root = Some(preview_root);
     let is_preview_entity =
         |entity: Entity| lunco_usd_bevy_scene::is_preview_entity(entity, preview_root, q_parents);
     if canonical.get(stage_id).is_none() {
@@ -382,7 +664,7 @@ fn produce_usd_canvas_session(
         || !state.built
         || (has_path_changes && !delta_is_current)
         || (!has_path_changes
-            && (state.generation != session.projected_generation()
+            && (state.generation != generation
                 || state.canonical_generation != Some(canonical_generation)));
     if !full_rebuild && !has_path_changes {
         return;
@@ -391,10 +673,15 @@ fn produce_usd_canvas_session(
     let view = cs.view();
     let prim_paths_for_log;
     if full_rebuild {
-        let prim_paths: Vec<String> = q
+        state.entities = q
             .iter()
             .filter(|(entity, p)| p.stage_handle.id() == stage_id && is_preview_entity(*entity))
-            .map(|(_, p)| p.path.clone())
+            .map(|(entity, p)| (p.path.clone(), entity))
+            .collect();
+        let prim_paths: Vec<String> = view
+            .prim_paths()
+            .into_iter()
+            .map(|path| path.to_string())
             .collect();
         let (mut source_nodes, mut source_wires) = collect_graph(&view, &prim_paths);
         sort_graph(&mut source_nodes, &mut source_wires);
@@ -409,10 +696,24 @@ fn produce_usd_canvas_session(
             let subtree = indexed_subtree(&state.source_prim_paths, root);
             for path in subtree {
                 state.source_prim_paths.remove(&path);
+                state.entities.remove(&path);
                 affected_paths.insert(path);
             }
         }
-        affected_paths.extend(changes.resynced_roots.iter().cloned());
+        let mut pending = changes.resynced_roots.clone();
+        while let Some(path) = pending.pop() {
+            let Ok(prim) = openusd::sdf::Path::new(&path) else {
+                state.last_error = Some(format!("Invalid USD change path: {path}"));
+                bevy::log::warn!("[usd-canvas] invalid USD change path: {path}");
+                return;
+            };
+            pending.extend(
+                view.children(&prim)
+                    .into_iter()
+                    .map(|child| child.to_string()),
+            );
+            affected_paths.insert(path);
+        }
         affected_paths.extend(changes.info_paths.iter().cloned());
 
         for (entity, path) in path_changes.iter() {
@@ -423,6 +724,7 @@ fn produce_usd_canvas_session(
                     .iter()
                     .any(|root| path_is_within(&path.path, root))
             {
+                state.entities.insert(path.path.clone(), entity);
                 affected_paths.insert(path.path.clone());
             }
         }
@@ -463,47 +765,67 @@ fn produce_usd_canvas_session(
         prim_paths_for_log = state.source_prim_paths.len();
     }
 
+    projection::resolve_referenced_interfaces(&view, &mut state.source_nodes, &state.source_wires);
     let roots = schema_roots(&state.source_nodes);
+    state.diagram_roots = diagram_roots(&state.source_nodes);
+    if !state.diagram_roots.contains(&state.diagram_root) {
+        state.last_error = Some(format!(
+            "USD scope {} is unavailable; showing the source with automatic layout",
+            state.diagram_root
+        ));
+        state.diagram_root = "/".into();
+    }
     let active_root = state
         .active_schema_root
         .as_ref()
         .filter(|root| roots.contains(root))
         .cloned();
-    let (nodes, wires) = active_root
-        .as_deref()
-        .map(|root| project_schema(&state.source_nodes, &state.source_wires, root))
-        .unwrap_or_default();
+    state.active_schema_root = active_root.clone();
+    let (nodes, wires) = state.project_view();
     let hash = topology_hash(&nodes, &wires);
 
     if state.built && state.stage_id == Some(stage_id) && state.topo_hash == hash {
         state.schema_roots = roots;
         state.active_schema_root = active_root;
-        state.generation = session.projected_generation();
+        state.generation = generation;
         state.canonical_generation = Some(canonical_generation);
         return;
     }
 
+    state.unresolved_links = projection::unresolved_links(&nodes, &wires);
     let scene = build_scene(nodes, wires);
     let bounds = scene.bounds();
     bevy::log::debug!(
-        "[usd-canvas] preview {} rebuilt: {} prim entities -> {} nodes, {} edges",
-        session.id().0,
+        "[usd-canvas] root {:?} rebuilt: {} prim entities -> {} nodes, {} edges",
+        preview_root,
         prim_paths_for_log,
         scene.node_count(),
         scene.edge_count()
     );
+    if state.built {
+        state.navigation_restore = Some((state.canvas.viewport.center, state.canvas.viewport.zoom));
+    }
+    state.expanded_scene = None;
+    state.group_plan.clear();
     state.canvas.scene = scene;
+    layout::request(state);
+    state.restore_placements();
     state.canvas.selection.clear();
     state.schema_roots = roots;
     state.active_schema_root = active_root;
     state.topo_hash = hash;
     state.stage_id = Some(stage_id);
     state.built = true;
-    state.doc = Some(doc);
-    state.generation = session.projected_generation();
+    state.doc = doc;
+    state.generation = generation;
     state.canonical_generation = Some(canonical_generation);
     if bounds.is_some() {
-        state.needs_fit = true;
+        state.frame_request = Some(
+            state
+                .navigation_restore
+                .map(|(center, zoom)| navigation::FrameTarget::Viewport(center, zoom))
+                .unwrap_or(navigation::FrameTarget::System),
+        );
     }
 }
 
@@ -512,6 +834,7 @@ fn produce_usd_canvas_session(
 /// closed preview state is retired without reading the composed stage.
 pub fn editor_canvas_changed(
     viewport: Option<Res<UsdViewportState>>,
+    mounts: Res<lunco_core::SceneMountState>,
     revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
     workbench: Option<Res<WorkbenchSnapshot>>,
 ) -> bool {
@@ -520,84 +843,154 @@ pub fn editor_canvas_changed(
         .as_deref()
         .is_some_and(|snapshot| snapshot.is_panel_visible(USD_CANVAS_PANEL_ID));
     viewport_changed
+        || mounts.is_changed()
         || (visible
             && (revision.is_changed() || workbench.is_some_and(|snapshot| snapshot.is_changed())))
 }
 
 // ─── Write-back: SceneEvent → UsdOp ─────────────────────────────────────────
 
-/// A dataflow edge's sink, snapshotted before `Canvas::ui` may delete it — the
-/// info needed to clear that wire's `inputs:<c>.connect`.
+/// Authored endpoint lists captured before a canvas event removes its edge.
 struct EdgeSink {
-    prim: String,
-    connector: String,
+    endpoints: Vec<(String, String, String, Vec<String>, String)>,
 }
 
-/// Resolve an edge's sink prim + connector from its `to` endpoint (dataflow
-/// edges are authored source-output → sink-input, so `to` is always the sink).
 fn edge_sink(scene: &Scene, id: EdgeId) -> Option<EdgeSink> {
-    let e = scene.edge(id)?;
-    // Joints have no dataflow connection to clear.
-    if e.data
-        .downcast_ref::<UsdWireData>()
-        .map(|d| d.kind != WireKind::Dataflow)
-        .unwrap_or(true)
-    {
+    let edge = scene.edge(id)?;
+    let kind = edge.data.downcast_ref::<UsdWireData>()?.kind;
+    if kind == WireKind::Joint {
         return None;
     }
-    let prim = scene.node(e.to.node)?.origin.clone()?;
-    Some(EdgeSink {
-        prim,
-        connector: e.to.port.as_str().to_string(),
-    })
+    let mut endpoints = Vec::new();
+    for (sink, source) in [(&edge.to, &edge.from), (&edge.from, &edge.to)] {
+        let (sink_node, sink_port) = groups::endpoint(scene, sink).ok()?;
+        let (source_node, source_port) = groups::endpoint(scene, source).ok()?;
+        let data = sink_node.data.downcast_ref::<UsdPrimNodeData>()?;
+        let source_path = format!("{}.{}", source_node.origin.as_deref()?, source_port);
+        let sources = data
+            .port_sources
+            .get(sink_port)
+            .cloned()
+            .unwrap_or_default();
+        if sources.contains(&source_path) {
+            endpoints.push((
+                sink_node.origin.clone()?,
+                sink_port.into(),
+                data.port_types.get(sink_port)?.clone(),
+                sources,
+                source_path,
+            ));
+        }
+    }
+    Some(EdgeSink { endpoints })
 }
 
-/// Classify an `EdgeCreated`'s two endpoints into (source-output, sink-input)
-/// by port kind, then author the sink's `inputs:<c>.connect`.
+/// Resolve causal direction or selected-system interface forwarding and author
+/// the exact sink property. Presentation identities never enter USD edits.
+fn connection_endpoints<'a>(
+    scene: &Scene,
+    from: &'a PortRef,
+    to: &'a PortRef,
+) -> Result<(&'a PortRef, &'a PortRef), String> {
+    if from == to {
+        return Err("A port cannot connect to itself".into());
+    }
+    let kind = |pr: &PortRef| -> Result<String, String> {
+        let (node, name) = groups::endpoint(scene, pr)?;
+        node.ports
+            .iter()
+            .find(|p| p.id.as_str() == name)
+            .map(|p| p.kind.as_str().to_string())
+            .ok_or_else(|| format!("Connection port {name} is absent"))
+    };
+    let from_kind = kind(from)?;
+    let to_kind = kind(to)?;
+    let boundary = |pr: &PortRef| {
+        scene
+            .node(pr.node)
+            .and_then(|node| node.data.downcast_ref::<UsdPrimNodeData>())
+            .and_then(|data| data.boundary)
+    };
+    let (source, sink) = match (from_kind.as_str(), to_kind.as_str()) {
+        ("output", "input") => (from, to),
+        ("input", "output") => (to, from),
+        ("acausal", "acausal") => (from, to),
+        ("input", "input") if boundary(from) == Some(projection::BoundaryRole::Inputs) => {
+            (from, to)
+        }
+        ("input", "input") if boundary(to) == Some(projection::BoundaryRole::Inputs) => (to, from),
+        ("output", "output") if boundary(to) == Some(projection::BoundaryRole::Outputs) => {
+            (from, to)
+        }
+        ("output", "output") if boundary(from) == Some(projection::BoundaryRole::Outputs) => {
+            (to, from)
+        }
+        _ => {
+            return Err(format!(
+                "cannot connect `{from_kind}` to `{to_kind}`; use an output/input pair or two acausal connectors"
+            ));
+        }
+    };
+    let property_type = |endpoint: &PortRef| -> Result<String, String> {
+        let (node, port) = groups::endpoint(scene, endpoint)?;
+        node.data
+            .downcast_ref::<UsdPrimNodeData>()
+            .and_then(|data| data.port_types.get(port))
+            .cloned()
+            .ok_or_else(|| format!("USD port {port} has no declared property type"))
+    };
+    let source_type = property_type(source)?;
+    let sink_type = property_type(sink)?;
+    if source_type != sink_type {
+        return Err(format!("cannot connect USD {source_type} to {sink_type}"));
+    }
+    Ok((source, sink))
+}
+
+fn validate_connection(scene: &Scene, from: &PortRef, to: &PortRef) -> Result<(), String> {
+    connection_endpoints(scene, from, to).map(|_| ())
+}
+
 fn connect_op(
     scene: &Scene,
     from: &PortRef,
     to: &PortRef,
     edit_target: &LayerId,
 ) -> Result<UsdOp, String> {
-    let kind = |pr: &PortRef| -> Result<&str, String> {
-        scene
-            .node(pr.node)
-            .ok_or_else(|| format!("connection endpoint node {:?} no longer exists", pr.node))?
-            .ports
-            .iter()
-            .find(|p| p.id == pr.port)
-            .map(|p| p.kind.as_str())
-            .ok_or_else(|| format!("connection endpoint port `{:?}` no longer exists", pr.port))
-    };
-    let from_kind = kind(from)?;
-    let to_kind = kind(to)?;
-    let (source, sink) = match (from_kind, to_kind) {
-        ("output", "input") => (from, to),
-        ("input", "output") => (to, from),
-        _ => {
-            return Err(format!(
-                "cannot connect `{from_kind}` to `{to_kind}`; dataflow connections require an output and an input"
-            ));
-        }
-    };
-    let source_prim = scene
-        .node(source.node)
-        .and_then(|node| node.origin.clone())
-        .ok_or_else(|| format!("source node {:?} has no USD prim origin", source.node))?;
-    let sink_prim = scene
-        .node(sink.node)
-        .and_then(|node| node.origin.clone())
-        .ok_or_else(|| format!("sink node {:?} has no USD prim origin", sink.node))?;
-    let sink_conn = sink.port.as_str();
-    let source_conn = source.port.as_str();
+    let (source, sink) = connection_endpoints(scene, from, to)?;
+    let (source_node, source_conn) = groups::endpoint(scene, source)?;
+    let (sink_node, sink_conn) = groups::endpoint(scene, sink)?;
+    let source_prim = source_node
+        .origin
+        .as_ref()
+        .ok_or("Source card has no USD origin")?;
+    let sink_prim = sink_node
+        .origin
+        .clone()
+        .ok_or("Sink card has no USD origin")?;
+    let data = sink_node
+        .data
+        .downcast_ref::<UsdPrimNodeData>()
+        .ok_or("Sink has no typed USD facts")?;
+    let sink_type = data
+        .port_types
+        .get(sink_conn)
+        .ok_or("USD sink has no declared property type")?;
+    let mut sources = data
+        .port_sources
+        .get(sink_conn)
+        .cloned()
+        .unwrap_or_default();
+    let source = format!("{source_prim}.{source_conn}");
+    if !sources.contains(&source) {
+        sources.push(source);
+    }
     Ok(UsdOp::SetConnection {
         edit_target: edit_target.clone(),
         path: sink_prim,
-        name: format!("inputs:{sink_conn}"),
-        // Co-sim ports are authored `float` (the convention rewire reads).
-        type_name: "float".to_string(),
-        sources: vec![format!("{source_prim}.outputs:{source_conn}")],
+        name: sink_conn.to_string(),
+        type_name: sink_type.clone(),
+        sources,
     })
 }
 
@@ -613,6 +1006,16 @@ fn build_ops(
     edit_target: &LayerId,
 ) -> Result<Vec<UsdOp>, String> {
     let mut ops = Vec::new();
+    let mut removals: std::collections::BTreeMap<(String, String), (String, Vec<String>)> =
+        Default::default();
+    let mut remove = |sink: &EdgeSink| {
+        for (prim, connector, type_name, sources, source) in &sink.endpoints {
+            let entry = removals
+                .entry((prim.clone(), connector.clone()))
+                .or_insert_with(|| (type_name.clone(), sources.clone()));
+            entry.1.retain(|path| path != source);
+        }
+    };
     for ev in events {
         match ev {
             SceneEvent::EdgeCreated { from, to, .. } => {
@@ -620,26 +1023,16 @@ fn build_ops(
             }
             SceneEvent::EdgeDeleted { id } => {
                 if let Some(sink) = edge_sinks.get(id) {
-                    ops.push(UsdOp::SetConnection {
-                        edit_target: edit_target.clone(),
-                        path: sink.prim.clone(),
-                        name: format!("inputs:{}", sink.connector),
-                        type_name: "float".to_string(),
-                        sources: Vec::new(), // clear the wire
-                    });
+                    remove(sink);
+                } else {
+                    return Err("this link has no editable USD property connection; edit physics joints in the joint editor".into());
                 }
             }
             SceneEvent::NodeDeleted { id, orphaned_edges } => {
                 // Clear any dataflow wire that fed this prim, then remove it.
                 for eid in orphaned_edges {
                     if let Some(sink) = edge_sinks.get(eid) {
-                        ops.push(UsdOp::SetConnection {
-                            edit_target: edit_target.clone(),
-                            path: sink.prim.clone(),
-                            name: format!("inputs:{}", sink.connector),
-                            type_name: "float".to_string(),
-                            sources: Vec::new(),
-                        });
+                        remove(sink);
                     }
                 }
                 if let Some(path) = node_origin.get(id) {
@@ -647,12 +1040,25 @@ fn build_ops(
                         edit_target: edit_target.clone(),
                         path: path.clone(),
                     });
+                } else {
+                    return Err("System interface terminals cannot be deleted; edit the USD properties instead".into());
                 }
             }
             _ => {}
         }
     }
-    Ok(ops)
+    let mut clear_ops = Vec::new();
+    for ((path, name), (type_name, sources)) in removals {
+        clear_ops.push(UsdOp::SetConnection {
+            edit_target: edit_target.clone(),
+            path,
+            name,
+            type_name,
+            sources,
+        });
+    }
+    clear_ops.extend(ops);
+    Ok(clear_ops)
 }
 
 // ─── Panel ──────────────────────────────────────────────────────────────────
@@ -683,180 +1089,140 @@ impl Panel for UsdCanvasPanel {
             .and_then(|preview| viewport.and_then(|state| state.session(preview)))
             .is_some_and(UsdPreviewSession::projection_ready);
         ctx.resource_scope::<UsdCanvasState, ()>(|ctx, views| {
-            let Some(preview) = focused_preview else {
-                ui.centered_and_justified(|ui| {
-                    ui.label(
-                        "No Editor document selected — choose a USD document in the Twin Browser.",
-                    );
-                });
-                return;
+            let show_scene = views.show_scene;
+            let preview = focused_preview;
+            let state = if show_scene {
+                &mut views.scene
+            } else {
+                let Some(preview) = preview else { toolbar::source_picker(ui, &mut views.show_scene); ui.label("Choose a USD document in the Twin Browser."); return; };
+                if !projection_ready { ui.label("The selected USD preview is settling."); return; }
+                let Some(state) = views.sessions.get_mut(&preview) else { ui.label("The document is being projected."); return; };
+                state
             };
-            if !projection_ready {
-                ui.centered_and_justified(|ui| {
-                    ui.label("The selected USD preview is settling; connection editing is paused.");
-                });
+            if !state.built { toolbar::source_picker(ui, &mut views.show_scene); ui.label("The loaded USD scene is being projected."); return; }
+            if let Some(show_scene) = toolbar::render(ui, ctx, state, show_scene) {
+                views.show_scene = show_scene;
                 return;
             }
-            let Some(state) = views.sessions.get_mut(&preview) else {
-                ui.centered_and_justified(|ui| {
-                    ui.label("The selected USD preview is still being projected.");
-                });
-                return;
-            };
-            if !state.built {
-                ui.centered_and_justified(|ui| {
-                    ui.label(
-                        "No Editor document selected — choose a USD document in the Twin Browser.",
-                    );
-                });
-                return;
-            }
-
-            if state.schema_roots.is_empty() {
-                ui.centered_and_justified(|ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.heading("Generated connections");
-                        ui.label("No authored USD connection schema is present.");
-                        ui.label(
-                            "The executable topology is generated from the composed USD network and is available in the standard Modelica diagram.",
-                        );
-                        let entries = ctx
-                            .resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
-                            .map(|sources| sources.entries.clone())
-                            .unwrap_or_default();
-                        if entries.is_empty() {
-                            ui.label("No generated network is available for this scene yet.");
-                        } else {
-                            for entry in entries {
-                                let label = entry
-                                    .uri
-                                    .strip_prefix("generated://")
-                                    .unwrap_or(entry.uri.as_str());
-                                let label = label.strip_suffix(".mo").unwrap_or(label);
-                                if let Some(error) = entry.projection_error {
-                                    ui.colored_label(
-                                        ui.visuals().error_fg_color,
-                                        format!("{label}: {error}"),
-                                    );
-                                } else if entry.document.is_unassigned() {
-                                    ui.label(format!("{label}: document is still compiling"));
-                                } else if ui.button(format!("Open {label} diagram")).clicked() {
-                                    ctx.trigger(FocusDocumentByName {
-                                        pattern: label.to_string(),
-                                    });
-                                }
-                            }
-                        }
-                    });
-                });
-                return;
-            }
-
-            let mut requested_root = state.active_schema_root.clone().unwrap_or_default();
-            ui.horizontal(|ui| {
-                ui.label("System:");
-                egui::ComboBox::from_id_salt("usd_schema_root")
-                    .selected_text(
-                        requested_root
-                            .rsplit('/')
-                            .next()
-                            .filter(|leaf| !leaf.is_empty())
-                            .unwrap_or("Select a schema"),
-                    )
-                    .show_ui(ui, |ui| {
-                        for root in &state.schema_roots {
-                            let label = root
-                                .rsplit('/')
-                                .next()
-                                .filter(|leaf| !leaf.is_empty())
-                                .unwrap_or(root);
-                            ui.selectable_value(&mut requested_root, root.clone(), label)
-                                .on_hover_text(root);
-                        }
-                    });
-            });
-            if !requested_root.is_empty()
-                && state.active_schema_root.as_deref() != Some(requested_root.as_str())
-            {
-                let (nodes, wires) = project_schema(
-                    &state.source_nodes,
-                    &state.source_wires,
-                    &requested_root,
-                );
-                state.canvas.scene = build_scene(nodes.clone(), wires.clone());
-                state.canvas.selection.clear();
-                state.topo_hash = topology_hash(&nodes, &wires);
-                state.active_schema_root = Some(requested_root);
-                state.needs_fit = state.canvas.scene.bounds().is_some();
-            }
-
-            if state.active_schema_root.is_none() {
-                ui.centered_and_justified(|ui| {
-                    ui.label("Select an authored schema to inspect its connections.");
-                });
+            if !state.diagram_mode && state.active_schema_root.is_none() {
+                ui.label("Select an authored schema to inspect its connections.");
                 return;
             }
 
             if state.canvas.scene.node_count() == 0 {
                 ui.centered_and_justified(|ui| {
-                    ui.label("The selected schema root has no authored schema nodes or connections.");
+                    ui.label("This system has no visible models. Use the breadcrumbs to return to its parent.");
                 });
                 return;
             }
 
             // Snapshot origins + sinks BEFORE `ui` mutates the scene, so deleted
             // nodes/edges can still be resolved for their write-back op.
-            let node_origin: HashMap<NodeId, String> = state
+            state.canvas.read_only = show_scene;
+            state.canvas.movable_layout = true;
+            let node_origin: HashMap<NodeId, String> = if show_scene { HashMap::new() } else { state
                 .canvas
                 .scene
                 .nodes()
-                .filter_map(|(id, n)| n.origin.clone().map(|o| (*id, o)))
-                .collect();
-            let edge_sinks: HashMap<EdgeId, EdgeSink> = state
+                .filter_map(|(id, n)| n.data.downcast_ref::<UsdPrimNodeData>().filter(|data| data.boundary.is_none()).and_then(|_| n.origin.clone()).map(|o| (*id, o)))
+                .collect() };
+            let edge_sinks: HashMap<EdgeId, EdgeSink> = if show_scene { HashMap::new() } else { state
                 .canvas
                 .scene
                 .edges()
                 .filter_map(|(id, _)| edge_sink(&state.canvas.scene, *id).map(|s| (*id, s)))
-                .collect();
-            let (Some(doc), Some(edit_target)) = (state.doc, state.edit_target.clone()) else {
-                ui.centered_and_justified(|ui| {
-                    ui.label("The selected USD preview has no writable authoring target.");
-                });
-                return;
-            };
-
+                .collect() };
+            let full = ui.available_rect_before_wrap();
+            let gap = ui.spacing().item_spacing.x;
+            let side_width = ui.spacing().interact_size.x * 12.0;
+            let show_details = state.details_open && full.width() > side_width * 2.2;
+            let graph_rect = if show_details { egui::Rect::from_min_max(full.min, egui::pos2(full.max.x - side_width - gap, full.max.y)) } else { full };
             // Consume a pending frame-to-fit now that the real widget size is
             // known (the producer can only guess it).
-            if state.needs_fit {
-                if let Some(b) = state.canvas.scene.bounds() {
-                    let size = ui.available_size();
-                    let rect = lunco_canvas::Rect::from_min_max(
-                        lunco_canvas::Pos::new(0.0, 0.0),
-                        lunco_canvas::Pos::new(size.x.max(1.0), size.y.max(1.0)),
-                    );
-                    let (c, z) = state.canvas.viewport.fit_values(b, rect, 48.0);
-                    state.canvas.viewport.snap_to(c, z);
+            if let Some(target) = state.frame_request.take() {
+                let (bounds, natural_scale) = match target {
+                    navigation::FrameTarget::Viewport(center, zoom) => { state.canvas.viewport.snap_to(center, zoom); (None, false) },
+                    navigation::FrameTarget::System => (state.canvas.scene.bounds(), false),
+                    navigation::FrameTarget::Node(key) => (state.canvas.scene.nodes().find(|(_, node)| projection::diagram_key(node) == Some(key.as_str())).map(|(_, node)| node.rect), true),
+                };
+                if let Some(bounds) = bounds {
+                    let rect = lunco_canvas::Rect::from_min_max(lunco_canvas::Pos::new(0.0, 0.0), lunco_canvas::Pos::new(graph_rect.width().max(1.0), graph_rect.height().max(1.0)));
+                    let (center, zoom) = state.canvas.viewport.fit_values(bounds, rect, 48.0);
+                    // One diagram unit per UI point is the natural card scale.
+                    state.canvas.viewport.snap_to(center, if natural_scale { zoom.min(1.0) } else { zoom });
                 }
-                state.needs_fit = false;
             }
 
-            ui.horizontal(|ui| {
-                ui.label("Signals flow toward the arrowhead");
-                ui.separator();
-                ui.colored_label(lunco_theme::active(ui.ctx()).tokens.port_input, "input");
-                ui.colored_label(lunco_theme::active(ui.ctx()).tokens.port_output, "output");
-                ui.label("Names come from the USD port contract");
-            });
-            if let Some(error) = state.last_error.as_deref() {
-                ui.colored_label(
-                    ui.visuals().error_fg_color,
-                    format!("Connection edit rejected: {error}"),
-                );
+            state.inspection.refresh(&state.canvas.scene);
+            if show_details {
+                let side = egui::Rect::from_min_max(egui::pos2(graph_rect.max.x + gap, full.min.y), full.max);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(side), |ui| inspection::render(ui, ctx, state));
             }
-            let (_resp, events) = state.canvas.ui(ui);
+            if state.details_open && !show_details {
+                let mut open = state.details_open;
+                egui::Window::new("Connection details").open(&mut open).default_width(side_width).show(ui.ctx(), |ui| inspection::render(ui, ctx, state));
+                state.details_open = open;
+            }
+            let (response, events) = ui.scope_builder(egui::UiBuilder::new().max_rect(graph_rect), |ui| state.canvas.ui(ui)).inner;
+            state.canvas_rect = Some(lunco_canvas::Rect::from_min_max(lunco_canvas::Pos::new(response.rect.min.x, response.rect.min.y), lunco_canvas::Pos::new(response.rect.max.x, response.rect.max.y)));
+            groups::frames(ui, ctx, state, graph_rect);
+            drop_assets::drop_ui(ui, &response, state, ctx);
+            inspection::connection_guidance(ui, &response, state);
+            response.context_menu(|ui| inspection::context_menu(ui, ctx, state));
             if events.is_empty() {
                 return;
             }
+
+            for event in &events {
+                match event {
+                    SceneEvent::NodeMoved { id, new_min, .. } => {
+                        if let Some(group_id) = state.canvas.scene.node(*id).and_then(|n| n.data.downcast_ref::<UsdPrimNodeData>()).and_then(|data| data.group_id.as_ref()) {
+                            if let (Some(group), Some(host)) = (state.group_plan.iter().find(|g| &g.id == group_id), state.view_document.as_ref()) {
+                                if let Some(rect) = group.rect { ctx.trigger(groups::MoveConnectionGroup { view_id:host.document().id().raw(),group_id:group_id.clone(),dx:f64::from(new_min.x-rect.min.x),dy:f64::from(new_min.y-rect.min.y) }); }
+                            }
+                            continue;
+                        }
+                        if let Some(path) = state.canvas.scene.node(*id).and_then(projection::diagram_key).map(str::to_string) {
+                            if let Some(host) = state.view_document.as_ref() {
+                                ctx.trigger(view_files::MoveConnectionViewNode { view_id: host.document().id().raw(), view: state.selected_view.clone(), path, x: f64::from(new_min.x), y: f64::from(new_min.y) });
+                            }
+                        }
+                    }
+                    SceneEvent::NodeDoubleClicked { id } if state.diagram_mode => {
+                        if let (Some(key), Some(host)) = (state.canvas.scene.node(*id).and_then(projection::diagram_key), state.view_document.as_ref()) {
+                            ctx.trigger(navigation::OpenConnectionNode { view_id: host.document().id().raw(), key: key.into(), program_path: None });
+                        }
+                    }
+                    SceneEvent::ConnectionRejected { reason } => { state.last_error = Some(reason.clone()); }
+                    SceneEvent::PortActivated { port } => {
+                        if let (Some(host), Some(key)) = (&state.view_document, state.canvas.scene.node(port.node).and_then(projection::diagram_key)) {
+                            ctx.trigger(navigation::SelectConnectionElement { view_id: host.document().id().raw(), key: key.into(), port: Some(port.port.as_str().to_string()), reveal: false });
+                        }
+                    }
+                    SceneEvent::SelectionChanged(selection) => {
+                        if let Some(path) = selection.nodes().iter().next()
+                            .and_then(|id| state.canvas.scene.node(*id))
+                            .and_then(|node| node.origin.clone()) {
+                            if show_scene {
+                                if let Some(target) = state.entities.get(&path) {
+                                    ctx.trigger(lunco_scene_selection::SelectEntityTarget { target: *target, intent: lunco_scene_selection::SelectionIntent::Replace });
+                                }
+                            } else if let Some(preview) = preview {
+                                ctx.trigger(crate::selection::SelectUsdPrim { preview, path, extend: false, toggle: false });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if show_scene || events.iter().any(|event| matches!(event, SceneEvent::ConnectionRejected { .. })) {
+                return;
+            }
+            let (Some(doc), Some(edit_target)) = (state.doc, state.edit_target.clone()) else {
+                state.rebuild_view();
+                state.last_error = Some("No writable USD document target".into());
+                return;
+            };
             let ops = match build_ops(
                 &state.canvas.scene,
                 &node_origin,
@@ -869,6 +1235,7 @@ impl Panel for UsdCanvasPanel {
                     ops
                 }
                 Err(error) => {
+                    state.rebuild_view();
                     state.last_error = Some(error);
                     return;
                 }

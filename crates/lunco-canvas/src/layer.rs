@@ -145,6 +145,8 @@ impl Layer for GridLayer {
 /// are computed from port local-offsets so wires meet the port
 /// graphic, not the node corner.
 pub struct EdgesLayer {
+    /// Emphasize selected edges and edges incident to selected nodes.
+    pub trace_selection: bool,
     registry_handle: std::sync::Arc<VisualRegistry>,
     /// Per-edge built visual, keyed by id (CQ-202). Same identity rule
     /// as [`CachedNodeVisual`].
@@ -196,6 +198,7 @@ impl EdgesLayer {
     pub fn new(registry: std::sync::Arc<VisualRegistry>) -> Self {
         Self {
             registry_handle: registry,
+            trace_selection: false,
             visual_cache: std::collections::HashMap::new(),
             incidence: std::collections::HashMap::new(),
             incidence_gen: u64::MAX,
@@ -246,6 +249,7 @@ impl Layer for EdgesLayer {
             self.incidence_gen = scene.generation();
         }
         let endpoint_counts = &self.incidence;
+        let tracing = self.trace_selection && !selection.is_empty();
 
         // Split borrows so the per-edge visual cache (mutated below) and the
         // registry (read) don't alias.
@@ -321,6 +325,14 @@ impl Layer for EdgesLayer {
                 );
             }
             let selected = selection.contains(crate::selection::SelectItem::Edge(*eid));
+            let emphasized = selected
+                || (tracing
+                    && if let Some(port) = selection.port() {
+                        edge.from == *port || edge.to == *port
+                    } else {
+                        selection.contains(crate::selection::SelectItem::Node(edge.from.node))
+                            || selection.contains(crate::selection::SelectItem::Node(edge.to.node))
+                    });
             let geometry = screen_cache.entry(*eid).or_insert_with(|| {
                 let waypoints = edge
                     .waypoints
@@ -347,13 +359,18 @@ impl Layer for EdgesLayer {
                     crate::scene::Pos::new(s.x.round(), s.y.round())
                 }));
             }
+            let opacity = ctx.ui.opacity();
+            if tracing && !emphasized {
+                ctx.ui.multiply_opacity(ctx.ui.visuals().disabled_alpha());
+            }
             visual_cache.get(eid).unwrap().visual.draw(
                 ctx,
                 geometry.from,
                 geometry.to,
                 &geometry.waypoints,
-                selected,
+                emphasized,
             );
+            ctx.ui.set_opacity(opacity);
         }
         // Evict visuals for edges that no longer exist (CQ-202).
         visual_cache.retain(|id, _| scene.edge(*id).is_some());

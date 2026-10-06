@@ -3877,7 +3877,17 @@ impl Document for UsdDocument {
                 sources,
                 ..
             } => {
-                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let prim_sdf = parse_prim_path(&path)?;
+                let composed = self.open_composed_stage()?;
+                if !composed
+                    .prim(prim_sdf.clone())
+                    .is_valid()
+                    .map_err(author_err)?
+                {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "composed connection target `{path}` not found in the loaded stage"
+                    )));
+                }
                 self.validate_attribute_type(&prim_sdf, &name, &type_name)?;
                 let source_paths = sources
                     .iter()
@@ -3906,6 +3916,7 @@ impl Document for UsdDocument {
                     _ => self.coarse_inverse(target, &id),
                 };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage.override_prim(&prim_sdf).map_err(author_err)?;
                 // Create-if-absent (like SetAttribute) so a connection can be
                 // authored on a not-yet-materialised port, then author the
                 // `connectionPaths` list op (explicit; empty clears).

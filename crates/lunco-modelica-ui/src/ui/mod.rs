@@ -341,10 +341,9 @@ fn derive_title_from_doc(doc: &lunco_modelica_document::ModelicaDocument) -> Str
 
 /// Retire Modelica tabs and transient selection state when their Twin closes.
 ///
-/// The document registry intentionally keeps file documents available as loose
-/// documents, but those documents must not remain in the active Twin's editor
-/// surface. Modelica tabs are therefore closed at the Twin lifecycle edge;
-/// the user can explicitly reopen a loose file later.
+/// Workspace teardown closes the Twin's documents through `CloseDocument`; this
+/// observer retires tabs and transient selection that reference them. Pending
+/// file opens are fenced by their admitted runtime owner on completion.
 fn clear_modelica_state_on_twin_closed(
     trigger: On<lunco_workspace::TwinClosed>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,

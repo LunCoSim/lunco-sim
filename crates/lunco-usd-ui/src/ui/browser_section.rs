@@ -70,24 +70,11 @@ impl BrowserSection for ConnectionsSection {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_, '_>) {
-        ui.label("Inspect and edit the wiring graph of the selected Assembly document.");
+        ui.label("Navigate the loaded scene's USD topology.");
         if ui.button("Open Connections graph").clicked() {
             ctx.actions.push(BrowserAction::OpenPanel {
                 id: USD_CONNECTION_CANVAS_PANEL_ID.0.to_string(),
             });
-        }
-        if ctx.resource::<UsdBrowserView>().is_some_and(|view| {
-            let workspace = ctx.resource::<lunco_workspace::WorkspaceResource>();
-            !view
-                .stages
-                .iter()
-                .any(|row| stage_in_active_scope(row, workspace))
-        }) {
-            ui.label(
-                egui::RichText::new("Select a USD document first to populate the graph.")
-                    .weak()
-                    .italics(),
-            );
         }
     }
 }

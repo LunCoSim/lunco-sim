@@ -8043,6 +8043,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-embodiment-core",
+ "lunco-hooks",
  "lunco-input-core",
  "lunco-interaction-core",
  "lunco-luncosim-edit-core",
@@ -8061,12 +8062,15 @@ dependencies = [
  "lunco-scripting-rhai-runtime",
  "lunco-settings",
  "lunco-spatial",
+ "lunco-status-core",
+ "lunco-storage",
  "lunco-telemetry-core",
  "lunco-terrain-surface",
  "lunco-theme",
  "lunco-time",
  "lunco-tools",
  "lunco-usd-bevy-camera",
+ "lunco-usd-bevy-core",
  "lunco-usd-bevy-mesh",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",
@@ -8090,6 +8094,7 @@ dependencies = [
  "lunco-workspace",
  "openusd",
  "serde",
+ "toml 1.1.2+spec-1.1.0",
 ]
 
 [[package]]
@@ -10965,6 +10970,7 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "egui",
+ "lunco-assets-core",
  "lunco-assets-runtime",
  "lunco-doc",
  "lunco-doc-bevy",

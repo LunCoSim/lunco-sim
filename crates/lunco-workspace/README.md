@@ -41,6 +41,13 @@ transferring resident source to another session. Only a clean explicit file
 reopen can install newly read source and its newly admitted owner. Active scope
 and teardown use the stored runtime owner.
 
+Workspace replacement closes all local resident documents through their domain
+`CloseDocument` handlers, drains outgoing `TwinClosed` cleanup, and only then
+publishes `TwinAdded`. A failed candidate scan preserves the current workspace.
+Individual Twin closure closes the documents whose stored runtime owner is that
+`LocalTwin`. Replicated documents follow their replication session. Shared
+application caches and registrations outlive editor sessions.
+
 ## Types
 
 - **`Workspace`** — root session type. Methods: `add_twin`,
