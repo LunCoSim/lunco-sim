@@ -272,6 +272,7 @@ impl Plugin for UsdCommandsPlugin {
         // UI's `browser_dispatch` only translates browser-panel clicks
         // into calls on this pipeline.
         app.init_resource::<PendingUsdLoads>();
+        app.add_observer(on_browser_usd_file);
         app.init_resource::<PendingUsdDiscards>();
         app.add_systems(
             Update,
@@ -345,10 +346,28 @@ register_commands!(
 /// Pending file read and USD parse kicked off by [`spawn_usd_load`]. Polled by
 /// [`drain_pending_usd_file_loads`] until the immutable preparation is ready;
 /// only identity and lifecycle state are committed on the owner thread.
+#[derive(PartialEq, Eq)]
+enum UsdLoadRequest {
+    File {
+        path: PathBuf,
+        admission: FileDocumentAdmission,
+    },
+    Browser {
+        request: Entity,
+    },
+}
+
+enum PreparedUsdLoad {
+    File(ResolvedFileDocument, PreparedUsdSource),
+    Browser {
+        id: DocumentId,
+        document: UsdDocument,
+    },
+}
+
 struct PendingUsdLoad {
-    path: PathBuf,
-    admission: FileDocumentAdmission,
-    task: Task<Result<(ResolvedFileDocument, PreparedUsdSource), String>>,
+    request: UsdLoadRequest,
+    task: Task<Result<PreparedUsdLoad, String>>,
 }
 
 #[derive(Resource, Default)]
@@ -415,7 +434,7 @@ pub fn spawn_usd_load(world: &mut World, abs_path: PathBuf, admission: FileDocum
         .resource::<PendingUsdLoads>()
         .tasks
         .iter()
-        .any(|load| load.path == abs_path && load.admission == admission)
+        .any(|load| matches!(&load.request, UsdLoadRequest::File { path, admission: captured } if path == &abs_path && captured == &admission))
     {
         return;
     }
@@ -426,16 +445,86 @@ pub fn spawn_usd_load(world: &mut World, abs_path: PathBuf, admission: FileDocum
         let (resolved, bytes) = task_admission.read(&path_for_task).await?;
         let source = String::from_utf8(bytes)
             .map_err(|error| format!("invalid UTF-8 in {}: {error}", resolved.path.display()))?;
-        Ok((resolved, PreparedUsdSource::parse(source)))
+        Ok(PreparedUsdLoad::File(
+            resolved,
+            PreparedUsdSource::parse(source),
+        ))
     });
     world
         .resource_mut::<PendingUsdLoads>()
         .tasks
         .push(PendingUsdLoad {
-            path: abs_path,
-            admission,
+            request: UsdLoadRequest::File {
+                path: abs_path,
+                admission,
+            },
             task,
         });
+}
+
+/// Decode and prepare an exact browser payload without assigning a filesystem identity.
+fn prepare_browser_usd_document(
+    id: DocumentId,
+    display_name: String,
+    bytes: &[u8],
+) -> Result<UsdDocument, String> {
+    let source = std::str::from_utf8(bytes)
+        .map_err(|error| format!("invalid UTF-8 in browser file `{display_name}`: {error}"))?
+        .to_owned();
+    let prepared = PreparedUsdSource::parse(source);
+    Ok(
+        <UsdDocument as lunco_doc::PreparedFileBacked>::with_prepared_origin(
+            id,
+            prepared,
+            lunco_doc::PathlessOrigin::untitled(display_name).into(),
+        ),
+    )
+}
+
+fn on_browser_usd_file(
+    trigger: On<lunco_workbench_file_dialog::PickResolved>,
+    requests: Query<&lunco_workbench_file_dialog::PickInFlight>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
+    mut pending: ResMut<PendingUsdLoads>,
+) {
+    use lunco_workbench_file_dialog::{PickFollowUp, PickedPath};
+    let event = trigger.event();
+    let Ok(request) = requests.get(event.request) else {
+        return;
+    };
+    if !matches!(event.follow_up, PickFollowUp::OpenFile)
+        || !matches!(request.follow_up, PickFollowUp::OpenFile)
+    {
+        return;
+    }
+    let PickedPath::BrowserFile {
+        display_name,
+        bytes,
+    } = &event.result
+    else {
+        return;
+    };
+    if !is_usd_path(display_name) {
+        return;
+    }
+    let identity = UsdLoadRequest::Browser {
+        request: event.request,
+    };
+    if pending.tasks.iter().any(|load| load.request == identity) {
+        return;
+    }
+    let id = registry.reserve_id();
+    let display_name = display_name.clone();
+    let bytes = bytes.clone();
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        std::panic::catch_unwind(|| prepare_browser_usd_document(id, display_name, &bytes))
+            .unwrap_or_else(|_| Err("browser USD source preparation panicked".to_owned()))
+            .map(|document| PreparedUsdLoad::Browser { id, document })
+    });
+    pending.tasks.push(PendingUsdLoad {
+        request: identity,
+        task,
+    });
 }
 
 /// Poll outstanding [`PendingUsdLoads`] and finish the open once each
@@ -454,8 +543,14 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
             None => still_pending.push(load),
             Some(Err(err)) => {
                 bevy::log::warn!("[UsdOpenFile] {}", err);
+                if matches!(load.request, UsdLoadRequest::Browser { .. }) {
+                    world.trigger(lunco_core::RuntimeError {
+                        name: "usd-browser-open-failed".to_owned(),
+                        message: err,
+                    });
+                }
             }
-            Some(Ok((resolved, prepared))) => {
+            Some(Ok(PreparedUsdLoad::File(resolved, prepared))) => {
                 let replication = lunco_core_session::current_replication_owner_in(world);
                 let workspace = world.get_resource::<WorkspaceResource>();
                 if !resolved.runtime.is_current(
@@ -501,24 +596,43 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
                     OpenOutcome::KeptDirty => {
                         bevy::log::warn!(
                             "[UsdOpenFile] {} has unsaved edits — keeping them; disk NOT reloaded ({doc})",
-                            load.path.display()
+                            resolved.path.display()
                         );
                     }
                     OpenOutcome::KeptUnparsable => {
                         bevy::log::warn!(
                             "[UsdOpenFile] {} does not parse as USDA — keeping the open document ({doc})",
-                            load.path.display()
+                            resolved.path.display()
                         );
                     }
                     OpenOutcome::Refreshed => {
                         bevy::log::info!(
                             "[UsdOpenFile] {} already open — refreshed from disk ({doc})",
-                            load.path.display()
+                            resolved.path.display()
                         );
                     }
                     OpenOutcome::Allocated => {}
                 }
                 world.trigger(UsdDocumentReady { doc, outcome });
+            }
+            Some(Ok(PreparedUsdLoad::Browser { id, document })) => {
+                if let Err(error) = world
+                    .resource_mut::<DocumentRegistry<UsdDocument>>()
+                    .install_prebuilt(id, document)
+                {
+                    bevy::log::warn!("[UsdBrowserOpen] {error}");
+                    world.trigger(lunco_core::RuntimeError {
+                        name: "usd-browser-open-failed".to_owned(),
+                        message: error.to_string(),
+                    });
+                    continue;
+                }
+                register_usd_document_runtime(world, id, DocumentRuntimeOwner::Application);
+                claim_user_document_if_projected(world, id);
+                world.trigger(UsdDocumentReady {
+                    doc: id,
+                    outcome: OpenOutcome::Allocated,
+                });
             }
         }
     }
@@ -3465,6 +3579,30 @@ mod change_set_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_doc::Document;
+
+    #[test]
+    fn browser_usd_payload_preparation_preserves_pathless_source_identity() {
+        let bytes = b"#usda 1.0\ndef Xform \"Fixture\" {}\n";
+        let first =
+            prepare_browser_usd_document(DocumentId::new(101), "same # %.usda".into(), bytes)
+                .unwrap();
+        let second =
+            prepare_browser_usd_document(DocumentId::new(102), "same # %.usda".into(), bytes)
+                .unwrap();
+        assert_ne!(first.id(), second.id());
+        assert!(first.origin().is_untitled());
+        assert!(first.origin().canonical_path().is_none());
+        assert_eq!(first.origin().display_name(), "same # %.usda");
+        assert!(first.parse_error().is_none());
+        assert!(first.is_dirty());
+        assert!(
+            prepare_browser_usd_document(DocumentId::new(103), "invalid.usda".into(), &[0xff])
+                .err()
+                .unwrap()
+                .contains("invalid UTF-8")
+        );
+    }
 
     #[test]
     fn pending_usd_request_dedup_retains_distinct_admitted_owners() {
@@ -3479,10 +3617,22 @@ mod tests {
         let replicated = FileDocumentAdmission::capture(None, Some(&remote));
         spawn_usd_load(app.world_mut(), path.clone(), application.clone());
         spawn_usd_load(app.world_mut(), path.clone(), application.clone());
-        spawn_usd_load(app.world_mut(), path, replicated.clone());
+        spawn_usd_load(app.world_mut(), path.clone(), replicated.clone());
         let pending = app.world().resource::<PendingUsdLoads>();
         assert_eq!(pending.tasks.len(), 2);
-        assert_eq!(pending.tasks[0].admission, application);
-        assert_eq!(pending.tasks[1].admission, replicated);
+        assert!(
+            pending.tasks[0].request
+                == UsdLoadRequest::File {
+                    path: path.clone(),
+                    admission: application
+                }
+        );
+        assert!(
+            pending.tasks[1].request
+                == UsdLoadRequest::File {
+                    path,
+                    admission: replicated
+                }
+        );
     }
 }

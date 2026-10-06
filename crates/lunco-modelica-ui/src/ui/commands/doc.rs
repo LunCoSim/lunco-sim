@@ -157,8 +157,8 @@ pub fn sync_editor_buffer_to_source(
 #[on_command(SaveDocument)]
 pub fn on_save_document(
     trigger: On<SaveDocument>,
-    mut registry: ResMut<ModelicaDocuments>,
-    mut console: ResMut<lunco_ui::log::LogBuffer>,
+    registry: ResMut<ModelicaDocuments>,
+    console: ResMut<lunco_ui::log::LogBuffer>,
     mut commands: Commands,
 ) {
     let doc = trigger.event().doc_id;
@@ -178,6 +178,8 @@ pub fn on_save_document(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let mut registry = registry;
+        let mut console = console;
         let to_save = {
             let Some(host) = registry.host(doc) else {
                 return;
@@ -236,6 +238,13 @@ pub fn on_save_as_document(
     workspace: Res<lunco_workspace::WorkspaceResource>,
     mut console: ResMut<lunco_ui::log::LogBuffer>,
     mut commands: Commands,
+    #[cfg(target_arch = "wasm32")] picker: Option<
+        NonSend<lunco_workbench_file_dialog::BrowserPicker>,
+    >,
+    #[cfg(not(target_arch = "wasm32"))] connection: Option<
+        Res<lunco_core_session::ClientConnection>,
+    >,
+    #[cfg(not(target_arch = "wasm32"))] replica: Option<Res<lunco_core_session::ReplicatedScene>>,
 ) {
     let doc = trigger.event().doc_id;
     let target_path = trigger.event().path.clone();
@@ -263,7 +272,19 @@ pub fn on_save_as_document(
             };
             (name, document.source().to_string())
         };
-        lunco_workbench_file_dialog::download_file(&name, &source);
+        let admission = picker
+            .as_deref()
+            .ok_or_else(|| "browser download capability is not installed".to_owned())
+            .and_then(|picker| lunco_workbench_file_dialog::download_file(picker, &name, &source));
+        if let Err(message) = admission {
+            warn!("[SaveAs] {message}");
+            console.error(message.clone());
+            commands.trigger(lunco_core::RuntimeError {
+                name: "modelica-save-failed".into(),
+                message,
+            });
+            return;
+        }
         registry.mark_document_saved(doc);
         let msg = format!("Downloaded {} ({} bytes)", name, source.len());
         info!("[SaveAs] {msg}");
@@ -291,8 +312,38 @@ pub fn on_save_as_document(
                 .active_twin
                 .and_then(|id| workspace.twin(id))
                 .map(|t| lunco_storage::StorageHandle::File(t.root.clone()));
-            commands.trigger(lunco_workbench_file_dialog::PickHandle {
-                mode: lunco_workbench_file_dialog::PickMode::SaveFile(
+            let pin = match lunco_workspace::PinnedDocumentRuntimeOwner::for_document(
+                doc,
+                Some(&workspace.0),
+            ) {
+                Ok(pin) => pin,
+                Err(message) => {
+                    warn!("[SaveAs] {message}");
+                    console.error(message.clone());
+                    commands.trigger(lunco_core::RuntimeError {
+                        name: "modelica-save-failed".into(),
+                        message,
+                    });
+                    return;
+                }
+            };
+            let replication = lunco_core_session::current_replication_owner(
+                connection.as_deref(),
+                replica.as_deref(),
+            );
+            if !pin.is_current(Some(&workspace.0), replication.as_ref()) {
+                let message = format!("Save As document {doc} belongs to a retired source owner");
+                warn!("[SaveAs] {message}");
+                console.error(message.clone());
+                commands.trigger(lunco_core::RuntimeError {
+                    name: "modelica-save-failed".into(),
+                    message,
+                });
+                return;
+            }
+            lunco_workbench_file_dialog::request_pick(
+                &mut commands,
+                lunco_workbench_file_dialog::PickMode::SaveFile(
                     lunco_workbench_file_dialog::SaveHint {
                         suggested_name: Some(suggested_name),
                         start_dir,
@@ -302,8 +353,9 @@ pub fn on_save_as_document(
                         )],
                     },
                 ),
-                on_resolved: lunco_workbench_file_dialog::PickFollowUp::SaveAs(doc),
-            });
+                lunco_workbench_file_dialog::PickFollowUp::SaveAs(doc),
+                pin,
+            );
             return;
         }
 

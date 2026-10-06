@@ -224,6 +224,11 @@ Indexed Twin source requests and leases retire by exact `TwinId`, and stored
 document ownership fences deletion after a source rebind. Preview admission
 rejects retired document owners; private restored snapshots explicitly belong
 to Application. See the [source lifetime contract](../../docs/architecture/55-scene-addressing-and-roots.md#document-source-admission-and-lifetime).
+Browser file picks carry request-owned bytes into this same asynchronous preparation pipeline.
+Each successful import installs a fresh pathless Application document; the
+filename is display data, even when another pick has the same name. Native
+Save-As requests pin the exact source owner before the backend starts. Browser
+Save-As uses a fallible download and only publishes saved state after admission.
 Repeated admitted clicks reuse the same document, preview session and view tab. Explicit
 `FocusUsdPreview` and `FocusUsdPreviewView` commands foreground their matching
 instance tab as well; replacing or closing a session removes its view tabs with

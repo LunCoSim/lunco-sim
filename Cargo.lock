@@ -9644,6 +9644,7 @@ dependencies = [
  "lunco-storage",
  "lunco-sysml-ast",
  "lunco-twin-journal",
+ "lunco-workbench-file-dialog",
  "lunco-workspace",
  "serde",
 ]
@@ -10377,6 +10378,7 @@ dependencies = [
  "lunco-usd-data",
  "lunco-usd-document",
  "lunco-usd-queries",
+ "lunco-workbench-file-dialog",
  "lunco-workspace",
  "openusd",
  "serde_json",
@@ -10744,6 +10746,7 @@ dependencies = [
  "egui",
  "lunco-assets-core",
  "lunco-assets-path",
+ "lunco-core",
  "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -10982,6 +10985,7 @@ dependencies = [
  "rfd",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-bindgen-test",
  "web-sys",
 ]
 
@@ -10991,12 +10995,14 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "lunco-core",
+ "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-storage",
  "lunco-twin",
  "lunco-workbench-file-dialog",
  "lunco-workspace",
+ "tempfile",
 ]
 
 [[package]]

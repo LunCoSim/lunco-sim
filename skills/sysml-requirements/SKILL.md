@@ -541,7 +541,10 @@ if facts.ok != true { throw(facts.errors); }
 Indexed SysML source loads retain the exact Workspace `TwinId` and live mount
 through installation. File opens use the shared worker-side
 `FileDocumentAdmission::read` and register the resolved runtime owner before
-document events. Retirement checks stored document ownership after source
+document events. Browser picks instead prepare request-owned bytes and create
+a fresh pathless Application document; duplicate display filenames never share
+source identity. Invalid UTF-8 rejects the import before installation.
+Retirement checks stored document ownership after source
 replacement; saving a file does not reassign its lifetime. See the
 [source admission contract](../../docs/architecture/55-scene-addressing-and-roots.md#document-source-admission-and-lifetime).
 

@@ -1109,6 +1109,17 @@ The production file-dialog capability used by the workbench and domain UI.
 It owns native `rfd` and browser dialog/download adapters plus the typed
 picker request/result events. `lunco-storage` remains an I/O abstraction and
 does not acquire dialog or platform-window dependencies.
+`request_pick` installs an ECS request carrier and caller-owned typed intent
+before enqueueing the backend. File-ops validates original document/session
+pins at backend start and resolution; Save All and Save As Twin use the
+canonical pinned-owner active-scope predicate. Cancel, source retirement and
+App exit retire the carrier. Browser inputs, FileReader callbacks and reads are
+request-owned; App teardown detaches handlers and aborts reads. `PickedPath`
+carries exact browser bytes, and document domains install fresh pathless
+Application sources. Names are display only. Browser downloads use the same
+App-owned resource, return admission errors, and retire blob URLs in the next
+browser task or on teardown. Native dialog retirement suppresses completion;
+`rfd` does not expose forced closure of a displayed OS dialog.
 
 **`lunco-workbench-runtime-ui`**
 Reusable HUI/Flair surface presentation. It owns the generic manifest asset

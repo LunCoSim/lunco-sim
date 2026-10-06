@@ -74,10 +74,28 @@ struct PendingSysmlOpens {
     tasks: Vec<PendingSysmlOpen>,
 }
 
+#[derive(PartialEq, Eq)]
+enum SysmlOpenRequest {
+    File {
+        path: std::path::PathBuf,
+        admission: lunco_workspace::FileDocumentAdmission,
+    },
+    Browser {
+        request: Entity,
+    },
+}
+
+enum PreparedSysmlOpen {
+    File(lunco_workspace::ResolvedFileDocument, String),
+    Browser {
+        id: DocumentId,
+        document: SysmlDocument,
+    },
+}
+
 struct PendingSysmlOpen {
-    path: std::path::PathBuf,
-    admission: lunco_workspace::FileDocumentAdmission,
-    task: bevy::tasks::Task<Result<(lunco_workspace::ResolvedFileDocument, String), String>>,
+    request: SysmlOpenRequest,
+    task: bevy::tasks::Task<Result<PreparedSysmlOpen, String>>,
 }
 
 register_commands!(
@@ -100,7 +118,8 @@ impl Plugin for SysmlApiPlugin {
             lunco_api::ApiQueryRegistryPlugin,
         );
         app.init_resource::<PendingSysmlOpens>()
-            .add_systems(Update, drain_pending_sysml_opens);
+            .add_systems(Update, drain_pending_sysml_opens)
+            .add_observer(on_browser_sysml_file);
         app.world_mut()
             .resource_mut::<ApiQueryRegistry>()
             .register(InspectSysmlDocumentProvider);
@@ -143,7 +162,7 @@ fn on_open_sysml_file(
     if pending
         .tasks
         .iter()
-        .any(|load| load.path == path && load.admission == admission)
+        .any(|load| matches!(&load.request, SysmlOpenRequest::File { path: captured_path, admission: captured } if captured_path == &path && captured == &admission))
     {
         return;
     }
@@ -153,11 +172,75 @@ fn on_open_sysml_file(
         let (resolved, bytes) = task_admission.read(&task_path).await?;
         let source = String::from_utf8(bytes)
             .map_err(|error| format!("invalid UTF-8 in {}: {error}", resolved.path.display()))?;
-        Ok((resolved, source))
+        Ok(PreparedSysmlOpen::File(resolved, source))
     });
     pending.tasks.push(PendingSysmlOpen {
-        path,
-        admission,
+        request: SysmlOpenRequest::File { path, admission },
+        task,
+    });
+}
+
+fn prepare_browser_sysml_document(
+    id: DocumentId,
+    display_name: String,
+    bytes: &[u8],
+) -> Result<SysmlDocument, String> {
+    let source = std::str::from_utf8(bytes)
+        .map_err(|error| format!("invalid UTF-8 in browser file `{display_name}`: {error}"))?
+        .to_owned();
+    Ok(SysmlDocument::with_origin(
+        id,
+        source,
+        lunco_doc::PathlessOrigin::untitled(display_name).into(),
+    ))
+}
+
+fn on_browser_sysml_file(
+    trigger: On<lunco_workbench_file_dialog::PickResolved>,
+    requests: Query<&lunco_workbench_file_dialog::PickInFlight>,
+    registry: Res<DocumentRegistry<SysmlDocument>>,
+    mut pending: ResMut<PendingSysmlOpens>,
+) {
+    use lunco_workbench_file_dialog::{PickFollowUp, PickedPath};
+    let event = trigger.event();
+    let Ok(request) = requests.get(event.request) else {
+        return;
+    };
+    if !matches!(event.follow_up, PickFollowUp::OpenFile)
+        || !matches!(request.follow_up, PickFollowUp::OpenFile)
+    {
+        return;
+    }
+    let PickedPath::BrowserFile {
+        display_name,
+        bytes,
+    } = &event.result
+    else {
+        return;
+    };
+    let extension = std::path::Path::new(display_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    if !matches!(extension.as_deref(), Some("sysml" | "kerml")) {
+        return;
+    }
+    let identity = SysmlOpenRequest::Browser {
+        request: event.request,
+    };
+    if pending.tasks.iter().any(|load| load.request == identity) {
+        return;
+    }
+    let id = registry.reserve_id();
+    let display_name = display_name.clone();
+    let bytes = bytes.clone();
+    let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
+        std::panic::catch_unwind(|| prepare_browser_sysml_document(id, display_name, &bytes))
+            .unwrap_or_else(|_| Err("browser SysML source preparation panicked".to_owned()))
+            .map(|document| PreparedSysmlOpen::Browser { id, document })
+    });
+    pending.tasks.push(PendingSysmlOpen {
+        request: identity,
         task,
     });
 }
@@ -170,6 +253,7 @@ fn drain_pending_sysml_opens(
     mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
     connection: Option<Res<lunco_core_session::ClientConnection>>,
     replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+    mut commands: Commands,
 ) {
     if pending.tasks.is_empty() {
         return;
@@ -181,8 +265,17 @@ fn drain_pending_sysml_opens(
             bevy::tasks::futures_lite::future::poll_once(&mut load.task),
         ) {
             None => waiting.push(load),
-            Some(Err(error)) => error!("[sysml] {error}"),
-            Some(Ok((resolved, source))) => {
+            Some(Err(error)) => {
+                error!("[sysml] {error}");
+                if matches!(load.request, SysmlOpenRequest::Browser { .. }) {
+                    lunco_core::trigger_runtime_error(
+                        &mut commands,
+                        "sysml-browser-open-failed",
+                        error,
+                    );
+                }
+            }
+            Some(Ok(PreparedSysmlOpen::File(resolved, source))) => {
                 let replication = lunco_core_session::current_replication_owner(
                     connection.as_deref(),
                     replica.as_deref(),
@@ -212,7 +305,7 @@ fn drain_pending_sysml_opens(
                     );
                     continue;
                 }
-                let (doc, outcome) = registry.open_file(resolved.path, source);
+                let (doc, outcome) = registry.open_file(resolved.path.clone(), source);
                 if outcome != OpenOutcome::KeptUnparsable
                     && let Some(workspace) = workspace.as_deref_mut()
                     && let Some(host) = registry.host(doc)
@@ -229,10 +322,10 @@ fn drain_pending_sysml_opens(
                 }
                 match outcome {
                     OpenOutcome::Allocated => {
-                        info!("[sysml] opened {} as {doc}", load.path.display())
+                        info!("[sysml] opened {} as {doc}", resolved.path.display())
                     }
                     OpenOutcome::Refreshed => {
-                        info!("[sysml] refreshed {} ({doc})", load.path.display())
+                        info!("[sysml] refreshed {} ({doc})", resolved.path.display())
                     }
                     OpenOutcome::KeptDirty => {
                         warn!("[sysml] kept dirty document {doc}; disk not reloaded")
@@ -240,6 +333,30 @@ fn drain_pending_sysml_opens(
                     OpenOutcome::KeptUnparsable => {
                         warn!("[sysml] kept {doc}; source is not valid SysML")
                     }
+                }
+            }
+            Some(Ok(PreparedSysmlOpen::Browser { id, document })) => {
+                if let Err(error) = registry.install_prebuilt(id, document) {
+                    warn!("[SysmlBrowserOpen] {error}");
+                    lunco_core::trigger_runtime_error(
+                        &mut commands,
+                        "sysml-browser-open-failed",
+                        error.to_string(),
+                    );
+                    continue;
+                }
+                if let Some(workspace) = workspace.as_deref_mut()
+                    && let Some(host) = registry.host(id)
+                {
+                    let origin = host.document().origin().clone();
+                    workspace.add_document(lunco_workspace::DocumentEntry {
+                        id,
+                        kind: lunco_workspace::DocumentKindId::new("sysml"),
+                        title: origin.display_name(),
+                        origin,
+                        runtime_context: lunco_workspace::DocumentRuntimeOwner::Application,
+                        dirty: host.document().is_dirty(),
+                    });
                 }
             }
         }
@@ -616,5 +733,33 @@ impl ApiQueryProvider for InspectSysmlDocumentProvider {
             "semantic_errors": semantic_errors,
             "analysis_error": analysis_error,
         })))
+    }
+}
+
+#[cfg(test)]
+mod browser_payload_tests {
+    use super::*;
+
+    #[test]
+    fn browser_sysml_payload_preparation_preserves_pathless_source_identity() {
+        let source = b"package Fixture {}";
+        let first =
+            prepare_browser_sysml_document(DocumentId::new(201), "same # %.sysml".into(), source)
+                .unwrap();
+        let second =
+            prepare_browser_sysml_document(DocumentId::new(202), "same # %.sysml".into(), source)
+                .unwrap();
+        assert_ne!(first.id(), second.id());
+        assert!(first.origin().is_untitled());
+        assert!(first.origin().canonical_path().is_none());
+        assert_eq!(first.origin().display_name(), "same # %.sysml");
+        assert_eq!(first.source(), "package Fixture {}");
+        assert!(first.is_dirty());
+        assert!(
+            prepare_browser_sysml_document(DocumentId::new(203), "invalid.sysml".into(), &[0xff])
+                .err()
+                .unwrap()
+                .contains("invalid UTF-8")
+        );
     }
 }

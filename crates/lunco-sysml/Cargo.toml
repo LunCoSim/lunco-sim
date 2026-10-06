@@ -24,6 +24,7 @@ lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-hash = { path = "../lunco-hash" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-workspace = { path = "../lunco-workspace" }
+lunco-workbench-file-dialog = { path = "../lunco-workbench-file-dialog" }
 serde = { workspace = true }
 
 [lints]

@@ -14,7 +14,7 @@
 //! Every externally callable verb is a reflected typed command per `AGENTS.md` § 4.2 — UI
 //! clicks, menu items, keybinds, HTTP API calls, MCP tools, and AI
 //! agents dispatch the same shape. Empty-string path fields fire the
-//! native file dialog via [`lunco_workbench_file_dialog::PickHandle`]; non-empty paths skip the
+//! native file dialog via [`lunco_workbench_file_dialog::request_pick`]; non-empty paths skip the
 //! dialog (recents, drag-drop, automation).
 //!
 //! ## What this module ships
@@ -47,7 +47,10 @@ use lunco_core::{Command, on_command, register_commands};
 use lunco_doc_bevy::{SaveAsDocument, rename::RenameOpenDocument};
 use lunco_twin::{DocumentKindId, DocumentKindRegistry};
 
-use lunco_workbench_file_dialog::{PickFollowUp, PickHandle, PickMode, PickResolved};
+use lunco_workbench_file_dialog::{
+    CancelPick, PickFollowUp, PickInFlight, PickMode, PickResolved, PickStarted, PickedPath,
+    request_pick,
+};
 use lunco_workspace::open::{
     AddFolderToWorkspace, AddTwin, CreateTwin, OpenFolder, OpenTwin, PendingTwinOpens,
     drain_pending_twin_opens,
@@ -57,7 +60,7 @@ use lunco_workspace::{FileRenamed, WorkspaceResource, rename::RenameTwinEntry};
 /// Request a system "Open File" dialog.
 ///
 /// Dispatches [`ShowOpenFilePicker`] which triggers the picker via
-/// [`lunco_workbench_file_dialog::PickHandle`]. On success, the file dialog resolves to
+/// [`lunco_workbench_file_dialog::request_pick`]. On success, the file dialog resolves to
 /// [`OpenFile`] with the chosen path.
 #[Command(default)]
 pub struct ShowOpenFilePicker {}
@@ -65,7 +68,7 @@ pub struct ShowOpenFilePicker {}
 /// Request a system "Open Folder" dialog.
 ///
 /// Dispatches [`ShowOpenFolderPicker`] which triggers the picker via
-/// [`lunco_workbench_file_dialog::PickHandle`]. On success, the file dialog resolves to
+/// [`lunco_workbench_file_dialog::request_pick`]. On success, the file dialog resolves to
 /// [`OpenFolder`] with the chosen path.
 #[Command(default)]
 pub struct ShowOpenFolderPicker {}
@@ -89,19 +92,19 @@ use lunco_doc_bevy::{NewDocument, OpenFile};
 #[Command(default)]
 pub struct CopyShareLink {}
 
-/// Save every open document in the current session.
+/// Save documents in the exact admitted active source scope.
 ///
 /// Documents with a writable canonical path are written via their
 /// owning domain's [`SaveDocument`](lunco_doc_bevy::SaveDocument)
-/// observer. Untitled documents are written into the active Twin using
-/// their workspace title; with no active Twin their domain's normal Save-As
-/// picker is used.
+/// observer. Untitled documents in a local active Twin are written under that
+/// root using their workspace title. Other admitted drafts use their domain's
+/// Save-As action. Retired and different-scope documents are excluded.
 #[Command(default)]
 pub struct SaveAll {}
 
 /// Promote the current session into a Twin at `folder`.
 ///
-/// Writes `twin.toml`, saves every open document into the new root, and
+/// Writes `twin.toml`, saves documents in the admitted active source scope, and
 /// declares the first open USD document as the default scene. Empty
 /// `folder` triggers a folder picker.
 #[Command(default)]
@@ -152,7 +155,7 @@ fn on_show_open_file_picker(
     registry: Res<DocumentKindRegistry>,
     mut commands: Commands,
 ) {
-    use lunco_workbench_file_dialog::{PickHandle, PickMode};
+    use lunco_workbench_file_dialog::PickMode;
     // Collect all unique extensions from every registered kind to
     // build a unified "Supported files" filter.
     let mut extensions: Vec<String> = Vec::new();
@@ -171,22 +174,26 @@ fn on_show_open_file_picker(
     }
 
     let ext_refs: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
-    commands.trigger(PickHandle {
-        mode: PickMode::OpenFile(lunco_workbench_file_dialog::OpenFilter::new(
+    request_pick(
+        &mut commands,
+        PickMode::OpenFile(lunco_workbench_file_dialog::OpenFilter::new(
             "Supported files",
             &ext_refs,
         )),
-        on_resolved: PickFollowUp::OpenFile,
-    });
+        PickFollowUp::OpenFile,
+        (),
+    );
 }
 
 #[on_command(ShowOpenFolderPicker)]
 fn on_show_open_folder_picker(_trigger: On<ShowOpenFolderPicker>, mut commands: Commands) {
-    use lunco_workbench_file_dialog::{PickHandle, PickMode};
-    commands.trigger(PickHandle {
-        mode: PickMode::OpenFolder,
-        on_resolved: PickFollowUp::OpenFolder,
-    });
+    use lunco_workbench_file_dialog::PickMode;
+    request_pick(
+        &mut commands,
+        PickMode::OpenFolder,
+        PickFollowUp::OpenFolder,
+        (),
+    );
 }
 
 /// Empty path means "ask the windowed workbench for a folder". A non-empty
@@ -197,13 +204,15 @@ fn on_create_twin_pick(trigger: On<CreateTwin>, mut commands: Commands) {
     if event.path.is_empty() {
         let name = event.name.clone();
         let default_scene = event.default_scene.clone();
-        commands.trigger(PickHandle {
-            mode: PickMode::OpenFolder,
-            on_resolved: PickFollowUp::CreateTwin {
+        request_pick(
+            &mut commands,
+            PickMode::OpenFolder,
+            PickFollowUp::CreateTwin {
                 name,
                 default_scene,
             },
-        });
+            (),
+        );
     }
 }
 
@@ -217,40 +226,46 @@ fn on_create_twin_pick(trigger: On<CreateTwin>, mut commands: Commands) {
 /// observer. A non-empty path is not this crate's business and is ignored here.
 #[on_command(OpenTwin)]
 fn on_open_twin_pick(trigger: On<OpenTwin>, mut commands: Commands) {
-    use lunco_workbench_file_dialog::{PickHandle, PickMode};
+    use lunco_workbench_file_dialog::PickMode;
     if !trigger.event().path.is_empty() {
         return; // handled by `lunco_workspace::open::on_open_twin`
     }
-    commands.trigger(PickHandle {
-        mode: PickMode::OpenFolder,
-        on_resolved: PickFollowUp::OpenTwin,
-    });
+    request_pick(
+        &mut commands,
+        PickMode::OpenFolder,
+        PickFollowUp::OpenTwin,
+        (),
+    );
 }
 
 /// Picker seam for [`AddFolderToWorkspace`] — see [`on_open_twin_pick`].
 #[on_command(AddFolderToWorkspace)]
 fn on_add_folder_to_workspace_pick(trigger: On<AddFolderToWorkspace>, mut commands: Commands) {
-    use lunco_workbench_file_dialog::{PickHandle, PickMode};
+    use lunco_workbench_file_dialog::PickMode;
     if !trigger.event().path.is_empty() {
         return; // handled by `lunco_workspace::open`
     }
-    commands.trigger(PickHandle {
-        mode: PickMode::OpenFolder,
-        on_resolved: PickFollowUp::AddFolderToWorkspace,
-    });
+    request_pick(
+        &mut commands,
+        PickMode::OpenFolder,
+        PickFollowUp::AddFolderToWorkspace,
+        (),
+    );
 }
 
 /// Picker seam for [`AddTwin`] — see [`on_open_twin_pick`].
 #[on_command(AddTwin)]
 fn on_add_twin_pick(trigger: On<AddTwin>, mut commands: Commands) {
-    use lunco_workbench_file_dialog::{PickHandle, PickMode};
+    use lunco_workbench_file_dialog::PickMode;
     if !trigger.event().path.is_empty() {
         return; // handled by `lunco_workspace::open`
     }
-    commands.trigger(PickHandle {
-        mode: PickMode::OpenFolder,
-        on_resolved: PickFollowUp::AddTwin,
-    });
+    request_pick(
+        &mut commands,
+        PickMode::OpenFolder,
+        PickFollowUp::AddTwin,
+        (),
+    );
 }
 
 #[on_command(RenameOpenDocument)]
@@ -479,34 +494,60 @@ fn on_rename_twin_entry(
 fn on_save_all(
     _trigger: On<SaveAll>,
     workspace: Option<Res<WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
     mut commands: Commands,
 ) {
     let Some(workspace) = workspace else {
-        warn!("[SaveAll] no workspace is installed");
+        reject_pick(&mut commands, "Save All has no workspace".into());
         return;
+    };
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    if replica.is_some() && replication.is_none() {
+        reject_pick(
+            &mut commands,
+            "Save All has no live owner for its replicated scene".into(),
+        );
+        return;
+    }
+    let entries = match PromotionIntent::capture(&workspace, replication.as_ref())
+        .and_then(|intent| intent.documents(&workspace, replication.as_ref()))
+    {
+        Ok(entries) => entries,
+        Err(reason) => {
+            reject_pick(&mut commands, reason);
+            return;
+        }
     };
     let active_root = workspace
         .active_twin
         .and_then(|id| workspace.twin(id))
         .map(|twin| twin.root.clone());
-    let entries = workspace.documents().to_vec();
     let mut used = std::collections::HashSet::new();
+    let mut saves = Vec::with_capacity(entries.len());
     for entry in entries {
-        if entry.origin.is_untitled() {
+        let destination = if entry.origin.is_untitled() {
             if let Some(root) = &active_root {
                 let path = promoted_document_path(root, &entry, &mut used);
-                commands.trigger(SaveAsDocument {
-                    doc_id: entry.id,
-                    path: path.display().to_string(),
-                });
+                let Some(path) = path.to_str() else {
+                    reject_pick(&mut commands, "Save All destination cannot be represented by the document command transport".into());
+                    return;
+                };
+                Some(path.to_owned())
             } else {
-                // The domain SaveDocument observer opens its normal Save-As
-                // picker. This keeps Save All useful for a loose draft while
-                // leaving path selection with the document owner.
-                commands.trigger(lunco_doc_bevy::SaveDocument { doc_id: entry.id });
+                None
             }
         } else {
-            commands.trigger(lunco_doc_bevy::SaveDocument { doc_id: entry.id });
+            None
+        };
+        saves.push((entry.id, destination));
+    }
+    for (doc_id, path) in saves {
+        if let Some(path) = path {
+            commands.trigger(SaveAsDocument { doc_id, path });
+        } else {
+            commands.trigger(lunco_doc_bevy::SaveDocument { doc_id });
         }
     }
 }
@@ -515,17 +556,56 @@ fn on_save_all(
 fn on_save_as_twin(
     trigger: On<SaveAsTwin>,
     workspace: Option<Res<WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
     mut commands: Commands,
 ) {
-    use lunco_workbench_file_dialog::{PickHandle, PickMode};
+    use lunco_workbench_file_dialog::PickMode;
     let folder = trigger.event().folder.clone();
-    if folder.is_empty() {
-        commands.trigger(PickHandle {
-            mode: PickMode::OpenFolder,
-            on_resolved: PickFollowUp::SaveAsTwin,
-        });
+    let Some(workspace) = workspace else {
+        reject_pick(&mut commands, "no workspace is installed".into());
+        return;
+    };
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    if replica.is_some() && replication.is_none() {
+        reject_pick(
+            &mut commands,
+            "Save As Twin has no live owner for its replicated scene".into(),
+        );
         return;
     }
+    let intent = match PromotionIntent::capture(&workspace, replication.as_ref()) {
+        Ok(intent) => intent,
+        Err(reason) => {
+            reject_pick(&mut commands, reason);
+            return;
+        }
+    };
+    if folder.is_empty() {
+        request_pick(
+            &mut commands,
+            PickMode::OpenFolder,
+            PickFollowUp::SaveAsTwin,
+            intent,
+        );
+        return;
+    }
+    let entries = match intent.documents(&workspace, replication.as_ref()) {
+        Ok(entries) => entries,
+        Err(reason) => {
+            reject_pick(&mut commands, reason);
+            return;
+        }
+    };
+    promote_documents(folder, entries, &mut commands);
+}
+
+fn promote_documents(
+    folder: String,
+    entries: Vec<lunco_workspace::DocumentEntry>,
+    commands: &mut Commands,
+) {
     let root = std::path::PathBuf::from(&folder);
     let manifest_path = root.join(lunco_twin::MANIFEST_FILENAME);
     if matches!(
@@ -551,24 +631,40 @@ fn on_save_as_twin(
             return;
         }
     }
-    let Some(workspace) = workspace else {
-        warn!("[SaveAsTwin] no workspace is installed");
-        return;
-    };
-    let entries = workspace.documents().to_vec();
     let mut used = std::collections::HashSet::new();
     let mut default_scene = String::new();
     let mut saves = Vec::with_capacity(entries.len());
     for entry in entries {
         let path = promoted_document_path(&root, &entry, &mut used);
         if default_scene.is_empty() && entry.kind.as_str() == "usd" {
-            default_scene = path
-                .strip_prefix(&root)
-                .unwrap_or(path.as_path())
-                .to_string_lossy()
-                .into_owned();
+            let relative = match path.strip_prefix(&root) {
+                Ok(relative) => relative,
+                Err(reason) => {
+                    reject_pick(
+                        commands,
+                        format!("promoted scene is outside its Twin root: {reason}"),
+                    );
+                    return;
+                }
+            };
+            let Some(relative) = relative.to_str() else {
+                reject_pick(
+                    commands,
+                    "promoted scene name cannot be represented in the Twin manifest".into(),
+                );
+                return;
+            };
+            default_scene = relative.to_owned();
         }
-        saves.push((entry.id, path));
+        let Some(path) = path.to_str() else {
+            reject_pick(
+                commands,
+                "promoted file destination cannot be represented by the document command transport"
+                    .into(),
+            );
+            return;
+        };
+        saves.push((entry.id, path.to_owned()));
     }
 
     // CreateTwin is the sole manifest-writing owner. Save-As commands can run
@@ -580,10 +676,7 @@ fn on_save_as_twin(
         default_scene,
     });
     for (doc, path) in saves {
-        commands.trigger(SaveAsDocument {
-            doc_id: doc,
-            path: path.display().to_string(),
-        });
+        commands.trigger(SaveAsDocument { doc_id: doc, path });
     }
 }
 
@@ -674,24 +767,291 @@ mod save_tests {
 // Picker resolution → typed command
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[derive(Component, Clone, Debug)]
+struct PromotionIntent {
+    active_twin: Option<lunco_workspace::TwinId>,
+    replication: Option<lunco_workspace::ReplicationOwner>,
+    sources: Vec<lunco_workspace::PinnedDocumentRuntimeOwner>,
+}
+
+impl PromotionIntent {
+    fn capture(
+        workspace: &lunco_workspace::Workspace,
+        replication: Option<&lunco_workspace::ReplicationOwner>,
+    ) -> Result<Self, String> {
+        let sources = workspace
+            .documents()
+            .iter()
+            .map(|entry| lunco_workspace::PinnedDocumentRuntimeOwner {
+                document: entry.id,
+                runtime: workspace.runtime_owner_for(entry),
+            })
+            .filter(|source| source.is_in_active_scope(Some(workspace), replication))
+            .collect();
+        let intent = Self {
+            active_twin: workspace.active_twin,
+            replication: replication.cloned(),
+            sources,
+        };
+        intent.documents(workspace, replication)?;
+        Ok(intent)
+    }
+
+    fn documents(
+        &self,
+        workspace: &lunco_workspace::Workspace,
+        replication: Option<&lunco_workspace::ReplicationOwner>,
+    ) -> Result<Vec<lunco_workspace::DocumentEntry>, String> {
+        if workspace.active_twin != self.active_twin || replication != self.replication.as_ref() {
+            return Err("source save session changed after admission".into());
+        }
+        if self
+            .active_twin
+            .is_some_and(|twin| workspace.twin(twin).is_none())
+        {
+            return Err("Save As Twin source Twin has closed".into());
+        }
+        self.sources
+            .iter()
+            .map(|source| {
+                if !source.is_in_active_scope(Some(workspace), replication) {
+                    return Err(format!(
+                        "Save As Twin source {} has retired",
+                        source.document
+                    ));
+                }
+                workspace
+                    .document(source.document)
+                    .cloned()
+                    .ok_or_else(|| format!("Save As Twin source {} has closed", source.document))
+            })
+            .collect()
+    }
+}
+
+/// Source selection remains with Workspace; the picker never interprets Twin
+/// policy. Save requests carry the canonical document pin directly.
+fn source_pins<'a>(
+    promotion: Option<&'a PromotionIntent>,
+    source: Option<&'a lunco_workspace::PinnedDocumentRuntimeOwner>,
+) -> impl Iterator<Item = &'a lunco_workspace::PinnedDocumentRuntimeOwner> {
+    promotion
+        .into_iter()
+        .flat_map(|intent| intent.sources.iter())
+        .chain(source)
+}
+
+fn reject_pick(commands: &mut Commands, message: String) {
+    warn!("[FilePicker] {message}");
+    commands.trigger(lunco_core::RuntimeError {
+        name: "file-picker-rejected".into(),
+        message,
+    });
+}
+
+fn admit_source_pick(
+    trigger: On<PickStarted>,
+    requests: Query<
+        (
+            Option<&PromotionIntent>,
+            Option<&lunco_workspace::PinnedDocumentRuntimeOwner>,
+        ),
+        With<PickInFlight>,
+    >,
+    workspace: Option<Res<WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+    mut commands: Commands,
+) {
+    let event = trigger.event();
+    if !matches!(
+        event.follow_up,
+        PickFollowUp::SaveAs(_) | PickFollowUp::SaveAsTwin
+    ) {
+        return;
+    }
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    let admitted = requests
+        .get(event.request)
+        .map_err(|_| "picker source carrier retired".to_owned())
+        .and_then(|(promotion, source)| {
+            let workspace = workspace
+                .as_deref()
+                .ok_or_else(|| "file save picker has no source workspace".to_owned())?;
+            match &event.follow_up {
+                PickFollowUp::SaveAs(document) => {
+                    let source = source
+                        .ok_or_else(|| "save picker has no admitted source pin".to_owned())?;
+                    if source.document == *document
+                        && source.is_current(Some(&workspace.0), replication.as_ref())
+                    {
+                        Ok(())
+                    } else {
+                        Err(format!("save source {document} has retired"))
+                    }
+                }
+                PickFollowUp::SaveAsTwin => promotion
+                    .ok_or_else(|| "Save As Twin picker has no admitted session".to_owned())?
+                    .documents(&workspace.0, replication.as_ref())
+                    .map(|_| ()),
+                _ => Err("picker follow-up does not admit a source".into()),
+            }
+        });
+    if let Err(reason) = admitted {
+        reject_pick(&mut commands, reason);
+        commands.trigger(CancelPick {
+            request: event.request,
+        });
+    }
+}
+
+fn retire_document_picks(
+    trigger: On<lunco_doc_bevy::DocumentClosed>,
+    requests: Query<
+        (
+            Entity,
+            Option<&PromotionIntent>,
+            Option<&lunco_workspace::PinnedDocumentRuntimeOwner>,
+        ),
+        With<PickInFlight>,
+    >,
+    mut commands: Commands,
+) {
+    for (request, promotion, source) in &requests {
+        if source_pins(promotion, source).any(|source| source.document == trigger.event().doc) {
+            commands.trigger(CancelPick { request });
+        }
+    }
+}
+
+fn retire_twin_picks(
+    trigger: On<lunco_workspace::TwinClosed>,
+    requests: Query<
+        (
+            Entity,
+            Option<&PromotionIntent>,
+            Option<&lunco_workspace::PinnedDocumentRuntimeOwner>,
+        ),
+        With<PickInFlight>,
+    >,
+    mut commands: Commands,
+) {
+    let twin = trigger.event().twin;
+    for (request, promotion, source) in &requests {
+        if source_pins(promotion, source).any(|source| source.runtime.local_twin() == Some(twin))
+            || promotion.is_some_and(|promotion| promotion.active_twin == Some(twin))
+        {
+            commands.trigger(CancelPick { request });
+        }
+    }
+}
+
+fn retire_replication_picks(
+    trigger: On<lunco_core_session::ReplicationOwnerRetired>,
+    requests: Query<
+        (
+            Entity,
+            Option<&PromotionIntent>,
+            Option<&lunco_workspace::PinnedDocumentRuntimeOwner>,
+        ),
+        With<PickInFlight>,
+    >,
+    mut commands: Commands,
+) {
+    for (request, promotion, source) in &requests {
+        if source_pins(promotion, source).any(|source| matches!(&source.runtime, lunco_workspace::DocumentRuntimeOwner::Replicated(owner) if owner == &trigger.event().owner)) {
+            commands.trigger(CancelPick { request });
+        }
+    }
+}
+
 /// Translate a [`PickResolved`] event into the matching typed
 /// file-workflow command, with the chosen path filled in.
 ///
 /// Cancellations ([`lunco_workbench_file_dialog::PickCancelled`]) are silent by design —
 /// no observer here for them. Add one if you want telemetry.
-fn on_pick_resolved(trigger: On<PickResolved>, mut commands: Commands) {
-    let ev = trigger.event();
-    let Some(path) = ev.handle.as_file_path().map(|p| p.display().to_string()) else {
-        warn!(
-            "[PickResolved] non-file handle — picker backend produced something \
-             other than `StorageHandle::File`; ignoring"
+fn on_pick_resolved(
+    trigger: On<PickResolved>,
+    requests: Query<(
+        &PickInFlight,
+        Option<&PromotionIntent>,
+        Option<&lunco_workspace::PinnedDocumentRuntimeOwner>,
+    )>,
+    workspace: Option<Res<WorkspaceResource>>,
+    kinds: Option<Res<DocumentKindRegistry>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+    mut commands: Commands,
+) {
+    let event = trigger.event();
+    let Ok((in_flight, promotion, source)) = requests.get(event.request) else {
+        reject_pick(
+            &mut commands,
+            "resolved file picker request has retired".into(),
         );
         return;
     };
-    match &ev.follow_up {
-        PickFollowUp::OpenFile => {
-            commands.trigger(OpenFile { path });
+    if in_flight.follow_up != event.follow_up {
+        reject_pick(
+            &mut commands,
+            "resolved picker intent differs from its admitted request".into(),
+        );
+        return;
+    }
+    let handle = match &event.result {
+        PickedPath::Path(handle) => handle,
+        PickedPath::BrowserFile { display_name, .. } => {
+            if !matches!(event.follow_up, PickFollowUp::OpenFile) {
+                reject_pick(
+                    &mut commands,
+                    "browser bytes cannot resolve a folder or save intent".into(),
+                );
+                return;
+            }
+            let extension = std::path::Path::new(display_name)
+                .extension()
+                .and_then(|extension| extension.to_str());
+            let supported = extension.is_some_and(|extension| {
+                kinds.as_deref().is_some_and(|kinds| {
+                    kinds.iter().any(|(_, meta)| {
+                        meta.extensions
+                            .iter()
+                            .any(|supported| supported.eq_ignore_ascii_case(extension))
+                    })
+                })
+            });
+            if !supported {
+                reject_pick(
+                    &mut commands,
+                    format!("no document domain is registered for picked file `{display_name}`"),
+                );
+            }
+            // Document domains consume the exact bytes from this same event.
+            return;
         }
+    };
+    let Some(native_path) = handle.as_file_path() else {
+        reject_pick(&mut commands, "picker result is not a native path".into());
+        return;
+    };
+    let Some(path) = native_path.to_str().map(str::to_owned) else {
+        reject_pick(
+            &mut commands,
+            "picked native path cannot be represented by the document command transport".into(),
+        );
+        return;
+    };
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    match &event.follow_up {
+        PickFollowUp::OpenFile => match lunco_storage::file_path_to_uri(native_path) {
+            Ok(path) => commands.trigger(OpenFile { path }),
+            Err(reason) => reject_pick(
+                &mut commands,
+                format!("cannot admit picked file path: {reason}"),
+            ),
+        },
         PickFollowUp::OpenFolder => {
             commands.trigger(OpenFolder { path });
         }
@@ -704,11 +1064,47 @@ fn on_pick_resolved(trigger: On<PickResolved>, mut commands: Commands) {
         PickFollowUp::AddTwin => {
             commands.trigger(AddTwin { path });
         }
-        PickFollowUp::SaveAs(doc) => {
-            commands.trigger(SaveAsDocument { doc_id: *doc, path });
+        PickFollowUp::SaveAs(document) => {
+            let Some(source) = source else {
+                reject_pick(
+                    &mut commands,
+                    "save picker has no admitted document source".into(),
+                );
+                return;
+            };
+            if source.document != *document
+                || !source.is_current(
+                    workspace.as_deref().map(|workspace| &workspace.0),
+                    replication.as_ref(),
+                )
+            {
+                reject_pick(
+                    &mut commands,
+                    format!("save picker source {document} has retired"),
+                );
+                return;
+            }
+            commands.trigger(SaveAsDocument {
+                doc_id: *document,
+                path,
+            });
         }
         PickFollowUp::SaveAsTwin => {
-            commands.trigger(SaveAsTwin { folder: path });
+            let Some(intent) = promotion else {
+                reject_pick(
+                    &mut commands,
+                    "Save As Twin picker has no admitted source session".into(),
+                );
+                return;
+            };
+            let entries = workspace
+                .as_deref()
+                .ok_or_else(|| "Save As Twin source workspace has retired".to_owned())
+                .and_then(|workspace| intent.documents(&workspace.0, replication.as_ref()));
+            match entries {
+                Ok(entries) => promote_documents(path, entries, &mut commands),
+                Err(reason) => reject_pick(&mut commands, reason),
+            }
         }
         PickFollowUp::CreateTwin {
             name,
@@ -772,7 +1168,11 @@ impl Plugin for FileOpsPlugin {
         app.register_type::<CopyShareLink>();
         // USD scene-root resolution is owned by `lunco-usd-commands` so GUI and
         // headless launches use the same doc-first world-mount path.
-        app.add_observer(on_pick_resolved);
+        app.add_observer(on_pick_resolved)
+            .add_observer(admit_source_pick)
+            .add_observer(retire_document_picks)
+            .add_observer(retire_twin_picks)
+            .add_observer(retire_replication_picks);
         // Off-thread folder-scan pipeline: each `Open*` / `Add*` parks
         // a `Task<Result<TwinMode, _>>` in `PendingTwinOpens`; this
         // system polls them every frame and registers Twins as scans
@@ -780,5 +1180,225 @@ impl Plugin for FileOpsPlugin {
         // (`~/.cargo`, `node_modules`, …).
         app.init_resource::<PendingTwinOpens>();
         app.add_systems(Update, drain_pending_twin_opens);
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod picker_admission_tests {
+    use super::*;
+    use lunco_workspace::{
+        DocumentEntry, DocumentRuntimeOwner, ReplicatedSceneOwner, ReplicationOwner, TwinId,
+        Workspace,
+    };
+
+    fn add_twin(workspace: &mut Workspace) -> (tempfile::TempDir, TwinId) {
+        let directory = tempfile::tempdir().unwrap();
+        let twin = match lunco_twin::TwinMode::open(directory.path()).unwrap() {
+            lunco_twin::TwinMode::Folder(twin) => twin,
+            _ => panic!("empty directory must be a folder"),
+        };
+        let id = workspace.add_twin(twin);
+        (directory, id)
+    }
+
+    fn document(
+        workspace: &mut Workspace,
+        id: u64,
+        runtime: DocumentRuntimeOwner,
+    ) -> lunco_doc::DocumentId {
+        let id = lunco_doc::DocumentId::new(id);
+        workspace.add_document(DocumentEntry {
+            id,
+            kind: lunco_workspace::DocumentKindId::new("text"),
+            origin: lunco_doc::DocumentOrigin::untitled("source"),
+            runtime_context: runtime,
+            title: "source.txt".into(),
+            dirty: true,
+        });
+        id
+    }
+
+    #[test]
+    fn picker_admission_uses_exact_local_and_remote_active_source_scope() {
+        let mut workspace = Workspace::new();
+        let (_first_root, first) = add_twin(&mut workspace);
+        let (second_root, second) = add_twin(&mut workspace);
+        let local = document(&mut workspace, 1, DocumentRuntimeOwner::LocalTwin(first));
+        document(&mut workspace, 2, DocumentRuntimeOwner::Application);
+        document(&mut workspace, 3, DocumentRuntimeOwner::LocalTwin(second));
+        document(
+            &mut workspace,
+            4,
+            DocumentRuntimeOwner::LocalTwin(TwinId::new(999)),
+        );
+        workspace.active_twin = Some(first);
+        let intent = PromotionIntent::capture(&workspace, None).unwrap();
+        assert_eq!(
+            intent
+                .sources
+                .iter()
+                .map(|source| source.document)
+                .collect::<Vec<_>>(),
+            vec![local]
+        );
+        workspace.document_mut(local).unwrap().title = "edited.txt".into();
+        assert_eq!(
+            intent.documents(&workspace, None).unwrap()[0].title,
+            "edited.txt",
+            "same-owner edits remain saveable"
+        );
+
+        let connection = World::new().spawn_empty().id();
+        let remote = ReplicationOwner::Twin {
+            scene: ReplicatedSceneOwner {
+                connection,
+                host_twin: TwinId::new(7),
+                authority: "mount-a".into(),
+                root: second_root.path().to_owned(),
+                owns_mount: false,
+            },
+        };
+        workspace.active_twin = None;
+        let imported = document(
+            &mut workspace,
+            5,
+            DocumentRuntimeOwner::Replicated(remote.clone()),
+        );
+        let intent = PromotionIntent::capture(&workspace, Some(&remote)).unwrap();
+        assert_eq!(
+            intent
+                .sources
+                .iter()
+                .map(|source| source.document)
+                .collect::<Vec<_>>(),
+            vec![imported]
+        );
+        workspace.close_document(imported);
+        let empty = PromotionIntent::capture(&workspace, Some(&remote)).unwrap();
+        assert!(
+            empty.sources.is_empty(),
+            "Application drafts must not enter a remote Twin export"
+        );
+        assert!(
+            empty.documents(&workspace, None).is_err(),
+            "empty exports still pin exact connection/mount scope"
+        );
+    }
+
+    #[derive(Resource, Default)]
+    struct Rejections {
+        errors: Vec<String>,
+        cancelled: Vec<Entity>,
+        original: Option<TwinId>,
+    }
+
+    fn observe_error(trigger: On<lunco_core::RuntimeError>, mut observed: ResMut<Rejections>) {
+        observed.errors.push(trigger.event().message.clone());
+    }
+
+    fn observe_cancel(trigger: On<CancelPick>, mut observed: ResMut<Rejections>) {
+        observed.cancelled.push(trigger.event().request);
+    }
+
+    #[test]
+    fn picker_admission_origin_pin_survives_queued_twin_switch_before_backend() {
+        let mut workspace = Workspace::new();
+        let (_first_root, first) = add_twin(&mut workspace);
+        let (_second_root, second) = add_twin(&mut workspace);
+        document(&mut workspace, 1, DocumentRuntimeOwner::LocalTwin(first));
+        document(&mut workspace, 2, DocumentRuntimeOwner::LocalTwin(second));
+        workspace.active_twin = Some(first);
+        let mut app = App::new();
+        app.insert_resource(WorkspaceResource(workspace))
+            .init_resource::<Rejections>()
+            .add_observer(on_save_as_twin)
+            .add_observer(admit_source_pick)
+            .add_observer(observe_error)
+            .add_observer(observe_cancel);
+        // Simulate the transport queue between source-command admission and
+        // backend start without opening an OS dialog in a resource-seam test.
+        app.add_observer(
+            move |trigger: On<lunco_workbench_file_dialog::PickHandle>,
+                  intents: Query<&PromotionIntent>,
+                  mut observed: ResMut<Rejections>,
+                  mut commands: Commands| {
+                let request = trigger.event().request;
+                observed.original = intents.get(request).unwrap().active_twin;
+                commands.queue(move |world: &mut World| {
+                    world.resource_mut::<WorkspaceResource>().active_twin = Some(second);
+                    let follow_up = world
+                        .get::<PickInFlight>(request)
+                        .unwrap()
+                        .follow_up
+                        .clone();
+                    world.trigger(PickStarted { request, follow_up });
+                });
+            },
+        );
+        app.world_mut().trigger(SaveAsTwin {
+            folder: String::new(),
+        });
+        app.world_mut().flush();
+        let observed = app.world().resource::<Rejections>();
+        assert_eq!(observed.original, Some(first));
+        assert_eq!(observed.cancelled.len(), 1);
+        assert!(
+            observed
+                .errors
+                .iter()
+                .any(|error| error.contains("source save session changed"))
+        );
+    }
+
+    #[test]
+    fn picker_admission_rejects_missing_and_retired_document_pins() {
+        let mut workspace = Workspace::new();
+        let (_root, twin) = add_twin(&mut workspace);
+        let doc = document(&mut workspace, 1, DocumentRuntimeOwner::LocalTwin(twin));
+        let pin = lunco_workspace::PinnedDocumentRuntimeOwner::for_document(doc, Some(&workspace))
+            .unwrap();
+        workspace.close_twin(twin);
+        let mut app = App::new();
+        app.insert_resource(WorkspaceResource(workspace))
+            .init_resource::<Rejections>()
+            .add_observer(admit_source_pick)
+            .add_observer(observe_error)
+            .add_observer(observe_cancel);
+        let missing = app
+            .world_mut()
+            .spawn(PickInFlight {
+                follow_up: PickFollowUp::SaveAs(doc),
+            })
+            .id();
+        let retired = app
+            .world_mut()
+            .spawn((
+                PickInFlight {
+                    follow_up: PickFollowUp::SaveAs(doc),
+                },
+                pin,
+            ))
+            .id();
+        for request in [missing, retired] {
+            app.world_mut().trigger(PickStarted {
+                request,
+                follow_up: PickFollowUp::SaveAs(doc),
+            });
+        }
+        app.world_mut().flush();
+        let observed = app.world().resource::<Rejections>();
+        assert_eq!(observed.cancelled, vec![missing, retired]);
+        assert!(
+            observed
+                .errors
+                .iter()
+                .any(|error| error.contains("no admitted source pin"))
+        );
+        assert!(
+            observed
+                .errors
+                .iter()
+                .any(|error| error.contains("retired"))
+        );
     }
 }

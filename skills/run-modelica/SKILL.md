@@ -664,6 +664,12 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   Alias reopens resolve source and resident identities on the file worker. Their
   captured owner/generation must still match at install, so a late read cannot
   replace a concurrently changed or newly installed different-owner source.
+- **Browser imports and saves**: shared picker results carry request-owned bytes
+  into the existing asynchronous file-load pipeline; same-name picks create
+  distinct pathless Application documents. Browser Save marks the document saved
+  only after download admission succeeds. Verify cancellation/read failure,
+  same-name overlapping reads and App teardown through the shared picker browser
+  tests; see the [picker owner contract](../../docs/crates-index.md).
 - **Complete result admission**: finite ordered times, matching series/metadata
   lengths, and finite values are required before a trajectory is marked Done.
   `experiments.result_limits` supplies the shared budgets; defaults are 8,000,000

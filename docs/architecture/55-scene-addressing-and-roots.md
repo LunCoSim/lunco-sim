@@ -157,6 +157,17 @@ state before document events. A pending read cannot publish into a successor
 Twin; identical requests coalesce only with identical captured admission facts.
 Dirty resident source cannot be rebound to another owner.
 
+Browser file selection carries exact request-owned bytes through `PickedPath::BrowserFile`.
+USD and SysML prepare those bytes through their existing asynchronous pipelines and install a fresh
+pathless Application document using the registry's reserved identity and
+`install_prebuilt`. The selected filename is presentation only; it never becomes
+a native path, Twin address, or browser storage key. Repeated names retain
+separate identities. Invalid UTF-8 produces a terminal diagnostic without
+installing a document. Native picker results retain typed storage paths. Source
+Save-As pickers capture the exact stored owner before backend dispatch; completion
+revalidates the same pin. Browser download admission is fallible, and a failed
+download does not mark source saved or publish `DocumentSaved`.
+
 New documents capture their creation context at dispatch; forks retain the
 source document's admitted owner. Private session snapshots explicitly belong to
 Application. Saving or opening a folder never reassigns runtime lifetime from

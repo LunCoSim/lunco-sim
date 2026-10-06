@@ -199,6 +199,8 @@ fn on_save_as_document_ui(
     trigger: On<SaveAsDocument>,
     registry: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
     mut commands: Commands,
 ) {
     let doc = trigger.event().doc_id;
@@ -208,59 +210,87 @@ fn on_save_as_document_ui(
     let Some(host) = registry.host(doc) else {
         return;
     };
+    let Some(workspace_ref) = workspace.as_deref() else {
+        warn!("[UsdSaveAs] source document workspace is unavailable");
+        lunco_core::trigger_runtime_error(
+            &mut commands,
+            "usd-save-picker-rejected",
+            "source document workspace is unavailable",
+        );
+        return;
+    };
+    let owner = match lunco_workspace::PinnedDocumentRuntimeOwner::for_document(
+        doc,
+        Some(&workspace_ref.0),
+    ) {
+        Ok(owner) => owner,
+        Err(error) => {
+            warn!("[UsdSaveAs] {error}");
+            lunco_core::trigger_runtime_error(&mut commands, "usd-save-picker-rejected", error);
+            return;
+        }
+    };
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    if !owner.is_current(Some(&workspace_ref.0), replication.as_ref()) {
+        warn!("[UsdSaveAs] source document belongs to a retired runtime owner");
+        lunco_core::trigger_runtime_error(
+            &mut commands,
+            "usd-save-picker-rejected",
+            "source document belongs to a retired runtime owner",
+        );
+        return;
+    }
     let suggested_name = suggested_usd_name(&host.document().origin().display_name());
     let start_dir = workspace
         .as_deref()
         .and_then(|ws| ws.active_twin)
         .and_then(|id| workspace.as_deref()?.twin(id))
         .map(|twin| lunco_storage::StorageHandle::File(twin.root.clone()));
-    commands.trigger(lunco_workbench_file_dialog::PickHandle {
-        mode: lunco_workbench_file_dialog::PickMode::SaveFile(
-            lunco_workbench_file_dialog::SaveHint {
-                suggested_name: Some(suggested_name),
-                start_dir,
-                filters: vec![lunco_workbench_file_dialog::OpenFilter::new(
-                    "USD stages",
-                    &["usda", "usdc", "usd"],
-                )],
-            },
-        ),
-        on_resolved: lunco_workbench_file_dialog::PickFollowUp::SaveAs(doc),
-    });
+    lunco_workbench_file_dialog::request_pick(
+        &mut commands,
+        lunco_workbench_file_dialog::PickMode::SaveFile(lunco_workbench_file_dialog::SaveHint {
+            suggested_name: Some(suggested_name),
+            start_dir,
+            filters: vec![lunco_workbench_file_dialog::OpenFilter::new(
+                "USD stages",
+                &["usda", "usdc", "usd"],
+            )],
+        }),
+        lunco_workbench_file_dialog::PickFollowUp::SaveAs(doc),
+        owner,
+    );
 }
 
-/// Own browser Save-As. A supplied path is a download name; an empty path
-/// still uses the shared picker so the browser can resolve the file name.
+/// Own browser Save-As. The supplied path or document title names the download;
+/// source lifetime and dirty state remain unchanged if admission fails.
 #[cfg(target_arch = "wasm32")]
 fn on_save_as_document_ui(
     trigger: On<SaveAsDocument>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
+    picker: Option<NonSend<lunco_workbench_file_dialog::BrowserPicker>>,
     mut commands: Commands,
 ) {
     let doc = trigger.event().doc_id;
-    let target_path = trigger.event().path.clone();
+    let mut target_path = trigger.event().path.clone();
     let Some(host) = registry.host(doc) else {
         return;
     };
     if target_path.is_empty() {
-        let suggested_name = suggested_usd_name(&host.document().origin().display_name());
-        commands.trigger(lunco_workbench_file_dialog::PickHandle {
-            mode: lunco_workbench_file_dialog::PickMode::SaveFile(
-                lunco_workbench_file_dialog::SaveHint {
-                    suggested_name: Some(suggested_name),
-                    start_dir: None,
-                    filters: vec![lunco_workbench_file_dialog::OpenFilter::new(
-                        "USD stages",
-                        &["usda", "usdc", "usd"],
-                    )],
-                },
-            ),
-            on_resolved: lunco_workbench_file_dialog::PickFollowUp::SaveAs(doc),
-        });
-        return;
+        target_path = suggested_usd_name(&host.document().origin().display_name());
     }
     let source = host.document().source().to_string();
-    lunco_workbench_file_dialog::download_file(&target_path, &source);
+    let admission = picker
+        .as_deref()
+        .ok_or_else(|| "browser download capability is not installed".to_owned())
+        .and_then(|picker| {
+            lunco_workbench_file_dialog::download_file(picker, &target_path, &source)
+        });
+    if let Err(error) = admission {
+        warn!("[UsdSaveAs] {error}");
+        lunco_core::trigger_runtime_error(&mut commands, "usd-browser-save-failed", error);
+        return;
+    }
     if let Some(host) = registry.host_mut(doc) {
         host.document_mut().mark_saved();
     }

@@ -44,6 +44,8 @@ pub struct ModelicaCommandsPlugin;
 
 impl Plugin for ModelicaCommandsPlugin {
     fn build(&self, app: &mut App) {
+        #[cfg(target_arch = "wasm32")]
+        app.add_observer(lifecycle::on_browser_modelica_file);
         app.add_plugins(compile::CompileCommandsPlugin)
             .init_resource::<CloseDialogState>()
             .init_resource::<PendingCloseAfterSave>()

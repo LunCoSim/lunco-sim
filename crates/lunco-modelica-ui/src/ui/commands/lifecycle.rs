@@ -913,29 +913,6 @@ pub fn on_open_file(
             return;
         }
 
-        // Browser-picked bytes belong to the application; a displayed filename
-        // is a save identity, not proof of a native scene-root relationship.
-        #[cfg(target_arch = "wasm32")]
-        if filesystem_path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("mo"))
-        {
-            if let Some(content) = lunco_workbench_file_dialog::take_picked_content(&path) {
-                let requested_path = std::path::PathBuf::from(&path);
-                let resolved = lunco_workspace::ResolvedFileDocument {
-                    path: requested_path.clone(),
-                    runtime: lunco_workspace::DocumentRuntimeOwner::Application,
-                };
-                let _ = open_file_result_tx().send(OpenFileResult {
-                    requested_path,
-                    admission,
-                    read_result: Ok((resolved, content)),
-                });
-                return;
-            }
-        }
-
         // Everything else (bundled://, file://, raw .mo path) flows
         // through the typed ClassRef + single `open_class` entry.
         if let Some(native_path) = native_file_path {
@@ -988,8 +965,108 @@ pub fn on_open_file(
     });
 }
 
+/// Admit an exact browser payload through the same per-document preparation
+/// pipeline as file loads. The name is display only; every pick gets a fresh
+/// pathless Application document and never reopens a filename identity.
+#[cfg(target_arch = "wasm32")]
+pub fn on_browser_modelica_file(
+    trigger: On<lunco_workbench_file_dialog::PickResolved>,
+    requests: Query<&lunco_workbench_file_dialog::PickInFlight>,
+    mut commands: Commands,
+) {
+    use lunco_workbench_file_dialog::{PickFollowUp, PickedPath};
+    let event = trigger.event();
+    let PickedPath::BrowserFile {
+        display_name,
+        bytes,
+    } = &event.result
+    else {
+        return;
+    };
+    if !matches!(event.follow_up, PickFollowUp::OpenFile)
+        || !requests
+            .get(event.request)
+            .is_ok_and(|request| request.follow_up == event.follow_up)
+        || !std::path::Path::new(display_name)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("mo"))
+    {
+        return;
+    }
+    let display_name = display_name.clone();
+    let bytes = Arc::clone(bytes);
+    commands.queue(move |world: &mut World| {
+        let base = std::path::Path::new(&display_name)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or(&display_name);
+        let name = unique_in_memory_name(world.resource::<PackageTreeCache>(), base);
+        let document = world.resource_mut::<ModelicaDocuments>().reserve_id();
+        let origin = DocumentOrigin::untitled(name.clone());
+        lunco_modelica_core::doc_ops::register_document_context(
+            &mut world.resource_mut::<lunco_workspace::WorkspaceResource>(),
+            document,
+            origin.clone(),
+            lunco_workspace::DocumentRuntimeOwner::Application,
+            true,
+        );
+        world
+            .resource_mut::<PackageTreeCache>()
+            .in_memory_models
+            .push(lunco_modelica_index::package_tree::types::InMemoryEntry {
+                display_name: name.clone(),
+                id: format!("mem://{name}"),
+                doc: document,
+            });
+        let tab = world.resource_mut::<ModelTabs>().ensure_for(document, None);
+        world
+            .commands()
+            .trigger(lunco_workbench_core::commands::OpenTab {
+                kind: MODEL_VIEW_KIND,
+                instance: tab,
+            });
+        let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
+            let result = std::str::from_utf8(&bytes)
+                .map_err(|error| format!("Modelica file `{display_name}` is not UTF-8: {error}"))
+                .map(|source| {
+                    (
+                        lunco_modelica_document::ModelicaDocument::with_origin(
+                            document, source, origin,
+                        ),
+                        lunco_workspace::DocumentRuntimeOwner::Application,
+                    )
+                });
+            (
+                crate::package_tree::cache::FileLoadResult {
+                    doc_id: document,
+                    result,
+                },
+                None,
+            )
+        });
+        let busy = world
+            .resource_mut::<lunco_status_core::status_bus::StatusBus>()
+            .begin(
+                lunco_status_core::status_bus::BusyScope::Document(document.0),
+                "opening",
+                format!("Loading {name}…"),
+            );
+        world
+            .resource_mut::<crate::ui::document_openings::DocumentOpenings>()
+            .insert(
+                document,
+                crate::ui::document_openings::OpeningState::FileLoad {
+                    display_name: name,
+                    task,
+                    busy,
+                },
+            );
+    });
+}
+
 /// Lazily-initialised sender for the `OpenFile` read-result channel.
-/// Both the native async path and the wasm picker path funnel results
+/// Direct path reads funnel results
 /// here; [`drain_open_file_results`] consumes them on the Update tick.
 fn open_file_result_tx() -> &'static std::sync::mpsc::Sender<OpenFileResult> {
     OPEN_FILE_RESULT_TX.get_or_init(|| {
@@ -1273,8 +1350,12 @@ pub fn on_document_closed_cleanup(
     mut drafts: Option<ResMut<lunco_modelica_runner::ExperimentDrafts>>,
     mut canvas_state: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
     mut bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
+    mut openings: Option<ResMut<crate::ui::document_openings::DocumentOpenings>>,
 ) {
     let doc = trigger.event().doc_id;
+    if let Some(openings) = openings.as_mut() {
+        openings.cancel(doc);
+    }
     model_tabs.close(doc);
     cache.in_memory_models.retain(|e| e.doc != doc);
     // Drop the per-doc canvas entry (viewport, selection, in-flight

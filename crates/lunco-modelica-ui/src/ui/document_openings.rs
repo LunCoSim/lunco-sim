@@ -388,6 +388,7 @@ pub fn drive_file_load_openings(
     mut commands: Commands,
     connection: Option<Res<lunco_core_session::ClientConnection>>,
     replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+    mut cache: ResMut<crate::package_tree::PackageTreeCache>,
 ) {
     use bevy::tasks::futures_lite::future;
     let replication =
@@ -554,6 +555,10 @@ pub fn drive_file_load_openings(
                 busy.set_outcome(lunco_status_core::status_bus::BusyOutcome::Failed(msg));
                 drop(busy);
                 if registry.host(ready.doc_id).is_none() {
+                    cache
+                        .in_memory_models
+                        .retain(|entry| entry.doc != ready.doc_id);
+                    workspace.close_document(ready.doc_id);
                     close_pending_file_tabs(ready.doc_id, &mut tabs, &mut commands);
                 }
             }

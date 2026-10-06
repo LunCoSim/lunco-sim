@@ -33,6 +33,7 @@ lunco-usd-data = { path = "../lunco-usd-data" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
 lunco-workspace = { path = "../lunco-workspace" }
+lunco-workbench-file-dialog = { path = "../lunco-workbench-file-dialog" }
 
 [dev-dependencies]
 lunco-usd-queries = { path = "../lunco-usd-queries" }

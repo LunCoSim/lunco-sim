@@ -15,7 +15,6 @@ rfd = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }
-wasm-bindgen-futures = { workspace = true }
 js-sys = { workspace = true }
 web-sys = { workspace = true, features = [
     "Window",
@@ -28,9 +27,16 @@ web-sys = { workspace = true, features = [
     "Node",
     "File",
     "FileList",
+    "FileReader",
+    "DomException",
+    "Event",
     "Blob",
     "Url",
 ] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.76"
+wasm-bindgen-futures = { workspace = true }
 
 [lints]
 workspace = true
