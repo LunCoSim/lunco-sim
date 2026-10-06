@@ -521,8 +521,8 @@ fn sysml_analysis_value(path: &str) -> Dynamic {
 /// snapshot instead of rebuilding a dynamic report for every attribute.
 #[cfg(feature = "sysml")]
 fn sysml_model_from_world(path: &str) -> Result<lunco_sysml_rhai::SysmlModelValue, Dynamic> {
-    let Some(report) = bridge_core::with_world(|world| {
-        lunco_scene_validation::validate::analyze_sysml_reference(world, path)
+    let Some(analysis) = bridge_core::with_world(|world| {
+        lunco_scene_validation::validate::sysml_model_analysis(world, path)
     }) else {
         return Err(sysml_value_error(
             path,
@@ -530,16 +530,7 @@ fn sysml_model_from_world(path: &str) -> Result<lunco_sysml_rhai::SysmlModelValu
             "SysML analysis requires an active world scope",
         ));
     };
-    if !report.ok {
-        return Err(sysml_value_error(path, "", report.errors.join("; ")));
-    }
-    let Some(analysis) = report.sysml_analysis else {
-        return Err(sysml_value_error(
-            path,
-            "",
-            "SysML source analysis is unavailable",
-        ));
-    };
+    let analysis = analysis.map_err(|errors| sysml_value_error(path, "", errors.join("; ")))?;
     publish_sysml_warning(path, None, None);
     Ok(lunco_sysml_rhai::SysmlModelValue::new(path, analysis))
 }

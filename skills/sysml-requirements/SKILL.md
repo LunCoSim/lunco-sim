@@ -348,7 +348,10 @@ The current supported subset is source-backed and deterministic:
   request selected attributes through `AnalyzeSysml`; a successful read clears
   only the warning for the same source path;
 - `sysml_model(path)` returns a read-only, revision-pinned `SysmlModel` backed
-  by the cached Rust semantic snapshot. Use `model.value(qualified_name)` for
+  by the cached Rust semantic snapshot. For a mounted Twin it hands back the
+  prepared analysis directly (no per-call lint-fact rebuild), so accessors that
+  open the model on demand stay cheap enough for per-tick mission policy;
+  source diagnostics still reject the model. Use `model.value(qualified_name)` for
   repeated typed reads in one builder/verifier, and use
   `model.requirement(qualified_name)` or
   `model.verification(qualified_name)` for source-owned traceability. This

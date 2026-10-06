@@ -262,17 +262,25 @@ fn validate_sysml(reference: &str, path: &Path, text: &str) -> ValidationReport 
     finish_sysml_report(reference, analysis)
 }
 
+fn sysml_diagnostic_messages(analysis: &lunco_sysml_ast::SysmlAnalysis) -> Vec<String> {
+    analysis
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| {
+            format!(
+                "{}:{}..{}: {}",
+                diagnostic.file, diagnostic.start, diagnostic.end, diagnostic.message
+            )
+        })
+        .collect()
+}
+
 fn finish_sysml_report(
     reference: &str,
     analysis: std::sync::Arc<lunco_sysml_ast::SysmlAnalysis>,
 ) -> ValidationReport {
     let mut report = ValidationReport::new(reference, "sysml");
-    for diagnostic in analysis.diagnostics() {
-        report.errors.push(format!(
-            "{}:{}..{}: {}",
-            diagnostic.file, diagnostic.start, diagnostic.end, diagnostic.message
-        ));
-    }
+    report.errors.extend(sysml_diagnostic_messages(&analysis));
     // The validated report intentionally contains no second, JSON-shaped copy
     // of the semantic AST. `sysml_analysis` is the typed in-process snapshot;
     // the generic AnalyzeSysml query projects only the tables a caller asks
@@ -915,6 +923,111 @@ pub(crate) fn validate_sysml_reference(
     )
 }
 
+/// Resolve a `twin://<name>` SysML reference to its mounted Workspace Twin.
+fn mounted_sysml_twin<'w>(
+    world: &'w World,
+    name: &str,
+    reference: &str,
+) -> Result<
+    (
+        lunco_workspace::TwinId,
+        &'w lunco_twin::Twin,
+        &'w lunco_assets_core::TwinRoots,
+    ),
+    ValidationReport,
+> {
+    let Some(workspace) = world.get_resource::<lunco_workspace::WorkspaceResource>() else {
+        return Err(ValidationReport::new(reference, "sysml").error(
+            "SysML twin:// source query requires the mounted WorkspaceResource; open the Twin first",
+        ));
+    };
+    let Some(roots) = world.get_resource::<lunco_assets_core::TwinRoots>() else {
+        return Err(ValidationReport::new(reference, "sysml")
+            .error("SysML twin:// source query requires the TwinRoots asset registry"));
+    };
+    let root = match roots.root_of(name) {
+        Ok(Some(root)) => root,
+        Ok(None) => {
+            return Err(ValidationReport::new(reference, "sysml")
+                .error(format!("Twin `{name}` is not mounted")));
+        }
+        Err(error) => {
+            return Err(ValidationReport::new(reference, "sysml")
+                .error(format!("cannot resolve {reference}: {error}")));
+        }
+    };
+    let Some((twin_id, twin)) = workspace
+        .twins()
+        .find(|(_, twin)| lunco_doc::same_file(&twin.root, &root))
+    else {
+        return Err(ValidationReport::new(reference, "sysml").error(format!(
+            "Twin `{name}` is mounted in TwinRoots but has no matching Workspace entry; reopen it through the Workspace",
+        )));
+    };
+    Ok((twin_id, twin, roots))
+}
+
+/// The prepared, revision-pinned analysis of a mounted Twin's SysML source set.
+#[cfg(feature = "sysml-runtime")]
+fn prepared_twin_sysml_analysis(
+    analyses: &lunco_sysml::TwinSysmlAnalyses,
+    name: &str,
+    reference: &str,
+    twin_id: lunco_workspace::TwinId,
+    twin: &lunco_twin::Twin,
+) -> Result<std::sync::Arc<lunco_sysml_ast::SysmlAnalysis>, ValidationReport> {
+    match analyses.state_for(name, twin_id, &twin.root) {
+        Some(lunco_sysml::TwinSysmlAnalysisState::Ready(analysis)) => Ok(analysis),
+        Some(lunco_sysml::TwinSysmlAnalysisState::Pending) => {
+            Err(ValidationReport::new(reference, "sysml").error(format!(
+                "Twin `{name}` SysML analysis is preparing asynchronously"
+            )))
+        }
+        Some(lunco_sysml::TwinSysmlAnalysisState::Failed(errors)) => {
+            let mut report = ValidationReport::new(reference, "sysml");
+            report.errors.extend(errors);
+            Err(report.finish())
+        }
+        None => Err(ValidationReport::new(reference, "sysml").error(format!(
+            "Twin `{name}` SysML source set has not been prepared for the current Twin identity"
+        ))),
+    }
+}
+
+/// Typed model access for one SysML reference. A mounted Twin returns its
+/// prepared, revision-pinned analysis directly; validation-only lint facts
+/// are not rebuilt for each model read. Source diagnostics still reject the
+/// model, exactly as they fail [`analyze_sysml_reference`].
+pub fn sysml_model_analysis(
+    world: &World,
+    reference: &str,
+) -> Result<std::sync::Arc<lunco_sysml_ast::SysmlAnalysis>, Vec<String>> {
+    #[cfg(feature = "sysml-runtime")]
+    if let Some(name) = reference
+        .strip_prefix("twin://")
+        .filter(|name| !name.is_empty() && !name.contains('/') && !name.contains('\\'))
+        && let Some(analyses) = world.get_resource::<lunco_sysml::TwinSysmlAnalyses>()
+    {
+        let (twin_id, twin, _) =
+            mounted_sysml_twin(world, name, reference).map_err(|report| report.errors)?;
+        let analysis = prepared_twin_sysml_analysis(analyses, name, reference, twin_id, twin)
+            .map_err(|report| report.errors)?;
+        let diagnostics = sysml_diagnostic_messages(&analysis);
+        return if diagnostics.is_empty() {
+            Ok(analysis)
+        } else {
+            Err(diagnostics)
+        };
+    }
+    let report = analyze_sysml_reference(world, reference);
+    if !report.ok {
+        return Err(report.errors);
+    }
+    report
+        .sysml_analysis
+        .ok_or_else(|| vec!["SysML source analysis is unavailable".to_owned()])
+}
+
 fn validate_sysml_twin(
     world: &World,
     name: &str,
@@ -923,65 +1036,27 @@ fn validate_sysml_twin(
 ) -> ValidationReport {
     #[cfg(all(target_arch = "wasm32", not(feature = "sysml-runtime")))]
     let _ = apply_structural_policy;
-    let Some(workspace) = world.get_resource::<lunco_workspace::WorkspaceResource>() else {
-        return ValidationReport::new(reference, "sysml").error(
-            "SysML twin:// source query requires the mounted WorkspaceResource; open the Twin first",
-        );
+    let (_twin_id, _twin, roots) = match mounted_sysml_twin(world, name, reference) {
+        Ok(twin) => twin,
+        Err(report) => return report,
     };
-    let Some(roots) = world.get_resource::<lunco_assets_core::TwinRoots>() else {
-        return ValidationReport::new(reference, "sysml")
-            .error("SysML twin:// source query requires the TwinRoots asset registry");
-    };
-    let root = match roots.root_of(name) {
-        Ok(Some(root)) => root,
-        Ok(None) => {
-            return ValidationReport::new(reference, "sysml")
-                .error(format!("Twin `{name}` is not mounted"));
-        }
-        Err(error) => {
-            return ValidationReport::new(reference, "sysml")
-                .error(format!("cannot resolve {reference}: {error}"));
-        }
-    };
-    let Some((_twin_id, _twin)) = workspace
-        .twins()
-        .find(|(_, twin)| lunco_doc::same_file(&twin.root, &root))
-    else {
-        return ValidationReport::new(reference, "sysml").error(format!(
-            "Twin `{name}` is mounted in TwinRoots but has no matching Workspace entry; reopen it through the Workspace",
-        ));
-    };
+    #[cfg(any(target_arch = "wasm32", feature = "sysml-runtime"))]
+    let _ = roots;
 
     #[cfg(feature = "sysml-runtime")]
     if let Some(analyses) = world.get_resource::<lunco_sysml::TwinSysmlAnalyses>() {
-        return match analyses.state_for(name, _twin_id, &_twin.root) {
-            Some(lunco_sysml::TwinSysmlAnalysisState::Ready(analysis)) => {
+        return match prepared_twin_sysml_analysis(analyses, name, reference, _twin_id, _twin) {
+            Ok(analysis) if apply_structural_policy => {
                 let policy_source = analysis
                     .files()
                     .iter()
                     .map(|file| file.text.as_str())
                     .collect::<Vec<_>>()
                     .join("\n");
-                let report = finish_sysml_report(reference, analysis);
-                if apply_structural_policy {
-                    apply_lint_policy(report, &policy_source)
-                } else {
-                    report
-                }
+                apply_lint_policy(finish_sysml_report(reference, analysis), &policy_source)
             }
-            Some(lunco_sysml::TwinSysmlAnalysisState::Pending) => {
-                ValidationReport::new(reference, "sysml").error(format!(
-                    "Twin `{name}` SysML analysis is preparing asynchronously"
-                ))
-            }
-            Some(lunco_sysml::TwinSysmlAnalysisState::Failed(errors)) => {
-                let mut report = ValidationReport::new(reference, "sysml");
-                report.errors.extend(errors);
-                report.finish()
-            }
-            None => ValidationReport::new(reference, "sysml").error(format!(
-                "Twin `{name}` SysML source set has not been prepared for the current Twin identity"
-            )),
+            Ok(analysis) => finish_sysml_report(reference, analysis),
+            Err(report) => report,
         };
     }
 
