@@ -35,6 +35,10 @@ lunco-workspace = { path = "../lunco-workspace" }
 lunco-core-session = { path = "../lunco-core-session" }
 openusd = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+crossbeam-channel = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+
 [dev-dependencies]
 lunco-usd-commands = { path = "../lunco-usd-commands" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }

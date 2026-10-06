@@ -10816,6 +10816,7 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "bevy_egui",
+ "crossbeam-channel",
  "lunco-api",
  "lunco-api-core",
  "lunco-assets-core",
@@ -10843,6 +10844,7 @@ dependencies = [
  "lunco-workspace",
  "openusd",
  "tempfile",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]
