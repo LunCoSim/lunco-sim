@@ -1474,10 +1474,10 @@ pub fn project_domain_islands(
     mut candidates: ResMut<PendingDomainProjectionCandidates>,
     mut admission: ResMut<lunco_core_runtime::AsyncWorkAdmission>,
     mut telemetry_indexes: ResMut<AuthoredTelemetryIndexes>,
-    class_users: Res<DomainClassUsers>,
-    classes: Res<MemberClasses>,
+    class_catalog: (Res<DomainClassUsers>, Res<MemberClasses>),
     domain_owner: DomainProjectionOwner,
 ) {
+    let (class_users, classes) = class_catalog;
     if domain_owner.modelica_channels.is_none() {
         return;
     }
