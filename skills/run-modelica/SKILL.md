@@ -178,6 +178,10 @@ caps bound graph count rather than heap bytes; eviction preserves live owners.
 Run the generic `immutable_reuse_cache_` tests and compile the browser worker
 bundle when changing configuration transport. Do not infer Twin teardown from
 shared immutable cache contents.
+For shared browser worker transport changes, run the generic `worker_lifecycle_`
+tests in a real browser and compile both Modelica execution and DEM bake
+consumers. Replacement must release the old handlers, including replacement
+inside an executing callback; failed replacement leaves an empty slot.
 For native compiler heartbeat changes, run the generic `compile_heartbeat_`
 lifetime tests; ensure normal, error, and unwind exit interrupt the wait and
 release the owned thread.

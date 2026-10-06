@@ -445,6 +445,14 @@ Canonical, append-only, Twin-scoped record of every change. Immutable entries ke
 **`lunco-worker-transport`**
 The generic Web Worker pool transport (wasm-only; `#![cfg(target_arch = "wasm32")]`). wasm32 has no OS threads, so multi-second companion work (a Modelica compile, a DEM decode + crater stamp) would freeze the page; each pool member is a JS `Worker` running a *second* wasm instance with its own linear memory. `WorkerPool` owns only the payload-agnostic plumbing — spawn / lazy-grow, the boot wire-id handshake (stale-worker guard), byte + Transferable-`ArrayBuffer` post, and crash respawn — driven by caller-supplied `Callbacks` (`on_message`/`on_ready`/`on_error`/`on_wire_mismatch`). Message framing, readiness gating, and result routing stay with the caller. `lunco-modelica-execution::worker_transport` composes it for the Fast-Run pool (source-library/run state on top); `lunco-terrain-bake::worker_client` composes it for the DEM bake — so the transport is written once and reused, not duplicated.
 
+Each slot owns its worker and event closures. Replacement and pool drop detach
+handlers, terminate the worker, and release its callback captures. A failed
+replacement leaves an empty slot. An executing owned wasm-bindgen closure remains
+alive until its invocation returns, allowing replacement within an unborrowed
+error callback. Generic browser `worker_lifecycle_` tests cover repeated
+replacement, active-callback replacement, failed recovery, and pool drop;
+compile both consuming browser worker paths when changing this transport.
+
 ---
 
 ### Simulation Engine
