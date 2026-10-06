@@ -23,6 +23,8 @@ replication runtime; the deployment guide owns service and TLS facts.
   Cover malformed/conflicting CLI flags and browser overrides with the generic
   `network_mode_configuration_`, `network_endpoint_configuration_`, and
   `network_endpoint_socket_family_` tests.
+  The Windows nightly job runs the exact network admission regressions,
+  including unpaired native argument surrogates and drive/UNC TLS paths.
   Prove public `JoinServer` rejection preserves the prior connection through
   the production command surface; an unresolvable valid hostname is a transport
   failure after admission, rather than a syntax rejection.

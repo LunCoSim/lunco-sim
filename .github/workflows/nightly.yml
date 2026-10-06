@@ -256,6 +256,27 @@ jobs:
             twin_source::tests::register_twin_encodes_display_names_without_rebinding_retired_mounts \
             asset_path::tests::native_preparation_canonicalizes_aliases_and_rejects_retired_mounts
 
+      - name: Verify Windows network admission contracts
+        if: matrix.platform == 'windows'
+        run: |
+          cargo test --release --locked -j 4 -p lunco-networking \
+            --features networking --lib -- --exact \
+            endpoint::tests::network_endpoint_configuration_preserves_hostname_ipv4_ipv6_and_explicit_port \
+            endpoint::tests::network_endpoint_configuration_rejects_invalid_explicit_input \
+            mode_configuration_tests::network_mode_configuration_requires_explicit_host_in_all_headless_launches \
+            mode_configuration_tests::network_mode_configuration_rejects_invalid_missing_duplicate_and_conflicting_flags \
+            mode_configuration_tests::network_host_configuration_rejects_zero_port_before_admission \
+            mode_configuration_tests::network_mode_configuration_browser_override_decodes_and_rejects_invalid_requests \
+            mode_configuration_tests::network_mode_configuration_rejects_unpaired_windows_surrogate_without_panicking \
+            wt_client::native_socket_tests::network_endpoint_socket_family_matches_literal_ip_and_dns_default \
+            server::configuration_tests::tls_path_configuration_rejects_incomplete_and_preserves_native_paths \
+            server::configuration_tests::host_bind_rejects_invalid_and_public_development_admission \
+            server::configuration_tests::tls_identity_validates_key_and_certificate_before_admission \
+            server::configuration_tests::tls_windows_drive_and_unc_paths_use_native_sibling_resolution \
+            wt_client::configuration_tests::certificate_pin_rejects_invalid_explicit_input_and_preserves_valid_bytes \
+            shared::tests::key_parser_rejects_zero_and_wrong_length \
+            shared::tests::key_parser_accepts_32_bytes_of_hex
+
       # ── Cross-compile (macOS x86_64 on Apple Silicon) ───────────────────
       # Only runs when the matrix entry sets `cross_target`. Adds the
       # rustup target, then runs build_native.sh again with --target so the
