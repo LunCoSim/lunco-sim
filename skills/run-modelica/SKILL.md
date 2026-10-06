@@ -285,6 +285,11 @@ use `Duplicate to edit`, then perform the same placement check. A drag that
 appears to work but disappears on reload is a product bug, not an acceptable
 generated-model editing mode.
 
+For class source extraction, reuse `lunco-modelica-ast::ast_extract::class_full_text_span`
+from the same parsed bytes. Its inline seam test covers same-line enclosing
+declarations and class qualifiers; do not derive declaration bounds by scanning
+backward through arbitrary identifiers.
+
 Projection must remain responsive while a native package or inherited icon is
 being resolved. Verify that `/api/ready` stays responsive, the canvas shows an
 explicit loading/error state, and the completion event reprojects the authored

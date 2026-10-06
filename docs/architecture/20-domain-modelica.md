@@ -111,6 +111,11 @@ records `ModelicaWorkerFailure`, faults the affected runtime, ends live compile
 and step state, and rejects later compiles. This application-owned failure
 survives scene teardown; a buffered success cannot revive a dead worker.
 
+Class source slicing shares `lunco-modelica-ast::class_full_text_span`. It starts
+at the parsed class-kind token, includes its declaration qualifiers, and ends
+after the closing semicolon. Enclosing declarations on the same line remain
+outside that span; library documents and duplicate preparation use this owner.
+
 Scratch and reserved duplicate documents register their typed creation context
 synchronously at allocation. Deferred document-open delivery cannot rebind them
 to a replacement Twin. Duplicate installation validates the captured context,

@@ -1023,21 +1023,37 @@ fn find_in_classes<'a>(
 /// source text must use this span, never `location` directly.
 pub fn class_full_text_span(class: &ClassDef, source: &str) -> (usize, usize) {
     let bytes = source.as_bytes();
-    // Rewind from the name over the space/tab-separated prefix keyword(s)
-    // (`model`/`package` plus qualifiers like `partial`/`final`/
-    // `encapsulated`/`replaceable`). Stops at a newline or non-alphabetic
-    // byte, so it can't cross into a previous declaration.
-    let mut start = (class.name.location.start as usize).min(bytes.len());
+    // The parser's class-kind token owns the declaration start. Only class
+    // qualifiers may precede it; enclosing names on the same line are not
+    // part of this declaration.
+    let mut start = (class.class_type_token.location.start as usize).min(bytes.len());
     loop {
         let mut i = start;
-        while i > 0 && matches!(bytes[i - 1], b' ' | b'\t') {
+        while i > 0 && bytes[i - 1].is_ascii_whitespace() {
             i -= 1;
         }
         let word_end = i;
         while i > 0 && bytes[i - 1].is_ascii_alphabetic() {
             i -= 1;
         }
-        if i == word_end {
+        if i == word_end
+            || !matches!(
+                source.get(i..word_end),
+                Some(
+                    "encapsulated"
+                        | "partial"
+                        | "final"
+                        | "inner"
+                        | "outer"
+                        | "replaceable"
+                        | "redeclare"
+                        | "expandable"
+                        | "operator"
+                        | "pure"
+                        | "impure"
+                )
+            )
+        {
             break;
         }
         start = i;
@@ -1049,7 +1065,7 @@ pub fn class_full_text_span(class: &ClassDef, source: &str) -> (usize, usize) {
         .map(|t| t.location.end as usize)
         .unwrap_or(class.location.end as usize)
         .min(bytes.len());
-    while end < bytes.len() && matches!(bytes[end], b' ' | b'\t') {
+    while end < bytes.len() && bytes[end].is_ascii_whitespace() {
         end += 1;
     }
     if end < bytes.len() && bytes[end] == b';' {
@@ -1473,6 +1489,32 @@ pub fn hash_content(source: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn class_full_text_span_confines_same_line_nested_declarations() {
+        for (source, expected) in [
+            (
+                "package Root package B model Part Real value; end Part; end B; end Root;",
+                "model Part Real value; end Part;",
+            ),
+            (
+                "package Root package B partial connector Part Real value; end Part; end B; end Root;",
+                "partial connector Part Real value; end Part;",
+            ),
+            (
+                "package Root package B encapsulated\npartial model Part Real value; end Part\n; end B; end Root;",
+                "encapsulated\npartial model Part Real value; end Part\n;",
+            ),
+        ] {
+            let syntax = crate::parse_to_syntax(source, "class-span.mo");
+            assert!(!syntax.has_errors());
+            let ast = syntax.parsed().expect("valid inline source");
+            let class = &ast.classes["Root"].classes["B"].classes["Part"];
+            let (start, end) = class_full_text_span(class, source);
+            assert_eq!(&source[start..end], expected);
+            assert!(!crate::parse_to_syntax(expected, "extracted.mo").has_errors());
+        }
+    }
 
     #[test]
     fn model_interface_prepares_ordered_source_root_requirements() {
