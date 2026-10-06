@@ -254,7 +254,10 @@ jobs:
             asset_path::tests::windows_native_load_paths_normalize_verbatim_mount_roots \
             lunco_source::tests::file_uri_reader_decodes_native_paths_and_rejects_invalid_input \
             twin_source::tests::register_twin_encodes_display_names_without_rebinding_retired_mounts \
-            asset_path::tests::native_preparation_canonicalizes_aliases_and_rejects_retired_mounts
+            asset_path::tests::native_preparation_canonicalizes_aliases_and_rejects_retired_mounts \
+            file_storage::tests::cache_directory_transaction_serializes_independent_writers_and_releases_lock \
+            file_storage::tests::cache_directory_transaction_streams_regular_metadata_without_following_links \
+            file_storage::tests::cache_directory_transaction_serializes_child_process
 
       - name: Verify Windows network admission contracts
         if: matrix.platform == 'windows'

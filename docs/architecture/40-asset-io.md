@@ -60,12 +60,14 @@ stage's existing weak reference cache permits sibling reuse after exact-origin,
 actual source-revision and live-mount checks, without another native lookup or
 composition; removing the live instances releases that snapshot.
 
-The Windows job in `.github/workflows/nightly.yml` runs nine exact native-path
+The Windows job in `.github/workflows/nightly.yml` runs exact native-path and storage
 regressions after the desktop release build, using that release profile and
 target cache. They cover standard drive/UNC file URIs, encoded filenames,
 canonical Twin roots, display-name component encoding, provider manifest
 confinement, native asset admission,
-retired/foreign mount rejection, case-variant canonical admission, and verbatim-root conversion. These tests use
+retired/foreign mount rejection, case-variant canonical admission, verbatim-root
+conversion, and cache-directory locking across independent handles and processes.
+The lock tests also verify release and regular-file enumeration. These tests use
 ordinary temporary directories; they do not require Windows symlink privileges
 or exercise Windows junction escape behavior. Unix test results alone are not
 Windows execution evidence.
