@@ -13,8 +13,7 @@
 //! That doubles the on-disk size, so this backend is intended for the
 //! document-sized payloads the workbench actually persists (Modelica
 //! sources, `.usda` stages, small JSON). Large binary assets (glTF,
-//! textures) should move to an OPFS backend once `opfs_stub` lands —
-//! see the `StorageHandle::Opfs` variant in `lib.rs`.
+//! textures) use the binary OPFS backend.
 //!
 //! Pickers are not meaningful in a sandboxed browser origin (there is no
 //! ambient filesystem); they return [`StorageError::Unsupported`]. The
@@ -65,17 +64,39 @@ impl WebStorage {
             )),
         }
     }
+
+    /// Bound the decoded buffer before allocating it. The browser supplies
+    /// the encoded DOMString; this budget covers the returned source bytes.
+    pub async fn read_bounded(
+        &self,
+        handle: &StorageHandle,
+        max_bytes: usize,
+    ) -> StorageResult<Vec<u8>> {
+        self.read_contents(handle, Some(max_bytes))
+    }
+
+    fn read_contents(
+        &self,
+        handle: &StorageHandle,
+        max_bytes: Option<usize>,
+    ) -> StorageResult<Vec<u8>> {
+        let key = Self::key(handle)?;
+        let hex = Self::local_storage()?
+            .get_item(&key)
+            .map_err(|error| {
+                StorageError::Io(std::io::Error::other(format!(
+                    "localStorage read failed: {error:?}"
+                )))
+            })?
+            .ok_or(StorageError::NotFound)?;
+        from_hex_bounded(&hex, max_bytes)
+    }
 }
 
 #[async_trait]
 impl Storage for WebStorage {
     async fn read(&self, handle: &StorageHandle) -> StorageResult<Vec<u8>> {
-        let key = Self::key(handle)?;
-        let ls = Self::local_storage()?;
-        match ls.get_item(&key).ok().flatten() {
-            Some(hex) => from_hex(&hex),
-            None => Err(StorageError::NotFound),
-        }
+        self.read_contents(handle, None)
     }
 
     async fn write(&self, handle: &StorageHandle, bytes: &[u8]) -> StorageResult<()> {
@@ -163,14 +184,22 @@ fn to_hex(bytes: &[u8]) -> String {
 
 /// Inverse of [`to_hex`]. Treats odd length or non-hex digits as a
 /// corrupt record rather than a missing one.
-fn from_hex(s: &str) -> StorageResult<Vec<u8>> {
+fn from_hex_bounded(s: &str, max_bytes: Option<usize>) -> StorageResult<Vec<u8>> {
     let bytes = s.as_bytes();
     if !bytes.len().is_multiple_of(2) {
         return Err(StorageError::Io(std::io::Error::other(
             "corrupt localStorage record (odd hex length)",
         )));
     }
-    let mut out = Vec::with_capacity(bytes.len() / 2);
+    let len = bytes.len() / 2;
+    if max_bytes.is_some_and(|limit| len > limit) {
+        return Err(StorageError::Io(std::io::Error::other(
+            "localStorage source exceeds byte budget",
+        )));
+    }
+    let mut out = Vec::new();
+    out.try_reserve_exact(len)
+        .map_err(|error| StorageError::Io(std::io::Error::other(error)))?;
     for pair in bytes.chunks_exact(2) {
         let hi = (pair[0] as char).to_digit(16);
         let lo = (pair[1] as char).to_digit(16);
@@ -189,19 +218,71 @@ fn from_hex(s: &str) -> StorageResult<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
     // Codec tests run on any target — no browser needed.
     #[test]
     fn hex_roundtrip() {
         let cases: &[&[u8]] = &[b"", b"hello", &[0x00, 0xff, 0x10, 0xab]];
         for c in cases {
-            assert_eq!(from_hex(&to_hex(c)).unwrap(), *c);
+            assert_eq!(from_hex_bounded(&to_hex(c), None).unwrap(), *c);
         }
     }
 
     #[test]
     fn hex_rejects_odd_and_nonhex() {
-        assert!(from_hex("abc").is_err());
-        assert!(from_hex("zz").is_err());
+        assert!(from_hex_bounded("abc", None).is_err());
+        assert!(from_hex_bounded("zz", None).is_err());
+    }
+
+    #[wasm_bindgen_test::wasm_bindgen_test(async)]
+    async fn bounded_browser_read_preserves_identity_and_rejects_invalid_records() {
+        let handle = StorageHandle::File(std::path::PathBuf::from("bounded owner # % Мир.mo"));
+        let storage = WebStorage::new();
+        let key = WebStorage::key(&handle).expect("owned fixture key");
+        let local = WebStorage::local_storage().expect("owned browser storage");
+        storage
+            .write(&handle, b"abc")
+            .await
+            .expect("source fixture");
+        assert_eq!(
+            storage
+                .read_bounded(&handle, 3)
+                .await
+                .expect("exact budget"),
+            b"abc"
+        );
+        assert!(
+            storage
+                .read_bounded(&handle, 2)
+                .await
+                .expect_err("oversized source")
+                .to_string()
+                .contains("byte budget")
+        );
+        assert!(storage.read_bounded(&handle, 0).await.is_err());
+        local.set_item(&key, "zz").expect("corrupt optional record");
+        assert!(
+            storage
+                .read_bounded(&handle, 2)
+                .await
+                .expect_err("invalid hex")
+                .to_string()
+                .contains("non-hex")
+        );
+        local.set_item(&key, "abc").expect("odd optional record");
+        assert!(
+            storage
+                .read_bounded(&handle, 2)
+                .await
+                .expect_err("odd hex")
+                .to_string()
+                .contains("odd hex")
+        );
+        local.remove_item(&key).expect("retire owned fixture");
+        assert!(matches!(
+            storage.read_bounded(&handle, 3).await,
+            Err(StorageError::NotFound)
+        ));
     }
 }

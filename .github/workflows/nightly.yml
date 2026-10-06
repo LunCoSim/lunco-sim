@@ -244,7 +244,7 @@ jobs:
         if: matrix.platform == 'windows'
         run: |
           cargo test --release --locked -j 4 --lib \
-            -p lunco-storage -p lunco-twin -p lunco-assets-core -p lunco-assets-path \
+            -p lunco-storage -p lunco-twin -p lunco-assets-core -p lunco-assets-path -p lunco-workspace \
             -- --exact \
             file_uri_tests::file_uris_preserve_native_paths_and_reject_invalid_addresses \
             tests::open_uses_canonical_root_identity \
@@ -259,6 +259,8 @@ jobs:
             asset_path::tests::native_preparation_canonicalizes_aliases_and_rejects_retired_mounts \
             asset_directory_tests::directory_worker_preserves_source_and_rejects_retired_mounts \
             asset_path::tests::web_transport_encodes_literal_filename_components_once \
+            tests::bounded_file_admission_preserves_runtime_identity_and_read_errors \
+            file_storage::tests::bounded_directory_listing_retains_lexical_cap_without_full_materialization \
             file_storage::tests::cache_directory_transaction_serializes_independent_writers_and_releases_lock \
             file_storage::tests::cache_directory_transaction_streams_regular_metadata_without_following_links \
             file_storage::tests::cache_directory_transaction_serializes_child_process

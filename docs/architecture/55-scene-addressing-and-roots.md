@@ -156,6 +156,11 @@ before installing source, and register its actual origin, runtime owner and dirt
 state before document events. A pending read cannot publish into a successor
 Twin; identical requests coalesce only with identical captured admission facts.
 Dirty resident source cannot be rebound to another owner.
+`read_bounded` uses the same admission and backend selection with a caller byte
+limit. Native and OPFS readers enforce it before returning source bytes; private
+browser storage checks decoded hex length before allocating its byte buffer.
+The browser still supplies its encoded DOMString. Read failures retain their
+storage diagnostic and never become a missing or empty source.
 
 Browser file selection carries exact request-owned bytes through `PickedPath::BrowserFile`.
 USD and SysML prepare those bytes through their existing asynchronous pipelines and install a fresh

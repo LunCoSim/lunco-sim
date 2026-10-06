@@ -261,27 +261,57 @@ impl FileDocumentAdmission {
         self,
         path: &std::path::Path,
     ) -> Result<(ResolvedFileDocument, Vec<u8>), String> {
+        self.read_contents(path, None).await
+    }
+
+    /// Read admitted bytes under the caller's source budget. The captured
+    /// identity and backend selection are the same as an ordinary file read.
+    pub async fn read_bounded(
+        self,
+        path: &std::path::Path,
+        max_bytes: usize,
+    ) -> Result<(ResolvedFileDocument, Vec<u8>), String> {
+        self.read_contents(path, Some(max_bytes)).await
+    }
+
+    async fn read_contents(
+        self,
+        path: &std::path::Path,
+        max_bytes: Option<usize>,
+    ) -> Result<(ResolvedFileDocument, Vec<u8>), String> {
         let resolved = self.resolve(path)?;
         #[cfg(not(target_arch = "wasm32"))]
         let bytes = {
             use lunco_storage::Storage;
-            lunco_storage::FileStorage::new()
-                .read(&StorageHandle::File(resolved.path.clone()))
-                .await
-                .map_err(|error| format!("read failed `{}`: {error}", resolved.path.display()))?
+            let storage = lunco_storage::FileStorage::new();
+            let handle = StorageHandle::File(resolved.path.clone());
+            match max_bytes {
+                Some(limit) => storage.read_bounded(&handle, limit).await,
+                None => storage.read(&handle).await,
+            }
+            .map_err(|error| format!("read failed `{}`: {error}", resolved.path.display()))?
         };
         #[cfg(target_arch = "wasm32")]
         let mut resolved = resolved;
         #[cfg(target_arch = "wasm32")]
         let bytes = if resolved.runtime == DocumentRuntimeOwner::Application {
             resolved.path = path.to_path_buf();
-            lunco_storage::read_file_sync(path)
-                .map_err(|error| format!("read failed `{}`: {error}", path.display()))?
+            use lunco_storage::Storage;
+            let storage = lunco_storage::WebStorage::new();
+            let handle = StorageHandle::File(path.to_path_buf());
+            match max_bytes {
+                Some(limit) => storage.read_bounded(&handle, limit).await,
+                None => storage.read(&handle).await,
+            }
+            .map_err(|error| format!("read failed `{}`: {error}", path.display()))?
         } else {
-            lunco_storage::OpfsStorage::new()
-                .read(&StorageHandle::File(resolved.path.clone()))
-                .await
-                .map_err(|error| format!("read failed `{}`: {error}", resolved.path.display()))?
+            let storage = lunco_storage::OpfsStorage::new();
+            let handle = StorageHandle::File(resolved.path.clone());
+            match max_bytes {
+                Some(limit) => storage.read_bounded(&handle, limit).await,
+                None => storage.read(&handle).await,
+            }
+            .map_err(|error| format!("read failed `{}`: {error}", resolved.path.display()))?
         };
         Ok((resolved, bytes))
     }
@@ -679,6 +709,38 @@ mod tests {
         assert_eq!(ws.twins().count(), 0);
         assert_eq!(ws.documents().len(), 0);
         assert!(ws.active_twin.is_none());
+    }
+
+    #[test]
+    fn bounded_file_admission_preserves_runtime_identity_and_read_errors() {
+        let root = tempfile::tempdir().expect("owned source root");
+        let source = root.path().join("source # % Мир.mo");
+        write(&source, "abc");
+        let mut workspace = Workspace::new();
+        let twin = workspace.add_twin(load_twin(root.path()));
+        let admission = FileDocumentAdmission::capture(Some(&workspace), None);
+        let (resolved, bytes) =
+            bevy::tasks::futures_lite::future::block_on(admission.clone().read_bounded(&source, 3))
+                .expect("exact budget");
+        assert_eq!(resolved.runtime, DocumentRuntimeOwner::LocalTwin(twin));
+        assert_eq!(
+            resolved.path,
+            lunco_storage::canonicalize_file_path(&source).expect("source identity")
+        );
+        assert_eq!(bytes, b"abc");
+        let error =
+            bevy::tasks::futures_lite::future::block_on(admission.clone().read_bounded(&source, 2))
+                .expect_err("oversized source");
+        assert!(
+            error.contains("read failed") && error.contains("2-byte read limit"),
+            "{error}"
+        );
+        assert!(
+            bevy::tasks::futures_lite::future::block_on(
+                admission.read_bounded(&root.path().join("missing.mo"), 3)
+            )
+            .is_err()
+        );
     }
 
     #[test]
