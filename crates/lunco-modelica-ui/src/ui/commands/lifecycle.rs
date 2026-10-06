@@ -17,7 +17,6 @@ use crate::ui::duplicate::{
 };
 use crate::ui::workbench_state::WorkbenchState;
 
-#[cfg(feature = "api")]
 use lunco_command_contracts::{Ack, OpId};
 #[cfg(feature = "api")]
 use lunco_core::ActiveCommandId;
@@ -1691,8 +1690,8 @@ pub fn on_new_modelica_document(
 
 /// Read a file's text and echo it to the log between `-- BEGIN --` /
 /// `-- END --` markers. A diagnostic for API callers that cannot see the host
-/// filesystem — it does NOT open a document (use `Open` for that). Goes through
-/// `lunco-storage`, so it works in the browser build too.
+/// filesystem. The admitted asynchronous read uses the same native/OPFS
+/// backend and exact runtime lifetime as document sources.
 #[Command(default)]
 pub struct GetFile {
     /// Path to read, resolved the same way document sources are.
@@ -1700,21 +1699,181 @@ pub struct GetFile {
 }
 
 #[on_command(GetFile)]
-pub fn on_get_file(trigger: On<GetFile>) {
-    let path = trigger.event().path.clone();
-    // `lunco-storage` (native fs / wasm localStorage): `GetFile` is an API
-    // command, and the API is served in the browser build too.
-    match lunco_modelica_runtime::source_asset::read_text_sync(std::path::Path::new(&path)) {
-        Ok(content) => {
-            bevy::log::info!(
-                "[GetFile] {} ({} bytes) -- BEGIN --\n{}\n-- END --",
-                path,
-                content.len(),
-                content,
-            );
+pub fn on_get_file(
+    trigger: On<GetFile>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+    mut commands: Commands,
+) -> Result<Ack, String> {
+    let requested = &trigger.event().path;
+    let path = match lunco_storage::file_uri_to_path(requested) {
+        Ok(Some(path)) => path,
+        Ok(None) => std::path::PathBuf::from(requested),
+        Err(error) => {
+            let error = format!("GetFile rejected: {error}");
+            warn!("{error}");
+            return Err(error);
         }
-        Err(e) => {
-            bevy::log::warn!("[GetFile] {} read failed: {}", path, e);
+    };
+    let pool = bevy::tasks::IoTaskPool::try_get().ok_or_else(|| {
+        let error = "GetFile requires the application I/O task pool".to_owned();
+        warn!("{error}");
+        error
+    })?;
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    let admission = lunco_workspace::FileDocumentAdmission::capture(
+        workspace.as_deref().map(|workspace| &workspace.0),
+        replication.as_ref(),
+    );
+    let runtime = workspace.as_deref().map_or(
+        lunco_workspace::DocumentRuntimeOwner::Application,
+        |workspace| workspace.new_document_runtime_owner(replication.as_ref()),
+    );
+    let task = pool.spawn(async move {
+        lunco_modelica_runtime::source_asset::read_admitted_file(&path, admission).await
+    });
+    commands.spawn(PendingFileDiagnostic {
+        requested: requested.clone(),
+        runtime,
+        task,
+    });
+    Ok(Ack::new(OpId::new()))
+}
+
+#[derive(Component)]
+pub(super) struct PendingFileDiagnostic {
+    requested: String,
+    runtime: lunco_workspace::DocumentRuntimeOwner,
+    task: bevy::tasks::Task<Result<(lunco_workspace::ResolvedFileDocument, String), String>>,
+}
+
+pub(super) fn retire_twin_file_diagnostics(
+    trigger: On<lunco_workspace::TwinClosed>,
+    pending: Query<(Entity, &PendingFileDiagnostic)>,
+    mut commands: Commands,
+) {
+    for (entity, read) in &pending {
+        if read.runtime.local_twin() == Some(trigger.event().twin) {
+            commands.entity(entity).try_despawn();
+        }
+    }
+}
+
+pub(super) fn retire_remote_file_diagnostics(
+    trigger: On<lunco_core_session::ReplicationOwnerRetired>,
+    pending: Query<(Entity, &PendingFileDiagnostic)>,
+    mut commands: Commands,
+) {
+    for (entity, read) in &pending {
+        if matches!(&read.runtime, lunco_workspace::DocumentRuntimeOwner::Replicated(owner) if owner == &trigger.event().owner)
+        {
+            commands.entity(entity).try_despawn();
+        }
+    }
+}
+
+/// Publish diagnostics only while the source's admitted runtime still exists.
+pub(super) fn drain_file_diagnostics(
+    mut pending: Query<(Entity, &mut PendingFileDiagnostic)>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+    mut commands: Commands,
+) {
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    for (entity, mut read) in &mut pending {
+        if !read.runtime.is_current(
+            workspace.as_deref().map(|workspace| &workspace.0),
+            replication.as_ref(),
+        ) {
+            commands.entity(entity).try_despawn();
+            continue;
+        }
+        let Some(outcome) = bevy::tasks::futures_lite::future::block_on(
+            bevy::tasks::futures_lite::future::poll_once(&mut read.task),
+        ) else {
+            continue;
+        };
+        commands.entity(entity).try_despawn();
+        match outcome {
+            Ok((resolved, content))
+                if resolved.runtime.is_current(
+                    workspace.as_deref().map(|workspace| &workspace.0),
+                    replication.as_ref(),
+                ) =>
+            {
+                bevy::log::info!(
+                    "[GetFile] {} ({} bytes) -- BEGIN --\n{}\n-- END --",
+                    resolved.path.display(),
+                    content.len(),
+                    content,
+                )
+            }
+            Ok(_) => lunco_core::trigger_runtime_error(
+                &mut commands,
+                "get-file-retired",
+                format!("source runtime retired before reading {}", read.requested),
+            ),
+            Err(error) => lunco_core::trigger_runtime_error(
+                &mut commands,
+                "get-file-read-failed",
+                format!("{}: {error}", read.requested),
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod file_diagnostic_lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn diagnostic_carriers_retire_only_their_exact_owner() {
+        let pool = bevy::tasks::TaskPoolBuilder::new().num_threads(1).build();
+        let mut app = App::new();
+        app.add_observer(retire_twin_file_diagnostics)
+            .add_observer(retire_remote_file_diagnostics);
+        let connection = app.world_mut().spawn_empty().id();
+        let replacement = app.world_mut().spawn_empty().id();
+        let remote = lunco_workspace::ReplicationOwner::Application { connection };
+        let successor = lunco_workspace::ReplicationOwner::Application {
+            connection: replacement,
+        };
+        let owners = [
+            lunco_workspace::DocumentRuntimeOwner::LocalTwin(lunco_workspace::TwinId::new(1)),
+            lunco_workspace::DocumentRuntimeOwner::LocalTwin(lunco_workspace::TwinId::new(2)),
+            lunco_workspace::DocumentRuntimeOwner::Application,
+            lunco_workspace::DocumentRuntimeOwner::Replicated(remote.clone()),
+            lunco_workspace::DocumentRuntimeOwner::Replicated(successor),
+        ];
+        let entities: Vec<_> = owners
+            .into_iter()
+            .map(|runtime| {
+                app.world_mut()
+                    .spawn(PendingFileDiagnostic {
+                        requested: "pending diagnostic".into(),
+                        runtime,
+                        task: pool.spawn(std::future::pending()),
+                    })
+                    .id()
+            })
+            .collect();
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: lunco_workspace::TwinId::new(1),
+            root: std::path::PathBuf::new(),
+            was_active: true,
+        });
+        app.world_mut()
+            .trigger(lunco_core_session::ReplicationOwnerRetired { owner: remote });
+        app.world_mut().flush();
+        for index in [0, 3] {
+            assert!(app.world().get_entity(entities[index]).is_err());
+        }
+        for index in [1, 2, 4] {
+            assert!(app.world().get_entity(entities[index]).is_ok());
         }
     }
 }

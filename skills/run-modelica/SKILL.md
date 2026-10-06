@@ -688,6 +688,10 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   trajectory allocation; event samples also consume the scoped recorder budget.
   Exercise `modelica_output_budget.rhai` with the documented default value cap
   and `max_parallel=1` to prove visible rejection and valid successor completion.
+- **File diagnostics**: `GetFile` acknowledges asynchronous read admission. It
+  uses the same captured native/OPFS source path as document opens; inspect its
+  log text or structured read-error diagnostic. Closing the admitted Twin or
+  replicated lifetime retires the pending request before publication.
 - **Live ≠ batch**: `SnapshotVariables` reads the *live* stepping model;
   `GetExperimentResult` reads a *stored batch run*. They are different objects.
 - **Blank plot/diagram in `luncosim`** → the Modelica perspective

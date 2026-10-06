@@ -129,6 +129,14 @@ generations before dispatch. The file worker resolves aliases; installation
 validates those captured facts before rebinding a clean resident source.
 Dirty sources and sources changed or installed by another owner after admission
 cannot be overwritten by a pending read.
+`GetFile` admits an I/O task with the current runtime and immutable file-root
+snapshot. Standard file URIs are decoded by Storage; mounted browser reads use
+OPFS. Retirement cancels its request carrier, and completion validates the
+resolved source owner before publishing log text. Read errors publish a
+structured diagnostic; invalid addresses or missing I/O capability reject the
+command at admission. Its acknowledgement admits the read; file content and
+read failures arrive asynchronously in the diagnostic stream.
+
 Workspace folder association remains a display/authoring lens. Active document
 scope and Modelica teardown read the stored runtime owner. Deferred document-open
 events require prior admission registration when a Workspace exists.

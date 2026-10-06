@@ -53,6 +53,8 @@ impl Plugin for ModelicaCommandsPlugin {
             .init_resource::<lifecycle::AppCloseFlow>()
             .add_observer(lifecycle::finish_close_after_save)
             .add_observer(lifecycle::on_document_closed_cleanup)
+            .add_observer(lifecycle::retire_twin_file_diagnostics)
+            .add_observer(lifecycle::retire_remote_file_diagnostics)
             .add_observer(crate::ui::uri_handler::on_modelica_uri_clicked)
             .add_observer(intent::resolve_editor_intent)
             .add_observer(intent::resolve_new_document_intent)
@@ -70,6 +72,7 @@ impl Plugin for ModelicaCommandsPlugin {
                     status::publish_unsaved_modelica_docs,
                     lifecycle::on_window_close_requested,
                     lifecycle::finalize_app_close,
+                    lifecycle::drain_file_diagnostics,
                 ),
             )
             .add_systems(
