@@ -89,6 +89,12 @@ fn collect_rhai_sources(
                 files.push((id, source));
             }
             Ok(lunco_storage::StorageEntryKind::File) => {}
+            Ok(lunco_storage::StorageEntryKind::Symlink) => {
+                return Err(format!(
+                    "followed Rhai asset inspection returned an unresolved symbolic link: {}",
+                    path.display()
+                ));
+            }
             Err(error) => {
                 return Err(format!(
                     "cannot inspect Rhai asset {}: {error}",
@@ -435,6 +441,12 @@ fn collect_toml_sources(current: &Path, files: &mut Vec<(PathBuf, String)>) -> R
                 files.push((path, source));
             }
             Ok(lunco_storage::StorageEntryKind::File) => {}
+            Ok(lunco_storage::StorageEntryKind::Symlink) => {
+                return Err(format!(
+                    "followed asset inspection returned an unresolved symbolic link: {}",
+                    path.display()
+                ));
+            }
             Err(error) => {
                 return Err(format!("cannot inspect asset {}: {error}", path.display()));
             }

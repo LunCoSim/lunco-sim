@@ -137,9 +137,10 @@ pub fn discover_scene_tests(scenes_dir: &Path) -> Result<Vec<SceneTest>, String>
 fn scene_paths(scenes_dir: &Path) -> Result<Vec<PathBuf>, String> {
     match lunco_storage::entry_kind_file_sync(scenes_dir) {
         Ok(lunco_storage::StorageEntryKind::Directory) => {}
-        Ok(lunco_storage::StorageEntryKind::File) => {
+        Ok(lunco_storage::StorageEntryKind::File)
+        | Ok(lunco_storage::StorageEntryKind::Symlink) => {
             return Err(format!(
-                "scene-test root is a file, not a directory: {}",
+                "scene-test root is not a directory: {}",
                 scenes_dir.display()
             ));
         }

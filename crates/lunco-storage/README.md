@@ -43,6 +43,13 @@ the backend to ship.
 
 ## Usage
 
+`Storage::entry_kind` follows native symbolic links for reads. Native
+`entry_kind_no_follow_file_sync` identifies the entry itself and returns
+`StorageEntryKind::Symlink` even for a broken link. Both use one native metadata
+classifier; OPFS never emits this kind. The rename owner resolves and checks the
+parent directory before moving an entry, and rejects every existing target kind
+so a dangling destination is not overwritten.
+
 Native `FileStorage::write` publishes complete bytes through an atomic rename.
 Each concurrent write reserves its own staging file; replacement and create-only
 `write_new` share this staging owner. `write_new` preserves an existing destination.

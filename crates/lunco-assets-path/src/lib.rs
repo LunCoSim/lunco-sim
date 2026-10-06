@@ -7,6 +7,79 @@
 
 use std::path::{Component, Path, PathBuf};
 
+/// Why a filename cannot be used unchanged on the supported platforms.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PortableFileNameError {
+    Empty,
+    InvalidCharacter(char),
+    TrailingDotOrSpace,
+    ReservedDeviceName,
+}
+
+impl std::fmt::Display for PortableFileNameError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => formatter.write_str("filename is empty"),
+            Self::InvalidCharacter(character) => write!(
+                formatter,
+                "filename contains forbidden character {character:?}"
+            ),
+            Self::TrailingDotOrSpace => formatter.write_str("filename ends with a dot or space"),
+            Self::ReservedDeviceName => {
+                formatter.write_str("filename names a reserved Windows device")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PortableFileNameError {}
+
+/// Validate one portable filesystem filename without rewriting it.
+///
+/// Callers creating or renaming portable Twin entries use this invariant;
+/// existing native source paths and asset URI spellings retain their own
+/// contracts. Unicode names are accepted. Separators, control characters,
+/// Windows reserved characters/device basenames (including extensions), and
+/// final dots/spaces are rejected on every host. This does not impose a path
+/// length limit or choose a replacement name.
+pub fn validate_portable_file_name(name: &str) -> Result<(), PortableFileNameError> {
+    if name.is_empty() {
+        return Err(PortableFileNameError::Empty);
+    }
+    if let Some(character) = name.chars().find(|character| {
+        character.is_control()
+            || matches!(
+                *character,
+                '/' | '\\' | '<' | '>' | ':' | '"' | '|' | '?' | '*'
+            )
+    }) {
+        return Err(PortableFileNameError::InvalidCharacter(character));
+    }
+    if name.ends_with('.') || name.ends_with(' ') {
+        return Err(PortableFileNameError::TrailingDotOrSpace);
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .expect("split always yields one component")
+        .trim_end_matches(' ');
+    let reserved = matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ["COM", "LPT"].iter().any(|prefix| {
+        stem.get(..3)
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+            && matches!(
+                stem.get(3..),
+                Some("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
+            )
+    });
+    if reserved {
+        return Err(PortableFileNameError::ReservedDeviceName);
+    }
+    Ok(())
+}
+
 /// Whether a reference contains an explicit asset scheme.
 pub fn has_scheme(reference: impl AsRef<str>) -> bool {
     split_scheme(reference.as_ref()).is_some()
@@ -202,6 +275,73 @@ pub fn is_anchored(reference: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portable_file_names_reject_reserved_devices_and_nonportable_components() {
+        for name in [
+            "CON",
+            "con.mo",
+            "NUL.tar.gz",
+            "PRN.txt",
+            "AUX",
+            "COM1.mo",
+            "com9",
+            "LPT1",
+            "lpt9.sysml",
+            "COM¹.mo",
+            "COM²",
+            "COM³",
+            "LPT¹",
+            "LPT².mo",
+            "LPT³",
+            "CONIN$",
+            "CONOUT$.txt",
+            "CON .mo",
+        ] {
+            assert_eq!(
+                validate_portable_file_name(name),
+                Err(PortableFileNameError::ReservedDeviceName),
+                "{name}"
+            );
+        }
+        for name in [
+            "",
+            ".",
+            "..",
+            "file.",
+            "file ",
+            "parent/file",
+            "parent\\file",
+            "drive:name",
+            "name*",
+            "name?",
+            "name<",
+            "name>",
+            "name|",
+            "name\"",
+            "name\0",
+            "name\n",
+        ] {
+            assert!(validate_portable_file_name(name).is_err(), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn portable_file_names_preserve_unicode_and_literal_filesystem_characters() {
+        for name in [
+            "Café 中文 🛰.mo",
+            "literal#%.usda",
+            " spaces inside .txt",
+            ".hidden",
+            "CON_model.mo",
+            "COM10.mo",
+            "LPT0.txt",
+            "console.mo",
+            "data.with.dots",
+        ] {
+            assert_eq!(validate_portable_file_name(name), Ok(()), "{name}");
+        }
+    }
 
     #[test]
     fn scheme_qualified_passes_through() {

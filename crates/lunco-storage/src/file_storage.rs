@@ -32,6 +32,34 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{Storage, StorageEntryKind, StorageError, StorageHandle, StorageResult};
 
+/// Both native inspection contracts share metadata classification and errors;
+/// callers choose whether the final entry or its target is the subject.
+#[cfg(not(target_arch = "wasm32"))]
+fn native_entry_kind(
+    path: &std::path::Path,
+    follow_links: bool,
+) -> StorageResult<StorageEntryKind> {
+    let metadata = if follow_links {
+        std::fs::metadata(path)
+    } else {
+        std::fs::symlink_metadata(path)
+    }
+    .map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            StorageError::NotFound
+        } else {
+            StorageError::Io(error)
+        }
+    })?;
+    Ok(if metadata.file_type().is_symlink() {
+        StorageEntryKind::Symlink
+    } else if metadata.is_dir() {
+        StorageEntryKind::Directory
+    } else {
+        StorageEntryKind::File
+    })
+}
+
 /// Native-filesystem backend.
 ///
 /// Stateless for `File` operations (delegates to `std::fs`). The
@@ -40,6 +68,15 @@ use crate::{Storage, StorageEntryKind, StorageError, StorageHandle, StorageResul
 #[derive(Default)]
 pub struct FileStorage {
     memory: Mutex<HashMap<String, Vec<u8>>>,
+}
+
+impl FileStorage {
+    /// Native no-follow entry identity, used when moving an entry rather than
+    /// reading its target. Broken symbolic links remain existing entries.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn entry_kind_no_follow(&self, path: &std::path::Path) -> StorageResult<StorageEntryKind> {
+        native_entry_kind(path, false)
+    }
 }
 
 /// Cross-process native cache publication transaction. A separate OS file
@@ -361,20 +398,7 @@ impl Storage for FileStorage {
     async fn entry_kind(&self, handle: &StorageHandle) -> StorageResult<StorageEntryKind> {
         match handle {
             #[cfg(not(target_arch = "wasm32"))]
-            StorageHandle::File(path) => {
-                let metadata = std::fs::metadata(path).map_err(|error| {
-                    if error.kind() == std::io::ErrorKind::NotFound {
-                        StorageError::NotFound
-                    } else {
-                        StorageError::Io(error)
-                    }
-                })?;
-                if metadata.is_dir() {
-                    Ok(StorageEntryKind::Directory)
-                } else {
-                    Ok(StorageEntryKind::File)
-                }
-            }
+            StorageHandle::File(path) => native_entry_kind(path, true),
             StorageHandle::Memory(key) => {
                 let map = self
                     .memory

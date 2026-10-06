@@ -372,9 +372,9 @@ backend and architectural stubs for future OPFS/IndexedDB and remote backends.
 **`lunco-assets-path`**
 The dependency-free URI and relative-path algebra shared by USD composition,
 document authoring, Twin resolution, and script imports. It owns canonical
-scheme parsing, separator normalization, relative-path validation, and
-traversal-safe path operations without depending on Bevy, storage, or a
-filesystem.
+scheme parsing, separator normalization, relative-path validation, portable
+filesystem filename-component validation (`validate_portable_file_name`), and
+traversal-safe path operations without depending on Bevy, storage, or a filesystem.
 
 **`lunco-assets-core`**
 The lightweight asset identity boundary. It owns cache and Twin-root
@@ -1088,6 +1088,21 @@ resolved picker handles into the existing document and workspace commands.
 Actual reads, writes, entry inspection, and renames use `lunco-storage`;
 folder/Twin admission remains in `lunco-workspace`; domain crates still own
 format-specific loading and serialization.
+Generated promotion names and rename targets use the shared portable filename
+validator; Save All and Save As Twin validate every destination before dispatching
+saves or manifest creation. Invalid names reject visibly rather than acquiring a
+replacement spelling. Existing title-to-filename mapping remains in this adapter.
+Native rename producers reject non-representable command paths; rename resolves
+the source parent through Storage and confines it to the admitted canonical Twin
+root, without dereferencing the final entry being moved. Public rename/save-plan
+admission failures return terminal typed command rejections. An empty Save As Twin
+path acknowledges picker admission; completion still uses its pinned request.
+Rename uses Storage's exact native no-follow entry inspection: broken final links
+can move, and any existing destination, including a dangling link, rejects. Parent
+canonicalization is an admission preflight, not an atomic defense against a
+concurrent malicious directory replacement.
+Promotion and workspace manifest creation also inspect the manifest entry itself;
+an existing dangling manifest link rejects before promotion queues any saves.
 
 **`lunco-workbench-text-editor`**
 Generic source-editor capability. It owns the source tab state, async source

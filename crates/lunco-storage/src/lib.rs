@@ -253,6 +253,9 @@ pub enum StorageEntryKind {
     File,
     /// A directory/container entry.
     Directory,
+    /// A symbolic link itself, including a broken link. Emitted only by native
+    /// no-follow inspection; followed `Storage::entry_kind` and OPFS never emit it.
+    Symlink,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -581,6 +584,20 @@ pub fn entry_kind_file_sync(path: &Path) -> StorageResult<StorageEntryKind> {
     FileStorage::new().entry_kind_sync(&StorageHandle::File(path.to_path_buf()))
 }
 
+/// Identify the native entry being moved without dereferencing its final link.
+/// Intermediate parent resolution remains the caller's ownership preflight.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn entry_kind_no_follow_file_sync(path: &Path) -> StorageResult<StorageEntryKind> {
+    FileStorage::new().entry_kind_no_follow(path)
+}
+
+/// Browser entries have no symbolic links, so identifying the entry itself
+/// uses the existing default browser file backend's entry-kind contract.
+#[cfg(target_arch = "wasm32")]
+pub fn entry_kind_no_follow_file_sync(path: &Path) -> StorageResult<StorageEntryKind> {
+    entry_kind_file_sync(path)
+}
+
 /// Wasm counterpart of [`entry_kind_file_sync`].
 #[cfg(target_arch = "wasm32")]
 pub fn entry_kind_file_sync(path: &Path) -> StorageResult<StorageEntryKind> {
@@ -687,7 +704,7 @@ pub trait Storage: Send + Sync {
         futures_lite::future::block_on(self.delete(handle))
     }
 
-    /// Identify the entry addressed by `handle`.
+    /// Identify the entry addressed by `handle`, following native symbolic links.
     async fn entry_kind(&self, handle: &StorageHandle) -> StorageResult<StorageEntryKind>;
 
     /// Synchronous convenience wrapper around [`Storage::entry_kind`].

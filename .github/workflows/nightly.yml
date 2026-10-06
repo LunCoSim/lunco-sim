@@ -244,11 +244,13 @@ jobs:
         if: matrix.platform == 'windows'
         run: |
           cargo test --release --locked -j 4 --lib \
-            -p lunco-storage -p lunco-twin -p lunco-assets-core \
+            -p lunco-storage -p lunco-twin -p lunco-assets-core -p lunco-assets-path \
             -- --exact \
             file_uri_tests::file_uris_preserve_native_paths_and_reject_invalid_addresses \
             tests::open_uses_canonical_root_identity \
             manifest::tests::native_plugin_paths_are_twin_relative_and_enabled_by_default \
+            tests::portable_file_names_reject_reserved_devices_and_nonportable_components \
+            tests::portable_file_names_preserve_unicode_and_literal_filesystem_characters \
             asset_path::tests::native_load_paths_keep_filesystem_characters_and_separate_labels \
             asset_path::tests::native_load_paths_reject_missing_retired_and_foreign_ownership \
             asset_path::tests::windows_native_load_paths_normalize_verbatim_mount_roots \

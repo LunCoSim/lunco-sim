@@ -6,6 +6,8 @@ license.workspace = true
 description = "Reusable typed file and Twin workflow commands for LunCoSim workbench hosts"
 
 [dependencies]
+lunco-assets-path = { path = "../lunco-assets-path" }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }

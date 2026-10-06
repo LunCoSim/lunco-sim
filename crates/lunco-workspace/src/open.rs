@@ -225,8 +225,8 @@ fn write_new_twin_manifest(
         });
     }
     let manifest_path = path.join(lunco_twin::MANIFEST_FILENAME);
-    match inspect_path(&manifest_path) {
-        Ok(StorageEntryKind::File) | Ok(StorageEntryKind::Directory) => {
+    match lunco_storage::entry_kind_no_follow_file_sync(&manifest_path) {
+        Ok(_) => {
             return Err(TwinError::AlreadyExists(path.to_path_buf()));
         }
         Err(StorageError::NotFound) => {}
@@ -239,7 +239,7 @@ fn write_new_twin_manifest(
     }
     match inspect_path(path) {
         Ok(StorageEntryKind::Directory) | Err(StorageError::NotFound) => {}
-        Ok(StorageEntryKind::File) => {
+        Ok(StorageEntryKind::File) | Ok(StorageEntryKind::Symlink) => {
             return Err(TwinError::NotAFileOrFolder(path.to_path_buf()));
         }
         Err(error) => {

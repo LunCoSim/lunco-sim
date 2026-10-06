@@ -670,6 +670,13 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   only after download admission succeeds. Verify cancellation/read failure,
   same-name overlapping reads and App teardown through the shared picker browser
   tests; see the [picker owner contract](../../docs/crates-index.md).
+- **Portable Twin saves**: Save All and Save As Twin preflight generated filenames
+  with the shared `lunco-assets-path` component validator before any save or manifest
+  command. Reserved device names (even with `.mo`), final dots/spaces and forbidden
+  characters reject visibly; no replacement filename hides invalid state. Rename
+  uses lossless command paths and confines the actual source parent through Storage.
+  Verify name algebra with the asset-path tests and source scope through the authored
+  `modelica_save_all_scope.rhai` production gate; these prove different boundaries.
 - **Complete result admission**: finite ordered times, matching series/metadata
   lengths, and finite values are required before a trajectory is marked Done.
   `experiments.result_limits` supplies the shared budgets; defaults are 8,000,000

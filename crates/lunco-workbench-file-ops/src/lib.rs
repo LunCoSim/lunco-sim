@@ -43,6 +43,7 @@
 //!   command and serialization to document owners.
 
 use bevy::prelude::*;
+use lunco_command_contracts::{Ack, OpId, Reject};
 use lunco_core::{Command, on_command, register_commands};
 use lunco_doc_bevy::{SaveAsDocument, rename::RenameOpenDocument};
 use lunco_twin::{DocumentKindId, DocumentKindRegistry};
@@ -51,11 +52,13 @@ use lunco_workbench_file_dialog::{
     CancelPick, PickFollowUp, PickInFlight, PickMode, PickResolved, PickStarted, PickedPath,
     request_pick,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use lunco_workspace::FileRenamed;
 use lunco_workspace::open::{
     AddFolderToWorkspace, AddTwin, CreateTwin, OpenFolder, OpenTwin, PendingTwinOpens,
     drain_pending_twin_opens,
 };
-use lunco_workspace::{FileRenamed, WorkspaceResource, rename::RenameTwinEntry};
+use lunco_workspace::{WorkspaceResource, rename::RenameTwinEntry};
 
 /// Request a system "Open File" dialog.
 ///
@@ -276,7 +279,7 @@ fn on_rename_open_document(
 ) {
     use lunco_doc::DocumentOrigin;
     let ev = trigger.event();
-    let new_name = ev.new_name.trim().to_string();
+    let new_name = ev.new_name.clone();
     if new_name.is_empty() {
         warn!("[RenameOpenDocument] empty new_name");
         return;
@@ -317,9 +320,17 @@ fn on_rename_open_document(
                 Ok(r) => r.to_path_buf(),
                 Err(_) => return,
             };
+            let (Some(root), Some(relative_path)) = (root.to_str(), rel.to_str()) else {
+                reject_pick(
+                    &mut commands,
+                    "rename source path cannot be represented by the document command transport"
+                        .into(),
+                );
+                return;
+            };
             commands.trigger(RenameTwinEntry {
-                twin_root: root.to_string_lossy().into_owned(),
-                relative_path: rel.to_string_lossy().into_owned(),
+                twin_root: root.to_owned(),
+                relative_path: relative_path.to_owned(),
                 new_name,
             });
         }
@@ -337,111 +348,135 @@ fn on_rename_open_document(
     }
 }
 
+fn rejected_file_command(commands: &mut Commands, message: String) -> Result<Ack, Reject> {
+    reject_pick(commands, message.clone());
+    Err(Reject::InvalidOp(message))
+}
+
+/// Resolve the directory actually renamed through storage, while leaving the
+/// final entry undereferenced: renaming a symlink moves the link itself.
+#[cfg(not(target_arch = "wasm32"))]
+fn confined_rename_source(
+    root: &std::path::Path,
+    relative: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    if relative.as_os_str().is_empty() || !lunco_assets_path::is_safe_relative_components(relative)
+    {
+        return Err(format!(
+            "rename source must be an ordinary relative path: {}",
+            relative.display()
+        ));
+    }
+    let candidate = root.join(relative);
+    let parent = candidate
+        .parent()
+        .ok_or_else(|| "rename source has no parent directory".to_owned())?;
+    let parent = lunco_storage::canonicalize_file_path(parent)
+        .map_err(|error| format!("cannot resolve rename source parent: {error}"))?;
+    if !parent.starts_with(root) {
+        return Err("rename source parent resolves outside its admitted Twin root".into());
+    }
+    let name = relative
+        .file_name()
+        .ok_or_else(|| "rename source has no filename".to_owned())?;
+    Ok(parent.join(name))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn unoccupied_rename_destination(
+    source: &std::path::Path,
+    name: &str,
+) -> Result<std::path::PathBuf, String> {
+    lunco_assets_path::validate_portable_file_name(name)
+        .map_err(|error| format!("rename target {name:?} is invalid: {error}"))?;
+    let parent = source
+        .parent()
+        .ok_or_else(|| "resolved rename source has no parent".to_owned())?;
+    let destination = parent.join(name);
+    if destination != source {
+        match lunco_storage::entry_kind_no_follow_file_sync(&destination) {
+            Ok(_) => {
+                return Err(format!(
+                    "rename target already exists: {}",
+                    destination.display()
+                ));
+            }
+            Err(lunco_storage::StorageError::NotFound) => {}
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect rename target {}: {error}",
+                    destination.display()
+                ));
+            }
+        }
+    }
+    Ok(destination)
+}
+
 #[on_command(RenameTwinEntry)]
 fn on_rename_twin_entry(
     trigger: On<RenameTwinEntry>,
     #[cfg(not(target_arch = "wasm32"))] mut workspace: ResMut<WorkspaceResource>,
-    #[cfg(not(target_arch = "wasm32"))] mut commands: Commands,
-) {
+    mut commands: Commands,
+) -> Result<Ack, Reject> {
     #[cfg(target_arch = "wasm32")]
     {
         let _ = trigger;
-        warn!("[RenameTwinEntry] rename not supported on wasm for filesystem-path Twin entries");
-        return;
+        rejected_file_command(
+            &mut commands,
+            "filesystem Twin entry rename is unavailable in this browser host".into(),
+        )
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
         use lunco_doc::DocumentOrigin;
         let ev = trigger.event();
         let twin_root = std::path::PathBuf::from(&ev.twin_root);
-        let new_name = ev.new_name.trim();
-        if new_name.is_empty() {
-            warn!("[RenameTwinEntry] new_name is empty");
-            return;
-        }
-        if new_name.contains(std::path::MAIN_SEPARATOR)
-            || new_name.contains('/')
-            || new_name == "."
-            || new_name == ".."
-        {
-            warn!(
-                "[RenameTwinEntry] new_name `{new_name}` contains a path separator or \
-             special segment — rename only, no move across directories"
-            );
-            return;
-        }
-        // Resolve TwinId by matching root path.
+        let new_name = &ev.new_name;
         let twin_id = workspace
             .twins()
-            .find(|(_, t)| t.root == twin_root)
+            .find(|(_, twin)| twin.root == twin_root)
             .map(|(id, _)| id);
         let Some(twin_id) = twin_id else {
-            warn!(
-                "[RenameTwinEntry] no open Twin matches root {}",
-                twin_root.display()
+            return rejected_file_command(
+                &mut commands,
+                format!("no open Twin matches rename root {}", twin_root.display()),
             );
-            return;
         };
-        let old_rel = std::path::PathBuf::from(&ev.relative_path);
-        if old_rel.as_os_str().is_empty()
-            || !old_rel
-                .components()
-                .all(|component| matches!(component, std::path::Component::Normal(_)))
-        {
-            warn!(
-                "[RenameTwinEntry] relative_path must stay within the Twin: {}",
-                old_rel.display()
-            );
-            return;
-        }
-        let old_abs = twin_root.join(&old_rel);
-        let old_kind = match lunco_storage::entry_kind_file_sync(&old_abs) {
+        let old_abs =
+            match confined_rename_source(&twin_root, std::path::Path::new(&ev.relative_path)) {
+                Ok(source) => source,
+                Err(message) => return rejected_file_command(&mut commands, message),
+            };
+        let old_kind = match lunco_storage::entry_kind_no_follow_file_sync(&old_abs) {
             Ok(kind) => kind,
-            Err(lunco_storage::StorageError::NotFound) => {
-                warn!("[RenameTwinEntry] source missing: {}", old_abs.display());
-                return;
-            }
             Err(error) => {
-                warn!(
-                    "[RenameTwinEntry] cannot inspect source {}: {error}",
-                    old_abs.display()
+                return rejected_file_command(
+                    &mut commands,
+                    format!(
+                        "cannot inspect rename source {}: {error}",
+                        old_abs.display()
+                    ),
                 );
-                return;
             }
         };
-        let new_abs = old_abs
-            .parent()
-            .map(|p| p.join(new_name))
-            .unwrap_or_else(|| twin_root.join(new_name));
+        let new_abs = match unoccupied_rename_destination(&old_abs, new_name) {
+            Ok(destination) => destination,
+            Err(message) => return rejected_file_command(&mut commands, message),
+        };
         if new_abs == old_abs {
-            // No-op (user submitted the existing name) — silent.
-            return;
-        }
-        match lunco_storage::entry_kind_file_sync(&new_abs) {
-            Ok(_) => {
-                warn!(
-                    "[RenameTwinEntry] target already exists: {}",
-                    new_abs.display()
-                );
-                return;
-            }
-            Err(lunco_storage::StorageError::NotFound) => {}
-            Err(error) => {
-                warn!(
-                    "[RenameTwinEntry] cannot inspect target {}: {error}",
-                    new_abs.display()
-                );
-                return;
-            }
+            return Ok(Ack::new(OpId::new()));
         }
         let is_dir = matches!(old_kind, lunco_storage::StorageEntryKind::Directory);
-        if let Err(e) = lunco_storage::rename_file_sync(&old_abs, &new_abs) {
-            warn!(
-                "[RenameTwinEntry] storage rename {} -> {} failed: {e}",
-                old_abs.display(),
-                new_abs.display()
+        if let Err(error) = lunco_storage::rename_file_sync(&old_abs, &new_abs) {
+            return rejected_file_command(
+                &mut commands,
+                format!(
+                    "rename {} to {} failed: {error}",
+                    old_abs.display(),
+                    new_abs.display()
+                ),
             );
-            return;
         }
 
         // Re-scan the Twin so its `files()` reflects disk.
@@ -487,7 +522,8 @@ fn on_rename_twin_entry(
             new_abs,
             is_dir,
         });
-    } // end #[cfg(not(target_arch = "wasm32"))]
+        Ok(Ack::new(OpId::new()))
+    }
 }
 
 #[on_command(SaveAll)]
@@ -497,27 +533,24 @@ fn on_save_all(
     connection: Option<Res<lunco_core_session::ClientConnection>>,
     replica: Option<Res<lunco_core_session::ReplicatedScene>>,
     mut commands: Commands,
-) {
+) -> Result<Ack, Reject> {
     let Some(workspace) = workspace else {
-        reject_pick(&mut commands, "Save All has no workspace".into());
-        return;
+        return rejected_file_command(&mut commands, "Save All has no workspace".into());
     };
     let replication =
         lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     if replica.is_some() && replication.is_none() {
-        reject_pick(
+        return rejected_file_command(
             &mut commands,
             "Save All has no live owner for its replicated scene".into(),
         );
-        return;
     }
     let entries = match PromotionIntent::capture(&workspace, replication.as_ref())
         .and_then(|intent| intent.documents(&workspace, replication.as_ref()))
     {
         Ok(entries) => entries,
         Err(reason) => {
-            reject_pick(&mut commands, reason);
-            return;
+            return rejected_file_command(&mut commands, reason);
         }
     };
     let active_root = workspace
@@ -529,10 +562,12 @@ fn on_save_all(
     for entry in entries {
         let destination = if entry.origin.is_untitled() {
             if let Some(root) = &active_root {
-                let path = promoted_document_path(root, &entry, &mut used);
+                let path = match promoted_document_path(root, &entry, &mut used) {
+                    Ok(path) => path,
+                    Err(message) => return rejected_file_command(&mut commands, message),
+                };
                 let Some(path) = path.to_str() else {
-                    reject_pick(&mut commands, "Save All destination cannot be represented by the document command transport".into());
-                    return;
+                    return rejected_file_command(&mut commands, "Save All destination cannot be represented by the document command transport".into());
                 };
                 Some(path.to_owned())
             } else {
@@ -550,6 +585,7 @@ fn on_save_all(
             commands.trigger(lunco_doc_bevy::SaveDocument { doc_id });
         }
     }
+    Ok(Ack::new(OpId::new()))
 }
 
 #[on_command(SaveAsTwin)]
@@ -559,27 +595,24 @@ fn on_save_as_twin(
     connection: Option<Res<lunco_core_session::ClientConnection>>,
     replica: Option<Res<lunco_core_session::ReplicatedScene>>,
     mut commands: Commands,
-) {
+) -> Result<Ack, Reject> {
     use lunco_workbench_file_dialog::PickMode;
     let folder = trigger.event().folder.clone();
     let Some(workspace) = workspace else {
-        reject_pick(&mut commands, "no workspace is installed".into());
-        return;
+        return rejected_file_command(&mut commands, "no workspace is installed".into());
     };
     let replication =
         lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     if replica.is_some() && replication.is_none() {
-        reject_pick(
+        return rejected_file_command(
             &mut commands,
             "Save As Twin has no live owner for its replicated scene".into(),
         );
-        return;
     }
     let intent = match PromotionIntent::capture(&workspace, replication.as_ref()) {
         Ok(intent) => intent,
         Err(reason) => {
-            reject_pick(&mut commands, reason);
-            return;
+            return rejected_file_command(&mut commands, reason);
         }
     };
     if folder.is_empty() {
@@ -589,80 +622,92 @@ fn on_save_as_twin(
             PickFollowUp::SaveAsTwin,
             intent,
         );
-        return;
+        return Ok(Ack::new(OpId::new()));
     }
     let entries = match intent.documents(&workspace, replication.as_ref()) {
         Ok(entries) => entries,
         Err(reason) => {
-            reject_pick(&mut commands, reason);
-            return;
+            return rejected_file_command(&mut commands, reason);
         }
     };
-    promote_documents(folder, entries, &mut commands);
+    promote_documents(folder, entries, &mut commands)
 }
 
 fn promote_documents(
     folder: String,
     entries: Vec<lunco_workspace::DocumentEntry>,
     commands: &mut Commands,
-) {
+) -> Result<Ack, Reject> {
     let root = std::path::PathBuf::from(&folder);
     let manifest_path = root.join(lunco_twin::MANIFEST_FILENAME);
-    if matches!(
-        lunco_storage::entry_kind_file_sync(&manifest_path),
-        Ok(lunco_storage::StorageEntryKind::File) | Ok(lunco_storage::StorageEntryKind::Directory)
-    ) {
-        warn!(
-            "[SaveAsTwin] `{}` already contains {} — choose a new Twin folder",
-            root.display(),
-            lunco_twin::MANIFEST_FILENAME
-        );
-        return;
+    match lunco_storage::entry_kind_no_follow_file_sync(&manifest_path) {
+        Ok(_) => {
+            return rejected_file_command(
+                commands,
+                format!(
+                    "{} already contains {}",
+                    root.display(),
+                    lunco_twin::MANIFEST_FILENAME
+                ),
+            );
+        }
+        Err(lunco_storage::StorageError::NotFound) => {}
+        Err(error) => {
+            return rejected_file_command(
+                commands,
+                format!(
+                    "cannot inspect manifest {}: {error}",
+                    manifest_path.display()
+                ),
+            );
+        }
     }
     match lunco_storage::entry_kind_file_sync(&root) {
-        Ok(lunco_storage::StorageEntryKind::File) => {
-            warn!("[SaveAsTwin] `{}` is not a folder", root.display());
-            return;
+        Ok(lunco_storage::StorageEntryKind::File)
+        | Ok(lunco_storage::StorageEntryKind::Symlink) => {
+            return rejected_file_command(commands, format!("{} is not a folder", root.display()));
         }
         Ok(lunco_storage::StorageEntryKind::Directory)
         | Err(lunco_storage::StorageError::NotFound) => {}
         Err(error) => {
-            warn!("[SaveAsTwin] cannot inspect `{}`: {error}", root.display());
-            return;
+            return rejected_file_command(
+                commands,
+                format!("cannot inspect {}: {error}", root.display()),
+            );
         }
     }
     let mut used = std::collections::HashSet::new();
     let mut default_scene = String::new();
     let mut saves = Vec::with_capacity(entries.len());
     for entry in entries {
-        let path = promoted_document_path(&root, &entry, &mut used);
+        let path = match promoted_document_path(&root, &entry, &mut used) {
+            Ok(path) => path,
+            Err(message) => return rejected_file_command(commands, message),
+        };
         if default_scene.is_empty() && entry.kind.as_str() == "usd" {
             let relative = match path.strip_prefix(&root) {
                 Ok(relative) => relative,
                 Err(reason) => {
-                    reject_pick(
+                    return rejected_file_command(
                         commands,
                         format!("promoted scene is outside its Twin root: {reason}"),
                     );
-                    return;
                 }
             };
             let Some(relative) = relative.to_str() else {
-                reject_pick(
+                return rejected_file_command(
                     commands,
                     "promoted scene name cannot be represented in the Twin manifest".into(),
                 );
-                return;
             };
             default_scene = relative.to_owned();
         }
         let Some(path) = path.to_str() else {
-            reject_pick(
+            return rejected_file_command(
                 commands,
                 "promoted file destination cannot be represented by the document command transport"
                     .into(),
             );
-            return;
         };
         saves.push((entry.id, path.to_owned()));
     }
@@ -678,6 +723,7 @@ fn promote_documents(
     for (doc, path) in saves {
         commands.trigger(SaveAsDocument { doc_id: doc, path });
     }
+    Ok(Ack::new(OpId::new()))
 }
 
 /// Choose a safe, stable filename for an open document being promoted into a
@@ -687,7 +733,7 @@ fn promoted_document_path(
     root: &std::path::Path,
     entry: &lunco_workspace::DocumentEntry,
     used: &mut std::collections::HashSet<String>,
-) -> std::path::PathBuf {
+) -> Result<std::path::PathBuf, String> {
     let raw = std::path::Path::new(&entry.title)
         .file_name()
         .and_then(|name| name.to_str())
@@ -713,9 +759,11 @@ fn promoted_document_path(
             _ => ".txt",
         });
     }
+    lunco_assets_path::validate_portable_file_name(&base)
+        .map_err(|error| format!("promoted filename {base:?} is invalid: {error}"))?;
     let original = base.clone();
     let mut suffix = 2;
-    while !used.insert(base.to_ascii_lowercase()) {
+    while used.contains(&base.to_ascii_lowercase()) {
         let path = std::path::Path::new(&original);
         let stem = path
             .file_stem()
@@ -728,7 +776,10 @@ fn promoted_document_path(
         };
         suffix += 1;
     }
-    root.join(base)
+    lunco_assets_path::validate_portable_file_name(&base)
+        .map_err(|error| format!("promoted filename {base:?} is invalid: {error}"))?;
+    used.insert(base.to_ascii_lowercase());
+    Ok(root.join(base))
 }
 
 #[cfg(test)]
@@ -753,13 +804,190 @@ mod save_tests {
             ..first.clone()
         };
         assert_eq!(
-            promoted_document_path(root, &first, &mut used),
+            promoted_document_path(root, &first, &mut used).unwrap(),
             root.join("Engine_Model.mo")
         );
         assert_eq!(
-            promoted_document_path(root, &second, &mut used),
+            promoted_document_path(root, &second, &mut used).unwrap(),
             root.join("Engine_Model-2.mo")
         );
+    }
+
+    #[test]
+    fn promoted_document_names_reject_invalid_final_candidates_without_rewriting() {
+        let root = std::path::Path::new("output");
+        let mut used = std::collections::HashSet::new();
+        for title in ["CON", "NUL.mo", "COM1.mo", "LPT9.txt", "name."] {
+            let entry = lunco_workspace::DocumentEntry {
+                id: lunco_doc::DocumentId::new(1),
+                kind: lunco_workspace::DocumentKindId::new("modelica"),
+                origin: lunco_doc::DocumentOrigin::untitled(title),
+                runtime_context: lunco_workspace::DocumentRuntimeOwner::Application,
+                title: title.into(),
+                dirty: true,
+            };
+            assert!(
+                promoted_document_path(root, &entry, &mut used).is_err(),
+                "{title}"
+            );
+            assert!(
+                used.is_empty(),
+                "an invalid name must not reserve a replacement identity"
+            );
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod rename_path_tests {
+    use super::*;
+
+    #[test]
+    fn rename_parent_confinement_uses_storage_identity_and_rejects_invalid_sources() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = lunco_storage::canonicalize_file_path(directory.path()).unwrap();
+        let nested = root.join("nested");
+        lunco_storage::ensure_directory_sync(&nested).unwrap();
+        assert_eq!(
+            confined_rename_source(&root, std::path::Path::new("nested/source.mo")).unwrap(),
+            nested.join("source.mo")
+        );
+        for relative in ["", "..", "../outside.mo", "missing/source.mo"] {
+            assert!(
+                confined_rename_source(&root, std::path::Path::new(relative)).is_err(),
+                "{relative:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_parent_confinement_rejects_escaping_directory_links_but_preserves_final_links() {
+        let directory = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = lunco_storage::canonicalize_file_path(directory.path()).unwrap();
+        let secret = outside.path().join("secret.mo");
+        lunco_storage::write_file_sync(&secret, b"outside source").unwrap();
+        lunco_storage::create_directory_symlink_sync(outside.path(), &root.join("escape")).unwrap();
+        assert!(confined_rename_source(&root, std::path::Path::new("escape/secret.mo")).is_err());
+        lunco_storage::create_file_symlink_sync(&secret, &root.join("link.mo")).unwrap();
+        let source = confined_rename_source(&root, std::path::Path::new("link.mo")).unwrap();
+        assert_eq!(
+            source,
+            root.join("link.mo"),
+            "the final symlink must not become its external target"
+        );
+        lunco_storage::rename_file_sync(&source, &root.join("renamed.mo")).unwrap();
+        assert_eq!(
+            lunco_storage::read_file_sync(&secret).unwrap(),
+            b"outside source"
+        );
+        assert!(matches!(
+            lunco_storage::entry_kind_file_sync(&source),
+            Err(lunco_storage::StorageError::NotFound)
+        ));
+        assert_eq!(
+            lunco_storage::read_file_sync(&root.join("renamed.mo")).unwrap(),
+            b"outside source"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_entry_inspection_preserves_broken_sources_and_rejects_dangling_destinations() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = lunco_storage::canonicalize_file_path(directory.path()).unwrap();
+        let absent = root.join("absent.mo");
+        let link = root.join("link.mo");
+        lunco_storage::create_file_symlink_sync(&absent, &link).unwrap();
+        let source = confined_rename_source(&root, std::path::Path::new("link.mo")).unwrap();
+        assert_eq!(
+            lunco_storage::entry_kind_no_follow_file_sync(&source).unwrap(),
+            lunco_storage::StorageEntryKind::Symlink
+        );
+        assert!(
+            matches!(
+                lunco_storage::entry_kind_file_sync(&source),
+                Err(lunco_storage::StorageError::NotFound)
+            ),
+            "followed inspection keeps its target-reading contract"
+        );
+        let destination = unoccupied_rename_destination(&source, "renamed.mo").unwrap();
+        lunco_storage::rename_file_sync(&source, &destination).unwrap();
+        assert_eq!(
+            lunco_storage::entry_kind_no_follow_file_sync(&destination).unwrap(),
+            lunco_storage::StorageEntryKind::Symlink
+        );
+        let other = root.join("other.mo");
+        lunco_storage::write_file_sync(&other, b"original").unwrap();
+        assert!(
+            unoccupied_rename_destination(&other, "renamed.mo")
+                .unwrap_err()
+                .contains("already exists")
+        );
+        assert_eq!(lunco_storage::read_file_sync(&other).unwrap(), b"original");
+        assert!(matches!(
+            lunco_storage::entry_kind_file_sync(&absent),
+            Err(lunco_storage::StorageError::NotFound)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn promotion_manifest_preflight_rejects_dangling_link_before_queueing_effects() {
+        #[derive(Resource, Default)]
+        struct Effects {
+            manifests: usize,
+            saves: usize,
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let root = lunco_storage::canonicalize_file_path(directory.path()).unwrap();
+        let manifest = root.join(lunco_twin::MANIFEST_FILENAME);
+        let absent = root.join("absent-manifest.toml");
+        lunco_storage::create_file_symlink_sync(&absent, &manifest).unwrap();
+        let entry = lunco_workspace::DocumentEntry {
+            id: lunco_doc::DocumentId::new(1),
+            kind: lunco_workspace::DocumentKindId::new("modelica"),
+            origin: lunco_doc::DocumentOrigin::untitled("source"),
+            runtime_context: lunco_workspace::DocumentRuntimeOwner::Application,
+            title: "source.mo".into(),
+            dirty: true,
+        };
+        let mut world = World::new();
+        world.init_resource::<Effects>();
+        world.add_observer(|_: On<CreateTwin>, mut effects: ResMut<Effects>| {
+            effects.manifests += 1;
+        });
+        world.add_observer(|_: On<SaveAsDocument>, mut effects: ResMut<Effects>| {
+            effects.saves += 1;
+        });
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let result = {
+            let mut commands = Commands::new(&mut queue, &world);
+            promote_documents(
+                root.to_str().unwrap().to_owned(),
+                vec![entry],
+                &mut commands,
+            )
+        };
+        assert!(
+            matches!(result, Err(Reject::InvalidOp(message)) if message.contains("already contains"))
+        );
+        queue.apply(&mut world);
+        let effects = world.resource::<Effects>();
+        assert_eq!(
+            (effects.manifests, effects.saves),
+            (0, 0),
+            "rejected manifest preflight must not enqueue a manifest or save command"
+        );
+        assert_eq!(
+            lunco_storage::entry_kind_no_follow_file_sync(&manifest).unwrap(),
+            lunco_storage::StorageEntryKind::Symlink
+        );
+        assert!(matches!(
+            lunco_storage::entry_kind_file_sync(&absent),
+            Err(lunco_storage::StorageError::NotFound)
+        ));
     }
 }
 
@@ -1102,7 +1330,9 @@ fn on_pick_resolved(
                 .ok_or_else(|| "Save As Twin source workspace has retired".to_owned())
                 .and_then(|workspace| intent.documents(&workspace.0, replication.as_ref()));
             match entries {
-                Ok(entries) => promote_documents(path, entries, &mut commands),
+                Ok(entries) => {
+                    let _ = promote_documents(path, entries, &mut commands);
+                }
                 Err(reason) => reject_pick(&mut commands, reason),
             }
         }
@@ -1154,6 +1384,8 @@ pub struct FileOpsPlugin;
 
 impl Plugin for FileOpsPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>();
         if !app.is_plugin_added::<lunco_workbench_file_dialog::PickerPlugin>() {
             app.add_plugins(lunco_workbench_file_dialog::PickerPlugin);
         }
@@ -1311,6 +1543,8 @@ mod picker_admission_tests {
         let mut app = App::new();
         app.insert_resource(WorkspaceResource(workspace))
             .init_resource::<Rejections>()
+            .init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>()
             .add_observer(on_save_as_twin)
             .add_observer(admit_source_pick)
             .add_observer(observe_error)

@@ -10994,6 +10994,8 @@ name = "lunco-workbench-file-ops"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-assets-path",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-core-session",
  "lunco-doc",
