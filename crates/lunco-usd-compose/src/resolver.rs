@@ -54,16 +54,21 @@ pub(crate) const BINARY_STUB_ID: &str = "__lunco_binary_stub__.usda";
 const EMPTY_USDA: &[u8] = b"#usda 1.0\n";
 
 /// True if `asset_path` names a non-USD binary asset (see
-/// [`BINARY_ASSET_EXTENSIONS`]). Strips URL query (`?…`) / fragment (`#…`)
-/// first — the NASA Perseverance URL carries an `?emrc=…` query.
+/// [`BINARY_ASSET_EXTENSIONS`]). HTTP URLs use their URL pathname; internal
+/// asset identifiers and native filenames retain literal `#`, `?` and `%`.
 pub fn is_binary_asset(asset_path: &str) -> bool {
-    let stem = asset_path
-        .split('?')
-        .next()
-        .unwrap_or(asset_path)
-        .split('#')
-        .next()
-        .unwrap_or(asset_path);
+    let is_http = lunco_assets_path::split_scheme(asset_path).is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    });
+    let parsed = if is_http {
+        match url::Url::parse(asset_path) {
+            Ok(url) => Some(url),
+            Err(_) => return false,
+        }
+    } else {
+        None
+    };
+    let stem = parsed.as_ref().map_or(asset_path, url::Url::path);
     if let Some(dot) = stem.rfind('.') {
         let ext = &stem[dot + 1..];
         BINARY_ASSET_EXTENSIONS
@@ -280,6 +285,46 @@ impl ar::Resolver for LuncoUsdResolver {
         _resolved_path: &ResolvedPath,
     ) -> Option<SystemTime> {
         None
+    }
+}
+
+#[cfg(test)]
+mod binary_classification_tests {
+    use super::*;
+
+    #[test]
+    fn binary_classification_preserves_logical_filename_suffixes() {
+        for address in [
+            "twin://fixture/models/model # %.glb",
+            "lunco://models/model ? %.GLTF",
+            "twin://fixture/models/model.usda#payload.glb",
+            r"C:\models\model # %.stl",
+            "https://example.invalid/model.glb?version=2#view",
+        ] {
+            assert!(is_binary_asset(address), "{address}");
+        }
+        for address in [
+            "twin://fixture/models/model.glb#source.usda",
+            "lunco://models/model.glb?source.usda",
+            "https://example.invalid/model.usda?next=model.glb#view.glb",
+        ] {
+            assert!(!is_binary_asset(address), "{address}");
+        }
+        let source = br#"#usda 1.0
+            def Scope "Mesh" (prepend references = @models/model # %.glb@) {}
+        "#;
+        assert!(
+            crate::child_layer_ids("twin://fixture/root.usda", source)
+                .unwrap()
+                .is_empty()
+        );
+        let source = br#"#usda 1.0
+            def Scope "Part" (prepend references = @models/model.glb#source.usda@) {}
+        "#;
+        assert_eq!(
+            crate::child_layer_ids("twin://fixture/root.usda", source).unwrap(),
+            ["twin://fixture/models/model.glb#source.usda"]
+        );
     }
 }
 
