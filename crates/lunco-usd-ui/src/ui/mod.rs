@@ -36,6 +36,7 @@ use lunco_workspace::WorkspaceResource;
 pub mod browser_dispatch;
 pub mod browser_section;
 pub mod loaded_stages;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod scene_files;
 pub mod session_codec;
 
@@ -48,6 +49,7 @@ pub use browser_section::{ConnectionsSection, UsdSceneSection};
 pub use loaded_stages::{
     LoadedStage, LoadedUsdStages, UsdBrowserView, WorkspaceStage, produce_usd_browser_view,
 };
+#[cfg(not(target_arch = "wasm32"))]
 pub use scene_files::{
     SceneFileKind, SceneFileRescan, SceneFileRow, SceneFileView, SceneFilesSection,
     produce_scene_file_view,
@@ -87,12 +89,15 @@ impl Plugin for UsdUiPlugin {
         // in the Files scope beside the raw folder tree. Its producer is gated on
         // the scene-root set (the walk parses layers off disk), so it costs
         // nothing per frame; see `scene_files.rs`.
-        app.init_resource::<SceneFileView>();
-        app.init_resource::<SceneFileRescan>();
-        app.add_systems(Update, produce_scene_file_view);
-        app.world_mut()
-            .resource_mut::<BrowserSectionRegistry>()
-            .register(SceneFilesSection);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            app.init_resource::<SceneFileView>();
+            app.init_resource::<SceneFileRescan>();
+            app.add_systems(Update, produce_scene_file_view);
+            app.world_mut()
+                .resource_mut::<BrowserSectionRegistry>()
+                .register(SceneFilesSection);
+        }
 
         app.add_observer(register_workspace_stage_on_doc_opened);
         app.add_observer(register_workspace_stage_on_doc_user_owned);
