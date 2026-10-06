@@ -73,7 +73,7 @@ lunco-scene-runner = { path = "../lunco-scene-runner", default-features = false 
 #   cargo build -p lunco-luncosim --bin luncosim --no-default-features --features server
 # which omits winit/wayland/x11/egui/picking/gizmos + the workbench/material/doc
 # UI crates entirely — the SAME `luncosim` bin, just a different feature set. Single-
-# player with no wire: `--no-default-features --features ui,lunco-api`.
+# player with no wire: `--no-default-features --features ui,api-transport`.
 # The wasm build sets its own feature set (`--no-default-features`), so this
 # default does not affect it.
 default = ["ui", "api-transport", "transport-http", "sysml"]

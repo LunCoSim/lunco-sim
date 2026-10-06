@@ -69,7 +69,6 @@ bevy = { workspace = true, features = [
     "bevy_input_focus",
     "mesh_picking",
     "bevy_ui_render",
-    "file_watcher",
     "bevy_post_process",
     "bevy_anti_alias",
     "smaa_luts",
@@ -183,6 +182,9 @@ image = { workspace = true, features = ["ico"], optional = true }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = { version = "0.1.31", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bevy = { workspace = true, features = ["file_watcher"] }
 
 [package.metadata.cargo-machete]
 # Cargo machete does not inspect build.rs; these dependencies rasterize and

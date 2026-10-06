@@ -73,6 +73,8 @@ the default and `lunco://` Bevy browser readers install it through the maintaine
 `HttpWasmAssetReader::with_request_mapper` API before `AssetPlugin` builds.
 Explicit HTTP URLs retain their encoded pathname, query and fragment semantics.
 Native and mounted OPFS readers retain literal filesystem components.
+Native UI builds enable Bevy `file_watcher` only in their native target
+dependencies; browser builds use the mapped HTTP readers without OS watchers.
 The focused browser owner seam is
 `lunco_source::browser_transport_tests::browser_readers_preserve_literal_filename_payloads_and_missing_errors`.
 Invoke the built test with `wasm-bindgen-test-runner` directly from a task-owned

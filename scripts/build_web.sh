@@ -17,10 +17,8 @@
 #
 # Available binaries:
 #   lunica   - Modelica Workbench IDE
-#   luncosim  - Simulation Sandbox (ground physics)
-#   luncosim - Full lunar-mission simulator (celestial + orbital). No Modelica
-#              worker / source-library bundle (not a Modelica IDE). Textures load over HTTP
-#              (built without a compiled-in celestial data bundle).
+#   luncosim - Full lunar-mission simulator with Modelica and DEM workers.
+#              Scene assets and declared datasets load through the asset pipeline.
 # ============================================================================
 
 set -e
@@ -222,12 +220,9 @@ check_prerequisites() {
 
 # Should we rebuild the off-thread worker bundle?
 #
-# The worker bin is owned by `lunco-modelica-core`, so it does not pull the
-# inner-loop UI edits invalidate it. But you DO want to skip it when
-# only HTML/JS/asset/build-script files changed, or — crucially —
-# when nothing under `crates/` changed since the last successful
-# worker build (re-running `build_web.sh` on a clean tree shouldn't
-# re-link 54 MB of wasm twice).
+# The worker bin is owned by `lunco-modelica-execution`. Source and dependency
+# revisions govern whether its Cargo output can be reused; HTML and asset-only
+# edits do not require recompiling the worker.
 #
 # Heuristic: rebuild iff any `.rs` or `Cargo.toml` under any watched
 # source root is newer than the existing `lunica_worker.wasm` cargo output.
@@ -236,15 +231,9 @@ check_prerequisites() {
 # False negative on a manual `cargo clean` is mitigated by the
 # `[ ! -f "$worker_wasm" ]` short-circuit below.
 #
-# Watched roots = this repo's `crates/` PLUS every local path-dependency
-# checkout referenced by a `[patch]` in the root Cargo.toml. The patch roots
-# are LOAD-BEARING: rumoca is consumed via `[patch] path = "../rumoca/..."`
-# and its sources compile straight into the worker. A fix there (a solver /
-# flatten change) lives OUTSIDE `crates/`, so scanning only `crates/` would
-# silently skip the worker rebuild and leave it running stale rumoca — which
-# is exactly how a fixed `rover.radiator.sigma` lowering "came back" in the
-# browser while the main bundle had the fix. Each root's `target/` is pruned
-# so the scan stays a cheap source-only stat sweep.
+# Watched roots include `crates/` and local path dependencies declared by the
+# root manifest, including the maintained third-party compiler/composer sources.
+# Each root's `target/` is pruned to keep the scan source-only.
 #
 # Set `WORKER_REBUILD=force` to override (e.g. switching profiles).
 should_rebuild_worker() {
@@ -256,15 +245,8 @@ should_rebuild_worker() {
         return 0
     fi
 
-    # Cargo.lock newer than the worker wasm = some dependency moved (a git-dep
-    # rev bump, a version pin, a new transitive crate). The path-root scan below
-    # only sees `crates/` + `[patch] path=` checkouts, so it CANNOT see a rumoca
-    # bump consumed as a git dependency (`branch=main#<rev>`, living in
-    # ~/.cargo/git). That's how the worker silently shipped stale rumoca: its
-    # `StoredDefinition`/`WireMessage` bincode layout diverged from the freshly
-    # rebuilt main bundle, so every postMessage mis-decoded (`UUID expected 16
-    # found 9`, source bundle "33 docs" instead of 2670). Gating on Cargo.lock catches the
-    # whole class of dep bumps the source-mtime scan can't.
+    # Lockfile revisions capture registry/Git dependency changes that the local
+    # source-root scan cannot observe.
     if [ -f "$PROJECT_DIR/Cargo.lock" ] && [ "$PROJECT_DIR/Cargo.lock" -nt "$worker_wasm" ]; then
         return 0
     fi
@@ -324,12 +306,9 @@ build_wasm() {
 
     maybe_sccache_env
 
-    # We use --no-default-features to avoid pulling in the full tokio/axum stack
-    # from lunco-api (the native `transport-http` server lives in the crate's
-    # default features and needs mio — unsupported on wasm32). `--features
-    # lunco-api` then opts the API crate back in *without* transport-http; on
-    # wasm32 it auto-compiles the `window.lunco_api(...)` JS bridge instead (no
-    # TcpListener) via `cfg(target_arch="wasm32")`.
+    # Select the application's UI and transport-free API features explicitly.
+    # lunica owns `api`; luncosim owns `api-transport`. Browser transport comes
+    # from the target-selected JS bridge, without native `transport-http`.
     #
     # `--cfg=web_sys_unstable_apis` is REQUIRED for wgpu's WebGPU backend on
     # wasm (web-sys's `Gpu*` bindings are gated behind that flag). Without it
@@ -349,13 +328,12 @@ build_wasm() {
     # luncosim carries the optional multiplayer wire (lightyear WebTransport,
     # client-only on wasm); lunica does not. Browser join is URL-driven
     # (`?connect=host#<digest>`), see `NetworkMode::from_url`.
-    local wasm_features="lunco-api,ui"
-    # LunCoSim has a `lunco-api` feature for native transport and a networking
-    # feature. The browser uses the JS bridge. Celestial data is never compiled
+    local wasm_features="api,ui"
+    # LunCoSim enables its API bridge and networking feature. Celestial data is never compiled
     # into the wasm; the browser loads scene assets and declared datasets through
     # the runtime asset pipeline.
     if [ "$binary" = "luncosim" ]; then
-        wasm_features="lunco-api,networking,ui"
+        wasm_features="api-transport,networking,ui"
         # Opt the client-prediction diagnostics into the browser build with
         # NET_DIAG=1 (off by default — same `net-diag` cargo feature as native).
         # Output lands in the browser console as `[net-diag …]` lines; mute a
@@ -392,7 +370,7 @@ build_wasm() {
                 # The worker is a headless core binary, regardless of which
                 # main bundle is asking for it.
                 RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis --cfg=getrandom_backend=\"wasm_js\"" \
-                    cargo build --profile "$profile" --target wasm32-unknown-unknown --bin lunica_worker -p lunco-modelica-core --no-default-features
+                    cargo build --profile "$profile" --target wasm32-unknown-unknown --bin lunica_worker -p lunco-modelica-execution --no-default-features
             else
                 # See should_rebuild_worker rustdoc — finding "newer" .rs
                 # under crates/ forces a rebuild even when the diff was in a

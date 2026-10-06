@@ -419,7 +419,7 @@ handler is responsible for emitting exactly one completion event; the executor d
 result when that contract is violated.
 
 **Feature placement trap:** enable `lunco-capture/api` from a rendered host's **`ui`** feature, never
-from its `lunco-api` feature. The headless server enables `lunco-api` too, and enabling capture there
+from its `api-transport` feature. The headless server enables `api-transport` too, and enabling capture there
 drags GPU readback and image I/O straight back in. `lunco-workbench/api` remains the shell's separate
 workspace-query feature; it is enabled by the GUI host alongside `lunco-capture/api`.
 

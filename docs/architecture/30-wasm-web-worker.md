@@ -136,7 +136,13 @@ keeps its native dispatch and ownership of `SimulationSession` values.
 
 ## Build (`scripts/build_web.sh build lunica`)
 
-Two cargo builds, two `wasm-bindgen` passes:
+The workbench (`lunco-modelica-ui`, features `api,ui`) and its Modelica worker
+(`lunco-modelica-execution`, binary `lunica_worker`) use separate Cargo builds
+and `wasm-bindgen` passes. LunCoSim selects `api-transport,networking,ui` and
+stages the same Modelica worker plus the DEM worker (`lunco-terrain-bake`).
+Both browser applications omit native `transport-http`; the target-selected
+API bridge supplies browser transport. Desktop file watching is enabled only
+in native Bevy dependencies of `lunco-luncosim-ui`.
 
 ```
 target/wasm32-unknown-unknown/web-release/lunica.wasm
@@ -154,7 +160,7 @@ dist/lunica/
     └── worker_bootstrap.js  ← `import init; await init();`  ← REQUIRED
 ```
 
-`RUSTFLAGS=--cfg=web_sys_unstable_apis` is mandatory for both bins
+`RUSTFLAGS='--cfg=web_sys_unstable_apis --cfg=getrandom_backend="wasm_js"'` is used for all browser bins
 (wgpu's WebGPU bindings and `web_sys::DedicatedWorkerGlobalScope` are
 gated on it).
 
@@ -288,20 +294,12 @@ hint and skips the optimisation pass.
 
 ## The wasm32 time problem (rumoca fork)
 
-`std::time::Instant` **panics** on `wasm32-unknown-unknown` (browsers
-restrict high-resolution monotonic clocks — Spectre mitigation). A fork
-at `LunCoSim/rumoca` replaces those imports with conditional compilation:
-
-```rust
-#[cfg(target_arch = "wasm32")]
-use instant::Instant;      // → performance.now() via wasm-bindgen
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
-```
-
-The `Instant` / `thread::spawn` wasm fixes live on **`main`**; the web
-build consumes the **`wasm-asset-loader`** branch (which adds
-`Session::load_source_root_in_memory` on top of `main`).
+Browser timers require a browser-capable monotonic clock such as
+`web_time::Instant`; executing `std::time::Instant::now()` on
+`wasm32-unknown-unknown` panics even when compilation succeeds. Clock and
+source-root loading implementations remain with their maintained owners.
+Browser builds consume the pinned Rumoca workspace dependencies and the
+checked-in overrides selected by the root manifest and lockfile.
 
 ## Building & running
 
@@ -318,8 +316,10 @@ build consumes the **`wasm-asset-loader`** branch (which adds
 Manual equivalent of the build:
 
 ```bash
-cargo build --release --target wasm32-unknown-unknown --bin lunica
-wasm-bindgen target/wasm32-unknown-unknown/release/lunica.wasm \
+RUSTFLAGS='--cfg=web_sys_unstable_apis --cfg=getrandom_backend="wasm_js"' \
+  cargo build -p lunco-modelica-ui --profile web-release \
+  --target wasm32-unknown-unknown --bin lunica --no-default-features --features api,ui
+wasm-bindgen target/wasm32-unknown-unknown/web-release/lunica.wasm \
     --out-dir dist/lunica --target web
 ```
 

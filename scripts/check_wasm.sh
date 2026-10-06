@@ -22,10 +22,10 @@
 #
 # Usage:
 #   scripts/check_wasm.sh          # full check, prints sizes
-#   scripts/check_wasm.sh --quick  # only build, skip wasm-bindgen / size dump
+#   scripts/check_wasm.sh --quick  # only build, skip size dump
 #
 # Exit codes:
-#   0  — both wasm binaries built clean
+#   0  — both applications and their companion workers built clean
 #   non-zero — one binary failed; full cargo output streamed to stderr
 # ============================================================================
 
@@ -51,26 +51,28 @@ fi
 build_one() {
     local bin="$1"
     local crate="$2"
+    local features="${3:-}"
     echo
     echo "── building $bin ($crate) ─────────────────────────"
     # --cfg=web_sys_unstable_apis is required for wgpu's WebGPU backend
     # bindings; see build_web.sh for the long-form rationale.
-    RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis" \
+    RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis --cfg=getrandom_backend=\"wasm_js\"" \
         cargo build \
             --profile web-dev \
             --target wasm32-unknown-unknown \
             --bin "$bin" \
             -p "$crate" \
-            --no-default-features
+            --no-default-features ${features:+--features "$features"}
 }
 
-# Build both wasm binaries. Failure short-circuits via `set -e`.
-build_one lunica        lunco-modelica-ui
-build_one luncosim       lunco-luncosim
-# The companion worker bundle for lunica. Off-thread Modelica compile
+# Build both browser applications. Failure short-circuits via `set -e`.
+build_one lunica        lunco-modelica-ui api,ui
+build_one luncosim      lunco-luncosim api-transport,networking,ui
+# The shared companion workers. Off-thread Modelica compile
 # can break in different ways than the main UI bundle (different deps
 # active, different cfg gates), so build it explicitly.
-build_one lunica_worker lunco-modelica-core
+build_one lunica_worker lunco-modelica-execution
+build_one dem_worker    lunco-terrain-bake
 
 echo
 echo "── wasm build gate passed ──"
@@ -79,7 +81,7 @@ if [ "$QUICK" = "1" ]; then exit 0; fi
 
 # Report sizes for context (not a gate — purely informational).
 target_dir="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
-for bin in lunica luncosim lunica_worker; do
+for bin in lunica luncosim lunica_worker dem_worker; do
     wasm="$target_dir/wasm32-unknown-unknown/web-dev/$bin.wasm"
     if [ -f "$wasm" ]; then
         size=$(du -h "$wasm" | cut -f1)

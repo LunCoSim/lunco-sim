@@ -82,9 +82,9 @@ export LUNICA_BIN="${LUNICA_BIN:-lunica}"
 # export LUNICA_BIN=target/debug/lunica
 ```
 
-**Utility / dev bins**: `modelica_run` (`lunco-modelica-core`, headless Modelica CLI → CSV),
+**Utility / dev bins**: `modelica_run` (`lunco-modelica-execution`, headless Modelica CLI → CSV),
 `modelica_library_indexer` (`lunco-modelica-assets`, rebuild the Modelica-library search index — re-run
-after a source-library change), `lunica_worker` (`lunco-modelica-core`, wasm compile worker, bundled not run),
+after a source-library change), `lunica_worker` (`lunco-modelica-execution`, wasm compile worker, bundled not run),
 `build_modelica_library_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-luncosim`, production
 transport smoke test). Authored luncosim behavior tests run through `luncosim test` plus their Rhai scenarios.
 Details:
@@ -148,7 +148,8 @@ Use this to jump to the right one; read the index for the full responsibility.
 ## Gotchas / naming traps
 
 - **No `apps/` directory** — every binary lives in a `crates/<crate>/src/{main.rs,bin/}`.
-- **`lunica` ≠ the main sim.** It is the Modelica workbench (crates `lunco-modelica-ui` (workbench), `lunco-modelica-ui-core` (shared UI contracts), and `lunco-modelica-core` (compiler/worker)); `luncosim` is the ground-physics simulator and `luncosim-server` is its headless launcher.
+- **`lunica` ≠ the main sim.** It is the Modelica workbench (crates `lunco-modelica-ui` (workbench), `lunco-modelica-ui-core` (shared UI contracts), `lunco-modelica-core` (runtime host), and `lunco-modelica-execution` (workers)); `luncosim` is the ground-physics simulator and `luncosim-server` is its headless launcher.
+- **Web application features are explicit.** `build_web.sh` and `check_wasm.sh` select `api,ui` for lunica and `api-transport,networking,ui` for luncosim, without native `transport-http`. Native file watching stays in the UI host's native Bevy dependencies.
 - **Do not launch LunCoSim through `cargo run`.** Build the named package/bin,
   then execute `$LUNCOSIM_BIN` directly. Bare `cargo run` is also
   ambiguous because the default members are `lunco-luncosim` and `lunco-modelica-ui`.

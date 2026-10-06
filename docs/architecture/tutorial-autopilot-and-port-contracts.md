@@ -66,8 +66,8 @@ The production scene-test boundary is the built binary, not parsing or a
 queued command:
 
 ```bash
-RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim \
-  --no-default-features --features lunco-api,transport-http -j 4
+cargo build -p lunco-luncosim --bin luncosim \
+  --no-default-features --features api-transport,transport-http -j 4
 target/debug/luncosim test \
   --scene assets/scenes/tests/tutorial_lander_mission.usda \
   --threads 1 --jitter 0 --max-ticks 30000
