@@ -87,9 +87,20 @@ impl Plugin for LunCoSimServicesPlugin {
 
         #[cfg(feature = "networking")]
         {
-            let mode = lunco_networking::NetworkMode::resolve(self.headless);
+            let (mode, configuration_error) = match lunco_networking::NetworkMode::resolve() {
+                Ok(mode) => (mode, None),
+                Err(error) => {
+                    warn!("[net] startup rejected: {error}");
+                    (None, Some(error.to_string()))
+                }
+            };
             info!("[net] networking mode: {mode:?}");
             app.add_plugins(lunco_networking::LunCoNetworkingPlugin { mode });
+            if let Some(error) = configuration_error {
+                app.world_mut()
+                    .resource_mut::<lunco_core_session::NetStatus>()
+                    .last_error = error;
+            }
             app.add_plugins(lunco_networking_core::prediction::NetcodePredictionPlugin);
             app.add_systems(Update, load_ready_scenario);
             app.add_systems(Update, replay_scenario_journal);

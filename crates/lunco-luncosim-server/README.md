@@ -15,8 +15,10 @@ fn main() -> lunco_luncosim_core::AppExit {
 }
 ```
 
-`run_headless()` starts the sim + physics + cosim + networking host through
-`ScheduleRunnerPlugin`. The core package has no GUI feature to unify.
+`run_headless()` starts the sim + physics + cosim through
+`ScheduleRunnerPlugin`. Networking requires explicit `--host [PORT]` or
+`--connect ADDRESS`; without either flag it runs locally. The core package has
+no GUI feature to unify.
 
 ## Why a separate crate
 
@@ -26,7 +28,8 @@ server binary select the runtime's empty default feature set while the GUI
 shell retains its independent desktop feature set.
 
 ```bash
-cargo run -p lunco-luncosim-server     # headless, NO flags needed
+cargo run -p lunco-luncosim-server     # local headless simulation
+cargo run -p lunco-luncosim-server -- --host 5888 --api 4101
 cargo run -p lunco-luncosim-server -- --headless-max-speed --scene path/to/scene.usda
 ```
 

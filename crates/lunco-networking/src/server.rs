@@ -367,6 +367,9 @@ fn resolve_host_bind(value: Option<&str>, key: &[u8; 32]) -> Result<IpAddr, Stri
 }
 
 pub(crate) fn prepare_host(port: u16) -> Result<PreparedHost, String> {
+    if port == 0 {
+        return Err("host port must be 1..=65535".into());
+    }
     let netcode_key = netcode_key()?;
     let bind_host = std::env::var_os("LUNCO_NET_BIND")
         .map(|value| {

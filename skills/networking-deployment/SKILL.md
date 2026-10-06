@@ -16,6 +16,16 @@ replication runtime; the deployment guide owns service and TLS facts.
 - Build the required production target with the documented `networking` feature
   and use the resulting binary; do not infer network behavior from a GUI-only
   build.
+- Networking is explicit on every launcher: use `--host` or `--connect` only
+  for an authorized network session. Headless desktop, scene tests and the
+  dedicated launcher stay local otherwise. Follow the
+  [startup and endpoint admission contract](../../docs/apps/luncosim/OPS.md#3-run-the-server).
+  Cover malformed/conflicting CLI flags and browser overrides with the generic
+  `network_mode_configuration_`, `network_endpoint_configuration_`, and
+  `network_endpoint_socket_family_` tests.
+  Prove public `JoinServer` rejection preserves the prior connection through
+  the production command surface; an unresolvable valid hostname is a transport
+  failure after admission, rather than a syntax rejection.
 - Use [`scripts/net_smoke.sh`](../../scripts/net_smoke.sh) or
   [`scripts/run_host_client.sh`](../../scripts/run_host_client.sh) for the
   narrowest real host/client check. Give every controllable process an explicit
@@ -46,7 +56,7 @@ replication runtime; the deployment guide owns service and TLS facts.
 Host admission validates native TLS paths, PEM/key matching, bind restrictions,
 and netcode keys before creating a listener. Invalid explicit configuration
 rejects visibly through `NetStatus.last_error`; check listener admission rather
-than process liveness alone. `JoinServer` rejects invalid key/pin configuration
+than process liveness alone. `JoinServer` rejects invalid endpoint/key/pin configuration
 before replacing the current connection. Pins cross the transport boundary as
 validated 32-byte values, and the invite digest belongs to the session status.
 

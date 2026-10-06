@@ -89,7 +89,7 @@ does not duplicate component geometry or requirements.
 - `networking` (opt-in) — multiplayer over WebTransport (lightyear). Enable it
   explicitly with `--features networking`; ordinary GUI and test runs do not
   bind multiplayer ports.
-- `server` — lean headless build: API + networking host, NO `ui`. Build with
+- `server` — lean headless build: API + opt-in networking (`--host`), NO `ui`. Build with
   `--no-default-features --features server`. Celestial data is external and
   loaded through the runtime asset and dataset pipelines.
 - `recording`, `tracy`, `net-diag` — opt-in diagnostics/tools.

@@ -183,7 +183,7 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
         app.insert_resource(NetworkRole::Client);
         app.insert_resource(NetStatus {
             role: NetworkRole::Client,
-            endpoint: server.clone(),
+            endpoint: server.address().to_owned(),
             ..Default::default()
         });
         let server = server.clone();
@@ -194,7 +194,7 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
                   mut status: ResMut<NetStatus>,
                   mut connection: ResMut<lunco_core_session::ClientConnection>,
                   mut role: ResMut<NetworkRole>| {
-                match crate::client::prepare_client(&server, client_id, "") {
+                match crate::client::prepare_client(server.clone(), client_id, "") {
                     Ok(prepared) => {
                         connection.0 = Some(crate::client::spawn_client(&mut commands, prepared))
                     }

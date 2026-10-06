@@ -56,6 +56,27 @@ cd ~/luncosim-server
 - `--host 5888` — WebTransport host (UDP). `5888` is the default; omit the number to use it.
 - `--api 4101` — HTTP admin API on `127.0.0.1`. `4101` is the default; omit the number to use it.
 
+Networking requires one explicit `--host [PORT]` or `--connect ADDRESS` flag.
+Headless desktop launches, scene tests, `LUNCO_NO_UI`, and `luncosim-server`
+remain local without that flag. Missing connect values, malformed or zero ports,
+duplicate flags, and host/connect conflicts reject startup networking visibly
+through `NetStatus.last_error`, while the local simulation remains usable.
+The optional host port defaults only when omitted; an invalid supplied value
+never selects that default.
+
+CLI, browser `?connect=`, and `JoinServer` share the validated `ConnectEndpoint`
+owner. It accepts a hostname, IPv4, or bracketed IPv6 with an optional nonzero
+port. URL parsing preserves DNS/IDNA hostnames and the exact port, including
+explicit HTTPS port 443; credentials, paths, queries, fragments, control
+characters, and malformed ports reject before replacing the current client.
+The typed endpoint reaches Netcode and WebTransport without reparsing an
+address string. A browser override must contain exactly one nonempty `connect`
+parameter. Native argument parsing uses `args_os` and rejects non-Unicode
+arguments through its typed result, consistent with the application CLI guard.
+Native sockets match literal IPv4/IPv6 endpoints; DNS uses wtransport's
+dual-stack default. Deep-link argument readers inspect only valid Unicode
+candidates without panicking on unrelated non-Unicode arguments.
+
 ### TLS certificate
 
 The server picks up a CA cert (Let's Encrypt) one of two ways — **point it at the

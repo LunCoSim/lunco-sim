@@ -139,6 +139,10 @@ As-built transport is **WebTransport only** (QUIC/TLS, browsers *and* native):
 | Dedicated server | `networking`, no `ui` (`target/debug/luncosim-server`) | server WebTransport, headless |
 | Browser (wasm) | `networking`, client-only | client WebTransport — `wt_client` dials a **hostname URL** so a real CA cert validates with no digest (lightyear's built-in IO is IP-only) |
 
+Launchers select networking explicitly; headless mode alone stays local. See
+the [startup and endpoint admission contract](../../docs/apps/luncosim/OPS.md#3-run-the-server)
+for flags, typed endpoint validation and rejection behavior.
+
 ---
 
 ## Authentication & Authorization

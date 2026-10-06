@@ -42,7 +42,9 @@ pub enum LaunchOutcome {
 /// The `luncosim:`-scheme URL this process was launched with, if any.
 fn deeplink_arg() -> Option<String> {
     let prefix = format!("{}:", crate::connect_link::SCHEME);
-    std::env::args().find(|a| a.starts_with(&prefix))
+    std::env::args_os()
+        .filter_map(|arg| arg.into_string().ok())
+        .find(|a| a.starts_with(&prefix))
 }
 
 /// Decide this process's role (see module docs). Never panics — IPC errors fall

@@ -28,8 +28,8 @@ use lightyear_aeronet::AeronetLinkOf;
 /// A validated 32-byte digest pins a specific self-signed cert.
 #[derive(Component)]
 pub(crate) struct WtUrlClientIo {
-    /// Full URL, e.g. `https://sandbox.lunco.space:5888`.
-    pub url: String,
+    /// Validated URL and exact transport port, admitted before session mutation.
+    pub endpoint: crate::ConnectEndpoint,
     /// Validated SHA-256 pin. `None` selects the documented unpinned mode.
     pub certificate_digest: Option<[u8; 32]>,
 }
@@ -54,13 +54,14 @@ fn link(
     mut commands: Commands,
 ) {
     if let Ok((entity, io)) = query.get(trigger.entity) {
-        let url = io.url.clone();
+        let endpoint = io.endpoint.clone();
         let digest = io.certificate_digest;
         commands.queue(move |world: &mut World| {
             if world.get_entity(entity).is_err() {
                 return;
             }
-            let config = client_config(&url, digest);
+            let config = client_config(&endpoint, digest);
+            let url = endpoint.url().to_string();
             let entity_mut = world.spawn((AeronetLinkOf(entity), Name::from("WtUrlClient")));
             // Native: `into_options()` converts the URL string to wtransport's
             // `ConnectOptions`, which preserves the hostname for SNI and DNS
@@ -85,47 +86,41 @@ fn link(
 ///   (browser) → normal CA chain validation. **Production path.**
 /// - Present digest: pin a specific self-signed cert SHA-256.
 ///   **Dev/localhost only.**
-fn client_config(url: &str, cert_hash: Option<[u8; 32]>) -> ClientConfig {
+fn client_config(endpoint: &crate::ConnectEndpoint, cert_hash: Option<[u8; 32]>) -> ClientConfig {
     #[cfg(not(target_family = "wasm"))]
     {
-        native_client_config(url, cert_hash)
+        native_client_config(endpoint, cert_hash)
     }
     #[cfg(target_family = "wasm")]
     {
-        let _ = url;
+        let _ = endpoint;
         wasm_client_config(cert_hash)
     }
 }
 
-/// Whether the `https://host:port` URL's host is a **bare IP literal** (v4 or
-/// v6) rather than a DNS name. A bare IP triggers the no-cert-validation direct
-/// path (a self-signed server over LAN/dev needs no CA cert and no digest);
-/// hostnames never do. IPv6 literals are bracketed (`https://[::1]:5888`).
-#[cfg(not(target_family = "wasm"))]
-fn url_host_is_bare_ip(url: &str) -> bool {
-    let after_scheme = url.strip_prefix("https://").unwrap_or(url);
-    let host = if let Some(rest) = after_scheme.strip_prefix('[') {
-        rest.split(']').next().unwrap_or("") // [::1]:5888 → ::1
-    } else {
-        after_scheme.split(':').next().unwrap_or("") // 192.168.0.5:5888 → 192.168.0.5
-    };
-    host.parse::<std::net::IpAddr>().is_ok()
-}
-
 /// Native client config. Absent digest + hostname → system CA store. Absent
 /// digest + bare IP → no validation (direct LAN/dev). Present digest → pinning.
+/// Literal IPs select their socket family; DNS uses wtransport's dual-stack default.
 #[cfg(not(target_family = "wasm"))]
-fn native_client_config(url: &str, cert_digest: Option<[u8; 32]>) -> ClientConfig {
-    use aeronet_webtransport::wtransport::{config::IpBindConfig, tls::Sha256Digest};
+fn native_client_config(
+    endpoint: &crate::ConnectEndpoint,
+    cert_digest: Option<[u8; 32]>,
+) -> ClientConfig {
+    use aeronet_webtransport::wtransport::tls::Sha256Digest;
     use core::time::Duration;
 
-    let config = ClientConfig::builder().with_bind_config(IpBindConfig::InAddrAnyV4);
+    let url = endpoint.url();
+
+    let config = match native_ip_bind_config(endpoint) {
+        Some(family) => ClientConfig::builder().with_bind_config(family),
+        None => ClientConfig::builder().with_bind_default(),
+    };
     let config = if let Some(hash) = cert_digest {
         // Dev: self-signed cert pinned by its SHA-256 digest (explicit override).
         info!("[net] connecting to {url} with pinned cert digest");
         let digest = Sha256Digest::new(hash);
         config.with_server_certificate_hashes([digest])
-    } else if url_host_is_bare_ip(url) {
+    } else if endpoint.is_bare_ip() {
         // Direct bare-IP dial, no digest: there's no DNS name to match a CA
         // cert's SAN, and an IP dial is a LAN/dev convenience against a
         // self-signed server. Skip validation entirely so it Just Works.
@@ -153,6 +148,41 @@ fn native_client_config(url: &str, cert_digest: Option<[u8; 32]>) -> ClientConfi
         .max_idle_timeout(Some(Duration::from_secs(30)))
         .expect("valid idle timeout")
         .build()
+}
+
+/// `None` leaves DNS resolution on the transport's documented dual-stack default.
+#[cfg(not(target_family = "wasm"))]
+fn native_ip_bind_config(
+    endpoint: &crate::ConnectEndpoint,
+) -> Option<aeronet_webtransport::wtransport::config::IpBindConfig> {
+    use aeronet_webtransport::wtransport::config::IpBindConfig;
+    match endpoint.url().host().expect("admitted endpoint has a host") {
+        url::Host::Ipv4(_) => Some(IpBindConfig::InAddrAnyV4),
+        url::Host::Ipv6(_) => Some(IpBindConfig::InAddrAnyV6),
+        url::Host::Domain(_) => None,
+    }
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod native_socket_tests {
+    use super::native_ip_bind_config;
+    use aeronet_webtransport::wtransport::config::IpBindConfig;
+
+    #[test]
+    fn network_endpoint_socket_family_matches_literal_ip_and_dns_default() {
+        let ipv4 = crate::ConnectEndpoint::parse("127.0.0.1:5888").unwrap();
+        let ipv6 = crate::ConnectEndpoint::parse("[::1]:5888").unwrap();
+        let dns = crate::ConnectEndpoint::parse("example.test:5888").unwrap();
+        assert!(matches!(
+            native_ip_bind_config(&ipv4),
+            Some(IpBindConfig::InAddrAnyV4)
+        ));
+        assert!(matches!(
+            native_ip_bind_config(&ipv6),
+            Some(IpBindConfig::InAddrAnyV6)
+        ));
+        assert!(native_ip_bind_config(&dns).is_none());
+    }
 }
 
 /// Browser client config. Absent digest → normal CA validation. Present digest

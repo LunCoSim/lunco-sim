@@ -239,7 +239,7 @@ pub fn run_headless() -> lunco_luncosim_core::AppExit {
     lunco_luncosim_core::log_build_identity(mode);
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "luncosim-server — headless LunCoSim runtime\n\nUsage: luncosim-server [--api PORT] [--scene PATH] [--headless-max-speed]"
+            "luncosim-server — headless LunCoSim runtime\n\nUsage: luncosim-server [--api PORT] [--scene PATH] [--headless-max-speed] [--host [PORT] | --connect ADDRESS]\n\nNetworking is idle unless --host or --connect is supplied."
         );
         return lunco_luncosim_core::AppExit::Success;
     }

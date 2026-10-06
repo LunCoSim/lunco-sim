@@ -27,6 +27,8 @@ pub(crate) mod connection_state;
 /// link builder and the native arg parser work regardless of the `networking`
 /// feature.
 pub mod connect_link;
+mod endpoint;
+pub use endpoint::{ConnectEndpoint, NetworkConfigError};
 
 #[cfg(feature = "networking")]
 mod client;
@@ -67,124 +69,140 @@ pub enum NetworkMode {
     /// Listen-server: run the authoritative world and accept WebTransport
     /// clients on `port`. (Native only.)
     Host { port: u16 },
-    /// Pure client: connect to `server` (a `host:port` string — a **hostname**
-    /// like `lunica.lunco.space:5888` or an `ip:port`) over WebTransport,
+    /// Pure client: connect to `server` (a validated hostname or IP authority,
+    /// such as `lunica.lunco.space:5888`) over WebTransport,
     /// identifying as `client_id` (must be distinct per client). Kept as a
-    /// string so a DNS name survives to the browser, which resolves it when it
-    /// dials the WebTransport URL (a `SocketAddr` couldn't hold a hostname).
-    Connect { server: String, client_id: u64 },
+    /// validated endpoint so a DNS name survives to the browser, which resolves
+    /// it when it dials the WebTransport URL.
+    Connect {
+        server: ConnectEndpoint,
+        client_id: u64,
+    },
 }
 
 impl NetworkMode {
-    /// Parse `--host [port]` / `--connect <addr[:port]>` from argv. Returns
-    /// `None` for single-player (no networking flags). A `--connect` host
-    /// without a port defaults to `:5888`; `--host` defaults to port `5888`.
-    pub fn from_args() -> Option<Self> {
-        let args: Vec<String> = std::env::args().collect();
-        for i in 0..args.len() {
-            match args[i].as_str() {
-                "--host" => {
-                    let port = args
-                        .get(i + 1)
-                        .and_then(|s| s.parse::<u16>().ok())
-                        .unwrap_or(lunco_core_session::DEFAULT_HOST_PORT);
-                    return Some(NetworkMode::Host { port });
-                }
-                "--connect" => {
-                    let raw = args.get(i + 1).cloned().unwrap_or_default();
-                    return Some(NetworkMode::Connect {
-                        server: normalize_addr(&raw),
-                        client_id: next_client_id(),
-                    });
-                }
-                _ => {}
-            }
-        }
-        None
+    /// Parse explicit networking flags. No flags means a local, idle process,
+    /// including headless scene tests and the dedicated server launcher.
+    pub fn from_args() -> Result<Option<Self>, NetworkConfigError> {
+        Self::parse_args(&std::env::args_os().collect::<Vec<_>>())
     }
 
-    /// Resolve the mode for the current target: CLI argv on native, the page
-    /// URL on wasm. Single entry point so `sandbox.rs` doesn't need a target
-    /// `cfg`. Returns `None` for single-player.
-    pub fn resolve(headless: bool) -> Option<Self> {
+    /// Pure native CLI admission. Malformed, duplicate and conflicting network
+    /// flags reject; only an omitted optional host port uses the default.
+    pub fn parse_args(args: &[std::ffi::OsString]) -> Result<Option<Self>, NetworkConfigError> {
+        let args: Vec<&str> = args
+            .iter()
+            .enumerate()
+            .map(|(index, argument)| {
+                argument.to_str().ok_or_else(|| {
+                    NetworkConfigError::Arguments(format!("argument {index} is not valid UTF-8"))
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        let mut mode = None;
+        let mut index = 1;
+        while index < args.len() {
+            let argument = args[index];
+            let host_value = argument.strip_prefix("--host=");
+            let connect_value = argument.strip_prefix("--connect=");
+            if argument == "--host" || host_value.is_some() {
+                if mode.is_some() {
+                    return Err(NetworkConfigError::Arguments(
+                        "use exactly one --host or --connect flag".into(),
+                    ));
+                }
+                let value = if let Some(value) = host_value {
+                    Some(value)
+                } else if let Some(value) =
+                    args.get(index + 1).filter(|value| !value.starts_with("--"))
+                {
+                    index += 1;
+                    Some(*value)
+                } else {
+                    None
+                };
+                let port = match value {
+                    None => lunco_core_session::DEFAULT_HOST_PORT,
+                    Some(value) => value
+                        .parse::<u16>()
+                        .ok()
+                        .filter(|port| *port != 0)
+                        .ok_or_else(|| {
+                            NetworkConfigError::Arguments("--host port must be 1..=65535".into())
+                        })?,
+                };
+                mode = Some(Self::Host { port });
+            } else if argument == "--connect" || connect_value.is_some() {
+                if mode.is_some() {
+                    return Err(NetworkConfigError::Arguments(
+                        "use exactly one --host or --connect flag".into(),
+                    ));
+                }
+                let value = if let Some(value) = connect_value {
+                    value
+                } else {
+                    index += 1;
+                    args.get(index)
+                        .filter(|value| !value.starts_with("--"))
+                        .copied()
+                        .ok_or_else(|| {
+                            NetworkConfigError::Arguments("--connect requires an address".into())
+                        })?
+                };
+                mode = Some(Self::connect_to(value)?);
+            }
+            index += 1;
+        }
+        Ok(mode)
+    }
+
+    /// Resolve explicit CLI flags on native or a `?connect=` page override on
+    /// wasm. Presentation/headless settings do not select a network role.
+    pub fn resolve() -> Result<Option<Self>, NetworkConfigError> {
         #[cfg(not(target_family = "wasm"))]
         {
-            let mode = Self::from_args();
-            if mode.is_none() {
-                // If running headless / as a dedicated server, default to Host mode
-                let is_headless = headless
-                    || std::env::args().any(|a| a == "--no-ui")
-                    || std::env::var("LUNCO_NO_UI").is_ok_and(|v| v != "0" && !v.is_empty())
-                    || std::env::current_exe()
-                        .ok()
-                        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-                        .is_some_and(|n| n.contains("luncosim-server"));
-                if is_headless {
-                    return Some(NetworkMode::Host {
-                        port: lunco_core_session::DEFAULT_HOST_PORT,
-                    });
-                }
-            }
-            mode
+            Self::from_args()
         }
         #[cfg(target_family = "wasm")]
         {
-            let _ = headless;
             Self::from_url()
         }
     }
 
-    /// Browser entry point. **Default is single-player (local sandbox)** — the
-    /// page boots offline; the user joins a session with the in-sim *Connect*
-    /// button (whose address field defaults to [`default_connect_host`], the page
-    /// origin). `?connect=host[:port]` is the dev / deep-link override that
-    /// auto-connects on load instead of waiting for the button.
-    ///
-    /// Port defaults to `5888` when the address carries none. Only `Connect` is
-    /// reachable on wasm — hosting is native-only.
+    /// Browser startup is local unless its page carries one valid `connect`
+    /// query parameter. Empty, duplicate or malformed overrides reject.
     #[cfg(target_family = "wasm")]
-    pub fn from_url() -> Option<Self> {
-        let window = web_sys::window()?;
-        let search = window.location().search().ok()?;
-        let raw = search.trim_start_matches('?').split('&').find_map(|pair| {
-            let mut it = pair.splitn(2, '=');
-            match (it.next(), it.next()) {
-                (Some("connect"), Some(v)) if !v.is_empty() => Some(v.to_string()),
-                _ => None,
-            }
-        })?;
-        Some(NetworkMode::Connect {
-            server: normalize_addr(&raw),
-            client_id: browser_client_id(),
-        })
+    pub fn from_url() -> Result<Option<Self>, NetworkConfigError> {
+        let window = web_sys::window()
+            .ok_or_else(|| NetworkConfigError::PageUrl("browser window unavailable".into()))?;
+        let href = window
+            .location()
+            .href()
+            .map_err(|_| NetworkConfigError::PageUrl("cannot read browser URL".into()))?;
+        Self::from_page_url(&href)
     }
 
-    /// Build a [`Connect`](NetworkMode::Connect) mode from a user-typed address
-    /// (the in-sim *Connect* button / the `JoinServer` command). Accepts a bare
-    /// `host`, `host:port`, or `ip:port`; the port defaults to `5888`. A bare DNS
-    /// name is fine now — the browser resolves it when it dials the WebTransport
-    /// URL. Returns `None` only for an empty address.
-    pub fn connect_to(addr: &str) -> Option<Self> {
-        if addr.trim().is_empty() {
-            return None;
+    pub fn from_page_url(raw: &str) -> Result<Option<Self>, NetworkConfigError> {
+        let url =
+            url::Url::parse(raw).map_err(|error| NetworkConfigError::PageUrl(error.to_string()))?;
+        let mut values = url.query_pairs().filter(|(key, _)| key == "connect");
+        let Some((_, address)) = values.next() else {
+            return Ok(None);
+        };
+        if values.next().is_some() {
+            return Err(NetworkConfigError::PageUrl(
+                "duplicate connect parameter".into(),
+            ));
         }
-        Some(NetworkMode::Connect {
-            server: normalize_addr(addr),
+        Self::connect_to(&address).map(Some)
+    }
+
+    /// Admit a typed endpoint before transport or current-session mutation.
+    pub fn connect_to(address: &str) -> Result<Self, NetworkConfigError> {
+        Ok(Self::Connect {
+            server: ConnectEndpoint::parse(address)?,
             client_id: next_client_id(),
         })
-    }
-}
-
-/// Normalize a user/URL address to a `host:port` string, defaulting the port to
-/// `5888`. Accepts a bare hostname (`lunica.lunco.space`), `host:port`, or
-/// `ip:port`. The host is kept as-is (hostname or IP) so the browser can resolve
-/// a DNS name when it dials the WebTransport URL.
-pub(crate) fn normalize_addr(raw: &str) -> String {
-    let raw = raw.trim();
-    if raw.contains(':') {
-        raw.to_string()
-    } else {
-        format!("{raw}:{}", lunco_core_session::DEFAULT_HOST_PORT)
     }
 }
 
@@ -201,6 +219,139 @@ pub(crate) fn next_client_id() -> u64 {
     #[cfg(not(target_family = "wasm"))]
     {
         lunco_id::random_u64()
+    }
+}
+
+#[cfg(test)]
+mod mode_configuration_tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Option<NetworkMode>, NetworkConfigError> {
+        NetworkMode::parse_args(
+            &args
+                .iter()
+                .map(|argument| std::ffi::OsString::from(*argument))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    #[test]
+    fn network_mode_configuration_requires_explicit_host_in_all_headless_launches() {
+        for args in [
+            vec!["luncosim"],
+            vec!["luncosim", "--no-ui"],
+            vec!["luncosim", "test", "--scene", "generic-scene"],
+            vec!["luncosim-server", "--headless-max-speed"],
+        ] {
+            assert!(parse(&args).unwrap().is_none());
+        }
+        assert!(matches!(
+            parse(&["luncosim", "--host"]).unwrap(),
+            Some(NetworkMode::Host { port: 5888 })
+        ));
+        assert!(matches!(
+            parse(&["luncosim", "--host", "--api", "4101"]).unwrap(),
+            Some(NetworkMode::Host { port: 5888 })
+        ));
+        assert!(matches!(
+            parse(&["luncosim", "--host=1234"]).unwrap(),
+            Some(NetworkMode::Host { port: 1234 })
+        ));
+        let Some(NetworkMode::Connect { server, .. }) =
+            parse(&["luncosim", "--connect", "[::1]:443"]).unwrap()
+        else {
+            panic!("expected admitted client")
+        };
+        assert_eq!(server.address(), "[::1]:443");
+        assert_eq!(server.port(), 443);
+    }
+
+    #[test]
+    fn network_mode_configuration_rejects_invalid_missing_duplicate_and_conflicting_flags() {
+        for flags in [
+            vec!["--host", "invalid"],
+            vec!["--host", "0"],
+            vec!["--host", "65536"],
+            vec!["--host", "-1"],
+            vec!["--host="],
+            vec!["--host=0"],
+            vec!["--connect"],
+            vec!["--connect", "--api", "4101"],
+            vec!["--connect", ""],
+            vec!["--connect="],
+            vec!["--connect=host:0"],
+            vec!["--host", "--host"],
+            vec!["--host", "--connect", "host"],
+            vec!["--connect", "host", "--host"],
+            vec!["--connect", "host", "--connect", "other"],
+        ] {
+            let mut args = vec!["luncosim"];
+            args.extend(flags);
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
+    }
+
+    #[cfg(all(feature = "networking", not(target_family = "wasm")))]
+    #[test]
+    fn network_host_configuration_rejects_zero_port_before_admission() {
+        assert_eq!(
+            crate::server::prepare_host(0).err().unwrap(),
+            "host port must be 1..=65535"
+        );
+    }
+
+    #[test]
+    fn network_mode_configuration_browser_override_decodes_and_rejects_invalid_requests() {
+        assert!(
+            NetworkMode::from_page_url("https://host.example/?other=x")
+                .unwrap()
+                .is_none()
+        );
+        let Some(NetworkMode::Connect { server, .. }) =
+            NetworkMode::from_page_url("https://host.example/?connect=%5B%3A%3A1%5D%3A443")
+                .unwrap()
+        else {
+            panic!("expected admitted browser endpoint")
+        };
+        assert_eq!(server.address(), "[::1]:443");
+        for raw in [
+            "https://host.example/?connect=",
+            "https://host.example/?connect",
+            "https://host.example/?connect=host:0",
+            "https://host.example/?connect=host&connect=other",
+            "https://host.example/?connect=host%2Fpath",
+            "not a page URL",
+        ] {
+            assert!(NetworkMode::from_page_url(raw).is_err(), "{raw}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn network_mode_configuration_rejects_non_unicode_argv_without_panicking() {
+        use std::os::unix::ffi::OsStringExt;
+        let args = [
+            std::ffi::OsString::from("luncosim"),
+            std::ffi::OsString::from_vec(vec![0xff]),
+        ];
+        assert!(matches!(
+            NetworkMode::parse_args(&args),
+            Err(NetworkConfigError::Arguments(_))
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn network_mode_configuration_rejects_unpaired_windows_surrogate_without_panicking() {
+        use std::os::windows::ffi::OsStringExt;
+        let args = [
+            std::ffi::OsString::from("luncosim"),
+            std::ffi::OsString::from_wide(&[0xd800]),
+        ];
+        assert!(matches!(
+            NetworkMode::parse_args(&args),
+            Err(NetworkConfigError::Arguments(_))
+        ));
     }
 }
 

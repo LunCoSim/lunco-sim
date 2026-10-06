@@ -137,9 +137,16 @@ struct MaxProxyX {
 struct MySession(u64);
 
 fn main() {
-    let Some(mode) = NetworkMode::from_args() else {
-        eprintln!("usage: net_smoke --host [port] | --connect <addr>");
-        return;
+    let mode = match NetworkMode::from_args() {
+        Ok(Some(mode)) => mode,
+        Ok(None) => {
+            eprintln!("usage: net_smoke --host [port] | --connect <addr>");
+            std::process::exit(2);
+        }
+        Err(error) => {
+            eprintln!("net_smoke: {error}");
+            std::process::exit(2);
+        }
     };
     let is_host = matches!(mode, NetworkMode::Host { .. });
 

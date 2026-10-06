@@ -89,7 +89,8 @@ pub(crate) fn register_client_systems(app: &mut App) {
 /// the registration site — the system body runs at most once per process.
 #[cfg(not(target_family = "wasm"))]
 fn seed_pending_from_deep_link_arg(mut pending: ResMut<crate::connection_state::PendingConnect>) {
-    let Some(link) = std::env::args()
+    let Some(link) = std::env::args_os()
+        .filter_map(|arg| arg.into_string().ok())
         .find(|a| a.starts_with(&format!("{}:", crate::connect_link::SCHEME)))
         .and_then(|a| crate::connect_link::parse_native(&a))
     else {
@@ -105,9 +106,8 @@ fn seed_pending_from_deep_link_arg(mut pending: ResMut<crate::connection_state::
     });
 }
 
-/// **Runtime**: spawn the lightyear client entity for `server` (a `host:port`
-/// string — hostname or `ip:port`) and start the link. Callable from a `Startup`
-/// system (auto-connect) or the `JoinServer` command observer.
+/// Prepare a client for an admitted endpoint before changing session state.
+/// Used by startup auto-connect and the `JoinServer` command observer.
 ///
 /// Both native and wasm use [`WtUrlClientIo`](crate::wt_client) which dials a
 /// `https://{server}` URL directly. This lets the OS/browser resolve DNS and
@@ -122,7 +122,7 @@ pub(crate) struct PreparedClient {
 }
 
 pub(crate) fn prepare_client(
-    server: &str,
+    server: crate::ConnectEndpoint,
     client_id: u64,
     digest: &str,
 ) -> Result<PreparedClient, String> {
@@ -132,7 +132,7 @@ pub(crate) fn prepare_client(
         crate::wt_client::parse_certificate_digest(digest)?
     };
     let auth = Authentication::Manual {
-        server_addr: SocketAddr::from(([127, 0, 0, 1], port_of(server))),
+        server_addr: SocketAddr::from(([127, 0, 0, 1], server.port())),
         client_id,
         private_key: netcode_key()?,
         protocol_id: PROTOCOL_ID,
@@ -148,7 +148,7 @@ pub(crate) fn prepare_client(
     Ok(PreparedClient {
         netcode,
         io: crate::wt_client::WtUrlClientIo {
-            url: format!("https://{server}"),
+            endpoint: server,
             certificate_digest,
         },
     })
@@ -156,7 +156,7 @@ pub(crate) fn prepare_client(
 
 pub(crate) fn spawn_client(commands: &mut Commands, prepared: PreparedClient) -> Entity {
     let PreparedClient { netcode, io } = prepared;
-    info!("[net] connecting to {}", io.url);
+    info!("[net] connecting to {}", io.endpoint);
     let client = commands
         .spawn((
             Name::new("LunCoClient"),
@@ -201,13 +201,15 @@ fn on_join_server(
     mut connection: ResMut<ClientConnection>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) -> Result<lunco_command_contracts::Ack, lunco_command_contracts::Reject> {
-    let address = crate::normalize_addr(&cmd.address);
-    let prepared =
-        prepare_client(&address, crate::next_client_id(), &cmd.digest).map_err(|error| {
+    let prepared = crate::ConnectEndpoint::parse(&cmd.address)
+        .map_err(|error| error.to_string())
+        .and_then(|server| prepare_client(server, crate::next_client_id(), &cmd.digest))
+        .map_err(|error| {
             warn!("[net] join rejected: {error}");
             status.last_error = error.clone();
             lunco_command_contracts::Reject::InvalidOp(error)
         })?;
+    let address = prepared.io.endpoint.address().to_owned();
     for e in &existing {
         commands.entity(e).try_despawn();
     }
@@ -275,17 +277,6 @@ lunco_core::register_commands!(on_join_server, on_leave_server);
 /// mandatory handshake contract, keeping it transport-neutral.
 fn on_net_disconnect_request(_trigger: On<NetDisconnectRequest>, mut commands: Commands) {
     commands.trigger(LeaveServer {});
-}
-
-/// Parse the port out of a `host:port` string for the netcode placeholder
-/// address (default `5888`). The host half is irrelevant — `WtUrlClientIo`
-/// dials the full hostname URL; this is only used for the netcode token.
-fn port_of(server: &str) -> u16 {
-    server
-        .rsplit(':')
-        .next()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(lunco_core_session::DEFAULT_HOST_PORT)
 }
 
 /// Reflect the handshake (non-zero [`LocalSession`]) into [`NetStatus`] so the
