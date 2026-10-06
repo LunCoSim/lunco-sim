@@ -197,6 +197,10 @@ pub struct SceneFilePreparation {
     desired: Option<(SceneFileInputs, u64)>,
     pending: Option<SceneFileTask>,
     operation: u64,
+    /// Admission capacity revision observed when the bounded queue was full.
+    /// The desired request waits for the next capacity change instead of
+    /// failing: a full queue is backpressure, not a scene-file error.
+    deferred_at_capacity: Option<u64>,
 }
 
 /// Set by the section's ↻ button to force one rebuild — the roots did not change,
@@ -484,6 +488,13 @@ pub fn produce_scene_file_view(world: &mut World) {
         let Some((desired, operation)) = state.desired.take() else {
             return;
         };
+        let capacity = world
+            .get_resource::<lunco_core_runtime::AsyncWorkAdmission>()
+            .map(lunco_core_runtime::AsyncWorkAdmission::capacity_revision);
+        if state.deferred_at_capacity.is_some() && state.deferred_at_capacity == capacity {
+            state.desired = Some((desired, operation));
+            return;
+        }
         let admitted = (|| {
             let mounts = world
                 .get_resource::<lunco_assets_core::TwinRoots>()
@@ -509,30 +520,45 @@ pub fn produce_scene_file_view(world: &mut World) {
                     lunco_workspace::ReplicationScope::Twin(twin) => twin.raw(),
                 },
             };
-            let permit = admission
-                .admit_external(
-                    lunco_core_runtime::AsyncWorkPriority::Interactive,
-                    lunco_core_runtime::AsyncWorkKey::new(
-                        lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
-                        scope_generation,
-                        0x7363656e652d66696c6573,
-                        desired.mount_revision.unwrap_or(0),
-                        operation,
-                    ),
-                )
-                .map_err(|error| format!("scene file preparation admission rejected: {error:?}"))?;
+            let permit = match admission.admit_external(
+                lunco_core_runtime::AsyncWorkPriority::Interactive,
+                lunco_core_runtime::AsyncWorkKey::new(
+                    lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
+                    scope_generation,
+                    0x7363656e652d66696c6573,
+                    desired.mount_revision.unwrap_or(0),
+                    operation,
+                ),
+            ) {
+                Ok(permit) => permit,
+                Err(lunco_core_runtime::AsyncWorkRejection::QueueFull) => {
+                    return Ok(None);
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "scene file preparation admission rejected: {error:?}"
+                    ));
+                }
+            };
             let inputs = desired.clone();
-            Ok(SceneFileTask {
-                inputs: desired,
+            Ok(Some(SceneFileTask {
+                inputs: desired.clone(),
                 operation,
                 task: pool.spawn(async move {
                     let result = prepare_scene_file_view(&inputs, mounts.as_ref());
                     (permit, result)
                 }),
-            })
+            }))
         })();
         match admitted {
-            Ok(pending) => state.pending = Some(pending),
+            Ok(Some(pending)) => {
+                state.deferred_at_capacity = None;
+                state.pending = Some(pending);
+            }
+            Ok(None) => {
+                state.deferred_at_capacity = capacity;
+                state.desired = Some((desired, operation));
+            }
             Err(error) => scene_file_preparation_failed(world, error),
         }
     });
