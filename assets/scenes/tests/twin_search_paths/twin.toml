@@ -1,0 +1,5 @@
+name = "twin_search_paths"
+version = "0.1.0"
+
+[usd]
+default_scene = "sim/scenes/search_paths.usda"

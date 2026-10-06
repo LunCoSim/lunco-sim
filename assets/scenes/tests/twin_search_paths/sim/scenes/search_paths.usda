@@ -1,0 +1,35 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World"
+{
+    def Scope "SearchRootProbe"
+    {
+        def Scope "Program" (
+            prepend apiSchemas = "LunCoProgramAPI"
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @scripts/search_root_probe.rhai@
+            uniform bool lunco:program:realtimeSafe = false
+        }
+    }
+    def Scope "SearchPrecedence"
+    {
+        def Scope "Program" (
+            prepend apiSchemas = "LunCoProgramAPI"
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @scripts/search_precedence.rhai@
+            uniform bool lunco:program:realtimeSafe = false
+        }
+    }
+    def DistantLight "TestLight"
+    {
+    }
+}

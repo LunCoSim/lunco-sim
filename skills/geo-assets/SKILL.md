@@ -156,7 +156,7 @@ vertical datum, or record the native-tool gap as blocked work.
 
 | kind | Input | Output |
 |---|---|---|
-| `dem` | DTM (GeoTIFF/.IMG) | `<output>/materials/textures/heightmap.tif` — square float32, georef in tags. `output` is a FOLDER; scenes reference it as `demSource = @terrain/<site>@` |
+| `dem` | DTM (GeoTIFF/.IMG) | `<output>/materials/textures/heightmap.tif` — square float32, georef in tags. `output` is a FOLDER; scenes reference it as the search path `demSource = @terrain/<site>@`, found from any scene folder through the Twin root/cache |
 | `map` | co-registered raster (ortho `.IMG`, `_SHADE`/`_SLOPE`/`_CLRGRAD` `.TIF`) | 8-bit RGB PNG at `output` (a FILE). Gray sources get a 1–99 percentile stretch in linear contrast space, then sRGB encoding for the runtime loader |
 | `albedo` | grayscale PDS3 `.IMG` or georeferenced TIFF orthophoto | stable linear material-albedo PNG at `output` (a FILE) |
 | `normalmap` | DTM | DEM-local ENU normal PNG (`RGB = n*0.5+0.5`, decoded by the shared terrain-surface shader kernel) |

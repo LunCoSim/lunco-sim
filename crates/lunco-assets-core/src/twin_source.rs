@@ -630,6 +630,30 @@ impl TwinRoots {
         resolve_twin_relative_directory(&root, relative)
     }
 
+    /// Whether a Twin-relative file or directory exists in the Twin's
+    /// authored-tree, Twin-cache, shared-cache order, including a composed
+    /// document overlay. Native readers only: on wasm the mounted OPFS tree
+    /// cannot be probed synchronously and every candidate is reported present.
+    pub fn resolve_existing(&self, name: &str, relative: &Path) -> Result<bool, TwinRootsError> {
+        if self
+            .overlay_for(&overlay_key(name, &crate::asset_path::slashed(relative)))?
+            .is_some()
+        {
+            return Ok(true);
+        }
+        let Some(root) = self.root_for(name)? else {
+            return Err(TwinRootsError::UnknownAuthority(name.to_owned()));
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        return Ok(resolve_twin_relative_path(&root, relative)?
+            .is_some_and(|path| path.is_file() || path.is_dir()));
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = root;
+            Ok(true)
+        }
+    }
+
     /// The "primary" open Twin as `(name, root)` — the alphabetically-first
     /// registered Twin, used as the default destination for newly created or
     /// imported assets when the caller doesn't name a Twin. `None` if no Twin
@@ -751,9 +775,10 @@ impl TwinReader {
     /// authored ref needs to climb out (verified across the shipped tree and the
     /// twins: zero `@../…@` refs).
     /// A Twin's DOWNLOADED assets live in its own `.cache/` (see
-    /// [`crate::twin_cache_dir`]), so a reference authored against the Twin
-    /// (`@terrain/apollo15/dtm.tif@`) resolves whether the file is committed in
-    /// the Twin or was fetched from that Twin's `Assets.toml`. Authored files
+    /// [`crate::twin_cache_dir`]), so a Twin-relative path resolves whether the
+    /// file is committed in the Twin or was fetched from that Twin's
+    /// `Assets.toml`. Search-path selection happens before this reader, in
+    /// native preparation. Authored files
     /// win: the cache is a materialisation of a declaration, never an override
     /// of something the author checked in.
     fn resolve(&self, path: &Path) -> Result<Option<PathBuf>, TwinRootsError> {

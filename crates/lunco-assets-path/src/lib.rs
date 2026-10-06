@@ -272,6 +272,20 @@ pub fn is_anchored(reference: &str) -> bool {
     has_scheme(reference) || reference.starts_with('/')
 }
 
+/// Whether an authored asset path uses OpenUSD's search-path form: relative,
+/// with no scheme and no leading `./` or `../`. `ArDefaultResolver` resolves
+/// such a path beside its authoring layer first and then through its search
+/// locations; a `./` or `../` spelling is strictly layer-relative.
+pub fn is_search_path(reference: &str) -> bool {
+    let reference = slashed(reference);
+    !reference.is_empty()
+        && !is_anchored(&reference)
+        && reference != "."
+        && reference != ".."
+        && !reference.starts_with("./")
+        && !reference.starts_with("../")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,6 +436,25 @@ mod tests {
             );
         }
         assert!(!is_anchored("a.usda"));
+    }
+
+    #[test]
+    fn search_paths_follow_openusd_spelling_rules() {
+        for path in ["terrain/site", "texture.png", r"terrain\site"] {
+            assert!(is_search_path(path), "{path}");
+        }
+        for path in [
+            "",
+            ".",
+            "..",
+            "./terrain/site",
+            "../terrain/site",
+            "/terrain/site",
+            "twin://fixture/terrain/site",
+            "file:///tmp/site",
+        ] {
+            assert!(!is_search_path(path), "{path}");
+        }
     }
 
     #[test]

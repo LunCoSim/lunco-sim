@@ -583,7 +583,9 @@ mod tests {
                 .expect("current stage")
                 .cached_native_asset_paths()
                 .expect("held table")
-                .contains(&reference)
+                .contains(&lunco_assets_core::asset_path::AssetReference::Native(
+                    reference.clone()
+                ))
         );
         let mut pending = world
             .remove_resource::<PendingNativeAssetPaths>()

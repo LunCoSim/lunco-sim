@@ -107,43 +107,70 @@ pub struct UsdReadPrimFacts {
 pub struct AssetIdentifierReadError {
     pub property: String,
     pub authored: String,
+    pub reason: String,
 }
 
 impl std::fmt::Display for AssetIdentifierReadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "asset {} (`{}`) has no composed canonical identifier",
-            self.property, self.authored
+            "asset {} (`{}`) {}",
+            self.property, self.authored, self.reason
         )
     }
 }
 impl std::error::Error for AssetIdentifierReadError {}
 
+/// Canonical identifier of a consumed asset value. An OpenUSD search path in a
+/// Twin returns the location chosen by worker preparation: beside its layer
+/// when that exists, otherwise from the Twin root.
 fn consumed_asset_identifier(
     value: Option<Value>,
+    prepared: Option<&lunco_assets_core::asset_path::PreparedAssetPaths>,
     prim: &SdfPath,
     name: &str,
 ) -> Result<Option<String>, AssetIdentifierReadError> {
     let Some(value) = value else {
         return Ok(None);
     };
+    let error = |authored: String, reason: String| AssetIdentifierReadError {
+        property: format!("{prim}.{name}"),
+        authored,
+        reason,
+    };
     let Some(asset) = value.try_as_asset_path() else {
-        return Err(AssetIdentifierReadError {
-            property: format!("{prim}.{name}"),
-            authored: "non-asset value".to_owned(),
-        });
+        return Err(error(
+            "non-asset value".to_owned(),
+            "has no composed canonical identifier".to_owned(),
+        ));
     };
     if asset.is_empty() {
         return Ok(Some(String::new()));
     }
-    asset
-        .canonical_identifier()
-        .map(|id| Some(id.to_owned()))
-        .ok_or_else(|| AssetIdentifierReadError {
-            property: format!("{prim}.{name}"),
-            authored: asset.into_string(),
-        })
+    let Some(identifier) = asset.canonical_identifier() else {
+        return Err(error(
+            asset.into_string(),
+            "has no composed canonical identifier".to_owned(),
+        ));
+    };
+    let Some(lunco_assets_core::asset_path::AssetReference::Search {
+        identifier,
+        authored,
+    }) = lunco_assets_core::asset_path::AssetReference::for_asset_value(
+        identifier,
+        asset.asset_path(),
+    )
+    else {
+        return Ok(Some(identifier.to_owned()));
+    };
+    match prepared.and_then(|prepared| prepared.search_resolution(&identifier, &authored)) {
+        Some(Ok(path)) => Ok(Some(lunco_assets_core::asset_path::anchor_of(path))),
+        Some(Err(failure)) => Err(error(authored, failure.to_string())),
+        None => Err(error(
+            authored,
+            "is a search path with no preparation for this source revision".to_owned(),
+        )),
+    }
 }
 
 /// Composed, default-time reads served by either the worker-produced initial
@@ -342,7 +369,12 @@ pub trait UsdRead {
         prim: &SdfPath,
         name: &str,
     ) -> Result<Option<String>, AssetIdentifierReadError> {
-        consumed_asset_identifier(self.attr_value(prim, name), prim, name)
+        consumed_asset_identifier(
+            self.attr_value(prim, name),
+            self.native_asset_paths(),
+            prim,
+            name,
+        )
     }
 
     /// A real scalar tolerant of `float`, `double`, `int`, or `int64` authoring,
@@ -750,7 +782,12 @@ pub trait UsdReadObject {
         prim: &SdfPath,
         name: &str,
     ) -> Result<Option<String>, AssetIdentifierReadError> {
-        consumed_asset_identifier(self.attr_value(prim, name), prim, name)
+        consumed_asset_identifier(
+            self.attr_value(prim, name),
+            self.native_asset_paths(),
+            prim,
+            name,
+        )
     }
     fn real(&self, prim: &SdfPath, name: &str) -> Option<f64>;
     fn real_f32(&self, prim: &SdfPath, name: &str) -> Option<f32>;
@@ -2182,28 +2219,41 @@ mod asset_identifier_tests {
             Some("textures/image # %.png")
         );
         let references = crate::native_paths::native_references_for_prims(&plan, [prim]);
-        assert_eq!(references, std::collections::BTreeSet::from([identifier]));
+        assert_eq!(
+            references,
+            std::collections::BTreeSet::from([
+                lunco_assets_core::asset_path::AssetReference::Native(identifier)
+            ])
+        );
     }
 
     #[test]
-    fn consumed_asset_requires_composed_context() {
+    fn consumed_asset_requires_composed_context_and_prepared_search() {
         let prim = SdfPath::new("/Source").unwrap();
         let error = consumed_asset_identifier(
             Some(Value::AssetPath("raw.png".into())),
+            None,
             &prim,
             "inputs:file",
         )
         .unwrap_err();
         assert_eq!(error.property, "/Source.inputs:file");
         assert_eq!(error.authored, "raw.png");
-        let mut value = openusd::sdf::AssetPath::new("raw.png");
-        value.set_canonical_identifier("twin://mount/child/raw.png");
+        let mut anchored = openusd::sdf::AssetPath::new("./raw.png");
+        anchored.set_canonical_identifier("twin://mount/child/raw.png");
         assert_eq!(
-            consumed_asset_identifier(Some(Value::AssetPath(value)), &prim, "inputs:file").unwrap(),
+            consumed_asset_identifier(Some(Value::AssetPath(anchored)), None, &prim, "inputs:file")
+                .unwrap(),
             Some("twin://mount/child/raw.png".into())
         );
+        let mut search = openusd::sdf::AssetPath::new("raw.png");
+        search.set_canonical_identifier("twin://mount/child/raw.png");
+        let error =
+            consumed_asset_identifier(Some(Value::AssetPath(search)), None, &prim, "inputs:file")
+                .unwrap_err();
+        assert!(error.reason.contains("no preparation"), "{error}");
         assert_eq!(
-            consumed_asset_identifier(None, &prim, "inputs:file").unwrap(),
+            consumed_asset_identifier(None, None, &prim, "inputs:file").unwrap(),
             None
         );
     }

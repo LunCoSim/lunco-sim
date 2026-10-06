@@ -37,12 +37,51 @@ pub fn source_relative_uri(path: &AssetPath, relative: &str) -> Option<String> {
     }
 }
 
-/// Native addresses prepared on an I/O worker for one originating asset source.
-/// Entries retain failures so invalid authored references fail at their consumer.
+/// One asset value that needs worker-side preparation.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AssetReference {
+    /// A native `file:` identifier mapped into its originating Twin mount.
+    Native(String),
+    /// An OpenUSD search path: the layer-anchored Twin identifier and the
+    /// authored spelling that is searched from the Twin root when the anchored
+    /// location does not exist.
+    Search {
+        identifier: String,
+        authored: String,
+    },
+}
+
+impl From<String> for AssetReference {
+    fn from(reference: String) -> Self {
+        Self::Native(reference)
+    }
+}
+
+impl AssetReference {
+    /// Classify a composed asset value. Only native identifiers and Twin-scoped
+    /// search paths need worker preparation.
+    pub fn for_asset_value(identifier: &str, authored: &str) -> Option<Self> {
+        if split_scheme(identifier).is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("file")) {
+            return Some(Self::Native(identifier.to_owned()));
+        }
+        (lunco_assets_path::is_search_path(authored) && crate::parse_twin_uri(identifier).is_some())
+            .then(|| Self::Search {
+                identifier: identifier.to_owned(),
+                authored: slashed(authored),
+            })
+    }
+}
+
+type Prepared = Result<AssetPath<'static>, crate::TwinRootsError>;
+
+/// Native addresses and search-path resolutions prepared on an I/O worker for
+/// one originating asset source. Entries retain failures so invalid authored
+/// references fail at their consumer.
 #[derive(Clone, Debug, Default)]
 pub struct PreparedAssetPaths {
     origin: Option<AssetPath<'static>>,
-    entries: std::collections::HashMap<String, Result<AssetPath<'static>, crate::TwinRootsError>>,
+    entries: std::collections::HashMap<String, Prepared>,
+    searches: std::collections::HashMap<(String, String), Prepared>,
 }
 
 impl PreparedAssetPaths {
@@ -51,24 +90,41 @@ impl PreparedAssetPaths {
         Self {
             origin,
             entries: Default::default(),
+            searches: Default::default(),
         }
     }
 
-    /// Canonicalize native references. Call only from the asset/preparation worker;
-    /// the runtime resolves this immutable table without filesystem access.
+    /// Canonicalize native references and resolve search paths. Call only from
+    /// the asset/preparation worker; the runtime resolves this immutable table
+    /// without filesystem access.
     pub fn prepare_on_worker(
-        references: impl IntoIterator<Item = String>,
+        references: impl IntoIterator<Item = impl Into<AssetReference>>,
         origin: Option<AssetPath<'static>>,
         roots: Option<&crate::TwinRoots>,
     ) -> Self {
-        let entries = references
-            .into_iter()
-            .map(|reference| {
-                let result = prepare_native_path(&reference, origin.as_ref(), roots);
-                (reference, result)
-            })
-            .collect();
-        Self { origin, entries }
+        let mut prepared = Self::for_origin(origin);
+        for reference in references {
+            match reference.into() {
+                AssetReference::Native(reference) => {
+                    let result = prepare_native_path(&reference, prepared.origin.as_ref(), roots);
+                    prepared.entries.insert(reference, result);
+                }
+                AssetReference::Search {
+                    identifier,
+                    authored,
+                } => {
+                    let result = prepare_search_path(&identifier, &authored, roots);
+                    prepared.searches.insert((identifier, authored), result);
+                }
+            }
+        }
+        prepared
+    }
+
+    /// The prepared resolution of an OpenUSD search path, if this table holds it.
+    pub fn search_resolution(&self, identifier: &str, authored: &str) -> Option<&Prepared> {
+        self.searches
+            .get(&(identifier.to_owned(), slashed(authored)))
     }
 
     /// Recheck mount admission before an asynchronous result is published.
@@ -79,6 +135,15 @@ impl PreparedAssetPaths {
         if !self.entries.is_empty() {
             native_origin_root("native preparation", self.origin.as_ref(), roots)?;
         }
+        for path in self.searches.values().flatten() {
+            let path = slashed(path.path());
+            let (authority, _) = crate::split_twin_rel(&path)
+                .ok_or_else(|| invalid_asset(format!("search resolution `{path}` has no Twin")))?;
+            roots
+                .ok_or(crate::TwinRootsError::RegistryUnavailable)?
+                .root_for(authority)?
+                .ok_or_else(|| crate::TwinRootsError::UnknownAuthority(authority.to_owned()))?;
+        }
         Ok(())
     }
 
@@ -88,8 +153,16 @@ impl PreparedAssetPaths {
     }
 
     /// Whether this exact authored input has a terminal preparation result.
-    pub fn contains(&self, reference: &str) -> bool {
-        self.entries.contains_key(reference)
+    pub fn contains(&self, reference: &AssetReference) -> bool {
+        match reference {
+            AssetReference::Native(reference) => self.entries.contains_key(reference),
+            AssetReference::Search {
+                identifier,
+                authored,
+            } => self
+                .searches
+                .contains_key(&(identifier.clone(), authored.clone())),
+        }
     }
 
     /// Extend a table only with preparation for the same exact Twin mount.
@@ -100,6 +173,7 @@ impl PreparedAssetPaths {
             ));
         }
         self.entries.extend(prepared.entries);
+        self.searches.extend(prepared.searches);
         Ok(())
     }
 }
@@ -183,6 +257,37 @@ fn prepare_native_path(
     native_origin_root(reference, origin, roots)?;
     Ok(
         AssetPath::from_path_buf(std::path::Path::new(&authority).join(relative))
+            .with_source(crate::TWIN_SCHEME),
+    )
+}
+
+/// Resolve an OpenUSD search path inside its Twin, as `ArDefaultResolver`
+/// does: the layer-anchored location when it exists, otherwise the authored
+/// spelling from the Twin root. Existence uses the Twin's authored-tree,
+/// Twin-cache, shared-cache order. A path found in neither place keeps its
+/// Twin-root identity, so its consumer reports the miss or offers the declared
+/// Twin dataset that delivers it.
+fn prepare_search_path(
+    identifier: &str,
+    authored: &str,
+    roots: Option<&crate::TwinRoots>,
+) -> Prepared {
+    let (authority, anchored) = crate::parse_twin_uri(identifier).ok_or_else(|| {
+        invalid_asset(format!("search path `{identifier}` is not a Twin address"))
+    })?;
+    let roots = roots.ok_or(crate::TwinRootsError::RegistryUnavailable)?;
+    let candidate = |relative: &str| {
+        relative_path(relative)
+            .ok_or_else(|| invalid_asset(format!("unsafe search candidate `{relative}`")))
+    };
+    let anchored = candidate(anchored)?;
+    let relative = if roots.resolve_existing(authority, &anchored)? {
+        anchored
+    } else {
+        candidate(authored)?
+    };
+    Ok(
+        AssetPath::from_path_buf(std::path::Path::new(authority).join(relative))
             .with_source(crate::TWIN_SCHEME),
     )
 }
@@ -326,6 +431,65 @@ mod tests {
             roots,
         );
         load_asset_path(reference, origin, roots, Some(&prepared))
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn search_paths_prefer_layer_then_twin_root() {
+        let folder = tempfile::tempdir().expect("Twin folder");
+        let root = folder.path();
+        let cached_site = crate::twin_cache_dir(root).join("terrain/site");
+        lunco_storage::ensure_directory_sync(&cached_site).expect("cached dataset");
+        lunco_storage::write_file_sync(&root.join("textures/a.png"), b"root").expect("root file");
+        lunco_storage::write_file_sync(&root.join("sim/scenes/textures/a.png"), b"layer")
+            .expect("layer file");
+        let roots = crate::TwinRoots::default();
+        let authority = roots.register("fixture", root).expect("mount");
+        let search = |authored: &str| {
+            let identifier = format!("twin://{authority}/sim/scenes/{authored}");
+            let reference =
+                AssetReference::for_asset_value(&identifier, authored).expect("Twin search path");
+            (identifier, reference)
+        };
+        let (site_id, site) = search("terrain/site");
+        let (layer_id, layer) = search("textures/a.png");
+        let (missing_id, missing) = search("terrain/absent");
+        let anchored = format!("twin://{authority}/sim/scenes/terrain/site");
+        assert_eq!(
+            AssetReference::for_asset_value(&anchored, "./terrain/site"),
+            None
+        );
+        let prepared = PreparedAssetPaths::prepare_on_worker(
+            [site.clone(), layer.clone(), missing.clone()],
+            None,
+            Some(&roots),
+        );
+        assert!(prepared.contains(&site) && prepared.contains(&layer));
+        let resolved = |identifier: &str, authored: &str| {
+            prepared
+                .search_resolution(identifier, authored)
+                .expect("prepared search")
+                .clone()
+                .map(|path| anchor_of(&path))
+        };
+        assert_eq!(
+            resolved(&site_id, "terrain/site").unwrap(),
+            format!("twin://{authority}/terrain/site"),
+            "a processed Twin dataset is found from the Twin root and its cache"
+        );
+        assert_eq!(
+            resolved(&layer_id, "textures/a.png").unwrap(),
+            format!("twin://{authority}/sim/scenes/textures/a.png"),
+            "the layer-anchored location wins when it exists"
+        );
+        assert_eq!(
+            resolved(&missing_id, "terrain/absent").unwrap(),
+            format!("twin://{authority}/terrain/absent"),
+            "a missing search path keeps its Twin-root identity for its consumer"
+        );
+        prepared.validate_owner(Some(&roots)).expect("live mount");
+        roots.unregister_name(&authority).expect("retire mount");
+        assert!(prepared.validate_owner(Some(&roots)).is_err());
     }
 
     #[test]

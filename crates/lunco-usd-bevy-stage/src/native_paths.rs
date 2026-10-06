@@ -1,7 +1,8 @@
 //! Native asset preparation over the shared composed USD read surface.
 
 use crate::UsdReadObject;
-use openusd::sdf::{Path as SdfPath, Value};
+use lunco_assets_core::asset_path::AssetReference;
+use openusd::sdf::{AssetPath, Path as SdfPath, Value};
 use std::collections::BTreeSet;
 
 fn native_reference(reference: &str) -> bool {
@@ -10,35 +11,35 @@ fn native_reference(reference: &str) -> bool {
         .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("file"))
 }
 
-fn collect_value(value: Option<Value>, references: &mut BTreeSet<String>) {
+fn collect_asset(path: &AssetPath, references: &mut BTreeSet<AssetReference>) {
+    if let Some(identifier) = path.canonical_identifier()
+        && let Some(reference) = AssetReference::for_asset_value(identifier, path.asset_path())
+    {
+        references.insert(reference);
+    }
+}
+
+fn collect_value(value: Option<Value>, references: &mut BTreeSet<AssetReference>) {
     match value {
-        Some(Value::AssetPath(path)) => {
-            if let Some(identifier) = path.canonical_identifier()
-                && native_reference(identifier)
-            {
-                references.insert(identifier.to_owned());
-            }
-        }
+        Some(Value::AssetPath(path)) => collect_asset(&path, references),
         Some(Value::AssetPathVec(paths)) => {
-            references.extend(
-                paths
-                    .into_iter()
-                    .filter_map(|path| path.canonical_identifier().map(str::to_owned))
-                    .filter(|reference| native_reference(reference)),
-            );
+            for path in &paths {
+                collect_asset(path, references);
+            }
         }
         _ => {}
     }
 }
 
-/// Read native asset-valued attributes and binary arcs from composed prims.
-/// Default scalar/array values carry their contributing-layer identifiers.
+/// Read asset-valued attributes needing worker preparation — native file
+/// identifiers and Twin search paths — and native binary arcs from composed
+/// prims. Default scalar/array values carry their contributing-layer identifiers.
 /// Time samples are included only when their USD value carries that context;
 /// consumers reject unanchored asset values. No domain schemas are enumerated.
 pub fn native_references_for_prims(
     reader: &dyn UsdReadObject,
     prims: impl IntoIterator<Item = SdfPath>,
-) -> BTreeSet<String> {
+) -> BTreeSet<AssetReference> {
     let mut references = BTreeSet::new();
     for prim in prims {
         for name in reader.attr_names(&prim) {
@@ -50,7 +51,7 @@ pub fn native_references_for_prims(
         if let Some(reference) = reader.binary_asset_uri(&prim)
             && native_reference(&reference)
         {
-            references.insert(reference);
+            references.insert(AssetReference::Native(reference));
         }
     }
     references
@@ -61,7 +62,7 @@ pub fn native_references_for_prims(
 pub fn changed_native_references(
     reader: &dyn UsdReadObject,
     changes: &[crate::canonical::RawStageChange],
-) -> BTreeSet<String> {
+) -> BTreeSet<AssetReference> {
     let mut references = BTreeSet::new();
     let mut structural = BTreeSet::new();
     for change in changes {
