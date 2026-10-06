@@ -250,8 +250,22 @@ impl LintReport {
 /// error findings so validation cannot report a clean result when linting did
 /// not run. Findings remain diagnostic and do not prevent scene loading.
 pub fn run_lint(domain: &str, facts: H) -> Vec<Diagnostic> {
+    run_lint_with_context(
+        domain,
+        facts,
+        lunco_hooks::RuntimeExecutionContext::unclassified(),
+    )
+}
+
+/// Evaluate policy with the runtime context captured by its admission owner.
+/// Asynchronous preparation never changes the caller's scope, clock, or sequence.
+pub fn run_lint_with_context(
+    domain: &str,
+    facts: H,
+    context: lunco_hooks::RuntimeExecutionContext,
+) -> Vec<Diagnostic> {
     let hook = hook_id(domain);
-    let Some(outcome) = lunco_hooks::invoke_unclassified(&hook, &[facts]) else {
+    let Some(outcome) = lunco_hooks::invoke_with_context(&hook, &[facts], context) else {
         // No rules authored for this domain. Not a problem, and not worth a log
         // line on every scene load.
         return Vec::new();
@@ -350,6 +364,59 @@ mod tests {
     use super::*;
     use lunco_hooks::{RegisteredHook, ScriptHook, register};
     use std::sync::Arc;
+
+    #[test]
+    fn prepared_policy_preserves_context_and_rejects_invalid_clock() {
+        struct ContextProbe {
+            expected: lunco_hooks::RuntimeExecutionContext,
+            calls: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl ScriptHook for ContextProbe {
+            fn invoke(
+                &self,
+                invocation: &lunco_hooks::HookInvocation<'_>,
+            ) -> lunco_hooks::HookResult {
+                assert_eq!(invocation.context, self.expected);
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(H::Array(Vec::new()))
+            }
+        }
+        let context = lunco_hooks::RuntimeExecutionContext {
+            route: Some(lunco_hooks::RuntimeRoute::twin_owned(
+                lunco_hooks::RuntimeCycle::Simulation,
+                9,
+                7,
+            )),
+            phase: lunco_hooks::RuntimePhase::Behavior,
+            clock: lunco_hooks::RuntimeClock::Simulation,
+            time_seconds: Some(12.0),
+            delta_seconds: Some(0.25),
+            sequence: Some(48),
+            producer: None,
+        };
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        register(RegisteredHook {
+            id: hook_id("test_prepared_context"),
+            backend: "test".into(),
+            deterministic: true,
+            hook: Arc::new(ContextProbe {
+                expected: context,
+                calls: Arc::clone(&calls),
+            }),
+        });
+        assert!(
+            run_lint_with_context("test_prepared_context", H::Map(Vec::new()), context).is_empty()
+        );
+        let invalid = lunco_hooks::RuntimeExecutionContext {
+            time_seconds: None,
+            ..context
+        };
+        let findings = run_lint_with_context("test_prepared_context", H::Map(Vec::new()), invalid);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code.as_deref(), Some("policy-execution-failed"));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        lunco_hooks::unregister(&hook_id("test_prepared_context"));
+    }
 
     /// A stand-in for a rhai policy: whatever the test wants to "author".
     struct Canned(Vec<H>);

@@ -746,7 +746,17 @@ impl ApiQueryProvider for ValidateAssetProvider {
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         use crate::preparation::{PreparationPoll, QueryKind};
         match crate::preparation::poll(world, QueryKind::Asset, params)? {
-            PreparationPoll::Pending(value) | PreparationPoll::Terminal(value) => Ok(Some(value)),
+            PreparationPoll::Pending { operation_id } => {
+                Ok(Some(crate::preparation::pending(operation_id)))
+            }
+            PreparationPoll::Failed {
+                operation_id,
+                diagnostic,
+            } => Ok(Some(crate::preparation::failed(operation_id, diagnostic))),
+            PreparationPoll::ReadyTwin { .. } => Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "File preparation returned a Twin report",
+            )),
             PreparationPoll::Ready {
                 operation_id,
                 report,
@@ -777,8 +787,18 @@ impl ApiQueryProvider for ValidateSysmlProvider {
             None
         } else {
             match crate::preparation::poll(world, QueryKind::Sysml, params)? {
-                PreparationPoll::Pending(value) | PreparationPoll::Terminal(value) => {
-                    return Ok(Some(value));
+                PreparationPoll::Pending { operation_id } => {
+                    return Ok(Some(crate::preparation::pending(operation_id)));
+                }
+                PreparationPoll::Failed {
+                    operation_id,
+                    diagnostic,
+                } => return Ok(Some(crate::preparation::failed(operation_id, diagnostic))),
+                PreparationPoll::ReadyTwin { .. } => {
+                    return Err(ApiQueryError::new(
+                        ApiErrorCode::InternalError,
+                        "File preparation returned a Twin report",
+                    ));
                 }
                 PreparationPoll::Ready {
                     operation_id,
@@ -1062,7 +1082,29 @@ impl ApiQueryProvider for ValidateTwinProvider {
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         use crate::preparation::{PreparationPoll, QueryKind};
         match crate::preparation::poll(world, QueryKind::Twin, params)? {
-            PreparationPoll::Pending(value) | PreparationPoll::Terminal(value) => Ok(Some(value)),
+            PreparationPoll::Pending { operation_id } => {
+                Ok(Some(crate::preparation::pending(operation_id)))
+            }
+            PreparationPoll::Failed {
+                operation_id,
+                diagnostic,
+            } => Ok(Some(crate::preparation::failed(operation_id, diagnostic))),
+            PreparationPoll::ReadyTwin {
+                operation_id,
+                snapshot,
+                registry_errors,
+                policy,
+                reference,
+                revisions,
+                permit: _permit,
+            } => {
+                let report = finish_twin_report(&reference, &policy, snapshot, registry_errors);
+                Ok(Some(crate::preparation::report_envelope(
+                    operation_id,
+                    lunco_api_core::api_value_from_serializable(&report)?,
+                    lunco_api_core::api_value_from_serializable(&revisions)?,
+                )))
+            }
             PreparationPoll::Ready { .. } => Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "Twin preparation returned an asset report",

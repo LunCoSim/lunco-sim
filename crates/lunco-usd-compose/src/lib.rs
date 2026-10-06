@@ -234,17 +234,6 @@ pub fn compose_file_to_stage_with_roots(
     .map_err(|error| anyhow!("cannot read {}: {error}", path.display()))?;
     let recipe =
         recipe_from_bytes_with_roots(&root_id, root_bytes, assets_root, twin_root, limits)?;
-    if !recipe.dependency_diagnostics.is_empty() {
-        anyhow::bail!(
-            "{}",
-            recipe
-                .dependency_diagnostics
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
     compose_recipe_to_stage(recipe).map(|(stage, _)| stage)
 }
 

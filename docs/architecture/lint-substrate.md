@@ -273,14 +273,30 @@ native directory/file URI, then uses the operation protocol above. Prepared
 source-read failures fail its report; namespace collision severity remains
 controlled by the authored policy.
 
-Native Twin `RunLint` confines indexed USD roots through the asset owner and
-bounds root and dependency reads with `StageClosureLimits` before allocation.
-Any source-read, parse, or composition failure emits owner error diagnostics,
-fails the Twin lint scope, and returns a failed command result even when the
-collision policy is `warn`. Browser Twin `RunLint` returns the terminal
-`twin-lint-unsupported-platform` diagnostic before inspection; use async
-`ValidateTwin` for mounted browser sources. Loaded-stage lint remains available
-on both platforms.
+Twin `RunLint` captures its exact Workspace Twin, live mount, lint revision,
+scene generation, and caller runtime context at dispatch. Its queued typed Ack
+identifies the requested scope revision. The deferred admission boundary checks
+those facts, then shares `QueryPreparations` tasks, permits, registered readers,
+closure budgets, and publication fences with `ValidateTwin`; native and mounted
+browser Twins use the same path. The command handler dispatches preparation;
+source I/O and parsing stay in the task. Native tasks use the compute pool;
+browser task execution remains cooperative on the page executor.
+
+The private `PendingTwinLint` owner retains only the exact operation ID and
+publication facts. One serial consumer takes typed prepared Twin facts and
+invokes the common lint policy mechanism with the captured scope, clock, and
+logical sequence. `GetDiagnostics` carries the actual pending/ready/failed
+scope; the queued Ack does not assert a completed lint result. Source failures
+emit owner errors and fail the scope independently of collision severity.
+Closing the exact Twin, changing its scene/mount/policy, or superseding the
+scope cancels/discards the operation. A retired completion cannot update a newer
+scope, and the permit remains held through serial policy consumption.
+
+Native CLI inspection keeps its bounded synchronous adapter. File composition
+preserves available sibling content when a dependency is missing; the shared
+Twin inspector exposes those dependency diagnostics as source errors, so a
+partial stage cannot produce a successful Twin lint scope. Loaded-stage lint
+remains available on both platforms.
 
 ## Explicit authoring/preflight only
 

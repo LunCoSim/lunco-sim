@@ -520,6 +520,11 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `query(name, #{params})` | value \| `()` \| error map | **READ** — call any query provider (Raycast, Nearest, GroundHeight, `CausalTrace`, …); successful data is direct, successful no-data is `()`, and failures are `#{ok:false,error}` |
 | `query("ListSpawnCatalog", #{})` | map | discover the spawn catalog used to validate `SpawnEntity.entry_id`, including each asset's source and authored `origin` |
 | `query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"})` | operation envelope | prepare one explicit native folder or current mounted Twin; poll the returned `operation_id` and consume the report once, with the same `lint.twin` policy used by `RunLint { scope: "twin" }` |
+
+Twin `RunLint` returns a queued Ack with its lint revision, then uses the same
+bounded async source preparation on native and mounted browser Twins. Follow
+that revision with `GetDiagnostics`; its scope becomes ready or failed.
+Superseded or retired preparations cannot replace a newer report.
 | `asset_source_relative_uri(document, relative)` | string \| error | resolve a safe document-relative asset while preserving the document's registered source authority; URI algebra only, with no filesystem read |
 | `get(id, "Comp.field")` | value \| `()` | reflected component **read** (vectors → `[x,y,z]`, quats → `[x,y,z,w]`, structs → maps) |
 | `set(id, "Comp.field", value)` | bool | host-side **tuning write** — reflected component field or canonical scalar co-simulation port; supported field types only; not replicated, undoable, or a persistent port hold; `false` on bad path/type |

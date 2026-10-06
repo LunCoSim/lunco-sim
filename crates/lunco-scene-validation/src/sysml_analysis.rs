@@ -37,8 +37,18 @@ impl ApiQueryProvider for AnalyzeSysmlProvider {
             None
         } else {
             match crate::preparation::poll(world, QueryKind::AnalyzeSysml, params)? {
-                PreparationPoll::Pending(value) | PreparationPoll::Terminal(value) => {
-                    return Ok(Some(value));
+                PreparationPoll::Pending { operation_id } => {
+                    return Ok(Some(crate::preparation::pending(operation_id)));
+                }
+                PreparationPoll::Failed {
+                    operation_id,
+                    diagnostic,
+                } => return Ok(Some(crate::preparation::failed(operation_id, diagnostic))),
+                PreparationPoll::ReadyTwin { .. } => {
+                    return Err(ApiQueryError::new(
+                        ApiErrorCode::InternalError,
+                        "File preparation returned a Twin report",
+                    ));
                 }
                 PreparationPoll::Ready {
                     operation_id,

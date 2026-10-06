@@ -538,6 +538,161 @@ pub struct RunLint {
     pub doc_id: Option<u64>,
 }
 
+#[derive(Resource, Default)]
+struct PendingTwinLint(Option<TwinLintTask>);
+struct TwinLintTask {
+    operation_id: u64,
+    revision: u64,
+    twin: lunco_workspace::TwinId,
+    context: lunco_core::RuntimeExecutionContext,
+    scene_generation: Option<u64>,
+}
+
+fn twin_lint_scope_current(report: &lunco_lint::LintReport, revision: u64) -> bool {
+    report.scopes.get("twin").is_some_and(|scope| {
+        scope.revision == revision && scope.state == lunco_lint::LintScopeState::Pending
+    })
+}
+
+fn fail_pending_twin_lint(world: &mut World, task: &TwinLintTask, code: &str, message: String) {
+    let mut report = world.resource_mut::<lunco_lint::LintReport>();
+    if twin_lint_scope_current(&report, task.revision) {
+        fail_lint_scope(
+            &mut report,
+            "twin",
+            task.revision,
+            lint_command_error("twin", code, "RunLint", message),
+        );
+    }
+}
+
+fn retire_pending_twin_lint(world: &mut World) {
+    if let Some(task) = world.resource_mut::<PendingTwinLint>().0.take() {
+        crate::preparation::cancel(world, task.operation_id);
+    }
+}
+
+fn on_twin_lint_owner_closed(trigger: On<lunco_workspace::TwinClosed>, mut commands: Commands) {
+    let twin = trigger.event().twin;
+    commands.queue(move |world: &mut World| {
+        if world
+            .resource::<PendingTwinLint>()
+            .0
+            .as_ref()
+            .is_some_and(|task| task.twin == twin)
+        {
+            if let Some(task) = world.resource_mut::<PendingTwinLint>().0.take() {
+                crate::preparation::cancel(world, task.operation_id);
+                fail_pending_twin_lint(
+                    world,
+                    &task,
+                    "twin-lint-owner-retired",
+                    "Twin closed before its lint report could publish".to_owned(),
+                );
+            }
+        }
+    });
+}
+
+fn poll_pending_twin_lint(world: &mut World) {
+    use crate::preparation::{PreparationPoll, QueryKind};
+    let Some(task) = world.resource_mut::<PendingTwinLint>().0.take() else {
+        return;
+    };
+    if !twin_lint_scope_current(world.resource::<lunco_lint::LintReport>(), task.revision) {
+        crate::preparation::cancel(world, task.operation_id);
+        return;
+    }
+    let generation = world
+        .get_resource::<lunco_core::SceneTransitionCoordinator>()
+        .and_then(|coordinator| coordinator.completed_generation());
+    if generation != task.scene_generation
+        || world
+            .get_resource::<lunco_core::SceneTransitionCoordinator>()
+            .is_some_and(|owner| owner.active_id().is_some())
+    {
+        crate::preparation::cancel(world, task.operation_id);
+        fail_pending_twin_lint(
+            world,
+            &task,
+            "twin-lint-scene-retired",
+            "Scene revision changed before Twin lint publication".to_owned(),
+        );
+        return;
+    }
+    match crate::preparation::poll_operation(world, QueryKind::TwinLint, task.operation_id) {
+        Ok(PreparationPoll::Pending { .. }) => {
+            world.resource_mut::<PendingTwinLint>().0 = Some(task)
+        }
+        Ok(PreparationPoll::ReadyTwin {
+            snapshot,
+            registry_errors,
+            policy,
+            permit: _permit,
+            ..
+        }) => {
+            let mut source_errors = registry_errors;
+            source_errors.extend(snapshot.read_errors.iter().cloned());
+            if !source_errors.is_empty() {
+                let message = format!(
+                    "Twin namespace inspection failed for {} source(s)",
+                    source_errors.len()
+                );
+                let mut report = world.resource_mut::<lunco_lint::LintReport>();
+                report.extend_logged(
+                    source_errors
+                        .into_iter()
+                        .map(|error| {
+                            lint_command_error(
+                                "twin",
+                                "twin-lint-source-read-failed",
+                                snapshot.twin.clone(),
+                                error,
+                            )
+                        })
+                        .collect(),
+                );
+                report.fail_scope("twin", task.revision, message);
+                return;
+            }
+            let findings = lunco_lint::run_lint_with_context(
+                "twin",
+                crate::twin_lint::facts(&snapshot, &policy),
+                task.context,
+            );
+            let mut report = world.resource_mut::<lunco_lint::LintReport>();
+            if twin_lint_scope_current(&report, task.revision) {
+                let policy_failure = findings
+                    .iter()
+                    .find(|finding| {
+                        matches!(
+                            finding.code.as_deref(),
+                            Some("policy-execution-failed" | "policy-invalid-result")
+                        )
+                    })
+                    .map(|finding| finding.message.clone());
+                report.extend_logged(findings);
+                match policy_failure {
+                    Some(message) => report.fail_scope("twin", task.revision, message),
+                    None => report.complete_scope("twin", task.revision),
+                }
+            }
+        }
+        Ok(PreparationPoll::Failed { diagnostic, .. }) => {
+            fail_pending_twin_lint(world, &task, "twin-lint-preparation-failed", diagnostic)
+        }
+        Err(error) => {
+            fail_pending_twin_lint(world, &task, "twin-lint-owner-retired", error.message)
+        }
+        Ok(PreparationPoll::Ready { .. }) => fail_pending_twin_lint(
+            world,
+            &task,
+            "twin-lint-invalid-result",
+            "Twin preparation returned file facts".to_owned(),
+        ),
+    }
+}
+
 /// Observer for [`RunLint`].
 #[on_command(RunLint)]
 pub fn on_run_lint(
@@ -553,146 +708,262 @@ pub fn on_run_lint(
     documents: Option<Res<DocumentRegistry<lunco_usd_document::document::UsdDocument>>>,
     backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    active_command: Option<Res<lunco_core::ActiveCommandId>>,
+    twin_roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    scene_owner: Option<Res<lunco_core::SceneTransitionCoordinator>>,
 ) -> Result<Ack, String> {
-    #[cfg(target_arch = "wasm32")]
-    let _ = &workspace;
     report.clear_domain("lint");
     let scope = trigger.event().scope.trim();
     if scope == "twin" {
         let revision = report.begin_scope("twin");
         report.clear_domain("twin");
-        #[cfg(target_arch = "wasm32")]
-        {
-            let message = "Synchronous Twin RunLint is unavailable on this platform; use ValidateTwin with the current mounted Twin address and poll its operation_id";
-            fail_lint_scope(
+        let domain = trigger.event().domain.trim();
+        if !domain.is_empty() && domain != "twin" {
+            let message = fail_lint_scope(
                 &mut report,
                 "twin",
                 revision,
-                lint_command_error("twin", "twin-lint-unsupported-platform", "RunLint", message),
+                lint_command_error(
+                    "twin",
+                    "invalid-twin-lint-domain",
+                    "RunLint",
+                    format!(
+                        "scope `twin` cannot be combined with domain `{domain}`; omit domain or use `twin`"
+                    ),
+                ),
             );
-            return Err(message.to_owned());
+            return Err(message);
         }
-        #[cfg(not(target_arch = "wasm32"))]
+        if trigger.event().doc_id.is_some() {
+            let message = fail_lint_scope(
+                &mut report,
+                "twin",
+                revision,
+                lint_command_error(
+                    "twin",
+                    "invalid-twin-lint-document",
+                    "RunLint",
+                    "scope `twin` inspects the active Twin and cannot take doc_id",
+                ),
+            );
+            return Err(message);
+        }
+        let policy = match crate::twin_lint::policy_name(&trigger.event().policy) {
+            Ok(policy) => policy,
+            Err(message) => {
+                let message = fail_lint_scope(
+                    &mut report,
+                    "twin",
+                    revision,
+                    lint_command_error("twin", "invalid-twin-lint-policy", "RunLint", message),
+                );
+                return Err(message);
+            }
+        };
+        let Some(workspace) = workspace.as_deref() else {
+            let message = fail_lint_scope(
+                &mut report,
+                "twin",
+                revision,
+                lint_command_error(
+                    "twin",
+                    "twin-lint-no-workspace",
+                    "RunLint",
+                    "Twin namespace lint requires the Workspace resource",
+                ),
+            );
+            return Err(message);
+        };
+        let Some(twin_id) = workspace.active_twin else {
+            let message = fail_lint_scope(
+                &mut report,
+                "twin",
+                revision,
+                lint_command_error(
+                    "twin",
+                    "twin-lint-no-active-twin",
+                    "Workspace",
+                    "Twin namespace lint requires an active Twin",
+                ),
+            );
+            return Err(message);
+        };
+        let Some(twin) = workspace.twin(twin_id) else {
+            let message = fail_lint_scope(
+                &mut report,
+                "twin",
+                revision,
+                lint_command_error(
+                    "twin",
+                    "twin-lint-missing-active-twin",
+                    format!("TwinId({})", twin_id.raw()),
+                    "Workspace active_twin does not resolve to an open Twin",
+                ),
+            );
+            return Err(message);
+        };
+        let twin_root = twin.root.clone();
+        let authority = twin_roots
+            .as_deref()
+            .ok_or_else(|| "Twin registry is unavailable".to_owned())
+            .and_then(|roots| {
+                roots
+                    .names()
+                    .map_err(|error| error.to_string())
+                    .and_then(|names| {
+                        names
+                            .into_iter()
+                            .find(|name| {
+                                roots.root_of(name).ok().flatten().as_ref() == Some(&twin_root)
+                            })
+                            .ok_or_else(|| "Active Twin has no current asset mount".to_owned())
+                    })
+            });
+        let authority = match authority {
+            Ok(authority) => authority,
+            Err(message) => {
+                let message = fail_lint_scope(
+                    &mut report,
+                    "twin",
+                    revision,
+                    lint_command_error("twin", "twin-lint-admission-failed", "RunLint", message),
+                );
+                return Err(message);
+            }
+        };
+        let scene_generation = scene_owner
+            .as_deref()
+            .and_then(|owner| owner.completed_generation());
+        if scene_owner
+            .as_deref()
+            .is_some_and(|owner| owner.active_id().is_some())
         {
-            let domain = trigger.event().domain.trim();
-            if !domain.is_empty() && domain != "twin" {
-                let message = fail_lint_scope(
-                    &mut report,
+            let message = fail_lint_scope(
+                &mut report,
+                "twin",
+                revision,
+                lint_command_error(
                     "twin",
-                    revision,
-                    lint_command_error(
-                        "twin",
-                        "invalid-twin-lint-domain",
-                        "RunLint",
-                        format!(
-                            "scope `twin` cannot be combined with domain `{domain}`; omit domain or use `twin`"
-                        ),
-                    ),
-                );
-                return Err(message);
-            }
-            if trigger.event().doc_id.is_some() {
-                let message = fail_lint_scope(
-                    &mut report,
+                    "twin-lint-scene-transition",
+                    "RunLint",
+                    "Scene transition is active; lint the admitted scene revision after it settles",
+                ),
+            );
+            return Err(message);
+        }
+        let context = match active_command
+            .as_deref()
+            .and_then(|command| command.origin())
+        {
+            Some(lunco_core::CommandOrigin::Rhai { context, .. }) => context,
+            _ => lunco_core::RuntimeExecutionContext {
+                route: Some(lunco_core::RuntimeRoute::application(
+                    lunco_core::RuntimeCycle::Command,
+                )),
+                phase: lunco_core::RuntimePhase::Command,
+                clock: lunco_core::RuntimeClock::None,
+                time_seconds: None,
+                delta_seconds: None,
+                sequence: None,
+                producer: None,
+            },
+        };
+        if let Err(error) = context.validate() {
+            let message = fail_lint_scope(
+                &mut report,
+                "twin",
+                revision,
+                lint_command_error(
                     "twin",
-                    revision,
-                    lint_command_error(
-                        "twin",
-                        "invalid-twin-lint-document",
-                        "RunLint",
-                        "scope `twin` inspects the active Twin and cannot take doc_id",
-                    ),
-                );
-                return Err(message);
+                    "twin-lint-invalid-context",
+                    "RunLint",
+                    error.to_string(),
+                ),
+            );
+            return Err(message);
+        }
+        let policy = policy.to_owned();
+        commands.queue(move |world: &mut World| {
+            if !twin_lint_scope_current(world.resource::<lunco_lint::LintReport>(), revision) {
+                return;
             }
-            let policy = match crate::twin_lint::policy_name(&trigger.event().policy) {
-                Ok(policy) => policy,
+            retire_pending_twin_lint(world);
+            let admitted = (|| -> Result<u64, String> {
+                let workspace = world
+                    .get_resource::<lunco_workspace::WorkspaceResource>()
+                    .ok_or("Workspace retired before Twin lint admission")?;
+                if workspace.active_twin != Some(twin_id)
+                    || workspace
+                        .twin(twin_id)
+                        .is_none_or(|twin| twin.root != twin_root)
+                {
+                    return Err("Twin changed before lint admission".to_owned());
+                }
+                let roots = world
+                    .get_resource::<lunco_assets_core::TwinRoots>()
+                    .ok_or("Twin registry is unavailable")?;
+                if roots
+                    .root_of(&authority)
+                    .map_err(|error| error.to_string())?
+                    .as_ref()
+                    != Some(&twin_root)
+                {
+                    return Err("Twin mount retired before lint admission".to_owned());
+                }
+                let scene_owner = world.get_resource::<lunco_core::SceneTransitionCoordinator>();
+                if scene_owner.and_then(|owner| owner.completed_generation()) != scene_generation
+                    || scene_owner.is_some_and(|owner| owner.active_id().is_some())
+                {
+                    return Err("Scene revision changed before Twin lint admission".to_owned());
+                }
+                if let Some(route) = context
+                    .route
+                    .filter(|route| route.scope == lunco_core::RuntimeScope::Twin)
+                {
+                    let generation = world
+                        .get_resource::<lunco_core::SceneTransitionCoordinator>()
+                        .and_then(|owner| owner.completed_generation());
+                    if generation != Some(route.generation)
+                        || route.owner_id.is_some_and(|owner| owner != twin_id.raw())
+                    {
+                        return Err(
+                            "Rhai lint context no longer belongs to this Twin scene".to_owned()
+                        );
+                    }
+                }
+                crate::preparation::admit_twin_lint(world, &format!("twin://{authority}"), &policy)
+                    .map_err(|error| error.message)
+            })();
+            match admitted {
+                Ok(operation_id) => {
+                    world.resource_mut::<PendingTwinLint>().0 = Some(TwinLintTask {
+                        operation_id,
+                        revision,
+                        twin: twin_id,
+                        context,
+                        scene_generation,
+                    });
+                }
                 Err(message) => {
-                    let message = fail_lint_scope(
+                    let mut report = world.resource_mut::<lunco_lint::LintReport>();
+                    fail_lint_scope(
                         &mut report,
                         "twin",
                         revision,
-                        lint_command_error("twin", "invalid-twin-lint-policy", "RunLint", message),
+                        lint_command_error(
+                            "twin",
+                            "twin-lint-admission-failed",
+                            "RunLint",
+                            message,
+                        ),
                     );
-                    return Err(message);
                 }
-            };
-            let Some(workspace) = workspace.as_deref() else {
-                let message = fail_lint_scope(
-                    &mut report,
-                    "twin",
-                    revision,
-                    lint_command_error(
-                        "twin",
-                        "twin-lint-no-workspace",
-                        "RunLint",
-                        "Twin namespace lint requires the Workspace resource",
-                    ),
-                );
-                return Err(message);
-            };
-            let Some(twin_id) = workspace.active_twin else {
-                let message = fail_lint_scope(
-                    &mut report,
-                    "twin",
-                    revision,
-                    lint_command_error(
-                        "twin",
-                        "twin-lint-no-active-twin",
-                        "Workspace",
-                        "Twin namespace lint requires an active Twin",
-                    ),
-                );
-                return Err(message);
-            };
-            let Some(twin) = workspace.twin(twin_id) else {
-                let message = fail_lint_scope(
-                    &mut report,
-                    "twin",
-                    revision,
-                    lint_command_error(
-                        "twin",
-                        "twin-lint-missing-active-twin",
-                        format!("TwinId({})", twin_id.raw()),
-                        "Workspace active_twin does not resolve to an open Twin",
-                    ),
-                );
-                return Err(message);
-            };
-            let snapshot = crate::twin_lint::inspect_twin(twin);
-            if !snapshot.read_errors.is_empty() {
-                let message = format!(
-                    "Twin namespace inspection failed for {} source(s)",
-                    snapshot.read_errors.len()
-                );
-                report.extend_logged(
-                    snapshot
-                        .read_errors
-                        .iter()
-                        .map(|error| {
-                            lint_command_error(
-                                "twin",
-                                "twin-lint-source-read-failed",
-                                snapshot.twin.clone(),
-                                error.clone(),
-                            )
-                        })
-                        .collect(),
-                );
-                report.fail_scope("twin", revision, message.clone());
-                return Err(message);
             }
-            let findings = lunco_lint::run_lint("twin", crate::twin_lint::facts(&snapshot, policy));
-            report.extend_logged(findings);
-            report.complete_scope("twin", revision);
-            info!(
-                "[lint] RunLint: Twin `{}` — {} namespace collision(s), {} source read error(s), policy={policy}",
-                snapshot.twin,
-                snapshot.collisions.len(),
-                snapshot.read_errors.len(),
-            );
-            return Ok(Ack::default());
-        }
+        });
+        return Ok(Ack {
+            data: Some(api_value!({"queued": true, "scope": "twin", "revision": revision})),
+            ..Ack::default()
+        });
     }
     if !scope.is_empty() && scope != "loaded_stages" {
         let revision = report.begin_scope("loaded_stages");
@@ -939,10 +1210,16 @@ impl ApiQueryProvider for RuntimeDiagnosticsQuery {
 /// the rest of this crate's verbs).
 pub fn register(app: &mut App) {
     app.init_resource::<lunco_lint::LintReport>();
+    app.init_resource::<PendingTwinLint>();
+    app.add_systems(Update, poll_pending_twin_lint);
+    app.add_observer(on_twin_lint_owner_closed);
     app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>();
     // Findings belong to the loaded scene. A replacement must not leave the
     // previous scene's errors highlighted as if they were current.
-    app.add_systems(lunco_core::SceneTeardown, lunco_lint::clear_report);
+    app.add_systems(
+        lunco_core::SceneTeardown,
+        (retire_pending_twin_lint, lunco_lint::clear_report).chain(),
+    );
     app.add_observer(on_usd_document_changed);
     lunco_api::add_plugin_once::<lunco_api::ApiQueryRegistryPlugin>(
         app,

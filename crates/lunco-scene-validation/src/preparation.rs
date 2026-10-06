@@ -28,6 +28,7 @@ pub(crate) enum QueryKind {
     Sysml,
     AnalyzeSysml,
     Twin,
+    TwinLint,
 }
 
 /// Query preparation uses one closure read at a time; budgets are the same
@@ -51,7 +52,8 @@ struct PreparationState {
 }
 struct Operation {
     kind: QueryKind,
-    params: ApiValue,
+    params: Option<ApiValue>,
+    reference: String,
     fence: OwnerFence,
     task: Task<Result<Prepared, String>>,
     _permit: Arc<ExternalWorkPermit>,
@@ -95,7 +97,7 @@ impl OwnerFence {
 }
 
 #[derive(serde::Serialize)]
-struct ReadRevision {
+pub(crate) struct ReadRevision {
     path: String,
     cid: String,
 }
@@ -117,14 +119,28 @@ struct Prepared {
     mounts: Vec<(String, PathBuf)>,
 }
 pub(crate) enum PreparationPoll {
-    Pending(ApiValue),
+    Pending {
+        operation_id: u64,
+    },
     Ready {
         operation_id: u64,
         report: ValidationReport,
         params: ApiValue,
         revisions: ApiValue,
     },
-    Terminal(ApiValue),
+    ReadyTwin {
+        operation_id: u64,
+        snapshot: TwinNamespaceSnapshot,
+        registry_errors: Vec<String>,
+        policy: String,
+        reference: String,
+        revisions: Vec<ReadRevision>,
+        permit: Arc<ExternalWorkPermit>,
+    },
+    Failed {
+        operation_id: u64,
+        diagnostic: String,
+    },
 }
 
 fn rejected(message: impl Into<String>) -> ApiQueryError {
@@ -133,7 +149,7 @@ fn rejected(message: impl Into<String>) -> ApiQueryError {
 fn envelope(id: u64, state: &str, report: ApiValue, revisions: ApiValue) -> ApiValue {
     api_value!({"operation_id": id, "state": state, "report": report, "source_revisions": revisions})
 }
-fn failed(id: u64, diagnostic: impl Into<String>) -> ApiValue {
+pub(crate) fn failed(id: u64, diagnostic: impl Into<String>) -> ApiValue {
     api_value!({"operation_id": id, "state": "failed", "diagnostic": diagnostic.into()})
 }
 fn twin_authority(reference: &str) -> Option<&str> {
@@ -175,7 +191,7 @@ fn capture_fence(
             mount = Some((authority, twin.root.clone()));
         }
     }
-    let domains: &[&'static str] = if kind == QueryKind::Twin {
+    let domains: &[&'static str] = if matches!(kind, QueryKind::Twin | QueryKind::TwinLint) {
         &["twin"]
     } else {
         &["modelica", "usd", "sysml", "wgsl", "rhai"]
@@ -191,22 +207,12 @@ fn capture_fence(
     })
 }
 
-/// Admit once from `path`, or consume only the exact requested operation.
+/// External query adapter: decode admission parameters or the exact poll ID once.
 pub(crate) fn poll(
     world: &World,
     kind: QueryKind,
     params: &ApiValue,
 ) -> Result<PreparationPoll, ApiQueryError> {
-    let preparations = world
-        .get_resource::<QueryPreparations>()
-        .ok_or_else(|| rejected("Validation preparation owner is unavailable"))?;
-    let mut state = preparations
-        .0
-        .lock()
-        .map_err(|_| rejected("Validation preparation state is poisoned"))?;
-    state
-        .operations
-        .retain(|_, operation| operation.fence.lifetime_current(world));
     if let Some(value) = params.get("operation_id") {
         if params.get("path").is_some() {
             return Err(rejected(
@@ -218,92 +224,152 @@ pub(crate) fn poll(
             ApiValue::Int(id) if *id >= 0 => *id as u64,
             _ => return Err(rejected("operation_id must be a nonnegative integer")),
         };
-        let operation = state.operations.get_mut(&id).ok_or_else(|| {
-            rejected(format!(
-                "Unknown, consumed, or retired validation operation {id}"
-            ))
-        })?;
-        if operation.kind != kind {
-            return Err(rejected("operation_id belongs to a different query"));
-        }
-        let Some(outcome) = future::block_on(future::poll_once(&mut operation.task)) else {
-            return Ok(PreparationPoll::Pending(envelope(
-                id,
-                "pending",
-                ApiValue::Unit,
-                ApiValue::Unit,
-            )));
-        };
-        let operation = state
-            .operations
-            .remove(&id)
-            .expect("polled operation remains owned");
-        drop(state);
-        if !operation.fence.is_current(world) {
-            return Err(rejected(
-                "Validation owner or policy retired before publication",
-            ));
-        }
-        let prepared = match outcome {
-            Ok(prepared) => prepared,
-            Err(error) => return Ok(PreparationPoll::Terminal(failed(id, error))),
-        };
-        let workspace = world.get_resource::<WorkspaceResource>();
-        let replication = lunco_core_session::session::current_replication_owner_in(world);
-        if prepared.source_runtime.as_ref().is_some_and(|owner| {
-            !owner.is_current(
-                workspace.map(|workspace| &**workspace),
-                replication.as_ref(),
-            )
-        }) || prepared.mounts.iter().any(|(name, root)| {
-            world
-                .get_resource::<TwinRoots>()
-                .is_none_or(|roots| roots.root_of(name).ok().flatten().as_ref() != Some(root))
-        }) {
-            return Err(rejected(
-                "Validation source owner retired before publication",
-            ));
-        }
-        let revisions = lunco_api_core::api_value_from_serializable(&prepared.revisions)?;
-        return match prepared.facts {
-            PreparedFacts::Asset { report, text } => {
-                let report = if kind == QueryKind::AnalyzeSysml {
-                    report
-                } else {
-                    crate::validate::apply_lint_policy(report, &text)
-                };
-                Ok(PreparationPoll::Ready {
-                    operation_id: id,
-                    report,
-                    params: operation.params,
-                    revisions,
-                })
-            }
-            PreparedFacts::Twin {
-                snapshot,
-                registry_errors,
-                policy,
-            } => {
-                let report = crate::validate::finish_twin_report(
-                    lunco_api::api_param_str(&operation.params, "path").expect("admitted path"),
-                    &policy,
-                    snapshot,
-                    registry_errors,
-                );
-                Ok(PreparationPoll::Terminal(envelope(
-                    id,
-                    "ready",
-                    lunco_api_core::api_value_from_serializable(&report)?,
-                    revisions,
-                )))
-            }
-        };
+        return poll_operation(world, kind, id);
     }
-    let reference = lunco_api::api_param_str(params, "path")
-        .ok_or_else(|| {
-            rejected("Initial validation query requires path; poll requires operation_id")
-        })?
-        .to_owned();
+    let reference = lunco_api::api_param_str(params, "path").ok_or_else(|| {
+        rejected("Initial validation query requires path; poll requires operation_id")
+    })?;
+    let policy = match params.get("policy") {
+        Some(ApiValue::Str(policy)) => policy.as_str(),
+        None => "warn",
+        Some(_) => return Err(rejected("policy must be a string")),
+    };
+    let operation_id = admit_request(
+        world,
+        kind,
+        reference.to_owned(),
+        policy.to_owned(),
+        Some(params.clone()),
+    )?;
+    Ok(PreparationPoll::Pending { operation_id })
+}
+
+/// Consume one exact typed operation; no internal API parameter envelope.
+pub(crate) fn poll_operation(
+    world: &World,
+    kind: QueryKind,
+    id: u64,
+) -> Result<PreparationPoll, ApiQueryError> {
+    let preparations = world
+        .get_resource::<QueryPreparations>()
+        .ok_or_else(|| rejected("Validation preparation owner is unavailable"))?;
+    let mut state = preparations
+        .0
+        .lock()
+        .map_err(|_| rejected("Validation preparation state is poisoned"))?;
+    state
+        .operations
+        .retain(|_, operation| operation.fence.lifetime_current(world));
+    let operation = state.operations.get_mut(&id).ok_or_else(|| {
+        rejected(format!(
+            "Unknown, consumed, or retired validation operation {id}"
+        ))
+    })?;
+    if operation.kind != kind {
+        return Err(rejected("operation_id belongs to a different query"));
+    }
+    let Some(outcome) = future::block_on(future::poll_once(&mut operation.task)) else {
+        return Ok(PreparationPoll::Pending { operation_id: id });
+    };
+    let operation = state
+        .operations
+        .remove(&id)
+        .ok_or_else(|| rejected("Validation operation retired before consumption"))?;
+    drop(state);
+    if !operation.fence.is_current(world) {
+        return Err(rejected(
+            "Validation owner or policy retired before publication",
+        ));
+    }
+    let prepared = match outcome {
+        Ok(prepared) => prepared,
+        Err(diagnostic) => {
+            return Ok(PreparationPoll::Failed {
+                operation_id: id,
+                diagnostic,
+            });
+        }
+    };
+    let workspace = world.get_resource::<WorkspaceResource>();
+    let replication = lunco_core_session::session::current_replication_owner_in(world);
+    if prepared.source_runtime.as_ref().is_some_and(|owner| {
+        !owner.is_current(
+            workspace.map(|workspace| &**workspace),
+            replication.as_ref(),
+        )
+    }) || prepared.mounts.iter().any(|(name, root)| {
+        world
+            .get_resource::<TwinRoots>()
+            .is_none_or(|roots| roots.root_of(name).ok().flatten().as_ref() != Some(root))
+    }) {
+        return Err(rejected(
+            "Validation source owner retired before publication",
+        ));
+    }
+    return match prepared.facts {
+        PreparedFacts::Asset { report, text } => {
+            let revisions = lunco_api_core::api_value_from_serializable(&prepared.revisions)?;
+            let report = if kind == QueryKind::AnalyzeSysml {
+                report
+            } else {
+                crate::validate::apply_lint_policy(report, &text)
+            };
+            Ok(PreparationPoll::Ready {
+                operation_id: id,
+                report,
+                params: operation
+                    .params
+                    .ok_or_else(|| rejected("Non-query operation returned file facts"))?,
+                revisions,
+            })
+        }
+        PreparedFacts::Twin {
+            snapshot,
+            registry_errors,
+            policy,
+        } => Ok(PreparationPoll::ReadyTwin {
+            operation_id: id,
+            snapshot,
+            registry_errors,
+            policy,
+            reference: operation.reference,
+            revisions: prepared.revisions,
+            permit: Arc::clone(&operation._permit),
+        }),
+    };
+}
+
+pub(crate) fn admit_twin_lint(
+    world: &World,
+    reference: &str,
+    policy: &str,
+) -> Result<u64, ApiQueryError> {
+    admit_request(
+        world,
+        QueryKind::TwinLint,
+        reference.to_owned(),
+        policy.to_owned(),
+        None,
+    )
+}
+
+fn admit_request(
+    world: &World,
+    kind: QueryKind,
+    reference: String,
+    policy: String,
+    params: Option<ApiValue>,
+) -> Result<u64, ApiQueryError> {
+    let preparations = world
+        .get_resource::<QueryPreparations>()
+        .ok_or_else(|| rejected("Validation preparation owner is unavailable"))?;
+    let mut state = preparations
+        .0
+        .lock()
+        .map_err(|_| rejected("Validation preparation state is poisoned"))?;
+    state
+        .operations
+        .retain(|_, operation| operation.fence.lifetime_current(world));
     let mut fence = capture_fence(world, &reference, kind)?;
     let source = admit_source(world, &reference, kind, &mut fence)?;
     let next = state
@@ -329,39 +395,54 @@ pub(crate) fn poll(
         .ok_or_else(|| rejected("Validation task pool is unavailable"))?;
     let roots = world.get_resource::<TwinRoots>().cloned();
     let server = world.get_resource::<AssetServer>().cloned();
-    let policy = match params.get("policy") {
-        Some(ApiValue::Str(policy)) => crate::twin_lint::policy_name(policy)
-            .map_err(rejected)?
-            .to_owned(),
-        None => "warn".to_owned(),
-        Some(_) => return Err(rejected("policy must be a string")),
-    };
+    let policy = crate::twin_lint::policy_name(&policy)
+        .map_err(rejected)?
+        .to_owned();
     let limits = world
         .get_resource::<QueryPreparationLimits>()
         .ok_or_else(|| rejected("Validation resource budget is unavailable"))?
         .0;
     let running_permit = Arc::clone(&permit);
+    let source_reference = reference.clone();
     let task = pool.spawn(async move {
         let _running_permit = running_permit;
-        catch_preparation(prepare(reference, source, roots, server, policy, limits)).await
+        catch_preparation(prepare(
+            source_reference,
+            source,
+            roots,
+            server,
+            policy,
+            limits,
+        ))
+        .await
     });
     state.next = next;
     state.operations.insert(
         next,
         Operation {
             kind,
-            params: params.clone(),
+            params,
+            reference,
             fence,
             task,
             _permit: permit,
         },
     );
-    Ok(PreparationPoll::Pending(envelope(
-        next,
-        "pending",
-        ApiValue::Unit,
-        ApiValue::Unit,
-    )))
+    Ok(next)
+}
+pub(crate) fn cancel(world: &World, id: u64) {
+    if let Some(preparations) = world.get_resource::<QueryPreparations>() {
+        preparations
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .operations
+            .remove(&id);
+    }
+}
+
+pub(crate) fn pending(id: u64) -> ApiValue {
+    envelope(id, "pending", ApiValue::Unit, ApiValue::Unit)
 }
 
 pub(crate) fn report_envelope(id: u64, report: ApiValue, revisions: ApiValue) -> ApiValue {
@@ -406,7 +487,7 @@ fn admit_source(
     kind: QueryKind,
     fence: &mut OwnerFence,
 ) -> Result<Source, ApiQueryError> {
-    if kind == QueryKind::Twin {
+    if matches!(kind, QueryKind::Twin | QueryKind::TwinLint) {
         if let Some(authority) = reference
             .strip_prefix("twin://")
             .filter(|name| !name.is_empty() && !name.contains('/'))
@@ -437,7 +518,7 @@ fn admit_source(
         workspace.map(|workspace| &**workspace),
         replication.as_ref(),
     );
-    if kind == QueryKind::Twin {
+    if matches!(kind, QueryKind::Twin | QueryKind::TwinLint) {
         let path = match lunco_storage::file_uri_to_path(reference)
             .map_err(|error| rejected(error.to_string()))?
         {
