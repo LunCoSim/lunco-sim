@@ -346,6 +346,22 @@ fn inspect_usd_file(
     entries: &mut Vec<NamespaceEntry>,
     read_errors: &mut Vec<String>,
 ) {
+    #[cfg(not(target_arch = "wasm32"))]
+    let path = match lunco_assets_core::existing_path_within_root(&twin.root, rel) {
+        Ok(Some(path)) => path,
+        Ok(None) => {
+            read_errors.push(format!(
+                "{}: indexed USD source was not found",
+                slashed(rel)
+            ));
+            return;
+        }
+        Err(error) => {
+            read_errors.push(format!("{}: {error}", slashed(rel)));
+            return;
+        }
+    };
+    #[cfg(target_arch = "wasm32")]
     let path = twin.root.join(rel);
     let engine_root = crate::validate::engine_assets_root();
     let stage = match lunco_usd_compose::compose_file_to_stage_with_roots(

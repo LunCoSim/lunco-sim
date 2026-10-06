@@ -273,6 +273,15 @@ native directory/file URI, then uses the operation protocol above. Prepared
 source-read failures fail its report; namespace collision severity remains
 controlled by the authored policy.
 
+Native Twin `RunLint` confines indexed USD roots through the asset owner and
+bounds root and dependency reads with `StageClosureLimits` before allocation.
+Any source-read, parse, or composition failure emits owner error diagnostics,
+fails the Twin lint scope, and returns a failed command result even when the
+collision policy is `warn`. Browser Twin `RunLint` returns the terminal
+`twin-lint-unsupported-platform` diagnostic before inspection; use async
+`ValidateTwin` for mounted browser sources. Loaded-stage lint remains available
+on both platforms.
+
 ## Explicit authoring/preflight only
 
 Linting is something you **run**, not something that runs at you. A check firing

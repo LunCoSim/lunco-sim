@@ -358,7 +358,11 @@ resolver scopes, collisions, source-read errors, and namespace findings. For a
 mounted browser Twin pass its current `twin://<assigned-authority>` instead of
 a native folder. For the active Twin after `OpenFolder`/`OpenTwin`, use
 `cmd("RunLint", #{scope: "twin", policy: "warn"})` and read
-`query("GetDiagnostics", #{scope: "twin"})` after `complete:true`.
+`query("GetDiagnostics", #{scope: "twin"})` after `complete:true` on native.
+Unreadable or invalid sources fail the scope and command result even with
+`policy: "warn"`. Browser Twin `RunLint` returns a terminal platform diagnostic;
+use async `ValidateTwin` with the mounted address instead. Loaded-stage lint
+remains available on both platforms.
 
 ## Command ownership
 

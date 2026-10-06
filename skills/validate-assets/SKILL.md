@@ -143,9 +143,12 @@ query("GetDiagnostics", #{scope: "twin"});
 
 `RunLint` and `ValidateTwin` share namespace facts and Rhai policy. Runtime
 `ValidateTwin` captures indexed source identity, owner, mount, and policy at
-admission and rejects publication after retirement or source changes. Use the
-async query for browser Twin preflight; synchronous Twin `RunLint` inspection
-has a separate platform boundary.
+admission and rejects publication after retirement or indexed source-set changes. Use the
+async query for browser Twin preflight. Browser Twin `RunLint` terminally
+rejects with `twin-lint-unsupported-platform`. Native Twin `RunLint` uses bounded,
+confined source reads; any source failure fails its scope and command result,
+independently of collision severity policy. Loaded-stage lint works on either
+platform.
 
 For a composed document, `ValidateAsset` is still the file-level gate. Use the
 live Rhai `model_authoring` facades for the next question: whether the exact

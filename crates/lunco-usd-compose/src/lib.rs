@@ -216,21 +216,36 @@ pub fn compose_file_to_stage_with_roots(
     assets_root: Option<&Path>,
     twin_root: Option<&Path>,
 ) -> Result<Stage> {
+    let absolute = lunco_storage::canonicalize_file_path(path)
+        .map_err(|error| anyhow!("cannot resolve USD root {}: {error}", path.display()))?;
+    let source_uri = lunco_storage::file_path_to_uri(&absolute)
+        .map_err(|error| anyhow!("cannot identify USD root {}: {error}", path.display()))?;
     let root_id = match assets_root.and_then(|root| path.strip_prefix(root).ok()) {
         Some(rel) => lunco_assets_core::engine_asset_uri(&lunco_assets_path::slashed(rel)),
-        None => {
-            let absolute = lunco_storage::canonicalize_file_path(path)
-                .map_err(|error| anyhow!("cannot resolve USD root {}: {error}", path.display()))?;
-            lunco_storage::file_path_to_uri(&absolute)
-                .map_err(|error| anyhow!("cannot identify USD root {}: {error}", path.display()))?
-        }
+        None => source_uri.clone(),
     };
-    let root_bytes = lunco_assets_core::read_asset_file_bytes(path)
-        .map_err(|error| anyhow!("cannot read {}: {error}", path.display()))?;
-    let source = std::str::from_utf8(&root_bytes)
-        .map_err(|error| anyhow!("USD root {} is not UTF-8: {error}", path.display()))?;
-    compose_source_to_stage_with_roots(&root_id, source, assets_root, twin_root)
-        .map(|(stage, _)| stage)
+    let limits = StageClosureLimits::default();
+    let root_bytes = lunco_assets_core::read_asset_bytes_bounded_with_twin_root(
+        &source_uri,
+        assets_root,
+        twin_root,
+        limits.max_bytes,
+    )
+    .map_err(|error| anyhow!("cannot read {}: {error}", path.display()))?;
+    let recipe =
+        recipe_from_bytes_with_roots(&root_id, root_bytes, assets_root, twin_root, limits)?;
+    if !recipe.dependency_diagnostics.is_empty() {
+        anyhow::bail!(
+            "{}",
+            recipe
+                .dependency_diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    compose_recipe_to_stage(recipe).map(|(stage, _)| stage)
 }
 
 /// Compose current in-memory layer source against the same asset resolver used
@@ -245,8 +260,15 @@ pub fn compose_source_to_stage_with_roots(
     twin_root: Option<&Path>,
 ) -> Result<(Stage, Vec<StageDependencyDiagnostic>)> {
     let recipe = recipe_from_source_with_roots(root_id, source, assets_root, twin_root)?;
-    let diagnostics = recipe.dependency_diagnostics.clone();
-    let resolver = LuncoUsdResolver::new(recipe.bytes.clone())?;
+    compose_recipe_to_stage(recipe)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn compose_recipe_to_stage(
+    recipe: recipe::StageRecipe,
+) -> Result<(Stage, Vec<StageDependencyDiagnostic>)> {
+    let diagnostics = recipe.dependency_diagnostics;
+    let resolver = LuncoUsdResolver::new(recipe.bytes)?;
     let resolver_diagnostics = resolver.diagnostics();
     let stage = Stage::builder().resolver(resolver).open(&recipe.root_id);
     resolver_diagnostics.check()?;

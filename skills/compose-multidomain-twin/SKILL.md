@@ -97,7 +97,9 @@ use the current assigned `twin://<authority>` instead of a native folder. See
 The inspector reports only collisions in the same resolver scope and includes
 every owner/source so the repair is made in the authored Twin. `RunLint` can
 run the same check against the active Twin with
-`cmd("RunLint", #{scope: "twin", policy: "warn"})`. Keep resolver policy in
+`cmd("RunLint", #{scope: "twin", policy: "warn"})` on native. Source failures
+fail that scope regardless of collision policy. Browser Twin `RunLint` rejects
+terminally; use async `ValidateTwin` for the mounted Twin. Keep resolver policy in
 `assets/scripting/policy/lint_twin.rhai`; do not add a Rust-side rename,
 silent precedence rule, or duplicate namespace registry.
 

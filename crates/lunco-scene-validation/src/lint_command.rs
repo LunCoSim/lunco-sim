@@ -35,7 +35,9 @@ use lunco_api::ApiQueryResult;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api_core::{ApiValue, api_value};
 use lunco_core::{Command, on_command, register_commands};
-use lunco_doc::{Diagnostic, DiagnosticSourceReport, DiagnosticSourceState, Document, DocumentId};
+use lunco_doc::{
+    Ack, Diagnostic, DiagnosticSourceReport, DiagnosticSourceState, Document, DocumentId,
+};
 use lunco_doc_bevy::{DocumentChanged, DocumentRegistry};
 use lunco_hooks::HookValue as H;
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -71,10 +73,11 @@ fn fail_lint_scope(
     scope: &str,
     revision: u64,
     finding: Diagnostic,
-) {
+) -> String {
     let message = finding.message.clone();
     report.extend_logged(vec![finding]);
-    report.fail_scope(scope, revision, message);
+    report.fail_scope(scope, revision, message.clone());
+    message
 }
 
 fn on_usd_document_changed(
@@ -550,113 +553,151 @@ pub fn on_run_lint(
     documents: Option<Res<DocumentRegistry<lunco_usd_document::document::UsdDocument>>>,
     backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-) {
+) -> Result<Ack, String> {
+    #[cfg(target_arch = "wasm32")]
+    let _ = &workspace;
     report.clear_domain("lint");
     let scope = trigger.event().scope.trim();
     if scope == "twin" {
         let revision = report.begin_scope("twin");
         report.clear_domain("twin");
-        let domain = trigger.event().domain.trim();
-        if !domain.is_empty() && domain != "twin" {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let message = "Synchronous Twin RunLint is unavailable on this platform; use ValidateTwin with the current mounted Twin address and poll its operation_id";
             fail_lint_scope(
                 &mut report,
                 "twin",
                 revision,
-                lint_command_error(
-                    "twin",
-                    "invalid-twin-lint-domain",
-                    "RunLint",
-                    format!(
-                        "scope `twin` cannot be combined with domain `{domain}`; omit domain or use `twin`"
-                    ),
-                ),
+                lint_command_error("twin", "twin-lint-unsupported-platform", "RunLint", message),
             );
-            return;
+            return Err(message.to_owned());
         }
-        if trigger.event().doc_id.is_some() {
-            fail_lint_scope(
-                &mut report,
-                "twin",
-                revision,
-                lint_command_error(
-                    "twin",
-                    "invalid-twin-lint-document",
-                    "RunLint",
-                    "scope `twin` inspects the active Twin and cannot take doc_id",
-                ),
-            );
-            return;
-        }
-        let policy = match crate::twin_lint::policy_name(&trigger.event().policy) {
-            Ok(policy) => policy,
-            Err(message) => {
-                fail_lint_scope(
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let domain = trigger.event().domain.trim();
+            if !domain.is_empty() && domain != "twin" {
+                let message = fail_lint_scope(
                     &mut report,
                     "twin",
                     revision,
-                    lint_command_error("twin", "invalid-twin-lint-policy", "RunLint", message),
+                    lint_command_error(
+                        "twin",
+                        "invalid-twin-lint-domain",
+                        "RunLint",
+                        format!(
+                            "scope `twin` cannot be combined with domain `{domain}`; omit domain or use `twin`"
+                        ),
+                    ),
                 );
-                return;
+                return Err(message);
             }
-        };
-        let Some(workspace) = workspace.as_deref() else {
-            fail_lint_scope(
-                &mut report,
-                "twin",
-                revision,
-                lint_command_error(
+            if trigger.event().doc_id.is_some() {
+                let message = fail_lint_scope(
+                    &mut report,
                     "twin",
-                    "twin-lint-no-workspace",
-                    "RunLint",
-                    "Twin namespace lint requires the Workspace resource",
-                ),
-            );
-            return;
-        };
-        let Some(twin_id) = workspace.active_twin else {
-            fail_lint_scope(
-                &mut report,
-                "twin",
-                revision,
-                lint_command_error(
+                    revision,
+                    lint_command_error(
+                        "twin",
+                        "invalid-twin-lint-document",
+                        "RunLint",
+                        "scope `twin` inspects the active Twin and cannot take doc_id",
+                    ),
+                );
+                return Err(message);
+            }
+            let policy = match crate::twin_lint::policy_name(&trigger.event().policy) {
+                Ok(policy) => policy,
+                Err(message) => {
+                    let message = fail_lint_scope(
+                        &mut report,
+                        "twin",
+                        revision,
+                        lint_command_error("twin", "invalid-twin-lint-policy", "RunLint", message),
+                    );
+                    return Err(message);
+                }
+            };
+            let Some(workspace) = workspace.as_deref() else {
+                let message = fail_lint_scope(
+                    &mut report,
                     "twin",
-                    "twin-lint-no-active-twin",
-                    "Workspace",
-                    "Twin namespace lint requires an active Twin",
-                ),
-            );
-            return;
-        };
-        let Some(twin) = workspace.twin(twin_id) else {
-            fail_lint_scope(
-                &mut report,
-                "twin",
-                revision,
-                lint_command_error(
+                    revision,
+                    lint_command_error(
+                        "twin",
+                        "twin-lint-no-workspace",
+                        "RunLint",
+                        "Twin namespace lint requires the Workspace resource",
+                    ),
+                );
+                return Err(message);
+            };
+            let Some(twin_id) = workspace.active_twin else {
+                let message = fail_lint_scope(
+                    &mut report,
                     "twin",
-                    "twin-lint-missing-active-twin",
-                    format!("TwinId({})", twin_id.raw()),
-                    "Workspace active_twin does not resolve to an open Twin",
-                ),
+                    revision,
+                    lint_command_error(
+                        "twin",
+                        "twin-lint-no-active-twin",
+                        "Workspace",
+                        "Twin namespace lint requires an active Twin",
+                    ),
+                );
+                return Err(message);
+            };
+            let Some(twin) = workspace.twin(twin_id) else {
+                let message = fail_lint_scope(
+                    &mut report,
+                    "twin",
+                    revision,
+                    lint_command_error(
+                        "twin",
+                        "twin-lint-missing-active-twin",
+                        format!("TwinId({})", twin_id.raw()),
+                        "Workspace active_twin does not resolve to an open Twin",
+                    ),
+                );
+                return Err(message);
+            };
+            let snapshot = crate::twin_lint::inspect_twin(twin);
+            if !snapshot.read_errors.is_empty() {
+                let message = format!(
+                    "Twin namespace inspection failed for {} source(s)",
+                    snapshot.read_errors.len()
+                );
+                report.extend_logged(
+                    snapshot
+                        .read_errors
+                        .iter()
+                        .map(|error| {
+                            lint_command_error(
+                                "twin",
+                                "twin-lint-source-read-failed",
+                                snapshot.twin.clone(),
+                                error.clone(),
+                            )
+                        })
+                        .collect(),
+                );
+                report.fail_scope("twin", revision, message.clone());
+                return Err(message);
+            }
+            let findings = lunco_lint::run_lint("twin", crate::twin_lint::facts(&snapshot, policy));
+            report.extend_logged(findings);
+            report.complete_scope("twin", revision);
+            info!(
+                "[lint] RunLint: Twin `{}` — {} namespace collision(s), {} source read error(s), policy={policy}",
+                snapshot.twin,
+                snapshot.collisions.len(),
+                snapshot.read_errors.len(),
             );
-            return;
-        };
-        let snapshot = crate::twin_lint::inspect_twin(twin);
-        let findings = lunco_lint::run_lint("twin", crate::twin_lint::facts(&snapshot, policy));
-        report.extend_logged(findings);
-        report.complete_scope("twin", revision);
-        info!(
-            "[lint] RunLint: Twin `{}` — {} namespace collision(s), {} source read error(s), policy={policy}",
-            snapshot.twin,
-            snapshot.collisions.len(),
-            snapshot.read_errors.len(),
-        );
-        return;
+            return Ok(Ack::default());
+        }
     }
     if !scope.is_empty() && scope != "loaded_stages" {
         let revision = report.begin_scope("loaded_stages");
         report.clear_domain(lunco_usd_avian_lint::USD_LINT_DOMAIN);
-        fail_lint_scope(
+        let message = fail_lint_scope(
             &mut report,
             "loaded_stages",
             revision,
@@ -667,13 +708,13 @@ pub fn on_run_lint(
                 format!("unknown lint scope `{scope}`; use `loaded_stages` or `twin`"),
             ),
         );
-        return;
+        return Err(message);
     }
     let domain = trigger.event().domain.trim().to_string();
     if !domain.is_empty() && domain != lunco_usd_avian_lint::USD_LINT_DOMAIN {
         let revision = report.begin_scope("loaded_stages");
         report.clear_domain(lunco_usd_avian_lint::USD_LINT_DOMAIN);
-        fail_lint_scope(
+        let message = fail_lint_scope(
             &mut report,
             "loaded_stages",
             revision,
@@ -686,14 +727,15 @@ pub fn on_run_lint(
                 ),
             ),
         );
-        return;
+        return Err(message);
     }
 
     if let Some(raw_doc) = trigger.event().doc_id {
         let doc = DocumentId::new(raw_doc);
         let Some(host) = documents.as_deref().and_then(|registry| registry.host(doc)) else {
-            warn!("[lint] RunLint: document {doc} is not open");
-            return;
+            let message = format!("RunLint document {doc} is not open");
+            warn!("[lint] {message}");
+            return Err(message);
         };
         let generation = host.document().generation();
         let revision = document_diagnostics
@@ -725,7 +767,7 @@ pub fn on_run_lint(
             warn!(
                 "[lint] RunLint: document {doc} projection is not current (generation {generation})"
             );
-            return;
+            return Ok(Ack::default());
         }
 
         let stage_handle = asset_server.as_deref().and_then(|server| {
@@ -752,8 +794,9 @@ pub fn on_run_lint(
                     diagnostics: Vec::new(),
                 },
             );
-            warn!("[lint] RunLint: document {doc} has no projected canonical stage");
-            return;
+            let message = format!("RunLint document {doc} has no projected canonical stage");
+            warn!("[lint] {message}");
+            return Err(message);
         };
         document_diagnostics.set_source_report(
             doc,
@@ -793,7 +836,7 @@ pub fn on_run_lint(
             });
         }
         info!("[lint] RunLint: document {doc} — report queued after live projection check");
-        return;
+        return Ok(Ack::default());
     }
 
     // Re-linting REPLACES this domain's findings: a rule that was fixed between
@@ -843,6 +886,7 @@ pub fn on_run_lint(
     });
 
     info!("[lint] RunLint: queued {linted} stage(s) for composed and live checks");
+    Ok(Ack::default())
 }
 
 /// Read structural runtime diagnostics from owning subsystems. These findings
