@@ -179,16 +179,21 @@ Run the generic `immutable_reuse_cache_` tests and compile the browser worker
 bundle when changing configuration transport. Do not infer Twin teardown from
 shared immutable cache contents.
 
-Native optional solve-cache reads capture the cache-owned
+Native optional solve-cache reuse captures the cache-owned
 `lunco_modelica_worker::worker::PreparedSolveDiskLimits` resource before
-`ModelicaExecutionPlugin` starts the worker. Defaults are 64 MiB compressed,
+`ModelicaExecutionPlugin` starts the worker. Defaults are 32 retained records, 64 MiB compressed,
 256 MiB decoded, and a 64 MiB zstd window; see
-[the cache read contract](../../docs/architecture/20-domain-modelica.md) for
+[the cache ownership contract](../../docs/architecture/20-domain-modelica.md) for
 valid ranges and configuration timing. Missing records are cache misses;
 rejected existing records warn and recompute admitted equations. Invalid limits
 are a typed worker startup failure. For decode changes, run the generic
 `prepared_solve_disk_cache_` tests; do not substitute repository models for the
 inline-storage boundary fixtures.
+For publication/retention changes, also run `persistent_solve_cache_` and storage
+`cache_directory_transaction_` tests, including the native Windows CI path.
+Keep heavy encoding outside the storage transaction; never remove its lock
+file or broaden retention beyond the owned cache namespace. Optional publication
+failures warn while preserving the admitted solver result.
 
 On native desktop startup, cache-miss solve-IR lowering runs in the worker's
 bounded preparation pool because the DAE input and solve options are immutable.

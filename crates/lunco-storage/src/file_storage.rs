@@ -42,10 +42,89 @@ pub struct FileStorage {
     memory: Mutex<HashMap<String, Vec<u8>>>,
 }
 
+/// Cross-process native cache publication transaction. A separate OS file
+/// handle owns the exclusive lock until this guard drops. The persistent lock
+/// file must never be removed or replaced while cache writers can use it.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct DirectoryCacheTransaction {
+    directory: std::path::PathBuf,
+    _lock: std::fs::File,
+}
+
+/// One direct regular file. Symlinks and directories are excluded without
+/// following them, and no directory-wide collection is allocated.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct DirectoryCacheFile {
+    pub handle: StorageHandle,
+    pub bytes: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DirectoryCacheTransaction {
+    /// Canonical directory identity shared by aliases of the same cache root.
+    pub fn directory(&self) -> &std::path::Path {
+        &self.directory
+    }
+
+    /// Stream regular-file metadata while retaining the transaction borrow.
+    /// Drop the iterator before deleting entries; enumeration order is unspecified.
+    pub fn files(
+        &self,
+    ) -> StorageResult<impl Iterator<Item = StorageResult<DirectoryCacheFile>> + '_> {
+        Ok(std::fs::read_dir(&self.directory)?.filter_map(|entry| {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => return Some(Err(StorageError::Io(error))),
+            };
+            // DirEntry::metadata does not traverse a symlink on Unix or Windows.
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(error) => return Some(Err(StorageError::Io(error))),
+            };
+            metadata.is_file().then(|| {
+                Ok(DirectoryCacheFile {
+                    handle: StorageHandle::File(entry.path()),
+                    bytes: metadata.len(),
+                })
+            })
+        }))
+    }
+}
+
 impl FileStorage {
     /// Construct a fresh backend.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Serialize cooperating native cache writers across threads and processes.
+    /// Call only on a worker thread, after heavy encoding/preparation completes.
+    /// Publication, bounded enumeration and deletion use the existing Storage API.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn lock_cache_directory(
+        &self,
+        handle: &StorageHandle,
+    ) -> StorageResult<DirectoryCacheTransaction> {
+        let StorageHandle::File(directory) = handle else {
+            return Err(StorageError::Unsupported(
+                "native cache transactions require a File directory".into(),
+            ));
+        };
+        std::fs::create_dir_all(directory)?;
+        let directory = std::fs::canonicalize(directory)?;
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(directory.join(".cache-lock"))?;
+        // A separate open per transaction avoids reentrant/cloned-handle lock
+        // semantics. Read+write is supported by both flock and Windows LockFileEx.
+        lock.lock()?;
+        Ok(DirectoryCacheTransaction {
+            directory,
+            _lock: lock,
+        })
     }
 
     /// Read at most the caller's byte budget, rejecting oversized contents
@@ -478,6 +557,140 @@ mod tests {
             storage.write(&handle, b"").await.unwrap();
             assert!(storage.read_bounded(&handle, 0).await.unwrap().is_empty());
         });
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn cache_directory_transaction_serializes_independent_writers_and_releases_lock() {
+        let root = tempdir().unwrap();
+        let directory = StorageHandle::File(root.path().join("Unicode cache é"));
+        let storage = FileStorage::new();
+        let transaction = storage.lock_cache_directory(&directory).unwrap();
+        let other = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(transaction.directory().join(".cache-lock"))
+            .unwrap();
+        assert!(matches!(
+            other.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        let counter = StorageHandle::File(transaction.directory().join("counter.bin"));
+        storage.write_sync(&counter, &0_u64.to_le_bytes()).unwrap();
+        drop(transaction);
+        other.try_lock().unwrap();
+        drop(other);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let directory = &directory;
+                let counter = &counter;
+                scope.spawn(move || {
+                    let storage = FileStorage::new();
+                    for _ in 0..16 {
+                        let _transaction = storage.lock_cache_directory(directory).unwrap();
+                        let bytes = block_on(storage.read_bounded(counter, 8)).unwrap();
+                        let value = u64::from_le_bytes(bytes.try_into().unwrap());
+                        storage
+                            .write_sync(counter, &(value + 1).to_le_bytes())
+                            .unwrap();
+                    }
+                });
+            }
+        });
+        let bytes = storage.read_sync(&counter).unwrap();
+        assert_eq!(u64::from_le_bytes(bytes.try_into().unwrap()), 128);
+        assert!(root.path().join("Unicode cache é/.cache-lock").exists());
+        assert!(matches!(
+            storage.lock_cache_directory(&StorageHandle::Memory("no directory".into())),
+            Err(StorageError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn cache_directory_transaction_streams_regular_metadata_without_following_links() {
+        let root = tempdir().unwrap();
+        let storage = FileStorage::new();
+        let transaction = storage
+            .lock_cache_directory(&StorageHandle::File(root.path().to_path_buf()))
+            .unwrap();
+        let file = StorageHandle::File(root.path().join("payload.bin"));
+        storage.write_sync(&file, b"abc").unwrap();
+        storage
+            .ensure_directory_sync(&StorageHandle::File(root.path().join("directory.bin")))
+            .unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            root.path().join("payload.bin"),
+            root.path().join("link.bin"),
+        )
+        .unwrap();
+        let mut files = transaction
+            .files()
+            .unwrap()
+            .collect::<StorageResult<Vec<_>>>()
+            .unwrap();
+        files.retain(|entry| {
+            entry.handle != StorageHandle::File(transaction.directory().join(".cache-lock"))
+        });
+        assert_eq!(files.len(), 1);
+        assert_eq!(
+            files[0].handle,
+            StorageHandle::File(transaction.directory().join("payload.bin"))
+        );
+        assert_eq!(files[0].bytes, 3);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn cache_directory_transaction_serializes_child_process() {
+        const CHILD_ROOT: &str = "LUNCO_STORAGE_CACHE_TRANSACTION_TEST_ROOT";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let root = std::path::PathBuf::from(root);
+            let storage = FileStorage::new();
+            storage
+                .write_sync(&StorageHandle::File(root.join("ready")), b"ready")
+                .unwrap();
+            let _transaction = storage
+                .lock_cache_directory(&StorageHandle::File(root.clone()))
+                .unwrap();
+            storage
+                .write_sync(&StorageHandle::File(root.join("published")), b"complete")
+                .unwrap();
+            return;
+        }
+        let root = tempdir().unwrap();
+        let storage = FileStorage::new();
+        let transaction = storage
+            .lock_cache_directory(&StorageHandle::File(root.path().to_path_buf()))
+            .unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "file_storage::tests::cache_directory_transaction_serializes_child_process",
+            ])
+            .env(CHILD_ROOT, root.path())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !root.path().join("ready").exists() {
+            if child.try_wait().unwrap().is_some() || std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("child failed to reach the cache transaction");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!root.path().join("published").exists());
+        assert!(child.try_wait().unwrap().is_none());
+        drop(transaction);
+        assert!(child.wait().unwrap().success());
+        assert_eq!(
+            storage
+                .read_sync(&StorageHandle::File(root.path().join("published")))
+                .unwrap(),
+            b"complete"
+        );
     }
 
     #[test]

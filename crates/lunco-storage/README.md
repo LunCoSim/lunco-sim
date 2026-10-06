@@ -48,6 +48,17 @@ Each concurrent write reserves its own staging file; replacement and create-only
 `write_new` share this staging owner. `write_new` preserves an existing destination.
 Consumers must use these storage methods for concurrent cache persistence.
 
+Native `FileStorage::lock_cache_directory` canonicalizes a File directory and
+returns a `DirectoryCacheTransaction` holding a separately opened exclusive
+standard-library file lock. Drop releases the lock on Unix and Windows. The
+persistent `.cache-lock` file must never be removed or replaced. Encode heavy
+artifacts before acquiring it; use existing Storage writes/deletes inside the
+transaction. Its `files()` iterator streams direct regular-file handles and
+sizes without following symlinks or collecting the whole directory. Consumers
+choose their bounded retention set and close each iterator before deleting
+entries. Generic `cache_directory_transaction_` tests exercise independent
+writers, child-process contention, release, and regular-file enumeration.
+
 `FileStorage::read_bounded(handle, max_bytes)` and the matching OPFS method
 enforce caller-owned read budgets before materializing full contents. Native
 reads take at most the limit plus one sentinel byte, including concurrent file

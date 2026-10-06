@@ -498,12 +498,14 @@ tests cover FIFO bounds, replacement, exact solve keys, live-reference survival
 and invalid admission. Browser configuration also requires a worker-bundle
 compile check.
 
-Native prepared-solve disk reads use the cache-owned `PreparedSolveDiskLimits`
+Native prepared-solve disk reuse uses the cache-owned `PreparedSolveDiskLimits`
 resource, captured before the worker starts. Insert it before
-`ModelicaExecutionPlugin` to configure compressed bytes, decoded bytes, and the
-zstd window logarithm. Defaults are 64 MiB compressed, 256 MiB decoded, and a
+`ModelicaExecutionPlugin` to configure retained entries, compressed bytes,
+decoded bytes, and the zstd window logarithm. Defaults are 32 retained records,
+64 MiB compressed, 256 MiB decoded, and a
 64 MiB zstd window (`zstd_window_log_max = 26`). Byte budgets must be positive
 and at most the named 256 MiB codec ceiling; window logarithms must be 10–28.
+The retained-entry budget must also be positive.
 Invalid configuration reports a typed worker failure before the preparation
 pool starts. Changing the resource after startup does not change that worker's
 immutable snapshot.
@@ -514,9 +516,35 @@ full record consumption, and the exact admitted source/library/solver/parameter
 key. A missing optional file is a cache miss. An unreadable, oversized,
 malformed, truncated, or mismatched record warns with its rejection cause and
 recomputes from the admitted DAE; it does not prevent authored model loading.
-The browser has no prepared-solve disk-cache reader. Generic inline-storage
-tests cover this decoding boundary; RAM eviction and persistent retention are
-separate cache concerns.
+The browser has no prepared-solve disk-cache reader.
+
+Publication runs on the dedicated solve-preparation pool. It serializes a
+borrowed record through decoded-byte and compressed-byte budgets into zstd,
+without cloning the solve graph or building a full decoded buffer. Compression
+uses the admitted window limit. Codec, budget, locking, retention, and storage
+failures return a typed optional-cache rejection; the actual worker warns with
+the cause and publishes the valid admitted solver result.
+
+`FileStorage::lock_cache_directory` owns a native RAII transaction on the
+canonical cache root's persistent `.cache-lock` file. Separate read/write
+handles use standard-library exclusive locking on Unix and Windows; dropping
+the guard releases the lock. The lock file is never removed or replaced.
+Heavy encoding happens before acquisition. Retention streams regular-file
+metadata, excluding symlinks and directories, and only owns exact lowercase
+`<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v5`.
+It preserves the lexicographically first N−1 other records within the compressed
+byte budget, deletes excess/oversized records in bounded sorted batches after
+closing each enumerator, then atomically publishes the incoming record.
+Unrecognized files, nested directories, and other caches remain untouched.
+Independent cooperating processes serialize this transaction: each successful
+publication meets its writer's captured entry and compressed-byte limits.
+The resulting owned records occupy at most N times the compressed-byte budget;
+this excludes filesystem overhead, atomic staging, and unrelated files.
+Directory processing retains only bounded keeper/victim sets, rather than a
+directory-wide vector. Generic `persistent_solve_cache_` tests cover streaming
+budgets, owned-only cleanup, concurrent publication, and rejection; storage
+`cache_directory_transaction_` tests cover independent handles, real process
+contention, lock release, and regular-file enumeration on native platforms.
 
 Session IDs fence stale results: when a Compile or UpdateParameters bumps
 the session, any in-flight Step for the old session is discarded.

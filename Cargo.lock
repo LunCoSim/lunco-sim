@@ -8864,6 +8864,7 @@ dependencies = [
  "rumoca-ir-solve",
  "rumoca-sim",
  "serde",
+ "tempfile",
  "web-time",
  "zstd",
 ]

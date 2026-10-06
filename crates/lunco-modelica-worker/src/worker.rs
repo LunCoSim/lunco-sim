@@ -176,11 +176,7 @@ struct LiveBuildPlan {
     options: rumoca_sim::SimOptions,
     key: PreparedSolveKey,
     #[cfg(not(target_arch = "wasm32"))]
-    source_key: u64,
-    #[cfg(not(target_arch = "wasm32"))]
     persistent_library_revision: Option<u64>,
-    #[cfg(not(target_arch = "wasm32"))]
-    override_key: Vec<(String, u64)>,
 }
 
 fn live_build_plan(
@@ -217,11 +213,6 @@ fn live_build_plan(
         },
         parameter_overrides: parameter_overrides.clone(),
     };
-    #[cfg(not(target_arch = "wasm32"))]
-    let override_key = parameter_overrides
-        .iter()
-        .map(|(name, value)| (name.clone(), value.to_bits()))
-        .collect();
     let library_revision_value = library_revision.unwrap_or_default();
     let key = PreparedSolveCache::key(
         source_key,
@@ -235,11 +226,7 @@ fn live_build_plan(
         options,
         key,
         #[cfg(not(target_arch = "wasm32"))]
-        source_key,
-        #[cfg(not(target_arch = "wasm32"))]
         persistent_library_revision: library_revision,
-        #[cfg(not(target_arch = "wasm32"))]
-        override_key,
     })
 }
 
@@ -435,14 +422,7 @@ impl SolvePreparationPool {
         let entity = work.entity;
         let session_id = work.session_id;
         let runtime_tx = runtime_tx.clone();
-        let disk_cache = work.plan.persistent_library_revision.map(|revision| {
-            (
-                work.plan.source_key,
-                revision,
-                work.plan.spec.id.to_string(),
-                work.plan.override_key.clone(),
-            )
-        });
+        let disk_cache = work.plan.persistent_library_revision.is_some();
         let tx = self.tx.clone();
         let disk_limits = self.disk_limits;
         let cache_key = work.plan.key.clone();
@@ -461,7 +441,7 @@ impl SolvePreparationPool {
             let cached = {
                 let _cache_span =
                     bevy::log::info_span!("modelica_solve_preparation_disk_cache_lookup").entered();
-                if disk_cache.is_some() {
+                if disk_cache {
                     match PreparedSolveCache::load_disk(&cache_key, disk_limits) {
                         Ok(model) => model,
                         Err(error) => {
@@ -511,18 +491,15 @@ impl SolvePreparationPool {
                 result
             };
             if !disk_hit {
-                if let (Ok(model), Some((source_key, revision, solver_id, overrides))) =
-                    (&result, disk_cache.as_ref())
-                {
+                if let Ok(model) = &result && disk_cache {
                     let _cache_span =
                         bevy::log::info_span!("modelica_solve_preparation_disk_cache_save").entered();
-                    PreparedSolveCache::save_disk(
-                        *source_key,
-                        *revision,
-                        solver_id,
-                        overrides,
-                        model,
-                    );
+                    if let Err(error) = PreparedSolveCache::save_disk(&cache_key, model, disk_limits) {
+                        log::warn!(
+                            "[modelica-runtime] optional prepared-solve cache publication rejected for `{model_name}` source={:016x}: {error}; keeping admitted solver result",
+                            cache_key.source_key,
+                        );
+                    }
                 }
             } else {
                 log::debug!(

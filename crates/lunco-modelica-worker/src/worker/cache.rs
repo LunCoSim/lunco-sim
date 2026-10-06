@@ -10,7 +10,7 @@ use super::solver;
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets_core::modelica_dir;
 #[cfg(not(target_arch = "wasm32"))]
-use lunco_storage::{FileStorage, StorageError, StorageHandle, write_file_sync};
+use lunco_storage::{FileStorage, Storage, StorageError, StorageHandle};
 #[cfg(not(target_arch = "wasm32"))]
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -72,13 +72,15 @@ impl<K: Clone + Eq + Hash, V> BoundedReuseCache<K, V> {
 pub(super) type CompiledArtifactCache =
     BoundedReuseCache<u64, Box<rumoca_compile::compile::DaeCompilationResult>>;
 
-/// Native optional solve-cache read budgets, captured when the worker starts.
+/// Native optional solve-cache byte and retention budgets captured at worker startup.
 /// Insert this resource before `ModelicaExecutionPlugin` to change the budgets.
 /// The codec ceiling is an admission invariant; a larger artifact is recomputed
 /// from its admitted DAE instead of being loaded from optional storage.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(bevy::prelude::Resource, Clone, Copy, Debug)]
 pub struct PreparedSolveDiskLimits {
+    /// Maximum regular v5 cache records retained after a successful publication.
+    pub retained_entries: usize,
     pub compressed_bytes: usize,
     pub decoded_bytes: usize,
     /// Maximum zstd back-reference window, expressed as a base-two logarithm.
@@ -91,14 +93,15 @@ impl PreparedSolveDiskLimits {
     pub const MAX_WINDOW_LOG: u32 = 28;
 
     pub fn validate(&self) -> Result<(), String> {
-        if self.compressed_bytes == 0
+        if self.retained_entries == 0
+            || self.compressed_bytes == 0
             || self.compressed_bytes > Self::CODEC_MAX_DECODED_BYTES
             || self.decoded_bytes == 0
             || self.decoded_bytes > Self::CODEC_MAX_DECODED_BYTES
             || !(10..=Self::MAX_WINDOW_LOG).contains(&self.zstd_window_log_max)
         {
             return Err(format!(
-                "invalid prepared-solve disk-cache limits: compressed/decoded byte budgets must be 1..={} and zstd window log must be 10..={}",
+                "invalid prepared-solve disk-cache limits: retained entries must be positive, compressed/decoded byte budgets must be 1..={} and zstd window log must be 10..={}",
                 Self::CODEC_MAX_DECODED_BYTES,
                 Self::MAX_WINDOW_LOG,
             ));
@@ -111,6 +114,7 @@ impl PreparedSolveDiskLimits {
 impl Default for PreparedSolveDiskLimits {
     fn default() -> Self {
         Self {
+            retained_entries: 32,
             compressed_bytes: 64 * 1024 * 1024,
             decoded_bytes: Self::CODEC_MAX_DECODED_BYTES,
             zstd_window_log_max: 26,
@@ -128,6 +132,99 @@ pub(super) enum PreparedSolveCacheReadError {
     Codec(bincode::error::DecodeError),
     TrailingBytes,
     Identity,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+pub(super) enum PreparedSolveCacheWriteError {
+    InvalidLimits(String),
+    InvalidPath,
+    Codec(bincode::error::EncodeError),
+    Compression(std::io::Error),
+    Storage(StorageError),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::fmt::Display for PreparedSolveCacheWriteError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidLimits(error) => formatter.write_str(error),
+            Self::InvalidPath => {
+                formatter.write_str("publication is outside the owned v5 cache namespace")
+            }
+            Self::Codec(error) => write!(formatter, "cache serialization rejected: {error}"),
+            Self::Compression(error) => write!(formatter, "cache compression rejected: {error}"),
+            Self::Storage(error) => {
+                write!(formatter, "cache publication/retention failed: {error}")
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl From<StorageError> for PreparedSolveCacheWriteError {
+    fn from(error: StorageError) -> Self {
+        Self::Storage(error)
+    }
+}
+
+/// Check a stream's byte budget before delegating any write or allocation.
+#[cfg(not(target_arch = "wasm32"))]
+struct BudgetWriter<W> {
+    inner: W,
+    used: usize,
+    limit: usize,
+    label: &'static str,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<W> BudgetWriter<W> {
+    fn new(inner: W, limit: usize, label: &'static str) -> Self {
+        Self {
+            inner,
+            used: 0,
+            limit,
+            label,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<W: std::io::Write> std::io::Write for BudgetWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.limit - self.used {
+            return Err(std::io::Error::other(format!(
+                "{} byte budget {} exceeded",
+                self.label, self.limit,
+            )));
+        }
+        let written = self.inner.write(bytes)?;
+        self.used += written;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// Reserve only bytes accepted by the outer compressed-byte budget.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct CacheBuffer(Vec<u8>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::io::Write for CacheBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .try_reserve_exact(bytes.len())
+            .map_err(std::io::Error::other)?;
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -165,13 +262,13 @@ pub(super) struct PreparedSolveKey {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Deserialize, Serialize)]
-struct PreparedSolveDiskRecord {
+struct PreparedSolveDiskRecord<M, S, P> {
     version: u32,
     source_key: u64,
     library_revision: u64,
-    solver_id: String,
-    parameter_overrides: Vec<(String, u64)>,
-    model: rumoca_ir_solve::SolveModel,
+    solver_id: S,
+    parameter_overrides: P,
+    model: M,
 }
 
 pub(super) struct PreparedSolveCache {
@@ -223,24 +320,24 @@ impl PreparedSolveCache {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn disk_path(
-        source_key: u64,
-        library_revision: u64,
-        solver_id: &str,
-        parameter_overrides: &[(String, u64)],
-    ) -> std::path::PathBuf {
+    fn disk_filename(key: &PreparedSolveKey) -> String {
         use std::hash::{Hash, Hasher};
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         PREPARED_SOLVE_CACHE_VERSION.hash(&mut hasher);
-        source_key.hash(&mut hasher);
-        library_revision.hash(&mut hasher);
-        solver_id.hash(&mut hasher);
-        parameter_overrides.hash(&mut hasher);
-        let key = hasher.finish();
+        key.source_key.hash(&mut hasher);
+        key.library_revision.hash(&mut hasher);
+        key.solver_id.hash(&mut hasher);
+        key.parameter_overrides.hash(&mut hasher);
+        let hash = hasher.finish();
+        format!("{:016x}-{hash:016x}.bin.zst", key.source_key)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn disk_path(key: &PreparedSolveKey) -> std::path::PathBuf {
         modelica_dir()
             .join("prepared-solve-v5")
-            .join(format!("{source_key:016x}-{key:016x}.bin.zst"))
+            .join(Self::disk_filename(key))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -248,12 +345,7 @@ impl PreparedSolveCache {
         key: &PreparedSolveKey,
         limits: PreparedSolveDiskLimits,
     ) -> Result<Option<rumoca_ir_solve::SolveModel>, PreparedSolveCacheReadError> {
-        let path = Self::disk_path(
-            key.source_key,
-            key.library_revision,
-            &key.solver_id,
-            &key.parameter_overrides,
-        );
+        let path = Self::disk_path(key);
         Self::load_disk_at(&FileStorage::new(), &StorageHandle::File(path), key, limits)
     }
 
@@ -291,13 +383,15 @@ impl PreparedSolveCache {
                 max_bytes: limits.decoded_bytes,
             });
         }
-        let (record, consumed): (PreparedSolveDiskRecord, usize) =
-            bincode::serde::decode_from_slice(
-                &bytes,
-                bincode::config::standard()
-                    .with_limit::<{ PreparedSolveDiskLimits::CODEC_MAX_DECODED_BYTES }>(),
-            )
-            .map_err(PreparedSolveCacheReadError::Codec)?;
+        let (record, consumed): (
+            PreparedSolveDiskRecord<rumoca_ir_solve::SolveModel, String, Vec<(String, u64)>>,
+            usize,
+        ) = bincode::serde::decode_from_slice(
+            &bytes,
+            bincode::config::standard()
+                .with_limit::<{ PreparedSolveDiskLimits::CODEC_MAX_DECODED_BYTES }>(),
+        )
+        .map_err(PreparedSolveCacheReadError::Codec)?;
         if consumed != bytes.len() {
             return Err(PreparedSolveCacheReadError::TrailingBytes);
         }
@@ -314,31 +408,148 @@ impl PreparedSolveCache {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn save_disk(
-        source_key: u64,
-        library_revision: u64,
-        solver_id: &str,
-        parameter_overrides: &[(String, u64)],
+        key: &PreparedSolveKey,
         model: &rumoca_ir_solve::SolveModel,
-    ) {
-        let path = Self::disk_path(source_key, library_revision, solver_id, parameter_overrides);
+        limits: PreparedSolveDiskLimits,
+    ) -> Result<(), PreparedSolveCacheWriteError> {
+        let path = Self::disk_path(key);
+        let root = path
+            .parent()
+            .ok_or(PreparedSolveCacheWriteError::InvalidPath)?;
+        Self::save_disk_at(&FileStorage::new(), root, &path, key, model, limits)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn encode_disk(
+        key: &PreparedSolveKey,
+        model: &rumoca_ir_solve::SolveModel,
+        limits: PreparedSolveDiskLimits,
+    ) -> Result<Vec<u8>, PreparedSolveCacheWriteError> {
+        limits
+            .validate()
+            .map_err(PreparedSolveCacheWriteError::InvalidLimits)?;
         let record = PreparedSolveDiskRecord {
             version: PREPARED_SOLVE_CACHE_VERSION,
-            source_key,
-            library_revision,
-            solver_id: solver_id.to_owned(),
-            parameter_overrides: parameter_overrides.to_vec(),
-            model: model.clone(),
+            source_key: key.source_key,
+            library_revision: key.library_revision,
+            solver_id: key.solver_id.as_str(),
+            parameter_overrides: key.parameter_overrides.as_slice(),
+            model,
         };
-        let Ok(bytes) = bincode::serde::encode_to_vec(record, bincode::config::standard()) else {
-            return;
-        };
-        let Ok(compressed) = zstd::stream::encode_all(bytes.as_slice(), 3) else {
-            return;
-        };
-        // Storage performs the native atomic replacement and owns the
-        // platform-specific persistence path.
-        let _ = write_file_sync(&path, &compressed);
+        let compressed = BudgetWriter::new(
+            CacheBuffer::default(),
+            limits.compressed_bytes,
+            "compressed",
+        );
+        let mut encoder = zstd::stream::write::Encoder::new(compressed, 3)
+            .map_err(PreparedSolveCacheWriteError::Compression)?;
+        encoder
+            .window_log(limits.zstd_window_log_max)
+            .map_err(PreparedSolveCacheWriteError::Compression)?;
+        let mut decoded = BudgetWriter::new(encoder, limits.decoded_bytes, "decoded");
+        bincode::serde::encode_into_std_write(record, &mut decoded, bincode::config::standard())
+            .map_err(PreparedSolveCacheWriteError::Codec)?;
+        let compressed = decoded
+            .inner
+            .finish()
+            .map_err(PreparedSolveCacheWriteError::Compression)?;
+        Ok(compressed.inner.0)
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_disk_at(
+        storage: &FileStorage,
+        root: &std::path::Path,
+        path: &std::path::Path,
+        key: &PreparedSolveKey,
+        model: &rumoca_ir_solve::SolveModel,
+        limits: PreparedSolveDiskLimits,
+    ) -> Result<(), PreparedSolveCacheWriteError> {
+        if path.parent() != Some(root)
+            || path.file_name().and_then(|name| name.to_str())
+                != Some(Self::disk_filename(key).as_str())
+        {
+            return Err(PreparedSolveCacheWriteError::InvalidPath);
+        }
+        // Serialization/compression do not hold the cross-process publication lock.
+        let compressed = Self::encode_disk(key, model, limits)?;
+        let transaction = storage.lock_cache_directory(&StorageHandle::File(root.to_path_buf()))?;
+        let incoming = transaction.directory().join(
+            path.file_name()
+                .ok_or(PreparedSolveCacheWriteError::InvalidPath)?,
+        );
+        Self::retain_disk(storage, &transaction, &incoming, limits)?;
+        storage.write_sync(&StorageHandle::File(incoming), &compressed)?;
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn retain_disk(
+        storage: &FileStorage,
+        transaction: &lunco_storage::file_storage::DirectoryCacheTransaction,
+        incoming: &std::path::Path,
+        limits: PreparedSolveDiskLimits,
+    ) -> Result<(), PreparedSolveCacheWriteError> {
+        use std::collections::BTreeSet;
+        // Keep the lexicographically first N-1 other valid-size keys. This is
+        // independent of OS enumeration order and does not track access times.
+        let mut keep = BTreeSet::new();
+        for file in transaction.files()? {
+            let file = file?;
+            let StorageHandle::File(path) = file.handle else {
+                return Err(PreparedSolveCacheWriteError::InvalidPath);
+            };
+            if path != incoming
+                && owned_cache_filename(&path)
+                && file.bytes <= limits.compressed_bytes as u64
+            {
+                keep.insert(path);
+                if keep.len() >= limits.retained_entries {
+                    keep.pop_last();
+                }
+            }
+        }
+        loop {
+            // A bounded sorted batch avoids modifying a directory while its
+            // enumerator is live. Each pass makes progress through actual deletes.
+            let mut victims = BTreeSet::new();
+            for file in transaction.files()? {
+                let file = file?;
+                let StorageHandle::File(path) = file.handle else {
+                    return Err(PreparedSolveCacheWriteError::InvalidPath);
+                };
+                if path != incoming && owned_cache_filename(&path) && !keep.contains(&path) {
+                    victims.insert(path);
+                    if victims.len() > limits.retained_entries {
+                        victims.pop_first();
+                    }
+                }
+            }
+            if victims.is_empty() {
+                break;
+            }
+            for path in victims.into_iter().rev() {
+                storage.delete_sync(&StorageHandle::File(path))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn owned_cache_filename(path: &std::path::Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let Some(key) = name.strip_suffix(".bin.zst") else {
+        return false;
+    };
+    let bytes = key.as_bytes();
+    bytes.len() == 33
+        && bytes[16] == b'-'
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            index == 16 || byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)
+        })
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -355,7 +566,9 @@ mod tests {
         }
     }
 
-    fn record(key: &PreparedSolveKey) -> PreparedSolveDiskRecord {
+    fn record(
+        key: &PreparedSolveKey,
+    ) -> PreparedSolveDiskRecord<rumoca_ir_solve::SolveModel, String, Vec<(String, u64)>> {
         PreparedSolveDiskRecord {
             version: PREPARED_SOLVE_CACHE_VERSION,
             source_key: key.source_key,
@@ -370,7 +583,9 @@ mod tests {
         }
     }
 
-    fn encode(record: &PreparedSolveDiskRecord) -> Vec<u8> {
+    fn encode(
+        record: &PreparedSolveDiskRecord<rumoca_ir_solve::SolveModel, String, Vec<(String, u64)>>,
+    ) -> Vec<u8> {
         bincode::serde::encode_to_vec(record, bincode::config::standard()).unwrap()
     }
 
@@ -383,6 +598,310 @@ mod tests {
         let handle = StorageHandle::Memory("generic-solve-cache".into());
         storage.write_sync(&handle, bytes).unwrap();
         (storage, handle)
+    }
+
+    #[test]
+    fn persistent_solve_cache_streams_borrowed_record_and_bounds_both_byte_budgets() {
+        use std::io::Write;
+        let key = key();
+        let record = record(&key);
+        let decoded_len = encode(&record).len();
+        let limits = PreparedSolveDiskLimits {
+            decoded_bytes: decoded_len,
+            ..Default::default()
+        };
+        let compressed = PreparedSolveCache::encode_disk(&key, &record.model, limits).unwrap();
+        let exact = PreparedSolveDiskLimits {
+            compressed_bytes: compressed.len(),
+            ..limits
+        };
+        assert_eq!(
+            PreparedSolveCache::encode_disk(&key, &record.model, exact).unwrap(),
+            compressed
+        );
+        let (storage, handle) = stored(&compressed);
+        let model = PreparedSolveCache::load_disk_at(&storage, &handle, &key, exact)
+            .unwrap()
+            .unwrap();
+        assert_eq!(model.initial_y, record.model.initial_y);
+        assert_eq!(model.parameters, record.model.parameters);
+        let decoded_error = PreparedSolveCache::encode_disk(
+            &key,
+            &record.model,
+            PreparedSolveDiskLimits {
+                decoded_bytes: decoded_len - 1,
+                ..exact
+            },
+        )
+        .unwrap_err();
+        assert!(decoded_error.to_string().contains("decoded byte budget"));
+        let compressed_error = PreparedSolveCache::encode_disk(
+            &key,
+            &record.model,
+            PreparedSolveDiskLimits {
+                compressed_bytes: 1,
+                ..exact
+            },
+        )
+        .unwrap_err();
+        assert!(
+            compressed_error
+                .to_string()
+                .contains("compressed byte budget")
+        );
+        let mut writer = BudgetWriter::new(CacheBuffer::default(), 2, "test");
+        assert!(writer.write_all(b"abc").is_err());
+        assert_eq!(writer.used, 0);
+        assert!(writer.inner.0.is_empty());
+        assert_eq!(writer.inner.0.capacity(), 0);
+        writer.write_all(b"ab").unwrap();
+        assert_eq!(writer.inner.0, b"ab");
+    }
+
+    #[test]
+    fn persistent_solve_cache_publication_retains_only_owned_regular_files() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("cache é");
+        let storage = FileStorage::new();
+        let limits = PreparedSolveDiskLimits {
+            retained_entries: 2,
+            compressed_bytes: 512,
+            ..Default::default()
+        };
+        for source in 1..=8 {
+            let name = format!("{source:016x}-0000000000000000.bin.zst");
+            storage
+                .write_sync(&StorageHandle::File(directory.join(name)), b"old")
+                .unwrap();
+        }
+        let oversized = directory.join("0000000000000000-0000000000000000.bin.zst");
+        storage
+            .write_sync(
+                &StorageHandle::File(oversized.clone()),
+                &vec![0; limits.compressed_bytes + 1],
+            )
+            .unwrap();
+        let unrelated = StorageHandle::File(directory.join("settings.json"));
+        storage.write_sync(&unrelated, b"user preferences").unwrap();
+        let malformed =
+            StorageHandle::File(directory.join("FFFFFFFFFFFFFFFF-0000000000000000.bin.zst"));
+        storage.write_sync(&malformed, b"unrecognized").unwrap();
+        let nested =
+            StorageHandle::File(directory.join("0000000000000000-0000000000000001.bin.zst"));
+        storage.ensure_directory_sync(&nested).unwrap();
+        #[cfg(unix)]
+        let link = directory.join("0000000000000000-0000000000000002.bin.zst");
+        #[cfg(unix)]
+        lunco_storage::create_file_symlink_sync(&directory.join("settings.json"), &link).unwrap();
+        let mut key = key();
+        key.source_key = 100;
+        let incoming = directory.join(PreparedSolveCache::disk_filename(&key));
+        let model = record(&key).model;
+        PreparedSolveCache::save_disk_at(&storage, &directory, &incoming, &key, &model, limits)
+            .unwrap();
+        let transaction = storage
+            .lock_cache_directory(&StorageHandle::File(directory.clone()))
+            .unwrap();
+        let retained = transaction
+            .files()
+            .unwrap()
+            .filter_map(|entry| {
+                let file = entry.unwrap();
+                let StorageHandle::File(path) = file.handle else {
+                    panic!("native file");
+                };
+                owned_cache_filename(&path).then_some(path)
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(retained.len(), 2);
+        assert!(
+            retained.contains(
+                &transaction
+                    .directory()
+                    .join("0000000000000001-0000000000000000.bin.zst")
+            )
+        );
+        assert!(retained.contains(&transaction.directory().join(incoming.file_name().unwrap())));
+        assert!(!bevy::tasks::block_on(
+            storage.exists(&StorageHandle::File(oversized))
+        ));
+        assert_eq!(storage.read_sync(&unrelated).unwrap(), b"user preferences");
+        assert_eq!(storage.read_sync(&malformed).unwrap(), b"unrecognized");
+        assert_eq!(
+            storage.entry_kind_sync(&nested).unwrap(),
+            lunco_storage::StorageEntryKind::Directory
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            storage.read_sync(&StorageHandle::File(link)).unwrap(),
+            b"user preferences"
+        );
+        drop(transaction);
+        let loaded = PreparedSolveCache::load_disk_at(
+            &storage,
+            &StorageHandle::File(incoming),
+            &key,
+            limits,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(loaded.initial_y, model.initial_y);
+    }
+
+    #[test]
+    fn persistent_solve_cache_concurrent_publications_enforce_exact_directory_quota() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("shared cache");
+        let limits = PreparedSolveDiskLimits {
+            retained_entries: 3,
+            compressed_bytes: 1024,
+            ..Default::default()
+        };
+        std::thread::scope(|scope| {
+            for source in 0..8 {
+                let directory = &directory;
+                scope.spawn(move || {
+                    let storage = FileStorage::new();
+                    for revision in 0..8 {
+                        let mut key = key();
+                        key.source_key = source;
+                        key.library_revision = revision;
+                        let model = record(&key).model;
+                        let path = directory.join(PreparedSolveCache::disk_filename(&key));
+                        PreparedSolveCache::save_disk_at(
+                            &storage, directory, &path, &key, &model, limits,
+                        )
+                        .unwrap();
+                    }
+                });
+            }
+        });
+        let storage = FileStorage::new();
+        let transaction = storage
+            .lock_cache_directory(&StorageHandle::File(directory.clone()))
+            .unwrap();
+        let owned = transaction
+            .files()
+            .unwrap()
+            .filter_map(|entry| {
+                let file = entry.unwrap();
+                let StorageHandle::File(path) = file.handle else {
+                    panic!("native file");
+                };
+                owned_cache_filename(&path).then_some((path, file.bytes))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(owned.len(), limits.retained_entries);
+        assert!(
+            owned
+                .iter()
+                .all(|(_, bytes)| *bytes <= limits.compressed_bytes as u64)
+        );
+        for (path, _) in owned {
+            let mut matching_keys = 0;
+            for source in 0..8 {
+                for revision in 0..8 {
+                    let mut key = key();
+                    key.source_key = source;
+                    key.library_revision = revision;
+                    if path.file_name().unwrap()
+                        == std::ffi::OsStr::new(&PreparedSolveCache::disk_filename(&key))
+                    {
+                        let loaded = PreparedSolveCache::load_disk_at(
+                            &storage,
+                            &StorageHandle::File(path.clone()),
+                            &key,
+                            limits,
+                        )
+                        .unwrap()
+                        .unwrap();
+                        assert_eq!(loaded.initial_y, [42.0]);
+                        matching_keys += 1;
+                    }
+                }
+            }
+            assert_eq!(matching_keys, 1);
+        }
+    }
+
+    #[test]
+    fn persistent_solve_cache_rejects_invalid_limits_paths_and_storage_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = FileStorage::new();
+        let key = key();
+        let model = record(&key).model;
+        let path = root.path().join(PreparedSolveCache::disk_filename(&key));
+        let invalid = PreparedSolveDiskLimits {
+            retained_entries: 0,
+            ..Default::default()
+        };
+        assert!(matches!(
+            PreparedSolveCache::save_disk_at(&storage, root.path(), &path, &key, &model, invalid),
+            Err(PreparedSolveCacheWriteError::InvalidLimits(_))
+        ));
+        assert_eq!(PreparedSolveDiskLimits::default().retained_entries, 32);
+        let (_command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (result_tx, result_rx) = crossbeam_channel::unbounded();
+        super::super::modelica_worker(
+            command_rx,
+            result_tx,
+            invalid,
+            lunco_modelica_runtime::ModelicaCacheLimits::default(),
+        );
+        assert!(
+            result_rx
+                .try_recv()
+                .unwrap()
+                .worker_failure
+                .unwrap()
+                .contains("retained entries must be positive")
+        );
+        assert!(matches!(
+            PreparedSolveCache::save_disk_at(
+                &storage,
+                root.path(),
+                &root.path().join("not-owned.bin.zst"),
+                &key,
+                &model,
+                Default::default()
+            ),
+            Err(PreparedSolveCacheWriteError::InvalidPath)
+        ));
+        let outside = root
+            .path()
+            .join("other-directory")
+            .join(path.file_name().unwrap());
+        assert!(matches!(
+            PreparedSolveCache::save_disk_at(
+                &storage,
+                root.path(),
+                &outside,
+                &key,
+                &model,
+                Default::default()
+            ),
+            Err(PreparedSolveCacheWriteError::InvalidPath)
+        ));
+        let blocked = root.path().join("file-is-not-a-directory");
+        storage
+            .write_sync(&StorageHandle::File(blocked.clone()), b"preserve")
+            .unwrap();
+        let path = blocked.join(PreparedSolveCache::disk_filename(&key));
+        let error = PreparedSolveCache::save_disk_at(
+            &storage,
+            &blocked,
+            &path,
+            &key,
+            &model,
+            Default::default(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, PreparedSolveCacheWriteError::Storage(_)));
+        assert!(error.to_string().contains("publication/retention failed"));
+        assert_eq!(
+            storage.read_sync(&StorageHandle::File(blocked)).unwrap(),
+            b"preserve"
+        );
     }
 
     #[test]
