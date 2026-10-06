@@ -12,14 +12,18 @@ fn native_reference(reference: &str) -> bool {
 
 fn collect_value(value: Option<Value>, references: &mut BTreeSet<String>) {
     match value {
-        Some(Value::AssetPath(path)) if native_reference(path.as_str()) => {
-            references.insert(path.into_string());
+        Some(Value::AssetPath(path)) => {
+            if let Some(identifier) = path.canonical_identifier()
+                && native_reference(identifier)
+            {
+                references.insert(identifier.to_owned());
+            }
         }
         Some(Value::AssetPathVec(paths)) => {
             references.extend(
                 paths
                     .into_iter()
-                    .map(|path| path.into_string())
+                    .filter_map(|path| path.canonical_identifier().map(str::to_owned))
                     .filter(|reference| native_reference(reference)),
             );
         }
@@ -28,8 +32,9 @@ fn collect_value(value: Option<Value>, references: &mut BTreeSet<String>) {
 }
 
 /// Read native asset-valued attributes and binary arcs from composed prims.
-/// Arrays and time samples use the same typed USD owner; no domain schemas are
-/// enumerated by the asset preparation boundary.
+/// Default scalar/array values carry their contributing-layer identifiers.
+/// Time samples are included only when their USD value carries that context;
+/// consumers reject unanchored asset values. No domain schemas are enumerated.
 pub fn native_references_for_prims(
     reader: &dyn UsdReadObject,
     prims: impl IntoIterator<Item = SdfPath>,

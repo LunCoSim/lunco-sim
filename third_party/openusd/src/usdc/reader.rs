@@ -1,0 +1,1849 @@
+//! Binary crate file reader.
+
+use std::{
+    any::type_name,
+    collections::HashMap,
+    io::{self, Cursor},
+    mem, str, vec,
+};
+
+use crate::gf::f16;
+use anyhow::{bail, ensure, Context, Result};
+use bytemuck::{bytes_of, bytes_of_mut, cast_slice_mut, AnyBitPattern, NoUninit, Pod};
+use num_traits::{AsPrimitive, Float, PrimInt};
+
+use crate::{
+    gf,
+    sdf::{self, Value},
+    tf,
+    usdc::coding,
+};
+
+use super::layout::*;
+
+/// Maximum dictionary nesting a crate file may declare.
+///
+/// `read_custom_data` recurses through `value()`, which re-enters it for a nested
+/// `Type::Dictionary` — one Rust stack frame per level, over data the file
+/// chooses. Without a ceiling a small crafted layer nests until the stack
+/// overflows, and a stack overflow is an immediate abort: not a `Result` anyone
+/// can catch, so it cannot be handled at any layer above.
+///
+/// 128 is far past anything authored — real `customData`/`assetInfo` nests a
+/// handful deep — while staying well inside the default 8 MiB stack.
+const MAX_DICT_DEPTH: usize = 128;
+
+// Maximum supported USDC crate version.
+// See USD Core Specification v1.0.1 §16.3.8.2 for version history:
+//   0.10.0 — Path Expression value types
+//   0.11.0 — Relocates in layer metadata
+//   0.12.0 — Splines
+const SW_VERSION: Version = version(0, 12, 0);
+
+/// Crate file represents structural data loaded from a USDC file on disk.
+#[derive(Debug)]
+pub struct CrateFile<R> {
+    /// File reader.
+    reader: R,
+
+    /// File header.
+    pub bootstrap: Bootstrap,
+    /// Structural sections.
+    pub sections: Vec<Section>,
+    /// Tokens section.
+    pub tokens: Vec<String>,
+    /// Strings section.
+    pub strings: Vec<usize>,
+    /// All unique fields.
+    pub fields: Vec<Field>,
+    /// A vector of groups of fields, invalid-index terminated.
+    pub fieldsets: Vec<Option<usize>>,
+    // All unique paths.
+    pub paths: Vec<sdf::Path>,
+    // All specs.
+    pub specs: Vec<Spec>,
+
+    /// Current dictionary nesting depth, guarding the `read_custom_data` ->
+    /// `value` -> `read_custom_data` recursion against a file-controlled stack
+    /// overflow. See [`MAX_DICT_DEPTH`].
+    dict_depth: usize,
+}
+
+impl<R> CrateFile<R> {
+    /// Returns file's version extracted from bootstrap header.
+    #[inline]
+    pub fn version(&self) -> Version {
+        Version::from(self.bootstrap)
+    }
+}
+
+impl<R: io::Read + io::Seek> CrateFile<R> {
+    /// Read structural sections of a crate file.
+    pub fn open(mut reader: R) -> Result<Self> {
+        let bootstrap = Self::read_header(&mut reader)?;
+
+        let mut file = CrateFile {
+            reader,
+            bootstrap,
+            sections: Vec::new(),
+            tokens: Vec::new(),
+            strings: Vec::new(),
+            fields: Vec::new(),
+            fieldsets: Vec::new(),
+            paths: Vec::new(),
+            specs: Vec::new(),
+            dict_depth: 0,
+        };
+
+        file.read_sections().context("Unable to read sections")?;
+        file.read_tokens().context("Unable to read TOKENS section")?;
+        file.read_strings().context("Unable to read STRINGS section")?;
+        file.read_fields().context("Unable to read FIELDS section")?;
+        file.read_fieldsets().context("Unable to read FIELDSETS section")?;
+        file.read_paths().context("Unable to read PATHS section")?;
+        file.read_specs().context("Unable to read SPECS section")?;
+
+        Ok(file)
+    }
+
+    /// Sanity check of structural validity.
+    /// Roughly corresponds to `PXR_PREFER_SAFETY_OVER_SPEED` define in USD.
+    pub fn validate(&self) -> Result<()> {
+        // See https://github.com/PixarAnimationStudios/OpenUSD/blob/0b18ad3f840c24eb25e16b795a5b0821cf05126e/pxr/usd/usd/crateFile.cpp#L3268
+        self.fields.iter().enumerate().try_for_each(|(index, field)| {
+            self.tokens
+                .get(field.token_index)
+                .with_context(|| format!("Invalid field token index {}: {}", index, field.token_index))?;
+
+            anyhow::Ok(())
+        })?;
+
+        self.fieldsets
+            .iter()
+            .enumerate()
+            .filter_map(|(i, index)| index.map(|index| (i, index)))
+            .try_for_each(|(index, fieldset)| {
+                self.fields
+                    .get(fieldset)
+                    .with_context(|| format!("Invalid fieldset index {index}: {fieldset}"))?;
+
+                anyhow::Ok(())
+            })?;
+
+        // STRINGS is an indirection into TOKENS, and `resolve_string` indexes both
+        // without checking. Validating the whole table here keeps that resolution
+        // infallible by construction rather than making every caller handle a
+        // `Result` for a condition that is decidable once, at load.
+        self.strings.iter().enumerate().try_for_each(|(index, &token)| {
+            self.tokens
+                .get(token)
+                .with_context(|| format!("Invalid string {index} token index: {token}"))?;
+
+            anyhow::Ok(())
+        })?;
+
+        self.specs.iter().enumerate().try_for_each(|(index, spec)| {
+            self.paths
+                .get(spec.path_index)
+                .with_context(|| format!("Invalid spec {} path index: {}", index, spec.path_index))?;
+
+            self.fieldsets
+                .get(spec.fieldset_index)
+                .with_context(|| format!("Invalid spec {} fieldset index: {}", index, spec.fieldset_index))?;
+
+            // Additionally, a fieldSetIndex must either be 0, or the element at
+            // the prior index must be a default-constructed FieldIndex.
+            // See https://github.com/PixarAnimationStudios/OpenUSD/blob/0b18ad3f840c24eb25e16b795a5b0821cf05126e/pxr/usd/usd/crateFile.cpp#L3289
+
+            if spec.fieldset_index > 0 {
+                ensure!(
+                    self.fieldsets[spec.fieldset_index - 1].is_none(),
+                    "Invalid spec {}, the element at the prior index {} must be a default-constructed field index",
+                    index,
+                    spec.fieldset_index
+                );
+            }
+
+            ensure!(spec.spec_type != sdf::SpecType::Unknown, "Invalid spec {index} type");
+
+            anyhow::Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// Read and verify bootstrap header, retrieve offset to TOC.
+    fn read_header(mut reader: impl io::Read + io::Seek) -> Result<Bootstrap> {
+        let header = reader.read_pod::<Bootstrap>()?;
+
+        ensure!(header.ident.eq(super::MAGIC), "Usd crate bootstrap section corrupt");
+
+        ensure!(header.toc_offset > 0, "Invalid TOC offset");
+
+        let file_ver = version(header.version[0], header.version[1], header.version[2]);
+
+        ensure!(
+            SW_VERSION.can_read(file_ver),
+            "Usd crate version mismatch, file is {file_ver}, library supports {SW_VERSION}"
+        );
+
+        Ok(header)
+    }
+
+    fn read_sections(&mut self) -> Result<()> {
+        self.set_position(self.bootstrap.toc_offset)?;
+
+        let count = self.reader.read_count()?;
+        ensure!(count > 0, "Crate file has no sections");
+        ensure!(count < 64, "Suspiciously large number of sections: {count}");
+
+        self.sections = self.reader.read_vec::<Section>(count)?;
+
+        Ok(())
+    }
+
+    fn read_tokens(&mut self) -> Result<()> {
+        let Some(section) = self.find_section(Section::TOKENS) else {
+            return Ok(());
+        };
+
+        self.set_position(section.start)?;
+
+        let file_ver = self.version();
+
+        // Read the number of tokens.
+        let count = self.reader.read_count()?;
+
+        self.tokens = if file_ver < version(0, 4, 0) {
+            todo!("Support TOKENS reader for < 0.4.0 files");
+        } else {
+            let uncompressed_size = self.reader.read_count()?;
+            let mut buffer = self.read_compressed(uncompressed_size)?;
+
+            ensure!(
+                buffer.len() == uncompressed_size,
+                "Decompressed size mismatch (expected {}, got {})",
+                uncompressed_size,
+                buffer.len(),
+            );
+
+            if buffer.is_empty() {
+                ensure!(
+                    count == 0,
+                    "Tokens section claims {count} tokens but the buffer is empty"
+                );
+                Vec::new()
+            } else {
+                ensure!(
+                    buffer.last() == Some(&b'\0'),
+                    "Tokens section not null-terminated in crate file"
+                );
+
+                // Pop last \0 byte to split strings without empty one at the end.
+                buffer.pop();
+
+                let strings = buffer
+                    .split(|c| *c == b'\0')
+                    .map(|buf| str::from_utf8(buf).map(|str| str.to_string()))
+                    .collect::<Result<Vec<_>, str::Utf8Error>>()
+                    .context("Failed to parse TOKENS section")?;
+
+                ensure!(
+                    strings.len() == count,
+                    "Crate file claims {} tokens, but found {}",
+                    count,
+                    strings.len(),
+                );
+
+                strings
+            }
+        };
+
+        Ok(())
+    }
+
+    fn read_strings(&mut self) -> Result<()> {
+        let Some(section) = self.find_section(Section::STRINGS) else {
+            return Ok(());
+        };
+
+        self.set_position(section.start)?;
+
+        let count = self.reader.read_count()?;
+        ensure!(
+            count < 128 * 1024 * 1024,
+            "Suspiciously large number of strings: {count}"
+        );
+
+        let strings = self.reader.read_vec::<u32>(count)?;
+
+        // These are indices, so convert to usize for convenience.
+        self.strings = strings.into_iter().map(|offset| offset as usize).collect::<Vec<_>>();
+
+        Ok(())
+    }
+
+    fn read_fields(&mut self) -> Result<()> {
+        let Some(section) = self.find_section(Section::FIELDS) else {
+            return Ok(());
+        };
+
+        self.set_position(section.start)?;
+
+        let file_ver = self.version();
+
+        self.fields = if file_ver < version(0, 4, 0) {
+            todo!("Support FIELDS reader before < 0.4.0")
+        } else {
+            let field_count = self.reader.read_count()?;
+
+            // Compressed fields in 0.4.0.
+            let indices = self.read_encoded_ints(field_count)?;
+
+            // Compressed value reps.
+            let reps = self.read_compressed(field_count)?;
+
+            let fields: Vec<_> = indices
+                .iter()
+                .zip(reps.iter())
+                .map(|(index, value)| Field::new(*index, *value))
+                .collect();
+
+            debug_assert_eq!(fields.len(), field_count);
+
+            fields
+        };
+
+        Ok(())
+    }
+
+    fn read_fieldsets(&mut self) -> Result<()> {
+        let Some(section) = self.find_section(Section::FIELDSETS) else {
+            return Ok(());
+        };
+
+        self.set_position(section.start)?;
+
+        let file_ver = self.version();
+
+        self.fieldsets = if file_ver < version(0, 4, 0) {
+            todo!("Support FIELDSETS reader for < 0.4.0 files");
+        } else {
+            let count = self.reader.read_count()?;
+
+            let decoded = self.read_encoded_ints::<u32>(count)?;
+
+            const INVALID_INDEX: u32 = u32::MAX;
+
+            let sets = decoded
+                .into_iter()
+                .map(|i| if i == INVALID_INDEX { None } else { Some(i as usize) })
+                .collect::<Vec<_>>();
+
+            debug_assert_eq!(sets.len(), count);
+
+            sets
+        };
+
+        Ok(())
+    }
+
+    fn read_paths(&mut self) -> Result<()> {
+        let Some(section) = self.find_section(Section::PATHS) else {
+            return Ok(());
+        };
+
+        self.set_position(section.start)?;
+
+        let file_ver = self.version();
+
+        if file_ver == version(0, 0, 1) {
+            todo!("Support PATHS reader for == 0.0.1 files");
+        } else if file_ver < version(0, 4, 0) {
+            todo!("Support PATHS reader for < 0.4.0 files");
+        } else {
+            // Read # of paths.
+            //
+            // Bounded before it is believed: `sdf::Path` is not `Pod`, so this
+            // cannot go through `read_vec`'s grow-as-you-read path and the whole
+            // table is reserved up front. A crafted count here was a direct OOM.
+            let path_count = self.reader.read_count()?;
+            let ceiling = self.remaining_bytes()?;
+            ensure!(
+                path_count as u64 <= ceiling,
+                "PATHS declares {path_count} paths but only {ceiling} bytes remain; \
+                 refusing to allocate the path table",
+            );
+            self.paths = vec![sdf::Path::default(); path_count];
+
+            self.read_compressed_paths()?;
+        };
+
+        Ok(())
+    }
+
+    /// Read compressed paths.
+    fn read_compressed_paths(&mut self) -> Result<()> {
+        // Read number of encoded paths.
+        let count: usize = self.reader.read_count()?;
+
+        // Read compressed data.
+
+        let path_indexes = self.read_encoded_ints::<u32>(count)?;
+        debug_assert_eq!(path_indexes.len(), count);
+
+        let element_token_indexes = self.read_encoded_ints::<i32>(count)?;
+        debug_assert_eq!(element_token_indexes.len(), count);
+
+        let jumps = self.read_encoded_ints::<i32>(count)?;
+        debug_assert_eq!(jumps.len(), count);
+
+        self.build_compressed_paths(&path_indexes, &element_token_indexes, &jumps)?;
+
+        Ok(())
+    }
+
+    fn build_compressed_paths(
+        &mut self,
+        path_indexes: &[u32],
+        element_token_indexes: &[i32],
+        jumps: &[i32],
+    ) -> Result<()> {
+        // See https://github.com/PixarAnimationStudios/OpenUSD/blob/0b18ad3f840c24eb25e16b795a5b0821cf05126e/pxr/usd/usd/crateFile.cpp#L3760
+        //
+        // The inner loop walks a child chain; a node that has both a child and a
+        // jump-addressed sibling pushes that sibling subtree onto an explicit
+        // stack, so stack frames stay bounded by namespace depth (the child
+        // chain) while namespace width fans out through the queue. C++
+        // `_BuildDecompressedPathsImpl` does the same, dispatching each sibling
+        // subtree to a `WorkDispatcher` task.
+        //
+        // TODO(rayon): this decoder is performance-critical — it runs for every
+        // loaded layer and dominates open time on large scenes. The deferred
+        // sibling subtrees are independent and should be decoded in parallel, as
+        // the C++ WorkDispatcher does.
+        // Nothing to decode when the PATHS section is empty.
+        if path_indexes.is_empty() {
+            return Ok(());
+        }
+
+        // EVERY SUBSCRIPT BELOW IS FILE-CONTROLLED. `index` walks forward with no
+        // bound of its own, `jumps[index]` steers `sibling_index` anywhere at all,
+        // and `path_indexes[index]` addresses the path table directly — so a
+        // crafted PATHS section could walk any of these arrays off the end and take
+        // the process down with an index panic. Each access is resolved through
+        // `.get()` and reported instead; a malformed layer must fail to load, not
+        // abort the host.
+        let mut pending = vec![(0usize, sdf::Path::default())];
+
+        while let Some((mut current_index, mut parent_path)) = pending.pop() {
+            loop {
+                let index = current_index;
+                current_index += 1;
+
+                // One bounds check covering the three parallel arrays, which
+                // `read_compressed_paths` reads at the same `count`.
+                let jump = *jumps
+                    .get(index)
+                    .with_context(|| format!("PATHS node index {index} out of range ({} nodes)", jumps.len()))?;
+
+                if parent_path.is_empty() {
+                    parent_path = sdf::Path::new("/")?;
+                    let slot = self
+                        .paths
+                        .get_mut(index)
+                        .with_context(|| format!("PATHS root slot {index} out of range"))?;
+                    *slot = parent_path.clone();
+                } else {
+                    let token_index = *element_token_indexes
+                        .get(index)
+                        .with_context(|| format!("PATHS token index slot {index} out of range"))?;
+                    let is_prim_property_path = token_index < 0;
+                    let token_index = token_index.unsigned_abs() as usize;
+                    let element_token = self.token_at(token_index)?.as_str().to_owned();
+
+                    let target = *path_indexes
+                        .get(index)
+                        .with_context(|| format!("PATHS target slot {index} out of range"))? as usize;
+
+                    let built = if is_prim_property_path {
+                        parent_path.append_property(&element_token)?
+                    } else if element_token.starts_with('{') {
+                        // Variant segments are appended directly without a separator
+                        // to produce canonical paths like /Prim{set=sel}.
+                        parent_path.append_variant_segment(&element_token)
+                    } else {
+                        parent_path.append_path(element_token.as_str())?
+                    };
+
+                    let total = self.paths.len();
+                    let slot = self
+                        .paths
+                        .get_mut(target)
+                        .with_context(|| format!("PATHS target index {target} out of range ({total} paths)"))?;
+                    *slot = built;
+                }
+
+                let has_child = jump > 0 || jump == -1;
+                let has_sibling = jump >= 0;
+
+                if has_child {
+                    if has_sibling {
+                        // A jump is a forward offset; anything that leaves the table
+                        // is malformed, and `checked_add` also refuses the overflow
+                        // a hostile value could otherwise wrap through.
+                        let sibling_index = index
+                            .checked_add(jump as usize)
+                            .with_context(|| format!("PATHS sibling jump from {index} overflowed"))?;
+                        ensure!(
+                            sibling_index < jumps.len(),
+                            "PATHS sibling jump from {index} lands at {sibling_index}, past the {} nodes",
+                            jumps.len(),
+                        );
+                        // Siblings share this node's parent; defer the subtree.
+                        pending.push((sibling_index, parent_path.clone()));
+                    }
+
+                    // Descend into the child (the next sequential entry) under
+                    // this node's path.
+                    let target = *path_indexes
+                        .get(index)
+                        .with_context(|| format!("PATHS target slot {index} out of range"))?
+                        as usize;
+                    parent_path = self.path_at(target)?.clone();
+                }
+
+                if !has_child && !has_sibling {
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn read_specs(&mut self) -> Result<()> {
+        let Some(section) = self.find_section(Section::SPECS) else {
+            return Ok(());
+        };
+
+        self.set_position(section.start)?;
+
+        let file_ver = self.version();
+
+        self.specs = if file_ver == version(0, 0, 1) {
+            todo!("Support SPECS reader for == 0.0.1 files");
+        } else if file_ver < version(0, 4, 0) {
+            todo!("Support SPECS reader for < 0.4.0 files");
+        } else {
+            // Version 0.4.0 specs are compressed
+
+            let spec_count = self.reader.read_count()?;
+
+            let path_indexes = self.read_encoded_ints::<u32>(spec_count)?;
+            let fieldset_indexes = self.read_encoded_ints::<u32>(spec_count)?;
+            let spec_types = self.read_encoded_ints::<u32>(spec_count)?;
+
+            path_indexes
+                .into_iter()
+                .zip(fieldset_indexes)
+                .zip(spec_types)
+                .map(|((path, fieldset), spec_type)| {
+                    Ok(Spec {
+                        path_index: path as usize,
+                        fieldset_index: fieldset as usize,
+                        spec_type: sdf::SpecType::from_repr(spec_type)
+                            .with_context(|| format!("Unable to parse SDF spec type: {spec_type}"))?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?
+        };
+
+        Ok(())
+    }
+
+    /// Find section by name.
+    pub fn find_section(&self, name: &str) -> Option<&Section> {
+        self.sections.iter().find(|s| s.name() == name)
+    }
+
+    /// A STRINGS-table entry resolved through to its token.
+    ///
+    /// Fallible on the SUBSCRIPT, not on the indirection: `validate()` proves every
+    /// stored `strings` entry points at a real token, but `string_index` itself
+    /// arrives from a value payload at unpack time and is not covered by that pass.
+    fn resolve_string(&self, string_index: u32) -> Result<String> {
+        let token = *self.strings.get(string_index as usize).with_context(|| {
+            format!("String index {string_index} out of range ({} strings)", self.strings.len())
+        })?;
+        Ok(self.token_at(token)?.clone())
+    }
+
+    /// A token by index, refused rather than panicked on when out of range.
+    ///
+    /// The indices these guard do NOT come from the structural tables `validate()`
+    /// checks at load — they are read lazily out of VALUE payloads at unpack time,
+    /// long after validation, so there is no earlier point at which they could have
+    /// been proven in range. A crafted payload naming token 2^31 reached a direct
+    /// `self.tokens[...]` and took the process down with an index panic; a parser
+    /// for untrusted input has to return an error there instead.
+    fn token_at(&self, index: usize) -> Result<&String> {
+        self.tokens
+            .get(index)
+            .with_context(|| format!("Token index {index} out of range ({} tokens)", self.tokens.len()))
+    }
+
+    /// A path by index, refused rather than panicked on when out of range.
+    /// Same lazily-read provenance as [`Self::token_at`].
+    fn path_at(&self, index: usize) -> Result<&sdf::Path> {
+        self.paths
+            .get(index)
+            .with_context(|| format!("Path index {index} out of range ({} paths)", self.paths.len()))
+    }
+
+    fn set_position(&mut self, position: u64) -> Result<()> {
+        self.reader.seek(io::SeekFrom::Start(position))?;
+        Ok(())
+    }
+
+    /// Bytes remaining from the current position — the hard ceiling on any element
+    /// count the file declares about itself.
+    ///
+    /// No table can hold more entries than the stream has bytes left to describe
+    /// them with, whatever its length prefix claims, so this bounds the counts that
+    /// drive allocations of NON-`Pod` elements. (`Pod` vectors are already safe:
+    /// [`ReadExt::read_vec`] grows with the bytes actually delivered. Types like
+    /// `sdf::Path` cannot go through that path and would otherwise be reserved in
+    /// full before a single byte is validated.)
+    ///
+    /// One byte per entry is deliberately generous — every real encoding costs
+    /// several — because the goal is to convert an unbounded allocation into a
+    /// bounded one, not to police the format.
+    fn remaining_bytes(&mut self) -> Result<u64> {
+        let pos = self.reader.stream_position()?;
+        let end = self.reader.seek(io::SeekFrom::End(0))?;
+        self.reader.seek(io::SeekFrom::Start(pos))?;
+        Ok(end.saturating_sub(pos))
+    }
+
+    fn unpack_value<T: Default + Pod>(&mut self, value: ValueRep) -> Result<T> {
+        ensure!(!value.is_array(), "Can't unpack array {value:?} as inline value");
+
+        let ty = value.ty()?;
+        ensure!(ty != Type::Invalid, "Invalid value type");
+
+        // If the value is inlined, just decode it.
+        let value = if value.is_inlined() {
+            // See https://github.com/PixarAnimationStudios/OpenUSD/blob/0b18ad3f840c24eb25e16b795a5b0821cf05126e/pxr/usd/usd/crateFile.cpp#L1590
+            let tmp = value.payload() & ((1_u64 << (mem::size_of::<u32>() * 8)) - 1);
+            let mut cursor = Cursor::new(bytes_of(&tmp));
+            cursor.read_pod::<T>()?
+        } else {
+            // Otherwise we have to read it from the file.
+            self.set_position(value.payload())?;
+            self.reader.read_pod::<T>()?
+        };
+
+        Ok(value)
+    }
+
+    fn read_token(&mut self, value: ValueRep) -> Result<String> {
+        let index: u64 = self.unpack_value(value)?;
+        let value = self.token_at(index as usize)?.clone();
+
+        Ok(value)
+    }
+
+    /// Read a scalar asset path or path expression.
+    ///
+    /// Both encode an index that points into the token table when the value is
+    /// inlined but into the string table when it is stored on the heap, so the
+    /// table is chosen by the inlined flag (mirrors `SdfAssetPath` /
+    /// `SdfPathExpression` handling in Pixar's crate reader).
+    fn read_asset_path(&mut self, value: ValueRep) -> Result<String> {
+        let index = self.unpack_value::<u32>(value)?;
+        if value.is_inlined() {
+            Ok(self.token_at(index as usize)?.clone())
+        } else {
+            self.resolve_string(index)
+        }
+    }
+
+    /// Reads a lz4 compressed data and returns decompressed raw bytes.
+    ///
+    /// Format expected:
+    /// - u64 uncompressed size
+    /// - lz4 compressed block of data.
+    ///
+    /// # Arguments:
+    /// - `estimated_size`: Size enough to hold uncompressed data.
+    fn read_compressed<T: Default + NoUninit + AnyBitPattern>(&mut self, estimated_count: usize) -> Result<Vec<T>> {
+        // Read data to memory. `read_vec` grows with the bytes actually delivered,
+        // so a `compressed_size` larger than the file fails on the short read
+        // instead of reserving its claim first.
+        let compressed_size = self.reader.read_count()?;
+        let input = self.reader.read_vec::<u8>(compressed_size)?;
+
+        // DECOMPRESSION BOMB BOUND. `estimated_count` is derived from a count in
+        // the file and describes the buffer the payload says it will expand into —
+        // nothing has checked it against the payload that actually arrived. Left
+        // unbounded it is the same OOM as an over-large `read_count`, only reached
+        // through the compressed path: a few KiB of input can name a multi-GiB
+        // output buffer, and the allocation happens before `decompress_lz4` gets a
+        // chance to disagree.
+        //
+        // LZ4's block format cannot expand by more than 255x (the maximum a single
+        // match can cover per token), so input length times that ratio is a hard
+        // ceiling no legitimate stream can exceed. Anything above it is malformed
+        // by construction, and rejecting it costs well-formed files nothing.
+        const MAX_LZ4_EXPANSION: usize = 255;
+        let elem = mem::size_of::<T>();
+        ensure!(elem > 0, "Refusing to decompress into zero-sized elements");
+        let declared_bytes = estimated_count.saturating_mul(elem);
+        let ceiling = input.len().saturating_mul(MAX_LZ4_EXPANSION);
+        ensure!(
+            declared_bytes <= ceiling,
+            "Declared uncompressed size ({declared_bytes} bytes) exceeds the maximum \
+             LZ4 expansion of the {} compressed bytes actually read (ceiling {ceiling}); \
+             refusing to allocate",
+            input.len(),
+        );
+
+        // Decompress to output buffer.
+        let mut output = vec![T::default(); estimated_count];
+        let actual_size = decompress_lz4(&input, cast_slice_mut(&mut output))?;
+
+        let actual_count = actual_size / mem::size_of::<T>();
+
+        if actual_count < output.len() {
+            output.truncate(actual_count);
+        }
+
+        Ok(output)
+    }
+
+    /// Reads sequence of compressed integers.
+    fn read_encoded_ints<T: PrimInt + 'static>(&mut self, count: usize) -> Result<Vec<T>>
+    where
+        i64: AsPrimitive<T>,
+    {
+        let estimated_size = coding::encoded_buffer_size::<u32>(count);
+
+        let buffer = self.read_compressed::<u8>(estimated_size)?;
+
+        let ints = coding::decode_ints(buffer.as_slice(), count)?;
+        debug_assert_eq!(ints.len(), count);
+
+        Ok(ints)
+    }
+
+    const MIN_COMPRESSED_ARRAY_SIZE: usize = 4;
+
+    // Implements various logic and compatibility checks to figure out the array length and whether it's compressed.
+    fn unpack_array_len(&mut self, value: ValueRep, kind: ArrayKind) -> Result<(usize, bool)> {
+        debug_assert!(!value.is_inlined());
+
+        // Empty array.
+        if value.payload() == 0 {
+            return Ok((0, false));
+        }
+
+        self.set_position(value.payload())?;
+
+        if self.version() < version(0, 5, 0) {
+            // Read and discard shape size.
+            let _ = self.reader.read_pod::<u32>()?;
+        }
+
+        // Detect compression.
+        let mut compressed = true;
+        match kind {
+            ArrayKind::Ints => {
+                // Version 0.5.0 introduced compressed int arrays.
+                // See https://github.com/PixarAnimationStudios/OpenUSD/blob/0b18ad3f840c24eb25e16b795a5b0821cf05126e/pxr/usd/usd/crateFile.cpp#L1935
+                if self.version() < version(0, 5, 0) || !value.is_compressed() {
+                    compressed = false;
+                }
+            }
+            ArrayKind::Floats => {
+                // Version 0.6.0 introduced compressed floating point arrays.
+                // See https://github.com/PixarAnimationStudios/OpenUSD/blob/0b18ad3f840c24eb25e16b795a5b0821cf05126e/pxr/usd/usd/crateFile.cpp#L1961C5-L1961C66
+                if self.version() < version(0, 6, 0) || !value.is_compressed() {
+                    compressed = false;
+                }
+            }
+            ArrayKind::Other => {
+                // Fallback to uncompressed.
+                // See https://github.com/PixarAnimationStudios/OpenUSD/blob/0b18ad3f840c24eb25e16b795a5b0821cf05126e/pxr/usd/usd/crateFile.cpp#L1868
+                debug_assert!(!value.is_compressed());
+                compressed = false;
+            }
+        }
+
+        // Read the number of elements.
+        let count = if self.version() < version(0, 7, 0) {
+            self.reader.read_pod::<u32>()? as usize
+        } else {
+            self.reader.read_pod::<u64>()? as usize
+        };
+
+        if count < Self::MIN_COMPRESSED_ARRAY_SIZE {
+            compressed = false;
+        }
+
+        Ok((count, compressed))
+    }
+
+    fn read_ints<T: PrimInt + Pod + Default>(&mut self, value: ValueRep) -> Result<Vec<T>>
+    where
+        i64: AsPrimitive<T>,
+    {
+        let (count, compressed) = self.unpack_array_len(value, ArrayKind::Ints)?;
+
+        if count == 0 {
+            return Ok(Vec::default());
+        }
+
+        if compressed {
+            self.read_encoded_ints(count)
+        } else {
+            self.reader.read_vec(count)
+        }
+    }
+
+    fn read_floats<T: Float + Default + Pod>(&mut self, value: ValueRep) -> Result<Vec<T>> {
+        use num_traits::cast;
+        ensure!(!value.is_inlined());
+
+        let (count, compressed) = self.unpack_array_len(value, ArrayKind::Floats)?;
+
+        let vec = if compressed {
+            let code = self.reader.read_pod::<u8>()?;
+
+            match code {
+                // Compressed integers
+                b'i' => {
+                    let ints: Vec<i32> = self.read_compressed(count)?;
+                    ints.into_iter().map(|i| cast(i).unwrap()).collect()
+                }
+                // Lookup table and indexes
+                b't' => {
+                    let lut_size = self.reader.read_pod::<u32>()? as usize;
+                    let lut: Vec<T> = self.reader.read_vec(lut_size)?;
+
+                    let indexes: Vec<u32> = self.read_encoded_ints(count)?;
+                    ensure!(
+                        indexes.len() == count,
+                        "Read invalid number of indexes to decompress doubles array"
+                    );
+
+                    let mut output = vec![T::zero(); count];
+                    for (i, index) in indexes.into_iter().enumerate() {
+                        output[i] = lut[index as usize];
+                    }
+
+                    output
+                }
+                _ => bail!("Invalid compressed double array code: {code}"),
+            }
+        } else {
+            self.reader.read_vec(count)?
+        };
+
+        Ok(vec)
+    }
+
+    fn read_list_op<T: Default + Clone + PartialEq>(
+        &mut self,
+        value: ValueRep,
+        mut read: impl FnMut(&mut Self) -> Result<Vec<T>>,
+    ) -> Result<sdf::ListOp<T>> {
+        self.set_position(value.payload())?;
+
+        let mut out = sdf::ListOp::<T>::default();
+
+        let header = self.reader.read_pod::<ListOpHeader>()?;
+
+        if header.is_explicit() {
+            out.explicit = true;
+        }
+
+        if header.has_explicit() {
+            out.explicit_items = read(self)?;
+        }
+
+        if header.has_added() {
+            out.added_items = read(self)?;
+        }
+
+        if header.has_prepend() {
+            out.prepended_items = read(self)?;
+        }
+
+        if header.has_appended() {
+            out.appended_items = read(self)?;
+        }
+
+        if header.has_deleted() {
+            out.deleted_items = read(self)?;
+        }
+
+        if header.has_ordered() {
+            out.ordered_items = read(self)?;
+        }
+
+        Ok(out)
+    }
+
+    /// Reads a count-prefixed vector of `u32` indices and maps each through
+    /// `lookup` to produce the element value.
+    /// `lookup` is fallible because the indices it receives come from the file:
+    /// every one of them is a table subscript a crafted stream can point past the
+    /// end, so resolution has to be able to refuse.
+    fn read_indexed_vec<T>(&mut self, lookup: impl Fn(&Self, usize) -> Result<T>) -> Result<Vec<T>> {
+        let count = self.reader.read_count()?;
+        let indices = self.reader.read_vec::<u32>(count)?;
+
+        indices.into_iter().map(|index| lookup(self, index as usize)).collect()
+    }
+
+    fn read_string_vec(&mut self) -> Result<Vec<String>> {
+        self.read_indexed_vec(|file, index| {
+            let token = *file
+                .strings
+                .get(index)
+                .with_context(|| format!("String index {index} out of range ({} strings)", file.strings.len()))?;
+            Ok(file.token_at(token)?.clone())
+        })
+    }
+
+    fn read_token_vec(&mut self) -> Result<Vec<String>> {
+        self.read_indexed_vec(|file, index| Ok(file.token_at(index)?.clone()))
+    }
+
+    fn read_path_vec(&mut self) -> Result<Vec<sdf::Path>> {
+        self.read_indexed_vec(|file, index| Ok(file.path_at(index)?.clone()))
+    }
+
+    /// Reads a count-prefixed vector of POD values.
+    fn read_pod_vec<T: Default + NoUninit + AnyBitPattern>(&mut self) -> Result<Vec<T>> {
+        let count = self.reader.read_count()?;
+        self.reader.read_vec(count)
+    }
+
+    fn read_string(&mut self) -> Result<String> {
+        let index = self.reader.read_pod::<u32>()?;
+        let string = self.resolve_string(index)?;
+
+        Ok(string)
+    }
+
+    fn read_path(&mut self) -> Result<sdf::Path> {
+        let index = self.reader.read_pod::<u32>()?;
+        let path = self.path_at(index as usize)?.clone();
+
+        Ok(path)
+    }
+
+    fn read_reference(&mut self) -> Result<sdf::Reference> {
+        let asset_path = self.read_string()?;
+        let prim_path = self.read_path()?;
+        let layer_offset = self.reader.read_pod::<sdf::LayerOffset>()?;
+        let custom_data = self.read_custom_data()?;
+
+        Ok(sdf::Reference {
+            asset_path,
+            prim_path,
+            layer_offset,
+            custom_data,
+        })
+    }
+
+    fn read_payload(&mut self) -> Result<sdf::Payload> {
+        let asset_path = self.read_string()?;
+        let prim_path = self.read_path()?;
+
+        let mut payload = sdf::Payload {
+            asset_path,
+            prim_path,
+            layer_offset: None,
+        };
+
+        // Layer offsets were added to SdfPayload starting in 0.8.0. Files
+        // before that cannot have them.
+        // See https://github.com/PixarAnimationStudios/OpenUSD/blob/0b18ad3f840c24eb25e16b795a5b0821cf05126e/pxr/usd/usd/crateFile.cpp#L1214C41-L1214C41
+        if self.version() >= version(0, 8, 0) {
+            let layer_offset = self.reader.read_pod::<sdf::LayerOffset>()?;
+            payload.layer_offset = Some(layer_offset);
+        }
+
+        Ok(payload)
+    }
+
+    /// Applies a recursive offset stored inline in the stream.
+    ///
+    /// USD crate files encode forward jumps as a signed `i64` relative to the
+    /// position **before** the offset itself, so we subtract 8 (the size of the
+    /// offset we just consumed) to land at the correct location.
+    ///
+    /// See <https://github.com/PixarAnimationStudios/OpenUSD/blob/0b18ad3f840c24eb25e16b795a5b0821cf05126e/pxr/usd/usd/crateFile.cpp#L1100>
+    fn apply_recursive_offset(&mut self) -> Result<()> {
+        let offset = self.reader.read_pod::<i64>()?;
+        self.reader.seek(io::SeekFrom::Current(offset - 8))?;
+        Ok(())
+    }
+
+    /// Reads a crate dictionary value (`customData`, `assetInfo`, and nested
+    /// dictionaries).
+    ///
+    /// Recurses through `value`, which re-enters here for a nested
+    /// `Type::Dictionary` — one Rust frame per nesting level, over file-controlled
+    /// data — so the depth is bounded by [`MAX_DICT_DEPTH`]. The counter is
+    /// restored on every exit path, including the error paths below, so one
+    /// rejected dictionary does not poison the sibling that follows it.
+    fn read_custom_data(&mut self) -> Result<HashMap<String, Value>> {
+        ensure!(
+            self.dict_depth < MAX_DICT_DEPTH,
+            "Dictionary nesting exceeds the maximum depth of {MAX_DICT_DEPTH}; refusing to recurse",
+        );
+        self.dict_depth += 1;
+        let result = self.read_custom_data_inner();
+        self.dict_depth -= 1;
+        result
+    }
+
+    fn read_custom_data_inner(&mut self) -> Result<HashMap<String, Value>> {
+        let mut count = self.reader.read_count()?;
+        let mut dict = HashMap::default();
+
+        while count > 0 {
+            let key = self.read_string()?;
+
+            let value = {
+                self.apply_recursive_offset()?;
+
+                let value = self.reader.read_pod::<ValueRep>()?;
+
+                ensure!(value.ty()? != Type::Invalid, "Can't parse dictionary value type");
+
+                // Save current position.
+                let saved_position = self.reader.stream_position()?;
+
+                let value = self.value(value)?;
+
+                // Restore position
+                self.set_position(saved_position)?;
+
+                value
+            };
+
+            dict.insert(key, value);
+            count -= 1;
+        }
+
+        Ok(dict)
+    }
+
+    /// Read an array of fixed-size vectors (e.g. `Vec<[f32; 3]>`).
+    /// Reads an array of POD values (including `repr(C)` gf types) directly,
+    /// without the intermediate `[T; N]` grouping step that
+    /// [`read_vec_array`] performs. `U` must have the same binary layout as
+    /// the on-disk element — safe for all gf vec types since they are
+    /// `#[repr(C)]` and `bytemuck::Pod`.
+    fn read_gf_array<U: Default + NoUninit + AnyBitPattern>(&mut self, value: ValueRep) -> Result<Vec<U>> {
+        debug_assert!(value.is_array() && !value.is_compressed());
+        let (count, _) = self.unpack_array_len(value, ArrayKind::Other)?;
+        if count == 0 {
+            return Ok(Vec::default());
+        }
+        self.reader.read_vec::<U>(count)
+    }
+
+    fn read_vec_array<T: Default + NoUninit + AnyBitPattern, const N: usize>(
+        &mut self,
+        value: ValueRep,
+    ) -> Result<Vec<[T; N]>> {
+        debug_assert!(value.is_array());
+        debug_assert!(!value.is_compressed());
+
+        let (count, _) = self.unpack_array_len(value, ArrayKind::Other)?;
+
+        // Array allowed to be empty.
+        if count == 0 {
+            return Ok(Vec::default());
+        }
+
+        let flat: Vec<T> = self.reader.read_vec(count * N)?;
+
+        // Reinterpret the flat vec as a vec of fixed-size arrays. `chunks_exact(N)`
+        // always yields slices of exactly N elements, so `try_into` cannot fail.
+        let result = flat
+            .chunks_exact(N)
+            .map(|chunk| chunk.try_into().expect("chunks_exact yields N elements"))
+            .collect();
+
+        Ok(result)
+    }
+
+    pub fn value(&mut self, value: ValueRep) -> Result<sdf::Value> {
+        let ty = value.ty()?;
+        ensure!(ty != Type::Invalid, "Invalid value type");
+
+        let variant = match ty {
+            //
+            // Bool and chars
+            //
+            Type::Bool if value.is_array() => {
+                let vec = self
+                    .read_vec_array::<u8, 1>(value)?
+                    .into_iter()
+                    .map(|[v]| v != 0)
+                    .collect();
+
+                sdf::Value::BoolVec(vec)
+            }
+
+            Type::Bool => {
+                let value: i32 = self.unpack_value(value)?;
+                sdf::Value::Bool(value != 0)
+            }
+
+            Type::Uchar if value.is_array() => {
+                let vec = self.read_vec_array::<u8, 1>(value)?.into_iter().map(|[v]| v).collect();
+                sdf::Value::UcharVec(vec)
+            }
+
+            Type::Uchar => {
+                let value = self.unpack_value::<u8>(value)?;
+                sdf::Value::Uchar(value)
+            }
+
+            //
+            // Ints (int, uint, int64, uint64)
+            //
+            Type::Int if value.is_array() => sdf::Value::IntVec(self.read_ints(value)?),
+            Type::Int => sdf::Value::Int(self.unpack_value(value)?),
+
+            Type::Uint if value.is_array() => sdf::Value::UintVec(self.read_ints(value)?),
+            Type::Uint => sdf::Value::Uint(self.unpack_value(value)?),
+
+            Type::Int64 if value.is_array() => sdf::Value::Int64Vec(self.read_ints(value)?),
+            Type::Int64 => sdf::Value::Int64(self.unpack_value(value)?),
+
+            Type::Uint64 if value.is_array() => sdf::Value::Uint64Vec(self.read_ints(value)?),
+            Type::Uint64 => sdf::Value::Uint64(self.unpack_value(value)?),
+
+            //
+            // Float types (half, float, double)
+            //
+            Type::Half if value.is_array() => sdf::Value::HalfVec(self.read_floats(value)?),
+            Type::Half => sdf::Value::Half(self.unpack_value(value)?),
+
+            Type::Float if value.is_array() => sdf::Value::FloatVec(self.read_floats(value)?),
+            Type::Float => sdf::Value::Float(self.unpack_value(value)?),
+
+            Type::Double if value.is_array() => sdf::Value::DoubleVec(self.read_floats(value)?),
+            Type::Double if value.is_inlined() => {
+                // Stored as f32
+                let value = self.unpack_value::<f32>(value)?;
+                sdf::Value::Double(value as f64)
+            }
+            Type::Double => sdf::Value::Double(self.unpack_value(value)?),
+
+            Type::DoubleVector => sdf::Value::DoubleVec(self.read_floats(value)?),
+
+            //
+            // Tokens, strings, asset paths
+            //
+            Type::StringVector => {
+                ensure!(!value.is_inlined());
+
+                self.set_position(value.payload())?;
+                sdf::Value::StringVec(self.read_string_vec()?)
+            }
+
+            Type::String if value.is_array() => {
+                self.set_position(value.payload())?;
+                sdf::Value::StringVec(self.read_string_vec()?)
+            }
+
+            Type::String => {
+                ensure!(!value.is_array());
+
+                let string_index = self.unpack_value::<u32>(value)?;
+                sdf::Value::String(self.resolve_string(string_index)?)
+            }
+            Type::AssetPath if value.is_array() => {
+                // Asset arrays (`asset[]`, e.g. value-clip `assetPaths`) are
+                // stored like string arrays — string-table indices, not direct
+                // token indices.
+                self.set_position(value.payload())?;
+                sdf::Value::AssetPathVec(self.read_string_vec()?.into_iter().map(Into::into).collect())
+            }
+            Type::AssetPath => sdf::Value::AssetPath(self.read_asset_path(value)?.into()),
+
+            Type::Token if value.is_array() => {
+                let (count, _) = self.unpack_array_len(value, ArrayKind::Other)?;
+                let indices = self.reader.read_vec::<u32>(count)?;
+                let tokens = indices
+                    .into_iter()
+                    .map(|i| Ok(self.token_at(i as usize)?.as_str().into()))
+                    .collect::<Result<Vec<_>>>()?;
+
+                sdf::Value::TokenVec(tokens)
+            }
+            Type::Token => sdf::Value::Token(self.read_token(value)?.into()),
+
+            //
+            // Vectors (half, float, double, int + vec{2,3,4})
+            //
+            Type::Vec2h if value.is_array() => Value::Vec2hVec(self.read_gf_array::<gf::Vec2h>(value)?),
+            Type::Vec2f if value.is_array() => Value::Vec2fVec(self.read_gf_array::<gf::Vec2f>(value)?),
+            Type::Vec2d if value.is_array() => Value::Vec2dVec(self.read_gf_array::<gf::Vec2d>(value)?),
+            Type::Vec2i if value.is_array() => Value::Vec2iVec(self.read_gf_array::<gf::Vec2i>(value)?),
+
+            Type::Vec3h if value.is_array() => Value::Vec3hVec(self.read_gf_array::<gf::Vec3h>(value)?),
+            Type::Vec3f if value.is_array() => Value::Vec3fVec(self.read_gf_array::<gf::Vec3f>(value)?),
+            Type::Vec3d if value.is_array() => Value::Vec3dVec(self.read_gf_array::<gf::Vec3d>(value)?),
+            Type::Vec3i if value.is_array() => Value::Vec3iVec(self.read_gf_array::<gf::Vec3i>(value)?),
+
+            Type::Vec4h if value.is_array() => Value::Vec4hVec(self.read_gf_array::<gf::Vec4h>(value)?),
+            Type::Vec4f if value.is_array() => Value::Vec4fVec(self.read_gf_array::<gf::Vec4f>(value)?),
+            Type::Vec4d if value.is_array() => Value::Vec4dVec(self.read_gf_array::<gf::Vec4d>(value)?),
+            Type::Vec4i if value.is_array() => Value::Vec4iVec(self.read_gf_array::<gf::Vec4i>(value)?),
+
+            // Inlined scalar vecs: the 32-bit inline payload stores [i8; N]
+            // sign-extended integers for all types except half-2, which is the
+            // only half variant that fits (2 × 2 bytes = 4 bytes).
+            Type::Vec2h if value.is_inlined() => sdf::Value::Vec2h(self.unpack_value::<gf::Vec2h>(value)?),
+            Type::Vec2f if value.is_inlined() => {
+                let [x, y] = to_vec::<f32, 2>(self.unpack_value(value)?);
+                sdf::Value::Vec2f(gf::vec2f(x, y))
+            }
+            Type::Vec2d if value.is_inlined() => {
+                let [x, y] = to_vec::<f64, 2>(self.unpack_value(value)?);
+                sdf::Value::Vec2d(gf::vec2d(x, y))
+            }
+            Type::Vec2i if value.is_inlined() => {
+                let [x, y] = to_vec::<i32, 2>(self.unpack_value(value)?);
+                sdf::Value::Vec2i(gf::vec2i(x, y))
+            }
+
+            Type::Vec3h if value.is_inlined() => {
+                let [x, y, z] = to_vec::<f16, 3>(self.unpack_value(value)?);
+                sdf::Value::Vec3h(gf::vec3h(x, y, z))
+            }
+            Type::Vec3f if value.is_inlined() => {
+                let [x, y, z] = to_vec::<f32, 3>(self.unpack_value(value)?);
+                sdf::Value::Vec3f(gf::vec3f(x, y, z))
+            }
+            Type::Vec3d if value.is_inlined() => {
+                let [x, y, z] = to_vec::<f64, 3>(self.unpack_value(value)?);
+                sdf::Value::Vec3d(gf::vec3d(x, y, z))
+            }
+            Type::Vec3i if value.is_inlined() => {
+                let [x, y, z] = to_vec::<i32, 3>(self.unpack_value(value)?);
+                sdf::Value::Vec3i(gf::vec3i(x, y, z))
+            }
+
+            Type::Vec4h if value.is_inlined() => {
+                let [x, y, z, w] = to_vec::<f16, 4>(self.unpack_value(value)?);
+                sdf::Value::Vec4h(gf::vec4h(x, y, z, w))
+            }
+            Type::Vec4f if value.is_inlined() => {
+                let [x, y, z, w] = to_vec::<f32, 4>(self.unpack_value(value)?);
+                sdf::Value::Vec4f(gf::vec4f(x, y, z, w))
+            }
+            Type::Vec4d if value.is_inlined() => {
+                let [x, y, z, w] = to_vec::<f64, 4>(self.unpack_value(value)?);
+                sdf::Value::Vec4d(gf::vec4d(x, y, z, w))
+            }
+            Type::Vec4i if value.is_inlined() => {
+                let [x, y, z, w] = to_vec::<i32, 4>(self.unpack_value(value)?);
+                sdf::Value::Vec4i(gf::vec4i(x, y, z, w))
+            }
+
+            // Non-inlined scalar vecs: repr(C) + Pod layout matches [T; N].
+            Type::Vec2h => sdf::Value::Vec2h(self.unpack_value::<gf::Vec2h>(value)?),
+            Type::Vec2f => sdf::Value::Vec2f(self.unpack_value::<gf::Vec2f>(value)?),
+            Type::Vec2d => sdf::Value::Vec2d(self.unpack_value::<gf::Vec2d>(value)?),
+            Type::Vec2i => sdf::Value::Vec2i(self.unpack_value::<gf::Vec2i>(value)?),
+
+            Type::Vec3h => sdf::Value::Vec3h(self.unpack_value::<gf::Vec3h>(value)?),
+            Type::Vec3f => sdf::Value::Vec3f(self.unpack_value::<gf::Vec3f>(value)?),
+            Type::Vec3d => sdf::Value::Vec3d(self.unpack_value::<gf::Vec3d>(value)?),
+            Type::Vec3i => sdf::Value::Vec3i(self.unpack_value::<gf::Vec3i>(value)?),
+
+            Type::Vec4h => sdf::Value::Vec4h(self.unpack_value::<gf::Vec4h>(value)?),
+            Type::Vec4f => sdf::Value::Vec4f(self.unpack_value::<gf::Vec4f>(value)?),
+            Type::Vec4d => sdf::Value::Vec4d(self.unpack_value::<gf::Vec4d>(value)?),
+            Type::Vec4i => sdf::Value::Vec4i(self.unpack_value::<gf::Vec4i>(value)?),
+
+            //
+            // Matrices
+            //
+            Type::Matrix2d if value.is_array() => Value::Matrix2dVec(
+                self.read_vec_array::<f64, 4>(value)?
+                    .into_iter()
+                    .map(gf::Mat2d)
+                    .collect(),
+            ),
+            Type::Matrix3d if value.is_array() => Value::Matrix3dVec(
+                self.read_vec_array::<f64, 9>(value)?
+                    .into_iter()
+                    .map(gf::Mat3d)
+                    .collect(),
+            ),
+            Type::Matrix4d if value.is_array() => Value::Matrix4dVec(
+                self.read_vec_array::<f64, 16>(value)?
+                    .into_iter()
+                    .map(gf::Matrix4d)
+                    .collect(),
+            ),
+
+            Type::Matrix2d if value.is_inlined() => {
+                sdf::Value::Matrix2d(gf::Mat2d(to_mat_diag::<2, 4>(self.unpack_value(value)?)))
+            }
+            Type::Matrix3d if value.is_inlined() => {
+                sdf::Value::Matrix3d(gf::Mat3d(to_mat_diag::<3, 9>(self.unpack_value(value)?)))
+            }
+            Type::Matrix4d if value.is_inlined() => {
+                sdf::Value::Matrix4d(gf::Matrix4d(to_mat_diag::<4, 16>(self.unpack_value(value)?)))
+            }
+
+            Type::Matrix2d => sdf::Value::Matrix2d(gf::Mat2d(self.unpack_value::<[f64; 4]>(value)?)),
+            Type::Matrix3d => sdf::Value::Matrix3d(gf::Mat3d(self.unpack_value::<[f64; 9]>(value)?)),
+            Type::Matrix4d => sdf::Value::Matrix4d(gf::Matrix4d(self.unpack_value::<[f64; 16]>(value)?)),
+
+            //
+            // Quats
+            //
+            // Pixar's GfQuat<T> declares `_imaginary: GfVec3<T>` then
+            // `_real: T`, so on-disk bytes are `[imag_x, imag_y, imag_z,
+            // real]` = `[x, y, z, w]`. The USDA textual form is
+            // `(real, i, j, k)` = `(w, x, y, z)`, which the USDA parser
+            // stores verbatim. Reorder USDC bytes here so `Value::Quat*`
+            // values are consistently `(w, x, y, z)` regardless of source
+            // — without this, binary USDC quats from real production
+            // assets (Isaac Sim Agilebot, Omniverse robotics scenes)
+            // come out with axes scrambled.
+            Type::Quath if value.is_array() => {
+                Value::QuathVec(xyzw_to_wxyz_quath(self.read_vec_array::<f16, 4>(value)?))
+            }
+            Type::Quath => {
+                let raw = self.unpack_value::<[f16; 4]>(value)?;
+                sdf::Value::quath(raw[3], raw[0], raw[1], raw[2])
+            }
+
+            Type::Quatf if value.is_array() => {
+                Value::QuatfVec(xyzw_to_wxyz_quatf(self.read_vec_array::<f32, 4>(value)?))
+            }
+            Type::Quatf => {
+                let raw = self.unpack_value::<[f32; 4]>(value)?;
+                sdf::Value::quatf(raw[3], raw[0], raw[1], raw[2])
+            }
+
+            Type::Quatd if value.is_array() => {
+                Value::QuatdVec(xyzw_to_wxyz_quatd(self.read_vec_array::<f64, 4>(value)?))
+            }
+            Type::Quatd => {
+                let raw = self.unpack_value::<[f64; 4]>(value)?;
+                sdf::Value::quatd(raw[3], raw[0], raw[1], raw[2])
+            }
+
+            //
+            // ListOp
+            //
+            Type::TokenListOp => {
+                ensure!(!value.is_inlined());
+
+                let list = self.read_list_op(value, |file: &mut Self| {
+                    Ok(file.read_token_vec()?.into_iter().map(tf::Token::from).collect())
+                })?;
+                sdf::Value::TokenListOp(list)
+            }
+            Type::StringListOp => {
+                ensure!(!value.is_inlined());
+
+                let list = self.read_list_op(value, |file: &mut Self| file.read_string_vec())?;
+                sdf::Value::StringListOp(list)
+            }
+            Type::PathListOp => {
+                ensure!(!value.is_inlined());
+
+                let list = self.read_list_op(value, |file: &mut Self| file.read_path_vec())?;
+                sdf::Value::PathListOp(list)
+            }
+            Type::ReferenceListOp => {
+                ensure!(!value.is_inlined());
+
+                let list = self.read_list_op(value, |file: &mut Self| {
+                    let count = file.reader.read_count()?;
+                    let mut vec = Vec::with_capacity(count);
+
+                    for _ in 0..count {
+                        let reference = file.read_reference()?;
+                        vec.push(reference);
+                    }
+
+                    Ok(vec)
+                })?;
+
+                sdf::Value::ReferenceListOp(list)
+            }
+
+            Type::IntListOp => {
+                ensure!(!value.is_inlined());
+                sdf::Value::IntListOp(self.read_list_op(value, |f: &mut Self| f.read_pod_vec())?)
+            }
+            Type::Int64ListOp => {
+                ensure!(!value.is_inlined());
+                sdf::Value::Int64ListOp(self.read_list_op(value, |f: &mut Self| f.read_pod_vec())?)
+            }
+            Type::UIntListOp => {
+                ensure!(!value.is_inlined());
+                sdf::Value::UIntListOp(self.read_list_op(value, |f: &mut Self| f.read_pod_vec())?)
+            }
+            Type::UInt64ListOp => {
+                ensure!(!value.is_inlined());
+                sdf::Value::UInt64ListOp(self.read_list_op(value, |f: &mut Self| f.read_pod_vec())?)
+            }
+
+            //
+            // SDF types
+            //
+            Type::TokenVector => {
+                ensure!(!value.is_inlined());
+
+                self.set_position(value.payload())?;
+
+                let tokens = self.read_token_vec()?;
+                sdf::Value::token_vec(tokens)
+            }
+
+            Type::PathVector => {
+                ensure!(!value.is_inlined());
+
+                self.set_position(value.payload())?;
+
+                let paths = self.read_path_vec()?;
+                sdf::Value::PathVec(paths)
+            }
+
+            Type::Specifier => {
+                let tmp: i32 = self.unpack_value(value)?;
+                let specifier =
+                    sdf::Specifier::from_repr(tmp).with_context(|| format!("Unable to parse SDF specifier: {tmp}"))?;
+
+                sdf::Value::Specifier(specifier)
+            }
+
+            Type::Permission => {
+                let tmp: i32 = self.unpack_value(value)?;
+                let permission =
+                    sdf::Permission::from_repr(tmp).with_context(|| format!("Unable to parse permission: {tmp}"))?;
+
+                sdf::Value::Permission(permission)
+            }
+
+            Type::Variability => {
+                let tmp: i32 = self.unpack_value(value)?;
+                let variability =
+                    sdf::Variability::from_repr(tmp).with_context(|| format!("Unable to parse variability: {tmp}"))?;
+
+                sdf::Value::Variability(variability)
+            }
+
+            Type::LayerOffsetVector => {
+                ensure!(!value.is_inlined());
+                ensure!(!value.is_array());
+                ensure!(!value.is_compressed());
+
+                self.set_position(value.payload())?;
+
+                let count = self.reader.read_count()?;
+                let vec = self.reader.read_vec(count)?;
+
+                sdf::Value::LayerOffsetVec(vec)
+            }
+
+            Type::Payload => {
+                ensure!(!value.is_inlined());
+                ensure!(!value.is_array());
+                ensure!(!value.is_compressed());
+
+                self.set_position(value.payload())?;
+
+                let payload = self.read_payload()?;
+                sdf::Value::Payload(payload)
+            }
+
+            Type::PayloadListOp => {
+                let list = self.read_list_op(value, |file: &mut Self| {
+                    let count = file.reader.read_count()?;
+                    let mut vec = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        let payload = file.read_payload()?;
+                        vec.push(payload);
+                    }
+
+                    Ok(vec)
+                })?;
+
+                sdf::Value::PayloadListOp(list)
+            }
+
+            Type::VariantSelectionMap => {
+                ensure!(!value.is_inlined());
+                ensure!(!value.is_array());
+                ensure!(!value.is_compressed());
+
+                self.set_position(value.payload())?;
+
+                let count = self.reader.read_count()?;
+                let mut map = HashMap::with_capacity(count);
+
+                for _ in 0..count {
+                    let key = self.read_string()?;
+                    let value = self.read_string()?;
+                    map.insert(key, value);
+                }
+
+                sdf::Value::VariantSelectionMap(map)
+            }
+
+            Type::TimeSamples => {
+                ensure!(!value.is_inlined());
+                ensure!(!value.is_compressed());
+
+                self.set_position(value.payload())?;
+
+                self.apply_recursive_offset()?;
+
+                let times_rep = self.reader.read_pod::<ValueRep>()?;
+
+                let ty = times_rep.ty()?;
+                ensure!(
+                    ty == Type::DoubleVector || (ty == Type::Double && times_rep.is_array()),
+                    "Invalid time samples type: expected either double vector or double array"
+                );
+
+                // Save current position.
+                let saved_position = self.reader.stream_position()?;
+
+                let times = self
+                    .value(times_rep)?
+                    .try_as_double_vec()
+                    .context("Failed to read time samples")?;
+
+                // Restore position
+                self.set_position(saved_position)?;
+
+                self.apply_recursive_offset()?;
+
+                let count = self.reader.read_count()?;
+                ensure!(count == times.len(), "Invalid time samples count");
+
+                let value_reps = self.reader.read_vec::<ValueRep>(count)?;
+                debug_assert_eq!(value_reps.len(), count);
+
+                let values = value_reps
+                    .into_iter()
+                    .map(|value| self.value(value))
+                    .collect::<Result<Vec<_>>>()?;
+
+                let samples = times.into_iter().zip(values).collect();
+
+                sdf::Value::TimeSamples(samples)
+            }
+
+            // Empty dictionary.
+            Type::Dictionary if value.is_inlined() => sdf::Value::Dictionary(HashMap::default()),
+            Type::Dictionary => {
+                ensure!(!value.is_compressed(), "Dictionary {ty} can't be compressed");
+                ensure!(!value.is_array(), "Dictionary {ty} can't be inlined");
+
+                self.set_position(value.payload())?;
+
+                sdf::Value::Dictionary(self.read_custom_data()?)
+            }
+
+            Type::ValueBlock => sdf::Value::ValueBlock,
+            Type::Value => sdf::Value::Value,
+
+            Type::TimeCode if value.is_array() => sdf::Value::TimeCodeVec(
+                self.read_floats::<f64>(value)?
+                    .into_iter()
+                    .map(sdf::TimeCode::from)
+                    .collect(),
+            ),
+            Type::TimeCode => sdf::Value::TimeCode(self.unpack_value::<f64>(value)?.into()),
+
+            Type::PathExpression if value.is_array() => {
+                // Path-expression arrays are stored like string arrays
+                // (string-table indices); surface them as a `StringVec`, as the
+                // `Value` enum has no dedicated path-expression array variant.
+                self.set_position(value.payload())?;
+                sdf::Value::StringVec(self.read_string_vec()?)
+            }
+            Type::PathExpression => {
+                let expr = self.read_asset_path(value)?;
+                sdf::Value::PathExpression(expr)
+            }
+
+            Type::UnregisteredValue => {
+                let token = self.read_token(value)?;
+                sdf::Value::UnregisteredValue(token)
+            }
+            Type::UnregisteredValueListOp => {
+                ensure!(!value.is_inlined());
+                let list = self.read_list_op(value, |file: &mut Self| file.read_string_vec())?;
+                sdf::Value::UnregisteredValueListOp(list)
+            }
+
+            Type::Relocates => {
+                ensure!(!value.is_inlined());
+                self.set_position(value.payload())?;
+                let count = self.reader.read_count()?;
+                let mut pairs = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let src_idx: u32 = self.reader.read_pod()?;
+                    let tgt_idx: u32 = self.reader.read_pod()?;
+                    let src = self.path_at(src_idx as usize)?.clone();
+                    let tgt = self.path_at(tgt_idx as usize)?.clone();
+                    pairs.push((src, tgt));
+                }
+                sdf::Value::Relocates(pairs)
+            }
+
+            _ => bail!("Unsupported value type: {ty}"),
+        };
+
+        Ok(variant)
+    }
+}
+
+enum ArrayKind {
+    Ints,
+    #[allow(dead_code)]
+    Floats,
+    Other,
+}
+
+/// Pixar's `GfQuat<T>` stores components on disk as `[x, y, z, w]` (imaginary fields first,
+/// Reorder each element from on-disk `[x, y, z, w]` to `(w, x, y, z)` so
+/// `Value::Quat*` is always `(real, i, j, k)` regardless of whether the value
+/// came from USDC or USDA. Pixar's `GfQuat<T>` declares `_imaginary:
+/// GfVec3<T>` before `T _real`, so on-disk bytes are `[x, y, z, w]`.
+fn xyzw_to_wxyz_quatf(v: Vec<[f32; 4]>) -> Vec<gf::Quatf> {
+    v.into_iter().map(|q| gf::quatf(q[3], q[0], q[1], q[2])).collect()
+}
+
+fn xyzw_to_wxyz_quatd(v: Vec<[f64; 4]>) -> Vec<gf::Quatd> {
+    v.into_iter().map(|q| gf::quatd(q[3], q[0], q[1], q[2])).collect()
+}
+
+fn xyzw_to_wxyz_quath(v: Vec<[f16; 4]>) -> Vec<gf::Quath> {
+    v.into_iter().map(|q| gf::quath(q[3], q[0], q[1], q[2])).collect()
+}
+
+fn to_vec<T: From<i8>, const N: usize>(data: [i8; N]) -> [T; N] {
+    data.map(T::from)
+}
+
+fn to_mat_diag<const N: usize, const M: usize>(data: [i8; N]) -> [f64; M] {
+    let mut matrix = [0_f64; M];
+    for i in 0..N {
+        matrix[i * N + i] = data[i] as f64;
+    }
+    matrix
+}
+
+fn decompress_lz4(mut input: &[u8], output: &mut [u8]) -> Result<usize> {
+    // Check first byte for # chunks.
+    // See https://github.com/PixarAnimationStudios/OpenUSD/blob/0b18ad3f840c24eb25e16b795a5b0821cf05126e/pxr/base/tf/fastCompression.cpp#L108
+
+    let chunks = input.read_pod::<u8>().context("Unable to read lz4 chunk count")? as usize;
+
+    if chunks == 0 {
+        let size = lz4_flex::decompress_into(input, output).context("Failed to decompress data, possibly corrupt?")?;
+
+        Ok(size)
+    } else {
+        // Decompress chunk by chunk.
+        // See https://github.com/PixarAnimationStudios/OpenUSD/blob/0b18ad3f840c24eb25e16b795a5b0821cf05126e/pxr/base/tf/fastCompression.cpp#L125
+
+        todo!("Support lz4 chunked decompression")
+    }
+}
+
+pub trait ReadExt {
+    /// Read a single "size" or "count" value encoded as `u64`.
+    ///
+    /// # Format:
+    /// - u64 size
+    fn read_count(&mut self) -> Result<usize>;
+
+    fn read_pod<T: Default + Pod>(&mut self) -> Result<T>;
+
+    fn read_vec<T: Default + NoUninit + AnyBitPattern>(&mut self, count: usize) -> Result<Vec<T>>;
+}
+
+impl<R: io::Read> ReadExt for R {
+    fn read_count(&mut self) -> Result<usize> {
+        let mut count = 0_u64;
+        self.read_exact(bytes_of_mut(&mut count))
+            .context("Unable to read size from IO stream")?;
+
+        Ok(count as usize)
+    }
+
+    fn read_pod<T: Default + Pod>(&mut self) -> Result<T> {
+        let mut object = T::default();
+
+        self.read_exact(bytes_of_mut(&mut object))
+            .with_context(|| format!("Unable to read pod: {}", type_name::<T>()))?;
+
+        Ok(object)
+    }
+
+    fn read_vec<T: Default + NoUninit + AnyBitPattern>(&mut self, count: usize) -> Result<Vec<T>> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+
+        // GROW AS THE DATA ARRIVES — never allocate `count` up front.
+        //
+        // `count` reaches here straight from `read_count()`, i.e. a `u64` read
+        // verbatim out of the file with nothing yet validated. A single crafted
+        // header field therefore used to name its own allocation: `vec![T; 1<<60]`
+        // aborts the process before one byte of payload is examined, so a ~40-byte
+        // `.usdc` (or a `.usdz` member) is a remote OOM against anything that opens
+        // an untrusted stage.
+        //
+        // Reading in bounded chunks makes the peak allocation a function of the
+        // bytes the stream ACTUALLY supplied rather than of the number it claims:
+        // an over-large `count` now fails on the first short `read_exact` with at
+        // most `MAX_CHUNK_ELEMS` elements committed. Well-formed files are
+        // unaffected apart from a few extra `resize_with` calls on large arrays.
+        //
+        // This is the choke point for the whole family — `read_pod_vec`,
+        // `read_vec_array` and the compressed-array paths all land here — which is
+        // why the bound lives at the primitive instead of at each call site, where
+        // it would be one forgotten site away from useless.
+        const MAX_CHUNK_BYTES: usize = 1 << 20; // 1 MiB of payload per step
+
+        let elem = mem::size_of::<T>();
+        // A zero-sized element carries no payload, so chunking cannot converge and
+        // the count is pure allocation — refuse rather than spin.
+        ensure!(elem > 0, "Refusing to read a vec of zero-sized elements");
+
+        let chunk = (MAX_CHUNK_BYTES / elem).max(1);
+        let mut vec: Vec<T> = Vec::new();
+        let mut remaining = count;
+
+        while remaining > 0 {
+            let n = remaining.min(chunk);
+            let start = vec.len();
+            vec.resize_with(start + n, T::default);
+            self.read_exact(cast_slice_mut(&mut vec[start..]))
+                .with_context(|| {
+                    format!(
+                        "Unable to read vec of {count} x {} ({} bytes declared); \
+                         stream ended after {start} elements",
+                        type_name::<T>(),
+                        count.saturating_mul(elem),
+                    )
+                })?;
+            remaining -= n;
+        }
+
+        Ok(vec)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// A declared count far larger than the stream must FAIL, not allocate.
+    ///
+    /// The whole family of `read_count`-driven reads funnels through `read_vec`,
+    /// and it used to open with `vec![T::default(); count]` — so eight bytes of
+    /// header naming `u64::MAX / 8` aborted the process on an allocation the file
+    /// had merely asserted. This pins the grow-as-you-read behaviour: the error is
+    /// the point, and reaching it at all proves nothing huge was reserved first.
+    #[test]
+    fn an_oversized_count_is_refused_not_allocated() {
+        // Eight elements claimed, four bytes supplied.
+        let data: Vec<u8> = vec![0xAA; 4];
+        let mut cursor = Cursor::new(data);
+        let err = cursor.read_vec::<u32>(8).expect_err("a short stream must not satisfy 8 elements");
+        assert!(
+            err.to_string().contains("Unable to read vec"),
+            "expected a short-read error, got: {err}"
+        );
+
+        // The pathological case: a count no machine can satisfy. Reaching an error
+        // rather than an abort IS the assertion.
+        let mut cursor = Cursor::new(vec![0u8; 16]);
+        assert!(
+            cursor.read_vec::<u64>(usize::MAX / 16).is_err(),
+            "an absurd count must be refused rather than reserved"
+        );
+    }
+
+    /// Zero-sized elements carry no payload, so chunked reading could not converge
+    /// — the count would be pure allocation with nothing to consume it.
+    #[test]
+    fn zero_sized_elements_are_refused() {
+        #[derive(Default, Clone, Copy)]
+        #[repr(C)]
+        struct Zst;
+        unsafe impl bytemuck::Zeroable for Zst {}
+        unsafe impl bytemuck::AnyBitPattern for Zst {}
+        unsafe impl bytemuck::NoUninit for Zst {}
+
+        let mut cursor = Cursor::new(vec![0u8; 8]);
+        assert!(cursor.read_vec::<Zst>(1).is_err(), "a ZST vec must be refused");
+    }
+
+    #[test]
+    fn test_read_crate_struct() {
+        let path = "./vendor/usd-wg-assets/full_assets/ElephantWithMonochord/SoC-ElephantWithMonochord.usdc";
+        if fs::metadata(path).is_err() {
+            eprintln!("Skipping test_read_crate_struct: fixture not available at {path}");
+            return;
+        }
+
+        let mut f = fs::File::open(path).expect("Failed to read crate file");
+
+        let file = CrateFile::open(&mut f).expect("Failed to read crate file");
+
+        assert_eq!(file.sections.len(), 6);
+
+        file.sections.iter().for_each(|section| {
+            assert!(!section.name().is_empty());
+            assert_ne!(section.start, 0_u64);
+            assert_ne!(section.size, 0_u64);
+        });
+
+        assert_eq!(file.tokens.len(), 192);
+
+        assert_eq!(file.fields.len(), 158);
+
+        file.fields.iter().for_each(|field| {
+            // Make sure each value rep has a valid type and cab be parsed.
+            let _ = field.value_rep.ty().unwrap();
+            // Make sure each token index is valid.
+            let _ = file.tokens[field.token_index];
+        });
+
+        assert_eq!(file.fieldsets.len(), 577);
+        assert_eq!(file.paths.len(), 248);
+        assert_eq!(file.specs.len(), 248);
+
+        assert!(file.validate().is_ok());
+    }
+}

@@ -476,15 +476,17 @@ struct ShaderImportCatalog {
     modules: Vec<Handle<Shader>>,
     scan_started: bool,
     ready: bool,
+    failure: Option<String>,
 }
 
 fn discover_shader_import_modules(
+    mut commands: Commands,
     mut catalog: ResMut<ShaderImportCatalog>,
     manifest: Option<Res<lunco_assets_runtime::discovery::AssetManifest>>,
     server: Option<Res<AssetServer>>,
     shaders: Option<Res<Assets<Shader>>>,
 ) {
-    if catalog.ready {
+    if catalog.ready || catalog.failure.is_some() {
         return;
     }
     let (Some(manifest), Some(server), Some(shaders)) = (manifest, server, shaders) else {
@@ -494,12 +496,27 @@ fn discover_shader_import_modules(
         return;
     }
     if !catalog.scan_started {
-        catalog.candidates = manifest
+        let candidates = manifest
             .rels()
             .iter()
             .filter(|path| path.ends_with(".wgsl"))
-            .map(|path| (path.clone(), server.load(path.clone())))
-            .collect();
+            .map(|path| {
+                super::shader_look::load_shader(path, &server).map(|handle| (path.clone(), handle))
+            })
+            .collect::<Result<Vec<_>, _>>();
+        match candidates {
+            Ok(candidates) => catalog.candidates = candidates,
+            Err(error) => {
+                error!("shader import address rejected: {error}");
+                lunco_core::trigger_runtime_error(
+                    &mut commands,
+                    "shader-import-address-rejected",
+                    &error,
+                );
+                catalog.failure = Some(error);
+                return;
+            }
+        }
         catalog.scan_started = true;
     }
 

@@ -1,0 +1,71 @@
+#usda 1.0
+(
+    customLayerData = {
+        string rootOnly = "root"
+        dictionary nested = {
+            string rootNested = "root"
+        }
+    }
+    subLayers = [
+        @./value_resolution_weak.usda@
+    ]
+)
+
+# Specifier resolution (12.2.1): a local `over` opinion together with an
+# inherit from a `class` resolves to `class`. The defining opinion comes
+# from the inherit arc, and "all defining specifiers are class" → class.
+over "InheritOnly" (
+    inherits = </_AbstractBase>
+)
+{
+}
+
+class "_AbstractBase"
+{
+}
+
+# Specifier "all over" rule: every authored opinion is `over` → `over`.
+over "AllOver"
+{
+}
+
+# Specifier precedence: a defining opinion (def in this layer) beats the
+# `over` from a hypothetical weaker layer. Here only def is authored, so
+# this exercises the simple case.
+def "DefPrim"
+{
+}
+
+# Custom + variability tests: the strong layer omits both fields.
+def "CustomTest"
+{
+    int attr
+}
+
+def "VarTest"
+{
+    int attr
+}
+
+# Dictionary resolution (12.2.5): strong and weak dictionary-valued
+# metadata compose recursively. Strong scalar values replace weak
+# dictionaries, and strong dictionaries replace weak scalar values.
+def "DictTest" (
+    customData = {
+        string strongOnly = "strong"
+        string strongOver = "strong"
+        dictionary nested = {
+            string strongNested = "strong"
+            dictionary deep = {
+                string conflict = "strong"
+                string strongDeep = "strong"
+            }
+        }
+        string strongScalarWins = "strong-scalar"
+        dictionary strongDictWins = {
+            string strongNested = "strong"
+        }
+    }
+)
+{
+}

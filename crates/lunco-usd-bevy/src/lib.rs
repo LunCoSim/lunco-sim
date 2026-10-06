@@ -2911,7 +2911,14 @@ fn read_standard_material(
                 let texture_path =
                     parent_prim_path(&conn).ok_or_else(|| MaterialReadError::new(input))?;
                 let asset_path = reader
-                    .asset(&texture_path, "inputs:file")
+                    .asset_identifier(&texture_path, "inputs:file")
+                    .map_err(|error| {
+                        error!(
+                            "[usd-bevy] {} texture `{input}` rejected: {error}",
+                            sdf_path.as_str()
+                        );
+                        MaterialReadError::new(input)
+                    })?
                     .ok_or_else(|| MaterialReadError::new(input))?;
                 let resolved = lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
                     asset_server,

@@ -355,7 +355,15 @@ pub fn read_dome_environment(
         || !reader
             .connections(sdf_path, ltok::A_TEXTURE_FILE)
             .is_empty();
-    let texture_value = reader.asset(sdf_path, ltok::A_TEXTURE_FILE);
+    let texture_value = reader
+        .asset_identifier(sdf_path, ltok::A_TEXTURE_FILE)
+        .map_err(|error| {
+            error!(
+                "[usd-bevy] {} dome texture rejected: {error}",
+                sdf_path.as_str()
+            );
+            crate::light::LightReadError
+        })?;
     if texture_authored && texture_value.is_none() {
         error!(
             "[usd-bevy] {} has authored DomeLight inputs:texture:file with an unsupported type",

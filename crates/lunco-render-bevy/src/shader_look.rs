@@ -78,15 +78,41 @@ impl CachedLook for ShaderLook {
     }
 }
 
+struct ShaderLoadHandles {
+    fragment: Handle<Shader>,
+    vertex: Option<Handle<Shader>>,
+}
+
+pub(crate) fn load_shader(
+    path: &str,
+    asset_server: &AssetServer,
+) -> Result<Handle<Shader>, String> {
+    let path = lunco_assets_core::asset_path::load_asset_path(path, None, None, None)
+        .map_err(|error| error.to_string())?;
+    Ok(asset_server.load::<Shader>(path))
+}
+
+fn shader_load_handles(
+    look: &ShaderLook,
+    asset_server: &AssetServer,
+) -> Result<ShaderLoadHandles, (ShaderStage, String)> {
+    let fragment =
+        load_shader(&look.shader, asset_server).map_err(|error| (ShaderStage::Fragment, error))?;
+    let vertex = look
+        .vertex_shader
+        .as_deref()
+        .map(|path| load_shader(path, asset_server))
+        .transpose()
+        .map_err(|error| (ShaderStage::Vertex, error))?;
+    Ok(ShaderLoadHandles { fragment, vertex })
+}
+
 /// Build the concrete `ShaderMaterial` a look describes.
-fn shader_material(look: &ShaderLook, asset_server: &AssetServer) -> ShaderMaterial {
+fn shader_material(look: &ShaderLook, handles: &ShaderLoadHandles) -> ShaderMaterial {
     let mut m = ShaderMaterial {
         // A path, not a handle, in the intent — `bevy::shader` pulls naga, so the
-        // domain crate cannot hold `Handle<Shader>`. Load it here.
-        vertex_shader: look
-            .vertex_shader
-            .clone()
-            .map(|p| asset_server.load::<Shader>(p)),
+        // domain crate cannot hold `Handle<Shader>`. Reuse the admitted handle.
+        vertex_shader: handles.vertex.clone(),
         // `live` params are real shader params — they are merely absent from the
         // sharing key, so a freshly-built material still has to carry them.
         values: look
@@ -129,7 +155,7 @@ fn shader_material(look: &ShaderLook, asset_server: &AssetServer) -> ShaderMater
     // it and repacks once the WGSL source lands. Same lifecycle as every other
     // `ShaderMaterial` in the codebase.
     m.repack();
-    build_shader_material(asset_server.load::<Shader>(look.shader.clone()), m)
+    build_shader_material(handles.fragment.clone(), m)
 }
 
 /// Shader-source facts shared by binding, readiness, and reflection.
@@ -143,11 +169,17 @@ pub(crate) struct ShaderSourceCache {
 }
 
 impl ShaderSourceCache {
-    fn shader_id(&mut self, path: &str, asset_server: &AssetServer) -> AssetId<Shader> {
-        *self
-            .ids_by_path
-            .entry(path.to_owned())
-            .or_insert_with(|| asset_server.load::<Shader>(path.to_owned()).id())
+    fn shader_id(
+        &mut self,
+        path: &str,
+        asset_server: &AssetServer,
+    ) -> Result<AssetId<Shader>, String> {
+        if let Some(id) = self.ids_by_path.get(path) {
+            return Ok(*id);
+        }
+        let id = load_shader(path, asset_server)?.id();
+        self.ids_by_path.insert(path.to_owned(), id);
+        Ok(id)
     }
 
     pub(crate) fn failure(
@@ -243,7 +275,10 @@ fn loaded_shader_stage_failure(
     cache: &mut ShaderSourceCache,
 ) -> Option<(ShaderStage, String)> {
     let shaders = shaders?;
-    let fragment_id = cache.shader_id(&look.shader, asset_server);
+    let fragment_id = match cache.shader_id(&look.shader, asset_server) {
+        Ok(id) => id,
+        Err(error) => return Some((ShaderStage::Fragment, error)),
+    };
     if let Some(source) = shaders.get(fragment_id).and_then(wgsl_source) {
         if let Some(detail) = cache.failure(fragment_id, ShaderStage::Fragment, source) {
             return Some((ShaderStage::Fragment, detail));
@@ -251,7 +286,10 @@ fn loaded_shader_stage_failure(
     }
 
     let vertex_path = look.vertex_shader.as_deref()?;
-    let vertex_id = cache.shader_id(vertex_path, asset_server);
+    let vertex_id = match cache.shader_id(vertex_path, asset_server) {
+        Ok(id) => id,
+        Err(error) => return Some((ShaderStage::Vertex, error)),
+    };
     shaders
         .get(vertex_id)
         .and_then(wgsl_source)
@@ -307,8 +345,9 @@ fn material_for(
     cache: &mut ShaderLookCache,
     materials: &mut Assets<ShaderMaterial>,
     asset_server: &AssetServer,
-) -> Handle<ShaderMaterial> {
-    cache.resolve(look, materials, |l| shader_material(l, asset_server))
+) -> Result<Handle<ShaderMaterial>, (ShaderStage, String)> {
+    let handles = shader_load_handles(look, asset_server)?;
+    Ok(cache.resolve(look, materials, |look| shader_material(look, &handles)))
 }
 
 /// Bind a shader look to its one render owner.
@@ -320,22 +359,28 @@ fn material_for(
 fn bind_shader_render_components(
     entity: Entity,
     handle: Handle<ShaderMaterial>,
-    look: &ShaderLook,
     skybox: bool,
-    asset_server: &AssetServer,
+    materials: &Assets<ShaderMaterial>,
     commands: &mut Commands,
 ) {
+    let Some(material) = materials.get(&handle) else {
+        error!("shader material disappeared before render binding");
+        clear_shader_render_components(commands, entity);
+        lunco_core::trigger_runtime_error(
+            commands,
+            "shader-material-binding-failed",
+            "shader material disappeared before render binding",
+        );
+        return;
+    };
+    let shader = material.shader.clone();
     let mut entity_commands = commands.entity(entity);
     entity_commands.try_remove::<MeshMaterial3d<StandardMaterial>>();
     if skybox {
         entity_commands.try_remove::<MeshMaterial3d<ShaderMaterial>>();
         entity_commands.try_insert((
             ShaderLookBound,
-            crate::procedural_sky::ProceduralSkyboxMaterial::new(
-                handle,
-                &look.shader,
-                asset_server,
-            ),
+            crate::procedural_sky::ProceduralSkyboxMaterial::new(handle, shader),
         ));
     } else {
         entity_commands.try_insert((MeshMaterial3d(handle), ShaderLookBound));
@@ -403,7 +448,17 @@ fn bind_shader_look(
         }
         return;
     }
-    let handle = material_for(look, &mut cache, &mut materials, &asset_server);
+    let handle = match material_for(look, &mut cache, &mut materials, &asset_server) {
+        Ok(handle) => handle,
+        Err((stage, detail)) => {
+            clear_shader_render_components(&mut commands, e);
+            error!("shader asset admission failed: {detail}");
+            if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                record_loaded_shader_stage_failure(diagnostics, e, look, stage, detail);
+            }
+            return;
+        }
+    };
     // Appearance intent is exclusive, but USD's visual projection and this
     // observer run in different schedules. A `PbrLook` may therefore already
     // have produced its concrete material before the projection swaps to a
@@ -411,7 +466,7 @@ fn bind_shader_look(
     // material component types on one mesh submits it twice with incompatible
     // pipelines (visible as bright, serrated fragments at wheel silhouettes).
     let skybox = skyboxes.get(e).is_ok();
-    bind_shader_render_components(e, handle, look, skybox, &asset_server, &mut commands);
+    bind_shader_render_components(e, handle, skybox, &materials, &mut commands);
     apply_shadow_intent(&mut commands, e, look);
 }
 
@@ -439,8 +494,18 @@ fn bind_added_skybox_shader_look(
         }
         return;
     }
-    let handle = material_for(look, &mut cache, &mut materials, &asset_server);
-    bind_shader_render_components(e, handle, look, true, &asset_server, &mut commands);
+    let handle = match material_for(look, &mut cache, &mut materials, &asset_server) {
+        Ok(handle) => handle,
+        Err((stage, detail)) => {
+            clear_shader_render_components(&mut commands, e);
+            error!("shader asset admission failed: {detail}");
+            if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                record_loaded_shader_stage_failure(diagnostics, e, look, stage, detail);
+            }
+            return;
+        }
+    };
+    bind_shader_render_components(e, handle, true, &materials, &mut commands);
 }
 
 /// Mirror the shader look's independent cast and receive intent onto Bevy markers.
@@ -536,17 +601,68 @@ fn rebind_changed_shader_look(
                 // asset-ID cache, avoiding repeated path resolution. Textures compare slot-by-slot
                 // (`textures_match`): a TEXTURED look whose texture SET is
                 // unchanged takes the cheap param path like everything else.
-                let want_shader_id = shader_cache.shader_id(&look.shader, &asset_server);
-                let want_vertex_shader_id = look
+                let want_shader_id = match shader_cache.shader_id(&look.shader, &asset_server) {
+                    Ok(id) => id,
+                    Err(detail) => {
+                        clear_shader_render_components(&mut commands, e);
+                        error!("shader asset admission failed: {detail}");
+                        if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                            record_loaded_shader_stage_failure(
+                                diagnostics,
+                                e,
+                                look,
+                                ShaderStage::Fragment,
+                                detail,
+                            );
+                        }
+                        continue;
+                    }
+                };
+                let want_vertex_shader_id = match look
                     .vertex_shader
                     .as_deref()
-                    .map(|path| shader_cache.shader_id(path, &asset_server));
+                    .map(|path| shader_cache.shader_id(path, &asset_server))
+                    .transpose()
+                {
+                    Ok(id) => id,
+                    Err(detail) => {
+                        clear_shader_render_components(&mut commands, e);
+                        error!("shader asset admission failed: {detail}");
+                        if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                            record_loaded_shader_stage_failure(
+                                diagnostics,
+                                e,
+                                look,
+                                ShaderStage::Vertex,
+                                detail,
+                            );
+                        }
+                        continue;
+                    }
+                };
                 let structural = existing.shader.id() != want_shader_id
                     || existing.vertex_shader.as_ref().map(Handle::id) != want_vertex_shader_id
                     || !textures_match(&existing, look);
                 if structural {
+                    let handles = match shader_load_handles(look, &asset_server) {
+                        Ok(handles) => handles,
+                        Err((stage, detail)) => {
+                            clear_shader_render_components(&mut commands, e);
+                            error!("shader asset admission failed: {detail}");
+                            if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                                record_loaded_shader_stage_failure(
+                                    diagnostics,
+                                    e,
+                                    look,
+                                    stage,
+                                    detail,
+                                );
+                            }
+                            continue;
+                        }
+                    };
                     let schema = existing.schema.clone();
-                    *existing = shader_material(look, &asset_server);
+                    *existing = shader_material(look, &handles);
                     existing.set_schema(schema);
                     // The rebuild loaded the shader afresh; make the id cache agree
                     // with the material so the compare above stays quiet next tick.
@@ -575,8 +691,7 @@ fn rebind_changed_shader_look(
                         commands.entity(e).try_insert(
                             crate::procedural_sky::ProceduralSkyboxMaterial::new(
                                 handle,
-                                &look.shader,
-                                &asset_server,
+                                existing.shader.clone(),
                             ),
                         );
                     }
@@ -588,16 +703,19 @@ fn rebind_changed_shader_look(
                 continue;
             }
         }
-        let handle = material_for(look, &mut cache, &mut materials, &asset_server);
+        let handle = match material_for(look, &mut cache, &mut materials, &asset_server) {
+            Ok(handle) => handle,
+            Err((stage, detail)) => {
+                clear_shader_render_components(&mut commands, e);
+                error!("shader asset admission failed: {detail}");
+                if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                    record_loaded_shader_stage_failure(diagnostics, e, look, stage, detail);
+                }
+                continue;
+            }
+        };
         let same_material = current.is_some_and(|m| m.0.id() == handle.id());
-        bind_shader_render_components(
-            e,
-            handle.clone(),
-            look,
-            skybox,
-            &asset_server,
-            &mut commands,
-        );
+        bind_shader_render_components(e, handle.clone(), skybox, &materials, &mut commands);
         // A content-key change normally needs to clear the entity's readiness
         // latch: the replacement material may still be waiting for reflection
         // or one of its declared images. Edge-stitch updates are the important
@@ -682,11 +800,23 @@ fn validate_shader_assets_on_change(
     let mut rejections = Vec::new();
 
     for (entity, look, current, skybox) in &looks {
-        let fragment = asset_server.load::<Shader>(look.shader.clone());
-        let vertex = look
-            .vertex_shader
-            .as_ref()
-            .map(|path| asset_server.load::<Shader>(path.clone()));
+        let handles = match shader_load_handles(look, &asset_server) {
+            Ok(handles) => handles,
+            Err((stage, detail)) => {
+                error!("shader asset admission failed: {detail}");
+                findings.push(lunco_core::RuntimeDiagnostic {
+                    code: "render-shader-stage".to_owned(),
+                    severity: lunco_core::DiagnosticSeverity::Error,
+                    producer: "shader-render".to_owned(),
+                    subject: format!("entity {entity:?}"),
+                    message: format!("{stage:?} shader admission failed: {detail}"),
+                });
+                rejections.push(entity);
+                continue;
+            }
+        };
+        let fragment = handles.fragment;
+        let vertex = handles.vertex;
         let fragment_changed = changed.contains(&fragment.id());
         let vertex_changed = vertex
             .as_ref()
@@ -767,8 +897,22 @@ fn validate_shader_assets_on_change(
         let Ok((_, look, _, _)) = looks.get(entity) else {
             continue;
         };
-        let handle = material_for(look, &mut cache, &mut materials, &asset_server);
-        bind_shader_render_components(entity, handle, look, skybox, &asset_server, &mut commands);
+        let handle = match material_for(look, &mut cache, &mut materials, &asset_server) {
+            Ok(handle) => handle,
+            Err((stage, detail)) => {
+                error!("shader asset admission failed: {detail}");
+                clear_shader_render_components(&mut commands, entity);
+                findings.push(lunco_core::RuntimeDiagnostic {
+                    code: "render-shader-stage".to_owned(),
+                    severity: lunco_core::DiagnosticSeverity::Error,
+                    producer: "shader-render".to_owned(),
+                    subject: format!("entity {entity:?}"),
+                    message: format!("{stage:?} shader admission failed: {detail}"),
+                });
+                continue;
+            }
+        };
+        bind_shader_render_components(entity, handle, skybox, &materials, &mut commands);
         apply_shadow_intent(&mut commands, entity, look);
     }
     if let Some(mut diagnostics) = diagnostics {
@@ -1075,7 +1219,23 @@ fn queue_shader_look_source_reflection(
         return;
     };
     for (entity, look, current) in &changed {
-        let handle = asset_server.load::<Shader>(look.shader.clone());
+        let handle = match load_shader(&look.shader, &asset_server) {
+            Ok(handle) => handle,
+            Err(error) => {
+                commands
+                    .entity(entity)
+                    .try_remove::<ShaderLookSourceInterface>()
+                    .try_remove::<ShaderLookSourceHandle>()
+                    .try_remove::<ShaderLookSourcePending>();
+                error!("shader reflection asset admission failed: {error}");
+                lunco_core::trigger_runtime_error(
+                    &mut commands,
+                    "shader-source-admission-failed",
+                    error,
+                );
+                continue;
+            }
+        };
         if current.is_some_and(|current| current.handle.id() == handle.id()) {
             continue;
         }

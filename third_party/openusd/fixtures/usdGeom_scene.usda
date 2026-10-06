@@ -1,0 +1,336 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+    doc = "UsdGeom reader integration test fixture: covers the cross-cutting Imageable / Boundable attributes (visibility, purpose, extent, proxyPrim, kind) plus the typeName recognition used by find_geom_prims."
+)
+
+def Xform "World" (
+    kind = "assembly"
+)
+{
+    def Scope "Geometry"
+    {
+        def Mesh "Hero" (
+            kind = "component"
+        )
+        {
+            uniform token purpose = "render"
+            float3[] extent = [(-1, -1, -1), (1, 1, 1)]
+            point3f[] points = [(-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            rel proxyPrim = </World/Geometry/HeroProxy>
+        }
+
+        def Mesh "HeroProxy"
+        {
+            uniform token purpose = "proxy"
+            float3[] extent = [(-1, -1, -1), (1, 1, 1)]
+            point3f[] points = [(-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+        }
+
+        def Cube "GuideCube"
+        {
+            uniform token purpose = "guide"
+            double size = 1.0
+        }
+
+        def Sphere "InvisibleBall"
+        {
+            token visibility = "invisible"
+            double radius = 0.5
+        }
+    }
+
+    def Camera "Cam"
+    {
+        float focalLength = 50
+    }
+
+    def Camera "AuthoredCam"
+    {
+        float focalLength = 35
+        float horizontalAperture = 36
+        float verticalAperture = 24
+        float fStop = 2.8
+        float focusDistance = 10
+        token projection = "perspective"
+        float2 clippingRange = (0.1, 5000)
+        float shutter:open = -0.25
+        float shutter:close = 0.25
+        float exposure = 1.5
+        token stereoRole = "left"
+    }
+
+    def Camera "OrthoCam"
+    {
+        token projection = "orthographic"
+    }
+
+    def Xform "Hidden" (
+        kind = "group"
+    )
+    {
+        token visibility = "invisible"
+
+        def Sphere "HiddenChild"
+        {
+            # No directly-authored visibility — should inherit `invisible`
+            # via compute_visibility's ancestor walk.
+            double radius = 1.0
+        }
+    }
+
+    # Untyped prim that still authors an Imageable opinion. Exercises
+    # find_geom_prims' fallback path for unknown Imageable subclasses.
+    def "CustomImageable"
+    {
+        token visibility = "invisible"
+        uniform token purpose = "guide"
+    }
+
+    def Xform "TRS"
+    {
+        # Standard translate / rotateY / scale stack. Per xformOpOrder
+        # semantics, the last-listed op (scale) is most local and is
+        # applied first to a point; the first-listed op (translate) is
+        # applied last.
+        double3 xformOp:translate = (1, 2, 3)
+        float xformOp:rotateY = 90
+        float3 xformOp:scale = (2, 2, 2)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateY", "xformOp:scale"]
+    }
+
+    def Xform "Detached"
+    {
+        # `!resetXformStack!` opts the prim out of inheriting any
+        # ancestor transform.
+        double3 xformOp:translate = (10, 0, 0)
+        uniform token[] xformOpOrder = ["!resetXformStack!", "xformOp:translate"]
+    }
+
+    def Xform "MatrixOp"
+    {
+        # Single-op matrix transform.
+        matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (5, 6, 7, 1) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+
+    def Xform "Inverted"
+    {
+        # `!invert!` applies the inverse of the named op.
+        double3 xformOp:translate = (4, 0, 0)
+        uniform token[] xformOpOrder = ["!invert!xformOp:translate"]
+    }
+
+    def Xform "EulerXYZ"
+    {
+        # Pixar's `rotateXYZ` composes as `Rx · Ry · Rz` (per pxr/usd/usdGeom/xformOp.cpp).
+        # In row-vector convention `v · M`, the leftmost matrix applies first to v.
+        # So rotateXYZ(0, 90, 0) applies Ry(90°) to v (since Rx(0) and Rz(0) are identity).
+        # Ry(90°) takes +X to -Z.
+        float3 xformOp:rotateXYZ = (0, 90, 0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "DoubleTranslate"
+    {
+        double3 xformOp:translate = (16777217, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "DoubleScale"
+    {
+        double3 xformOp:scale = (16777217, 1, 1)
+        uniform token[] xformOpOrder = ["xformOp:scale"]
+    }
+
+    def Xform "DoubleScalarOps"
+    {
+        double xformOp:translateX = 16777217
+        double xformOp:scaleY = 16777217
+        uniform token[] xformOpOrder = ["xformOp:translateX", "xformOp:scaleY"]
+    }
+
+    def Xform "DoubleOrient"
+    {
+        quatd xformOp:orient = (0.7071067811865476, 0, 0, 0.7071067811865475)
+        uniform token[] xformOpOrder = ["xformOp:orient"]
+    }
+
+    def Scope "Shapes"
+    {
+        def Cube "AuthoredCube"
+        {
+            double size = 3.0
+        }
+
+        def Cube "DefaultCube"
+        {
+        }
+
+        def Sphere "Ball"
+        {
+            double radius = 4.5
+        }
+
+        def Cylinder "Pipe"
+        {
+            double radius = 0.25
+            double height = 2.0
+            uniform token axis = "Y"
+        }
+
+        def Capsule "Pill"
+        {
+            double radius = 0.1
+            double height = 0.5
+            uniform token axis = "X"
+        }
+
+        def Cone "Pyramid"
+        {
+            double radius = 1.5
+            double height = 4.0
+            # axis unauthored → defaults to Z.
+        }
+
+        def Plane "Ground"
+        {
+            double width = 10.0
+            double length = 8.0
+            uniform token axis = "Y"
+        }
+    }
+
+    def Mesh "FancyMesh"
+    {
+        # A quad with displayColor + UVs + a faceVertexCount-of-4 face.
+        # GeomSubset child partitions the (single) face into a
+        # material-bind family for downstream binding.
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+            interpolation = "vertex"
+        )
+        texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (
+            interpolation = "faceVarying"
+        )
+        color3f[] primvars:displayColor = [(1, 0, 0)] (
+            interpolation = "constant"
+        )
+        bool doubleSided = 1
+        uniform token orientation = "leftHanded"
+        uniform token subdivisionScheme = "none"
+        uniform token interpolateBoundary = "edgeAndCorner"
+        int[] cornerIndices = [0, 2]
+        float[] cornerSharpnesses = [10, 5]
+        int[] creaseIndices = [0, 1, 1, 2]
+        int[] creaseLengths = [2, 2]
+        float[] creaseSharpnesses = [3, 4]
+        int[] holeIndices = []
+        float3[] extent = [(0, 0, 0), (1, 1, 0)]
+        vector3f[] velocities = [(0, 0, 0), (0.1, 0, 0), (0, 0.1, 0), (0, 0, 0)]
+
+        def GeomSubset "Front"
+        {
+            uniform token familyName = "materialBind"
+            uniform token elementType = "face"
+            int[] indices = [0]
+        }
+    }
+
+    def Mesh "FallbackMesh"
+    {
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        texCoord2f[] primvars:st = [(0.5, 0.25)]
+    }
+
+    def Scope "Curves"
+    {
+        def BasisCurves "Linear"
+        {
+            point3f[] points = [(0, 0, 0), (1, 0, 0), (2, 0, 0), (3, 0, 0)]
+            int[] curveVertexCounts = [4]
+            uniform token type = "linear"
+            uniform token wrap = "nonperiodic"
+            float[] widths = [0.1, 0.1, 0.1, 0.1]
+        }
+
+        def NurbsCurves "Smooth"
+        {
+            point3f[] points = [(0, 0, 0), (1, 1, 0), (2, 0, 0), (3, 1, 0)]
+            int[] curveVertexCounts = [4]
+            int[] order = [4]
+            double[] knots = [0, 0, 0, 0, 1, 1, 1, 1]
+            double[] pointWeights = [1.0, 0.7071068, 0.7071068, 1.0]
+        }
+
+        def NurbsPatch "Sheet"
+        {
+            point3f[] points = [
+                (0, 0, 0), (1, 0, 0), (2, 0, 0), (3, 0, 0),
+                (0, 1, 0), (1, 1, 1), (2, 1, 1), (3, 1, 0),
+                (0, 2, 0), (1, 2, 1), (2, 2, 1), (3, 2, 0),
+                (0, 3, 0), (1, 3, 0), (2, 3, 0), (3, 3, 0),
+            ]
+            int uVertexCount = 4
+            int vVertexCount = 4
+            int uOrder = 4
+            int vOrder = 4
+            double[] uKnots = [0, 0, 0, 0, 1, 1, 1, 1]
+            double[] vKnots = [0, 0, 0, 0, 1, 1, 1, 1]
+            uniform token uForm = "periodic"
+            # vForm unauthored — defaults to "open" per Pixar.
+        }
+
+        def HermiteCurves "Hairs"
+        {
+            point3f[] points = [(0, 0, 0), (0, 1, 0), (1, 0, 0), (1, 1, 0)]
+            vector3f[] tangents = [(0, 1, 0), (0, 1, 0), (0, 1, 0), (0, 1, 0)]
+            int[] curveVertexCounts = [2, 2]
+        }
+
+        def Points "Cloud"
+        {
+            point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+            float[] widths = [0.05, 0.05, 0.05]
+            int64[] ids = [10, 20, 30]
+        }
+
+        def TetMesh "Soft"
+        {
+            point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 1)]
+            int[] tetVertexIndices = [0, 1, 2, 3, 1, 2, 3, 4]
+        }
+    }
+
+    def Scope "InstancerScope"
+    {
+        def Xform "Proto"
+        {
+            def Cube "Marker"
+            {
+                double size = 0.5
+            }
+        }
+
+        def PointInstancer "Stars"
+        {
+            rel prototypes = [</World/InstancerScope/Proto>]
+            int[] protoIndices = [0, 0, 0, 0]
+            point3f[] positions = [(0, 0, 0), (1, 0, 0), (2, 0, 0), (3, 0, 0)]
+            float3[] scales = [(1, 1, 1), (2, 2, 2), (1, 1, 1), (0.5, 0.5, 0.5)]
+            int64[] ids = [100, 200, 300, 400]
+            int64[] invisibleIds = [300]
+            vector3f[] velocities = [(0, 0, 0), (0.1, 0, 0), (0, 0.1, 0), (0, 0, 0.1)]
+        }
+    }
+}

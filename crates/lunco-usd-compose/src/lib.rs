@@ -10,7 +10,9 @@ mod resolver;
 
 pub mod recipe;
 
-use recipe::{StageClosureLimits, StageDependencyDiagnostic};
+use recipe::StageClosureLimits;
+#[cfg(not(target_arch = "wasm32"))]
+use recipe::StageDependencyDiagnostic;
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
@@ -347,6 +349,84 @@ pub fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scalar_asset_identifiers_follow_the_strongest_contributing_layer() {
+        let root = "twin://fixture/scenes/root.usda";
+        let child = "twin://fixture/scenes/parts/child.usda";
+        let bytes = std::collections::HashMap::from([
+            (
+                root.to_owned(),
+                br#"#usda 1.0
+                def Scope "Instance" (prepend references = @parts/child.usda@</Source>) {
+                    asset override = @parent.png@
+                    asset blocked = None
+                }
+            "#
+                .to_vec(),
+            ),
+            (
+                child.to_owned(),
+                br#"#usda 1.0
+                (expressionVariables = { string NAME = "image" })
+                def Scope "Source" {
+                    asset image = @textures/image # %.png@
+                    asset override = @child.png@
+                    asset blocked = @blocked.png@
+                    asset[] images = [@textures/a.png@, @textures/missing.png@]
+                    asset expression = @`"textures/${NAME}.png"`@
+                    asset binary = @meshes/model.glb@
+                }
+            "#
+                .to_vec(),
+            ),
+        ]);
+        let stage = Stage::builder()
+            .resolver(LuncoUsdResolver::new(bytes).unwrap())
+            .open(root)
+            .unwrap();
+        let asset = |name: &str| {
+            stage
+                .attribute(openusd::sdf::Path::new(&format!("/Instance.{name}")).unwrap())
+                .get::<openusd::sdf::AssetPath>()
+                .unwrap()
+        };
+        let image = asset("image").unwrap();
+        assert_eq!(image.as_str(), "textures/image # %.png");
+        assert_eq!(
+            image.canonical_identifier(),
+            Some("twin://fixture/scenes/parts/textures/image # %.png")
+        );
+        assert_eq!(
+            image.resolved_path(),
+            None,
+            "identity does not require payload existence"
+        );
+        assert_eq!(
+            asset("override").unwrap().canonical_identifier(),
+            Some("twin://fixture/scenes/parent.png")
+        );
+        assert_eq!(asset("blocked"), None);
+        let images = stage
+            .attribute(openusd::sdf::Path::new("/Instance.images").unwrap())
+            .get::<Vec<openusd::sdf::AssetPath>>()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            images[1].canonical_identifier(),
+            Some("twin://fixture/scenes/parts/textures/missing.png")
+        );
+        let expression = asset("expression").unwrap();
+        assert_eq!(expression.as_str(), "`\"textures/${NAME}.png\"`");
+        assert_eq!(
+            expression.canonical_identifier(),
+            Some("twin://fixture/scenes/parts/textures/image.png")
+        );
+        assert_eq!(
+            asset("binary").unwrap().canonical_identifier(),
+            Some("twin://fixture/scenes/parts/meshes/model.glb")
+        );
+    }
 
     #[test]
     fn child_layer_ids_normalize_windows_separators_in_twin_uris() {

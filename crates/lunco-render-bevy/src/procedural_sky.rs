@@ -63,15 +63,8 @@ pub(crate) struct ProceduralSkyboxMaterial {
 }
 
 impl ProceduralSkyboxMaterial {
-    pub(crate) fn new(
-        material: Handle<super::ShaderMaterial>,
-        shader_path: &str,
-        asset_server: &AssetServer,
-    ) -> Self {
-        Self {
-            material,
-            shader: asset_server.load(shader_path.to_owned()),
-        }
+    pub(crate) fn new(material: Handle<super::ShaderMaterial>, shader: Handle<Shader>) -> Self {
+        Self { material, shader }
     }
 }
 

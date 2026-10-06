@@ -1826,52 +1826,13 @@ fn bridge_usd_dem_terrain(
                 commands.entity(prior).try_despawn();
             }
         }
-        // Directory of the scene asset this prim came from (e.g.
-        // `twins/moonbase`), used to resolve a relative `demSource` when NO
-        // Twin is open — the web autoload path (LoadScene from the staged asset
-        // tree) has no `twin://` root, so the DEM is resolved against the
-        // scene's own folder instead. `None` for in-memory stages.
         let asset_path = asset_server.get_path(id);
-        // The root a relative `demSource` resolves against is the root the SCENE
-        // itself came from. Every twin — local or downloaded — is addressed
-        // `twin://<name>/<rel>`, and `TwinRoots` maps that name to wherever THIS
-        // peer keeps the bytes (a checkout, or a downloaded scenario's cache dir).
-        // So one lookup covers both, with no per-origin flag and no `#[cfg]`.
-        let scene_dir = asset_path
-            .as_ref()
-            .and_then(|p| p.path().parent().map(|d| d.to_path_buf()));
-        let scene_twin_name = asset_path.as_ref().and_then(|p| {
-            matches!(p.source(), bevy::asset::io::AssetSourceId::Name(_)).then(|| {
-                p.path()
-                    .components()
-                    .next()
-                    .and_then(|c| c.as_os_str().to_str())
-                    .map(str::to_owned)
-            })?
-        });
-        let scene_root = asset_path
-            .as_ref()
-            .filter(|p| matches!(p.source(), bevy::asset::io::AssetSourceId::Name(_)))
-            .and_then(|p| p.path().components().next())
-            .and_then(|c| c.as_os_str().to_str())
-            .and_then(|name| match twins.root_of(name) {
-                Ok(root) => root,
-                Err(error) => {
-                    error!("[usd-dem] Twin root lookup failed for '{name}': {error}");
-                    None
-                }
-            })
-            // A scene with no source root (the web autoload path loads from the
-            // staged `assets/` tree) resolves against its own folder. That is the
-            // scene's real location, not a guess about which twin is open.
-            .or_else(|| scene_dir.clone());
         bridge_dem_prim_read(
             &reader,
             entity,
             prim_path,
             &sdf,
-            scene_root.as_deref(),
-            scene_twin_name.as_deref(),
+            asset_path.as_ref(),
             &twins,
             &datasets,
             &registry,
@@ -1894,8 +1855,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
     entity: Entity,
     prim_path: &lunco_usd_bevy_scene::UsdPrimPath,
     sdf: &openusd::sdf::Path,
-    scene_root: Option<&std::path::Path>,
-    scene_twin_name: Option<&str>,
+    origin: Option<&bevy::asset::AssetPath<'_>>,
     twins: &lunco_assets_core::twin_source::TwinRoots,
     datasets: &lunco_assets_datasets::DatasetRegistry,
     registry: &lunco_terrain_surface::TerrainLayerParserRegistry,
@@ -1964,27 +1924,63 @@ fn bridge_dem_prim_read<R: UsdRead>(
     // several ways to be silently wrong, and the bare half collided with core USD
     // (`size`). The namespace split is now by prim: a LAYER prim carries
     // `lunco:layer:*`, the terrain SURFACE carries `lunco:terrain:*`.
-    use lunco_terrain_surface::LayerAttrSource;
     let dem_attrs = dem_layer_sdf.as_ref().map(|d| UsdLayerAttrs {
         reader,
         sdf: d.clone(),
         ns: NS_LAYER,
     });
-    let rel = dem_attrs.as_ref().and_then(|a| a.get_asset("demSource"));
-    let Some(rel) = rel else {
-        warn!(
-            "[usd-dem] prim {} is a DEM terrain but has no dem-layer demSource",
-            prim_path.path
-        );
+    let Some(dem_layer) = dem_layer_sdf.as_ref() else {
+        warn!("[usd-dem] prim {} has no DEM layer", prim_path.path);
         return;
     };
-
+    let identifier = match reader.asset_identifier(dem_layer, "lunco:layer:demSource") {
+        Ok(Some(identifier)) if !identifier.is_empty() => identifier,
+        Ok(_) => {
+            warn!(
+                "[usd-dem] prim {} has no dem-layer demSource",
+                prim_path.path
+            );
+            return;
+        }
+        Err(error) => {
+            warn!("[usd-dem] source rejected: {error}");
+            lunco_core::trigger_runtime_error(
+                commands,
+                "usd-dem-source-rejected",
+                error.to_string(),
+            );
+            return;
+        }
+    };
+    let address = match lunco_assets_core::asset_path::load_asset_path(
+        &identifier,
+        origin,
+        Some(twins),
+        reader.native_asset_paths(),
+    ) {
+        Ok(address) => address,
+        Err(error) => {
+            warn!("[usd-dem] source rejected: {error}");
+            lunco_core::trigger_runtime_error(
+                commands,
+                "usd-dem-source-rejected",
+                error.to_string(),
+            );
+            return;
+        }
+    };
+    let address = if address.source() == &bevy::asset::io::AssetSourceId::Default {
+        address.with_source(lunco_assets_core::LUNCO_SCHEME)
+    } else {
+        address
+    };
+    let uri = address.to_string();
     // A Twin manifest is the authoritative declaration for a downloadable
     // delivered artifact. Wait for its scan before deciding whether this
     // source is available; an unscanned scope means "not known yet", not
     // "missing". Once scanned, a declared-but-uninstalled product becomes a
     // pending projection rather than a fake terrain build with no ready input.
-    if let Some(name) = scene_twin_name {
+    if let Some((name, relative)) = lunco_assets_core::parse_twin_uri(&uri) {
         let root = match twins.root_of(name) {
             Ok(Some(root)) => root,
             Ok(None) => {
@@ -2007,7 +2003,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
                 .try_insert(DemDatasetScanPending::new(scope));
             return;
         }
-        if let Some(entry) = datasets.declared_artifact(&scope, std::path::Path::new(&rel)) {
+        if let Some(entry) = datasets.declared_artifact(&scope, std::path::Path::new(relative)) {
             if !entry.state.is_installed() {
                 let detail = format!(
                     "Terrain data '{}' is not installed. Choose Download in Twin resources to continue.",
@@ -2030,43 +2026,8 @@ fn bridge_dem_prim_read<R: UsdRead>(
         }
     }
 
-    // Resolve the processed DEM site directory through the asset boundary.
-    //
-    // `demSource` is relative to the root the SCENE came from. Named Twin scenes
-    // resolve through `TwinRoots`, whose canonical resolver checks the authored
-    // tree and then the Twin cache; an autoloaded scene with no Twin authority
-    // uses `scene_root` directly. Both paths preserve the scene's own asset
-    // identity rather than consulting whichever Twin happens to be open.
-    //
-    // Deliberately NO fallback to "whichever twin is open": a client usually has
-    // an unrelated local twin open, which would capture the lookup and resolve a
-    // downloaded twin's DEM under the wrong root.
-    //
-    // Native yields an absolute directory path; the web autoload path stays
-    // cache/asset-relative, which is what the wasm DEM reader probes against OPFS.
-    let Some(root) = scene_root else {
-        warn!("[usd-dem] cannot resolve DEM source '{rel}': the scene has no root directory");
-        return;
-    };
-    // Named Twin scenes resolve through the asset boundary, which checks the
-    // authored tree before the Twin's `.cache`. A direct `root.join(rel)` would
-    // miss downloaded Twin assets and force every scene to author `.cache`.
-    let uri = if let Some(name) = scene_twin_name {
-        let path = match twins.resolve_directory(name, std::path::Path::new(&rel)) {
-            Ok(Some(path)) => path,
-            Ok(None) => {
-                warn!("[usd-dem] cannot resolve DEM source '{rel}' for Twin '{name}'");
-                return;
-            }
-            Err(error) => {
-                error!("[usd-dem] Twin asset lookup failed for '{name}/{rel}': {error}");
-                return;
-            }
-        };
-        lunco_assets_path::slashed(path)
-    } else {
-        lunco_assets_path::slashed(root.join(&rel))
-    };
+    // Directory lookup and heightmap reads run in the existing terrain worker.
+    // The request retains the canonical contributing-layer address unchanged.
     let window_m = match dem_attrs
         .as_ref()
         .map(|a| a.authored_f32("windowM"))
@@ -2249,7 +2210,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
         );
     }
     debug!(
-        "[usd-dem] bridged layered terrain prim {} → DEM '{rel}' (target_res {target_res}, \
+        "[usd-dem] bridged layered terrain prim {} → DEM '{identifier}' (target_res {target_res}, \
          lod_viz {lod_viz}, collider_ring {collider_ring}, {layer_count} composed layer(s))",
         prim_path.path
     );
@@ -2411,7 +2372,7 @@ mod dem_bridge_tests {
              {extra}\
              \x20   def Xform \"ground\"\n    {{\n\
              \x20       token lunco:layer = \"dem\"\n\
-             \x20       asset lunco:layer:demSource = @site/heightmap.tif@\n\
+             \x20       asset lunco:layer:demSource = @site@\n\
              {layer_extra}\
              \x20   }}\n}}\n"
         )
@@ -2573,8 +2534,11 @@ def Xform \"Traverse\"\n{\n}\n"
     fn bridge_with_spec(
         scene: &str,
     ) -> (World, Entity, lunco_obstacle_field::spec::ObstacleFieldSpec) {
-        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", scene))
-            .expect("stage builds");
+        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source(
+            "lunco://fixture/scene.usda",
+            scene,
+        ))
+        .expect("stage builds");
         let view = cs.view();
         let registry = lunco_terrain_surface::TerrainLayerParserRegistry::default();
         let mut spec = lunco_obstacle_field::spec::ObstacleFieldSpec::default();
@@ -2593,7 +2557,6 @@ def Xform \"Traverse\"\n{\n}\n"
                 entity,
                 &prim_path,
                 &sdf,
-                Some(std::path::Path::new("/twin/moonbase")),
                 None,
                 &lunco_assets_core::twin_source::TwinRoots::default(),
                 &lunco_assets_datasets::DatasetRegistry::default(),
@@ -2609,13 +2572,14 @@ def Xform \"Traverse\"\n{\n}\n"
     #[test]
     fn twin_dem_remains_scan_pending_until_its_manifest_scope_is_ready() {
         let scene = dem_scene("", "");
-        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", &scene))
-            .expect("stage builds");
-        let view = cs.view();
         let twin_roots = lunco_assets_core::twin_source::TwinRoots::default();
         let twin_name = twin_roots
             .register("manifest-scan-fixture", std::env::temp_dir())
             .expect("temporary root is available");
+        let root = lunco_assets_core::twin_uri(&twin_name, "scene.usda");
+        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source(root, &scene))
+            .expect("stage builds");
+        let view = cs.view();
         let datasets = lunco_assets_datasets::DatasetRegistry::default();
         let registry = lunco_terrain_surface::TerrainLayerParserRegistry::default();
         let mut spec = lunco_obstacle_field::spec::ObstacleFieldSpec::default();
@@ -2634,8 +2598,7 @@ def Xform \"Traverse\"\n{\n}\n"
                 entity,
                 &prim_path,
                 &sdf,
-                Some(&std::env::temp_dir()),
-                Some(&twin_name),
+                None,
                 &twin_roots,
                 &datasets,
                 &registry,
@@ -2722,8 +2685,8 @@ def Xform \"Traverse\"\n{\n}\n"
         assert_eq!(req.collider.max_depth, 7);
         assert_eq!(req.collider.tile_resolution, 33);
         assert!(
-            req.uri.ends_with("site/heightmap.tif") && req.uri.starts_with("/twin/moonbase"),
-            "demSource resolves against the scene root, got `{}`",
+            req.uri == "lunco://fixture/site",
+            "demSource retains its composed directory identifier, got `{}`",
             req.uri
         );
         // Defaults: lodViz unauthored ⇒ streaming ON.

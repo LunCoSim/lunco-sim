@@ -1,0 +1,276 @@
+use std::borrow::Borrow;
+use std::hash::{Hash, Hasher};
+use std::ops::Deref;
+
+/// A reference to an external asset — the value of an `asset` attribute or
+/// metadatum, authored in `@...@` syntax.
+///
+/// This is the Rust analog of USD's
+/// [`SdfAssetPath`](https://openusd.org/release/api/class_sdf_asset_path.html).
+/// It carries the authored path always, plus — once value resolution has
+/// processed it — the evaluated path (the authored path with its
+/// `expressionVariables` substituted) and the resolved path (the result of
+/// anchoring and resolving the evaluated path).
+///
+/// As layer data an asset path holds only its authored path; the evaluated and
+/// resolved paths are filled in by value resolution
+/// ([`Attribute::get`](crate::usd::Attribute::get)), which evaluates any
+/// variable expression and anchors the result to the layer of the strongest
+/// opinion. Identity — equality, hashing, and ordering — is therefore the
+/// authored path alone; the evaluated and resolved paths are derived
+/// annotations that do not affect it (this differs from C++ `operator==`,
+/// which compares all three).
+///
+/// The string-like traits ([`Deref`] to `str`, [`AsRef`], [`Borrow`],
+/// [`Display`](std::fmt::Display), and `PartialEq` against string types) let
+/// it stand in for its authored path: `&asset` coerces to `&str`, and
+/// `asset == "foo.usd"` compares directly.
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(transparent))]
+pub struct AssetPath {
+    /// The path as authored in the layer, before expression evaluation or
+    /// asset resolution.
+    pub authored_path: String,
+    /// The authored path with its variable expression evaluated, set by value
+    /// resolution; `None` when the authored path is not an expression or has
+    /// not been evaluated (e.g. raw layer data). A derived annotation, not
+    /// serialized.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    evaluated_path: Option<String>,
+    /// The result of asset resolution, set by value resolution; `None` for an
+    /// asset path that has not been resolved (e.g. raw layer data). A derived
+    /// annotation, not serialized.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    resolved_path: Option<String>,
+    /// Canonical identifier anchored to the contributing layer. This derived
+    /// annotation is independent of payload existence and is not serialized.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    canonical_identifier: Option<String>,
+}
+
+impl AssetPath {
+    /// Creates an asset path from its authored path string, with no resolved
+    /// path yet.
+    pub fn new(authored_path: impl Into<String>) -> Self {
+        Self {
+            authored_path: authored_path.into(),
+            evaluated_path: None,
+            resolved_path: None,
+            canonical_identifier: None,
+        }
+    }
+
+    /// Creates an asset path with both its authored and resolved paths set
+    /// (C++ `SdfAssetPath(authoredPath, resolvedPath)`).
+    pub fn with_resolved_path(authored_path: impl Into<String>, resolved_path: impl Into<String>) -> Self {
+        Self {
+            authored_path: authored_path.into(),
+            evaluated_path: None,
+            resolved_path: Some(resolved_path.into()),
+            canonical_identifier: None,
+        }
+    }
+
+    /// Borrows the authored path, before expression evaluation or resolution.
+    pub fn as_str(&self) -> &str {
+        &self.authored_path
+    }
+
+    /// The path used as input to asset resolution: the evaluated path if value
+    /// resolution has substituted an expression, otherwise the authored path
+    /// (C++ `GetAssetPath`).
+    pub fn asset_path(&self) -> &str {
+        self.evaluated_path.as_deref().unwrap_or(&self.authored_path)
+    }
+
+    /// The authored path with its variable expression evaluated, if value
+    /// resolution has set it, else `None` (C++ `GetEvaluatedPath`).
+    pub fn evaluated_path(&self) -> Option<&str> {
+        self.evaluated_path.as_deref()
+    }
+
+    /// Sets the evaluated path (C++ `SetEvaluatedPath`).
+    pub fn set_evaluated_path(&mut self, evaluated_path: impl Into<String>) {
+        self.evaluated_path = Some(evaluated_path.into());
+    }
+
+    /// The resolved path if value resolution has set it, else `None`
+    /// (C++ `GetResolvedPath`).
+    pub fn resolved_path(&self) -> Option<&str> {
+        self.resolved_path.as_deref()
+    }
+
+    /// Sets the resolved path (C++ `SetResolvedPath`).
+    pub fn set_resolved_path(&mut self, resolved_path: impl Into<String>) {
+        self.resolved_path = Some(resolved_path.into());
+    }
+
+    /// The canonical identifier computed for the strongest default opinion.
+    /// Raw and time-sampled values have no identifier until their contributing
+    /// layer context is supplied by value resolution.
+    pub fn canonical_identifier(&self) -> Option<&str> {
+        self.canonical_identifier.as_deref()
+    }
+
+    /// Record an identifier produced by the resolver with its layer anchor.
+    pub fn set_canonical_identifier(&mut self, identifier: impl Into<String>) {
+        self.canonical_identifier = Some(identifier.into());
+    }
+
+    /// Returns `true` if the authored path is empty.
+    pub fn is_empty(&self) -> bool {
+        self.authored_path.is_empty()
+    }
+
+    /// Consumes the asset path, returning the owned authored path string.
+    pub fn into_string(self) -> String {
+        self.authored_path
+    }
+}
+
+// Identity is the authored path alone; the resolved path is a derived cache.
+impl PartialEq for AssetPath {
+    fn eq(&self, other: &Self) -> bool {
+        self.authored_path == other.authored_path
+    }
+}
+
+impl Eq for AssetPath {}
+
+impl Hash for AssetPath {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.authored_path.hash(state);
+    }
+}
+
+impl PartialOrd for AssetPath {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for AssetPath {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.authored_path.cmp(&other.authored_path)
+    }
+}
+
+impl Deref for AssetPath {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.authored_path
+    }
+}
+
+impl AsRef<str> for AssetPath {
+    fn as_ref(&self) -> &str {
+        &self.authored_path
+    }
+}
+
+impl Borrow<str> for AssetPath {
+    fn borrow(&self) -> &str {
+        &self.authored_path
+    }
+}
+
+impl std::fmt::Display for AssetPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.authored_path)
+    }
+}
+
+impl From<String> for AssetPath {
+    fn from(authored_path: String) -> Self {
+        Self::new(authored_path)
+    }
+}
+
+impl From<&str> for AssetPath {
+    fn from(authored_path: &str) -> Self {
+        Self::new(authored_path)
+    }
+}
+
+impl From<AssetPath> for String {
+    fn from(asset: AssetPath) -> Self {
+        asset.authored_path
+    }
+}
+
+impl PartialEq<str> for AssetPath {
+    fn eq(&self, other: &str) -> bool {
+        self.authored_path == other
+    }
+}
+
+impl PartialEq<&str> for AssetPath {
+    fn eq(&self, other: &&str) -> bool {
+        self.authored_path == *other
+    }
+}
+
+impl PartialEq<String> for AssetPath {
+    fn eq(&self, other: &String) -> bool {
+        self.authored_path == *other
+    }
+}
+
+impl PartialEq<AssetPath> for str {
+    fn eq(&self, other: &AssetPath) -> bool {
+        other.authored_path == *self
+    }
+}
+
+impl PartialEq<AssetPath> for &str {
+    fn eq(&self, other: &AssetPath) -> bool {
+        other.authored_path == *self
+    }
+}
+
+impl PartialEq<AssetPath> for String {
+    fn eq(&self, other: &AssetPath) -> bool {
+        other.authored_path == *self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn derived_identifier_not_serialized() {
+        let mut asset = AssetPath::new("./image # %.png");
+        asset.set_canonical_identifier("twin://mount/child/image # %.png");
+        asset.set_resolved_path("transport-only");
+        assert_eq!(asset, AssetPath::new("./image # %.png"));
+        assert_eq!(serde_json::to_string(&asset).unwrap(), "\"./image # %.png\"");
+        let decoded: AssetPath = serde_json::from_str(&serde_json::to_string(&asset).unwrap()).unwrap();
+        assert_eq!(decoded.as_str(), asset.as_str());
+        assert_eq!(decoded.canonical_identifier(), None);
+        assert_eq!(decoded.resolved_path(), None);
+    }
+
+    #[test]
+    fn string_like() {
+        let asset = AssetPath::new("./tex.png");
+
+        // Deref / AsRef coercion to &str.
+        assert_eq!(asset.len(), "./tex.png".len());
+        assert!(asset.ends_with(".png"));
+        assert_eq!(asset.as_ref() as &str, "./tex.png");
+
+        // Direct comparison against string types, both orderings.
+        assert_eq!(asset, "./tex.png");
+        assert_eq!("./tex.png", asset);
+        assert_eq!(asset, String::from("./tex.png"));
+
+        assert_eq!(asset.to_string(), "./tex.png");
+        assert_eq!(String::from(asset), "./tex.png");
+
+        assert!(!AssetPath::new("./tex.png").is_empty());
+        assert!(AssetPath::default().is_empty());
+    }
+}

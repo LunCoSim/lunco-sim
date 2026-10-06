@@ -203,7 +203,6 @@ impl LuncoUsdResolver {
 impl ar::Resolver for LuncoUsdResolver {
     fn create_identifier(&self, asset_path: &str, anchor: Option<&ResolvedPath>) -> String {
         match canonicalize_at(asset_path, anchor) {
-            Ok(id) if is_binary_asset(&id) => BINARY_STUB_ID.to_string(),
             Ok(id) => id,
             Err(error) => {
                 // The trait cannot return an error. Retain the authored spelling
@@ -227,7 +226,9 @@ impl ar::Resolver for LuncoUsdResolver {
         {
             return None;
         }
-        if asset_path == BINARY_STUB_ID || self.bytes.borrow().contains_key(asset_path) {
+        if is_binary_asset(asset_path) {
+            Some(ResolvedPath::new(BINARY_STUB_ID))
+        } else if asset_path == BINARY_STUB_ID || self.bytes.borrow().contains_key(asset_path) {
             Some(ResolvedPath::new(asset_path))
         } else {
             None

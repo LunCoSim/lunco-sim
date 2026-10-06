@@ -21,11 +21,11 @@ pub struct SolarSystemRoot;
 
 /// A body map authored on a celestial body prim.
 ///
-/// The value remains the authored asset reference. Resolution and loading are
-/// owned by the asset layer and the runtime adapter that consumes this fact.
+/// The value is the admitted canonical load address. The USD owner preserves
+/// the authored value separately and supplies the contributing layer's origin.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct AuthoredBodyAlbedo {
-    /// Asset reference exactly as authored.
+    /// Canonical logical address prepared for this scene revision.
     pub asset: String,
 }
 

@@ -1,0 +1,27 @@
+#usda 1.0
+(
+    defaultPrim = "Smoke"
+)
+
+def Volume "Smoke"
+{
+    rel field:density = </Smoke/density>
+    rel field:temperature = </Smoke/temperature>
+
+    def OpenVDBAsset "density"
+    {
+        asset filePath = @./smoke.vdb@
+        token fieldName = "density"
+        int fieldIndex = 0
+        token fieldDataType = "float"
+        token fieldClass = "fogVolume"
+    }
+
+    def Field3DAsset "temperature"
+    {
+        asset filePath = @./smoke.f3d@
+        token fieldName = "temperature"
+        token fieldDataType = "float"
+        token fieldPurpose = "heat"
+    }
+}

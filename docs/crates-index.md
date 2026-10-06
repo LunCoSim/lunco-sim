@@ -101,6 +101,11 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 ## 4. USD Integration Layer
 Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation metadata, and materials.
 
+OpenUSD is the pinned maintained owner in `third_party/openusd`, selected by the
+workspace registry/Git patches. Its provenance file records revision/license and
+the derived strongest-default asset identifier. Composed I/O consumers use that
+identifier; authored bytes and serialization retain their original values.
+
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-usd-document`** | Headless authored OpenUSD document/layer lifecycle and typed operation substrate: `UsdDocument`, layer identity, edit history, and document state. No runtime, physics, rendering, or UI. |

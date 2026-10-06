@@ -6,6 +6,7 @@ license.workspace = true
 description = "Render-free USD celestial and link-component projection for LunCoSim"
 
 [dependencies]
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy = { workspace = true, features = ["bevy_asset"] }
 openusd = { workspace = true }

@@ -129,7 +129,8 @@ compliance suite (shipped Dec 2025).
 USD implementation** (our fork). A conformance suite is the only systematic
 answer to "does our composition match Pixar's"; everything today is
 spot-checked. Findings are fixed in the fork
-(`../openusd`, pull first), never worked around in LunCo.
+(the pinned source in `third_party/openusd`, with revision/license in
+`LUNCOSIM-PROVENANCE.md`), never worked around in LunCo.
 
 **Scope:** medium; mostly harness work, then a burn-down of findings.
 

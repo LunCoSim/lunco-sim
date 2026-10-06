@@ -127,7 +127,7 @@ const MAX_IMAGERY_ATTEMPTS: u8 = 3;
 /// sample the same texels.
 fn load_body_image(
     asset_server: &AssetServer,
-    path: impl Into<bevy::asset::AssetPath<'static>>,
+    path: bevy::asset::AssetPath<'static>,
 ) -> Handle<Image> {
     asset_server
         .load_builder()
@@ -256,7 +256,19 @@ pub(crate) fn adopt_authored_body_albedo(
             .iter()
             .any(|r| r.naif_id == decl.naif && r.dataset_key == albedo.asset)
         {
-            let image = load_body_image(&asset_server, albedo.asset.clone());
+            let path = match lunco_assets_core::asset_path::load_asset_path(
+                &albedo.asset,
+                None,
+                None,
+                None,
+            ) {
+                Ok(path) => path,
+                Err(error) => {
+                    error!("[celestial] authored imagery rejected: {error}");
+                    continue;
+                }
+            };
+            let image = load_body_image(&asset_server, path);
             // If the globe appeared after the asset event, capture the already
             // resident asset once; steady state is driven by AssetEvent<Image].
             if images.get(image.id()).is_some() {
@@ -438,10 +450,22 @@ pub(crate) fn bind_dataset_body_imagery(
         // The URI, not the path: `lunco://` searches the packed cache and the
         // shared pool in turn, so this one string resolves the same whether the
         // file shipped with the build or was downloaded a moment ago.
+        let path = match lunco_assets_core::asset_path::load_asset_path(
+            &entry.artifact_uri(),
+            None,
+            None,
+            None,
+        ) {
+            Ok(path) => path,
+            Err(error) => {
+                error!("[celestial] dataset imagery rejected: {error}");
+                continue;
+            }
+        };
         pending.inflight.push(PendingBodyImage {
             naif_id,
             dataset_key: entry.id.clone(),
-            image: load_body_image(&asset_server, entry.artifact_uri()),
+            image: load_body_image(&asset_server, path),
         });
     }
 

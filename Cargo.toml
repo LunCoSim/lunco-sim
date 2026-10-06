@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "third_party/openusd",
     "third_party/rumoca/rumoca-solver",
     "third_party/rumoca/rumoca-eval-solve",
     "crates/lunco-core",
@@ -251,33 +252,17 @@ resolver = "2"
 # scnr2 patch removed — rumoca main uses scnr2 0.3.3 and
 # parol_runtime 4.2 which resolve correctly without overrides.
 
-# openusd consumed from the `main` branch of our fork github.com/LunCoSim/openusd
-# (which tracks github.com/mxpv/openusd as upstream) instead of the crates.io
-# 0.5.0 release. main adds the authoring/journaling features Phase C needs — the
-# `Diff`/`Edit` API (add_sink/extract_diff/apply_diff, usd/diff.rs), the
-# `usd::editor` module, value-resolution/relocates/PathTable fixes, and our
-# `usd::evaluate` export — while still reporting version 0.5.0 (satisfies the
-# `=0.5.0` requirement below). We consume the canonical git version rather than a
-# local checkout; local patches land on the fork's main, then `cargo update -p openusd`.
-# To develop against a local checkout, point this at `../openusd` — but land the
-# change on the fork's `main` before committing, or nobody else can build.
-#
-# Fork-only API we depend on (beyond the authoring/journaling features above):
-# `shade::MaterialBindingAPI::on()` — a public constructor that wraps ANY prim
-# (C++ ctor semantics). `::get()` requires the schema to be applied, but bindings
-# INHERIT, so the prim we query (a mesh inside a rover) authors none; resolving
-# through `::get()` would silently drop every inherited binding. This is what lets
-# `resolve_bound_material` (lunco-usd-bevy) delegate to openusd's spec
-# implementation instead of re-deriving USD's binding rules by hand.
-openusd = { git = "https://github.com/LunCoSim/openusd", branch = "main" }
+# Pinned maintained OpenUSD source with the canonical scalar-asset identifier
+# annotation documented in third_party/openusd/LUNCOSIM-PROVENANCE.md.
+openusd = { path = "third_party/openusd" }
 
 # transform-gizmo is the maintained LunCoSim Bevy 0.19 / egui 0.35 fork.
 # Pin the fork revision because its Bevy picking backend must apply the same
 # GizmoOptions::viewport_rect mapping as its renderer for isolated USD previews.
 transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "8e5d26f6d8bcae547ed0d269f9e25cd62ceacb53" }
 
-# [patch."https://github.com/LunCoSim/openusd"]
-# openusd = { path = "../openusd" }
+[patch."https://github.com/LunCoSim/openusd"]
+openusd = { path = "third_party/openusd" }
 
 # Rumoca consumed from the `main` branch of LunCoSim/rumoca (see
 # [workspace.dependencies]). The fixes are merged into that `main`, so we

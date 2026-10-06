@@ -219,7 +219,8 @@ pub(crate) fn crater_placements(
 /// `lunco-luncosim`) can place it on an authored terrain prim.
 #[derive(Component)]
 pub struct DemTerrainRequest {
-    /// DEM site directory (contains `materials/textures/heightmap.tif`).
+    /// Canonical asset directory, or an explicit native directory for standalone
+    /// commands. Contains `materials/textures/heightmap.tif`.
     pub uri: String,
     /// Half side length (metres) of the centred region to realize at native
     /// resolution. `f64::INFINITY` = the whole DEM.
@@ -985,6 +986,7 @@ struct DemBuildTask(Task<Result<DemBuild, String>>);
 #[derive(Component, Clone)]
 pub struct DemWorkerJob {
     id: u32,
+    source: String,
     collider_ring: bool,
     collider: crate::collider_ring::TerrainColliderSettings,
     lod_viz: bool,
@@ -1105,9 +1107,12 @@ fn layer_contributions(
 /// reload. Pure I/O (an `await`, not CPU) → safe to run on the main-thread
 /// event loop; the heavy decode/stamp is what moves to the worker.
 async fn read_bytes(
-    path: std::path::PathBuf,
+    directory: &lunco_assets_core::AssetDirectory,
     settings: &lunco_settings::DownloadSettings,
 ) -> Result<Vec<u8>, String> {
+    let path = directory
+        .file_path_on_worker(std::path::Path::new("materials/textures/heightmap.tif"))
+        .map_err(|error| error.to_string())?;
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = settings;
@@ -1118,40 +1123,37 @@ async fn read_bytes(
             .map_err(|e| e.to_string())
     }
     #[cfg(target_arch = "wasm32")]
-    {
-        use lunco_storage::{OpfsStorage, StorageHandle};
-        // Two DEM origins on web, disambiguated by where the file actually lives:
-        //  • a **scenario-sync twin** — fetched over the network into the OPFS
-        //    scenario cache `<cache>/scenarios/<id>/…`, which is mounted as that
-        //    Twin's root, so the DEM source resolves to an absolute path under
-        //    that cache dir. Read it straight from OPFS.
-        //  • the **baked-in demo twin** — staged next to the wasm under `assets/`,
-        //    fetched same-origin over HTTP, cached in Cache-Storage. Those URLs
-        //    are MUTABLE — a host-side twin update can replace the file in place —
-        //    so the cached copy is served now and a background
-        //    `If-None-Match`/`If-Modified-Since` probe refreshes the cache for the
-        //    next reload.
-        // The baked demo's `twins/…` path never exists under `scenarios/`, so an
-        // OPFS existence check cleanly picks the right backend.
-        let opfs_candidate = lunco_assets_core::scenarios_dir().join(&path);
-        let opfs = OpfsStorage::new();
-        if opfs
-            .exists(&StorageHandle::File(opfs_candidate.clone()))
+    match directory {
+        lunco_assets_core::AssetDirectory::File(_) => lunco_storage::OpfsStorage::new()
+            .read(&lunco_storage::StorageHandle::File(path))
             .await
-        {
-            return opfs
-                .read(&StorageHandle::File(opfs_candidate))
-                .await
-                .map_err(|e| e.to_string());
+            .map_err(|e| e.to_string()),
+        lunco_assets_core::AssetDirectory::Web(_) => {
+            let url = lunco_assets_core::asset_path::web_url(&path.to_string_lossy());
+            lunco_assets_core::web_fetch::fetch_bytes_cached_conditional(
+                "lunco-twin-v1",
+                &url,
+                settings,
+            )
+            .await
         }
-        let url = lunco_assets_core::asset_path::web_url(&path.to_string_lossy());
-        lunco_assets_core::web_fetch::fetch_bytes_cached_conditional(
-            "lunco-twin-v1",
-            &url,
-            settings,
-        )
-        .await
     }
+}
+
+/// Exact mount authorities are never rebound; late DEM work cannot publish for
+/// an outgoing source after another Twin acquires the same logical name.
+fn validate_dem_source(
+    source: &str,
+    roots: Option<&lunco_assets_core::TwinRoots>,
+) -> Result<(), String> {
+    if let Some((authority, _)) = lunco_assets_core::parse_twin_uri(source) {
+        roots
+            .ok_or_else(|| "DEM Twin registry is unavailable".to_owned())?
+            .root_for(authority)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("DEM source Twin `{authority}` was retired"))?;
+    }
+    Ok(())
 }
 
 /// A failed web DEM I/O step, as reported by the detached fetch/dispatch task:
@@ -1211,6 +1213,7 @@ fn start_dem_builds(
     >,
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
     settings: Res<lunco_settings::DownloadSettings>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
 ) {
     // Parent-body radius for site-anchored scenes — folded LAST over the layer
     // stack so the tangent-plane DEM hugs the body sphere. Georeferenced
@@ -1228,8 +1231,9 @@ fn start_dem_builds(
         if req.is_added() && georef.is_some() {
             continue;
         }
-        let dir = std::path::PathBuf::from(&req.uri);
-        let tif_path = dir.join("materials/textures/heightmap.tif");
+        let source = req.uri.clone();
+        let source_roots = roots.as_deref().cloned();
+        let dir = std::path::PathBuf::from(&source);
         // Site identity = the DEM folder name (`terrain/apollo15/` → "apollo15").
         // This is the ONE fact the raster genuinely does not carry, and the folder
         // already states it — so it needs no sidecar either. It keys the bake cache
@@ -1279,6 +1283,7 @@ fn start_dem_builds(
             let cache_key = std::sync::Arc::new(std::sync::Mutex::new(None));
             commands.entity(entity).insert(DemWorkerJob {
                 id,
+                source: source.clone(),
                 collider_ring,
                 collider,
                 lod_viz,
@@ -1291,49 +1296,30 @@ fn start_dem_builds(
                 .spawn(async move {
                     let tx = get_wasm_bake_failures_tx().clone();
 
-                    // A scenario-synced twin's DEM already lives in the OPFS scenario
-                    // cache — read it from there rather than re-fetching it over HTTP
-                    // (where it doesn't exist: `assets/<scenario-id>/…` is a 404).
-                    // Only the baked-in demo twin is staged under `assets/`. This
-                    // mirrors `read_bytes`; the .tif can't reuse it because it
-                    // wants progress reporting.
-                    let opfs_tif = lunco_assets_core::scenarios_dir().join(&tif_path);
-                    let opfs_handle = lunco_storage::StorageHandle::File(opfs_tif);
-                    let opfs = lunco_storage::OpfsStorage::new();
-                    let tif = if opfs.exists(&opfs_handle).await {
-                        // Local read: no network, so report it as instantly complete
-                        // rather than leaving the progress bar at zero.
-                        match opfs.read(&opfs_handle).await {
-                            Ok(b) => {
-                                if let Ok(mut s) = download_progress.lock() {
-                                    let n = b.len() as u64;
-                                    *s = Some((n, n));
+                    let directory = match lunco_assets_core::resolve_asset_directory_on_worker(&source, source_roots.as_ref()).await {
+                        Ok(directory) => directory,
+                        Err(error) => { let _ = tx.send((id, format!("Terrain '{site_id}': directory admission failed: {error}"))); return; }
+                    };
+                    let tif_path = match directory.file_path_on_worker(std::path::Path::new("materials/textures/heightmap.tif")) {
+                        Ok(path) => path,
+                        Err(error) => { let _ = tx.send((id, error.to_string())); return; }
+                    };
+                    let tif = match &directory {
+                        lunco_assets_core::AssetDirectory::File(_) => {
+                            match lunco_storage::OpfsStorage::new().read(&lunco_storage::StorageHandle::File(tif_path.clone())).await {
+                                Ok(bytes) => {
+                                    if let Ok(mut progress) = download_progress.lock() { let size = bytes.len() as u64; *progress = Some((size, size)); }
+                                    bytes
                                 }
-                                b
-                            }
-                            Err(e) => {
-                                bevy::log::error!("[dem-terrain] tif read from scenario cache failed: {e}");
-                                let _ = tx.send((
-                                    id,
-                                    format!(
-                                        "Terrain '{site_id}': could not read the cached heightmap \
-                                         '{}' — no ground was created. {e}",
-                                        tif_path.display()
-                                    ),
-                                ));
-                                return;
+                                Err(error) => { let _ = tx.send((id, format!("Terrain '{site_id}': mounted heightmap read failed: {error}"))); return; }
                             }
                         }
-                    } else {
+                        lunco_assets_core::AssetDirectory::Web(_) => {
                         let url = lunco_assets_core::asset_path::web_url(&tif_path.to_string_lossy());
-
                         let progress_slot = download_progress.clone();
                         let progress_cb = wasm_bindgen::closure::Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, total: f64| {
-                            if let Ok(mut s) = progress_slot.lock() {
-                                *s = Some((done as u64, total as u64));
-                            }
+                            if let Ok(mut s) = progress_slot.lock() { *s = Some((done as u64, total as u64)); }
                         });
-
                         // Cached-first with a download bar, plus a background
                         // conditional revalidate: the heightmap URL is mutable (a
                         // host-side twin update replaces it in place), so a changed
@@ -1362,7 +1348,11 @@ fn start_dem_builds(
                                 return;
                             }
                         }
+                        }
                     };
+                    if let Err(error) = validate_dem_source(&source, source_roots.as_ref()) {
+                        let _ = tx.send((id, error)); return;
+                    }
 
                     // OPFS grid cache: key = format version + the RAW fetched
                     // bytes + the job params (content-exact — composes with the
@@ -1428,7 +1418,14 @@ fn start_dem_builds(
             // ONE file. The `metadata.yaml` read that used to precede this is gone:
             // the raster states its own extent and position, so there is no second
             // document to fetch, parse, or disagree with.
-            let tif = read_bytes(tif_path, &settings).await?;
+            let directory = lunco_assets_core::resolve_asset_directory_on_worker(
+                &source,
+                source_roots.as_ref(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            let tif = read_bytes(&directory, &settings).await?;
+            validate_dem_source(&source, source_roots.as_ref())?;
             let grid = height_grid_from_geotiff(&tif).map_err(|e| e.to_string())?;
 
             // Crop the playable region at native resolution. The mesh and collider
@@ -1509,6 +1506,7 @@ fn finish_dem_builds(
     mut meshes: Option<ResMut<Assets<Mesh>>>,
     mut faults: ResMut<lunco_core::RuntimeFaults>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
 ) {
     use bevy::tasks::futures_lite::future;
 
@@ -1521,6 +1519,10 @@ fn finish_dem_builds(
             .entity(entity)
             .try_remove::<(DemBuildTask, DemTerrainRequest)>();
 
+        if let Err(error) = validate_dem_source(&req.uri, roots.as_deref()) {
+            warn!("[dem-terrain] discarded retired source result: {error}");
+            continue;
+        }
         let built = match result {
             Ok(b) => b,
             Err(err) => {
@@ -1722,16 +1724,21 @@ fn finish_dem_worker(
     mut faults: ResMut<lunco_core::RuntimeFaults>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut admission: Option<ResMut<lunco_core_runtime::AsyncWorkAdmission>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
 ) {
     let curvature_radius = curvature.map(|c| c.radius_m);
     // Drain failed wasm bakes:
     if let Ok(rx) = get_wasm_bake_failures_rx().try_lock() {
         while let Ok((failed_id, reason)) = rx.try_recv() {
-            let entity = jobs
-                .iter()
-                .find(|(_, job)| job.id == failed_id)
-                .map(|(entity, _)| entity);
-            if let Some(entity) = entity {
+            let current = jobs.iter().find(|(_, job)| job.id == failed_id);
+            if let Some((entity, job)) = current {
+                if let Err(error) = validate_dem_source(&job.source, roots.as_deref()) {
+                    warn!("[dem-terrain] discarded retired worker failure: {error}");
+                    commands
+                        .entity(entity)
+                        .try_remove::<(DemTerrainRequest, DemWorkerJob)>();
+                    continue;
+                }
                 commands
                     .entity(entity)
                     .remove::<(DemTerrainRequest, DemWorkerJob)>();
@@ -1761,6 +1768,13 @@ fn finish_dem_worker(
         let Some((entity, job)) = jobs.iter().find(|(_, j)| j.id == reply.id) else {
             continue;
         };
+        if let Err(error) = validate_dem_source(&job.source, roots.as_deref()) {
+            warn!("[dem-terrain] discarded retired worker source: {error}");
+            commands
+                .entity(entity)
+                .try_remove::<(DemTerrainRequest, DemWorkerJob)>();
+            continue;
+        }
         match (reply.stage, reply.grid) {
             (lunco_terrain_bake::BakeStage::Coarse, Ok(grid)) => {
                 let contributions =

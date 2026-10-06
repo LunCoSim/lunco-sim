@@ -186,6 +186,29 @@ are attached explicitly with `AssetPath::with_label`. Scene transition strings
 and canonical recipe keys describe identities and never replace the typed load
 address. Full scene restart retains the asset server's existing typed path.
 
+Composed default `asset` and `asset[]` values retain their contributing layer's
+canonical identifier. The vendored OpenUSD owner uses its existing strongest
+opinion, expression-variable context and `create_identifier` result even when
+no external payload is loaded. The derived annotation is not serialized and
+does not change authored strings or equality. `UsdRead::asset` remains the
+raw authoring/query read; I/O consumers use fallible `asset_identifier`. A
+consumed value without context fails visibly. Time-sampled assets currently
+lack contributing-layer annotations and are rejected when consumed rather
+than anchored to the scene root.
+
+Programs, PBR textures, dome textures, WGSL sources/texture inputs and body
+albedo maps pass that identifier through stage preparation and the shared typed
+load boundary. The render owner reconstructs typed shader/image paths once;
+procedural sky uses the already admitted shader handle. Child references and
+sublayers therefore keep their source directories on initial and live projection.
+DEM projection likewise retains its canonical directory address and derives
+dataset readiness from that address's actual authority and relative path.
+`resolve_asset_directory_on_worker` selects the confined directory transport
+inside the existing terrain I/O worker; mounted browser Twins stay in OPFS.
+The existing bake task/job checks its never-rebound mount authority before
+publication and scene teardown cancels it. Directory lookup never runs on the UI
+thread and does not read a directory as an asset file.
+
 Native USD composition uses standard `file:` URIs. Bevy does not register a
 filesystem source. `lunco-assets-core::asset_path::PreparedAssetPaths` prepares
 native references through `lunco-storage::canonicalize_file_path` on the stage

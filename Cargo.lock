@@ -3732,6 +3732,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11277822c27bde750de02c5dc5159b91e88bf2661a2c1d98106f2fb1c5c6f590"
 
 [[package]]
+name = "diff_json"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6ba1c5ed21063bcaab3e3db72513874cbdd590fd71d5847d55b6248815318de"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "difflib"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7479,6 +7489,7 @@ dependencies = [
  "futures-lite",
  "lunco-api",
  "lunco-api-core",
+ "lunco-assets-core",
  "lunco-assets-datasets",
  "lunco-celestial",
  "lunco-celestial-spatial-core",
@@ -9074,6 +9085,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "big_space",
+ "lunco-assets-core",
  "lunco-assets-runtime",
  "lunco-celestial-spatial-core",
  "lunco-core",
@@ -10547,6 +10559,7 @@ name = "lunco-usd-sim-celestial"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "lunco-assets-core",
  "lunco-celestial",
  "lunco-celestial-spatial-core",
  "lunco-core",
@@ -12392,17 +12405,20 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 [[package]]
 name = "openusd"
 version = "0.5.0"
-source = "git+https://github.com/LunCoSim/openusd?branch=main#e388c0edb1f350d8c02e1fa37294e680dda5b2dd"
 dependencies = [
  "anyhow",
  "bitflags 2.13.0",
  "bytemuck",
  "derive_more",
+ "diff_json",
  "half",
  "logos 0.16.1",
  "lz4_flex",
  "num-traits",
+ "serde",
+ "serde_json",
  "strum",
+ "tempfile",
  "thiserror 2.0.18",
  "zip",
 ]

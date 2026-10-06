@@ -46,6 +46,20 @@ composition arc before OpenUSD's infallible identifier callback. That callback
 records any rejected identity; stage construction checks its diagnostics before
 publishing the stage.
 
+The maintained OpenUSD source is pinned and vendored at `third_party/openusd`
+(revision and license in its `LUNCOSIM-PROVENANCE.md`); both registry and fork
+Git dependencies use that owner through the workspace patches. It is an explicit
+workspace member for focused owner tests and retains its maintained third-party
+edition 2021. Its derived
+`SdfAssetPath::canonical_identifier` retains strongest-default layer context
+without changing serialization. USD I/O readers use fallible `asset_identifier`
+and shared typed paths; authored/query reads retain the raw string. See the
+[composed asset contract](55-scene-addressing-and-roots.md#native-payload-and-source-admission).
+Directory payloads use `resolve_asset_directory_on_worker` and its typed
+`AssetDirectory` transport in the existing consumer worker. Native containment
+and mounted OPFS admission stay at the asset owner; a missing mounted directory
+cannot become an engine HTTP lookup.
+
 Native projection uses the shared worker-prepared `PreparedAssetPaths` table;
 see [native admission and revision ownership](55-scene-addressing-and-roots.md#native-payload-and-source-admission).
 USD entry, preview, schema and composition readers use `load_asset_path` and

@@ -406,6 +406,16 @@ that command; it must not create an ECS marker or write a parallel registry.
 An empty contract is source-only and remains visibly distinct from a running
 cosim participant.
 
+Composed asset I/O uses `UsdRead::asset_identifier`, the canonical identifier
+annotated by the maintained strongest-default OpenUSD resolver. Keep `asset`
+for raw authoring/query text. Never reanchor a child layer's asset string against
+the scene root. Initial/live preparation carries the same context; missing
+consumed context is an error. Time-sampled assets without that annotation are
+not admitted. Render consumers retain typed `load_asset_path` addresses and
+reuse admitted handles. DEM directory lookup uses the existing I/O worker and
+asset owner's directory transport, with exact mount checks before publication.
+See [asset provenance](../../docs/architecture/55-scene-addressing-and-roots.md#native-payload-and-source-admission).
+
 ## Law 2 — ask the scene root, never guess
 
 To author a new top-level prim you need the target document *and* the parent

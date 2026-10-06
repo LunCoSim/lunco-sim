@@ -114,11 +114,10 @@ pub fn apply_usd_shader_materials(
     // loader. Later authored generations read the canonical live stage.
     canonical: NonSend<CanonicalStages>,
     mut commands: Commands,
-    // For `asset`-typed shader inputs (texture layers): root-relative paths
-    // resolve against the SCENE's own source root and load through the asset
-    // server — the same authority rule as the sandbox layer binder (the scene
-    // the material came from decides the root, never a guessed twin).
+    // Composed identifiers retain each contributing layer; preparation admits
+    // native sources before the shared typed asset-server boundary.
     asset_server: Res<AssetServer>,
+    twin_roots: Option<Res<lunco_assets_core::TwinRoots>>,
     diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let mut evaluated = false;
@@ -144,6 +143,7 @@ pub fn apply_usd_shader_materials(
             &asset_server,
             visual_target.map(|target| target.0),
             procedural_skybox,
+            twin_roots.as_deref(),
         ) {
             findings.push(finding);
         }
@@ -169,6 +169,7 @@ fn apply_usd_shader_material_read(
     asset_server: &AssetServer,
     visual_target: Option<Entity>,
     procedural_skybox: bool,
+    twin_roots: Option<&lunco_assets_core::TwinRoots>,
 ) -> Option<lunco_core::RuntimeDiagnostic> {
     // From here on the prim is evaluated regardless of outcome.
     commands.entity(entity).try_insert(UsdShaderResolved);
@@ -194,8 +195,26 @@ fn apply_usd_shader_material_read(
     let Some(shader_prim) = lunco_usd_bevy_stage::resolve_bound_shader(reader, sdf_path) else {
         return None;
     };
-    let Some(raw_shader_path) = reader.asset(&shader_prim, "info:wgsl:sourceAsset") else {
-        return None;
+    let shader_path = match resolved_shader_asset(
+        reader,
+        &shader_prim,
+        "info:wgsl:sourceAsset",
+        asset_server,
+        prim_path.stage_handle.id(),
+        twin_roots,
+    ) {
+        Ok(Some(path)) => path.to_string(),
+        Ok(None) => return None,
+        Err(error) => {
+            return Some(reject_shader_material(
+                commands,
+                entity,
+                visual_target,
+                prim_path,
+                "source-asset",
+                error,
+            ));
+        }
     };
     if reader
         .text(&shader_prim, "info:implementationSource")
@@ -211,12 +230,6 @@ fn apply_usd_shader_material_read(
             "WGSL source is authored but info:implementationSource is not `sourceAsset`",
         ));
     }
-    // Normalise to the engine-library-relative form (strip a `lunco://` scheme) so an
-    // authored `@lunco://shaders/x.wgsl@` and a bare `@shaders/x.wgsl@` behave
-    // identically downstream. A `twin://` custom shader is left schemed and is
-    // validated by the render asset owner when it loads.
-    let shader_path = lunco_assets_core::engine_asset_rel(&raw_shader_path).to_string();
-
     // The shader's parameters are the Shader prim's `inputs:` — typed, declared, and
     // belonging to the shader that consumes them.
     let mut values = read_shader_inputs(reader, &shader_prim);
@@ -233,31 +246,36 @@ fn apply_usd_shader_material_read(
             format!("malformed authored material attribute `{attribute}`"),
         ));
     }
-    // `asset`-typed inputs are TEXTURE layers (doc 18 §3.1): `inputs:albedo_map =
-    // @terrain/site/…/ortho.png@` fills the material slot of the same reflected
-    // name. Root-relative paths resolve through the SCENE's registered source
-    // root; already-schemed paths pass through. The default Bevy source is
-    // promoted to `lunco://` by the asset-path owner, so it cannot accidentally
-    // resolve beside a guessed working directory.
-    //
-    // The role also owns the image transfer contract. Albedo and mineral maps
-    // are color data and must be decoded from sRGB to linear before WGSL uses
-    // them. Surface, normal, and shadow maps carry encoded/scalar data; treating
-    // those PNGs as sRGB changes their values before the shader decodes them
-    // (notably turning a neutral encoded normal into a downward-facing one).
+    // Each texture inherits the contributing USD layer's canonical identifier.
+    // Stage preparation admits native addresses before this projection runs.
     let mut textures: BTreeMap<TextureLayer, Handle<Image>> = BTreeMap::new();
     let mut texture_error = None;
-    for (layer, authored) in read_shader_texture_inputs(reader, &shader_prim) {
-        let uri = if authored.contains("://") {
-            authored
-        } else {
-            let Some(uri) = scene_asset_uri(prim_path, asset_server, &authored) else {
-                texture_error = Some(format!(
-                    "root-relative texture input `{authored}` has no authored scene source root"
-                ));
+    let inputs = match read_shader_texture_inputs(reader, &shader_prim) {
+        Ok(inputs) => inputs,
+        Err(error) => {
+            return Some(reject_shader_material(
+                commands,
+                entity,
+                visual_target,
+                prim_path,
+                "texture-source",
+                error,
+            ));
+        }
+    };
+    for (layer, identifier) in inputs {
+        let path = match lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
+            asset_server,
+            prim_path.stage_handle.id(),
+            &identifier,
+            twin_roots,
+            reader.native_asset_paths(),
+        ) {
+            Ok(path) => path,
+            Err(error) => {
+                texture_error = Some(error.to_string());
                 break;
-            };
-            uri
+            }
         };
         let is_srgb = texture_layer_is_srgb(layer);
         textures.insert(
@@ -267,7 +285,7 @@ fn apply_usd_shader_material_read(
                 .with_settings(move |settings: &mut bevy::image::ImageLoaderSettings| {
                     settings.is_srgb = is_srgb;
                 })
-                .load::<Image>(uri),
+                .load::<Image>(path),
         );
     }
     if let Some(detail) = texture_error {
@@ -285,19 +303,8 @@ fn apply_usd_shader_material_read(
     // in `lunco::terrain` (terrain_surface.wgsl) behind the `LUNCO_NOISE_2D`
     // shader_def that `shader_material.rs::specialize` sets on wasm. The twins were
     // 88-92% identical and had already drifted apart twice; a shader_def cannot.
-    let resolved_shader_path = shader_path;
-
-    debug!(
-        "[shader] applied {} to {}",
-        resolved_shader_path, prim_path.path
-    );
-    // A path, not a `Handle<Shader>`: `bevy::shader` pulls naga. The binder loads it.
-    // Route a bare built-in reference (`shaders/wheel.wgsl`) through the `lunco://`
-    // engine library so it resolves from ANYWHERE — including with an external Twin
-    // open, where Bevy's default source is the wrong root and the shipped shader
-    // would miss (→ a black-hole ShaderMaterial). An already-schemed `twin://…`
-    // custom shader is passed through untouched. See `lunco_assets_core::engine_asset_uri`.
-    let shader = lunco_assets_core::engine_asset_uri(&resolved_shader_path);
+    debug!("[shader] applied {} to {}", shader_path, prim_path.path);
+    let shader = shader_path;
     // `primvars:doNotCastShadows` — read on the GPRIM, not on the shader, because
     // two prims sharing one material can legitimately disagree about casting. Same
     // attribute and same polarity the `PbrLook` path reads in `lunco-usd-bevy`;
@@ -402,15 +409,30 @@ fn apply_usd_shader_material_read(
     // `info:wgsl:vertexAsset` on the same `Shader` prim. Procedural camera
     // backgrounds always use the renderer's fullscreen vertex and therefore do
     // not read or carry a mesh vertex stage.
-    let vertex_shader = (!procedural_skybox)
-        .then(|| {
-            reader
-                .asset(&shader_prim, "info:wgsl:vertexAsset")
-                .map(|raw| {
-                    lunco_assets_core::engine_asset_uri(lunco_assets_core::engine_asset_rel(&raw))
-                })
-        })
-        .flatten();
+    let vertex_shader = if procedural_skybox {
+        None
+    } else {
+        match resolved_shader_asset(
+            reader,
+            &shader_prim,
+            "info:wgsl:vertexAsset",
+            asset_server,
+            prim_path.stage_handle.id(),
+            twin_roots,
+        ) {
+            Ok(path) => path.map(|path| path.to_string()),
+            Err(error) => {
+                return Some(reject_shader_material(
+                    commands,
+                    entity,
+                    visual_target,
+                    prim_path,
+                    "vertex-source",
+                    error,
+                ));
+            }
+        }
+    };
     let interface = reader.text(&shader_prim, "info:wgsl:interface");
     let mut look = ShaderLook::new(shader)
         .with_values(values)
@@ -612,14 +634,14 @@ fn texture_layer_is_srgb(layer: TextureLayer) -> bool {
     )
 }
 
-/// Reads the `asset`-typed `inputs:*` of a `Shader` prim: `(slot, authored
-/// path)` pairs. CONNECTED inputs are skipped for the same reason as in
+/// Reads the `asset`-typed `inputs:*` of a `Shader` prim: `(slot, canonical
+/// identifier)` pairs. CONNECTED inputs are skipped for the same reason as in
 /// [`read_shader_inputs`] — a connected port is fed by a producer node
 /// (doc 18 Tier B), not by an authored file.
 fn read_shader_texture_inputs(
     reader: &dyn UsdReadObject,
     shader_prim: &SdfPath,
-) -> Vec<(TextureLayer, String)> {
+) -> Result<Vec<(TextureLayer, String)>, String> {
     let mut out = Vec::new();
     for attr in reader.attr_names(shader_prim) {
         let Some(name) = attr.strip_prefix("inputs:") else {
@@ -628,26 +650,44 @@ fn read_shader_texture_inputs(
         let Some(layer) = texture_layer_for_input(&to_snake_case(name)) else {
             continue;
         };
-        if !reader.connections(shader_prim, &attr).is_empty() {
+        if !reader.connections(shader_prim, &attr).is_empty()
+            || reader.attr_type_name(shader_prim, &attr).as_deref() != Some("asset")
+        {
             continue;
         }
-        if let Some(path) = reader.asset(shader_prim, &attr) {
+        if let Some(path) = reader
+            .asset_identifier(shader_prim, &attr)
+            .map_err(|error| error.to_string())?
+        {
             out.push((layer, path));
         }
     }
-    out
+    Ok(out)
 }
 
-/// Resolve a root-relative texture through the stage asset's registered source.
-/// The path algebra is owned by `lunco-assets-core`; this crate only supplies
-/// the stage identity and requests the resulting image handle from Bevy.
-fn scene_asset_uri(
-    prim_path: &UsdPrimPath,
+fn resolved_shader_asset(
+    reader: &dyn UsdReadObject,
+    prim: &SdfPath,
+    property: &str,
     asset_server: &AssetServer,
-    relative: &str,
-) -> Option<String> {
-    let asset_path = asset_server.get_path(prim_path.stage_handle.id())?;
-    lunco_assets_core::asset_path::source_relative_uri(&asset_path, relative)
+    stage: bevy::asset::AssetId<UsdStageAsset>,
+    roots: Option<&lunco_assets_core::TwinRoots>,
+) -> Result<Option<bevy::asset::AssetPath<'static>>, String> {
+    reader
+        .asset_identifier(prim, property)
+        .map_err(|error| error.to_string())?
+        .filter(|identifier| !identifier.is_empty())
+        .map(|identifier| {
+            lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
+                asset_server,
+                stage,
+                &identifier,
+                roots,
+                reader.native_asset_paths(),
+            )
+            .map_err(|error| error.to_string())
+        })
+        .transpose()
 }
 
 #[cfg(test)]

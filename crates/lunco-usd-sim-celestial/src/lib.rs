@@ -571,21 +571,6 @@ pub fn insert_celestial_comms_components(
         }
     }
 
-    // --- Body imagery authored on the body prim ---
-    //
-    // `asset lunco:body:albedoMap = @lunco://textures/earth.png@` — which map a
-    // body wears is scene content, so a Twin can dress its own Earth without
-    // touching the engine's `Assets.toml`. Read as an ASSET, not a string:
-    // `sdf::Value` keeps those distinct and a `text()` read of an asset-typed
-    // attribute silently yields nothing.
-    if let Some(albedo) = reader.asset(sdf_path, "lunco:body:albedoMap") {
-        if !albedo.is_empty() {
-            commands
-                .entity(entity)
-                .try_insert(lunco_celestial_spatial_core::AuthoredBodyAlbedo { asset: albedo });
-        }
-    }
-
     // --- Geodetic anchor (ground stations + scene site anchor) ---
     // Terrain owns the same authored lat/lon as a DEM georeference, but that
     // data is not a second ECS placement. `TerrainGeoref` is projected by the
@@ -981,6 +966,8 @@ fn project_celestial_comms_prims(
     mut pending: ResMut<PendingCelestialProjection>,
     stages: Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>,
     canonical: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
+    asset_server: Option<Res<AssetServer>>,
+    twin_roots: Option<Res<lunco_assets_core::TwinRoots>>,
 ) {
     let mut entities = pending.0.take_queued();
     if pending.0.take_initial_discovery() {
@@ -1054,6 +1041,44 @@ fn project_celestial_comms_prims(
             is_scene_root,
             &mut commands,
         );
+        commands
+            .entity(entity)
+            .try_remove::<lunco_celestial_spatial_core::AuthoredBodyAlbedo>();
+        let albedo = reader
+            .asset_identifier(&sdf_path, "lunco:body:albedoMap")
+            .map_err(|error| error.to_string())
+            .and_then(|identifier| {
+                identifier
+                    .filter(|identifier| !identifier.is_empty())
+                    .map(|identifier| {
+                        let server = asset_server
+                            .as_deref()
+                            .ok_or_else(|| "albedo consumer has no asset server".to_owned())?;
+                        lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
+                            server,
+                            id,
+                            &identifier,
+                            twin_roots.as_deref(),
+                            reader.native_asset_paths(),
+                        )
+                        .map_err(|error| error.to_string())
+                    })
+                    .transpose()
+            });
+        match albedo {
+            Ok(Some(path)) => {
+                commands.entity(entity).try_insert(
+                    lunco_celestial_spatial_core::AuthoredBodyAlbedo {
+                        asset: path.to_string(),
+                    },
+                );
+            }
+            Ok(None) => {}
+            Err(error) => {
+                warn!("[usd-celestial] {resolved_path} albedo rejected: {error}");
+                lunco_core::trigger_runtime_error(&mut commands, "usd-body-albedo-rejected", error);
+            }
+        }
         if is_scene_root {
             commands.entity(entity).try_insert(CelestialProjected);
         }

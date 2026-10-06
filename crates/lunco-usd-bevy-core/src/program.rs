@@ -358,7 +358,7 @@ pub fn resolve_program(
             })
         }
         "sourceAsset" => {
-            let Some(asset) = asset else {
+            let Some(_) = asset else {
                 return Err(source_issue(
                     prim,
                     "info:sourceAsset",
@@ -372,6 +372,16 @@ pub fn resolve_program(
                     "sourceAsset is selected but info:id or sourceCode is also populated",
                 ));
             }
+            let asset = view
+                .asset_identifier(prim, "info:sourceAsset")
+                .map_err(|error| source_issue(prim, "info:sourceAsset", error.to_string()))?
+                .ok_or_else(|| {
+                    source_issue(
+                        prim,
+                        "info:sourceAsset",
+                        "selected source asset has no composed value",
+                    )
+                })?;
             let Some(backend) = program_asset_backend(&asset) else {
                 return Err(source_issue(
                     prim,

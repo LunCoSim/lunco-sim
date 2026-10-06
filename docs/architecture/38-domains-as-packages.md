@@ -602,7 +602,10 @@ rendering, no domain physics semantics, no ephemeris. "Reuse USD" means *stop ha
 plane and adopt the standard one* — it does **not** hand us an engine. The engine (project USD→ECS, step
 solvers, exchange values) is irreducibly LunCo, and that's where the real value is, not plumbing.
 
-### 12.2 Coverage — verified against the Rust `openusd` v0.5 crate (`LunCoSim/openusd`)
+### 12.2 Coverage — verified against the pinned Rust `openusd` v0.5 crate
+
+The maintained source lives in `third_party/openusd`; its provenance file records
+the exact `LunCoSim/openusd` revision, license and local derived asset annotation.
 
 The crate is **schema-aware** with the full `sdf`/`pcp`/`usd`/`usda`/`usdc`/`usdz` stack. Crucially, the
 mechanisms our §9 adopt-plan depends on **already ship in it**:

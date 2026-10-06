@@ -102,6 +102,50 @@ pub struct UsdReadPrimFacts {
     pub has_attr_prefix: bool,
 }
 
+/// A composed asset value lacks the contributing layer's canonical identifier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetIdentifierReadError {
+    pub property: String,
+    pub authored: String,
+}
+
+impl std::fmt::Display for AssetIdentifierReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "asset {} (`{}`) has no composed canonical identifier",
+            self.property, self.authored
+        )
+    }
+}
+impl std::error::Error for AssetIdentifierReadError {}
+
+fn consumed_asset_identifier(
+    value: Option<Value>,
+    prim: &SdfPath,
+    name: &str,
+) -> Result<Option<String>, AssetIdentifierReadError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let Some(asset) = value.try_as_asset_path() else {
+        return Err(AssetIdentifierReadError {
+            property: format!("{prim}.{name}"),
+            authored: "non-asset value".to_owned(),
+        });
+    };
+    if asset.is_empty() {
+        return Ok(Some(String::new()));
+    }
+    asset
+        .canonical_identifier()
+        .map(|id| Some(id.to_owned()))
+        .ok_or_else(|| AssetIdentifierReadError {
+            property: format!("{prim}.{name}"),
+            authored: asset.into_string(),
+        })
+}
+
 /// Composed, default-time reads served by either the worker-produced initial
 /// plan or the live canonical `StageView`. Extractors depend on this seam rather
 /// than reaching into OpenUSD directly.
@@ -282,13 +326,23 @@ pub trait UsdRead {
     /// `scalar::<String>` will NOT read one — the value is `Value::AssetPath`, so a
     /// `String` extraction returns `None`. That is the whole reason this exists: the
     /// type is the contract, and a reader that quietly accepted both would let the
-    /// wrong one keep working. Returns the *authored* path (`AssetPath::as_str`),
-    /// which is what a Bevy asset handle wants; the resolved path is available on the
-    /// same type when we grow a resolver. Provided.
+    /// wrong one keep working. This authoring read returns the authored path;
+    /// I/O consumers use [`Self::asset_identifier`] for the composed layer anchor.
     fn asset(&self, prim: &SdfPath, name: &str) -> Option<String> {
         self.attr_value(prim, name)
             .and_then(|v| v.try_as_asset_path())
             .map(|a| a.into_string())
+    }
+
+    /// Canonical load identifier anchored by the strongest default opinion.
+    /// Payload existence is handled at the asset boundary. Missing provenance,
+    /// including unanchored time samples, rejects rather than using a root guess.
+    fn asset_identifier(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+    ) -> Result<Option<String>, AssetIdentifierReadError> {
+        consumed_asset_identifier(self.attr_value(prim, name), prim, name)
     }
 
     /// A real scalar tolerant of `float`, `double`, `int`, or `int64` authoring,
@@ -691,6 +745,13 @@ pub trait UsdReadObject {
     fn attr_type_name(&self, prim: &SdfPath, name: &str) -> Option<String>;
     fn text(&self, prim: &SdfPath, name: &str) -> Option<String>;
     fn asset(&self, prim: &SdfPath, name: &str) -> Option<String>;
+    fn asset_identifier(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+    ) -> Result<Option<String>, AssetIdentifierReadError> {
+        consumed_asset_identifier(self.attr_value(prim, name), prim, name)
+    }
     fn real(&self, prim: &SdfPath, name: &str) -> Option<f64>;
     fn real_f32(&self, prim: &SdfPath, name: &str) -> Option<f32>;
     fn integer(&self, prim: &SdfPath, name: &str) -> Option<i32>;
@@ -2060,5 +2121,90 @@ impl UsdRead for UsdReadSource<'_> {
             Self::Prepared(reader) => UsdRead::stage_metadata_value(*reader, name),
             Self::Live(reader) => UsdRead::stage_metadata_value(reader, name),
         }
+    }
+}
+
+#[cfg(test)]
+mod asset_identifier_tests {
+    use super::*;
+
+    #[test]
+    fn prepared_and_live_reads_keep_child_layer_asset_identity() {
+        let root = if cfg!(windows) {
+            "file:///C:/fixture/scenes/root.usda"
+        } else {
+            "file:///fixture/scenes/root.usda"
+        };
+        let child = if cfg!(windows) {
+            "file:///C:/fixture/scenes/parts/source.usda"
+        } else {
+            "file:///fixture/scenes/parts/source.usda"
+        };
+        let recipe = lunco_usd_compose::recipe::StageRecipe::new(
+            root,
+            std::collections::HashMap::from([
+                (
+                    root.to_owned(),
+                    br#"#usda 1.0
+                def Scope "Instance" (prepend references = @parts/source.usda@</Source>) {}
+            "#
+                    .to_vec(),
+                ),
+                (
+                    child.to_owned(),
+                    br#"#usda 1.0
+                def Scope "Source" { asset image = @textures/image # %.png@ }
+            "#
+                    .to_vec(),
+                ),
+            ]),
+        );
+        let plan = crate::UsdStageProjectionPlan::from_recipe(&recipe).unwrap();
+        let live = crate::canonical::CanonicalStage::from_recipe(&recipe).unwrap();
+        let prim = SdfPath::new("/Instance").unwrap();
+        let expected = if cfg!(windows) {
+            "file:///C:/fixture/scenes/parts/textures/image%20%23%20%25.png"
+        } else {
+            "file:///fixture/scenes/parts/textures/image%20%23%20%25.png"
+        };
+        let identifier = UsdRead::asset_identifier(&plan, &prim, "image")
+            .unwrap()
+            .unwrap();
+        assert_eq!(identifier, expected);
+        assert_eq!(
+            UsdRead::asset_identifier(&live.view(), &prim, "image")
+                .unwrap()
+                .as_deref(),
+            Some(expected)
+        );
+        assert_eq!(
+            UsdRead::asset(&plan, &prim, "image").as_deref(),
+            Some("textures/image # %.png")
+        );
+        let references = crate::native_paths::native_references_for_prims(&plan, [prim]);
+        assert_eq!(references, std::collections::BTreeSet::from([identifier]));
+    }
+
+    #[test]
+    fn consumed_asset_requires_composed_context() {
+        let prim = SdfPath::new("/Source").unwrap();
+        let error = consumed_asset_identifier(
+            Some(Value::AssetPath("raw.png".into())),
+            &prim,
+            "inputs:file",
+        )
+        .unwrap_err();
+        assert_eq!(error.property, "/Source.inputs:file");
+        assert_eq!(error.authored, "raw.png");
+        let mut value = openusd::sdf::AssetPath::new("raw.png");
+        value.set_canonical_identifier("twin://mount/child/raw.png");
+        assert_eq!(
+            consumed_asset_identifier(Some(Value::AssetPath(value)), &prim, "inputs:file").unwrap(),
+            Some("twin://mount/child/raw.png".into())
+        );
+        assert_eq!(
+            consumed_asset_identifier(None, &prim, "inputs:file").unwrap(),
+            None
+        );
     }
 }

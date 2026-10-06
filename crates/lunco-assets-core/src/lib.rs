@@ -690,6 +690,157 @@ pub fn engine_asset_local_path(reference: &str) -> Option<PathBuf> {
     Some(roots[0].join(relative))
 }
 
+/// Directory transport selected by the asset owner on the existing I/O worker.
+/// A mounted browser Twin stays in OPFS; engine assets use the web library.
+#[derive(Debug, Clone)]
+pub enum AssetDirectory {
+    /// Native filesystem, or the mounted OPFS filesystem on wasm.
+    File(PathBuf),
+    #[cfg(target_arch = "wasm32")]
+    Web(PathBuf),
+}
+
+impl AssetDirectory {
+    /// Resolve a payload file beneath this directory on the existing I/O worker.
+    /// Native canonical containment rejects escaped child symlinks/junctions.
+    pub fn file_path_on_worker(&self, relative: &Path) -> Result<PathBuf, TwinRootsError> {
+        if !asset_path::is_safe_relative_components(relative) {
+            return Err(TwinRootsError::AssetResolution(
+                std::io::ErrorKind::InvalidInput,
+                format!("unsafe directory payload `{}`", relative.display()),
+            ));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            existing_path_within_root(self.path(), relative)
+                .map_err(|error| TwinRootsError::AssetResolution(error.kind(), error.to_string()))?
+                .filter(|path| path.is_file())
+                .ok_or_else(|| {
+                    TwinRootsError::AssetResolution(
+                        std::io::ErrorKind::NotFound,
+                        format!("directory payload `{}` was not found", relative.display()),
+                    )
+                })
+        }
+        #[cfg(target_arch = "wasm32")]
+        Ok(self.path().join(relative))
+    }
+
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::File(path) => path,
+            #[cfg(target_arch = "wasm32")]
+            Self::Web(path) => path,
+        }
+    }
+}
+
+/// Resolve a canonical directory address inside the existing consumer worker.
+/// Native Twin and engine paths use canonical confinement. Browser Twin paths
+/// use the mounted OPFS tree and never switch to the engine HTTP source.
+pub async fn resolve_asset_directory_on_worker(
+    reference: &str,
+    roots: Option<&TwinRoots>,
+) -> Result<AssetDirectory, TwinRootsError> {
+    let invalid =
+        |detail: String| TwinRootsError::AssetResolution(std::io::ErrorKind::InvalidInput, detail);
+    let missing = || {
+        TwinRootsError::AssetResolution(
+            std::io::ErrorKind::NotFound,
+            format!("asset directory `{reference}` was not found"),
+        )
+    };
+    if let Some((authority, relative)) = parse_twin_uri(reference) {
+        let relative = asset_path::relative_path(relative)
+            .ok_or_else(|| invalid(format!("unsafe asset directory `{reference}`")))?;
+        let roots = roots.ok_or(TwinRootsError::RegistryUnavailable)?;
+        let root = roots
+            .root_for(authority)?
+            .ok_or_else(|| TwinRootsError::UnknownAuthority(authority.to_owned()))?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = root;
+            let path = roots
+                .resolve_directory(authority, &relative)?
+                .ok_or_else(missing)?;
+            roots
+                .root_for(authority)?
+                .ok_or_else(|| TwinRootsError::UnknownAuthority(authority.to_owned()))?;
+            return Ok(AssetDirectory::File(path));
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let storage = lunco_storage::OpfsStorage::new();
+            for base in [root.clone(), twin_cache_dir(&root), cache_dir()] {
+                let path = lunco_storage::canonicalize_file_path(&base.join(&relative))
+                    .map_err(|error| invalid(error.to_string()))?;
+                match storage
+                    .read_directory(&lunco_storage::StorageHandle::File(path.clone()))
+                    .await
+                {
+                    Ok(_) => {
+                        roots.root_for(authority)?.ok_or_else(|| {
+                            TwinRootsError::UnknownAuthority(authority.to_owned())
+                        })?;
+                        return Ok(AssetDirectory::File(path));
+                    }
+                    Err(lunco_storage::StorageError::NotFound) => {}
+                    Err(error) => return Err(invalid(error.to_string())),
+                }
+            }
+            return Err(missing());
+        }
+    }
+    if let Some(relative) = parse_lunco_uri(reference) {
+        let relative = asset_path::relative_path(relative)
+            .ok_or_else(|| invalid(format!("unsafe engine directory `{reference}`")))?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            for root in library_roots(&assets_dir_abs()) {
+                let path = existing_path_within_root(&root, &relative).map_err(|error| {
+                    TwinRootsError::AssetResolution(error.kind(), error.to_string())
+                })?;
+                if let Some(path) = path
+                    && path.is_dir()
+                {
+                    return Ok(AssetDirectory::File(path));
+                }
+            }
+            return Err(missing());
+        }
+        #[cfg(target_arch = "wasm32")]
+        return Ok(AssetDirectory::Web(relative));
+    }
+    let native =
+        lunco_storage::file_uri_to_path(reference).map_err(|error| invalid(error.to_string()))?;
+    if native.is_none() && asset_path::has_scheme(reference) {
+        return Err(invalid(format!(
+            "unsupported asset directory source `{reference}`"
+        )));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let path = native.unwrap_or_else(|| PathBuf::from(reference));
+        let path = lunco_storage::canonicalize_file_path(&path)
+            .map_err(|error| invalid(error.to_string()))?;
+        if !path.is_dir() {
+            return Err(missing());
+        }
+        Ok(AssetDirectory::File(path))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        if native.is_some() {
+            return Err(invalid(
+                "native directory requires a prepared mounted address".to_owned(),
+            ));
+        }
+        let path = asset_path::relative_path(reference)
+            .ok_or_else(|| invalid(format!("unsafe web directory `{reference}`")))?;
+        Ok(AssetDirectory::Web(path))
+    }
+}
+
 /// The local filesystem path ANY reference resolves to, whichever root owns it —
 /// a `twin://<name>/<rel>` against the open Twin's root, anything else against
 /// the shipped engine library. `None` when the Twin is not open or the reference
@@ -860,5 +1011,97 @@ mod tests {
             Path::new("bundle/manifest.json")
         );
         assert_eq!(asset_manifest_url(), "assets/manifest.json");
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod asset_directory_tests {
+    use super::*;
+
+    #[test]
+    fn directory_worker_preserves_source_and_rejects_retired_mounts() {
+        let root = tempfile::tempdir().unwrap();
+        let authored = root.path().join("parts/site # % 月");
+        let cached = twin_cache_dir(root.path()).join("parts/cached");
+        lunco_storage::ensure_directory_sync(&authored).unwrap();
+        lunco_storage::ensure_directory_sync(&cached).unwrap();
+        let roots = TwinRoots::default();
+        let authority = roots.register("fixture", root.path()).unwrap();
+        let address = twin_uri(&authority, "parts/site # % 月");
+        let origin =
+            asset_path::load_asset_path(&twin_uri(&authority, "scene.usda"), None, None, None)
+                .unwrap();
+        let native_identifier = lunco_storage::file_path_to_uri(&authored).unwrap();
+        let prepared = asset_path::PreparedAssetPaths::prepare_on_worker(
+            [native_identifier.clone()],
+            Some(origin.clone()),
+            Some(&roots),
+        );
+        let admitted = asset_path::load_asset_path(
+            &native_identifier,
+            Some(&origin),
+            Some(&roots),
+            Some(&prepared),
+        )
+        .unwrap();
+        assert_eq!(admitted.label(), None);
+        assert_eq!(admitted.to_string(), address);
+        let resolve = |source: &str| {
+            bevy::tasks::futures_lite::future::block_on(resolve_asset_directory_on_worker(
+                source,
+                Some(&roots),
+            ))
+        };
+        let directory = resolve(&admitted.to_string()).unwrap();
+        assert_eq!(
+            directory.path(),
+            lunco_storage::canonicalize_file_path(&authored).unwrap()
+        );
+        let payload = authored.join("image # %.bin");
+        lunco_storage::write_file_sync(&payload, b"payload").unwrap();
+        assert_eq!(
+            directory
+                .file_path_on_worker(Path::new("image # %.bin"))
+                .unwrap(),
+            lunco_storage::canonicalize_file_path(&payload).unwrap()
+        );
+        assert!(
+            directory
+                .file_path_on_worker(Path::new("../escape"))
+                .is_err()
+        );
+        #[cfg(unix)]
+        {
+            let outside = root.path().join("outside.bin");
+            lunco_storage::write_file_sync(&outside, b"outside").unwrap();
+            std::os::unix::fs::symlink(outside, authored.join("escape.bin")).unwrap();
+            assert!(
+                directory
+                    .file_path_on_worker(Path::new("escape.bin"))
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            resolve(&twin_uri(&authority, "parts/cached"))
+                .unwrap()
+                .path(),
+            lunco_storage::canonicalize_file_path(&cached).unwrap()
+        );
+        assert!(resolve(&twin_uri(&authority, "../escape")).is_err());
+        roots.unregister_name(&authority).unwrap();
+        roots.register("fixture", root.path()).unwrap();
+        assert!(matches!(
+            resolve(&address),
+            Err(TwinRootsError::UnknownAuthority(_))
+        ));
+        assert!(
+            asset_path::load_asset_path(
+                &native_identifier,
+                Some(&origin),
+                Some(&roots),
+                Some(&prepared)
+            )
+            .is_err()
+        );
     }
 }

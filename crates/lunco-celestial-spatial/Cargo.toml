@@ -5,6 +5,7 @@ edition = "2024"
 license.workspace = true
 
 [dependencies]
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-engineering-values = { path = "../lunco-engineering-values" }
 lunco-api-core = { path = "../lunco-api-core" }

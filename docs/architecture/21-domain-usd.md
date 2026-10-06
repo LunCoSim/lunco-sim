@@ -161,6 +161,14 @@ The live `Stage` remains in its thread-affine owner. Runtime sidecar read/parse
 and editor-preview initial serialization are still synchronous, and the native
 admission queue reports its missing wasm worker transport visibly.
 
+The composed default asset reader retains the strongest contributing layer's
+canonical identifier, including unresolved payloads. `UsdRead::asset_identifier`
+is the fallible I/O read; `asset` remains authored/query text. Prepared plans and
+live views carry the same derived context. Programs, materials, lights, celestial
+albedo and DEM consumers retain that identity through typed source admission;
+DEM directories resolve inside their existing I/O worker. See the
+[composed asset contract](55-scene-addressing-and-roots.md#native-payload-and-source-admission).
+
 Native binary, texture and source references use the stage worker's immutable
 asset-admission table. Live changes with new native inputs pass the shared
 revision-fenced preparation gate before the sink consumes them; its

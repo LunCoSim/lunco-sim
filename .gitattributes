@@ -1,0 +1,2 @@
+# Preserve the pinned upstream fixture bytes, including their authored whitespace.
+third_party/openusd/fixtures/*.usda -whitespace
