@@ -805,6 +805,22 @@ fn run_summary(exp: &lunco_experiments::Experiment, doc_id: Option<u64>) -> ApiV
         obj.push(("doc_id".into(), api_value!(d)));
     }
     obj.push(("has_result".into(), ApiValue::Bool(exp.result.is_some())));
+    if let Some(result) = exp.result.as_ref() {
+        obj.push((
+            "restored_history".into(),
+            ApiValue::Bool(result.meta.restored_history),
+        ));
+        match &result.meta.source_content {
+            Some(lunco_experiments::SourceContentIdentity::Available { cid }) => {
+                obj.push(("source_cid".into(), ApiValue::Str(cid.to_string())))
+            }
+            Some(lunco_experiments::SourceContentIdentity::Unavailable { reason }) => obj.push((
+                "source_identity_unavailable".into(),
+                ApiValue::Str(reason.clone()),
+            )),
+            None => {}
+        }
+    }
     let created_ms = exp
         .created_at
         .duration_since(web_time::UNIX_EPOCH)
@@ -1053,6 +1069,8 @@ impl ApiQueryProvider for GetExperimentResultProvider {
             "returned_points": times.len(),
             "downsampled": stride > 1,
             "variable_count": series.len(),
+            "restored_history": result.meta.restored_history,
+            "source_cid": result.meta.source_content.as_ref().and_then(|identity| match identity { lunco_experiments::SourceContentIdentity::Available { cid } => Some(cid.to_string()), _ => None }),
             "missing_variables": missing,
             "times": times,
             "series": ApiValue::Map(series),

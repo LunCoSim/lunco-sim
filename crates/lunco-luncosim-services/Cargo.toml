@@ -41,10 +41,11 @@ lunco-usd-document = { path = "../lunco-usd-document", optional = true }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
 serde_json = { workspace = true }
+crossbeam-channel = { workspace = true }
 
 [features]
 default = []
-experiments = ["dep:lunco-experiments", "dep:lunco-storage", "dep:lunco-core-session"]
+experiments = ["dep:lunco-experiments", "dep:lunco-storage", "dep:lunco-core-session", "dep:lunco-core-runtime"]
 session-input-archive-export = [
     "dep:lunco-command-contracts",
     "dep:lunco-core",
@@ -85,3 +86,6 @@ server = ["api-transport", "transport-http", "networking", "experiments"]
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile = { workspace = true }

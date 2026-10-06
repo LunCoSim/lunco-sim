@@ -64,6 +64,8 @@ pub enum AsyncWorkKind {
     VisualizationPreparation,
     /// Encode an immutable session-input capture for durable export.
     SessionInputArchiveExport,
+    /// Encode, validate, or read optional completed experiment artifacts.
+    ExperimentArtifact,
 }
 
 /// Stable identity for one preparation operation.

@@ -1327,6 +1327,12 @@ fn dispatch_experiment(
             .resource_mut::<lunco_experiments::ExperimentRegistry>()
             .set_status(exp_id, lunco_experiments::RunStatus::Queued);
         let result_limits = source_snapshot.result_limits;
+        let artifact_admission = origin.artifact_admission(
+            world
+                .get_resource::<lunco_workspace::WorkspaceResource>()
+                .map(|workspace| &workspace.0),
+            result_limits,
+        );
         let handle = runner_res.0.run_fast(&exp, source_snapshot);
         // Store the handle so a draining system can pump updates into
         // registry status.
@@ -1334,6 +1340,7 @@ fn dispatch_experiment(
             .resource_mut::<lunco_modelica_runner::PendingHandles>()
             .0
             .push(lunco_modelica_runner::PendingRun {
+                artifact_admission,
                 handle,
                 origin,
                 result_limits,

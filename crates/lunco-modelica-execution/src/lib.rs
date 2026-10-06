@@ -108,6 +108,12 @@ impl Plugin for ModelicaExecutionPlugin {
             ) {
                 bevy::log::warn!("{error}");
             }
+            app.insert_resource(lunco_experiments::artifact::ArtifactWorkerTransport {
+                dispatch: worker_transport::dispatch_artifact,
+                retire: worker_transport::retire_artifact_leases,
+                discard: worker_transport::discard_artifact_lease,
+                clear: worker_transport::clear_artifact_leases,
+            });
             let _ = worker_transport::register_result_sender(tx_res.clone());
             let _ = worker_transport::register_command_sender(tx_cmd.clone());
             app.insert_resource(ModelicaChannels {

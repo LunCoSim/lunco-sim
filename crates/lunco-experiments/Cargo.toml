@@ -10,6 +10,8 @@ serde = { workspace = true, features = ["rc"] }
 uuid = { workspace = true }
 crossbeam-channel = { workspace = true }
 web-time = { workspace = true }
+lunco-hash = { path = "../lunco-hash", features = ["cid"] }
+serde_json = { workspace = true, features = ["raw_value"] }
 # Optional — exposes ExperimentRegistry as a Bevy Resource and ships
 # events. Off by default so headless callers (CLI sweeps, tests) stay
 # Bevy-free.

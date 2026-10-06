@@ -721,6 +721,18 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   trajectory allocation; event samples also consume the scoped recorder budget.
   Exercise `modelica_output_budget.rhai` with the documented default value cap
   and `max_parallel=1` to prove visible rejection and valid successor completion.
+- **Durable batch history**: completed Twin-owned results persist asynchronously
+  with their immutable definition and actual compiler source CID. Application
+  runs have no Twin destination. Inspect `source_cid` and `restored_history` in
+  `GetExperimentResult`; an archived result never claims the currently edited
+  source or starts playback. Parsed-only contributing libraries without source
+  bytes warn that persistence is unavailable while the run remains valid.
+  Exercise `modelica_artifact_history.rhai` in fresh seed/restore sessions and
+  verify the UUID artifact is durable before stopping the seed session. Seed
+  creates a fresh Twin around its API-authored scene; restore opens the saved
+  Twin through `OpenTwin`. Include
+  a corrupt optional artifact and changed same-name source; history must retain
+  its original CID and values. See the [artifact owner contract](../../docs/architecture/25-experiments.md#durable-completed-history).
 - **File diagnostics**: `GetFile` acknowledges asynchronous read admission. It
   uses the same captured native/OPFS source path as document opens; inspect its
   log text or structured read-error diagnostic. Closing the admitted Twin or

@@ -16,7 +16,13 @@
 #[cfg(feature = "bevy")]
 mod origins;
 #[cfg(feature = "bevy")]
-pub use origins::{ExperimentOrigin, ExperimentOrigins};
+pub use origins::{ArtifactAdmission, ExperimentOrigin, ExperimentOrigins};
+
+pub mod artifact;
+pub use artifact::{
+    ExperimentDefinition, RunArtifact, SourceContentIdentity, decode_run_artifact,
+    encode_run_artifact, stamp_source_identity,
+};
 
 mod result_limits;
 pub use result_limits::{RunResultError, RunResultLimits};
@@ -304,6 +310,10 @@ impl RunResult {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RunMeta {
+    #[serde(default)]
+    pub source_content: Option<SourceContentIdentity>,
+    #[serde(default)]
+    pub restored_history: bool,
     pub wall_time_ms: u64,
     pub sample_count: usize,
     /// Backend-specific notes (solver used, step count, etc.). Free-form.
@@ -736,6 +746,7 @@ pub struct RunProgress {
 pub struct RunCompleted {
     pub experiment_id: ExperimentId,
     pub origin: ExperimentOrigin,
+    pub artifact_admission: Option<ArtifactAdmission>,
 }
 
 #[cfg(feature = "bevy")]

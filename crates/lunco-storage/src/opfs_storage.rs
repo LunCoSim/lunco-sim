@@ -120,24 +120,44 @@ impl OpfsStorage {
     }
 
     /// List direct children with the same File-handle mapping as native storage.
-    /// Enumeration remains asynchronous and creates no directories.
     pub async fn read_directory(
         &self,
         handle: &StorageHandle,
     ) -> StorageResult<Vec<StorageHandle>> {
+        self.read_directory_contents(handle, None)
+            .await
+            .map(|snapshot| snapshot.entries)
+    }
+    /// Stream regular direct files, retaining at most the lexical cap.
+    pub async fn read_directory_bounded(
+        &self,
+        handle: &StorageHandle,
+        cap: usize,
+    ) -> StorageResult<crate::BoundedDirectoryEntries> {
+        self.read_directory_contents(handle, Some(cap)).await
+    }
+    async fn read_directory_contents(
+        &self,
+        handle: &StorageHandle,
+        cap: Option<usize>,
+    ) -> StorageResult<crate::BoundedDirectoryEntries> {
         let path = handle
             .as_file_path()
             .ok_or_else(|| unsupported("OpfsStorage addresses File handles only"))?;
-        let segments: Vec<_> = path
+        let path = crate::canonicalize_file_path(path)?;
+        let segments = path
             .components()
             .filter_map(|component| match component {
                 std::path::Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
                 _ => None,
             })
-            .collect();
+            .collect::<Vec<_>>();
         let directory = resolve_dir(&segments_root().await?, &segments, false).await?;
-        let iterator = directory.keys();
-        let mut entries = Vec::new();
+        let iterator = directory.entries();
+        let mut snapshot = crate::BoundedDirectoryEntries {
+            entries: Vec::new(),
+            truncated: false,
+        };
         loop {
             let result = JsFuture::from(iterator.next().map_err(js_err)?)
                 .await
@@ -149,14 +169,35 @@ impl OpfsStorage {
             if done {
                 break;
             }
-            let name = js_sys::Reflect::get(&result, &JsValue::from_str("value"))
-                .map_err(js_err)?
+            let entry = js_sys::Array::from(
+                &js_sys::Reflect::get(&result, &JsValue::from_str("value")).map_err(js_err)?,
+            );
+            let name = entry
+                .get(0)
                 .as_string()
                 .ok_or_else(|| unsupported("OPFS directory iterator returned no name"))?;
-            entries.push(StorageHandle::File(path.join(name)));
+            if cap.is_some() {
+                let handle = entry.get(1);
+                if handle.is_instance_of::<web_sys::FileSystemDirectoryHandle>() {
+                    continue;
+                }
+                handle
+                    .dyn_into::<web_sys::FileSystemFileHandle>()
+                    .map_err(|_| {
+                        unsupported("OPFS directory iterator returned an unknown entry kind")
+                    })?;
+            }
+            let entry = StorageHandle::File(path.join(name));
+            if let Some(cap) = cap {
+                snapshot.retain_entry(entry, cap);
+            } else {
+                snapshot.entries.push(entry);
+            }
         }
-        entries.sort_by_key(|entry| entry.display_name());
-        Ok(entries)
+        if cap.is_none() {
+            snapshot.entries.sort_by_key(|entry| entry.display_name());
+        }
+        Ok(snapshot)
     }
 
     /// Delete the OPFS file addressed by `handle`. [`StorageError::NotFound`]

@@ -13,7 +13,7 @@ use bevy::asset::AssetServer;
 use bevy::log::error;
 #[cfg(feature = "networking")]
 use bevy::log::info;
-#[cfg(any(feature = "experiments", feature = "networking"))]
+#[cfg(feature = "networking")]
 use bevy::log::warn;
 use bevy::prelude::*;
 
@@ -22,6 +22,8 @@ use lunco_usd_bevy_runtime_core::scene::LoadScene;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::UsdStageAsset;
 
+#[cfg(feature = "experiments")]
+mod experiment_artifacts;
 #[cfg(all(feature = "session-input-archive-export", not(target_arch = "wasm32")))]
 mod session_input_archive;
 
@@ -68,22 +70,7 @@ impl Plugin for LunCoSimServicesPlugin {
         }
 
         #[cfg(feature = "experiments")]
-        {
-            app.add_systems(
-                Update,
-                write_run_result_artifact.run_if(
-                    resource_exists::<lunco_experiments::ExperimentRegistry>
-                        .and_then(resource_exists::<lunco_workspace::WorkspaceResource>),
-                ),
-            );
-            app.add_systems(
-                Update,
-                load_run_result_artifacts.run_if(
-                    resource_changed::<lunco_experiments::ExperimentRegistry>
-                        .and_then(resource_exists::<lunco_workspace::WorkspaceResource>),
-                ),
-            );
-        }
+        experiment_artifacts::install(app);
 
         #[cfg(feature = "networking")]
         {
@@ -115,12 +102,6 @@ impl Plugin for LunCoSimServicesPlugin {
             app.add_systems(Update, replay_scenario_journal_obstacle);
             app.init_resource::<lunco_networking_sync::sync::PendingRunStatus>();
             app.init_resource::<lunco_networking_sync::sync::RequestManifestRebuild>();
-            #[cfg(feature = "experiments")]
-            app.add_systems(
-                Update,
-                request_rebuild_after_result
-                    .run_if(resource_exists::<lunco_experiments::ExperimentRegistry>),
-            );
             #[cfg(feature = "experiments")]
             app.add_systems(
                 Update,
@@ -205,6 +186,33 @@ fn load_ready_scenario(
         root: mount.root,
         owns_mount,
     });
+    #[cfg(feature = "experiments")]
+    if let Some(owner) = replica.0.as_ref() {
+        let mut paths = m
+            .assets
+            .iter()
+            .filter_map(|asset| {
+                let relative = lunco_networking_sync::scenario_sync::safe_rel_path(&asset.path)?;
+                (relative.parent() == Some(std::path::Path::new("results"))
+                    && relative
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        == Some("json"))
+                .then(|| owner.root.join(relative))
+            })
+            .take(lunco_experiments::REGISTRY_CAP_PER_TWIN)
+            .collect::<Vec<_>>();
+        paths.sort();
+        commands.trigger(experiment_artifacts::MaterializedArtifacts {
+            runtime: lunco_workspace::DocumentRuntimeOwner::Replicated(
+                lunco_workspace::ReplicationOwner::Twin {
+                    scene: owner.clone(),
+                },
+            ),
+            root: owner.root.clone(),
+            paths,
+        });
+    }
     info!("[net] scenario fully cached; loading entry scene (read-only): {scene}");
     commands.trigger(LoadScene {
         path: mount.path,
@@ -700,143 +708,6 @@ fn replay_scenario_journal_obstacle(
         // Install the peer's spec. Sets the resource directly (NOT the
         // `UpdateObstacleFieldSpec` command), so no re-record.
         *spec = new_spec;
-    }
-}
-
-/// Result-artifact writer: on `RunCompleted`, the host serializes the finished
-/// `RunResult` to `<twin>/results/<experiment-id>.json` so it rides the **content
-/// plane** — the twin file-walk CID's `results/` (a non-dot dir) and the manifest
-/// sync ships it to peers. Host-authoritative: a Client never ran the sim, so it
-/// writes nothing (it *receives* the artifact). The result is recovered from the
-/// registry (core writes it there before `RunCompleted` fires — same pattern as
-/// `project_run_results_to_ui`). JSON today; parquet is a deferred format swap
-/// pending a wasm-reader spike (see `NETWORKING_STATE_SYNC_TAXONOMY_DESIGN.md`).
-/// `RunResult` to `<twin>/results/<experiment-id>.json` through the cross-platform
-/// [`lunco_storage`] layer (native file / wasm WebStorage). This is **core
-/// persistence, not a networking concern** — a single-player run's results
-/// survive a restart, and when networking is on the same file rides the content
-/// plane to peers. Host/standalone only: a networked Client never ran the sim, so
-/// it writes nothing (it *receives* the artifact). Recovered from the registry
-/// (core writes it there before `RunCompleted` fires — same pattern as
-/// `project_run_results_to_ui`). JSON today; parquet is a deferred format swap.
-#[cfg(feature = "experiments")]
-fn write_run_result_artifact(
-    mut completed: MessageReader<lunco_experiments::RunCompleted>,
-    registry: Res<lunco_experiments::ExperimentRegistry>,
-    workspace: Res<lunco_workspace::WorkspaceResource>,
-    role: Option<Res<lunco_core_session::NetworkRole>>,
-) {
-    if matches!(
-        role.as_deref(),
-        Some(lunco_core_session::NetworkRole::Client)
-    ) {
-        return;
-    }
-    for msg in completed.read() {
-        let id = msg.experiment_id;
-        let Some(result) = registry.get(id).and_then(|e| e.result.as_ref()) else {
-            continue;
-        };
-        let Some(active) = workspace.active_twin else {
-            continue;
-        };
-        let Some(twin) = workspace.twin(active) else {
-            continue;
-        };
-        // The storage layer creates parent dirs on write (FileStorage tmp+rename;
-        // WebStorage is key-based), so no explicit mkdir — all I/O goes through it.
-        let dest =
-            lunco_twin::results_dir(&twin.root).join(format!("{}.json", id.as_artifact_stem()));
-        match serde_json::to_vec_pretty(result) {
-            Ok(bytes) => match lunco_storage::write_file_sync(&dest, &bytes) {
-                Ok(()) => info!("[experiment] wrote result artifact {dest:?}"),
-                Err(e) => warn!("[experiment] result artifact write failed: {e}"),
-            },
-            Err(e) => warn!("[experiment] result serialize failed: {e}"),
-        }
-    }
-}
-
-/// Result-artifact loader — the consume half of persistence/ship-artifact. For
-/// each known experiment that lacks a trajectory, reads
-/// `<twin>/results/<id>.json` through [`lunco_storage`] (cross-platform, no
-/// directory listing — bounded by the registry cap) and loads it. This restores a
-/// single-player run's results after a restart AND makes a networked peer *see*
-/// the host's results once their file syncs.
-///
-/// Change-driven on [`ExperimentRegistry`] mutation (a definition synced, a run
-/// completed, a status update) — so a just-synced result file is picked up on the
-/// next registry change (e.g. the presence status flip) rather than by polling.
-#[cfg(feature = "experiments")]
-fn load_run_result_artifacts(
-    mut registry: ResMut<lunco_experiments::ExperimentRegistry>,
-    workspace: Res<lunco_workspace::WorkspaceResource>,
-    settings: Res<lunco_experiments::ExperimentSettings>,
-) {
-    let Some(active) = workspace.active_twin else {
-        return;
-    };
-    let Some(root) = workspace
-        .twin(active)
-        .map(|t| lunco_twin::results_dir(&t.root))
-    else {
-        return;
-    };
-    // Ids known but resultless — the only candidates worth a storage read.
-    let want: Vec<lunco_experiments::ExperimentId> = registry
-        .iter_all()
-        .filter(|e| e.result.is_none())
-        .map(|e| e.id)
-        .collect();
-    for id in want {
-        let path = root.join(format!("{}.json", id.as_artifact_stem()));
-        let Ok(bytes) = lunco_storage::read_file_sync(&path) else {
-            continue; // not present (yet)
-        };
-        match serde_json::from_slice::<lunco_experiments::RunResult>(&bytes) {
-            Ok(result) => {
-                let wall = result.meta.wall_time_ms;
-                if let Err(error) = registry.set_complete_result(id, result, settings.result_limits)
-                {
-                    warn!(
-                        "[experiment] result artifact rejected for {}: {error}",
-                        id.as_artifact_stem()
-                    );
-                    continue;
-                }
-                registry.set_status(
-                    id,
-                    lunco_experiments::RunStatus::Done { wall_time_ms: wall },
-                );
-                info!(
-                    "[experiment] loaded result artifact for {}",
-                    id.as_artifact_stem()
-                );
-            }
-            Err(e) => warn!(
-                "[experiment] result artifact parse failed for {}: {e}",
-                id.as_artifact_stem()
-            ),
-        }
-    }
-}
-
-/// Networking distribution trigger: when a run finishes on the host, ask for an
-/// immediate scenario-manifest rebuild so already-connected peers pull the
-/// just-written result artifact now (serviced by `service_manifest_rebuild_request`
-/// in lunco-networking). The write itself is the core persistence system's job;
-/// this only nudges distribution. Host-only.
-#[cfg(all(feature = "networking", feature = "experiments"))]
-fn request_rebuild_after_result(
-    mut completed: MessageReader<lunco_experiments::RunCompleted>,
-    role: Option<Res<lunco_core_session::NetworkRole>>,
-    mut rebuild: ResMut<lunco_networking_sync::sync::RequestManifestRebuild>,
-) {
-    if !matches!(role.as_deref(), Some(lunco_core_session::NetworkRole::Host)) {
-        return;
-    }
-    if completed.read().count() > 0 {
-        rebuild.0 = true;
     }
 }
 

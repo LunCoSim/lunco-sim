@@ -776,3 +776,27 @@ mod opfs_identity_tests {
         assert!(super::opfs_file_identity(Path::new("/")).is_err());
     }
 }
+
+/// Deterministic bounded regular-file snapshot; enumeration never retains more
+/// than the caller's cap, even when the backing directory contains many files.
+#[derive(Debug)]
+pub struct BoundedDirectoryEntries {
+    pub entries: Vec<StorageHandle>,
+    pub truncated: bool,
+}
+impl BoundedDirectoryEntries {
+    pub(crate) fn retain_entry(&mut self, entry: StorageHandle, cap: usize) {
+        let name = entry.display_name();
+        let index = self
+            .entries
+            .partition_point(|current| current.display_name() < name);
+        if self.entries.len() == cap {
+            self.truncated = true;
+            if index >= cap {
+                return;
+            }
+            self.entries.pop();
+        }
+        self.entries.insert(index, entry);
+    }
+}

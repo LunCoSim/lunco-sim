@@ -128,6 +128,7 @@ struct CachedDae {
     model: ModelIdent,
     runtime: lunco_workspace::DocumentRuntimeOwner,
     dae: Arc<Dae>,
+    source_content: lunco_experiments::SourceContentIdentity,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -137,6 +138,7 @@ fn publish_cached_dae(
     key: u64,
     dae: Arc<Dae>,
     cancel: &AtomicBool,
+    source_content: lunco_experiments::SourceContentIdentity,
 ) {
     // Called under the state lock: owner retirement sets cancellation before
     // taking the same lock, so closed work cannot repopulate its cache.
@@ -153,6 +155,7 @@ fn publish_cached_dae(
             model,
             runtime: source.runtime.clone(),
             dae,
+            source_content,
         },
     );
 }
@@ -545,7 +548,7 @@ fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
         return;
     };
     let (forward_tx, forward_rx) = unbounded::<RunUpdate>();
-    (transport.register_run_sender)(run_id, forward_tx);
+    (transport.register_run_sender)(run_id, forward_tx, src.runtime.clone());
     spawn_forwarder(run_id, forward_rx, tx, state.clone());
     let dispatched = (transport.dispatch_run_fast)(
         run_id,
@@ -768,11 +771,12 @@ fn run_inner(
     // applied to the DAE afterwards (see `apply_value_bindings_to_dae`), so a
     // whole parameter/input sweep shares ONE compile and recompiles zero times.
     let key = dae_cache_key(&source);
-    let cached = state
-        .lock()
-        .ok()
-        .and_then(|s| s.dae_cache.get(&key).map(|entry| entry.dae.clone()));
-    let base_dae: Arc<Dae> = match cached {
+    let cached = state.lock().ok().and_then(|s| {
+        s.dae_cache
+            .get(&key)
+            .map(|entry| (entry.dae.clone(), entry.source_content.clone()))
+    });
+    let (base_dae, source_content) = match cached {
         Some(d) => d,
         None => {
             let compiled = {
@@ -797,16 +801,32 @@ fn run_inner(
                     &source.filename,
                     &source.extras,
                 );
+                let identity = result
+                    .as_ref()
+                    .map_err(|error| error.clone())
+                    .and_then(|compiled| compiler.compiled_source_content_identity(compiled))
+                    .map(|cid| lunco_experiments::SourceContentIdentity::Available { cid })
+                    .unwrap_or_else(|reason| {
+                        lunco_experiments::SourceContentIdentity::Unavailable { reason }
+                    });
                 compiler.clear_user_documents();
-                result
+                (result, identity)
             };
+            let (compiled, identity) = compiled;
             match compiled {
                 Ok(d) => {
                     let dae = d.dae.clone();
                     if let Ok(mut s) = lock_runner_state(&state) {
-                        publish_cached_dae(&mut s, &source, key, dae.clone(), &cancel);
+                        publish_cached_dae(
+                            &mut s,
+                            &source,
+                            key,
+                            dae.clone(),
+                            &cancel,
+                            identity.clone(),
+                        );
                     }
-                    dae
+                    (dae, identity)
                 }
                 Err(e) => {
                     let _ = tx.send(RunUpdate::Failed {
@@ -855,7 +875,11 @@ fn run_inner(
     // web can NOT diverge on solver selection / sampling. The only
     // platform-specific piece is the `RunSink` impl (native = crossbeam
     // channel + atomic cancel; worker = postMessage + cancel registry).
-    let mut sink = ChannelSink { tx, cancel };
+    let mut sink = ChannelSink {
+        tx,
+        cancel,
+        source_content,
+    };
     drive_run(&run_dae, &bounds, source.result_limits, t_wall, &mut sink);
 }
 
@@ -1130,6 +1154,7 @@ fn run_batch_sim(
             wall_time_ms: started.elapsed().as_millis() as u64,
             sample_count: n_samples,
             notes: None,
+            ..Default::default()
         },
     }));
 }
@@ -1211,6 +1236,7 @@ pub trait RunSink {
 struct ChannelSink {
     tx: Sender<RunUpdate>,
     cancel: Arc<AtomicBool>,
+    source_content: lunco_experiments::SourceContentIdentity,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1218,7 +1244,8 @@ impl RunSink for ChannelSink {
     fn is_cancelled(&mut self) -> bool {
         self.cancel.load(Ordering::SeqCst)
     }
-    fn emit(&mut self, update: RunUpdate) {
+    fn emit(&mut self, mut update: RunUpdate) {
+        lunco_experiments::stamp_source_identity(&mut update, &self.source_content);
         let _ = self.tx.send(update);
     }
 }
@@ -1365,6 +1392,7 @@ fn emit_partial_failure(
                 wall_time_ms: started.elapsed().as_millis() as u64,
                 sample_count: all_times.len(),
                 notes: Some(notes),
+                ..Default::default()
             },
         }),
     });
@@ -1631,6 +1659,7 @@ pub fn run_stepping_loop(
                         wall_time_ms: started.elapsed().as_millis() as u64,
                         sample_count: all_times.len() - last_emit_idx,
                         notes: None,
+                        ..Default::default()
                     },
                 }),
             });
@@ -1658,6 +1687,7 @@ pub fn run_stepping_loop(
             wall_time_ms: started.elapsed().as_millis() as u64,
             sample_count: n_samples,
             notes: None,
+            ..Default::default()
         },
     }));
 }
@@ -1836,6 +1866,7 @@ pub struct PendingHandles(pub Vec<PendingRun>);
 
 /// Immutable ownership envelope for an admitted asynchronous handle.
 pub struct PendingRun {
+    pub artifact_admission: Option<lunco_experiments::ArtifactAdmission>,
     pub handle: RunHandle,
     pub origin: lunco_experiments::ExperimentOrigin,
     pub result_limits: lunco_experiments::RunResultLimits,
@@ -1950,6 +1981,7 @@ pub fn drain_pending_handles(
                     ev_completed.write(RunCompleted {
                         experiment_id: handle.run_id,
                         origin: handle.origin.clone(),
+                        artifact_admission: handle.artifact_admission.clone(),
                     });
                     terminal = true;
                 }
@@ -2136,6 +2168,9 @@ mod tests {
                 dae_cache_key(input),
                 Arc::new(Dae::default()),
                 &cancel,
+                lunco_experiments::SourceContentIdentity::Unavailable {
+                    reason: "inline cache fixture".into(),
+                },
             );
         }
         assert_eq!(runner.state.lock().expect("state").dae_cache.len(), 3);
@@ -2151,6 +2186,9 @@ mod tests {
                 dae_cache_key(&owned),
                 Arc::new(Dae::default()),
                 &cancel,
+                lunco_experiments::SourceContentIdentity::Unavailable {
+                    reason: "inline cache fixture".into(),
+                },
             );
             assert_eq!(state.dae_cache.len(), 2);
             assert!(!state.dae_cache.contains_key(&dae_cache_key(&owned)));
@@ -2163,6 +2201,9 @@ mod tests {
             dae_cache_key(&source),
             Arc::new(Dae::default()),
             &AtomicBool::new(false),
+            lunco_experiments::SourceContentIdentity::Unavailable {
+                reason: "inline cache fixture".into(),
+            },
         );
         assert_eq!(runner.state.lock().expect("state").dae_cache.len(), 2);
     }
@@ -2423,6 +2464,7 @@ mod tests {
             .insert_resource(origins)
             .insert_resource(PendingHandles(vec![
                 PendingRun {
+                    artifact_admission: None,
                     result_limits: Default::default(),
                     origin: origin.clone(),
                     handle: RunHandle {
@@ -2432,6 +2474,7 @@ mod tests {
                     },
                 },
                 PendingRun {
+                    artifact_admission: None,
                     result_limits: Default::default(),
                     origin,
                     handle: RunHandle {
@@ -2532,6 +2575,7 @@ mod tests {
                 ..Default::default()
             })
             .insert_resource(PendingHandles(vec![PendingRun {
+                artifact_admission: None,
                 origin,
                 result_limits: limits,
                 handle: RunHandle {

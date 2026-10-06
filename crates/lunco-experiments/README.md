@@ -32,6 +32,13 @@ plugs in via the `ExperimentRunner` trait; the Modelica binding lives in
 `lunco-modelica-runner`. Future backends (FMU, codegen,
 remote) plug in the same way.
 
+Completed Twin history uses a versioned `RunArtifact` with an immutable
+execution definition and compiler-provided source-content identity. The shared
+codec admits byte and scalar budgets before trajectory allocation. Restored
+rows retain an archived runtime origin and never emit a live run completion.
+The application service owns asynchronous storage and discovery; this crate
+does not choose a filesystem root or execute I/O.
+
 ## Features
 
 - `bevy` — exposes the registry as a Bevy `Resource`. Off → plain data types

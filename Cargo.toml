@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "third_party/openusd",
+    "third_party/rumoca/rumoca-compile",
     "third_party/rumoca/rumoca-solver",
     "third_party/rumoca/rumoca-eval-solve",
     "crates/lunco-core",
@@ -697,5 +698,6 @@ debug = "line-tables-only"
 strip = "none"
 
 [patch."https://github.com/LunCoSim/rumoca"]
+rumoca-compile = { path = "third_party/rumoca/rumoca-compile" }
 rumoca-solver = { path = "third_party/rumoca/rumoca-solver" }
 rumoca-eval-solve = { path = "third_party/rumoca/rumoca-eval-solve" }

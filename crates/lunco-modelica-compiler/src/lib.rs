@@ -1363,6 +1363,79 @@ impl ModelicaCompiler {
             .get(source_set_id)
             .map(Result::as_ref)
     }
+
+    /// Portable identity of the successfully seated compile input closure.
+    /// Includes the target, actual transformed overlays, and admitted library
+    /// bytes. Runtime mount IDs and host paths never contribute to this CID.
+    /// Capture before clearing the admitted user-document overlay.
+    pub fn compiled_source_content_identity(
+        &self,
+        compiled: &rumoca_compile::compile::DaeCompilationResult,
+    ) -> Result<lunco_hash::content::Cid, String> {
+        fn field(bytes: &mut Vec<u8>, value: &[u8]) {
+            bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(value);
+        }
+        let closure = compiled
+            .source_closure
+            .as_ref()
+            .ok_or("compile result has no strict participating-source closure")?;
+        if closure.files.is_empty() {
+            return Err("strict compile has no participating source files".into());
+        }
+        let mut bytes = b"LunCoModelicaCompileClosure\0\x01".to_vec();
+        field(&mut bytes, closure.target.as_bytes());
+        let mut overlays = Vec::new();
+        let mut contributing_roots = std::collections::HashSet::new();
+        for participant in &closure.files {
+            if self.seated_user_uris.contains(&participant.uri) {
+                let document = self
+                    .session
+                    .get_document(&participant.uri)
+                    .ok_or("participating overlay no longer has seated text")?;
+                overlays.push(lunco_hash::content::cid(document.content.as_bytes()));
+            } else {
+                if participant.source_set_keys.is_empty() {
+                    return Err(format!(
+                        "participating source `{}` has no admitted byte owner",
+                        participant.uri
+                    ));
+                }
+                contributing_roots.extend(participant.source_set_keys.iter().cloned());
+            }
+        }
+        overlays.sort_by_key(|cid| cid.to_bytes());
+        for cid in overlays {
+            field(&mut bytes, &cid.to_bytes());
+        }
+        // Preserve actual first-wins admission order while excluding unrelated
+        // roots. A contributing source set is conservatively represented in full.
+        let mut ordered = self
+            .source_set_order
+            .iter()
+            .filter(|id| contributing_roots.contains(*id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut remaining = contributing_roots
+            .into_iter()
+            .filter(|id| !ordered.contains(id))
+            .collect::<Vec<_>>();
+        remaining.sort();
+        ordered.extend(remaining);
+        for id in ordered {
+            let content = self
+                .source_root_content_closures
+                .get(&id)
+                .ok_or_else(|| format!("participating source root `{id}` has no byte identity"))?
+                .as_ref()
+                .map_err(|error| error.to_string())?;
+            for file in &content.files {
+                field(&mut bytes, file.source_uri.as_bytes());
+                field(&mut bytes, &file.cid.to_bytes());
+            }
+        }
+        Ok(lunco_hash::content::cid(&bytes))
+    }
 }
 
 /// Convert a rumoca [`StrictCompileReport`] into the Diagnostics
@@ -1934,5 +2007,83 @@ mod source_root_smoke {
         // Just assert we got a DAE at all — shape details vary
         // by rumoca version.
         let _ = r.dae;
+    }
+    #[test]
+    fn compiled_source_identity_uses_actual_participants_and_portable_inputs() {
+        let source =
+            "model IdentityProbe Real x(start=1,fixed=true); equation der(x)=0; end IdentityProbe;";
+        let mut compiler = ModelicaCompiler::new();
+        let mut unused = PreparedSourceRoot::prepare(
+            "unused-root",
+            "unused-root",
+            vec![(
+                "Unused.mo".into(),
+                "package Unused model Part Real y; equation y=1; end Part; end Unused;".into(),
+            )],
+            Vec::new(),
+        );
+        unused.content_closure = Err(ModelicaSourceRootContentError::SourceTextUnavailable {
+            source_set_id: "unused-root".into(),
+        });
+        assert!(compiler.install_source_root(unused).diagnostics.is_empty());
+        let first = compiler
+            .compile_str_multi(
+                "IdentityProbe",
+                source,
+                "/host-a/editor.mo",
+                &[(
+                    "Ignored.mo".into(),
+                    "model Ignored Real y; equation y=9; end Ignored;".into(),
+                )],
+            )
+            .expect("inline compile");
+        assert_eq!(
+            first
+                .source_closure
+                .as_ref()
+                .expect("strict closure")
+                .target,
+            "IdentityProbe"
+        );
+        assert_eq!(
+            first
+                .source_closure
+                .as_ref()
+                .expect("strict closure")
+                .files
+                .len(),
+            1
+        );
+        let identity = compiler
+            .compiled_source_content_identity(&first)
+            .expect("unused parsed-only root is excluded");
+        compiler.clear_user_documents();
+        let second = compiler
+            .compile_str("IdentityProbe", source, "/host-b/editor.mo")
+            .expect("portable target");
+        assert_eq!(
+            identity,
+            compiler
+                .compiled_source_content_identity(&second)
+                .expect("portable identity")
+        );
+        let changed = source.replace("start=1", "start=2");
+        let third = compiler
+            .compile_str("IdentityProbe", &changed, "/host-b/editor.mo")
+            .expect("changed source");
+        assert_ne!(
+            identity,
+            compiler
+                .compiled_source_content_identity(&third)
+                .expect("changed identity")
+        );
+        let required = "model RequiredProbe Unused.Part part; end RequiredProbe;";
+        let compiled = compiler
+            .compile_str("RequiredProbe", required, "RequiredProbe.mo")
+            .expect("parsed-only dependency remains compilable");
+        let error = compiler
+            .compiled_source_content_identity(&compiled)
+            .expect_err("participating parsed-only bytes are unavailable");
+        assert!(error.contains("parsed definitions but no source text"));
     }
 }

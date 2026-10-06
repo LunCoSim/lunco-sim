@@ -174,6 +174,51 @@ impl FileStorage {
         self.read_contents(handle, Some(max_bytes))
     }
 
+    /// Stream regular direct files into a deterministic bounded snapshot.
+    pub async fn read_directory_bounded(
+        &self,
+        handle: &StorageHandle,
+        cap: usize,
+    ) -> StorageResult<crate::BoundedDirectoryEntries> {
+        self.read_directory_contents(handle, Some(cap))
+    }
+    fn read_directory_contents(
+        &self,
+        handle: &StorageHandle,
+        cap: Option<usize>,
+    ) -> StorageResult<crate::BoundedDirectoryEntries> {
+        let mut snapshot = crate::BoundedDirectoryEntries {
+            entries: Vec::new(),
+            truncated: false,
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        if let StorageHandle::File(path) = handle {
+            for entry in std::fs::read_dir(path).map_err(|error| match error.kind() {
+                std::io::ErrorKind::NotFound => StorageError::NotFound,
+                _ => StorageError::Io(error),
+            })? {
+                let entry = entry.map_err(StorageError::Io)?;
+                if cap.is_some() && !entry.file_type().map_err(StorageError::Io)?.is_file() {
+                    continue;
+                }
+                let entry = StorageHandle::File(entry.path());
+                if let Some(cap) = cap {
+                    snapshot.retain_entry(entry, cap);
+                } else {
+                    snapshot.entries.push(entry);
+                }
+            }
+            if cap.is_none() {
+                snapshot.entries.sort_by_key(|entry| entry.display_name());
+            }
+            return Ok(snapshot);
+        }
+        let _ = (handle, cap, &mut snapshot);
+        Err(StorageError::Unsupported(
+            "FileStorage does not list web / remote directories".into(),
+        ))
+    }
+
     fn read_contents(
         &self,
         handle: &StorageHandle,
@@ -430,24 +475,8 @@ impl Storage for FileStorage {
     }
 
     async fn read_directory(&self, handle: &StorageHandle) -> StorageResult<Vec<StorageHandle>> {
-        match handle {
-            #[cfg(not(target_arch = "wasm32"))]
-            StorageHandle::File(path) => {
-                let mut entries = std::fs::read_dir(path)
-                    .map_err(|error| match error.kind() {
-                        std::io::ErrorKind::NotFound => StorageError::NotFound,
-                        _ => StorageError::Io(error),
-                    })?
-                    .map(|entry| entry.map(|entry| StorageHandle::File(entry.path())))
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(StorageError::Io)?;
-                entries.sort_by_key(|entry| entry.display_name());
-                Ok(entries)
-            }
-            _ => Err(StorageError::Unsupported(
-                "FileStorage does not list web / remote directories".into(),
-            )),
-        }
+        self.read_directory_contents(handle, None)
+            .map(|snapshot| snapshot.entries)
     }
 
     async fn rename(&self, from: &StorageHandle, to: &StorageHandle) -> StorageResult<()> {
@@ -520,6 +549,58 @@ mod tests {
     use super::*;
     use futures_lite::future::block_on;
     use tempfile::tempdir;
+
+    #[test]
+    fn bounded_directory_listing_retains_lexical_cap_without_full_materialization() {
+        block_on(async {
+            let root = tempdir().expect("temporary storage root");
+            for name in ["z.json", "b.json", "c.json", "a.json"] {
+                std::fs::write(root.path().join(name), b"{}").expect("fixture bytes");
+            }
+            std::fs::create_dir(root.path().join("0-directory.json")).expect("non-file child");
+            let storage = FileStorage::new();
+            let handle = StorageHandle::File(root.path().to_path_buf());
+            let snapshot = storage
+                .read_directory_bounded(&handle, 2)
+                .await
+                .expect("bounded listing");
+            assert!(snapshot.truncated);
+            assert_eq!(
+                snapshot
+                    .entries
+                    .iter()
+                    .map(|entry| entry
+                        .as_file_path()
+                        .expect("File")
+                        .file_name()
+                        .expect("name")
+                        .to_string_lossy()
+                        .into_owned())
+                    .collect::<Vec<_>>(),
+                vec!["a.json", "b.json"]
+            );
+            let full = storage
+                .read_directory_bounded(&handle, 4)
+                .await
+                .expect("exact cap");
+            assert_eq!(full.entries.len(), 4);
+            assert!(!full.truncated);
+            let empty = storage
+                .read_directory_bounded(&handle, 0)
+                .await
+                .expect("zero retention");
+            assert!(empty.entries.is_empty());
+            assert!(empty.truncated);
+            assert_eq!(
+                storage
+                    .read_directory(&handle)
+                    .await
+                    .expect("full reader")
+                    .len(),
+                5
+            );
+        });
+    }
 
     #[test]
     fn memory_roundtrip() {

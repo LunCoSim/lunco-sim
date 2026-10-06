@@ -25,6 +25,8 @@ lunco-core = { path = "../lunco-core" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-experiments = { path = "../lunco-experiments" }
+lunco-workspace = { path = "../lunco-workspace" }
+lunco-storage = { path = "../lunco-storage" }
 lunco-modelica-library = { path = "../lunco-modelica-library" }
 lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
@@ -52,6 +54,7 @@ anyhow.workspace = true
 lunco-worker-transport = { path = "../lunco-worker-transport" }
 js-sys.workspace = true
 wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
 web-sys = { workspace = true, features = [
     "console",
     "DedicatedWorkerGlobalScope",

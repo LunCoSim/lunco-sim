@@ -67,6 +67,13 @@ use lunco_modelica_runtime::{ModelicaChannels, ModelicaCommand, ModelicaResult};
 /// (multiplexing on a magic-byte prefix) is uglier and harder to extend.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub enum WireMessage {
+    ArtifactWriteTransferred {
+        token: u64,
+        path: std::path::PathBuf,
+        header: lunco_experiments::artifact::RunArtifactHeader,
+        limits: lunco_experiments::RunResultLimits,
+    },
+    ExperimentArtifact(lunco_experiments::artifact::ArtifactRequest),
     /// Required immutable cache configuration, posted first to every worker.
     ConfigureCacheLimits(lunco_modelica_runtime::ModelicaCacheLimits),
     /// Forward a Bevy-side `ModelicaCommand` to the worker for processing.
@@ -96,7 +103,9 @@ pub enum WireMessage {
     /// Decode the generated editor index from the retained source bundle.
     /// The worker sends the result back in bounded chunks so the browser UI
     /// never parses the 20 MB JSON artifact in one main-thread turn.
-    InstallLibraryIndexFromSource { bytes: Vec<u8> },
+    InstallLibraryIndexFromSource {
+        bytes: Vec<u8>,
+    },
     /// Diagnostic round-trip — worker echoes back as a `WireResult::Log`.
     /// Used by the test bridge (`window.__lc_test_worker_ping`) to confirm
     /// the worker is alive and responding without sending an actual
@@ -148,6 +157,7 @@ pub enum WireMessage {
 /// panic/error is silent).
 #[derive(serde::Serialize, serde::Deserialize)]
 pub enum WireResult {
+    ExperimentArtifact(lunco_experiments::artifact::ArtifactResponse),
     /// A normal `ModelicaResult` produced by `process_worker_command`.
     Result(ModelicaResult),
     /// The worker finished decoding the compressed source library bundle (from
@@ -155,7 +165,9 @@ pub enum WireResult {
     /// `GLOBAL_PARSED_SOURCE_BUNDLE`, and is ready to resolve `Modelica.*` references.
     /// The main thread opens the compile gate (drains queued compiles/parses/
     /// Fast Runs) on receipt. `docs` is the decoded class count, for logging.
-    LibraryReady { docs: usize },
+    LibraryReady {
+        docs: usize,
+    },
     /// A bounded part of the generated editor index decoded by the worker.
     /// `done` closes the current assembly on the main side.
     LibraryIndexChunk {
@@ -165,10 +177,14 @@ pub enum WireResult {
     },
     /// The required source library runtime artifact could not be decoded. This is a
     /// terminal packaging/runtime error; no source reparse path exists.
-    LibraryFailed { error: String },
+    LibraryFailed {
+        error: String,
+    },
     /// The generated editor index could not be decoded. This is a terminal
     /// metadata error; source readiness is reported independently.
-    LibraryIndexFailed { error: String },
+    LibraryIndexFailed {
+        error: String,
+    },
     /// Free-form diagnostic line — surfaced as `bevy::log::info!` on main.
     /// Used by the worker to expose its progress (which command arrived,
     /// how long it took, panic/recover) since the worker's own console is
@@ -215,7 +231,9 @@ pub enum WireResult {
     /// only way to reclaim it is to discard the whole worker instance, so the
     /// main thread respawns this worker once it's idle (see `handle_worker_error`
     /// / `respawn_worker`). Sent by the worker after a run completes.
-    RecycleRequest { mem_mb: u32 },
+    RecycleRequest {
+        mem_mb: u32,
+    },
 }
 
 // The pooled `Worker`s live in a `lunco_worker_transport::WorkerPool` (composed
@@ -466,7 +484,10 @@ static RUN_SENDERS: OnceLock<
     std::sync::Mutex<
         std::collections::HashMap<
             lunco_experiments::ExperimentId,
-            crossbeam_channel::Sender<lunco_experiments::RunUpdate>,
+            (
+                crossbeam_channel::Sender<lunco_experiments::RunUpdate>,
+                lunco_workspace::DocumentRuntimeOwner,
+            ),
         >,
     >,
 > = OnceLock::new();
@@ -474,7 +495,10 @@ static RUN_SENDERS: OnceLock<
 fn run_senders() -> &'static std::sync::Mutex<
     std::collections::HashMap<
         lunco_experiments::ExperimentId,
-        crossbeam_channel::Sender<lunco_experiments::RunUpdate>,
+        (
+            crossbeam_channel::Sender<lunco_experiments::RunUpdate>,
+            lunco_workspace::DocumentRuntimeOwner,
+        ),
     >,
 > {
     RUN_SENDERS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
@@ -486,9 +510,10 @@ fn run_senders() -> &'static std::sync::Mutex<
 pub fn register_run_sender(
     run_id: lunco_experiments::ExperimentId,
     tx: crossbeam_channel::Sender<lunco_experiments::RunUpdate>,
+    runtime: lunco_workspace::DocumentRuntimeOwner,
 ) {
     if let Ok(mut map) = run_senders().lock() {
-        map.insert(run_id, tx);
+        map.insert(run_id, (tx, runtime));
     }
 }
 
@@ -499,7 +524,7 @@ fn forward_run_update(
     let tx = match run_senders()
         .lock()
         .ok()
-        .and_then(|m| m.get(&run_id).cloned())
+        .and_then(|m| m.get(&run_id).map(|(sender, _)| sender.clone()))
     {
         Some(tx) => tx,
         None => {
@@ -698,6 +723,13 @@ fn route_wire_result(idx: usize, data: JsValue) {
     match bincode::serde::decode_from_slice::<WireResult, _>(&bytes, bincode::config::standard())
         .map(|(m, _)| m)
     {
+        Ok(WireResult::ExperimentArtifact(response)) => {
+            if let Ok(mut senders) = artifact_senders().lock() {
+                if let Some((sender, _)) = senders.remove(&response.token) {
+                    let _ = sender.try_send(response);
+                }
+            }
+        }
         Ok(WireResult::Result(result)) => {
             if let Some(error) = &result.worker_failure {
                 fail_worker_pipeline(error.clone());
@@ -762,6 +794,33 @@ fn route_wire_result(idx: usize, data: JsValue) {
             queue_parse_failure(doc_id, generation, error);
         }
         Ok(WireResult::RunUpdate { run_id, update }) => {
+            if let lunco_experiments::RunUpdate::Completed(result) = &update {
+                if let Some(lunco_experiments::SourceContentIdentity::Available { cid }) =
+                    &result.meta.source_content
+                {
+                    let runtime = run_senders().lock().ok().and_then(|senders| {
+                        senders.get(&run_id).map(|(_, runtime)| runtime.clone())
+                    });
+                    if let Some(runtime) = runtime.filter(|runtime| {
+                        matches!(
+                            runtime,
+                            lunco_workspace::DocumentRuntimeOwner::LocalTwin(_)
+                                | lunco_workspace::DocumentRuntimeOwner::Replicated(
+                                    lunco_workspace::ReplicationOwner::Twin { .. }
+                                )
+                        )
+                    }) {
+                        ARTIFACT_LEASES.with(|leases| {
+                            let mut leases = leases.borrow_mut();
+                            if leases.len() >= lunco_experiments::REGISTRY_CAP_PER_TWIN {
+                                bevy::log::warn!("[experiment] completed codec lease was not admitted: retained-buffer cap reached");
+                            } else {
+                                leases.insert(run_id, ArtifactCodecLease { runtime, cid:cid.to_string(), data:Uint8Array::new(&data), worker:idx });
+                            }
+                        });
+                    }
+                }
+            }
             forward_run_update(run_id, update);
         }
         Ok(WireResult::Log(line)) => {
@@ -877,6 +936,10 @@ pub fn prewarm_pool_on_source_bundle_ready() {
 ///   2. Respawn a fresh worker in that slot and re-seed it with source library, so pool
 ///      capacity self-heals (critical for the wasm default single-worker pool).
 fn handle_worker_error(idx: usize) {
+    ARTIFACT_LEASES.with(|leases| leases.borrow_mut().retain(|_, lease| lease.worker != idx));
+    if idx == 0 {
+        fail_artifact_requests("artifact worker disconnected");
+    }
     if let Some(handle) = lunco_modelica_core::engine_resource::global_engine_handle() {
         handle.clear_all_pending();
     }
@@ -1351,6 +1414,8 @@ fn send_run_failure(run_id: lunco_experiments::ExperimentId, error: impl Into<St
 /// source reparsing or leave a request pending forever.
 #[cfg(target_arch = "wasm32")]
 pub fn fail_worker_pipeline(error: String) {
+    ARTIFACT_LEASES.with(|leases| leases.borrow_mut().clear());
+    fail_artifact_requests(&error);
     let is_new = PIPELINE_FAILURE.with(|failure| {
         let mut failure = failure.borrow_mut();
         if failure.is_some() {
@@ -1697,4 +1762,141 @@ fn mark_worker_library_ready(idx: usize) {
             *s = LibraryState::Ready;
         }
     }
+}
+
+fn artifact_senders() -> &'static Mutex<
+    HashMap<
+        u64,
+        (
+            Sender<lunco_experiments::artifact::ArtifactResponse>,
+            lunco_workspace::DocumentRuntimeOwner,
+        ),
+    >,
+> {
+    static SENDERS: OnceLock<
+        Mutex<
+            HashMap<
+                u64,
+                (
+                    Sender<lunco_experiments::artifact::ArtifactResponse>,
+                    lunco_workspace::DocumentRuntimeOwner,
+                ),
+            >,
+        >,
+    > = OnceLock::new();
+    SENDERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+fn fail_artifact_requests(error: &str) {
+    if let Ok(mut senders) = artifact_senders().lock() {
+        for (token, (sender, _)) in senders.drain() {
+            let _ = sender.try_send(lunco_experiments::artifact::ArtifactResponse {
+                token,
+                result: Err(error.into()),
+            });
+        }
+    }
+}
+struct ArtifactCodecLease {
+    runtime: lunco_workspace::DocumentRuntimeOwner,
+    cid: String,
+    data: Uint8Array,
+    worker: usize,
+}
+thread_local! { static ARTIFACT_LEASES: std::cell::RefCell<HashMap<lunco_experiments::ExperimentId,ArtifactCodecLease>> = std::cell::RefCell::new(HashMap::new()); }
+pub fn discard_artifact_lease(id: lunco_experiments::ExperimentId) {
+    ARTIFACT_LEASES.with(|leases| {
+        leases.borrow_mut().remove(&id);
+    });
+}
+pub fn retire_artifact_leases(runtime: &lunco_workspace::DocumentRuntimeOwner) {
+    ARTIFACT_LEASES.with(|leases| {
+        leases
+            .borrow_mut()
+            .retain(|_, lease| &lease.runtime != runtime)
+    });
+    if let Ok(mut routes) = artifact_senders().lock() {
+        routes.retain(|_, (_, owner)| owner != runtime);
+    }
+}
+pub fn clear_artifact_leases() {
+    ARTIFACT_LEASES.with(|leases| leases.borrow_mut().clear());
+    fail_artifact_requests("artifact transport dropped");
+}
+pub fn dispatch_artifact(
+    request: lunco_experiments::artifact::ArtifactRequest,
+    runtime: lunco_workspace::DocumentRuntimeOwner,
+    sender: Sender<lunco_experiments::artifact::ArtifactResponse>,
+) -> Result<(), String> {
+    if let Some(error) = pipeline_failure() {
+        return Err(error);
+    }
+    ensure_pool_spawned();
+    if !is_worker_active() {
+        return Err("experiment artifact Web Worker is unavailable".into());
+    }
+    let token = request.token;
+    let mut senders = artifact_senders()
+        .lock()
+        .map_err(|_| "artifact callback registry poisoned")?;
+    if senders.len() >= lunco_experiments::REGISTRY_CAP_PER_TWIN {
+        return Err("artifact Web Worker admission is full".into());
+    }
+    if senders.contains_key(&token) {
+        return Err("duplicate artifact operation token".into());
+    }
+    senders.insert(token, (sender, runtime.clone()));
+    drop(senders);
+    let posted = (|| match request.operation {
+        lunco_experiments::artifact::ArtifactOperation::Write {
+            path,
+            artifact,
+            limits,
+        } => {
+            let header = lunco_experiments::artifact::RunArtifactHeader::from_artifact(&artifact)?;
+            let lease = ARTIFACT_LEASES
+                .with(|leases| leases.borrow_mut().remove(&artifact.experiment_id))
+                .ok_or("completed transferable codec lease is unavailable")?;
+            if lease.runtime != runtime || artifact.result.meta.source_content.as_ref().is_none_or(|identity| !matches!(identity,lunco_experiments::SourceContentIdentity::Available {cid} if cid.to_string()==lease.cid)) { return Err("artifact codec lease owner/source CID does not match admission".into()); }
+            let bytes = bincode::serde::encode_to_vec(
+                WireMessage::ArtifactWriteTransferred {
+                    token,
+                    path,
+                    header,
+                    limits,
+                },
+                bincode::config::standard(),
+            )
+            .map_err(|error| error.to_string())?;
+            let header = Uint8Array::new_with_length(
+                u32::try_from(bytes.len())
+                    .map_err(|_| "artifact header exceeds browser transfer range")?,
+            );
+            header.copy_from(&bytes);
+            let payload = js_sys::Array::of2(&header, &lease.data);
+            let transfer = js_sys::Array::of2(&header.buffer(), &lease.data.buffer());
+            pool()
+                .lock()
+                .map_err(|_| "worker pool poisoned")?
+                .inner
+                .as_ref()
+                .ok_or("worker pool disappeared")?
+                .post_transfer(0, &payload, &transfer)
+                .map_err(|error| format!("artifact transfer failed: {error:?}"))
+        }
+        operation => post_msg_to(
+            0,
+            &WireMessage::ExperimentArtifact(lunco_experiments::artifact::ArtifactRequest {
+                token,
+                operation,
+            }),
+            "experiment artifact",
+        )
+        .map_err(|error| format!("artifact worker dispatch failed: {error}")),
+    })();
+    if posted.is_err() {
+        if let Ok(mut senders) = artifact_senders().lock() {
+            senders.remove(&token);
+        }
+    }
+    posted
 }

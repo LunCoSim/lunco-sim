@@ -49,7 +49,8 @@ pub struct ModelicaRunnerResource(pub Arc<ModelicaRunner>);
 #[derive(Clone, Copy)]
 pub struct WorkerRunTransport {
     /// Register the per-run update channel before dispatch.
-    pub register_run_sender: fn(ExperimentId, Sender<RunUpdate>),
+    pub register_run_sender:
+        fn(ExperimentId, Sender<RunUpdate>, lunco_workspace::DocumentRuntimeOwner),
     /// Post a Fast Run request to the worker pool.
     pub dispatch_run_fast: fn(
         ExperimentId,
@@ -118,6 +119,7 @@ fn cancel_closed_twin_runs(
     mut experiments: ResMut<lunco_experiments::ExperimentRegistry>,
     mut cancelled: MessageWriter<lunco_experiments::RunCancelled>,
     runner: Option<Res<ModelicaRunnerResource>>,
+    artifacts: Option<Res<lunco_experiments::artifact::ArtifactWorkerTransport>>,
 ) {
     cancel_runtime_runs(
         &lunco_workspace::DocumentRuntimeOwner::LocalTwin(trigger.event().twin),
@@ -125,6 +127,7 @@ fn cancel_closed_twin_runs(
         &mut experiments,
         &mut cancelled,
         runner.as_deref(),
+        artifacts.as_deref(),
     );
 }
 
@@ -134,6 +137,7 @@ fn cancel_retired_replication_runs(
     mut experiments: ResMut<lunco_experiments::ExperimentRegistry>,
     mut cancelled: MessageWriter<lunco_experiments::RunCancelled>,
     runner: Option<Res<ModelicaRunnerResource>>,
+    artifacts: Option<Res<lunco_experiments::artifact::ArtifactWorkerTransport>>,
 ) {
     cancel_runtime_runs(
         &lunco_workspace::DocumentRuntimeOwner::Replicated(trigger.event().owner.clone()),
@@ -141,6 +145,7 @@ fn cancel_retired_replication_runs(
         &mut experiments,
         &mut cancelled,
         runner.as_deref(),
+        artifacts.as_deref(),
     );
 }
 
@@ -150,7 +155,11 @@ fn cancel_runtime_runs(
     experiments: &mut lunco_experiments::ExperimentRegistry,
     cancelled: &mut MessageWriter<lunco_experiments::RunCancelled>,
     runner: Option<&ModelicaRunnerResource>,
+    artifacts: Option<&lunco_experiments::artifact::ArtifactWorkerTransport>,
 ) {
+    if let Some(artifacts) = artifacts {
+        (artifacts.retire)(owner);
+    }
     #[cfg(target_arch = "wasm32")]
     let _ = runner;
     pending.0.retain(|handle| {
@@ -181,8 +190,12 @@ fn cancel_runtime_runs(
 fn cancel_removed_experiment_handles(
     mut removed: MessageReader<lunco_experiments::ExperimentRemoved>,
     mut pending: ResMut<PendingHandles>,
+    artifacts: Option<Res<lunco_experiments::artifact::ArtifactWorkerTransport>>,
 ) {
     for event in removed.read() {
+        if let Some(artifacts) = artifacts.as_deref() {
+            (artifacts.discard)(event.experiment_id);
+        }
         pending.0.retain(|handle| {
             if handle.run_id == event.experiment_id {
                 handle.cancel();
@@ -247,6 +260,7 @@ mod tests {
             let flag = Arc::new(AtomicBool::new(false));
             let cancel = flag.clone();
             pending.0.push(PendingRun {
+                artifact_admission: None,
                 result_limits: Default::default(),
                 origin: origins.get(&id).expect("admitted origin").clone(),
                 handle: RunHandle {
@@ -323,6 +337,7 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(false));
         let cancel = flag.clone();
         let pending = PendingRun {
+            artifact_admission: None,
             result_limits: Default::default(),
             origin: origins.get(&id).expect("origin").clone(),
             handle: RunHandle {

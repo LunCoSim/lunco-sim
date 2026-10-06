@@ -155,8 +155,13 @@ fn on_run_modelica_solve(
     }
     experiments.set_status(experiment_id, lunco_experiments::RunStatus::Queued);
     let result_limits = source_snapshot.result_limits;
+    let artifact_admission = origin.artifact_admission(
+        workspace.as_deref().map(|workspace| &workspace.0),
+        result_limits,
+    );
     let handle = runner.0.run_fast(&experiment, source_snapshot);
     pending.0.push(PendingRun {
+        artifact_admission,
         handle,
         origin,
         result_limits,

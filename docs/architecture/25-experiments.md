@@ -344,9 +344,61 @@ can beat the nearest segment found so far; phase-space plots retain the general
 search because their X values may reverse. Screen-space line geometry is still
 rebuilt for display.
 
+## Durable completed history
+
+The optional artifact adapter in `lunco-luncosim-services` admits work from
+`RunCompleted`, `TwinAdded`, and the actual materialized remote Twin manifest.
+Each operation captures its exact runtime owner, canonical storage root, result
+limits, immutable definition and trajectory. Application runs have no Twin
+artifact destination. Closing that owner retires its queued work and callbacks;
+late outcomes cannot populate a replacement Twin. A durable write announces a
+new manifest only after Storage reports success.
+
+`lunco-experiments` owns the versioned JSON envelope, decoded scalar validation,
+and bounded serializer. Neither raw Workspace Twin IDs nor filesystem roots are
+persisted. A compiler-owned CID describes the actual successful strict target
+and participating source contributions before user overlays are cleared.
+Host paths and mount IDs do not contribute. A participating parsed-only library
+without source bytes is explicitly nonpersistable; the valid simulation result
+remains available. Unused libraries do not affect the CID.
+
+Native codec and Storage work run through bounded background admission. Browser
+JSON encoding and decoding run in the existing execution Web Worker. A bounded,
+once-consumed lease retains the already received transferable completion buffer;
+the UI sends only its small typed header back for encoding. The worker checks
+the exact run, source CID, byte budget and scalar budget. Existing typed worker
+transport still copies and decodes numerical buffers when receiving a result;
+this adapter does not remove that transport cost.
+The runner's exact runtime and removed-run retirement also drops these leases
+in standalone Modelica hosts that do not compose the artifact writer.
+
+Storage lists at most the registry's 20 retained lexical entries and reads each
+candidate under the captured byte cap. Malformed or missing optional history
+warns without failing authored loading or a valid run. Rehydration uses the same
+bounded registry, an explicit archived runtime origin, and `restored_history`
+metadata; it emits no live completion or playback. Same-UUID definition, owner
+or compiled-source conflicts reject. Archived history is queryable without
+pretending it came from the currently edited document. A remote Application
+manifest without an actual admitted Twin mount has no history storage owner.
+An existing replicated row must already be terminal before its artifact can
+attach. Replaying a historical Create as Pending does not prove execution;
+without an admitted terminal status that row remains unavailable as history.
+Private runtime-state persistence retains its independent load/save policy.
+Native background operations reuse the shared asset root-confinement check for
+the directory and file; existing symlinks cannot route optional reads or writes
+outside the admitted root. This is a confinement check at preparation, not a
+race-free guarantee against concurrent hostile filesystem replacement.
+
+Verify the pure codec, compiler contribution CID, bounded directory iterator
+and asynchronous route seams, then run `modelica_artifact_history.rhai` in two
+fresh owned sessions: seed a completed run and verify its UUID artifact is
+durable before restart. Seed uses `CreateTwin` on a fresh root with an existing
+API-authored entry scene; restore uses `OpenTwin` on the saved Twin. Restore
+with a corrupt optional neighbor, then run
+the same class name from changed source and compare CIDs and values.
+
 ## Future enhancements
 
-- Disk persistence of experiments or definitions
 - Parameter sweep grid UI
 - Diff metrics (RMS, max-error)
 - Solver picker UI
@@ -433,4 +485,3 @@ pre-initialise rayon's global pool from the app; do not patch rumoca.
 
 - Determining if interactive runs should produce an experiment entry upon stopping.
 - Journaling experiment definitions as undoable operations in `lunco-twin-journal`.
-- Utilizing JavaScript transferable buffers (`Float64Array`) for WASM execution to optimize large results transfer.

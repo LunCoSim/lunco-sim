@@ -204,6 +204,42 @@ mod wasm {
         }
     }
 
+    async fn process_artifact(
+        operation: lunco_experiments::artifact::ArtifactOperation,
+    ) -> Result<lunco_experiments::artifact::ArtifactOutcome, String> {
+        use lunco_experiments::artifact::{ArtifactOperation, ArtifactOutcome};
+        let storage = lunco_storage::OpfsStorage::new();
+        match operation {
+            ArtifactOperation::Read { path, limits } => {
+                let bytes = storage
+                    .read_bounded(
+                        &lunco_storage::StorageHandle::File(path),
+                        limits.max_artifact_bytes,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                lunco_experiments::decode_run_artifact(&bytes, limits).map(ArtifactOutcome::Read)
+            }
+            ArtifactOperation::Write { .. } => {
+                Err("artifact write requires the transferred completion buffer".into())
+            }
+            ArtifactOperation::List { directory, cap } => {
+                let listing = storage
+                    .read_directory_bounded(&lunco_storage::StorageHandle::File(directory), cap)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(ArtifactOutcome::Listed {
+                    paths: listing
+                        .entries
+                        .into_iter()
+                        .filter_map(|handle| handle.as_file_path().map(|path| path.to_path_buf()))
+                        .collect(),
+                    truncated: listing.truncated,
+                })
+            }
+        }
+    }
+
     fn post_result(scope: &DedicatedWorkerGlobalScope, result: ModelicaResult) {
         post_wire(scope, &WireResult::Result(result));
     }
@@ -275,7 +311,7 @@ mod wasm {
         // Compile the CLEAN model source (no inputs/overrides baked in) via the
         // worker's persistent ModelicaCompiler — identical to the interactive
         // Compile path and to native `run_inner`, so the source seated in the
-        // shared session is always the same. Reuses the worker's compile cache.
+        // shared session is always the same.
         let compile = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             STATE.with(|s| {
                 let mut state = s.try_borrow_mut().expect("worker state borrow");
@@ -283,11 +319,21 @@ mod wasm {
                 let result = state
                     .compiler()
                     .compile_str_multi(model_name, source, filename, extras);
+                let identity = result
+                    .as_ref()
+                    .map_err(|error| error.clone())
+                    .and_then(|compiled| {
+                        state.compiler().compiled_source_content_identity(compiled)
+                    })
+                    .map(|cid| lunco_experiments::SourceContentIdentity::Available { cid })
+                    .unwrap_or_else(|reason| {
+                        lunco_experiments::SourceContentIdentity::Unavailable { reason }
+                    });
                 state.compiler().clear_user_documents();
-                result
+                result.map(|result| (result, identity))
             })
         }));
-        let dae = match compile {
+        let (dae, source_content) = match compile {
             Ok(Ok(d)) => d,
             Ok(Err(e)) => {
                 post_run_update(
@@ -356,7 +402,11 @@ mod wasm {
         // `run_stepping_loop`. `WorkerSink` is the only worker-specific part
         // (postMessage + the cancel registry). The admitted limits and output
         // grid use the same mechanism on both platforms.
-        let mut sink = WorkerSink { scope, run_id };
+        let mut sink = WorkerSink {
+            scope,
+            run_id,
+            source_content,
+        };
         lunco_modelica_runner::drive_run(&run_dae, bounds, result_limits, started, &mut sink);
         post_log(
             scope,
@@ -384,6 +434,7 @@ mod wasm {
     struct WorkerSink<'a> {
         scope: &'a DedicatedWorkerGlobalScope,
         run_id: lunco_experiments::ExperimentId,
+        source_content: lunco_experiments::SourceContentIdentity,
     }
 
     impl lunco_modelica_runner::RunSink for WorkerSink<'_> {
@@ -395,7 +446,8 @@ mod wasm {
                 false
             }
         }
-        fn emit(&mut self, update: lunco_experiments::RunUpdate) {
+        fn emit(&mut self, mut update: lunco_experiments::RunUpdate) {
+            lunco_experiments::stamp_source_identity(&mut update, &self.source_content);
             // DIAGNOSTIC: on each streamed Progress, log the worker's wasm linear
             // memory size. Native runs this exact solve flat at ~905 MB; this
             // surfaces whether the in-browser worker's memory climbs unbounded
@@ -444,6 +496,73 @@ mod wasm {
         )));
 
         let onmessage = Closure::wrap(Box::new(move |event: MessageEvent| {
+            if js_sys::Array::is_array(&event.data()) {
+                let payload = js_sys::Array::from(&event.data());
+                let header_bytes = Uint8Array::new(&payload.get(0)).to_vec();
+                let header = bincode::serde::decode_from_slice::<WireMessage, _>(
+                    &header_bytes,
+                    bincode::config::standard(),
+                )
+                .map(|(message, _)| message);
+                if let Ok(WireMessage::ArtifactWriteTransferred {
+                    token,
+                    path,
+                    header,
+                    limits,
+                }) = header
+                {
+                    let raw = Uint8Array::new(&payload.get(1));
+                    let result = if usize::try_from(raw.length())
+                        .ok()
+                        .is_none_or(|length| length > limits.max_artifact_bytes)
+                    {
+                        Err("transferred artifact completion exceeds configured byte budget".into())
+                    } else {
+                        bincode::serde::decode_from_slice::<WireResult, _>(
+                            &raw.to_vec(),
+                            bincode::config::standard(),
+                        )
+                        .map_err(|error| error.to_string())
+                        .and_then(|(message, _)| match message {
+                            WireResult::RunUpdate {
+                                run_id,
+                                update: lunco_experiments::RunUpdate::Completed(result),
+                            } if run_id == header.experiment_id => header.with_result(result),
+                            _ => {
+                                Err("artifact transfer is not the exact completed run envelope"
+                                    .into())
+                            }
+                        })
+                        .and_then(|artifact| {
+                            artifact.validate(limits)?;
+                            lunco_experiments::encode_run_artifact(&artifact, limits)
+                        })
+                    };
+                    let scope = scope_for_cb.clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let result = match result {
+                            Ok(bytes) => lunco_storage::OpfsStorage::new()
+                                .write(&lunco_storage::StorageHandle::File(path), &bytes)
+                                .await
+                                .map(|_| lunco_experiments::artifact::ArtifactOutcome::Written)
+                                .map_err(|error| error.to_string()),
+                            Err(error) => Err(error),
+                        };
+                        post_wire(
+                            &scope,
+                            &WireResult::ExperimentArtifact(
+                                lunco_experiments::artifact::ArtifactResponse { token, result },
+                            ),
+                        );
+                    });
+                } else {
+                    let error = "artifact transferred header is invalid".to_string();
+                    STATE
+                        .with(|state| *state.borrow_mut() = WorkerStateSlot::Failed(error.clone()));
+                    post_result(&scope_for_cb, ModelicaResult::worker_failure(error));
+                }
+                return;
+            }
             let bytes: Vec<u8> = match Uint8Array::new(&event.data()).to_vec() {
                 v if !v.is_empty() => v,
                 _ => return,
@@ -667,6 +786,14 @@ mod wasm {
                                 .unwrap_or(0)
                         ),
                     );
+                }
+                WireMessage::ArtifactWriteTransferred {token,..} => post_wire(&scope_for_cb,&WireResult::ExperimentArtifact(lunco_experiments::artifact::ArtifactResponse {token,result:Err("artifact write requires the transferred completion buffer".into())})),
+                WireMessage::ExperimentArtifact(request) => {
+                    let scope = scope_for_cb.clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let result = process_artifact(request.operation).await;
+                        post_wire(&scope, &WireResult::ExperimentArtifact(lunco_experiments::artifact::ArtifactResponse { token: request.token, result }));
+                    });
                 }
                 WireMessage::RunFast {
                     run_id,
