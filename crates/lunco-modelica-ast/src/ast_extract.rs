@@ -381,15 +381,13 @@ pub fn string_literal_value(e: &rumoca_ir_ast::Expression) -> Option<String> {
 /// Names without any `.` (single-segment, e.g. `"PID"`) return `""`
 /// — the implicit top-level scope. Empty input → `""`.
 ///
-/// Centralised so callers stop reinventing it inline. The codebase
-/// previously had two competing idioms (`rsplit_once('.').map(...)`
-/// and `rsplitn(2, '.').nth(1).unwrap_or("")`) at ~12 sites; the
-/// latter is one typo away from "first segment" instead of "all but
-/// last". Delegates to rumoca-core's `parent_scope` (subscript-aware,
-/// shared with rumoca); its `None` for single-segment names maps to
-/// the empty top-level scope `""`.
+/// Uses the shared Modelica name segments, so a dot inside a quoted identifier
+/// or a bracketed subscript remains part of that segment.
 pub fn parent_qualified(qualified: &str) -> &str {
-    rumoca_core::parent_scope(qualified).unwrap_or("")
+    crate::qualified_name_segments(qualified)
+        .last()
+        .filter(|last| last.len() < qualified.len())
+        .map_or("", |last| &qualified[..qualified.len() - last.len() - 1])
 }
 
 /// Return ALL non-package classes (qualified) reachable from the

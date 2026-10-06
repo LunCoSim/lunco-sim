@@ -11,7 +11,10 @@ pub fn find_class_by_qualified_name<'a>(
     ast: &'a StoredDefinition,
     name: &str,
 ) -> Option<&'a ClassDef> {
-    if !name.contains('.') {
+    if lunco_modelica_ast::qualified_name_segments(name)
+        .nth(1)
+        .is_none()
+    {
         if let Some(class) = ast.classes.get(name) {
             return Some(class);
         }
@@ -24,7 +27,7 @@ pub fn find_class_by_qualified_name<'a>(
     }
 
     let path = lunco_modelica_ast::strip_within_prefix(name, ast.within.as_ref());
-    let mut segments = path.split('.');
+    let mut segments = lunco_modelica_ast::qualified_name_segments(path);
     let first = segments.next()?;
     let mut current = ast.classes.get(first)?;
     for segment in segments {

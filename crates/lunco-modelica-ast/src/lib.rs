@@ -31,7 +31,7 @@ pub use rumoca_ir_ast::StoredDefinition;
 pub fn scope_chain_candidates(raw: &str, ctx: Option<&str>) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(ctx) = ctx {
-        let parts: Vec<&str> = ctx.split('.').collect();
+        let parts: Vec<&str> = qualified_name_segments(ctx).collect();
         for i in (0..parts.len().saturating_sub(1)).rev() {
             let prefix = parts[..=i].join(".");
             out.push(format!("{prefix}.{raw}"));
@@ -42,6 +42,42 @@ pub fn scope_chain_candidates(raw: &str, ctx: Option<&str>) -> Vec<String> {
 }
 
 use std::borrow::Cow;
+
+/// Borrow the dotted segments of a Modelica name, preserving quoted identifiers
+/// and bracketed subscripts. This only identifies boundaries; syntax validity
+/// remains the canonical parser's responsibility.
+pub fn qualified_name_segments(name: &str) -> impl Iterator<Item = &str> {
+    let mut remaining = Some(name);
+    std::iter::from_fn(move || {
+        let segment = remaining.take()?;
+        let mut quote = None;
+        let mut escaped = false;
+        let mut brackets = 0usize;
+        for (index, byte) in segment.bytes().enumerate() {
+            if let Some(delimiter) = quote {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == delimiter {
+                    quote = None;
+                }
+                continue;
+            }
+            match byte {
+                b'\'' | b'"' => quote = Some(byte),
+                b'[' => brackets += 1,
+                b']' => brackets = brackets.saturating_sub(1),
+                b'.' if brackets == 0 => {
+                    remaining = Some(&segment[index + 1..]);
+                    return Some(&segment[..index]);
+                }
+                _ => {}
+            }
+        }
+        Some(segment)
+    })
+}
 
 /// Remove the authored `within` prefix from a qualified name.
 ///
@@ -65,6 +101,42 @@ pub fn strip_within_prefix<'a>(
 
 #[cfg(test)]
 mod qualified_name_tests {
+    #[test]
+    fn qualified_segments_preserve_quoted_dots_escapes_and_subscripts() {
+        for (name, expected) in [
+            ("Root.Part", vec!["Root", "Part"]),
+            ("Root.'Part.Name'.Leaf", vec!["Root", "'Part.Name'", "Leaf"]),
+            (
+                r"Root.'Part\'.Name'.Leaf",
+                vec!["Root", r"'Part\'.Name'", "Leaf"],
+            ),
+            ("Root.'A[B].C'.Leaf", vec!["Root", "'A[B].C'", "Leaf"]),
+            (
+                "Root.bus[data.medium].pin",
+                vec!["Root", "bus[data.medium]", "pin"],
+            ),
+            (
+                r#"Root.bus[lookup("a]b.c")].pin"#,
+                vec!["Root", r#"bus[lookup("a]b.c")]"#, "pin"],
+            ),
+            ("'Part.Name'", vec!["'Part.Name'"]),
+        ] {
+            assert_eq!(
+                super::qualified_name_segments(name).collect::<Vec<_>>(),
+                expected
+            );
+        }
+        assert_eq!(
+            super::ast_extract::parent_qualified("Root.'Part.Name'"),
+            "Root"
+        );
+        assert_eq!(super::ast_extract::parent_qualified("'Part.Name'"), "");
+        assert_eq!(
+            super::scope_chain_candidates("Target", Some("Root.'Part.Name'.Leaf")),
+            vec!["Root.'Part.Name'.Target", "Root.Target", "Target"]
+        );
+    }
+
     #[test]
     fn within_prefix_requires_a_package_segment_boundary() {
         let syntax = super::parse_to_syntax("within Root.B; model Part end Part;", "within.mo");

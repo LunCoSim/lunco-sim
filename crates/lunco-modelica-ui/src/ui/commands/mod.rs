@@ -53,6 +53,8 @@ impl Plugin for ModelicaCommandsPlugin {
             .init_resource::<lifecycle::AppCloseFlow>()
             .add_observer(lifecycle::finish_close_after_save)
             .add_observer(lifecycle::on_document_closed_cleanup)
+            .add_observer(super::panels::canvas_diagram::loads::retire_twin_duplicates)
+            .add_observer(super::panels::canvas_diagram::loads::retire_remote_duplicates)
             .add_observer(lifecycle::retire_twin_file_diagnostics)
             .add_observer(lifecycle::retire_remote_file_diagnostics)
             .add_observer(crate::ui::uri_handler::on_modelica_uri_clicked)

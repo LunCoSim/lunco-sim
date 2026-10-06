@@ -114,16 +114,31 @@ survives scene teardown; a buffered success cannot revive a dead worker.
 Qualified source names share the AST owner's `strip_within_prefix` rule: an
 authored `within` package is removed only at a complete dotted segment boundary.
 Similar package prefixes remain distinct in class lookup and source editing.
+The same AST owner supplies borrowed qualified-name segments. Quoted dots and
+escaped quotes remain inside identifiers in library path resolution, exact class
+selection, duplicate names and enclosing `within` clauses. Source syntax and
+compiler name resolution retain their own validation boundaries.
 
 Class source slicing shares `lunco-modelica-ast::class_full_text_span`. It starts
 at the parsed class-kind token, includes its declaration qualifiers, and ends
 after the closing semicolon. Enclosing declarations on the same line remain
 outside that span; library documents and duplicate preparation use this owner.
+Read-only library document loading selects the exact qualified class through
+the shared index lookup; a missing sibling cannot resolve another class with
+the same leaf name.
 
 Scratch and reserved duplicate documents register their typed creation context
 synchronously at allocation. Deferred document-open delivery cannot rebind them
-to a replacement Twin. Duplicate installation validates the captured context,
-and owner retirement cancels its pending work and status handle.
+to a replacement Twin. Duplication captures the target owner before queued
+command delivery and snapshots resident source bytes with their document owner.
+The existing task resolves library paths, reads selected sources and enclosing
+package imports, and rewrites the exact qualified class from those bytes.
+Known-source read, decode, parse, or rewrite failures end the operation visibly;
+source and target retirement cancel it. Failed or cancelled duplicates release
+their pending document metadata, name, tab and busy handle. Successful native
+duplicates use the canonical syntax cache and install before the projection busy
+handoff. Browser tasks retain the deferred editor parsing contract; Bevy tasks
+in a browser do not imply execution on a separate JavaScript worker.
 
 File opening captures local root IDs and the exact replicated mount before it
 leaves the caller. Its existing async task resolves native canonical identity

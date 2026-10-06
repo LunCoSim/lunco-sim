@@ -63,7 +63,7 @@ fn build_class_to_file_index() -> std::collections::HashMap<String, std::path::P
 }
 
 pub fn locate_library_file(qualified: &str) -> Option<std::path::PathBuf> {
-    let segments: Vec<&str> = qualified.split('.').collect();
+    let segments: Vec<&str> = lunco_modelica_ast::qualified_name_segments(qualified).collect();
     if segments.is_empty() {
         return None;
     }

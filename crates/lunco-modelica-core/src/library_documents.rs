@@ -40,8 +40,6 @@ pub async fn load_library_class(
             lunco_modelica_runtime::source_asset::read_admitted_file(path, admission).await?
         };
     let path = resolved.path.as_path();
-    let short_name = qualified.rsplit('.').next().unwrap_or(qualified);
-    let parent_pkg = qualified.rsplit_once('.').map_or("", |(parent, _)| parent);
     let key = path.to_string_lossy().to_string();
     let bundled_ast =
         lunco_modelica_library::source_library::parsed_source_bundle().and_then(|bundle| {
@@ -72,28 +70,8 @@ pub async fn load_library_class(
             .map_err(|e| format!("parse failed `{}`: {e}", path.display()))?,
     };
 
-    let class_def = lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast, short_name)
-        .ok_or_else(|| format!("class `{qualified}` not found in `{}`", path.display()))?;
-    let (full_start, full_end) =
-        lunco_modelica_ast::ast_extract::class_full_text_span(class_def, &full_source);
-    if full_start > full_end
-        || full_end > full_source.len()
-        || !full_source.is_char_boundary(full_start)
-        || !full_source.is_char_boundary(full_end)
-    {
-        return Err(format!(
-            "class `{qualified}` span {full_start}..{full_end} invalid for source of {} bytes in `{}` (bundle_hit={bundle_hit}) — likely a stale/mismatched parsed bundle or wrong-file resolution",
-            full_source.len(),
-            path.display()
-        ));
-    }
-
-    let class_slice = &full_source[full_start..full_end];
-    let source = if parent_pkg.is_empty() {
-        class_slice.to_string()
-    } else {
-        format!("within {parent_pkg};\n{class_slice}")
-    };
+    let source = selected_class_source(&ast, &full_source, qualified)
+        .map_err(|error| format!("{error} in `{}` (bundle_hit={bundle_hit})", path.display()))?;
     Ok((
         ModelicaDocument::with_origin(
             id,
@@ -105,4 +83,56 @@ pub async fn load_library_class(
         ),
         resolved.runtime,
     ))
+}
+
+fn selected_class_source(
+    ast: &StoredDefinition,
+    full_source: &str,
+    qualified: &str,
+) -> Result<String, String> {
+    let class_def =
+        lunco_modelica_index::class_lookup::find_class_by_qualified_name(ast, qualified)
+            .ok_or_else(|| format!("class `{qualified}` not found"))?;
+    let (full_start, full_end) =
+        lunco_modelica_ast::ast_extract::class_full_text_span(class_def, &full_source);
+    if full_start > full_end
+        || full_end > full_source.len()
+        || !full_source.is_char_boundary(full_start)
+        || !full_source.is_char_boundary(full_end)
+    {
+        return Err(format!(
+            "class `{qualified}` span {full_start}..{full_end} invalid for source of {} bytes",
+            full_source.len(),
+        ));
+    }
+
+    let class_slice = &full_source[full_start..full_end];
+    let parent_pkg = lunco_modelica_ast::ast_extract::parent_qualified(qualified);
+    Ok(if parent_pkg.is_empty() {
+        class_slice.to_string()
+    } else {
+        format!("within {parent_pkg};\n{class_slice}")
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn library_class_selection_requires_exact_qualified_identity() {
+        let source = "package Root package A model Part Real fromA; end Part; end A; package B model Part Real fromB; end Part; end B; end Root;";
+        let syntax = lunco_modelica_ast::parse_to_syntax(source, "siblings.mo");
+        let ast = syntax.parsed().expect("valid inline source");
+        let selected =
+            super::selected_class_source(ast, source, "Root.B.Part").expect("exact class");
+        assert!(selected.starts_with("within Root.B;\nmodel Part"));
+        assert!(selected.contains("fromB"));
+        assert!(!selected.contains("fromA"));
+        assert!(!lunco_modelica_ast::parse_to_syntax(&selected, "selected.mo").has_errors());
+        assert!(super::selected_class_source(ast, source, "Root.C.Part").is_err());
+        let source = "within Root.B; model Part Real fromB; end Part;";
+        let syntax = lunco_modelica_ast::parse_to_syntax(source, "within.mo");
+        let ast = syntax.parsed().expect("valid inline source");
+        assert!(super::selected_class_source(ast, source, "Root.B.Part").is_ok());
+        assert!(super::selected_class_source(ast, source, "Root.BPart").is_err());
+    }
 }

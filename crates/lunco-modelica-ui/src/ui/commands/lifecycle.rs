@@ -11,10 +11,9 @@ use std::sync::Arc;
 use crate::model_tabs::ModelTabs;
 use crate::package_tree::PackageTreeCache;
 use crate::ui::MODEL_VIEW_KIND;
+use crate::ui::class_source::{ClassSourcePlan, ResolvedClassSource};
 use crate::ui::document_context::ModelicaDocuments;
-use crate::ui::duplicate::{
-    build_duplicate_source, collect_parent_imports, extract_class_spans_inline,
-};
+use crate::ui::panels::canvas_diagram::loads::PreparedDuplicate;
 use crate::ui::workbench_state::WorkbenchState;
 
 use lunco_command_contracts::{Ack, OpId};
@@ -353,6 +352,18 @@ pub fn finalize_app_close(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/// Append a suffix inside a quoted Modelica token. The parser validates the
+/// resulting class declaration; explicit unquoted input is never normalized.
+fn modelica_name_with_suffix(name: &str, suffix: &str) -> String {
+    match name
+        .strip_prefix('\'')
+        .and_then(|_| name.strip_suffix('\''))
+    {
+        Some(prefix) => format!("{prefix}{suffix}'"),
+        None => format!("{name}{suffix}"),
+    }
+}
+
 /// CQ-111: pick a workspace-unique display name. Starts from `base`; while
 /// the name collides with an existing in-memory model it appends a numeric
 /// suffix (`Base`, `Base2`, `Base3`, …), matching the historic dedup scheme.
@@ -365,7 +376,7 @@ fn unique_in_memory_name(cache: &PackageTreeCache, base: &str) -> String {
     let mut name = base.to_string();
     let mut n: u32 = 2;
     while taken.contains(name.as_str()) {
-        name = format!("{base}{n}");
+        name = modelica_name_with_suffix(base, &n.to_string());
         n += 1;
     }
     name
@@ -540,6 +551,10 @@ pub fn on_duplicate_model_from_read_only(
         raw if raw.is_unassigned() => {
             let Some(active) = workspace.as_ref().and_then(|ws| ws.active_document) else {
                 console.error("Duplicate failed: no active document");
+                commands.trigger(lunco_core::RuntimeError {
+                    name: "modelica-duplicate-failed".into(),
+                    message: "Duplicate failed: no active document".into(),
+                });
                 return;
             };
             active
@@ -547,59 +562,89 @@ pub fn on_duplicate_model_from_read_only(
         raw => raw,
     };
 
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    let source_pin = lunco_workspace::PinnedDocumentRuntimeOwner::for_document(
+        source_doc,
+        workspace.as_deref().map(|workspace| &workspace.0),
+    );
+    let source_pin = match source_pin {
+        Ok(pin)
+            if pin.is_current(
+                workspace.as_deref().map(|workspace| &workspace.0),
+                replication.as_ref(),
+            ) =>
+        {
+            pin
+        }
+        _ => {
+            commands.trigger(lunco_core::RuntimeError {
+                name: "modelica-duplicate-cancelled".into(),
+                message: "Duplicate source runtime owner retired".into(),
+            });
+            return;
+        }
+    };
     let (source_full, origin_class_short, origin_fqn) = {
         let Some(host) = registry.host(source_doc) else {
             console.error("Duplicate failed: source doc not found in registry");
+            commands.trigger(lunco_core::RuntimeError {
+                name: "modelica-duplicate-failed".into(),
+                message: "Duplicate failed: source document is not resident".into(),
+            });
             return;
         };
         let doc = host.document();
-        // Duplicate whatever the user is *looking at*: the drilled-in
-        // class when the tab is drilled into a nested model (e.g.
-        // `AnnotatedRocketStage.RocketStage`), otherwise the top-level
-        // class. Extracting the drilled class *directly* — rather than
-        // copying the whole enclosing package and re-drilling into it —
-        // keeps this path consistent with `spawn_duplicate_class_task`
-        // (the by-name duplicate) and honours `build_duplicate_source`'s
-        // `within`-wrap contract. The old code always extracted the
-        // top-level package and named the copy after it, so duplicating a
-        // nested model produced a bogus `within Pkg; package PkgCopy` (a
-        // package nested in its own origin) whose re-drill target never
-        // matched the within-qualified name.
+        // Duplicate the drilled-in class, or the top-level class when no
+        // drill-in is selected, preserving its authored `within` scope.
         let fqn = model_tabs.drilled_class_for_doc(source_doc);
         let top_short = doc
             .strict_ast()
             .as_ref()
             .and_then(|ast| ast.classes.iter().next().map(|(n, _)| n.clone()))
             .or_else(|| {
-                fqn.as_ref()
-                    .and_then(|q| q.split('.').next().map(String::from))
+                fqn.as_ref().and_then(|q| {
+                    lunco_modelica_ast::qualified_name_segments(q)
+                        .next()
+                        .map(String::from)
+                })
             })
             .unwrap_or_else(|| doc.origin().display_name());
         // Target qualified name = drilled class if drilled, else the
         // top-level class. `build_duplicate_source` pops its last segment
         // for the `within` clause, so a top-level target (no dot) yields
         // no `within` — exactly right for copying a whole package/model.
-        let origin_fqn = fqn.unwrap_or_else(|| top_short.clone());
-        let origin_short = origin_fqn
-            .rsplit('.')
-            .next()
+        let origin_fqn = fqn.unwrap_or_else(|| match doc.index().within_path.as_deref() {
+            Some(package) if !package.is_empty() => format!("{package}.{top_short}"),
+            _ => top_short.clone(),
+        });
+        let origin_short = lunco_modelica_ast::qualified_name_segments(&origin_fqn)
+            .last()
             .map(String::from)
             .unwrap_or(top_short);
-        (doc.source_arc(), origin_short, Some(origin_fqn))
+        (doc.source_arc(), origin_short, origin_fqn)
     };
 
-    let base_name = format!("{origin_class_short}Copy");
+    let base_name = modelica_name_with_suffix(&origin_class_short, "Copy");
     let name = unique_in_memory_name(&cache, &base_name);
 
+    let target = match workspace.as_deref() {
+        Some(workspace) => workspace.new_document_runtime_owner(replication.as_ref()),
+        None => match replication.as_ref() {
+            Some(owner @ lunco_workspace::ReplicationOwner::Twin { .. }) => {
+                lunco_workspace::DocumentRuntimeOwner::Replicated(owner.clone())
+            }
+            _ => lunco_workspace::DocumentRuntimeOwner::Application,
+        },
+    };
     let doc_id = registry.reserve_id();
-    let replication =
-        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     if let Some(workspace) = workspace.as_deref_mut() {
-        lunco_modelica_core::doc_ops::register_scratch_context(
+        lunco_modelica_core::doc_ops::register_document_context(
             &mut workspace.0,
             doc_id,
-            name.clone(),
-            replication.as_ref(),
+            DocumentOrigin::untitled(name.clone()),
+            target.clone(),
+            false,
         );
     }
 
@@ -621,29 +666,18 @@ pub fn on_duplicate_model_from_read_only(
         instance: tab_id,
     });
 
-    let origin_short_for_task = origin_class_short.clone();
     let name_for_task = name.clone();
     let origin_fqn_for_task = origin_fqn;
+    let mut source_for_task = ResolvedClassSource::from_resident(source_full, source_pin.clone());
+    source_for_task.origin_path =
+        registry
+            .host(source_doc)
+            .and_then(|host| match host.document().origin() {
+                DocumentOrigin::File { path, .. } => Some(path.clone()),
+                _ => None,
+            });
     let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-        let class_src: &str = &source_full;
-        let imports = origin_fqn_for_task
-            .as_deref()
-            .and_then(crate::library_fs::resolve_class_path_indexed)
-            .map(|p| collect_parent_imports(&p))
-            .unwrap_or_default();
-        let spans = extract_class_spans_inline(class_src, &origin_short_for_task);
-        let copy_src = build_duplicate_source(
-            class_src,
-            spans.as_ref(),
-            &name_for_task,
-            origin_fqn_for_task.as_deref(),
-            &imports,
-        );
-        lunco_modelica_document::ModelicaDocument::with_origin(
-            doc_id,
-            copy_src,
-            DocumentOrigin::untitled(name_for_task),
-        )
+        PreparedDuplicate::build(doc_id, name_for_task, &origin_fqn_for_task, source_for_task)
     });
 
     let busy = bus.begin(
@@ -658,6 +692,8 @@ pub fn on_duplicate_model_from_read_only(
                 display_name: name.clone(),
                 origin_short: origin_class_short.clone(),
                 task,
+                target,
+                source_pin: Some(source_pin),
                 busy,
             },
         ),
@@ -674,51 +710,82 @@ pub fn on_duplicate_model_from_read_only(
 pub fn on_open_class(
     trigger: On<OpenClass>,
     mut commands: Commands,
+    registry: Res<ModelicaDocuments>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     connection: Option<Res<lunco_core_session::ClientConnection>>,
     replica: Option<Res<lunco_core_session::ReplicatedScene>>,
 ) {
     let replication =
         lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
-    let admission = lunco_workspace::FileDocumentAdmission::capture(
-        workspace.as_deref().map(|workspace| &workspace.0),
-        replication.as_ref(),
-    );
-    let ev = trigger.event();
-    let qualified = ev.qualified.clone();
-    let action = ev.action.clone();
-    commands.queue(move |world: &mut World| match action {
+    let workspace = workspace.as_deref().map(|workspace| &workspace.0);
+    let qualified = trigger.qualified.clone();
+    match &trigger.action {
         ClassAction::View => {
-            crate::ui::panels::canvas_diagram::drill_into_class(world, &qualified, admission);
+            let admission =
+                lunco_workspace::FileDocumentAdmission::capture(workspace, replication.as_ref());
+            commands.queue(move |world: &mut World| {
+                crate::ui::panels::canvas_diagram::drill_into_class(world, &qualified, admission);
+            });
         }
         ClassAction::Duplicate { name } => {
-            spawn_duplicate_class_task(world, qualified, name);
+            let plan =
+                ClassSourcePlan::capture(&qualified, &registry, workspace, replication.as_ref());
+            let target = match workspace {
+                Some(workspace) => workspace.new_document_runtime_owner(replication.as_ref()),
+                None => match replication {
+                    Some(owner @ lunco_workspace::ReplicationOwner::Twin { .. }) => {
+                        lunco_workspace::DocumentRuntimeOwner::Replicated(owner)
+                    }
+                    _ => lunco_workspace::DocumentRuntimeOwner::Application,
+                },
+            };
+            let name = name.clone();
+            commands.queue(move |world: &mut World| {
+                spawn_duplicate_class_task(world, qualified, name, plan, target)
+            });
         }
-    });
+    }
 }
 
-pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hint: String) {
-    let origin_short = qualified
-        .rsplit('.')
-        .next()
+fn spawn_duplicate_class_task(
+    world: &mut World,
+    qualified: String,
+    name_hint: String,
+    plan: ClassSourcePlan,
+    target: lunco_workspace::DocumentRuntimeOwner,
+) {
+    let replication = lunco_core_session::current_replication_owner_in(world);
+    let workspace = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .map(|workspace| &workspace.0);
+    if !target.is_current(workspace, replication.as_ref()) {
+        world.commands().trigger(lunco_core::RuntimeError {
+            name: "modelica-duplicate-cancelled".into(),
+            message: "Duplicate cancelled before dispatch: its originating target owner retired"
+                .into(),
+        });
+        return;
+    }
+    let origin_short = lunco_modelica_ast::qualified_name_segments(&qualified)
+        .last()
         .map(str::to_string)
         .unwrap_or_else(|| qualified.clone());
 
     let base_name = if name_hint.is_empty() {
-        format!("{origin_short}Copy")
+        modelica_name_with_suffix(&origin_short, "Copy")
     } else {
         name_hint
     };
     let name = unique_in_memory_name(world.resource::<PackageTreeCache>(), &base_name);
 
     let doc_id = world.resource_mut::<ModelicaDocuments>().reserve_id();
-    let replication = lunco_core_session::current_replication_owner_in(world);
     if let Some(mut workspace) = world.get_resource_mut::<lunco_workspace::WorkspaceResource>() {
-        lunco_modelica_core::doc_ops::register_scratch_context(
+        lunco_modelica_core::doc_ops::register_document_context(
             &mut workspace.0,
             doc_id,
-            name.clone(),
-            replication.as_ref(),
+            DocumentOrigin::untitled(name.clone()),
+            target.clone(),
+            false,
         );
     }
     let mem_id = format!("mem://{name}");
@@ -748,68 +815,11 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
             instance: tab_id,
         });
 
-    // Resolve the origin source on the main thread — the unified
-    // resolver reads `World` (the open-document registry is one of its
-    // backends), so it can't run inside the bg task. It spans every
-    // backend (source library/third-party index, filesystem libraries, open docs,
-    // bundled examples), which is what fixes "(no classes yet)" when
-    // duplicating a bundled composite: the old source library-index-only lookup
-    // missed bundled files and emitted a comment-only document.
-    let resolved = crate::ui::class_source::resolve_class_source(world, &qualified);
-
     let qualified_for_task = qualified.clone();
-    let origin_short_for_task = origin_short.clone();
     let name_for_task = name.clone();
     let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-        let Some(crate::ui::class_source::ResolvedClassSource {
-            source: source_full,
-            origin_path,
-        }) = resolved
-        else {
-            return lunco_modelica_document::ModelicaDocument::with_origin(
-                doc_id,
-                format!("// Could not locate source for {qualified_for_task}\n"),
-                DocumentOrigin::untitled(name_for_task),
-            );
-        };
-
-        // The heavy work stays off the main thread: enclosing-package
-        // import harvesting + the rewrite parse. Imports only exist for
-        // file-backed libraries (the chain of `package.mo` above the
-        // class); bundled/open-doc sources are self-contained.
-        let imports = origin_path
-            .as_ref()
-            .map(|p| collect_parent_imports(p))
-            .unwrap_or_default();
-
-        // Prefer the path-cached spans (cheap on repeat source library duplications);
-        // fall back to an inline parse (always used for sources with no
-        // on-disk path). Either way the spans are absolute in
-        // `source_full` and `build_duplicate_source` slices to the class
-        // span before rewriting.
-        let spans = origin_path
-            .as_ref()
-            .and_then(|path| {
-                crate::ui::duplicate::extract_class_spans_via_path(
-                    path,
-                    &source_full,
-                    &origin_short_for_task,
-                )
-            })
-            .filter(|s| s.full_start < s.full_end && s.full_end <= source_full.len())
-            .or_else(|| extract_class_spans_inline(&source_full, &origin_short_for_task));
-        let copy_src = build_duplicate_source(
-            &source_full,
-            spans.as_ref(),
-            &name_for_task,
-            Some(&qualified_for_task),
-            &imports,
-        );
-        lunco_modelica_document::ModelicaDocument::with_origin(
-            doc_id,
-            copy_src,
-            DocumentOrigin::untitled(name_for_task),
-        )
+        let source = plan.resolve().await?;
+        PreparedDuplicate::build(doc_id, name_for_task, &qualified_for_task, source)
     });
 
     let busy = world
@@ -828,6 +838,8 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
                     display_name: name.clone(),
                     origin_short,
                     task,
+                    target,
+                    source_pin: None,
                     busy,
                 },
             ),
@@ -1353,7 +1365,7 @@ pub fn on_document_closed_cleanup(
 ) {
     let doc = trigger.event().doc_id;
     if let Some(openings) = openings.as_mut() {
-        openings.cancel(doc);
+        drop(openings.cancel(doc));
     }
     model_tabs.close(doc);
     cache.in_memory_models.retain(|e| e.doc != doc);
@@ -1829,6 +1841,36 @@ pub(super) fn drain_file_diagnostics(
 #[cfg(test)]
 mod file_diagnostic_lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn duplicate_generated_name_suffixes_stay_inside_quoted_tokens() {
+        let base = modelica_name_with_suffix("'Part Name'", "Copy");
+        assert_eq!(base, "'Part NameCopy'");
+        let mut cache = PackageTreeCache {
+            roots: Vec::new(),
+            tasks: Vec::new(),
+            in_memory_models: Vec::new(),
+            bundled_tree_indexed: false,
+            library_roots_synced: false,
+        };
+        cache
+            .in_memory_models
+            .push(lunco_modelica_index::package_tree::types::InMemoryEntry {
+                display_name: base.clone(),
+                id: format!("mem://{base}"),
+                doc: DocumentId::new(1),
+            });
+        let unique = unique_in_memory_name(&cache, &base);
+        assert_eq!(unique, "'Part NameCopy2'");
+        assert!(
+            !lunco_modelica_ast::parse_to_syntax(
+                &format!("model {unique} end {unique};"),
+                "inline.mo"
+            )
+            .has_errors()
+        );
+        assert_eq!(modelica_name_with_suffix("Part", "Copy"), "PartCopy");
+    }
 
     #[test]
     fn diagnostic_carriers_retire_only_their_exact_owner() {

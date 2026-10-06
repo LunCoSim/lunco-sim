@@ -563,12 +563,23 @@ fn queue_retire_runtime_projection(
                     .map(|source| source.document),
             );
         }
+        let mut cancelled_duplicates = Vec::new();
         if let Some(mut openings) =
             world.get_resource_mut::<crate::ui::document_openings::DocumentOpenings>()
         {
             for document in &closed_documents {
-                openings.cancel(*document);
+                if matches!(
+                    openings.cancel(*document),
+                    Some(crate::ui::document_openings::OpeningState::Duplicate(_))
+                ) {
+                    cancelled_duplicates.push(*document);
+                }
             }
+        }
+        for document in cancelled_duplicates {
+            crate::ui::panels::canvas_diagram::loads::retire_duplicate_placeholder_in(
+                world, document,
+            );
         }
         if let Some(mut pins) = world.get_resource_mut::<crate::ui::doc_pin::DocPinState>() {
             for document in &closed_documents {

@@ -184,18 +184,16 @@ impl DocumentOpenings {
         self.in_flight.remove(&doc)
     }
 
-    /// End an admitted document task at its owning lifecycle boundary.
-    pub fn cancel(&mut self, doc: DocumentId) -> bool {
-        let Some(mut opening) = self.remove(doc) else {
-            return false;
-        };
+    /// End admitted work and return its owned state for reservation cleanup.
+    pub fn cancel(&mut self, doc: DocumentId) -> Option<OpeningState> {
+        let mut opening = self.remove(doc)?;
         let busy = match &mut opening {
             OpeningState::FileLoad { busy, .. } => busy,
             OpeningState::DrillIn(binding) => &mut binding.busy,
             OpeningState::Duplicate(binding) => &mut binding.busy,
         };
         busy.set_outcome(lunco_status_core::status_bus::BusyOutcome::Cancelled);
-        true
+        Some(opening)
     }
 
     pub fn get_mut(&mut self, doc: DocumentId) -> Option<&mut OpeningState> {

@@ -287,11 +287,36 @@ generated-model editing mode.
 
 Use the shared AST `strip_within_prefix` for qualified lookup and editing;
 similarly spelled package prefixes must not match an authored `within` package.
+Reuse the AST's `qualified_name_segments` and `parent_qualified` for class paths;
+quoted identifiers containing dots remain one segment. Extraction checks do not
+prove the compiler accepts that qualified name: validate compilation separately
+through its actual command/error boundary.
 
 For class source extraction, reuse `lunco-modelica-ast::ast_extract::class_full_text_span`
 from the same parsed bytes. Its inline seam test covers same-line enclosing
 declarations and class qualifiers; do not derive declaration bounds by scanning
 backward through arbitrary identifiers.
+Read-only library views also require exact qualified identity. The generic
+library extraction seam checks sibling leaf names and a missing sibling without
+reading repository fixtures.
+
+Duplicate admission pins its original target scope and resident source snapshot.
+Check an exact nested qualified class when sibling packages share a short name;
+known-source errors must report failure without installing a substitute document.
+Closing the source or target lifetime during preparation must cancel publication
+and release pending names, tabs and status. Use inline parser tests for span and
+rewrite boundaries, and authored Rhai commands/queries for these public lifecycle
+outcomes. `assets/scenarios/tests/modelica_duplicate_lifecycle.rhai` exercises
+qualified siblings and quoted names, error diagnostics and exact-name reuse,
+observed pending source-close cancellation, original-target Twin replacement
+without retagging, and a valid successor. Run it in a UI-capable host with
+Application/Retain lifetime and API-authored `root_a`, `root_b`, `entry_scene`
+fixtures. Asynchronous folder scanning permits a duplicate to install while its
+old Twin is live; the gate preserves that valid retained-source outcome. Exact
+Twin/connection retirement of never-ready tasks belongs to the generic resource
+seam test, since public folder replacement cannot force that worker boundary.
+Native preparation runs on the existing task pool; browser Bevy tasks
+retain the browser editor's deferred parsing contract.
 
 Projection must remain responsive while a native package or inherited icon is
 being resolved. Verify that `/api/ready` stays responsive, the canvas shows an

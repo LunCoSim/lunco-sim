@@ -2,13 +2,14 @@
 //!
 //! Two parallel pipelines: drill-in opens source library classes read-only,
 //! duplicate creates an editable Untitled copy. Both reserve a doc
-//! id eagerly, spawn an off-thread loader on
+//! id eagerly, schedule preparation on
 //! `AsyncComputeTaskPool`, and install the prebuilt
 //! [`lunco_modelica_document::ModelicaDocument`] via
 //! [`crate::ui::document_context::ModelicaDocuments::install_prebuilt`]
 //! when the load completes. The in-flight task and metadata live
 //! in [`crate::ui::document_openings::DocumentOpenings`]; the
-//! per-frame drivers below poll their own variant.
+//! per-frame drivers below poll their own variant. Native tasks run on the
+//! task pool; browser scheduling does not imply a separate JavaScript worker.
 
 use crate::ui::document_context::ModelicaDocuments;
 use crate::ui::document_openings::{DocumentOpenings, OpeningState};
@@ -74,27 +75,153 @@ pub struct DrillInBinding {
     pub busy: lunco_status_core::status_bus::BusyHandle,
 }
 
-/// Tab-to-task binding for duplicate-to-workspace operations whose
-/// bg parse hasn't finished yet. The parse goes off the UI thread
-/// because naïve synchronous construction of a multi-KB source
-/// re-runs rumoca synchronously — locked the workbench for seconds
-/// in debug builds, which users (correctly) called a bug:
-/// *"no operations like that must be in UI thread"*.
-///
-/// Same shape as [`DrillInBinding`]: the bg task returns a fully-
-/// built [`lunco_modelica_document::ModelicaDocument`], the driver
-/// [`drive_duplicate_loads`] installs it into the registry via
-/// `install_prebuilt`. Stored in
-/// [`crate::ui::document_openings::DocumentOpenings`] under
-/// [`OpeningState::Duplicate`].
+/// A successful rewrite carries the selected source lifetime through installation.
+pub struct PreparedDuplicate {
+    document: lunco_modelica_document::ModelicaDocument,
+    source_runtime: lunco_workspace::DocumentRuntimeOwner,
+    resident: Option<lunco_workspace::PinnedDocumentRuntimeOwner>,
+}
+
+impl PreparedDuplicate {
+    pub(crate) fn build(
+        document: lunco_doc::DocumentId,
+        name: String,
+        qualified: &str,
+        source: crate::ui::class_source::ResolvedClassSource,
+    ) -> Result<Self, String> {
+        let imports = match source.origin_path.as_deref() {
+            Some(path) => crate::ui::duplicate::collect_parent_imports(path)?,
+            None => Vec::new(),
+        };
+        let spans = crate::ui::duplicate::extract_class_spans_inline(&source.source, qualified);
+        let rewritten = crate::ui::duplicate::build_duplicate_source(
+            &source.source,
+            spans.as_ref(),
+            &name,
+            Some(qualified),
+            &imports,
+        )?;
+        let syntax = lunco_modelica_document::SyntaxCache::from_source(&rewritten, 0);
+        if syntax.has_errors() {
+            return Err("rewritten duplicate has syntax errors".into());
+        }
+        let document = lunco_modelica_document::ModelicaDocument::from_parts(
+            document,
+            rewritten,
+            lunco_doc::DocumentOrigin::untitled(name),
+            std::sync::Arc::new(syntax),
+        );
+        Ok(Self {
+            document,
+            source_runtime: source.runtime,
+            resident: source.resident,
+        })
+    }
+}
+
+/// The pending task and exact owners are retired together on cancellation.
 pub struct DuplicateBinding {
     pub display_name: String,
     pub origin_short: String,
-    pub task: bevy::tasks::Task<lunco_modelica_document::ModelicaDocument>,
-    /// RAII guard registered with [`lunco_status_core::status_bus::StatusBus`].
-    /// Same lifecycle as [`DrillInBinding::busy`] — clears the
-    /// `(BusyScope::Document, "duplicate")` slot on Drop.
+    pub task: bevy::tasks::Task<Result<PreparedDuplicate, String>>,
+    pub target: lunco_workspace::DocumentRuntimeOwner,
+    pub source_pin: Option<lunco_workspace::PinnedDocumentRuntimeOwner>,
     pub busy: lunco_status_core::status_bus::BusyHandle,
+}
+
+/// Remove only the uninstalled document's metadata and pending view bindings.
+fn retire_duplicate_placeholder(
+    document: lunco_doc::DocumentId,
+    cache: &mut crate::package_tree::PackageTreeCache,
+    tabs: &mut crate::model_tabs::ModelTabs,
+    workspace: Option<&mut lunco_workspace::WorkspaceResource>,
+    commands: &mut Commands,
+) {
+    cache.in_memory_models.retain(|entry| entry.doc != document);
+    for instance in tabs.close_all_for_doc(document) {
+        commands.trigger(lunco_workbench_core::commands::CloseTab {
+            kind: crate::ui::MODEL_VIEW_KIND,
+            instance,
+        });
+    }
+    if let Some(workspace) = workspace {
+        workspace.close_document(document);
+    }
+}
+
+/// Consume the reservation returned by shared cancellation, regardless of which
+/// runtime observer removed its pending task first.
+pub(crate) fn retire_duplicate_placeholder_in(world: &mut World, document: lunco_doc::DocumentId) {
+    if let Some(mut workspace) = world.get_resource_mut::<lunco_workspace::WorkspaceResource>() {
+        workspace.close_document(document);
+    }
+    world.resource_scope(
+        |world, mut cache: Mut<crate::package_tree::PackageTreeCache>| {
+            world.resource_scope(|world, mut tabs: Mut<crate::model_tabs::ModelTabs>| {
+                retire_duplicate_placeholder(
+                    document,
+                    &mut cache,
+                    &mut tabs,
+                    None,
+                    &mut world.commands(),
+                );
+            });
+        },
+    );
+}
+
+pub(crate) fn retire_twin_duplicates(
+    trigger: On<lunco_workspace::TwinClosed>,
+    mut openings: ResMut<DocumentOpenings>,
+    mut cache: ResMut<crate::package_tree::PackageTreeCache>,
+    mut tabs: ResMut<crate::model_tabs::ModelTabs>,
+    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+    mut commands: Commands,
+) {
+    retire_duplicate_owner(
+        &lunco_workspace::DocumentRuntimeOwner::LocalTwin(trigger.twin),
+        &mut openings,
+        &mut cache,
+        &mut tabs,
+        &mut workspace,
+        &mut commands,
+    );
+}
+
+pub(crate) fn retire_remote_duplicates(
+    trigger: On<lunco_core_session::ReplicationOwnerRetired>,
+    mut openings: ResMut<DocumentOpenings>,
+    mut cache: ResMut<crate::package_tree::PackageTreeCache>,
+    mut tabs: ResMut<crate::model_tabs::ModelTabs>,
+    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+    mut commands: Commands,
+) {
+    retire_duplicate_owner(
+        &lunco_workspace::DocumentRuntimeOwner::Replicated(trigger.owner.clone()),
+        &mut openings,
+        &mut cache,
+        &mut tabs,
+        &mut workspace,
+        &mut commands,
+    );
+}
+
+fn retire_duplicate_owner(
+    owner: &lunco_workspace::DocumentRuntimeOwner,
+    openings: &mut DocumentOpenings,
+    cache: &mut crate::package_tree::PackageTreeCache,
+    tabs: &mut crate::model_tabs::ModelTabs,
+    workspace: &mut Option<ResMut<lunco_workspace::WorkspaceResource>>,
+    commands: &mut Commands,
+) {
+    for document in openings.doc_ids() {
+        let retired = matches!(openings.get_mut(document), Some(OpeningState::Duplicate(binding))
+            if &binding.target == owner || binding.source_pin.as_ref().is_some_and(|pin| &pin.runtime == owner));
+        if retired {
+            drop(openings.cancel(document));
+            retire_duplicate_placeholder(document, cache, tabs, workspace.as_deref_mut(), commands);
+        }
+    }
 }
 
 /// Bevy system: poll pending duplicate bg tasks; `install_prebuilt`
@@ -104,12 +231,13 @@ pub struct DuplicateBinding {
 pub fn drive_duplicate_loads(
     mut openings: bevy::prelude::ResMut<DocumentOpenings>,
     mut registry: bevy::prelude::ResMut<ModelicaDocuments>,
+    mut cache: ResMut<crate::package_tree::PackageTreeCache>,
     mut probe: Option<bevy::prelude::ResMut<crate::FrameTimeProbe>>,
     mut egui_q: bevy::prelude::Query<&mut bevy_egui::EguiContext>,
     mut tabs: bevy::prelude::ResMut<crate::model_tabs::ModelTabs>,
     mut canvas_state: bevy::prelude::ResMut<super::CanvasDiagramState>,
     mut commands: bevy::prelude::Commands,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
     connection: Option<Res<lunco_core_session::ClientConnection>>,
     replica: Option<Res<lunco_core_session::ReplicatedScene>>,
 ) {
@@ -134,24 +262,44 @@ pub fn drive_duplicate_loads(
         if openings.duplicate_display(doc_id).is_none() {
             continue;
         }
-        let admission = lunco_workspace::PinnedDocumentRuntimeOwner::for_document(
-            doc_id,
-            workspace.as_deref().map(|workspace| &workspace.0),
-        );
-        if !admission.is_ok_and(|source| {
-            source.is_current(
-                workspace.as_deref().map(|workspace| &workspace.0),
-                replication.as_ref(),
-            )
-        }) {
-            openings.cancel(doc_id);
-            bevy::log::warn!(
-                "Modelica duplicate {doc_id} cancelled: its admitted document runtime retired"
+        let current_workspace = workspace.as_deref().map(|workspace| &workspace.0);
+        let current = if let Some(OpeningState::Duplicate(binding)) = openings.get_mut(doc_id) {
+            binding
+                .target
+                .is_current(current_workspace, replication.as_ref())
+                && current_workspace.is_none_or(|workspace| {
+                    workspace
+                        .document(doc_id)
+                        .is_some_and(|document| document.runtime_context == binding.target)
+                })
+                && binding.source_pin.as_ref().is_none_or(|pin| {
+                    pin.is_current(current_workspace, replication.as_ref())
+                        && registry.host(pin.document).is_some()
+                })
+        } else {
+            false
+        };
+        if !current {
+            drop(openings.cancel(doc_id));
+            let message = format!(
+                "Modelica duplicate {doc_id} cancelled: its admitted source or target owner retired"
+            );
+            warn!("{message}");
+            commands.trigger(lunco_core::RuntimeError {
+                name: "modelica-duplicate-cancelled".into(),
+                message,
+            });
+            retire_duplicate_placeholder(
+                doc_id,
+                &mut cache,
+                &mut tabs,
+                workspace.as_deref_mut(),
+                &mut commands,
             );
             continue;
         }
         let t_poll = web_time::Instant::now();
-        let polled: Option<lunco_modelica_document::ModelicaDocument> =
+        let polled: Option<Result<PreparedDuplicate, String>> =
             if let Some(OpeningState::Duplicate(b)) = openings.get_mut(doc_id) {
                 bevy::tasks::futures_lite::future::block_on(
                     bevy::tasks::futures_lite::future::poll_once(&mut b.task),
@@ -159,28 +307,79 @@ pub fn drive_duplicate_loads(
             } else {
                 None
             };
-        let Some(doc) = polled else { continue };
+        let Some(result) = polled else { continue };
         let poll_ms = t_poll.elapsed().as_secs_f64() * 1000.0;
         let Some(OpeningState::Duplicate(b)) = openings.remove(doc_id) else {
             continue;
         };
-        // Hand the parse-phase busy handle to the canvas state so the
-        // bus keeps a `Document(doc_id)` entry across the gap between
-        // here and the next `spawn_projection_task` for this doc. The
-        // projection spawn calls `complete_projection_handoff(doc_id)`
-        // once its own entry is in place. Without this stash the bus
-        // briefly goes idle for the doc and the canvas overlay
-        // flickers off then on.
-        canvas_state.stash_projection_handoff(doc_id, b.busy);
         let dup_display_name = b.display_name;
         let origin_short = b.origin_short;
-        let t_install = web_time::Instant::now();
-        if let Err(error) = registry.install_prebuilt(doc_id, doc) {
-            bevy::log::warn!(
-                "[CanvasDiagram] duplicate document {doc_id} could not be installed: {error}"
+        let mut busy = b.busy;
+        let prepared = match result {
+            Ok(prepared) => prepared,
+            Err(message) => {
+                warn!("Modelica duplicate {doc_id} failed: {message}");
+                commands.trigger(lunco_core::RuntimeError {
+                    name: "modelica-duplicate-failed".into(),
+                    message: message.clone(),
+                });
+                busy.set_outcome(lunco_status_core::status_bus::BusyOutcome::Failed(message));
+                retire_duplicate_placeholder(
+                    doc_id,
+                    &mut cache,
+                    &mut tabs,
+                    workspace.as_deref_mut(),
+                    &mut commands,
+                );
+                continue;
+            }
+        };
+        let current_workspace = workspace.as_deref().map(|workspace| &workspace.0);
+        if !prepared
+            .source_runtime
+            .is_current(current_workspace, replication.as_ref())
+            || prepared.resident.as_ref().is_some_and(|pin| {
+                !pin.is_current(current_workspace, replication.as_ref())
+                    || registry.host(pin.document).is_none()
+            })
+        {
+            let message =
+                format!("Modelica duplicate {doc_id} cancelled: its selected source owner retired");
+            warn!("{message}");
+            commands.trigger(lunco_core::RuntimeError {
+                name: "modelica-duplicate-cancelled".into(),
+                message,
+            });
+            busy.set_outcome(lunco_status_core::status_bus::BusyOutcome::Cancelled);
+            retire_duplicate_placeholder(
+                doc_id,
+                &mut cache,
+                &mut tabs,
+                workspace.as_deref_mut(),
+                &mut commands,
             );
             continue;
         }
+        let t_install = web_time::Instant::now();
+        if let Err(error) = registry.install_prebuilt(doc_id, prepared.document) {
+            let message = format!("duplicate document {doc_id} could not be installed: {error}");
+            warn!("{message}");
+            commands.trigger(lunco_core::RuntimeError {
+                name: "modelica-duplicate-failed".into(),
+                message: message.clone(),
+            });
+            busy.set_outcome(lunco_status_core::status_bus::BusyOutcome::Failed(message));
+            retire_duplicate_placeholder(
+                doc_id,
+                &mut cache,
+                &mut tabs,
+                workspace.as_deref_mut(),
+                &mut commands,
+            );
+            continue;
+        }
+        // Only a published document may carry its busy handle into projection.
+        canvas_state.stash_projection_handoff(doc_id, busy);
         let install_ms = t_install.elapsed().as_secs_f64() * 1000.0;
         info!(
             "[CanvasDiagram] duplicate: installed `{}` (from `{}`) — poll={poll_ms:.1}ms install={install_ms:.1}ms",
@@ -495,7 +694,9 @@ pub fn drill_into_class(
     // docs, AND bundled demos — through one command instead of the Welcome
     // panel owning a separate bundled opener. Match the top-level qualified
     // segment against a bundled model's filename stem and open it in-memory.
-    let stem = qualified.split('.').next().unwrap_or(qualified);
+    let stem = lunco_modelica_ast::qualified_name_segments(qualified)
+        .next()
+        .unwrap_or(qualified);
     if crate::models::bundled_models().is_ok_and(|models| {
         models
             .iter()
@@ -663,4 +864,256 @@ fn open_drill_in_tab(
         qualified,
         file_path.display()
     );
+}
+
+#[cfg(test)]
+mod duplicate_retirement_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_owner_observers_cancel_only_exact_pending_lifetimes() {
+        use lunco_workspace::{
+            DocumentRuntimeOwner, PinnedDocumentRuntimeOwner, ReplicatedSceneOwner,
+            ReplicationOwner, TwinId,
+        };
+        let pool = bevy::tasks::TaskPoolBuilder::new().num_threads(1).build();
+        let mut app = App::new();
+        app.init_resource::<DocumentOpenings>()
+            .init_resource::<crate::model_tabs::ModelTabs>()
+            .init_resource::<lunco_workspace::WorkspaceResource>()
+            .init_resource::<lunco_status_core::status_bus::StatusBus>()
+            .add_observer(retire_twin_duplicates)
+            .add_observer(retire_remote_duplicates)
+            .add_systems(Update, lunco_status_core::status_bus::drain_busy_drops);
+        app.insert_resource(crate::package_tree::PackageTreeCache {
+            roots: Vec::new(),
+            tasks: Vec::new(),
+            in_memory_models: Vec::new(),
+            bundled_tree_indexed: false,
+            library_roots_synced: false,
+        });
+        let connection = app.world_mut().spawn_empty().id();
+        let replacement = app.world_mut().spawn_empty().id();
+        let remote = ReplicationOwner::Twin {
+            scene: ReplicatedSceneOwner {
+                connection,
+                host_twin: TwinId::new(20),
+                authority: "generic-mount".into(),
+                root: std::path::PathBuf::new(),
+                owns_mount: true,
+            },
+        };
+        let mut other_connection = remote.clone();
+        if let ReplicationOwner::Twin { scene } = &mut other_connection {
+            scene.connection = replacement;
+        }
+        let mut other_mount = remote.clone();
+        if let ReplicationOwner::Twin { scene } = &mut other_mount {
+            scene.host_twin = TwinId::new(21);
+        }
+        let twin_a = DocumentRuntimeOwner::LocalTwin(TwinId::new(1));
+        let admissions = [
+            (twin_a.clone(), None),
+            (
+                DocumentRuntimeOwner::Application,
+                Some(PinnedDocumentRuntimeOwner {
+                    document: lunco_doc::DocumentId::new(900),
+                    runtime: twin_a,
+                }),
+            ),
+            (DocumentRuntimeOwner::LocalTwin(TwinId::new(2)), None),
+            (DocumentRuntimeOwner::Replicated(remote.clone()), None),
+            (DocumentRuntimeOwner::Replicated(other_connection), None),
+            (DocumentRuntimeOwner::Replicated(other_mount), None),
+            (DocumentRuntimeOwner::Application, None),
+        ];
+        for (index, (target, source_pin)) in admissions.into_iter().enumerate() {
+            let document = lunco_doc::DocumentId::new(index as u64 + 1);
+            let name = format!("Pending{}", document.0);
+            app.world_mut()
+                .resource_mut::<crate::package_tree::PackageTreeCache>()
+                .in_memory_models
+                .push(lunco_modelica_index::package_tree::types::InMemoryEntry {
+                    display_name: name.clone(),
+                    id: format!("mem://{name}"),
+                    doc: document,
+                });
+            app.world_mut()
+                .resource_mut::<crate::model_tabs::ModelTabs>()
+                .ensure_for(document, None);
+            lunco_modelica_core::doc_ops::register_document_context(
+                &mut app
+                    .world_mut()
+                    .resource_mut::<lunco_workspace::WorkspaceResource>()
+                    .0,
+                document,
+                lunco_doc::DocumentOrigin::untitled(name.clone()),
+                target.clone(),
+                false,
+            );
+            let busy = app
+                .world_mut()
+                .resource_mut::<lunco_status_core::status_bus::StatusBus>()
+                .begin(
+                    lunco_status_core::status_bus::BusyScope::Document(document.0),
+                    "duplicate",
+                    "Preparing",
+                );
+            app.world_mut().resource_mut::<DocumentOpenings>().insert(
+                document,
+                OpeningState::Duplicate(DuplicateBinding {
+                    display_name: name,
+                    origin_short: "Source".into(),
+                    target,
+                    source_pin,
+                    task: pool.spawn(std::future::pending::<Result<PreparedDuplicate, String>>()),
+                    busy,
+                }),
+            );
+        }
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: TwinId::new(1),
+            root: std::path::PathBuf::new(),
+            was_active: true,
+        });
+        app.world_mut()
+            .trigger(lunco_core_session::ReplicationOwnerRetired { owner: remote });
+        app.update();
+        for raw in 1..=7 {
+            let document = lunco_doc::DocumentId::new(raw);
+            let retained = ![1, 2, 4].contains(&raw);
+            assert_eq!(
+                app.world()
+                    .resource::<DocumentOpenings>()
+                    .in_flight
+                    .contains_key(&document),
+                retained
+            );
+            assert_eq!(
+                app.world()
+                    .resource::<crate::package_tree::PackageTreeCache>()
+                    .in_memory_models
+                    .iter()
+                    .any(|entry| entry.doc == document),
+                retained
+            );
+            assert_eq!(
+                app.world()
+                    .resource::<crate::model_tabs::ModelTabs>()
+                    .any_for_doc(document)
+                    .is_some(),
+                retained
+            );
+            assert_eq!(
+                app.world()
+                    .resource::<lunco_workspace::WorkspaceResource>()
+                    .document(document)
+                    .is_some(),
+                retained
+            );
+            assert_eq!(
+                app.world()
+                    .resource::<lunco_status_core::status_bus::StatusBus>()
+                    .is_busy(lunco_status_core::status_bus::BusyScope::Document(raw)),
+                retained
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_cancellation_returns_the_owned_reservation_for_cleanup() {
+        let pool = bevy::tasks::TaskPoolBuilder::new().num_threads(1).build();
+        let mut world = World::new();
+        world.init_resource::<DocumentOpenings>();
+        world.init_resource::<crate::model_tabs::ModelTabs>();
+        world.init_resource::<lunco_workspace::WorkspaceResource>();
+        world.insert_resource(crate::package_tree::PackageTreeCache {
+            roots: Vec::new(),
+            tasks: Vec::new(),
+            in_memory_models: Vec::new(),
+            bundled_tree_indexed: false,
+            library_roots_synced: false,
+        });
+        let document = lunco_doc::DocumentId::new(7);
+        let unrelated = lunco_doc::DocumentId::new(8);
+        let mut bus = lunco_status_core::status_bus::StatusBus::default();
+        for id in [document, unrelated] {
+            let name = format!("Copy{}", id.0);
+            world
+                .resource_mut::<crate::package_tree::PackageTreeCache>()
+                .in_memory_models
+                .push(lunco_modelica_index::package_tree::types::InMemoryEntry {
+                    display_name: name.clone(),
+                    id: format!("mem://{name}"),
+                    doc: id,
+                });
+            world
+                .resource_mut::<crate::model_tabs::ModelTabs>()
+                .ensure_for(id, None);
+            lunco_modelica_core::doc_ops::register_document_context(
+                &mut world.resource_mut::<lunco_workspace::WorkspaceResource>().0,
+                id,
+                lunco_doc::DocumentOrigin::untitled(name.clone()),
+                lunco_workspace::DocumentRuntimeOwner::Application,
+                false,
+            );
+            world.resource_mut::<DocumentOpenings>().insert(
+                id,
+                OpeningState::Duplicate(DuplicateBinding {
+                    display_name: name,
+                    origin_short: "Source".into(),
+                    task: pool.spawn(std::future::pending::<Result<PreparedDuplicate, String>>()),
+                    target: lunco_workspace::DocumentRuntimeOwner::Application,
+                    source_pin: None,
+                    busy: bus.begin(
+                        lunco_status_core::status_bus::BusyScope::Document(id.0),
+                        "duplicate",
+                        "Preparing",
+                    ),
+                }),
+            );
+        }
+        // A different runtime owner may remove the task before its duplicate
+        // observer runs. The returned state still identifies the cleanup consumer.
+        let cancelled = world.resource_mut::<DocumentOpenings>().cancel(document);
+        assert!(matches!(cancelled, Some(OpeningState::Duplicate(_))));
+        drop(cancelled);
+        retire_duplicate_placeholder_in(&mut world, document);
+        assert!(
+            world
+                .resource::<DocumentOpenings>()
+                .in_flight
+                .contains_key(&unrelated)
+        );
+        assert!(
+            !world
+                .resource::<DocumentOpenings>()
+                .in_flight
+                .contains_key(&document)
+        );
+        let cache = world.resource::<crate::package_tree::PackageTreeCache>();
+        assert_eq!(cache.in_memory_models.len(), 1);
+        assert_eq!(cache.in_memory_models[0].doc, unrelated);
+        assert!(
+            world
+                .resource::<crate::model_tabs::ModelTabs>()
+                .any_for_doc(document)
+                .is_none()
+        );
+        assert!(
+            world
+                .resource::<crate::model_tabs::ModelTabs>()
+                .any_for_doc(unrelated)
+                .is_some()
+        );
+        let workspace = world.resource::<lunco_workspace::WorkspaceResource>();
+        assert!(workspace.document(document).is_none());
+        assert!(workspace.document(unrelated).is_some());
+        assert!(
+            world
+                .resource_mut::<DocumentOpenings>()
+                .cancel(document)
+                .is_none()
+        );
+    }
 }
