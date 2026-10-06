@@ -230,12 +230,33 @@ pub fn load_asset_path(
     Ok(AssetPath::from_path_buf(std::path::PathBuf::from(path)).with_source(source))
 }
 
+// Filesystem components become URL path components only at HTTP transport.
+// A literal percent must be encoded too: `part%20one` and `part one` differ.
+const HTTP_PATH_COMPONENTS: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~')
+    .remove(b'/');
+
+/// Encode a literal filesystem route for HTTP, preserving path separators.
+/// This accepts paths, not already encoded URLs.
+pub(crate) fn http_asset_path(path: &str) -> String {
+    percent_encoding::utf8_percent_encode(&slashed(path), HTTP_PATH_COMPONENTS).to_string()
+}
+
 /// Convert an asset reference to the same-origin URL path used by the web
-/// asset source.
+/// asset source. Explicit HTTP URLs keep their URL semantics; logical path
+/// components are encoded once, including literal percent and delimiters.
 pub fn web_url(reference: &str) -> String {
+    if split_scheme(reference).is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    }) {
+        return reference.to_string();
+    }
     let raw = slashed(reference);
-    if raw.starts_with('/') || raw.starts_with("http://") || raw.starts_with("https://") {
-        return raw;
+    if raw.starts_with('/') {
+        return http_asset_path(&raw);
     }
     let rel = crate::engine_asset_rel(&raw);
     if has_scheme(rel) {
@@ -243,9 +264,9 @@ pub fn web_url(reference: &str) -> String {
     }
     let root = crate::ASSETS_DIR_NAME;
     if rel.starts_with(&format!("{root}/")) {
-        rel.to_string()
+        http_asset_path(rel)
     } else {
-        format!("{root}/{rel}")
+        http_asset_path(&format!("{root}/{rel}"))
     }
 }
 
@@ -535,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn web_url_roots_library_paths_and_passes_addressable_ones_through() {
+    fn web_transport_encodes_literal_filename_components_once() {
         assert_eq!(web_url("dem/site.tif"), "assets/dem/site.tif");
         assert_eq!(web_url("assets/dem/site.tif"), "assets/dem/site.tif");
         assert_eq!(web_url("lunco://dem/site.tif"), "assets/dem/site.tif");
@@ -543,5 +564,35 @@ mod tests {
         assert_eq!(web_url("/abs/x.tif"), "/abs/x.tif");
         assert_eq!(web_url("twin://ep1/x.tif"), "twin://ep1/x.tif");
         assert_eq!(web_url("dem\\site.tif"), "assets/dem/site.tif");
+        let relative = "dem/part # %20 ? 月.tif";
+        let encoded = "assets/dem/part%20%23%20%2520%20%3F%20%E6%9C%88.tif";
+        for reference in [
+            relative.to_string(),
+            format!("assets/{relative}"),
+            format!("lunco://{relative}"),
+        ] {
+            assert_eq!(web_url(&reference), encoded);
+        }
+        // This is the same mapper supplied to both Bevy browser readers,
+        // after their configured root has been joined to the logical path.
+        assert_eq!(http_asset_path(&format!("assets/{relative}")), encoded);
+        assert_eq!(
+            http_asset_path(&format!("assets/.cache/{relative}")),
+            encoded.replacen("assets/", "assets/.cache/", 1)
+        );
+        assert_eq!(web_url("/part # %.tif"), "/part%20%23%20%25.tif");
+        assert_ne!(web_url("part%20one.tif"), web_url("part one.tif"));
+        assert_eq!(
+            web_url("https://h/part%20%23.tif?x=%25#view"),
+            "https://h/part%20%23.tif?x=%25#view"
+        );
+        assert_eq!(
+            web_url("HTTP://h/part%20.tif?q=a#b"),
+            "HTTP://h/part%20.tif?q=a#b"
+        );
+        assert_eq!(
+            web_url("twin://ep1/part # %.tif"),
+            "twin://ep1/part # %.tif"
+        );
     }
 }

@@ -123,6 +123,12 @@ fn unregister_twin_root(
 pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
     let assets_dir = lunco_assets_core::assets_dir_abs();
 
+    #[cfg(target_arch = "wasm32")]
+    app.register_asset_source(
+        bevy::asset::io::AssetSourceId::Default,
+        lunco_assets_core::lunco_source::web_asset_source(&assets_dir),
+    );
+
     // Engine asset *library* under a NAMED, location-independent scheme so a
     // scene living OUTSIDE the project (an external Twin) can still reference
     // shared parts: `@lunco://vessels/rovers/skid_rover.usda@`.

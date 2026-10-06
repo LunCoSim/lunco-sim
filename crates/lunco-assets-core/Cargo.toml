@@ -36,5 +36,8 @@ tar = { workspace = true }
 futures-lite = { workspace = true }
 tempfile = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.76"
+
 [lints]
 workspace = true

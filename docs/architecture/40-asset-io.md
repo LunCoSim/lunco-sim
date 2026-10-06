@@ -65,6 +65,34 @@ see [native admission and revision ownership](55-scene-addressing-and-roots.md#n
 USD entry, preview, schema and composition readers use `load_asset_path` and
 retain its typed address through loading. Logical filename characters are data;
 Bevy subasset labels are supplied separately with `with_label`.
+Browser HTTP transport encodes literal filename components once through
+`asset_path::http_asset_path`, preserving `/` separators and distinguishing
+literal `%20` from a space. `web_url` uses that mapper for logical engine paths;
+the default and `lunco://` Bevy browser readers install it through the maintained
+`HttpWasmAssetReader::with_request_mapper` API before `AssetPlugin` builds.
+Explicit HTTP URLs retain their encoded pathname, query and fragment semantics.
+Native and mounted OPFS readers retain literal filesystem components.
+The focused browser owner seam is
+`lunco_source::browser_transport_tests::browser_readers_preserve_literal_filename_payloads_and_missing_errors`.
+Invoke the built test with `wasm-bindgen-test-runner` directly from a task-owned
+working directory; its static server serves that directory. Cargo invokes the
+runner from the package directory. Create generic
+plaintext fixtures under both `assets/http-path-fixture/default` and
+`assets/http-path-fixture/library`:
+
+| Literal filename | Exact ASCII payload, without a trailing newline |
+| --- | --- |
+| `payload # % 月.txt` | `literal-delimiters` |
+| `payload%20one.txt` | `literal-percent20` |
+| `payload one.txt` | `literal-space` |
+
+Create only `assets/http-path-fixture/library/.cache/cache # % 月.txt` with
+payload `packed-cache`; leave `missing # % 月.txt` absent in every root. The
+async test exercises actual default/library reader builders, packed-cache
+fallback, distinct decoded filenames, typed missing-file errors and the worker
+fetch transport. These temporary transport fixtures are neither Twin assets
+nor authored USD; browser seam evidence is separate from full app acceptance.
+
 USD composition classifies binary arcs by the full logical filename extension.
 Literal `#`, `?` and `%` remain filename data; only explicit HTTP URLs use their
 maintained URL pathname, excluding query/fragment fields. A binary-looking

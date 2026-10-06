@@ -413,7 +413,11 @@ the scene root. Initial/live preparation carries the same context; missing
 consumed context is an error. Time-sampled assets without that annotation are
 not admitted. Render consumers retain typed `load_asset_path` addresses and
 reuse admitted handles. Binary arc classification preserves the full logical
-filename; URL query/fragment semantics apply only to explicit HTTP addresses. DEM directory lookup uses the existing I/O worker and
+filename; URL query/fragment semantics apply only to explicit HTTP addresses.
+Browser default/library readers and worker fetches encode literal filename
+components at the shared asset HTTP transport boundary. Keep authored logical
+addresses literal; do not pre-encode them or decode existing HTTP URLs.
+DEM directory lookup uses the existing I/O worker and
 asset owner's directory transport, with exact mount checks before publication.
 See [asset provenance](../../docs/architecture/55-scene-addressing-and-roots.md#native-payload-and-source-admission).
 

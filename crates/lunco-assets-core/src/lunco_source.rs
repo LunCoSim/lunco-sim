@@ -16,8 +16,9 @@
 //! See `docs/architecture/56-asset-resolution-and-cache.md`.
 //!
 //! **One resolver, every platform.** Every root is read through Bevy's own
-//! [`AssetSource::get_default_reader`], which yields a file reader natively and
-//! an HTTP reader on wasm. So the browser resolves the same chain over HTTP as
+//! platform reader, which yields a file reader natively and Bevy's maintained
+//! HTTP reader on wasm. HTTP requests encode literal filename components through
+//! its request mapper. The browser resolves the same chain over HTTP as
 //! native resolves over directories — the fallback is not a native-only
 //! convenience that silently disappears on web.
 
@@ -420,7 +421,7 @@ pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
         Box::new(FallbackReader {
             readers: reader_roots
                 .iter()
-                .map(|r| AssetSource::get_default_reader(r.clone())())
+                .map(|r| library_asset_reader(r))
                 .collect(),
             roots: reader_roots.clone(),
         }) as Box<dyn ErasedAssetReader>
@@ -436,6 +437,30 @@ pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
     })
 }
 
+fn library_asset_reader(root: &str) -> Box<dyn ErasedAssetReader> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        AssetSource::get_default_reader(root.to_string())()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Box::new(
+            bevy::asset::io::wasm::HttpWasmAssetReader::new(root).with_request_mapper(|path| {
+                std::borrow::Cow::Owned(crate::asset_path::http_asset_path(path))
+            }),
+        )
+    }
+}
+
+/// The default browser source uses the same filename transport mapping as
+/// `lunco://`, with its configured root and Bevy's platform capabilities.
+#[cfg(target_arch = "wasm32")]
+pub fn web_asset_source(root: &Path) -> AssetSourceBuilder {
+    let root = root.to_string_lossy().into_owned();
+    AssetSourceBuilder::platform_default(&root, None)
+        .with_reader(move || library_asset_reader(&root))
+}
+
 /// Keeps the authored-tree watcher backing the fallback reader alive.
 ///
 /// The reader's existing priority still decides which bytes win, so a cache
@@ -446,6 +471,62 @@ struct FallbackWatcher {
 }
 
 impl AssetWatcher for FallbackWatcher {}
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod browser_transport_tests {
+    use super::*;
+    use wasm_bindgen_test::*;
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    // The existing runner serves these generic plaintext temporary fixtures
+    // from its owned working directory; setup is documented in asset I/O.
+    #[wasm_bindgen_test(async)]
+    async fn browser_readers_preserve_literal_filename_payloads_and_missing_errors() {
+        let mut default_source = web_asset_source(Path::new("assets/http-path-fixture/default"));
+        let mut library_source = lunco_asset_source(Path::new("assets/http-path-fixture/library"));
+        let readers = [(default_source.reader)(), (library_source.reader)()];
+        let fixtures = [
+            ("payload # % 月.txt", b"literal-delimiters".as_slice()),
+            ("payload%20one.txt", b"literal-percent20".as_slice()),
+            ("payload one.txt", b"literal-space".as_slice()),
+        ];
+        for reader in &readers {
+            for (filename, expected) in fixtures {
+                let mut stream = ErasedAssetReader::read(reader.as_ref(), Path::new(filename))
+                    .await
+                    .expect("read exact literal filename over HTTP");
+                let mut bytes = Vec::new();
+                Reader::read_to_end(stream.as_mut(), &mut bytes)
+                    .await
+                    .expect("read HTTP payload");
+                assert_eq!(bytes, expected, "{filename}");
+            }
+            let missing =
+                ErasedAssetReader::read(reader.as_ref(), Path::new("missing # % 月.txt")).await;
+            assert!(matches!(missing, Err(AssetReaderError::NotFound(_))));
+        }
+
+        let mut stream =
+            ErasedAssetReader::read(readers[1].as_ref(), Path::new("cache # % 月.txt"))
+                .await
+                .expect("read packed-cache fallback through the same mapper");
+        let mut bytes = Vec::new();
+        Reader::read_to_end(stream.as_mut(), &mut bytes)
+            .await
+            .expect("read packed-cache payload");
+        assert_eq!(bytes, b"packed-cache");
+
+        let settings = lunco_settings::DownloadSettings::default();
+        for (filename, expected) in fixtures {
+            let url = crate::asset_path::web_url(&format!("http-path-fixture/default/{filename}"));
+            let bytes = crate::web_fetch::network_fetch_uncached(&url, &settings)
+                .await
+                .expect("worker fetch uses the same literal filename transport");
+            assert_eq!(bytes, expected, "{filename}");
+        }
+    }
+}
 
 /// Reads each root in turn, moving on only when the asset is absent there.
 ///
@@ -577,7 +658,7 @@ impl AssetReader for FallbackReader {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod windows_uri_tests {
     use super::*;
 
