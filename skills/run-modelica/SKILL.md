@@ -285,6 +285,9 @@ use `Duplicate to edit`, then perform the same placement check. A drag that
 appears to work but disappears on reload is a product bug, not an acceptable
 generated-model editing mode.
 
+Use the shared AST `strip_within_prefix` for qualified lookup and editing;
+similarly spelled package prefixes must not match an authored `within` package.
+
 For class source extraction, reuse `lunco-modelica-ast::ast_extract::class_full_text_span`
 from the same parsed bytes. Its inline seam test covers same-line enclosing
 declarations and class qualifiers; do not derive declaration bounds by scanning

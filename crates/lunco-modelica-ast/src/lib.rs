@@ -57,10 +57,31 @@ pub fn strip_within_prefix<'a>(
         return qualified;
     };
     let prefix = within.to_string();
-    let Some(rest) = qualified.strip_prefix(&prefix) else {
-        return qualified;
-    };
-    rest.strip_prefix('.').unwrap_or(rest)
+    qualified
+        .strip_prefix(&prefix)
+        .and_then(|rest| rest.strip_prefix('.'))
+        .unwrap_or(qualified)
+}
+
+#[cfg(test)]
+mod qualified_name_tests {
+    #[test]
+    fn within_prefix_requires_a_package_segment_boundary() {
+        let syntax = super::parse_to_syntax("within Root.B; model Part end Part;", "within.mo");
+        let ast = syntax.parsed().expect("valid inline source");
+        for (qualified, expected) in [
+            ("Root.B.Part", "Part"),
+            ("Root.BPart", "Root.BPart"),
+            ("Root.BAD.Part", "Root.BAD.Part"),
+            ("Root.B", "Root.B"),
+            ("Part", "Part"),
+        ] {
+            assert_eq!(
+                super::strip_within_prefix(qualified, ast.within.as_ref()),
+                expected
+            );
+        }
+    }
 }
 
 /// Normalize text accepted at the Modelica source boundary.

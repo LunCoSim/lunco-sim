@@ -111,6 +111,10 @@ records `ModelicaWorkerFailure`, faults the affected runtime, ends live compile
 and step state, and rejects later compiles. This application-owned failure
 survives scene teardown; a buffered success cannot revive a dead worker.
 
+Qualified source names share the AST owner's `strip_within_prefix` rule: an
+authored `within` package is removed only at a complete dotted segment boundary.
+Similar package prefixes remain distinct in class lookup and source editing.
+
 Class source slicing shares `lunco-modelica-ast::class_full_text_span`. It starts
 at the parsed class-kind token, includes its declaration qualifiers, and ends
 after the closing semicolon. Enclosing declarations on the same line remain
