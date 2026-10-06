@@ -178,6 +178,9 @@ caps bound graph count rather than heap bytes; eviction preserves live owners.
 Run the generic `immutable_reuse_cache_` tests and compile the browser worker
 bundle when changing configuration transport. Do not infer Twin teardown from
 shared immutable cache contents.
+For native compiler heartbeat changes, run the generic `compile_heartbeat_`
+lifetime tests; ensure normal, error, and unwind exit interrupt the wait and
+release the owned thread.
 
 Native optional solve-cache reuse captures the cache-owned
 `lunco_modelica_worker::worker::PreparedSolveDiskLimits` resource before

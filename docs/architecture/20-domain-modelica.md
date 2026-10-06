@@ -463,6 +463,14 @@ worker thread; the main Bevy thread communicates via `crossbeam` channels:
 - `ModelicaResult { entity, session_id, outputs, variables, error, ... }`
   — returned after each command
 
+The shared compiler owns native diagnostic heartbeat threads per compile.
+An RAII guard closes their stop channel and joins them on normal return,
+compiler rejection, or unwind; interruptible waiting avoids a five-second
+shutdown delay. Thread admission is fallible: failure warns and leaves the
+optional diagnostic unavailable while the actual compile continues. Browser
+compilation creates no native heartbeat thread. Generic `compile_heartbeat_`
+tests cover periodic progress, resource release, and normal/error/unwind exit.
+
 The worker shares immutable compiled DAE artifacts across participants whose
 assembled equations are structurally identical. Generated USD wrappers keep
 instance-qualified names for diagnostics, but those names and their runtime

@@ -7,6 +7,9 @@
 
 use rumoca_compile::{Session, SessionConfig};
 
+#[cfg(not(target_arch = "wasm32"))]
+mod compiler_heartbeat;
+
 const SOURCE_SET_REVISION_VERSION: u32 = 1;
 
 /// Strong content identity for one exact Modelica source file in an admitted
@@ -994,50 +997,18 @@ impl ModelicaCompiler {
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
         let t_total = web_time::Instant::now();
 
-        // Heartbeat: rumoca's compile pipeline is opaque from outside
-        // and can take minutes on cold caches with source library-heavy models
-        // (parol Debug::fmt overhead — see ../rumoca/docs/design-notes/
-        // perf-parol-trace-overhead.md). Without a periodic log line,
-        // the user sees nothing for the entire duration and reasonably
-        // assumes the worker hung. Spawn a tiny thread that emits an
-        // INFO log every 5s while the synchronous compile is in
-        // flight; signal it to stop on return.
-        //
-        // Wasm note: `std::thread::spawn` panics on wasm32-unknown-unknown
-        // (single-threaded target). The compile already runs on the main
-        // task there via the chunked browser-load path, so a heartbeat thread
-        // would be unavailable and purely cosmetic. Skip it.
-        use std::sync::atomic::{AtomicBool, Ordering};
-        let still_compiling = std::sync::Arc::new(AtomicBool::new(true));
+        // Native diagnostic progress is scoped to this exact compile. Its
+        // guard interrupts and joins the heartbeat on return or unwind.
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            let stopper = std::sync::Arc::clone(&still_compiling);
-            let model_for_thread = model_name.to_string();
-            // Spawn detached — we deliberately do NOT join after compile
-            // returns. The heartbeat sleeps in 5-second chunks; joining
-            // would block the worker for up to a full tick (5 s) on EVERY
-            // compile, even fast cache-hit ones. The workbench's
-            // is_compiling flag would then stay set for that whole window,
-            // and the Step dispatcher would idle visibly. Letting the
-            // JoinHandle drop detaches the thread; it self-exits within
-            // 5 s of `stopper=false` with at most one stray "still
-            // compiling +N s" log line if the timing aligns badly.
-            let _ = std::thread::spawn(move || {
-                let started = web_time::Instant::now();
-                let tick = std::time::Duration::from_secs(5);
-                loop {
-                    std::thread::sleep(tick);
-                    if !stopper.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    log::info!(
-                        "[ModelicaCompiler] still compiling `{}` (+{:.0}s)",
-                        model_for_thread,
-                        started.elapsed().as_secs_f64()
-                    );
-                }
-            });
-        }
+        let _heartbeat = match compiler_heartbeat::CompileHeartbeat::start(model_name) {
+            Ok(heartbeat) => Some(heartbeat),
+            Err(error) => {
+                log::warn!(
+                    "[ModelicaCompiler] diagnostic heartbeat could not start for `{model_name}`: {error}"
+                );
+                None
+            }
+        };
 
         let mut result = self
             .session
@@ -1050,10 +1021,6 @@ impl ModelicaCompiler {
                 }
             }
         }
-
-        still_compiling.store(false, Ordering::Relaxed);
-        // No `join` — see spawn comment above. The thread is detached
-        // and will exit on its own within one tick.
 
         log::info!(
             "[ModelicaCompiler] compile `{}` finished in {:.2}s ({})",
