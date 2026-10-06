@@ -210,50 +210,54 @@ fn label_for(path: &Path, assets_root: Option<&Path>, roots: &[PathBuf]) -> Stri
     path.to_string_lossy().into_owned()
 }
 
-/// Producer for [`SceneFileView`]. Walks the resolved reference closure of every
-/// open file-backed USD document.
-///
-/// Gated on the ROOT SET (plus an explicit rescan request): the walk parses every
-/// layer it reaches, which is filesystem work that must not ride the frame.
-pub fn produce_scene_file_view(
-    registry: Option<Res<DocumentRegistry<UsdDocument>>>,
-    // OPTIONAL, both of them. This plugin is added by panel-level tests and by
-    // hosts that install no asset sources at all; a hard `Res` there is not a
-    // missing feature but a PANIC in `Main`, taking the whole app down to
-    // populate a browser list. Absent registry ⇒ no scene roots ⇒ nothing to
-    // walk; absent `TwinRoots` ⇒ `twin://` arcs are simply unresolvable, which
-    // the view already reports as `unresolved`.
-    twins: Option<Res<TwinRoots>>,
-    mut view: ResMut<SceneFileView>,
-    mut rescan: ResMut<SceneFileRescan>,
-    mut last_roots: Local<Vec<PathBuf>>,
-) {
-    let Some(registry) = registry else {
-        return;
+/// Snapshot current scoped document roots without filesystem reads.
+fn current_scene_file_roots(world: &World) -> Vec<PathBuf> {
+    let Some(registry) = world.get_resource::<DocumentRegistry<UsdDocument>>() else {
+        return Vec::new();
     };
-    let mut roots: Vec<PathBuf> = registry
+    let workspace = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .map(|workspace| &workspace.0);
+    let replication = lunco_core_session::current_replication_owner_in(world);
+    let mut roots: Vec<_> = registry
         .ids()
+        .filter(|id| {
+            lunco_workspace::PinnedDocumentRuntimeOwner::for_document(*id, workspace)
+                .is_ok_and(|pin| pin.is_in_active_scope(workspace, replication.as_ref()))
+        })
         .filter_map(|id| registry.host(id))
-        .filter_map(|h| match h.document().origin() {
+        .filter_map(|host| match host.document().origin() {
             DocumentOrigin::File { path, .. } => Some(path.clone()),
             _ => None,
         })
         .collect();
     roots.sort();
     roots.dedup();
+    roots
+}
 
-    let forced = std::mem::replace(&mut rescan.0, false);
+/// Producer for [`SceneFileView`]. Walks the resolved reference closure of
+/// file-backed USD documents in the current typed runtime scope.
+///
+/// Gated on the ROOT SET (plus an explicit rescan request): the walk parses every
+/// layer it reaches, which is filesystem work that must not ride the frame.
+pub fn produce_scene_file_view(world: &mut World, mut last_roots: Local<Vec<PathBuf>>) {
+    let roots = current_scene_file_roots(world);
+    let forced = std::mem::replace(&mut world.resource_mut::<SceneFileRescan>().0, false);
     if !forced && *last_roots == roots {
         return;
     }
     last_roots.clone_from(&roots);
 
     let assets_root = assets_root_for(&roots);
+    // Minimal hosts may omit the Twin asset source; unresolved Twin arcs are
+    // counted rather than requiring a registry solely for browser inspection.
+    let twins = world.get_resource::<TwinRoots>();
     let unresolved = std::sync::atomic::AtomicUsize::new(0);
     let files = lunco_assets_core::transitive_file_closure_with(
         &roots,
         |reference| {
-            let resolved = resolve_scheme(reference, assets_root.as_deref(), twins.as_deref());
+            let resolved = resolve_scheme(reference, assets_root.as_deref(), twins);
             if resolved.is_none() {
                 unresolved.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
@@ -274,6 +278,7 @@ pub fn produce_scene_file_view(
         .collect();
     rows.sort_by(|a, b| (a.kind, &a.label).cmp(&(b.kind, &b.label)));
 
+    let mut view = world.resource_mut::<SceneFileView>();
     view.roots = roots;
     view.rows = rows;
     view.unresolved = unresolved.into_inner();
@@ -465,6 +470,99 @@ impl BrowserSection for SceneFilesSection {
 mod tests {
     use super::*;
     use lunco_storage::Storage;
+
+    #[test]
+    fn scene_file_roots_retire_exact_twin_context_and_restore_application_scope() {
+        use lunco_workspace::{
+            DocumentEntry, DocumentKindId, DocumentRuntimeOwner, TwinMode, WorkspaceResource,
+        };
+        let root = tempfile::tempdir().expect("generic folder root");
+        let other = tempfile::tempdir().expect("other generic folder root");
+        let folder = |path: &Path| match TwinMode::open(path).expect("empty folder admission") {
+            TwinMode::Folder(twin) | TwinMode::Twin(twin) => twin,
+            TwinMode::Orphan(_) => panic!("temporary root is a folder"),
+        };
+        let mut world = World::new();
+        world.init_resource::<DocumentRegistry<UsdDocument>>();
+        world.init_resource::<WorkspaceResource>();
+        let application = other.path().join("application.usda");
+        let retired = root.path().join("scene.usda");
+        let admit = |world: &mut World, path: &Path, runtime: DocumentRuntimeOwner| {
+            let document = world
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .reserve_id();
+            let origin = DocumentOrigin::writable_file(path);
+            world
+                .resource_mut::<DocumentRegistry<UsdDocument>>()
+                .install_prebuilt(
+                    document,
+                    UsdDocument::with_origin(document, "#usda 1.0\n", origin.clone()),
+                )
+                .expect("generic resident document");
+            world
+                .resource_mut::<WorkspaceResource>()
+                .add_document(DocumentEntry {
+                    id: document,
+                    kind: DocumentKindId::new("usd"),
+                    origin,
+                    runtime_context: runtime,
+                    title: "Generic document".into(),
+                    dirty: false,
+                });
+            document
+        };
+        admit(&mut world, &application, DocumentRuntimeOwner::Application);
+        assert_eq!(current_scene_file_roots(&world), vec![application.clone()]);
+        let first = world
+            .resource_mut::<WorkspaceResource>()
+            .add_twin(folder(root.path()));
+        let old_document = admit(&mut world, &retired, DocumentRuntimeOwner::LocalTwin(first));
+        assert_eq!(current_scene_file_roots(&world), vec![retired.clone()]);
+        world.resource_mut::<WorkspaceResource>().close_twin(first);
+        assert!(
+            world
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .host(old_document)
+                .is_some()
+        );
+        assert!(
+            world
+                .resource::<WorkspaceResource>()
+                .document(old_document)
+                .is_some()
+        );
+        assert_eq!(current_scene_file_roots(&world), vec![application.clone()]);
+        let reopened = world
+            .resource_mut::<WorkspaceResource>()
+            .add_twin(folder(root.path()));
+        assert_ne!(first, reopened);
+        assert!(
+            current_scene_file_roots(&world).is_empty(),
+            "retained source cannot acquire a reopened Twin owner"
+        );
+        admit(
+            &mut world,
+            &retired,
+            DocumentRuntimeOwner::LocalTwin(reopened),
+        );
+        assert_eq!(current_scene_file_roots(&world), vec![retired.clone()]);
+        let inactive = world
+            .resource_mut::<WorkspaceResource>()
+            .add_twin(folder(other.path()));
+        admit(
+            &mut world,
+            &other.path().join("inactive.usda"),
+            DocumentRuntimeOwner::LocalTwin(inactive),
+        );
+        assert_eq!(current_scene_file_roots(&world), vec![retired]);
+        world
+            .resource_mut::<WorkspaceResource>()
+            .close_twin(inactive);
+        world
+            .resource_mut::<WorkspaceResource>()
+            .close_twin(reopened);
+        assert_eq!(current_scene_file_roots(&world), vec![application]);
+    }
 
     #[test]
     fn kinds_route_by_extension() {

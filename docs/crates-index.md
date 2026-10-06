@@ -795,6 +795,10 @@ on the command/runtime boundary.
 Interactive USD browser and document presentation. Owns workbench sections, loaded-stage and scene-file views, browser dispatch, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd-commands`. Add `lunco-usd-viewport-ui` when an application needs the render-heavy preview surface.
 The physical scene-file closure section is native-only; browser hosts retain
 the indexed Twin file browser and loaded-stage sections.
+Its roots come from file-backed USD documents whose existing pinned owner is in
+the active runtime scope. Closing a Twin hides its retained documents; reopening
+the same folder cannot reassign their retired owner. Application roots return
+when no local or replicated Twin is active.
 
 **`lunco-viewport-core`**
 Small renderer-independent viewport geometry contract. It owns the physical-pixel
