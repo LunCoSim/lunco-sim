@@ -597,6 +597,15 @@ pub struct OfflineRecordingPresentation {
     pub retain_workbench_chrome: bool,
 }
 
+/// Apply the shared HUD stacking once per egui pass. HUD owners register their
+/// layers through `lunco_theme::HudTier`; a layer registered by a later system
+/// is stacked on the next pass.
+fn stack_hud_layers(mut contexts: bevy_egui::EguiContexts) {
+    if let Ok(ctx) = contexts.ctx_mut() {
+        lunco_theme::stack_hud_layers(ctx);
+    }
+}
+
 impl Plugin for WorkbenchPlugin {
     fn build(&self, app: &mut App) {
         // Source browsing can read browser-served assets, so the shared
@@ -642,7 +651,11 @@ impl Plugin for WorkbenchPlugin {
             .auto_create_primary_context = false;
         app.add_systems(
             EguiPrimaryContextPass,
-            lunco_render_recovery::draw_render_recovery_banner.in_set(ApplicationOverlayRenderSet),
+            (
+                lunco_render_recovery::draw_render_recovery_banner
+                    .in_set(ApplicationOverlayRenderSet),
+                stack_hud_layers.after(ApplicationOverlayRenderSet),
+            ),
         );
         app.configure_sets(
             EguiPrimaryContextPass,

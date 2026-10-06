@@ -204,8 +204,8 @@ pub(crate) fn draw_celestial_time(
         return;
     };
 
-    egui::Area::new(egui::Id::new("celestial_time"))
-        .order(egui::Order::Foreground)
+    lunco_theme::HudTier::General
+        .area(ctx, egui::Id::new("celestial_time"))
         .anchor(egui::Align2::LEFT_TOP, egui::vec2(12.0, 40.0))
         .interactable(true)
         .show(ctx, |ui| {

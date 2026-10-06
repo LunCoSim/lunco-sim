@@ -84,8 +84,8 @@ fn draw_control_blackout(
 
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
     let screen = ctx.content_rect();
-    egui::Area::new(egui::Id::new("lunco_control_blackout"))
-        .order(egui::Order::Foreground)
+    lunco_theme::HudTier::General
+        .area(ctx, egui::Id::new("lunco_control_blackout"))
         .interactable(false)
         // Top-centre: this is the one thing on screen that explains why the
         // controls stopped answering, so it does not go in a corner.

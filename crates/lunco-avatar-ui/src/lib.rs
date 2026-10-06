@@ -613,10 +613,9 @@ pub fn draw_notifications(mut egui_ctx: EguiContexts, notes: Res<ScreenNotificat
         return;
     }
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("lunco_notifications"),
-    ));
+    let painter = ctx.layer_painter(
+        lunco_theme::HudTier::General.layer(ctx, egui::Id::new("lunco_notifications")),
+    );
     let rect = ctx.content_rect();
     let cx = rect.center().x;
     let mut y = rect.top() + 56.0;

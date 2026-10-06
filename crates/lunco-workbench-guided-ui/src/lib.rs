@@ -30,11 +30,11 @@ use lunco_workbench_core::presentation::{HelpAnchors, ViewportPlaceholder};
 use lunco_workbench_core::{PerspectiveId, WorkbenchSnapshot};
 use lunco_workbench_widgets::{UiIcon, icon_text_button, paint_icon};
 
-/// Shared layer for guided presentation. Workbench menus and window controls
-/// use egui's `Foreground` order, so guided HUDs, rings, coach cards, and
-/// recovery surfaces remain visible without covering those controls. The
-/// guided systems are chained so surfaces in this layer have stable order.
-pub const GUIDED_OVERLAY_ORDER: egui::Order = egui::Order::Middle;
+/// Shared UI layer for guided rings, coach cards, and recovery surfaces: above
+/// the HUD tiers and below workbench menus and popups. The lesson HUD itself is
+/// a specific-HUD readout. The guided systems are chained so surfaces in this
+/// layer have stable order.
+pub const GUIDED_OVERLAY_ORDER: egui::Order = lunco_theme::UI_ORDER;
 
 /// Painter/input layer for guided scrims. Keeping scrims below the guided
 /// surfaces prevents a later scrim paint from dimming their content; application
@@ -521,17 +521,16 @@ fn draw_guided_hud(
         return;
     }
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    // The viewport rect is the full egui viewport. The guided layer keeps this
-    // non-interactive HUD above ordinary panels while application menus remain
-    // above all guided presentation.
+    // The lesson HUD is a specific-HUD readout: above docked panels and below
+    // the general HUD, UI surfaces, popups, and menus.
     let screen = ctx.viewport_rect();
     let theme = theme
         .map(|t| t.clone())
         .unwrap_or_else(lunco_theme::Theme::dark);
     let accent = theme.tokens.accent;
 
-    egui::Area::new(egui::Id::new("lunco_guided_hud"))
-        .order(GUIDED_OVERLAY_ORDER)
+    lunco_theme::HudTier::Specific
+        .area(ctx, egui::Id::new("lunco_guided_hud"))
         .interactable(!hud.actions.is_empty())
         .fixed_pos(egui::pos2(screen.left() + 16.0, screen.top() + 44.0))
         .show(ctx, |ui| {

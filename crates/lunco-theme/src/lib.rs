@@ -931,6 +931,92 @@ impl Default for TypographyScale {
     }
 }
 
+/// Application UI stacking, top to bottom:
+///
+/// 1. menus and 2. popups use egui's `Foreground` order;
+/// 3. UI — floating windows, dialogs, guided cards, notices — uses [`UI_ORDER`];
+/// 4. the general HUD (clocks, toasts, global notices) and
+/// 5. the specific HUD (scene-, lesson- or vehicle-specific readouts) share
+///    egui's `Background` order above the docked panels and are stacked by
+///    [`stack_hud_layers`]. Authored runtime HUI is painted before the egui
+///    pass and therefore stays below every egui tier.
+///
+/// HUD areas belong inside the viewport rectangle; docked panels share the
+/// `Background` order and are not above a HUD that overlaps them.
+pub const UI_ORDER: egui::Order = egui::Order::Middle;
+
+/// The two HUD tiers below every menu, popup and UI surface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HudTier {
+    /// Global readouts such as the sky clock, toasts and render notices.
+    General,
+    /// Readouts owned by one scene, lesson or vehicle.
+    Specific,
+}
+
+impl HudTier {
+    /// egui order shared by both HUD tiers.
+    pub const ORDER: egui::Order = egui::Order::Background;
+
+    /// Register `id` as this tier's layer for the current frame and return it.
+    pub fn layer(self, ctx: &egui::Context, id: egui::Id) -> egui::LayerId {
+        let layer = egui::LayerId::new(Self::ORDER, id);
+        ctx.data_mut(|data| {
+            let layers = data.get_temp_mut_or_default::<HudLayers>(hud_layers_id());
+            let tier = match self {
+                Self::General => &mut layers.general,
+                Self::Specific => &mut layers.specific,
+            };
+            if !tier.contains(&layer) {
+                tier.push(layer);
+            }
+        });
+        layer
+    }
+
+    /// An `Area` drawn in this tier.
+    pub fn area(self, ctx: &egui::Context, id: egui::Id) -> egui::Area {
+        egui::Area::new(self.layer(ctx, id).id).order(Self::ORDER)
+    }
+}
+
+#[derive(Clone, Default)]
+struct HudLayers {
+    general: Vec<egui::LayerId>,
+    specific: Vec<egui::LayerId>,
+}
+
+fn hud_layers_id() -> egui::Id {
+    egui::Id::new("lunco_theme_hud_layers")
+}
+
+/// Raise the HUD layers registered since the previous call above the docked
+/// panels and place every general-HUD layer directly above the top-most
+/// specific-HUD layer, so the general tier is drawn and hit-tested above it.
+/// egui applies `move_to_top` as a stable sort, so the tier boundary uses its
+/// sublayer mechanism. Call once per egui pass after the application overlays.
+pub fn stack_hud_layers(ctx: &egui::Context) {
+    let layers = ctx.data_mut(|data| data.remove_temp::<HudLayers>(hud_layers_id()));
+    let Some(HudLayers { general, specific }) = layers else {
+        return;
+    };
+    for layer in specific.iter().chain(&general) {
+        ctx.move_to_top(*layer);
+    }
+    let top_specific = ctx.memory(|memory| {
+        let order: Vec<_> = memory.layer_ids().collect();
+        specific
+            .iter()
+            .copied()
+            .max_by_key(|layer| order.iter().position(|candidate| candidate == layer))
+    });
+    if let Some(parent) = top_specific {
+        for layer in general {
+            ctx.set_sublayer(parent, layer);
+        }
+    }
+}
+
 /// A stable egui text-style key for a semantic typography role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TypographyRole {
@@ -1314,6 +1400,30 @@ fn install_fallback_fonts_once(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hud_tiers_stack_below_ui_and_menus() {
+        assert!(UI_ORDER < egui::Order::Foreground);
+        assert!(HudTier::ORDER < UI_ORDER);
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let ctx = &ui.ctx().clone();
+            let general = HudTier::General.area(ctx, egui::Id::new("general"));
+            let specific = HudTier::Specific.area(ctx, egui::Id::new("specific"));
+            // Registered and painted general-first; stacking still puts it on top.
+            general.show(ctx, |ui| ui.label("general"));
+            specific.show(ctx, |ui| ui.label("specific"));
+            stack_hud_layers(ctx);
+        });
+        let order = ctx.memory(|memory| memory.layer_ids().collect::<Vec<_>>());
+        let position = |name: &str| {
+            order
+                .iter()
+                .position(|layer| layer.id == egui::Id::new(name))
+                .expect("HUD layer")
+        };
+        assert!(position("specific") < position("general"));
+    }
 
     #[test]
     fn theme_revision_changes_only_when_derived_visuals_can_change() {

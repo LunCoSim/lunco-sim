@@ -48,7 +48,7 @@ pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges:
     let width = 300.0;
     let left = (rect.right() - width - 12.0).max(rect.left() + 12.0);
     egui::Area::new(egui::Id::new("lunco_modelica_connection_legend"))
-        .order(egui::Order::Foreground)
+        .order(lunco_theme::UI_ORDER)
         // The legend is painted in its own egui layer, so the canvas Ui's
         // normal clip would otherwise be lost. Keep the generated surface
         // inside the dock leaf that owns the diagram; the workbench menu,

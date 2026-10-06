@@ -336,8 +336,8 @@ pub fn draw_render_recovery_banner(
 
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
     let screen = ctx.content_rect();
-    egui::Area::new(egui::Id::new("lunco_render_recovery"))
-        .order(egui::Order::Foreground)
+    lunco_theme::HudTier::General
+        .area(ctx, egui::Id::new("lunco_render_recovery"))
         .interactable(false)
         .fixed_pos(egui::pos2(screen.center().x - 210.0, screen.top() + 12.0))
         .show(ctx, |ui| {

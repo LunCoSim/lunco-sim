@@ -229,9 +229,9 @@ coalesces consecutive identical discrete snapshots before this shared reader.
 Keep the expanded history view discrete: do not append active progress to its
 event list. Hide the entire event summary from the strip while that history
 view is open, including its fallback to the latest discrete event; preserve
-the strip click target so it can close the popup. Active
-progress opens the compact state of this same popup when it belongs on the
-surface. Scene progress is titled “Scene loading…” or “Scene unloading…” for a
+the strip click target so it can close the popup. Active progress shows a
+compact notice anchored above the strip as a non-exclusive `UI_ORDER` overlay,
+never an egui popup, so it cannot close a menu the user opens while loading. Scene progress is titled “Scene loading…” or “Scene unloading…” for a
 clear transition; other progress keeps its source label. The complete
 owner-written message wraps inside the card, and the status strip uses the same
 concise scene label. Do not infer phase from free-form text. Terrain tile
@@ -239,13 +239,21 @@ streaming, optional terrain
 refinement, and post-projection scene geometry stay published for readiness
 consumers but drive the workbench loading notice only during an admitted or
 active scene transition. This prevents camera movement after scene load from
-reopening the loading notice. “Recent status details” expands the popup in
-place and keeps the expanded view open when work completes. The compact state
-closes on completion; do not stack it with the history view or auto-close a
-history view the user expanded.
+reopening the loading notice. “Recent status details” opens the history popup,
+which stays open when work completes. The compact notice disappears on
+completion; do not stack it with the history view or auto-close a history view
+the user expanded.
 
-Tutorial HUDs, rings, coach/recovery cards, and completion prompts use
-`lunco_workbench_guided_ui::GUIDED_OVERLAY_ORDER` (`egui::Order::Middle`);
+Stack application surfaces through `lunco-theme`, top to bottom: menus and
+popups (egui `Foreground`), UI windows/dialogs/notices (`UI_ORDER`), the
+general HUD (`HudTier::General`: sky clock, toasts, global notices), and the
+specific HUD (`HudTier::Specific`: lesson or vehicle readouts). Create HUD areas
+with `HudTier::area`/`HudTier::layer`; the workbench applies
+`stack_hud_layers` once per pass. Never give a persistent overlay `Foreground`.
+Authored runtime HUI paints before egui and stays below every egui tier.
+Tutorial rings, coach/recovery cards, and completion prompts use
+`lunco_workbench_guided_ui::GUIDED_OVERLAY_ORDER` (`UI_ORDER`); the lesson HUD is
+a specific-HUD readout;
 their scrims use the shared `GUIDED_SCRIM_ORDER` (`egui::Order::Background`).
 Workbench menus and window controls are egui `Foreground` surfaces and therefore
 remain above both tutorial layers visually and for input. The workbench measures

@@ -209,23 +209,24 @@ private dock layout.
    while they belong on the visible surface. Consecutive identical discrete snapshots
    are coalesced by StatusBus before the renderers read them. Warning and error rows
    copy the unmodified message without depending on the window width; attention rows
-   emit the owning typed action. While active progress exists, the same anchored popup
-   presents a compact progress notice automatically. It shows the status source and a
+   emit the owning typed action. While active progress exists, a compact progress
+   notice is anchored above the strip as a non-exclusive UI-tier overlay, so it never
+   occupies egui's single open-popup slot and menus stay usable while a scene loads. It shows the status source and a
    wrapped full owner-provided message; scene progress is titled “Scene loading…” or
    “Scene unloading…” during a clear transition and uses that concise label in the
    status strip. The renderer does not infer a phase from free-form text. The popup
    spinner marks ongoing work; determinate progress remains in the status strip without
    adding a redundant progress track to the card. “Recent status details” and the status
-   strip open the recent-history view in place. History renders discrete events only; it
+   strip open the recent-history popup, which replaces the notice while it is open. History renders discrete events only; it
    never inserts live progress rows. While history is open, the strip hides its entire
    event summary, including discrete-history fallback, so the event list stays stable;
    the empty strip area remains clickable to close the popup. Terrain streaming, derived
    terrain, and post-projection scene-visual progress remain on StatusBus for
    visual-readiness consumers, but drive the loading notice only while a scene
    transition is admitted or active. This prevents camera-driven terrain streaming from
-   reopening the scene-loading notice after the scene has loaded. Completion closes the
-   compact notice automatically; an expanded history view remains open until the user
-   closes it. The two views share one popup and never stack.
+   reopening the scene-loading notice after the scene has loaded. Completion removes the
+   compact notice; an expanded history popup remains open until the user closes it.
+   The notice and the history popup never stack.
 
 ### 3.1 Rendering contract — how chrome and 3D share the window
 
@@ -273,10 +274,14 @@ restricts the checklist to the `sandbox_view` perspective; other hosts show it
 in every perspective by default. Tutorial hints, authored action buttons,
 spotlights, coach cards, and recovery surfaces remain available over Builder
 and Editor when a lesson targets those views. Their authored anchors still have
-to resolve in the active layout. Tutorial presentation uses the optional
-`lunco_workbench_guided_ui::GUIDED_OVERLAY_ORDER`
-(`egui::Order::Middle`) for its HUD, ring, coach/recovery card, and completion
-prompt. Its painter/input scrims use the shared
+to resolve in the active layout. Application surfaces stack, top to bottom: menus, popups (egui `Foreground`),
+UI windows/dialogs/notices (`lunco_theme::UI_ORDER`), the general HUD, then the
+specific HUD (`lunco_theme::HudTier`, egui `Background` above docked panels,
+ordered once per pass by `lunco_theme::stack_hud_layers`). Authored runtime HUI
+paints before egui and stays below every egui tier. Tutorial presentation uses
+`lunco_workbench_guided_ui::GUIDED_OVERLAY_ORDER` (`UI_ORDER`) for its ring,
+coach/recovery card, and completion prompt; its lesson HUD is a specific-HUD
+readout. Its painter/input scrims use the shared
 `GUIDED_SCRIM_ORDER` (`egui::Order::Background`). Workbench menus and window
 controls use egui's `Foreground` order, so opening a menu has deterministic
 visual and input precedence over both tutorial layers. The tutorial content region

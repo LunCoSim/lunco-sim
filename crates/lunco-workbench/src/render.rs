@@ -1205,9 +1205,11 @@ pub(crate) fn perspective_help_anchor(id: PerspectiveId) -> String {
     format!("menu.perspective.{}", id.as_str())
 }
 
-/// Render the bottom status strip and its shared progress/history popup.
-/// Active progress opens a compact notice; expanding it replaces that notice
-/// with discrete recent history. Live progress stays out of the history list.
+/// Render the bottom status strip, its active-progress notice, and the
+/// recent-history popup. The progress notice is a non-exclusive overlay so it
+/// never occupies egui's single open-popup slot: menus and other user-opened
+/// popups stay usable while a scene loads. Expanding the notice opens the
+/// discrete recent history. Live progress stays out of the history list.
 pub(crate) fn render_status_bar_inner(
     ui: &mut egui::Ui,
     world: &mut World,
@@ -1216,11 +1218,6 @@ pub(crate) fn render_status_bar_inner(
     use lunco_status_core::status_bus::{StatusBarAction, StatusBus, StatusLevel};
 
     let popup_id = ui.make_persistent_id("lunco_workbench_status_bar_popup");
-    let popup_view_id = ui.make_persistent_id("lunco_workbench_status_popup_view");
-    let mut popup_view = ui
-        .ctx()
-        .data_mut(|data| data.get_temp::<StatusPopupView>(popup_view_id))
-        .unwrap_or_default();
     let runtime_fault = world
         .get_resource::<lunco_core::RuntimeFaults>()
         .and_then(|faults| faults.first.clone());
@@ -1242,8 +1239,7 @@ pub(crate) fn render_status_bar_inner(
         should_open
     });
     let popup_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
-    let history_surface_open =
-        (popup_open && popup_view == StatusPopupView::History) || should_auto_open_fault;
+    let history_surface_open = popup_open || should_auto_open_fault;
     let scene_transition_active = world
         .get_resource::<lunco_core::SceneTransitionCoordinator>()
         .is_some_and(|coordinator| coordinator.active().is_some() || coordinator.has_admitted());
@@ -1320,19 +1316,6 @@ pub(crate) fn render_status_bar_inner(
     let mut status_action = None;
     let mut expand_status_history = false;
     let mut ignore_popup_outside_click = false;
-
-    // The compact progress notice and the history view share one popup id and
-    // anchor. A completion closes only the automatically-opened notice; the
-    // history view remains open if the user expanded it.
-    if should_auto_open_fault {
-        popup_view = StatusPopupView::History;
-    } else if primary_progress.is_some() && !popup_open {
-        popup_view = StatusPopupView::Progress;
-        egui::Popup::open_id(ui.ctx(), popup_id);
-    } else if primary_progress.is_none() && popup_open && popup_view == StatusPopupView::Progress {
-        egui::Popup::close_id(ui.ctx(), popup_id);
-        popup_view = StatusPopupView::History;
-    }
 
     ui.horizontal(|ui| {
         let bar_width = ui.available_width();
@@ -1474,12 +1457,9 @@ pub(crate) fn render_status_bar_inner(
                 })
                 .clicked()
         {
-            if egui::Popup::is_id_open(ui.ctx(), popup_id) && popup_view == StatusPopupView::History
-            {
+            if egui::Popup::is_id_open(ui.ctx(), popup_id) {
                 egui::Popup::close_id(ui.ctx(), popup_id);
             } else {
-                ignore_popup_outside_click = popup_view == StatusPopupView::Progress;
-                popup_view = StatusPopupView::History;
                 egui::Popup::open_id(ui.ctx(), popup_id);
             }
         }
@@ -1487,24 +1467,16 @@ pub(crate) fn render_status_bar_inner(
         // A newly reported runtime fault always opens the history after click
         // handling, so a click in the same frame cannot close the fault notice.
         if should_auto_open_fault {
-            popup_view = StatusPopupView::History;
             ignore_popup_outside_click = true;
             egui::Popup::open_id(ui.ctx(), popup_id);
         }
 
-        if !history_loaded
-            && popup_view == StatusPopupView::History
-            && egui::Popup::is_id_open(ui.ctx(), popup_id)
-        {
+        if !history_loaded && egui::Popup::is_id_open(ui.ctx(), popup_id) {
             history = status_history_snapshot(world.resource::<StatusBus>());
             history_loaded = true;
         }
 
-        let popup_width = if popup_view == StatusPopupView::Progress {
-            status_progress_card_width(ui.ctx().content_rect().width())
-        } else {
-            recent_events_width
-        };
+        let popup_width = recent_events_width;
 
         if scene_visible {
             ui.separator();
@@ -1609,11 +1581,6 @@ pub(crate) fn render_status_bar_inner(
             }
         }
 
-        // Keep the view mode with egui's temporary UI state. It is not
-        // persisted as application or Twin state.
-        ui.ctx()
-            .data_mut(|data| data.insert_temp(popup_view_id, popup_view));
-
         egui::Popup::from_response(&response)
             .id(popup_id)
             .width(popup_width)
@@ -1621,13 +1588,11 @@ pub(crate) fn render_status_bar_inner(
             .gap(5.0)
             .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
             .open_memory(None)
-            .close_behavior(
-                if popup_view == StatusPopupView::Progress || ignore_popup_outside_click {
-                    egui::PopupCloseBehavior::IgnoreClicks
-                } else {
-                    egui::PopupCloseBehavior::CloseOnClickOutside
-                },
-            )
+            .close_behavior(if ignore_popup_outside_click {
+                egui::PopupCloseBehavior::IgnoreClicks
+            } else {
+                egui::PopupCloseBehavior::CloseOnClickOutside
+            })
             .frame(
                 egui::Frame::new()
                     .fill(theme.tokens.overlay_backdrop)
@@ -1640,57 +1605,73 @@ pub(crate) fn render_status_bar_inner(
             .show(|ui| {
                 ui.set_min_width(popup_width);
                 ui.set_max_width(popup_width);
-                if popup_view == StatusPopupView::Progress {
-                    if let Some(progress) = primary_progress.as_ref() {
-                        expand_status_history = render_status_progress_notice(
-                            ui,
-                            progress,
-                            theme,
-                            scene_transition_is_clearing,
-                        );
-                    }
-                } else {
-                    ui.set_max_height(360.0);
-                    ui.heading("Recent status events");
-                    ui.separator();
-                    let mut popup_attention_source = None;
-                    egui::ScrollArea::vertical()
-                        .id_salt("recent_status_history")
-                        .auto_shrink([false, true])
-                        .show(ui, |ui| {
-                            if history.is_empty() {
-                                ui.label(egui::RichText::new("(no events yet)").weak());
-                                return;
+                ui.set_max_height(360.0);
+                ui.heading("Recent status events");
+                ui.separator();
+                let mut popup_attention_source = None;
+                egui::ScrollArea::vertical()
+                    .id_salt("recent_status_history")
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        if history.is_empty() {
+                            ui.label(egui::RichText::new("(no events yet)").weak());
+                            return;
+                        }
+                        // History contains discrete snapshots only.
+                        for (key, ev) in history.iter().rev() {
+                            if render_status_event_row(
+                                ui,
+                                ev,
+                                theme,
+                                ui.make_persistent_id(("workbench_status_event", key)),
+                            ) {
+                                popup_attention_source = Some(ev.source);
                             }
-                            // History contains discrete snapshots only.
-                            for (key, ev) in history.iter().rev() {
-                                if render_status_event_row(
-                                    ui,
-                                    ev,
-                                    theme,
-                                    ui.make_persistent_id(("workbench_status_event", key)),
-                                ) {
-                                    popup_attention_source = Some(ev.source);
-                                }
-                            }
-                        });
-                    if let Some(source) = popup_attention_source {
-                        status_action = Some(StatusBarAction { source });
-                    }
+                        }
+                    });
+                if let Some(source) = popup_attention_source {
+                    status_action = Some(StatusBarAction { source });
                 }
             });
+        if let Some(progress) = primary_progress.as_ref()
+            && !history_surface_open
+        {
+            let card_width = status_progress_card_width(ui.ctx().content_rect().width());
+            egui::Area::new(popup_id.with("progress_notice"))
+                .order(lunco_theme::UI_ORDER)
+                .pivot(egui::Align2::LEFT_BOTTOM)
+                .fixed_pos(response.rect.left_top() - egui::vec2(0.0, 5.0))
+                .interactable(true)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::new()
+                        .fill(theme.tokens.overlay_backdrop)
+                        .stroke(egui::Stroke::new(1.0, theme.tokens.overlay_border))
+                        .corner_radius(theme.rounding.window)
+                        .inner_margin(egui::Margin::same(
+                            theme.spacing.window_padding.round() as i8
+                        ))
+                        .show(ui, |ui| {
+                            ui.set_min_width(card_width);
+                            ui.set_max_width(card_width);
+                            expand_status_history = render_status_progress_notice(
+                                ui,
+                                progress,
+                                theme,
+                                scene_transition_is_clearing,
+                            );
+                        });
+                });
+        }
     });
     if expand_status_history {
-        popup_view = StatusPopupView::History;
-        ui.ctx()
-            .data_mut(|data| data.insert_temp(popup_view_id, popup_view));
+        egui::Popup::open_id(ui.ctx(), popup_id);
     }
     if let Some(action) = status_action {
         trigger_or_defer(world, action);
     }
 }
 
-/// Render the compact active-progress state of the shared status popup.
+/// Render the compact active-progress notice above the status strip.
 fn render_status_progress_notice(
     ui: &mut egui::Ui,
     event: &lunco_status_core::status_bus::StatusEvent,
@@ -2002,13 +1983,6 @@ pub fn menu_popup_max_width(content_width: f32, requested_max_width: f32) -> f32
 }
 
 type RuntimeFaultKey = (String, String, String);
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum StatusPopupView {
-    #[default]
-    History,
-    Progress,
-}
 
 fn should_auto_open_status_popup(
     previous: Option<&RuntimeFaultKey>,

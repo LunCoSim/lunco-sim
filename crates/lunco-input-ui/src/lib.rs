@@ -69,8 +69,8 @@ pub fn draw_input_overlay(
     let x = (window.width() - panel_w) / 2.0;
     let y = window.height() - panel_h - 20.0;
 
-    egui::Area::new(egui::Id::new("lunco_input_overlay"))
-        .order(egui::Order::Foreground)
+    lunco_theme::HudTier::General
+        .area(ctx, egui::Id::new("lunco_input_overlay"))
         .fixed_pos(egui::pos2(x, y))
         .show(ctx, |ui| {
             egui::Frame::new()
