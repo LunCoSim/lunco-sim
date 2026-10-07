@@ -353,7 +353,32 @@ fn prepare_route_and_add_unpossessed(me) {
         listed_programs.programs[0]["path"]
     } else { () };
     this.checks.push(t_true(program_path != () && discovered.contains(program_path),
-        "scene-scope route discovery finds the nested program through batched USD reads"));
+        "scene-scope route discovery finds the nested program through focused USD reads"));
+    let unassigned_programs = waypoint_editor::discover_subject_programs(
+        this.doc, ROOT, (), 0,
+    );
+    let one_route_programs = waypoint_editor::discover_subject_programs(
+        this.doc, ROUTE, (), 0,
+    );
+    this.checks.push(t_true(one_route_programs.len() == 1
+        && one_route_programs[0] == program_path
+        && unassigned_programs.contains(program_path)
+        && unassigned_programs.contains(ROOT + "/AlternateRoute/Program"),
+        "unpossessed discovery finds source-bound programs without attribute payloads"));
+    let ambiguous_pointer = #{
+        button: "primary", doc_id: this.doc, scene_root_path: ROOT,
+        target_path: ROOT + "/Ground", hit_path: ROOT + "/Ground",
+        prim_paths: [ROOT + "/Ground", ROOT],
+        pointer_intents: ["route.add_point"],
+        modifiers: #{ alt: true, shift: false, ctrl: false },
+        surface_world_position: point3([4.0, 0.0, -16.0], "active_physics"),
+    };
+    let before_ambiguous = document_generation(this.doc);
+    let ambiguous = waypoint_editor::route_pointer_action(ambiguous_pointer);
+    this.checks.push(t_true(ambiguous.ok == false && ambiguous.handled == true
+        && ambiguous.error.contains("select an authored route program")
+        && document_generation(this.doc) == before_ambiguous,
+        "unpossessed terrain add rejects ambiguous programs without editing USD"));
     let idle_click = waypoint_editor::route_pointer_action(#{
         button: "primary", doc_id: this.doc + this.doc,
         pointer_intents: ["selection.replace"],

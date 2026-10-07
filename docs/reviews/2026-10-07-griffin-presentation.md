@@ -50,6 +50,56 @@ renderer defect. Source histories and screenshots are paired in the evidence.
 
 ## Evidence and limits
 
+### Operator controls and sky
+
+The live mission could complete with `program_active` and `autopilot_enable`
+still set, suppressing manual drive and steering while the independent brake
+worked. Its terminal branch now explicitly stops guidance. Its target-scoped
+`intent.edge` subscription cancels the complete mission route branch on a
+pressed or pulsed controlled-rover command, clearing only guidance flags and
+preserving the controller's input. Route leaves cannot restart after this
+interruption.
+
+The actor-bound production handler regression passed four policy checks and
+four admitted-port checks. Foreign sources, wrong targets and release edges
+leave guidance unchanged; the exact pressed controlled-FLIP event interrupts
+it and preserves all three manual input values. The temporary observer was
+then detached, and native Space release restored all manual inputs to zero.
+
+An unpossessed terrain click exhausted Rhai's aggregate string budget while
+discovering route programs among FLIP's CAD hierarchy. Route discovery now
+requests only topology and relationships, deduplicates pointer candidates,
+and traverses branches in batches of 16. The actual live scene-interaction
+owner accepted the unpossessed terrain context and created `FlipRoute/P4`.
+The authored route gates also cover rejection when multiple routes are
+ambiguous; the main windowed fixture was not rerun in this phase.
+
+Native W, S, A, D and Space press/release each passed 11 authored assertions
+against the exact ready Twin, including possession, other inputs at zero and
+guidance disabled. The driver is `scripts/api/test_flip_manual_controls.py`;
+its assertions are Twin-owned Rhai. Earlier W/A output observations also
+recorded the wheel filter decaying after release and a 0.011729 rad/s final yaw
+rate. The gate requires FLIP possession and fails visibly if it is absent.
+
+The default scene references the shipped procedural sky component, authored
+through the document API on its persistent root layer. The runtime composed
+prim is spawned with `LunCoProceduralSkyAPI`; the rendered capture shows the
+starfield and physical Sun disk supplied by the existing celestial Sun.
+Runtime waypoints remain in their transient layer and were not saved.
+
+- `target/griffin-completion/native-control-regression.log`: ten native input
+  samples, all PASS, with 110 authored assertions.
+- `target/griffin-completion/manual-native-input.json`: W/A owner values,
+  motor outputs and native release settling.
+- `target/griffin-completion/waypoint-no-selection.json`: successful live
+  scene-interaction owner append without a controlled/selected path.
+- `target/griffin-completion/mission-manual-handoff.log`: final policy PASS 4
+  and committed-port PASS 4 using the exact production `on_event` handler.
+- `target/griffin-completion/final-controls-handoff.json`: ready world,
+  zero runtime diagnostics, disabled guidance and released manual inputs.
+- `target/griffin-completion/sky-document-inspection.json` and
+  `sky-controls.png`: exact document/layer inspection and rendered sky.
+
 - `target/griffin-completion/presentation-final.log`: `TESTS_OK 16`, surface
   operations PASS, successful Modelica compilation and cache preparation.
 - `target/griffin-completion/presentation-driver.log`: readiness transitions,

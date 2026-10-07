@@ -140,7 +140,7 @@ fn prim_exists(doc, path) {
     // Runtime presentation reads follow the composed stage. The authored
     // document can be one journal revision ahead while a transient view edit
     // is being projected, and that must not make the ribbon disappear.
-    let result = query("QueryUsdPrim", #{ doc_id: doc, path: path });
+    let result = query("QueryUsdPrim", #{ doc_id: doc, path: path, attrs: [] });
     result != () && result.ok != false
 }
 
@@ -266,19 +266,25 @@ fn route_edit_path_with_scene_discovery(context, allow_scene_discovery) {
     // first can route a click on another program's waypoint to the wrong route.
     let pointer_targets = [];
     for path in [context["target_path"], context["hit_path"]] {
-        if type_of(path) == "string" && path != "" { pointer_targets.push(path); }
+        if type_of(path) == "string" && path != "" && !pointer_targets.contains(path) {
+            pointer_targets.push(path);
+        }
     }
     let prim_paths = context["prim_paths"];
     if type_of(prim_paths) == "array" {
         for path in prim_paths {
-            if type_of(path) == "string" && path != "" { pointer_targets.push(path); }
+            if type_of(path) == "string" && path != "" && !pointer_targets.contains(path) {
+                pointer_targets.push(path);
+            }
         }
     }
     for path in pointer_targets {
         let route = route_for_path(doc, path, subject);
         if route != () { return route; }
-        let pointer_route = route_for_path(doc, path, ());
-        if pointer_route != () { return pointer_route; }
+        if subject != () {
+            let pointer_route = route_for_path(doc, path, ());
+            if pointer_route != () { return pointer_route; }
+        }
     }
 
     // With no route-bearing pointer target, an explicitly selected program or
@@ -288,8 +294,10 @@ fn route_edit_path_with_scene_discovery(context, allow_scene_discovery) {
     let selected = context["selected_path"];
     let selected_route = route_for_path(doc, selected, subject);
     if selected_route != () { return selected_route; }
-    let selected_point_route = route_for_path(doc, selected, ());
-    if selected_point_route != () { return selected_point_route; }
+    if subject != () {
+        let selected_point_route = route_for_path(doc, selected, ());
+        if selected_point_route != () { return selected_point_route; }
+    }
     if selected != () && is_route_program(doc, selected, subject) {
         let program_route = route_parent_path(selected);
         if program_route != () { return program_route; }
@@ -331,6 +339,7 @@ fn is_route_program(doc, path, subject) {
     let record = query("QueryUsdPrim", #{
         doc_id: doc,
         path: path,
+        attrs: [],
         rels: ["inputs:subject"],
         schemas: true,
     });
@@ -380,7 +389,9 @@ fn route_for_path(doc, path, subject) {
 
 fn is_route_scope(doc, path, subject) {
     if type_of(path) != "string" || path == "" { return false; }
-    let result = query("QueryUsdPrim", #{ doc_id: doc, path: path, children: true });
+    let result = query("QueryUsdPrim", #{
+        doc_id: doc, path: path, attrs: [], children: true,
+    });
     if result == () || result.ok == false || result.children == () {
         return false;
     }
@@ -388,6 +399,7 @@ fn is_route_scope(doc, path, subject) {
     let programs = query("QueryUsdPrims", #{
         doc_id: doc,
         paths: result.children,
+        attrs: [],
         rels: ["inputs:subject"],
         schemas: true,
     });
@@ -421,35 +433,35 @@ fn discover_subject_programs(doc, scope, subject, depth) {
     if result == () || result.ok == false || result.children == () {
         return programs;
     }
-    // Read one hierarchy level from a composed-stage snapshot instead of
-    // resolving every prim through a separate QueryUsdPrim call.
-    let frontier = result.children;
-    for level in 0..(33 - depth) {
-        if frontier.len() == 0 { break; }
+    discover_program_paths(doc, result.children, subject, 32 - depth)
+}
+
+fn discover_program_paths(doc, paths, subject, remaining_depth) {
+    let programs = [];
+    // Small branch-local snapshots bound aggregate path bytes and amortize
+    // query/VM dispatch; a whole CAD hierarchy level exceeds Rhai's value limit.
+    let offset = 0;
+    while offset < paths.len() {
+        let chunk = paths.extract(offset, 16);
         let batch = query("QueryUsdPrims", #{
-            doc_id: doc,
-            paths: frontier,
-            attrs: [],
-            rels: ["inputs:subject"],
-            schemas: true,
-            children: level < (32 - depth),
+            doc_id: doc, paths: chunk, attrs: [],
+            rels: ["inputs:subject"], schemas: true,
+            children: remaining_depth > 0,
         });
         if batch == () || batch.ok == false || batch.records == ()
-            || batch.records.len() != frontier.len() {
-            return programs;
-        }
-        let nested = [];
+            || batch.records.len() != chunk.len() { return programs; }
         for record in batch.records {
-            if record_is_route_program(record, subject) {
+            if record.api_schemas.contains("LunCoProgramAPI")
+                && record_is_route_program(record, subject) {
                 programs.push(record.path);
             }
-            if level < (32 - depth) && record.children != () {
-                for child in record.children {
-                    if !nested.contains(child) { nested.push(child); }
+            if remaining_depth > 0 && record.children.len() > 0 {
+                for program in discover_program_paths(doc, record.children, subject, remaining_depth - 1) {
+                    programs.push(program);
                 }
             }
         }
-        frontier = nested;
+        offset += chunk.len();
     }
     programs
 }
@@ -458,6 +470,7 @@ fn linked_routes(doc, subject, scene_root, allow_scene_discovery) {
     let result = query("QueryUsdPrim", #{
         doc_id: doc,
         path: subject,
+        attrs: [],
         rels: ["programs"],
     });
     let routes = [];
@@ -633,6 +646,7 @@ fn route_child_snapshot(doc, route, attrs, validate_scope) {
     let result = query("QueryUsdPrim", #{
         doc_id: doc,
         path: route,
+        attrs: [],
         children: true,
     });
     if result == () {

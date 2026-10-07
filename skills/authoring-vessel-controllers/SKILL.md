@@ -135,6 +135,15 @@ presses a bound intent on a target owned by another session. The existing
 After the claim, the target-scoped semantic edge reaches the route policy and
 the held port command is applied.
 
+Route editing resolves composed `LunCoProgramAPI` and `inputs:subject` bindings,
+including when the pointer context has no selected or possessed subject.
+Identity and hierarchy queries explicitly request `attrs: []`; omitted `attrs`
+reads every authored attribute. Discover programs through bounded, branch-local
+`QueryUsdPrims` batches: Rhai limits aggregate string bytes in nested values,
+so a whole CAD hierarchy level can exceed the limit even without attributes.
+Verify both a unique unpossessed route and ambiguity rejection, and exercise
+the active `scene_interaction` hook through native window input for UI acceptance.
+
 ## 2. High-level logic → rhai, event-driven
 
 A a `Scope` applying `LunCoProgramAPI` child prim on the vessel, naming a `.rhai` scenario
