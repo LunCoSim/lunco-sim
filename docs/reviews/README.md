@@ -14,6 +14,9 @@ lesson, which belongs in the architecture doc for that subsystem.
 
 ## Standing issues
 
+- [`open-modelica-and-griffin-handover.md`](open-modelica-and-griffin-handover.md) —
+  committed declaration-scoped defaults and main integration, retained validation,
+  pending Griffin readiness/mission acceptance and aggregate-output readback.
 - [`open-model-authoring-ux-gaps.md`](open-model-authoring-ux-gaps.md) —
   current generic UX and runtime-evidence backlog derived from vehicle modeling
   and live simulation; it does not propose vehicle-specific core APIs.
