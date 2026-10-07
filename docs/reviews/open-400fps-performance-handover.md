@@ -116,9 +116,9 @@ exited and released the port. That evidence was stored in
 Declaration-scoped Modelica initialization is fixed in the compiler's DAE phase
 and editor compile dispatch. The production scoped-defaults gate passes 20 checks
 including integration, override, reset, expressions, arrays, and batch execution.
-See `2026-10-07-scoped-modelica-defaults.md` for owner contracts and evidence.
-Fresh Griffin runs remain held by MainPropulsion and AttitudePropulsion preparation;
-landing and engine-command verifications have no verdict and are not accepted.
+The bounded post-merge Griffin
+probe remained held during cold preparation; earlier landing and engine-command
+verifications timed out without verdicts. Twin acceptance remains open.
 
 Earlier dated measurements are historical diagnostics. Their raw captures,
 logs and screenshots are absent from this checkout's current `target/`, so
