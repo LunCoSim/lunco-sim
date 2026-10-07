@@ -116,8 +116,7 @@ exited and released the port. That evidence was stored in
 Declaration-scoped Modelica initialization is fixed in the compiler's DAE phase
 and editor compile dispatch. The production scoped-defaults gate passes 20 checks
 including integration, override, reset, expressions, arrays, and batch execution.
-See [the Modelica and Griffin handover](open-modelica-and-griffin-handover.md)
-for owner contracts, integration and evidence. The bounded post-merge Griffin
+The bounded post-merge Griffin
 probe remained held during cold preparation; earlier landing and engine-command
 verifications timed out without verdicts. Twin acceptance remains open.
 
