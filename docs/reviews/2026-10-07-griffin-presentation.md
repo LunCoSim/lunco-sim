@@ -117,3 +117,31 @@ Windows-native, browser/wasm, full-suite, aggregate-output production regression
 and separate package-wrapper namespace acceptance were not run in this demo
 completion phase. Authored aggregate-output coverage is supplied for follow-up.
 Performance outside preparation timings remains unaccepted.
+
+## Detachment and operator route ownership
+
+After deployment, automatic mission driving and the operator route could both
+write FLIP's guidance inputs. A HUD stop only stopped the operator route;
+the mission continued writing until its route completed. The Twin mission now
+retires its driving branch on the exact operator script host's `route_started`
+or `route_stopped` event. It preserves the new operator program's writes.
+Deployment also uses `AcquireControl` with `bind_camera: true`, handing the
+local keyboard and camera to the same FLIP that the HUD controls.
+
+The authored `griffin_operator_route_handoff.rhai` observer exercises HUD
+start/stop while mission guidance is active after adapter retirement following
+`RestartScene`. It requires 120 ticks of disabled guidance and native W
+press/release without another possession. Runtime waypoints are supplied as
+transient setup through the route editor, not saved to the authored scene.
+The fresh-reload run passed all six authored checks in
+`target/griffin-completion/detach-handoff-final.log` at 123.516667 scene seconds.
+The production mission yielded on `route_started` before its automatic drive
+could complete. The expanded exact-handler regression also passed ten policy
+checks and four admitted-port checks in the same log. Both temporary observers
+were stopped, test keys released, and the transport returned to 1x.
+
+A separate repeated `OpenTwin` of the same active root exposed a mount-alias
+failure: the new mount received a suffixed namespace while authored references
+retained the canonical namespace. This is not resolved by the Twin control
+change. A fresh application launch avoids that repeated-open path. No broad
+Twin close/reopen acceptance is claimed.

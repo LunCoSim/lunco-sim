@@ -241,7 +241,19 @@ possession leaves the program's input ports and enable state intact. The generic
 `intent.edge` from its currently possessed subject; input from the free avatar
 or another unpossessed surface cannot stop it. `Action` remains the route
 toggle. Other authored autopilots should consume the same semantic edge
-contract to yield. Do not set
+contract to yield. When a mission also drives that subject, retire its driving
+branch on the operator route's `route_started` and `route_stopped` events.
+Subscribe to the running script host (`usd_path(me)` at the emitter), which
+can be the parent scope of the `LunCoProgramAPI` source prim. Retiring a mission
+must preserve a newly started operator program's guidance writes. Test the HUD
+handoff while mission guidance is active immediately after deployment, then
+verify it remains stopped across subsequent ticks and a scene reload.
+
+An attended deployment may explicitly hand the local operator to the new
+vehicle with `AcquireControl { bind_camera: true }`. A host-authority claim
+with `bind_camera: false` does not move local keyboard input to that vehicle.
+Keep this discrete operator handoff separate from publishing guidance.
+Do not set
 `Position`, `LinearVelocity`,
 `ModelicaModel.inputs`, or a private actuator component to make a scenario move;
 those bypass the authored input and model contracts.
