@@ -6,7 +6,7 @@ use lunco_usd_bevy_scene::UsdPrimPath;
 #[derive(Resource)]
 struct RoverAsset(String);
 
-fn main() {
+fn main() -> std::io::Result<()> {
     let rover_asset = std::env::args().nth(1).unwrap_or_else(|| {
         eprintln!("usage: usd_rover_visual <asset-path-relative-to-assets>");
         std::process::exit(2);
@@ -17,7 +17,7 @@ fn main() {
             eprintln!("error: rover asset must be a safe path relative to the asset library");
             std::process::exit(2);
         });
-    let assets_root = lunco_assets_core::assets_dir_abs();
+    let assets_root = lunco_assets_core::assets_dir_abs()?;
     App::new()
         .add_plugins((
             DefaultPlugins.set(AssetPlugin {
@@ -34,6 +34,7 @@ fn main() {
         .add_systems(Startup, (setup_scene, setup_rover))
         .add_systems(Update, (orbit_camera, debug_rover_presence))
         .run();
+    Ok(())
 }
 
 fn setup_scene(
@@ -95,7 +96,15 @@ fn setup_rover(
     asset_server: Res<AssetServer>,
     rover_asset: Res<RoverAsset>,
 ) {
-    let stage_handle = asset_server.load(rover_asset.0.clone());
+    let path =
+        match lunco_assets_core::asset_path::load_asset_path(&rover_asset.0, None, None, None) {
+            Ok(path) => path,
+            Err(error) => {
+                error!("invalid rover asset address: {error}");
+                return;
+            }
+        };
+    let stage_handle = asset_server.load(path);
 
     commands.spawn((
         Name::new("RucheyokRover"),

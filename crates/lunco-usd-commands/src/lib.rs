@@ -2341,17 +2341,9 @@ fn validate_live_attribute_types(
     let document_composed = document.composed_arc();
     if let Some(stage) = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc) {
         let view = stage.view();
-        let stage_path = world
+        let stage_id = world
             .get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
-            .and_then(|scenes| scenes.coords_of(doc))
-            .map(|(name, rel)| lunco_assets_core::twin_uri(&name, &rel));
-        let stage_id = stage_path
-            .and_then(|path| {
-                world
-                    .get_resource::<AssetServer>()
-                    .and_then(|server| server.get_handle::<UsdStageAsset>(path))
-            })
-            .map(|handle| handle.id());
+            .and_then(|scenes| lunco_usd_bevy_twin::stage_asset_for_document(scenes, doc));
         return validate_attribute_types_in_view(world, ops, &planned_attributes, &view, stage_id);
     }
 

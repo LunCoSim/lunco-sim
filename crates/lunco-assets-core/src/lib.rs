@@ -182,8 +182,8 @@ pub fn cache_dir() -> PathBuf {
 /// Read-only in practice: downloads still land in [`cache_dir`], because a
 /// packaged `assets/` may sit on a read-only mount and because one machine
 /// should not re-fetch the same product per installed copy.
-pub fn packed_cache_dir() -> PathBuf {
-    assets_dir_abs().join(".cache")
+pub fn packed_cache_dir() -> std::io::Result<PathBuf> {
+    Ok(assets_dir_abs()?.join(".cache"))
 }
 
 /// The directory holding the engine's dataset manifests: `assets/manifests`.
@@ -198,8 +198,8 @@ pub fn packed_cache_dir() -> PathBuf {
 /// One file per **group**, named for it: `celestial.toml` declares the
 /// `celestial` group. The file stem is what the UI shows as the owning library,
 /// so a new group is a new file and nothing else.
-pub fn manifests_dir() -> PathBuf {
-    assets_dir_abs().join("manifests")
+pub fn manifests_dir() -> std::io::Result<PathBuf> {
+    Ok(assets_dir_abs()?.join("manifests"))
 }
 
 /// Every engine manifest as `(group, path)`, sorted by group.
@@ -209,7 +209,7 @@ pub fn manifests_dir() -> PathBuf {
 /// download list reshuffle between machines for no reason.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn engine_manifests() -> Result<Vec<(String, PathBuf)>, std::io::Error> {
-    let entries = std::fs::read_dir(manifests_dir())?;
+    let entries = std::fs::read_dir(manifests_dir()?)?;
     let mut out: Vec<(String, PathBuf)> = entries
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
@@ -228,8 +228,12 @@ pub fn engine_manifests() -> Result<Vec<(String, PathBuf)>, std::io::Error> {
 /// such group. This is for a consumer that wants one group's declarations
 /// rather than the whole manifest set.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn engine_manifest_text(group: &str) -> Option<String> {
-    std::fs::read_to_string(manifests_dir().join(format!("{group}.toml"))).ok()
+pub fn engine_manifest_text(group: &str) -> std::io::Result<Option<String>> {
+    match std::fs::read_to_string(manifests_dir()?.join(format!("{group}.toml"))) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// Every cache root a library-relative reference is looked up in, in order:
@@ -239,11 +243,11 @@ pub fn engine_manifest_text(group: &str) -> Option<String> {
 /// synchronous resolver ([`engine_asset_local_path`]) and any tool probing for
 /// bytes all ask here, so a file found by the loader is a file found by the
 /// validator.
-pub fn cache_roots() -> Vec<PathBuf> {
-    library_roots(&assets_dir_abs())
+pub fn cache_roots() -> std::io::Result<Vec<PathBuf>> {
+    Ok(library_roots(&assets_dir_abs()?)
         .into_iter()
         .skip(1)
-        .collect()
+        .collect())
 }
 
 /// The complete search order for the engine asset library rooted at `assets`.
@@ -416,8 +420,8 @@ pub fn assets_dir() -> PathBuf {
 ///
 /// Callers use this only for native operations that require a filesystem path;
 /// runtime asset loading uses the corresponding `lunco://` identity.
-pub fn engine_models_root() -> PathBuf {
-    assets_dir_abs().join(ENGINE_MODELS_DIR)
+pub fn engine_models_root() -> std::io::Result<PathBuf> {
+    Ok(assets_dir_abs()?.join(ENGINE_MODELS_DIR))
 }
 
 /// Logical path of one engine Modelica source below the asset library.
@@ -435,8 +439,8 @@ pub fn engine_model_asset_uri(relative: &str) -> String {
 /// The directory is owned by the engine asset library. Keeping this lookup in
 /// the asset owner prevents CLI and UI consumers from embedding a second copy
 /// of its on-disk layout.
-pub fn engine_scene_tests_root() -> PathBuf {
-    assets_dir_abs().join(ENGINE_SCENE_TESTS_DIR)
+pub fn engine_scene_tests_root() -> std::io::Result<PathBuf> {
+    Ok(assets_dir_abs()?.join(ENGINE_SCENE_TESTS_DIR))
 }
 
 /// Whether an engine-library relative path belongs to its authored scene tree.
@@ -457,8 +461,8 @@ pub fn engine_shader_asset_rel(stem: &str) -> String {
 }
 
 /// Absolute path of an engine-library shader generated from a safe file stem.
-pub fn engine_shader_path(stem: &str) -> PathBuf {
-    assets_dir_abs().join(engine_shader_asset_rel(stem))
+pub fn engine_shader_path(stem: &str) -> std::io::Result<PathBuf> {
+    Ok(assets_dir_abs()?.join(engine_shader_asset_rel(stem)))
 }
 
 /// Resolves the shipped-library root used by Bevy's `AssetPlugin`.
@@ -479,59 +483,66 @@ pub fn engine_shader_path(stem: &str) -> PathBuf {
 /// Anything reaching library bytes off the `AssetServer` must anchor here rather
 /// than joining `"assets"` itself: a bare relative join silently follows the CWD
 /// of whoever calls it, which is how the same reference resolved two ways.
+/// Return a validated root or a terminal installation/configuration error.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn assets_dir_abs() -> PathBuf {
-    if let Some(configured) = std::env::var_os(ASSET_ROOT_ENV) {
-        let root = PathBuf::from(configured);
-        if !root.is_dir() {
-            panic!(
-                "{ASSET_ROOT_ENV} must name an existing asset directory, got {}",
-                root.display()
-            );
-        }
-        return std::fs::canonicalize(&root).unwrap_or_else(|error| {
-            panic!(
-                "{ASSET_ROOT_ENV} could not be canonicalized ({}): {error}",
-                root.display()
-            )
-        });
-    }
-
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            if let Some(root) = find_assets_dir(parent) {
-                return root;
-            }
-        }
-    }
-
-    if let Ok(cwd) = std::env::current_dir() {
-        return find_assets_dir(&cwd).unwrap_or_else(|| {
-            panic!(
-                "could not resolve the LunCoSim asset directory from executable `{}` or current directory `{}`; set {ASSET_ROOT_ENV} explicitly",
-                std::env::current_exe()
-                    .ok()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string()),
-                cwd.display()
-            )
-        });
-    }
-
-    panic!(
-        "could not determine the current directory for the LunCoSim asset library; set {ASSET_ROOT_ENV} explicitly"
+pub fn assets_dir_abs() -> std::io::Result<PathBuf> {
+    let configured = std::env::var_os(ASSET_ROOT_ENV).map(PathBuf::from);
+    resolve_assets_root(
+        configured.as_deref(),
+        std::env::current_exe().ok().as_deref(),
+        std::env::current_dir().ok().as_deref(),
     )
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_assets_root(
+    configured: Option<&Path>,
+    exe: Option<&Path>,
+    cwd: Option<&Path>,
+) -> std::io::Result<PathBuf> {
+    let discovered;
+    let root = match configured {
+        Some(root) => root,
+        None => {
+            discovered = exe.and_then(Path::parent).and_then(find_assets_dir)
+                .or_else(|| cwd.and_then(find_assets_dir))
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound,
+                    format!("could not resolve the LunCoSim asset directory; set {ASSET_ROOT_ENV} to the installed asset library")))?;
+            &discovered
+        }
+    };
+    validate_assets_root(root)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn validate_assets_root(root: &Path) -> std::io::Result<PathBuf> {
+    let canonical = lunco_storage::canonicalize_file_path(root).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid asset root {}: {error}", root.display()),
+        )
+    })?;
+    if !canonical.is_dir() || canonical.to_str().is_none() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "asset root {} must be an existing UTF-8 directory",
+                root.display()
+            ),
+        ));
+    }
+    Ok(canonical)
+}
+
 #[cfg(target_arch = "wasm32")]
-pub fn assets_dir_abs() -> PathBuf {
-    assets_dir()
+pub fn assets_dir_abs() -> std::io::Result<PathBuf> {
+    Ok(assets_dir())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn find_assets_dir(base: &Path) -> Option<PathBuf> {
     base.ancestors()
-        .map(|parent| parent.join(assets_dir()))
+        .map(|parent| parent.join(ASSETS_DIR_NAME))
         .find(|candidate| candidate.is_dir())
 }
 
@@ -552,23 +563,23 @@ fn find_assets_dir(base: &Path) -> Option<PathBuf> {
 /// STRUCTURED entity in Modelica's file-system mapping, rather than merely a
 /// folder that happens to hold `.mo` files.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn models_package_root_path(package: &str) -> Option<PathBuf> {
-    let root = engine_models_root().join(package);
+pub fn models_package_root_path(package: &str) -> std::io::Result<Option<PathBuf>> {
+    let root = engine_models_root()?.join(package);
     if !root.join("package.mo").is_file() {
-        return None;
+        return Ok(None);
     }
     // Canonicalize for the same reason `source_library_root_path` does: the
     // parser keys
     // its source-root cache on the exact path it is handed, so a CWD-dependent
     // form would produce a different key per caller and force full reparses.
-    std::fs::canonicalize(&root).ok().or(Some(root))
+    std::fs::canonicalize(&root).map(Some)
 }
 
 /// wasm has no filesystem to put a library on, so there is no MODELICAPATH entry;
 /// browser consumers use the Bevy `ModelicaSource` asset loader.
 #[cfg(target_arch = "wasm32")]
-pub fn models_package_root_path(_package: &str) -> Option<PathBuf> {
-    None
+pub fn models_package_root_path(_package: &str) -> std::io::Result<Option<PathBuf>> {
+    Ok(None)
 }
 
 /// Cache `scenarios/` directory — where a downloaded scenario's files are
@@ -658,38 +669,25 @@ pub fn engine_asset_rel(reference: &str) -> &str {
 /// that actually holds the file. When none does, it returns the `assets/` path
 /// anyway, so an error message names where the file was EXPECTED rather than
 /// where it was last looked for.
-pub fn engine_asset_local_path(reference: &str) -> Option<PathBuf> {
+pub fn engine_asset_local_path(reference: &str) -> std::io::Result<Option<PathBuf>> {
     let rel = engine_asset_rel(reference);
     if has_scheme(rel) {
-        return None; // another scheme's root — not in the shipped library
+        return Ok(None);
     }
-    let relative = asset_path::relative_path(rel)?;
-    let roots = library_roots(&assets_dir_abs());
-
+    let relative = asset_path::relative_path(rel).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("unsafe library asset `{reference}`"),
+        )
+    })?;
+    let roots = library_roots(&assets_dir_abs()?);
     #[cfg(not(target_arch = "wasm32"))]
     for root in &roots {
-        match existing_path_within_root(root, &relative) {
-            Ok(Some(path)) => return Some(path).filter(|path| path.is_file()),
-            Ok(None) => {}
-            Err(error) => {
-                bevy::log::warn!(
-                    "[lunco-assets] cannot resolve asset `{rel}` under {}: {error}",
-                    root.display()
-                );
-                return None;
-            }
+        if let Some(path) = existing_path_within_root(root, &relative)? {
+            return Ok(Some(path).filter(|path| path.is_file()));
         }
     }
-
-    #[cfg(target_arch = "wasm32")]
-    for root in &roots {
-        let candidate = root.join(&relative);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-
-    Some(roots[0].join(relative))
+    Ok(Some(roots[0].join(relative)))
 }
 
 /// Directory transport selected by the asset owner on the existing I/O worker.
@@ -798,7 +796,9 @@ pub async fn resolve_asset_directory_on_worker(
             .ok_or_else(|| invalid(format!("unsafe engine directory `{reference}`")))?;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            for root in library_roots(&assets_dir_abs()) {
+            for root in
+                library_roots(&assets_dir_abs().map_err(|error| invalid(error.to_string()))?)
+            {
                 let path = existing_path_within_root(&root, &relative).map_err(|error| {
                     TwinRootsError::AssetResolution(error.kind(), error.to_string())
                 })?;
@@ -860,10 +860,11 @@ pub async fn resolve_asset_directory_on_worker(
 /// Callers hand an absolute path to the `AssetServer`, which prepends its own
 /// configured root to every load string — so a path under the library has to be
 /// reduced to its relative form or the load resolves to `<assets>/<assets>/…`.
-pub fn library_rel(path: &Path) -> Option<String> {
-    path.strip_prefix(assets_dir_abs())
+pub fn library_rel(path: &Path) -> std::io::Result<Option<String>> {
+    Ok(path
+        .strip_prefix(assets_dir_abs()?)
         .ok()
-        .map(asset_path::slashed)
+        .map(asset_path::slashed))
 }
 
 /// Cache `fonts/` directory — where `lunco-assets -- download`
@@ -898,19 +899,13 @@ pub fn fonts_dir() -> PathBuf {
 ///
 /// Populated by `cargo run -p lunco-assets -- download` via the
 /// `crates/lunco-theme/Assets.toml` entry.
-pub fn dejavu_sans_path() -> PathBuf {
-    // The multi-root search probes the filesystem (`Path::exists`), which panics
-    // on wasm's no-filesystem target; there the font arrives via `fetch`, not this
-    // path, so keep the nominal shared-cache path for wasm callers.
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        engine_asset_local_path("fonts/DejaVuSans.ttf")
-            .unwrap_or_else(|| fonts_dir().join("DejaVuSans.ttf"))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        fonts_dir().join("DejaVuSans.ttf")
-    }
+pub fn dejavu_sans_path() -> std::io::Result<PathBuf> {
+    engine_asset_local_path("fonts/DejaVuSans.ttf")?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "font has no engine-library address",
+        )
+    })
 }
 
 /// Constructs a Modelica compilation output path for a given entity.
@@ -928,6 +923,37 @@ pub fn modelica_entity_dir(entity_name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn asset_root_admission_reports_invalid_overrides_and_discovers_canonical_library() {
+        let tree = tempfile::tempdir().unwrap();
+        let root = tree.path().join("assets");
+        std::fs::create_dir(&root).unwrap();
+        let exe = tree.path().join("bin/luncosim");
+        assert_eq!(
+            resolve_assets_root(None, Some(&exe), None).unwrap(),
+            root.canonicalize().unwrap()
+        );
+        assert!(
+            resolve_assets_root(
+                Some(&tree.path().join("absent")),
+                Some(&exe),
+                Some(tree.path())
+            )
+            .is_err()
+        );
+        assert!(resolve_assets_root(None, None, None).is_err());
+        let file = tree.path().join("file");
+        std::fs::write(&file, "data").unwrap();
+        assert!(resolve_assets_root(Some(&file), Some(&exe), None).is_err());
+        let unicode = tree.path().join("Twin Мир # %");
+        std::fs::create_dir(&unicode).unwrap();
+        assert_eq!(
+            resolve_assets_root(Some(&unicode), None, None).unwrap(),
+            unicode.canonicalize().unwrap()
+        );
+    }
 
     #[test]
     fn cache_dir_defaults_to_os_global_cache() {
@@ -963,9 +989,8 @@ mod tests {
             "lunco://../outside.usda",
             "lunco://terrain/../../outside.usda",
         ] {
-            assert_eq!(
-                engine_asset_local_path(reference),
-                None,
+            assert!(
+                engine_asset_local_path(reference).is_err(),
                 "unsafe engine reference must be rejected: {reference}"
             );
         }

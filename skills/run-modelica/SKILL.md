@@ -154,6 +154,11 @@ manifest. The worker commits root preparations in admission order before
 compilation, rejects unadmitted roots, and reports failed roots without retrying
 synchronous discovery. Synchronous compiler helpers remain for CLI and batch
 callers.
+An unqualified source asset already present in an admitted root compiles the
+root-owned class only when its exact source CID is in the admitted content
+closure. Changed or conflicting source text is rejected; update and readmit
+the source root before compiling it. This prevents a second URI from duplicating
+the same root definition while preserving the root's authority.
 The policy list does not replace composed USD facts for member-class
 discovery. The worker's prepared-solve cache keys library state from the
 revisions that `ModelicaCompiler` records while admitting source roots. Its
@@ -798,3 +803,16 @@ components in generated USD networks. Explicit authored inputs take precedence.
 The worker's initialized solver observation supplies runtime readback; do not
 copy defaults into each Twin to compensate for a lifecycle bridge replacing
 unbound slots with zero. Verify after advancing physics, not only at compile time.
+
+Modelica index warming reads `LUNCOSIM_WARM_DIRS` as the operating system's
+path list: colon-separated on Unix and semicolon-separated on Windows, so
+Windows drive letters remain intact. Shipped package roots use the fallible
+asset-library resolver; root failures are reported before admitting sources.
+USD participant/network source loads use the stage's prepared typed load
+address, retaining literal filenames and native reference admission during
+initial load and parameter recompilation.
+Program format selection preserves `#` in named/native filenames; HTTP source
+URLs use their path component when selecting the executor.
+Twin Modelica directories may use `.` to designate the admitted Twin root;
+the directory resolver preserves this manifest semantic without permitting
+parent traversal or using it as a concrete file address.

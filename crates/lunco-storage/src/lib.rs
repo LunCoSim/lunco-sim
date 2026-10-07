@@ -32,6 +32,9 @@
 
 use std::path::{Path, PathBuf};
 
+mod path_identity;
+pub use path_identity::FilePathIdentity;
+
 pub mod file_storage;
 
 pub use file_storage::FileStorage;
@@ -160,6 +163,38 @@ pub fn file_uri_to_path(reference: &str) -> StorageResult<Option<PathBuf>> {
     }
 }
 
+/// Convert a USD-authored Windows drive/UNC reference to the native file contract.
+///
+/// Logical `/...` asset roots retain their meaning. Drive-relative addresses
+/// are rejected because their interpretation depends on per-drive process state.
+/// Foreign Windows filesystem addresses fail explicitly on non-Windows hosts.
+pub fn windows_file_reference_uri(reference: &str) -> StorageResult<Option<String>> {
+    let bytes = reference.as_bytes();
+    let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    let unc = reference.starts_with(r"\\") || reference.starts_with("//");
+    if !drive && !unc {
+        return Ok(None);
+    }
+    #[cfg(windows)]
+    {
+        let path = Path::new(reference);
+        if !path.is_absolute() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("USD filesystem reference `{reference}` must be fully qualified"),
+            )
+            .into());
+        }
+        file_path_to_uri(path).map(Some)
+    }
+    #[cfg(not(windows))]
+    {
+        Err(StorageError::Unsupported(format!(
+            "Windows filesystem reference `{reference}` requires a Windows host"
+        )))
+    }
+}
+
 /// Encode an absolute native filesystem path as a standard `file:` URI.
 /// Relative paths and browser storage keys are not native file URI addresses.
 pub fn file_path_to_uri(path: &Path) -> StorageResult<String> {
@@ -192,6 +227,34 @@ pub fn file_path_to_uri(path: &Path) -> StorageResult<String> {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod file_uri_tests {
     use super::*;
+
+    #[test]
+    fn authored_windows_references_use_native_identity_or_explicit_host_rejection() {
+        for reference in [
+            r"C:\My Twin\part#%.usda",
+            "C:/My Twin/part#%.usda",
+            r"\\server\share\My Twin\part.usda",
+            r"\\?\C:\My Twin\part.usda",
+        ] {
+            #[cfg(windows)]
+            {
+                let uri = windows_file_reference_uri(reference).unwrap().unwrap();
+                let decoded = file_uri_to_path(&uri).unwrap().unwrap();
+                assert_eq!(file_path_to_uri(&decoded).unwrap(), uri);
+            }
+            #[cfg(not(windows))]
+            assert!(windows_file_reference_uri(reference).is_err());
+        }
+        assert!(windows_file_reference_uri("C:part.usda").is_err());
+        for reference in [
+            "lunco://models/part.usda",
+            "twin://root/part.usda",
+            "/models/part.usda",
+            "./part#%.usda",
+        ] {
+            assert_eq!(windows_file_reference_uri(reference).unwrap(), None);
+        }
+    }
 
     #[test]
     fn file_uris_preserve_native_paths_and_reject_invalid_addresses() {

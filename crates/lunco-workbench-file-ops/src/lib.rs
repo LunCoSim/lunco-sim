@@ -385,6 +385,7 @@ fn confined_rename_source(
 #[cfg(not(target_arch = "wasm32"))]
 fn unoccupied_rename_destination(
     source: &std::path::Path,
+    source_kind: lunco_storage::StorageEntryKind,
     name: &str,
 ) -> Result<std::path::PathBuf, String> {
     lunco_assets_path::validate_portable_file_name(name)
@@ -395,7 +396,16 @@ fn unoccupied_rename_destination(
     let destination = parent.join(name);
     if destination != source {
         match lunco_storage::entry_kind_no_follow_file_sync(&destination) {
-            Ok(_) => {
+            Ok(kind) => {
+                if !matches!(source_kind, lunco_storage::StorageEntryKind::Symlink)
+                    && !matches!(kind, lunco_storage::StorageEntryKind::Symlink)
+                    && lunco_storage::canonicalize_file_path(source)
+                        .map_err(|error| error.to_string())?
+                        == lunco_storage::canonicalize_file_path(&destination)
+                            .map_err(|error| error.to_string())?
+                {
+                    return Ok(destination);
+                }
                 return Err(format!(
                     "rename target already exists: {}",
                     destination.display()
@@ -431,7 +441,16 @@ fn on_rename_twin_entry(
     {
         use lunco_doc::DocumentOrigin;
         let ev = trigger.event();
-        let twin_root = std::path::PathBuf::from(&ev.twin_root);
+        let twin_root =
+            match lunco_storage::canonicalize_file_path(std::path::Path::new(&ev.twin_root)) {
+                Ok(root) => root,
+                Err(error) => {
+                    return rejected_file_command(
+                        &mut commands,
+                        format!("invalid rename Twin root {}: {error}", ev.twin_root),
+                    );
+                }
+            };
         let new_name = &ev.new_name;
         let twin_id = workspace
             .twins()
@@ -460,7 +479,23 @@ fn on_rename_twin_entry(
                 );
             }
         };
-        let new_abs = match unoccupied_rename_destination(&old_abs, new_name) {
+        let old_abs = if matches!(old_kind, lunco_storage::StorageEntryKind::Symlink) {
+            old_abs
+        } else {
+            match lunco_storage::canonicalize_file_path(&old_abs) {
+                Ok(source) => source,
+                Err(error) => {
+                    return rejected_file_command(
+                        &mut commands,
+                        format!(
+                            "cannot resolve rename source {}: {error}",
+                            old_abs.display()
+                        ),
+                    );
+                }
+            }
+        };
+        let new_abs = match unoccupied_rename_destination(&old_abs, old_kind, new_name) {
             Ok(destination) => destination,
             Err(message) => return rejected_file_command(&mut commands, message),
         };
@@ -912,7 +947,12 @@ mod rename_path_tests {
             ),
             "followed inspection keeps its target-reading contract"
         );
-        let destination = unoccupied_rename_destination(&source, "renamed.mo").unwrap();
+        let destination = unoccupied_rename_destination(
+            &source,
+            lunco_storage::StorageEntryKind::Symlink,
+            "renamed.mo",
+        )
+        .unwrap();
         lunco_storage::rename_file_sync(&source, &destination).unwrap();
         assert_eq!(
             lunco_storage::entry_kind_no_follow_file_sync(&destination).unwrap(),
@@ -921,9 +961,13 @@ mod rename_path_tests {
         let other = root.join("other.mo");
         lunco_storage::write_file_sync(&other, b"original").unwrap();
         assert!(
-            unoccupied_rename_destination(&other, "renamed.mo")
-                .unwrap_err()
-                .contains("already exists")
+            unoccupied_rename_destination(
+                &other,
+                lunco_storage::StorageEntryKind::File,
+                "renamed.mo"
+            )
+            .unwrap_err()
+            .contains("already exists")
         );
         assert_eq!(lunco_storage::read_file_sync(&other).unwrap(), b"original");
         assert!(matches!(

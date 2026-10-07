@@ -113,7 +113,7 @@ fn collect_rhai_sources(
 /// or unrelated scenario content. This keeps the asset layer reusable and
 /// prevents a directory convention from becoming a second policy engine.
 pub fn rhai_sources() -> Result<Vec<(String, String)>, String> {
-    let root = lunco_assets_core::assets_dir_abs();
+    let root = lunco_assets_core::assets_dir_abs().map_err(|error| error.to_string())?;
     let mut files = Vec::new();
     collect_rhai_sources(&root, &root, &mut files)?;
     files.sort_by(|left, right| left.0.cmp(&right.0));
@@ -495,7 +495,7 @@ pub fn active_policy_set() -> Result<Vec<LoadedPolicy>, String> {
 /// Load the application startup function and its manifest-selected policies.
 pub fn active_policy_bundle() -> Result<LoadedPolicyBundle, String> {
     #[cfg(not(target_arch = "wasm32"))]
-    let assets_root = lunco_assets_core::assets_dir_abs();
+    let assets_root = lunco_assets_core::assets_dir_abs().map_err(|error| error.to_string())?;
     #[cfg(not(target_arch = "wasm32"))]
     {
         let mut files = Vec::new();

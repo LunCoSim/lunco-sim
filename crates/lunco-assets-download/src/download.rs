@@ -87,10 +87,8 @@ pub fn download_asset(
 /// `shared = true`, which selects the global cache. Authored USD always
 /// addresses the resulting artifact through its logical Twin URI, never via
 /// the physical cache path.
-/// When a `dest_root` is supplied, `entry.dest` is validated to be a
-/// strictly relative path with no `..` segments (see
-/// [`lunco_assets_path::is_safe_relative_path`])
-/// so a manifest can never escape the Twin root.
+/// The shared destination owner validates portable relative filenames before
+/// policy evaluation or writes, for both Twin and engine downloads.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn download_asset_with_control(
     entry: &AssetEntry,
@@ -99,16 +97,6 @@ pub fn download_asset_with_control(
     mut control: DownloadControl<'_>,
     dest_root: Option<&Path>,
 ) -> Result<(), DownloadError> {
-    // Twin-relative downloads must not let a manifest's `dest` walk outside
-    // the Twin root. Cache-relative downloads are plain relative paths.
-    if let (Some(_root), Some(d)) = (dest_root, entry.dest.as_deref()) {
-        if !lunco_assets_path::is_safe_relative_path(d) {
-            return Err(DownloadError::ManifestFailed(format!(
-                "asset `{key}` has an unsafe `dest` for a twin download: {d:?} \
-                 (must be relative, no `..`, no absolute, no backslash)"
-            )));
-        }
-    }
     let dest = entry_dest_path(entry, dest_root)
         .map_err(|error| DownloadError::ManifestFailed(error.to_string()))?;
 
@@ -391,7 +379,9 @@ pub fn download_all_for_group_with_limit(
     max_parallel: usize,
     settings: &DownloadSettings,
 ) -> Result<(), DownloadError> {
-    let path = lunco_assets_core::manifests_dir().join(format!("{group}.toml"));
+    let path = lunco_assets_core::manifests_dir()
+        .map_err(|error| DownloadError::ManifestFailed(error.to_string()))?
+        .join(format!("{group}.toml"));
     let manifest = AssetManifest::from_file(&path)
         .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
 
@@ -619,7 +609,9 @@ pub fn download_one_engine(
 
     Err(DownloadError::ManifestFailed(format!(
         "asset `{asset_key}` not declared in any manifest under {}",
-        lunco_assets_core::manifests_dir().display()
+        lunco_assets_core::manifests_dir()
+            .map_err(|error| DownloadError::ManifestFailed(error.to_string()))?
+            .display()
     )))
 }
 
@@ -731,7 +723,7 @@ pub fn list_for_twin(twin_root: &Path) -> Result<(), std::io::Error> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn list_group(group: &str) -> Result<(), std::io::Error> {
     list_manifest(
-        &lunco_assets_core::manifests_dir().join(format!("{group}.toml")),
+        &lunco_assets_core::manifests_dir()?.join(format!("{group}.toml")),
         group,
         None,
     )
@@ -1309,8 +1301,23 @@ mod tests {
             bundle: Vec::new(),
             extra: Default::default(),
         };
-        let error = entry_dest_path(&entry, None).expect_err("engine path must be contained");
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        let mut entry = entry;
+        for shared in [false, true] {
+            entry.shared = shared;
+            for destination in [
+                "../escape.tif",
+                "C:/escape.tif",
+                "terrain/NUL.tif",
+                "terrain/file:stream",
+            ] {
+                entry.dest = Some(destination.into());
+                for root in [None, Some(Path::new("owned-cache"))] {
+                    let error = entry_dest_path(&entry, root)
+                        .expect_err("every scope must enforce portable containment");
+                    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+                }
+            }
+        }
     }
 
     /// The default is the Twin's cache; `shared = true` selects the global

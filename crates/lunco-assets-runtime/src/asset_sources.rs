@@ -120,8 +120,8 @@ fn unregister_twin_root(
 ///
 /// Returns the [`TwinRoots`] handle (already inserted as a resource) for callers
 /// that want to pre-register a root before the first scene load.
-pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
-    let assets_dir = lunco_assets_core::assets_dir_abs();
+pub fn register_lunco_asset_sources(app: &mut App) -> std::io::Result<TwinRoots> {
+    let assets_dir = lunco_assets_core::assets_dir_abs()?;
 
     #[cfg(target_arch = "wasm32")]
     app.register_asset_source(
@@ -163,6 +163,7 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
                 lunco_assets_core::LUNCO_SCHEME,
                 rel,
             ))
+            .map_err(Into::into)
         })
         .expect("register the canonical lunco asset scheme");
     let roots = twin_roots.clone();
@@ -170,15 +171,16 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
         .register(lunco_assets_core::TWIN_SCHEME, move |rest| {
             // `twin://<name>/<rel>` — the name selects the root, so this handler is
             // stateful where `lunco://`'s is constant.
-            let (name, rel) = lunco_assets_core::split_twin_rel(rest)?;
-            let rel = lunco_assets_path::relative_path(rel)?;
-            match roots.resolve_file(name, &rel) {
-                Ok(path) => path,
-                Err(error) => {
-                    error!("[twin-roots] local path lookup failed for `{rest}`: {error}");
-                    None
-                }
-            }
+            let invalid = || {
+                lunco_assets_core::SchemeRegistryError::AssetResolution(format!(
+                    "invalid Twin asset `{rest}`"
+                ))
+            };
+            let (name, rel) = lunco_assets_core::split_twin_rel(rest).ok_or_else(invalid)?;
+            let rel = lunco_assets_path::relative_path(rel).ok_or_else(invalid)?;
+            roots.resolve_file(name, &rel).map_err(|error| {
+                lunco_assets_core::SchemeRegistryError::AssetResolution(error.to_string())
+            })
         })
         .expect("register the canonical twin asset scheme");
     app.insert_resource(schemes);
@@ -190,7 +192,7 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
     // `lunco-assets` runtime package so this source library stays lightweight.
     app.add_plugins(crate::discovery::AssetDiscoveryPlugin);
 
-    twin_roots
+    Ok(twin_roots)
 }
 
 /// Register the generic text asset type after Bevy's [`AssetPlugin`] has been

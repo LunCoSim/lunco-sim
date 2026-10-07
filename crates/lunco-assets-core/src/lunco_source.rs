@@ -135,7 +135,7 @@ fn read_asset_bytes_inner(
     let root = match assets_root {
         Some(root) => root,
         None => {
-            default_root = crate::assets_dir_abs();
+            default_root = crate::assets_dir_abs()?;
             &default_root
         }
     };

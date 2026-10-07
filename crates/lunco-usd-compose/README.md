@@ -15,7 +15,9 @@ second closure walker.
 Native file entrypoints canonicalize the native root through `lunco-storage`
 and encode it as a standard file URI. `canonicalize_at` returns `Result` and
 anchors literal sibling filenames with URL path segments, preserving Windows
-drive, UNC, and verbatim roots. Asset-root references (`/…`) keep their logical
+drive, UNC, and verbatim roots. Authored native Windows drive/UNC references
+normalize through `lunco-storage::windows_file_reference_uri`; drive-relative
+paths and foreign-host Windows filesystem references produce explicit errors. Asset-root references (`/…`) keep their logical
 asset meaning. The native asset reader decodes file identities through storage;
 invalid file URIs are terminal errors. `LuncoUsdResolver::new` validates layer
 identifiers and composition arcs before admission; stage builders also check

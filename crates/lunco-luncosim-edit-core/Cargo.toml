@@ -5,6 +5,7 @@ edition = "2024"
 license.workspace = true
 
 [dependencies]
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 # Runtime scene handlers and plugin composition used by the editor and headless
 # hosts. UI producers that only emit shared payloads depend on

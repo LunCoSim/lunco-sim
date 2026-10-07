@@ -476,7 +476,13 @@ pub fn run_gui() -> AppExit {
     };
 
     let startup_scene = lunco_luncosim_runtime::startup_scene_arg(&args);
-    let mut app = build_gui_app_with_profile(offscreen, render_profile, startup_scene);
+    let mut app = match build_gui_app_with_profile(offscreen, render_profile, startup_scene) {
+        Ok(app) => app,
+        Err(error) => {
+            eprintln!("luncosim startup failed: {error}");
+            return AppExit::error();
+        }
+    };
 
     #[cfg(all(
         feature = "api-transport",
@@ -564,14 +570,14 @@ fn build_gui_app_with_profile(
     offscreen: bool,
     render_profile: LunCoSimRenderProfile,
     startup_scene: Option<String>,
-) -> App {
+) -> std::io::Result<App> {
     let mut app = App::new();
     // Register every LunCo asset source (lunco:// and twin://) +
     // the shared `TwinRoots` resource in ONE shared place (`lunco-assets-core`), so all
     // binaries get identical schemes. MUST run before `DefaultPlugins`/`AssetPlugin`
     // snapshots the source registry.
-    lunco_assets_runtime::register_lunco_asset_sources(&mut app);
-    let plugins = default_plugins_with_profile(offscreen, render_profile);
+    lunco_assets_runtime::register_lunco_asset_sources(&mut app)?;
+    let plugins = default_plugins_with_profile(offscreen, render_profile)?;
     app.add_plugins(plugins);
     lunco_assets_runtime::register_lunco_asset_types(&mut app);
     // Flushes the WARN/ERROR dedup counters the `LogPlugin` filter accumulates.
@@ -606,7 +612,7 @@ fn build_gui_app_with_profile(
         ..Default::default()
     });
     lunco_luncosim_presentation::register(&mut app);
-    app
+    Ok(app)
 }
 
 /// Construct the luncosim's primary window for the custom workbench chrome.
@@ -680,7 +686,7 @@ mod window_tests {
 fn default_plugins_with_profile(
     offscreen: bool,
     render_profile: LunCoSimRenderProfile,
-) -> bevy::app::PluginGroupBuilder {
+) -> std::io::Result<bevy::app::PluginGroupBuilder> {
     // Window title (advertises the `--api` port so side-by-side instances are
     // distinguishable) + present mode are windowed-only and must be known at
     // window-build time, so they're computed here rather than in the UI plugin.
@@ -730,7 +736,7 @@ fn default_plugins_with_profile(
     let group = DefaultPlugins
         .set(bevy::app::TaskPoolPlugin { task_pool_options })
         .set(AssetPlugin {
-            file_path: lunco_assets_core::assets_dir_abs().to_string_lossy().to_string(),
+            file_path: lunco_assets_core::assets_dir_abs()?.to_string_lossy().to_string(),
             // File watching is an interactive authoring capability. Offscreen
             // runs must be deterministic and must not allocate OS watcher
             // resources; scene tests and render capture use explicit paths.
@@ -790,5 +796,5 @@ fn default_plugins_with_profile(
             ..default()
         })
     };
-    group.build().disable::<TransformPlugin>()
+    Ok(group.build().disable::<TransformPlugin>())
 }

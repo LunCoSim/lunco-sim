@@ -244,9 +244,20 @@ jobs:
         if: matrix.platform == 'windows'
         run: |
           cargo test --release --locked -j 4 --lib \
-            -p lunco-storage -p lunco-twin -p lunco-assets-core -p lunco-assets-path -p lunco-workspace \
+            -p lunco-storage -p lunco-twin -p lunco-assets-core -p lunco-assets-path -p lunco-workspace -p lunco-networking-scenario -p lunco-assets-datasets -p lunco-assets-download -p lunco-scripting-rhai-core \
             -- --exact \
             file_uri_tests::file_uris_preserve_native_paths_and_reject_invalid_addresses \
+            file_uri_tests::authored_windows_references_use_native_identity_or_explicit_host_rejection \
+            path_identity::tests::destination_identity_covers_missing_descendants_and_native_aliases \
+            tests::asset_root_admission_reports_invalid_overrides_and_discovers_canonical_library \
+            twin_source::tests::directory_root_designator_retains_mount_ownership_and_rejects_parent_escape \
+            tests::portable_materialization_rejects_aliases_and_accepts_literal_names \
+            tests::scenario_paths_admit_literal_names_and_reject_materialization_conflicts \
+            manifest::tests::source_pool_names_preserve_literals_and_reject_nonportable_url_names \
+            registry::tests::overlapping_process_outputs_are_rejected_during_registration \
+            download::tests::every_download_scope_rejects_unsafe_dest_before_resolution \
+            names::tests::accepts_one_normal_component \
+            names::tests::rejects_path_or_empty_names \
             tests::open_uses_canonical_root_identity \
             manifest::tests::native_plugin_paths_are_twin_relative_and_enabled_by_default \
             tests::portable_file_names_reject_reserved_devices_and_nonportable_components \
@@ -264,6 +275,17 @@ jobs:
             file_storage::tests::cache_directory_transaction_serializes_independent_writers_and_releases_lock \
             file_storage::tests::cache_directory_transaction_streams_regular_metadata_without_following_links \
             file_storage::tests::cache_directory_transaction_serializes_child_process
+
+      - name: Verify Windows literal filename runtime
+        if: matrix.platform == 'windows'
+        env:
+          LUNCOSIM_EPHEMERAL_SETTINGS: '1'
+          LUNCOSIM_ISOLATED_RUN: '1'
+          LUNCOSIM_CONFIG: target/windows-path-contracts-config
+        run: |
+          target/release/luncosim.exe test \
+            --scene assets/scenes/tests/twin_search_paths/sim/scenes/search_paths.usda \
+            --api 4192 --threads 1 --max-ticks 3600 --verdict-channel TWIN_SEARCH_PATHS
 
       - name: Verify Windows network admission contracts
         if: matrix.platform == 'windows'

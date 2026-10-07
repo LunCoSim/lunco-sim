@@ -268,13 +268,12 @@ pub fn apply_program_resolution(
     }
 }
 
-fn asset_path_without_fragment(path: &str) -> &str {
-    path.split(['?', '#']).next().unwrap_or(path)
-}
-
 /// Classify a source asset by its canonical extension.
 fn program_asset_backend(path: &str) -> Option<ProgramBackend> {
-    let path = asset_path_without_fragment(path);
+    let path = match lunco_assets_path::split_scheme(path) {
+        Some(("http" | "https", rest)) => rest.split(['?', '#']).next().unwrap_or(rest),
+        _ => path,
+    };
     if path.ends_with(".rhai") {
         Some(ProgramBackend::Rhai)
     } else if path.ends_with(".mo") {
@@ -283,6 +282,37 @@ fn program_asset_backend(path: &str) -> Option<ProgramBackend> {
         Some(ProgramBackend::Python)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod source_extension_tests {
+    use super::*;
+
+    #[test]
+    fn source_extensions_preserve_literal_files_and_use_http_url_components() {
+        for path in [
+            "twin://mounted/renamed # %.mo",
+            "lunco://models/literal#%.mo",
+            r"C:\Twin\literal#%.mo",
+            "file:///tmp/literal%23%25.mo",
+            "https://example.invalid/model.mo?sig=a#view",
+        ] {
+            assert_eq!(
+                program_asset_backend(path),
+                Some(ProgramBackend::Modelica),
+                "{path}"
+            );
+        }
+        assert_eq!(
+            program_asset_backend("twin://mounted/script.mo#copy.rhai"),
+            Some(ProgramBackend::Rhai)
+        );
+        assert_eq!(
+            program_asset_backend("https://example.invalid/script.rhai?next=model.mo"),
+            Some(ProgramBackend::Rhai)
+        );
+        assert_eq!(program_asset_backend("twin://mounted/model.mo#label"), None);
     }
 }
 

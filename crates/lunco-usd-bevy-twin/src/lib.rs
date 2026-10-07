@@ -348,17 +348,12 @@ pub fn scene_document_for(
     backed.doc_for(name, rel)
 }
 
-/// Resolve the `UsdStageAsset` identity backing one Twin document.
+/// Read the stage identity committed by the document projection owner.
 pub fn stage_asset_for_document(
     backed: &DocBackedTwinScenes,
-    asset_server: &AssetServer,
     doc: DocumentId,
 ) -> Option<AssetId<UsdStageAsset>> {
-    let (name, rel) = backed.coords_of(doc)?;
-    let twin_path = lunco_assets_core::twin_uri(&name, &rel);
-    asset_server
-        .get_handle::<UsdStageAsset>(twin_path)
-        .map(|handle| handle.id())
+    backed.map.get(&doc)?.stage_id
 }
 
 /// Resolve a document-backed Twin scene to its already-mounted canonical USD
@@ -368,11 +363,7 @@ pub fn stage_asset_for_document(
 /// core owns canonical stage storage. This function only joins those existing
 /// owners; it does not load, compose, or project a stage.
 pub fn canonical_stage_for_document(world: &World, doc: DocumentId) -> Option<&CanonicalStage> {
-    let stage_id = stage_asset_for_document(
-        world.get_resource::<DocBackedTwinScenes>()?,
-        world.get_resource::<AssetServer>()?,
-        doc,
-    )?;
+    let stage_id = stage_asset_for_document(world.get_resource::<DocBackedTwinScenes>()?, doc)?;
     world.get_non_send::<CanonicalStages>()?.get(stage_id)
 }
 

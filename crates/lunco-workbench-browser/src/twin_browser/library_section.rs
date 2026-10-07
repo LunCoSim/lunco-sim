@@ -34,7 +34,13 @@ impl LuncoLibrarySection {
             return;
         }
 
-        let mut assets = lunco_assets_runtime::discovery::list_library_assets(manifest);
+        let mut assets = match lunco_assets_runtime::discovery::list_library_assets(manifest) {
+            Ok(assets) => assets,
+            Err(error) => {
+                bevy::log::error!("library listing failed: {error}");
+                return;
+            }
+        };
         assets.sort_by(|a, b| a.rel.cmp(&b.rel));
         self.tree = build_path_tree(assets.into_iter().map(|asset| {
             let rel = PathBuf::from(&asset.rel);

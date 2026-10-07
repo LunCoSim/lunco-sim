@@ -292,10 +292,10 @@ fn on_load_twin_timeline_file(
             lunco_command_contracts::OpId::new(),
         ));
     }
-    let handle = asset_server.load::<lunco_assets_runtime::TextAsset>(lunco_assets_core::twin_uri(
-        &request.name,
-        &request.relative_path,
-    ));
+    let uri = lunco_assets_core::twin_uri(&request.name, &request.relative_path);
+    let path = lunco_assets_core::asset_path::load_asset_path(&uri, None, None, None)
+        .map_err(|error| format!("invalid Twin source `{uri}`: {error}"))?;
+    let handle = asset_server.load::<lunco_assets_runtime::TextAsset>(path);
     let id = handle.id();
     if assets
         .as_deref()

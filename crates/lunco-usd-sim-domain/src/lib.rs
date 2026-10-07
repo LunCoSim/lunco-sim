@@ -2751,7 +2751,7 @@ pub fn resolve_member_classes(
     canonical: NonSend<CanonicalStages>,
     mut scene_changes: MessageReader<lunco_usd_bevy_scene::UsdSceneChangeBatch>,
     mut stage_asset_events: MessageReader<AssetEvent<UsdStageAsset>>,
-    asset_server: Res<AssetServer>,
+    assets: (Res<AssetServer>, Option<Res<lunco_assets_core::TwinRoots>>),
     sources: Res<Assets<ModelicaSource>>,
     modelica_channels: Option<Res<ModelicaChannels>>,
     mut source_events: MessageReader<AssetEvent<ModelicaSource>>,
@@ -2760,6 +2760,7 @@ pub fn resolve_member_classes(
     if modelica_channels.is_none() {
         return;
     }
+    let (asset_server, roots) = assets;
     const MAX_DOMAIN_CLASS_DISCOVERY_PER_UPDATE: usize = 64;
 
     let mut loaded = HashSet::new();
@@ -3006,7 +3007,20 @@ pub fn resolve_member_classes(
                 if classes.known.contains_key(&asset) || classes.pending.contains_key(&asset) {
                     continue;
                 }
-                let handle: Handle<ModelicaSource> = asset_server.load(asset.clone());
+                let path = match lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
+                    &asset_server,
+                    id,
+                    &asset,
+                    roots.as_deref(),
+                    canonical.native_asset_paths_for(id, stage_asset),
+                ) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        classes.reject(&asset, error.to_string());
+                        continue;
+                    }
+                };
+                let handle: Handle<ModelicaSource> = asset_server.load(path);
                 discovered.insert(handle.id());
                 classes.handles.insert(asset.clone(), handle.clone());
                 classes.pending.insert(asset, handle);

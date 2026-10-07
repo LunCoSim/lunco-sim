@@ -248,8 +248,13 @@ fn assets_root_for(roots: &[PathBuf]) -> Option<PathBuf> {
             return Some(found.to_path_buf());
         }
     }
-    let cwd = lunco_assets_core::assets_dir_abs();
-    cwd.is_dir().then_some(cwd)
+    match lunco_assets_core::assets_dir_abs() {
+        Ok(root) => Some(root),
+        Err(error) => {
+            bevy::log::error!("scene browser asset root failed: {error}");
+            None
+        }
+    }
 }
 
 /// Label a path relative to whichever root it sits under, so rows stay readable.

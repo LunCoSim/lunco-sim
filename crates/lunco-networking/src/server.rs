@@ -1494,7 +1494,7 @@ fn build_manifest_from_input(input: ScenarioBuildInput) -> Result<ScenarioBuildO
         return Err("scenario contains no distributable assets".into());
     }
     let revision = scenario_revision(&assets);
-    Ok((
+    let manifest =
         // `asset_base_url` is stamped at publish time (`drive_scenario_manifest`) —
         // this build is pure and knows nothing about how the host is reachable.
         ScenarioManifestMsg {
@@ -1507,9 +1507,9 @@ fn build_manifest_from_input(input: ScenarioBuildInput) -> Result<ScenarioBuildO
             journal_head,
             asset_base_url: None,
             twin_scene,
-        },
-        cid_paths,
-    ))
+        };
+    lunco_networking_scenario::validate_manifest_paths(&manifest)?;
+    Ok((manifest, cid_paths))
 }
 
 /// Host-side: an in-flight off-thread scenario-manifest build. The walk reads +

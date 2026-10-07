@@ -99,7 +99,9 @@ fn resolve(reference: &str) -> Result<PathBuf, String> {
     if as_given.is_file() {
         return Ok(as_given.to_path_buf());
     }
-    match lunco_assets_core::engine_asset_local_path(reference) {
+    match lunco_assets_core::engine_asset_local_path(reference)
+        .map_err(|error| error.to_string())?
+    {
         Some(p) if p.is_file() => Ok(p),
         Some(p) => Err(format!(
             "file not found: `{reference}` (tried as given, then {})",
@@ -146,10 +148,14 @@ fn validate_asset_with_policy(reference: &str, apply_authored_policy: bool) -> V
             Ok(id) => id,
             Err(error) => return ValidationReport::new(reference, "usd").error(error.to_string()),
         };
+        let engine_root = match engine_assets_root() {
+            Ok(root) => root,
+            Err(error) => return ValidationReport::new(reference, "usd").error(error.to_string()),
+        };
         match lunco_usd_compose::recipe_from_bytes_with_roots(
             &id,
             std::mem::take(&mut bytes),
-            Some(engine_assets_root().as_path()),
+            Some(engine_root.as_path()),
             None,
             lunco_usd_compose::recipe::StageClosureLimits::default(),
         ) {
@@ -361,7 +367,9 @@ fn resolve_twin_root(reference: &str) -> Result<PathBuf, String> {
     if as_given.is_dir() {
         return Ok(as_given.to_path_buf());
     }
-    match lunco_assets_core::engine_asset_local_path(reference) {
+    match lunco_assets_core::engine_asset_local_path(reference)
+        .map_err(|error| error.to_string())?
+    {
         Some(path) if path.is_dir() => Ok(path),
         Some(path) => Err(format!(
             "Twin folder not found: `{reference}` (resolved `{}` is not a directory)",
@@ -649,7 +657,7 @@ fn validate_usd_stage(mut report: ValidationReport, stage: &CanonicalStage) -> V
 /// Asset-root discovery is shared with the runtime AssetServer. Keeping this
 /// function as a thin owner call means validation never guesses a repository
 /// layout from the crate's manifest directory.
-pub(crate) fn engine_assets_root() -> PathBuf {
+pub(crate) fn engine_assets_root() -> std::io::Result<PathBuf> {
     lunco_assets_core::assets_dir_abs()
 }
 

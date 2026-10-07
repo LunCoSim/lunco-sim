@@ -242,6 +242,7 @@ fn request_builtin_rhai_assets(
     asset_server: Option<Res<AssetServer>>,
     policy: Option<Res<crate::policy::ScriptedPolicyRegistry>>,
     mut builtins: ResMut<BuiltinRhaiAssets>,
+    mut commands: Commands,
 ) {
     let Some(manifest) = manifest else {
         return;
@@ -304,9 +305,25 @@ fn request_builtin_rhai_assets(
             continue;
         }
         admitted_ids.insert(rel.clone());
-        builtins.handles.entry(rel.clone()).or_insert_with(|| {
-            asset_server.load::<RhaiSource>(lunco_assets_core::engine_asset_uri(&rel))
-        });
+        let uri = lunco_assets_core::engine_asset_uri(&rel);
+        let path = match lunco_assets_core::asset_path::load_asset_path(&uri, None, None, None) {
+            Ok(path) => path,
+            Err(error) => {
+                builtins
+                    .classified_roles
+                    .insert(rel.clone(), Err(error.to_string()));
+                lunco_core::trigger_runtime_error(
+                    &mut commands,
+                    "rhai-source-address-invalid",
+                    format!("{rel}: {error}"),
+                );
+                continue;
+            }
+        };
+        builtins
+            .handles
+            .entry(rel.clone())
+            .or_insert_with(|| asset_server.load::<RhaiSource>(path));
     }
 
     // Policy replacement is a real lifecycle change: release built-in handles

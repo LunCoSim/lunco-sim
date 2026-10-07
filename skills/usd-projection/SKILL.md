@@ -92,6 +92,9 @@ reads on the same plan; explicit geometry/topology queries use the owning
 document's composed stage. A failed promotion faults the mounted scene and
 rejects that live edit.
 
+The stage ID committed by the document projection owner identifies the live
+stage; use `stage_asset_for_document` rather than an asset-server filename
+lookup. Source-text and stage assets may share a path but have different types.
 Changes to a document's root scene are projected by its canonical stage. Only
 different recipe roots that compose the changed layer are dependent refresh
 targets; the root scene never refreshes itself as a dependent stage.
@@ -541,3 +544,9 @@ before deferred teardown. Scene-time readiness closes immediately; pending
 admissions and scene requests are discarded, the active transaction fails, and
 `ClearScene` runs at the next lifecycle phase. Inactive Twin closure must not
 clear another Twin's scene. See architecture 61 for the shared owner contract.
+
+Native path verification uses the asset owner's typed `AssetPath` throughout
+loading and handle lookup, including literal `#` filenames. Windows drive and
+UNC USD references normalize to `file:` at composition; they are rejected
+explicitly on a foreign host. Dataset output ownership uses worker-prepared
+`lunco-storage::FilePathIdentity` snapshots rather than lexical path prefixes.

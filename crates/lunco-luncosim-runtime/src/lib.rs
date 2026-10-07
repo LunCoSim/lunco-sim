@@ -203,29 +203,29 @@ pub fn startup_scene_arg(args: &[String]) -> Option<String> {
 pub fn build_headless_app_with_scene(
     compute_threads: Option<usize>,
     startup_scene: Option<String>,
-) -> App {
-    let mut app = lunco_luncosim_core::build_core_app(compute_threads);
+) -> std::io::Result<App> {
+    let mut app = lunco_luncosim_core::build_core_app(compute_threads)?;
     app.add_plugins(lunco_luncosim_simulation::LunCoSimSimulationPlugin);
     app.add_plugins(LunCoSimRuntimePlugin {
         headless: true,
         startup_scene,
     });
-    app
+    Ok(app)
 }
 
 /// Build the production headless app with an optional fixed compute-pool size.
 /// The returned app has no schedule runner, allowing deterministic scene tests
 /// to install their own clock and loop.
-pub fn build_headless_app_with_threads(compute_threads: Option<usize>) -> App {
+pub fn build_headless_app_with_threads(compute_threads: Option<usize>) -> std::io::Result<App> {
     let args: Vec<String> = std::env::args().collect();
     build_headless_app_with_scene(compute_threads, startup_scene_arg(&args))
 }
 
 /// Build the normal headless app with the production schedule runner.
-pub fn build_headless_app() -> App {
-    let mut app = build_headless_app_with_threads(Some(1));
+pub fn build_headless_app() -> std::io::Result<App> {
+    let mut app = build_headless_app_with_threads(Some(1))?;
     app.add_plugins(lunco_luncosim_simulation::LunCoSimHeadlessPlugin::default());
-    app
+    Ok(app)
 }
 
 /// Run the production headless server.
@@ -248,7 +248,13 @@ pub fn run_headless() -> lunco_luncosim_core::AppExit {
     } else {
         lunco_core_runtime::SimulationExecutionMode::Realtime
     };
-    let mut app = build_headless_app_with_threads(Some(1));
+    let mut app = match build_headless_app_with_threads(Some(1)) {
+        Ok(app) => app,
+        Err(error) => {
+            eprintln!("luncosim startup failed: {error}");
+            return lunco_luncosim_core::AppExit::error();
+        }
+    };
 
     #[cfg(all(
         feature = "api-transport",

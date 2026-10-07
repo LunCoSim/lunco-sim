@@ -300,10 +300,10 @@ fn on_load_twin_tool_library(
         ));
     }
     let asset_server = asset_server.ok_or_else(|| "AssetServer is not installed".to_owned())?;
-    let handle = asset_server.load::<crate::source_asset::RhaiSource>(lunco_assets_core::twin_uri(
-        &request.name,
-        &request.relative_path,
-    ));
+    let uri = lunco_assets_core::twin_uri(&request.name, &request.relative_path);
+    let path = lunco_assets_core::asset_path::load_asset_path(&uri, None, None, None)
+        .map_err(|error| format!("invalid Twin source `{uri}`: {error}"))?;
+    let handle = asset_server.load::<crate::source_asset::RhaiSource>(path);
     let id = handle.id();
     if assets
         .as_deref()

@@ -7188,6 +7188,7 @@ dependencies = [
  "lunco-assets-path",
  "lunco-core",
  "lunco-settings",
+ "lunco-storage",
  "lunco-telemetry-core",
  "lunco-workspace",
  "serde",
@@ -7911,6 +7912,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "big_space",
+ "lunco-assets-core",
  "lunco-command-contracts",
  "lunco-control-core",
  "lunco-core",
@@ -8955,6 +8957,7 @@ dependencies = [
 name = "lunco-networking-scenario"
 version = "0.1.0-dev"
 dependencies = [
+ "lunco-assets-path",
  "lunco-hash",
  "serde",
  "sha2 0.11.0",
@@ -9156,6 +9159,7 @@ dependencies = [
  "lunco-api",
  "lunco-api-core",
  "lunco-assets-core",
+ "lunco-assets-path",
  "lunco-command-contracts",
  "lunco-core",
  "lunco-core-session",
@@ -9508,6 +9512,7 @@ name = "lunco-scripting-rhai-core"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-assets-path",
  "lunco-assets-runtime",
  "lunco-behavior",
  "lunco-core",
@@ -9650,6 +9655,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10182,6 +10188,7 @@ dependencies = [
  "anyhow",
  "bevy",
  "lunco-assets-core",
+ "lunco-assets-path",
  "lunco-core",
  "lunco-usd-bevy-stage",
  "lunco-usd-compose",
@@ -10606,6 +10613,7 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "lunco-assets-core",
  "lunco-celestial-spatial-core",
  "lunco-core",
  "lunco-core-runtime",
@@ -11106,6 +11114,7 @@ dependencies = [
  "bevy_egui",
  "bevy_flair",
  "bevy_hui",
+ "lunco-assets-core",
  "lunco-assets-runtime",
  "lunco-core",
  "lunco-exposure-core",

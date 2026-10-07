@@ -179,6 +179,69 @@ pub fn is_safe_relative_path(rel: &str) -> bool {
     !(bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
 }
 
+/// Whether a declared output can be materialized unchanged on every host.
+///
+/// This write/transfer admission rule composes traversal safety with portable
+/// filename validation. Native read paths retain their filesystem contract.
+pub fn is_portable_relative_path(rel: &str) -> bool {
+    is_safe_relative_path(rel)
+        && rel
+            .split('/')
+            .all(|name| validate_portable_file_name(name).is_ok())
+}
+
+/// Portable file declarations with unambiguous directory and file identities.
+///
+/// Unicode uppercase keys deliberately reject case aliases on every peer.
+/// This applies to transferable declarations, never to native filesystem reads.
+#[derive(Default)]
+pub struct PortablePathSet {
+    components: std::collections::BTreeMap<String, String>,
+    files: std::collections::BTreeSet<String>,
+}
+
+impl PortablePathSet {
+    /// Admit a file or explain its nonportable name, alias, or file/directory conflict.
+    pub fn insert(&mut self, path: &str) -> Result<(), String> {
+        if !is_portable_relative_path(path) {
+            return Err(format!(
+                "path `{path}` must use portable relative filenames"
+            ));
+        }
+        let mut prefix = String::new();
+        let mut pending = Vec::new();
+        let count = path.split('/').count();
+        for (index, component) in path.split('/').enumerate() {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(component);
+            let key = prefix.to_uppercase();
+            if let Some(existing) = self.components.get(&key) {
+                if existing != &prefix {
+                    return Err(format!(
+                        "path `{path}` has case alias `{prefix}` for `{existing}`"
+                    ));
+                }
+                if self.files.contains(&key) || index + 1 == count {
+                    return Err(format!(
+                        "path `{path}` duplicates a file or overlaps a directory at `{prefix}`"
+                    ));
+                }
+            }
+            pending.push((key, prefix.clone()));
+        }
+        let file = pending
+            .last()
+            .expect("portable path has a component")
+            .0
+            .clone();
+        self.components.extend(pending);
+        self.files.insert(file);
+        Ok(())
+    }
+}
+
 /// Whether a path contains only ordinary relative components.
 ///
 /// This is the `Path` counterpart to [`is_safe_relative_path`]. It is used at
@@ -289,6 +352,30 @@ pub fn is_search_path(reference: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portable_materialization_rejects_aliases_and_accepts_literal_names() {
+        for path in [
+            "terrain/NUL.tif",
+            "terrain/file?.bin",
+            "terrain/file.",
+            "terrain/file ",
+            "dir/file:stream",
+            "../escape",
+            "C:/escape",
+        ] {
+            assert!(!is_portable_relative_path(path), "{path}");
+        }
+        let mut paths = PortablePathSet::default();
+        paths.insert("Тест # %/one.usda").unwrap();
+        paths.insert("Тест # %/two.usda").unwrap();
+        assert!(paths.insert("тест # %/three.usda").is_err());
+        assert!(paths.insert("Тест # %/ONE.usda").is_err());
+        assert!(paths.insert("Тест # %/one.usda/child").is_err());
+        assert!(paths.insert("Тест # %").is_err());
+        assert!(paths.insert("Тест # %/one.usda").is_err());
+        paths.insert("unrelated/valid.bin").unwrap();
+    }
 
     #[test]
     fn portable_file_names_reject_reserved_devices_and_nonportable_components() {

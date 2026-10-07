@@ -6,6 +6,7 @@ license.workspace = true
 description = "Reusable HUI/Flair runtime-authored surface presentation for LunCoSim hosts"
 
 [dependencies]
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-core = { path = "../lunco-core" }
 bevy = { workspace = true, features = [

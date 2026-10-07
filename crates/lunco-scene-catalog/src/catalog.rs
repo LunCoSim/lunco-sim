@@ -458,9 +458,11 @@ pub fn spawn_usd_entry(
     local_pos: Vec3,
     rotation: Quat,
     anchor: SpawnAnchor,
-) -> SpawnResult {
+) -> Result<SpawnResult, String> {
     let SpawnSource::UsdFile(path) = &entry.source;
-    let handle = asset_server.load(path.clone());
+    let path = lunco_assets_core::asset_path::load_asset_path(path, None, None, None)
+        .map_err(|error| format!("catalog asset address is invalid: {error}"))?;
+    let handle = asset_server.load(path);
 
     let mut ent = commands.spawn((
         Name::new(entry.display_name.clone()),
@@ -503,9 +505,9 @@ pub fn spawn_usd_entry(
     // already converted the semantic pose into this grid's cell/local storage.
     ent.try_insert(ChildOf(anchor.entity()));
 
-    SpawnResult {
+    Ok(SpawnResult {
         root_entity: ent.id(),
-    }
+    })
 }
 
 /// Derive a dynamic category label from a discovered asset's path — the name
@@ -1092,7 +1094,8 @@ mod spawn_anchor_tests {
             POS,
             Quat::IDENTITY,
             SpawnAnchor::scene_root(args.scene_root),
-        );
+        )
+        .unwrap();
     }
 
     /// Drives the REAL spawn through `Commands` + a flush, then returns the world

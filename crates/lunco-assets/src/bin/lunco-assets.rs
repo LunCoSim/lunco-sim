@@ -314,7 +314,9 @@ fn entry_cache_root(entry: &AssetEntry, twin_root: Option<&std::path::Path>) -> 
 fn process_group(group: &str) -> Result<(), String> {
     println!("Processing `{group}`...");
     process_filtered(
-        &lunco_assets_core::manifests_dir().join(format!("{group}.toml")),
+        &lunco_assets_core::manifests_dir()
+            .map_err(|error| error.to_string())?
+            .join(format!("{group}.toml")),
         None,
         None,
         "good",

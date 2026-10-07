@@ -56,8 +56,8 @@ impl Plugin for HeadlessAssetTypePlugin {
 /// The host owns scheduling. `MinimalPlugins` therefore has its default
 /// `ScheduleRunnerPlugin` disabled so deterministic runners can install one
 /// explicit cadence policy.
-pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
-    MinimalPlugins
+pub fn default_plugins() -> std::io::Result<bevy::app::PluginGroupBuilder> {
+    Ok(MinimalPlugins
         .build()
         .disable::<bevy::app::ScheduleRunnerPlugin>()
         .add(bevy::app::PanicHandlerPlugin)
@@ -81,13 +81,13 @@ pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
         .add(bevy::input::InputPlugin)
         .add(bevy::state::app::StatesPlugin)
         .add(AssetPlugin {
-            file_path: lunco_assets_core::assets_dir_abs().to_string_lossy().to_string(),
+            file_path: lunco_assets_core::assets_dir_abs()?.to_string_lossy().to_string(),
             watch_for_changes_override: Some(false),
             meta_check: AssetMetaCheck::Never,
             ..default()
         })
         .add_after::<AssetPlugin>(HeadlessAssetTypePlugin)
-        .build()
+        .build())
 }
 
 /// Build the host-neutral Bevy substrate with an optional pinned Compute pool.
@@ -98,9 +98,9 @@ pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
 /// Domain plugins and application services are layered by the production host;
 /// this function deliberately cannot install them because it has no dependency
 /// on those domains.
-pub fn build_core_app(compute_threads: Option<usize>) -> App {
+pub fn build_core_app(compute_threads: Option<usize>) -> std::io::Result<App> {
     let mut app = App::new();
-    lunco_assets_runtime::register_lunco_asset_sources(&mut app);
+    lunco_assets_runtime::register_lunco_asset_sources(&mut app)?;
 
     let task_pool_options = if let Some(threads) = compute_threads {
         assert!(threads > 0, "compute_threads must be positive");
@@ -117,11 +117,11 @@ pub fn build_core_app(compute_threads: Option<usize>) -> App {
     } else {
         bevy::app::TaskPoolOptions::default()
     };
-    let plugins = default_plugins().set(bevy::app::TaskPoolPlugin { task_pool_options });
+    let plugins = default_plugins()?.set(bevy::app::TaskPoolPlugin { task_pool_options });
     app.add_plugins(plugins);
     lunco_assets_runtime::register_lunco_asset_types(&mut app);
     app.add_plugins(log_dedup::LogDedupPlugin);
-    app
+    Ok(app)
 }
 
 #[cfg(test)]
@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn headless_substrate_installs_only_data_asset_stores() {
         let mut app = App::new();
-        app.add_plugins(default_plugins());
+        app.add_plugins(default_plugins().unwrap());
 
         assert!(app.is_plugin_added::<AssetPlugin>());
         assert!(app.world().get_resource::<AssetServer>().is_some());

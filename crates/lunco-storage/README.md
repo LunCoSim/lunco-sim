@@ -47,8 +47,15 @@ the backend to ship.
 `entry_kind_no_follow_file_sync` identifies the entry itself and returns
 `StorageEntryKind::Symlink` even for a broken link. Both use one native metadata
 classifier; OPFS never emits this kind. The rename owner resolves and checks the
-parent directory before moving an entry, and rejects every existing target kind
-so a dangling destination is not overwritten.
+parent directory before moving an entry, and rejects existing distinct targets, including dangling links. A case-only
+rename to the same canonical entry is admitted; the workbench canonicalizes
+the command's Twin root before looking up its owner.
+
+`FilePathIdentity::prepare` resolves the deepest existing ancestor for a native
+output destination on its I/O worker. `overlaps` compares the carried snapshot
+without I/O, including missing descendants and Windows directory case mode.
+Ambiguous Windows names fail visibly when the case-mode query fails. Dataset
+registration and merge use this mechanism to protect source/output ownership.
 
 Native `FileStorage::write` publishes complete bytes through an atomic rename.
 Each concurrent write reserves its own staging file; replacement and create-only

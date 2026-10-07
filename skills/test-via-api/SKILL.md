@@ -572,3 +572,20 @@ and egui; raw motion drives the native camera input map. For mouse look, hold
 the configured `input_binding("look_button")`, emit raw motion, and release the
 button. Cursor positioning alone does not rotate a camera. The bridge emits
 both the native `WindowEvent::MouseMotion` and typed Bevy `MouseMotion` message.
+
+For path interoperability, run the production `twin_search_paths` scene gate:
+it exercises layer/Twin search precedence and imports, tool discovery, and
+timeline discovery with literal `#`, `%`, and spaces in filenames. Distinguish
+Linux runtime evidence from Windows-native CI tests. Root resolution and
+application builders are fallible; an invalid `LUNCO_ASSET_ROOT` must exit with
+a diagnostic rather than panic or silently discover another library.
+
+`python scripts/api/test_path_interoperability.py` uses an owned windowed
+production session on `LUNCOSIM_API_PORT` (default 4193) and a fresh temporary
+Twin below `target/`. Its Rhai observer verifies Modelica documents through
+literal filenames, canonical-root and case-only renames, rejected existing or
+nonportable targets, and save/readback at the renamed path. It authors a USD
+document through typed document operations, saves it with a literal filename,
+and admits it through the Twin's default scene to verify its Modelica source
+equation and loaded canonical stage. API `Exit` must release both the process
+and port.

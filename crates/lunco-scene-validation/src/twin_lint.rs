@@ -363,7 +363,13 @@ fn inspect_usd_file(
     };
     #[cfg(target_arch = "wasm32")]
     let path = twin.root.join(rel);
-    let engine_root = crate::validate::engine_assets_root();
+    let engine_root = match crate::validate::engine_assets_root() {
+        Ok(root) => root,
+        Err(error) => {
+            read_errors.push(format!("engine asset root: {error}"));
+            return;
+        }
+    };
     let stage = match lunco_usd_compose::compose_file_to_stage_with_roots(
         &path,
         Some(engine_root.as_path()),

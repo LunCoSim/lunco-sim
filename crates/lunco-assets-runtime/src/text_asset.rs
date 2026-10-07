@@ -159,11 +159,26 @@ fn discover_text_assets(
                     Some("json" | "toml")
                 )
             })
-            .map(|asset_path| TextAssetEntry {
-                asset_path: asset_path.clone(),
-                twin_id: None,
-                twin_name: None,
-                handle: asset_server.load(asset_path.clone()),
+            .filter_map(|asset_path| {
+                let path = match lunco_assets_core::asset_path::load_asset_path(
+                    asset_path, None, None, None,
+                ) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        lunco_core::trigger_runtime_error(
+                            &mut commands,
+                            "text-asset-address-invalid",
+                            error.to_string(),
+                        );
+                        return None;
+                    }
+                };
+                Some(TextAssetEntry {
+                    asset_path: asset_path.clone(),
+                    twin_id: None,
+                    twin_name: None,
+                    handle: asset_server.load::<TextAsset>(path),
+                })
             })
             .collect::<Vec<_>>(),
     );
@@ -234,7 +249,15 @@ fn load_twin_text_assets(
             continue;
         }
         let asset_path = lunco_assets_core::twin_uri(&trigger.event().name, &file.relative_path);
-        let handle = asset_server.load::<TextAsset>(asset_path.clone());
+        let path =
+            match lunco_assets_core::asset_path::load_asset_path(&asset_path, None, None, None) {
+                Ok(path) => path,
+                Err(error) => {
+                    warn!("invalid Twin text source `{asset_path}`: {error}");
+                    continue;
+                }
+            };
+        let handle = asset_server.load::<TextAsset>(path);
         catalog.entries.push(TextAssetEntry {
             asset_path,
             twin_id: Some(twin_id),

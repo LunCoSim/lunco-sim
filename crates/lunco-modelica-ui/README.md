@@ -199,7 +199,7 @@ roots, Editor documents, or scene composition.
 `modelica_library_indexer` flags:
 - `--warm` — full-compile the explicitly configured warm targets after indexing
 - `--warm-only NAME[,NAME…]` — explicit list of qualified names and `.mo` paths
-- `LUNCOSIM_WARM_DIRS=path1:path2` — env var, scans each dir for `.mo` files and warms every top-level model
+- `LUNCOSIM_WARM_DIRS` — native path-list environment variable (`path1:path2` on Unix, `C:\models;D:\models` on Windows), scans each dir for `.mo` files and warms every top-level model
 - `-v, --verbose` — per-file scan logging
 
 ## Key Dependencies

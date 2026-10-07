@@ -12,8 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
-fn models_root() -> PathBuf {
-    lunco_assets_core::engine_models_root()
+fn models_root() -> Result<PathBuf, String> {
+    lunco_assets_core::engine_models_root().map_err(|error| error.to_string())
 }
 
 fn source_error(path: &Path, error: impl std::fmt::Display) -> String {
@@ -61,7 +61,7 @@ fn walk_package(
 
 /// Every top-level `*.mo` filename, sorted by basename.
 pub fn model_filenames() -> Result<Vec<String>, String> {
-    let root = models_root();
+    let root = models_root()?;
     let entries =
         lunco_storage::read_directory_sync(&root).map_err(|error| source_error(&root, error))?;
     let mut filenames = entries
@@ -85,7 +85,7 @@ pub fn model_filenames() -> Result<Vec<String>, String> {
 
 /// Every top-level `*.mo` source, sorted by basename.
 pub fn model_files() -> Result<Vec<(String, String)>, String> {
-    let root = models_root();
+    let root = models_root()?;
     let mut files = model_filenames()?
         .into_iter()
         .map(|filename| {
@@ -106,14 +106,14 @@ pub fn model_source(filename: &str) -> Result<Option<String>, String> {
     if !model_filenames()?.iter().any(|name| name == filename) {
         return Ok(None);
     }
-    let root = models_root();
+    let root = models_root()?;
     let path = root.join(candidate);
     read_source(&path).map(Some)
 }
 
 /// Every `.mo` in a structured package under the engine Modelica library.
 pub fn package_files(package: &str) -> Result<Vec<(String, String)>, String> {
-    let package_root = models_root().join(package);
+    let package_root = models_root()?.join(package);
     let kind = lunco_storage::entry_kind_file_sync(&package_root)
         .map_err(|error| source_error(&package_root, error))?;
     if kind != lunco_storage::StorageEntryKind::Directory {
@@ -130,7 +130,7 @@ pub fn package_files(package: &str) -> Result<Vec<(String, String)>, String> {
 
 /// Top-level structured Modelica packages that contain `package.mo`.
 pub fn package_roots() -> Result<Vec<String>, String> {
-    let root = models_root();
+    let root = models_root()?;
     let entries =
         lunco_storage::read_directory_sync(&root).map_err(|error| source_error(&root, error))?;
     let mut roots = entries
