@@ -35,7 +35,7 @@ const PREPARED_SOLVE_CACHE_VERSION: u32 = 5;
 mod cache;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cache::PreparedSolveDiskLimits;
-use cache::{CompiledArtifactCache, PreparedSolveCache, PreparedSolveKey};
+use cache::{BoundedReuseCache, PreparedSolveCache, PreparedSolveKey};
 mod bridge;
 mod compile;
 pub use bridge::{
@@ -231,7 +231,7 @@ fn live_build_plan(
 }
 
 fn build_stepper(
-    _comp_res: &rumoca_compile::compile::DaeCompilationResult,
+    _comp_res: &CompiledModelArtifact,
     profile: solver::RuntimeProfile,
     parameter_overrides: &[(String, f64)],
     source_key: u64,
@@ -250,7 +250,7 @@ fn build_stepper(
         {
             let lower_started = web_time::Instant::now();
             let model = lunco_modelica_solver::simulation_session::lower_for_live(
-                &_comp_res.dae,
+                &_comp_res.compiled.dae,
                 &plan.options,
             )?;
             bevy::log::info!(
@@ -261,8 +261,9 @@ fn build_stepper(
             prepared.insert(plan.key.clone(), std::sync::Arc::new(model));
         }
     } else {
+        #[cfg(target_arch = "wasm32")]
         bevy::log::info!(
-            "[modelica-runtime] reused prepared solver IR for `{}`: cache=hit",
+            "[modelica-runtime] reused prepared solver IR for `{}`: cache=memory-hit",
             plan.spec.id,
         );
     }
@@ -416,7 +417,7 @@ impl SolvePreparationPool {
             return id;
         }
         self.in_flight_solve_keys.insert(key.clone(), id);
-        let dae = work.comp_res.dae.clone();
+        let dae = work.comp_res.compiled.dae.clone();
         let options = work.plan.options.clone();
         let model_name = work.model_name.clone();
         let entity = work.entity;
@@ -438,6 +439,7 @@ impl SolvePreparationPool {
                 queue_wait_us = queued_at.elapsed().as_micros() as u64,
             )
             .entered();
+            let cache_started = web_time::Instant::now();
             let cached = {
                 let _cache_span =
                     bevy::log::info_span!("modelica_solve_preparation_disk_cache_lookup").entered();
@@ -456,7 +458,9 @@ impl SolvePreparationPool {
                     None
                 }
             };
+            let cache_elapsed = cache_started.elapsed();
             let disk_hit = cached.is_some();
+            let mut lower_elapsed = None;
             let result = if let Some(model) = cached {
                 send_preparation_phase(&runtime_tx, entity, session_id,
                     lunco_modelica_runtime::ModelicaPreparationPhase::CachedSolverLoaded);
@@ -482,12 +486,7 @@ impl SolvePreparationPool {
                         )))
                     })
                 };
-                if result.is_ok() {
-                    log::debug!(
-                        "[modelica-runtime] parallel solve lowering finished for `{model_name}` in {:?}",
-                        lower_started.elapsed(),
-                    );
-                }
+                lower_elapsed = Some(lower_started.elapsed());
                 result
             };
             if !disk_hit {
@@ -501,11 +500,14 @@ impl SolvePreparationPool {
                         );
                     }
                 }
-            } else {
-                log::debug!(
-                    "[modelica-runtime] loaded prepared solver IR for `{model_name}`: cache=disk-hit"
-                );
             }
+            log::info!(
+                "[modelica-runtime] prepared solver IR for `{model_name}`: cache={} disk_enabled={disk_cache} lookup={cache_elapsed:?} lower={lower_elapsed:?} preparation={:?} source={:016x} success={}",
+                if disk_hit { "disk-hit" } else { "miss" },
+                preparation_started.elapsed(),
+                cache_key.source_key,
+                result.is_ok(),
+            );
             if result.is_ok() {
                 send_preparation_phase(&runtime_tx, entity, session_id,
                     lunco_modelica_runtime::ModelicaPreparationPhase::SolverPrepared {
@@ -675,7 +677,7 @@ struct CompileWork {
     raw_extras: Vec<(String, String)>,
     parameter_overrides: Vec<(String, f64)>,
     unit: CompileUnit,
-    comp_res: Box<rumoca_compile::compile::DaeCompilationResult>,
+    comp_res: CompiledModelArtifact,
     unit_key: u64,
     library_gen: u64,
     library_revision: u64,
@@ -1291,8 +1293,7 @@ fn commit_ready_compiler_completions(
                         continue;
                     }
                 };
-                let unit_key =
-                    prepared_unit_hash(&pending.model_name, &pending.doc_uri, &artifact.unit);
+                let unit_key = comp_res.prepared_source_key;
                 let plan = match live_build_plan(
                     profile_for(pending.entity, realtime_models),
                     &pending.parameter_overrides,
@@ -1329,7 +1330,20 @@ fn commit_ready_compiler_completions(
                     plan,
                     intent: pending.intent,
                 };
+                let lookup_started = web_time::Instant::now();
                 if prepared_solve_cache.contains_key(&work.plan.key) {
+                    log::info!(
+                        "[modelica-runtime] prepared solver IR for `{}`: cache=memory-hit lookup={:?} source={:016x}",
+                        work.model_name,
+                        lookup_started.elapsed(),
+                        work.plan.key.source_key,
+                    );
+                    send_preparation_phase(
+                        tx,
+                        work.entity,
+                        work.session_id,
+                        lunco_modelica_runtime::ModelicaPreparationPhase::CachedSolverLoaded,
+                    );
                     finish_compile_work(
                         work,
                         steppers,
@@ -1381,7 +1395,7 @@ struct CachedModel {
     /// session never holds the document under two filenames.
     doc_uri: String,
     /// The compiled artifact steppers are rebuilt from (see struct docs).
-    compiled: Box<rumoca_compile::compile::DaeCompilationResult>,
+    compiled: CompiledModelArtifact,
     /// [`compile_unit_hash`] of the [`CompileUnit`] `compiled` was built from.
     unit_hash: u64,
     /// Worker library generation at the time `compiled` was built.
@@ -1408,14 +1422,39 @@ fn compile_unit_hash(model_name: &str, doc_uri: &str, unit: &CompileUnit) -> u64
     h.finish()
 }
 
-/// Stable cross-process identity for the solve-IR source. The admitted library
-/// revision is a separate [`PreparedSolveKey`] field; a worker-local generation
-/// counter must not affect persistent reuse across launches.
-fn prepared_unit_hash(model_name: &str, doc_uri: &str, unit: &CompileUnit) -> u64 {
+/// A strict compiled artifact and the captured participating-source identity.
+/// The identity is computed before the compiler clears its user overlays and
+/// travels with the immutable DAE through memory hits and participant resets.
+#[derive(Clone)]
+struct CompiledModelArtifact {
+    compiled: Box<rumoca_compile::compile::DaeCompilationResult>,
+    prepared_source_key: u64,
+}
+
+type CompiledArtifactCache = BoundedReuseCache<u64, CompiledModelArtifact>;
+
+/// Capture solve identity from the compiler's authoritative strict closure.
+/// Unrelated sibling documents never contribute; generated wrappers normalize
+/// only their instance identity, retaining equations, parameters, and starts.
+fn prepared_source_key(
+    compiler: &ModelicaCompiler,
+    compiled: &rumoca_compile::compile::DaeCompilationResult,
+    model_name: &str,
+    doc_uri: &str,
+    unit: &CompileUnit,
+) -> Result<u64, String> {
     use std::hash::{Hash, Hasher};
+    let generated = is_generated_structural_unit(model_name, unit, doc_uri);
+    let identity = compiler.compiled_source_content_identity(compiled, |source| {
+        if generated {
+            generated_structural_source(model_name, source)
+        } else {
+            source.to_owned()
+        }
+    })?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    shared_source_hash(model_name, unit, doc_uri).hash(&mut h);
-    h.finish()
+    identity.to_bytes().hash(&mut h);
+    Ok(h.finish())
 }
 
 const GENERATED_MODEL_MARKER: &str = "__LUNCO_GENERATED_MODEL__";
@@ -1433,6 +1472,9 @@ fn is_generated_structural_unit(model_name: &str, unit: &CompileUnit, doc_uri: &
 /// not its equations; ordinary numeric Modelica literals remain part of the
 /// structural key.
 fn generated_structural_source(model_name: &str, source: &str) -> String {
+    if !source.contains(model_name) {
+        return source.to_owned();
+    }
     let mut normalized = source.replace(model_name, GENERATED_MODEL_MARKER);
     let Some(class_stem) = model_name.strip_suffix("_System") else {
         return normalized;
@@ -1460,8 +1502,9 @@ fn generated_structural_source(model_name: &str, source: &str) -> String {
     normalized
 }
 
-/// Hash the source identity used by the cross-entity artifact and prepared
-/// solve-IR caches. Document URIs are attribution keys, not equation identity;
+/// Hash the conservative precompile input set for shared DAE admission.
+/// Strict participating-source identity is captured after compilation for the
+/// prepared solve cache. Document URIs are attribution keys, not equation identity;
 /// generated instance names and their numeric network-title suffix are
 /// similarly excluded. Sibling documents form a source set: their runtime
 /// document IDs and iteration order do not affect the equations they define.
@@ -1520,7 +1563,7 @@ fn compile_shared(
     unit: &CompileUnit,
     doc_uri: &str,
     library_gen: u64,
-) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+) -> Result<CompiledModelArtifact, String> {
     let key = shared_compile_hash(model_name, unit, doc_uri, library_gen);
     let generated = is_generated_structural_unit(model_name, unit, doc_uri);
     log::debug!(
@@ -1542,15 +1585,19 @@ fn compile_shared(
             &unit.extras,
         )
     };
-    if let Ok(compiled) = &outcome {
-        artifacts.insert(key, compiled.clone());
-    }
-    outcome
+    let compiled = outcome?;
+    let prepared_source_key = prepared_source_key(compiler, &compiled, model_name, doc_uri, unit)?;
+    let artifact = CompiledModelArtifact {
+        compiled,
+        prepared_source_key,
+    };
+    artifacts.insert(key, artifact.clone());
+    Ok(artifact)
 }
 
 struct BackendCompileResult {
     unit: CompileUnit,
-    outcome: Result<Box<rumoca_compile::compile::DaeCompilationResult>, String>,
+    outcome: Result<CompiledModelArtifact, String>,
     diagnostics: Vec<lunco_doc::Diagnostic>,
     library_revision: u64,
 }
@@ -1646,14 +1693,12 @@ struct CacheRebuild {
     /// The instance values that must be supplied to Rumoca when the cached DAE
     /// is lowered into a fresh live stepper.
     parameter_overrides: Vec<(String, f64)>,
-    /// Stable source-set identity used by the cross-process solve-IR cache.
-    unit_key: u64,
     /// Assembled from the cached source set — carries the `input_defaults`
     /// to re-seed and the stripped primary for error diagnostics.
     unit: CompileUnit,
     /// `Ok` = artifact to build the stepper from; `Err` = rumoca's formatted
     /// compile summary.
-    outcome: Result<Box<rumoca_compile::compile::DaeCompilationResult>, String>,
+    outcome: Result<CompiledModelArtifact, String>,
     compile_diagnostics: Vec<lunco_doc::Diagnostic>,
 }
 
@@ -1683,7 +1728,6 @@ fn rebuild_from_cache(
     };
     let mut unit = assemble_compile_unit(&source, extras);
     let hash = compile_unit_hash(&model_name, &doc_uri, &unit);
-    let unit_key = prepared_unit_hash(&model_name, &doc_uri, &unit);
     // Library defaults are folded in AFTER hashing on purpose: the hash keys the
     // source set, and `library_gen` already invalidates the artifact when the
     // seated libraries change. Both the reuse and the recompile path below need
@@ -1700,7 +1744,6 @@ fn rebuild_from_cache(
             model_name,
             library_revision,
             parameter_overrides,
-            unit_key,
             unit,
             outcome: Ok(compiled),
             compile_diagnostics: Vec::new(),
@@ -1718,7 +1761,6 @@ fn rebuild_from_cache(
         model_name,
         library_revision: Some(result.library_revision),
         parameter_overrides,
-        unit_key,
         unit: result.unit,
         outcome: result.outcome,
         compile_diagnostics: result.diagnostics,
@@ -1732,7 +1774,7 @@ struct NativeCachedRebuild {
     raw_extras: Vec<(String, String)>,
     doc_uri: String,
     parameter_overrides: Vec<(String, f64)>,
-    compiled: Box<rumoca_compile::compile::DaeCompilationResult>,
+    compiled: CompiledModelArtifact,
     unit_hash: u64,
     cached_library_gen: u64,
     unit_key: u64,
@@ -1818,7 +1860,7 @@ fn native_cached_rebuild(
 ) -> Option<NativeCachedRebuild> {
     let cached = cached_models.get(&entity)?;
     let mut unit = assemble_compile_unit(&cached.source, cached.extra_sources.clone());
-    let unit_key = prepared_unit_hash(&cached.model_name, &cached.doc_uri, &unit);
+    let unit_key = cached.compiled.prepared_source_key;
     unit.merge_library_defaults(library_defaults);
     Some(NativeCachedRebuild {
         model_name: cached.model_name.clone(),
@@ -1923,7 +1965,20 @@ fn submit_cached_solve_preparation(
             return;
         }
     };
+    let lookup_started = web_time::Instant::now();
     if prepared_solve_cache.contains_key(&work.plan.key) {
+        log::info!(
+            "[modelica-runtime] prepared solver IR for `{}`: cache=memory-hit lookup={:?} source={:016x}",
+            work.model_name,
+            lookup_started.elapsed(),
+            work.plan.key.source_key,
+        );
+        send_preparation_phase(
+            tx,
+            work.entity,
+            work.session_id,
+            lunco_modelica_runtime::ModelicaPreparationPhase::CachedSolverLoaded,
+        );
         finish_compile_work(
             work,
             steppers,
@@ -2142,13 +2197,13 @@ fn send_preparation_phase(
 
 fn add_experiment_defaults(
     mut result: ModelicaResult,
-    comp_res: &rumoca_compile::compile::DaeCompilationResult,
+    comp_res: &CompiledModelArtifact,
 ) -> ModelicaResult {
-    result.experiment_start_time = comp_res.experiment_start_time;
-    result.experiment_stop_time = comp_res.experiment_stop_time;
-    result.experiment_tolerance = comp_res.experiment_tolerance;
-    result.experiment_interval = comp_res.experiment_interval;
-    result.experiment_solver = comp_res.experiment_solver.clone();
+    result.experiment_start_time = comp_res.compiled.experiment_start_time;
+    result.experiment_stop_time = comp_res.compiled.experiment_stop_time;
+    result.experiment_tolerance = comp_res.compiled.experiment_tolerance;
+    result.experiment_interval = comp_res.compiled.experiment_interval;
+    result.experiment_solver = comp_res.compiled.experiment_solver.clone();
     result
 }
 
@@ -3766,7 +3821,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                 &comp_res,
                                 profile_for(entity, &w.realtime_models),
                                 &rb.parameter_overrides,
-                                rb.unit_key,
+                                comp_res.prepared_source_key,
                                 rb.library_revision,
                                 &mut w.prepared_solve_cache,
                             ) {
@@ -3934,7 +3989,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         &comp_res,
                         profile_for(entity, &w.realtime_models),
                         &parameter_overrides,
-                        prepared_unit_hash(&model_name, &doc_uri, &unit),
+                        comp_res.prepared_source_key,
                         Some(compiler.library_revision()),
                         &mut w.prepared_solve_cache,
                     );
@@ -4050,7 +4105,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                             &comp_res,
                             profile_for(entity, &w.realtime_models),
                             &rb.parameter_overrides,
-                            rb.unit_key,
+                            comp_res.prepared_source_key,
                             rb.library_revision,
                             &mut w.prepared_solve_cache,
                         ) {
@@ -4160,7 +4215,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         &comp_res,
                         profile_for(entity, &w.realtime_models),
                         &[],
-                        prepared_unit_hash(&model_name, &doc_uri, &unit),
+                        comp_res.prepared_source_key,
                         Some(compiler.library_revision()),
                         &mut w.prepared_solve_cache,
                     ) {
@@ -4746,9 +4801,19 @@ mod artifact_cache_tests {
         shared_compile_hash(model, &unit, uri, 4)
     }
 
-    fn prepared_hash_of(model: &str, source: &str, uri: &str) -> u64 {
-        let unit = assemble_compile_unit(source, Vec::new());
-        prepared_unit_hash(model, uri, &unit)
+    fn prepared_hash_of(
+        model: &str,
+        source: &str,
+        uri: &str,
+        extras: Vec<(String, String)>,
+    ) -> u64 {
+        let unit = assemble_compile_unit(source, extras);
+        let mut compiler = ModelicaCompiler::new();
+        let compiled = compiler
+            .compile_str_multi(model, &unit.source, uri, &unit.extras)
+            .expect("inline strict compilation succeeds");
+        prepared_source_key(&compiler, &compiled, model, uri, &unit)
+            .expect("participating source bytes are available")
     }
 
     /// The hash keys the whole assembled CompileUnit: primary source, extras,
@@ -4833,19 +4898,6 @@ mod artifact_cache_tests {
             first, second,
             "generated instance identity must not defeat structural DAE reuse"
         );
-        assert_eq!(
-            prepared_hash_of(
-                "Traverse_x2f_rocker__bogie__101_System",
-                "model Traverse_x2f_rocker__bogie__101_System\n  input Real throttle;\nend Traverse_x2f_rocker__bogie__101_System;\nannotation(Documentation(info=\"rocker_bogie_101 network\"));",
-                "generated/Traverse_x2f_rocker__bogie__101_System.mo",
-            ),
-            prepared_hash_of(
-                "Traverse_x2f_rocker__bogie__202_System",
-                "model Traverse_x2f_rocker__bogie__202_System\n  input Real throttle;\nend Traverse_x2f_rocker__bogie__202_System;\nannotation(Documentation(info=\"rocker_bogie_202 network\"));",
-                "generated/Traverse_x2f_rocker__bogie__202_System.mo",
-            ),
-            "generated instance identity must not defeat persistent solve-IR reuse"
-        );
         assert_ne!(
             shared_hash_of(
                 "Traverse_x2f_rocker__bogie__101_System",
@@ -4861,6 +4913,116 @@ mod artifact_cache_tests {
             ),
             "generated normalization must not rewrite equation literals"
         );
+    }
+
+    #[test]
+    fn prepared_closure_key_excludes_unrelated_siblings_and_retains_dependencies_and_starts() {
+        let source = "model Probe Dependency part; end Probe;";
+        let dependency = "model Dependency parameter Real gain=1; Real x(start=1); equation der(x)=-gain*x; end Dependency;";
+        let extras = |irrelevant: &str, relevant: &str| {
+            vec![
+                ("dependency.mo".into(), relevant.into()),
+                ("unrelated.mo".into(), irrelevant.into()),
+            ]
+        };
+        let first = prepared_hash_of(
+            "Probe",
+            source,
+            "a.mo",
+            extras(
+                "model Ignored Real y; equation y=1; end Ignored;",
+                dependency,
+            ),
+        );
+        let second = prepared_hash_of(
+            "Probe",
+            source,
+            "b.mo",
+            extras(
+                "model RenamedIgnored Real y; equation y=2; end RenamedIgnored;",
+                dependency,
+            ),
+        );
+        assert_eq!(
+            first, second,
+            "unrelated sibling edits and document IDs do not change solver identity"
+        );
+        for changed in [
+            dependency.replace("start=1", "start=2"),
+            dependency.replace("gain=1", "gain=2"),
+        ] {
+            assert_ne!(
+                first,
+                prepared_hash_of(
+                    "Probe",
+                    source,
+                    "a.mo",
+                    extras("model Ignored end Ignored;", &changed)
+                ),
+                "participating starts and parameters are part of solver identity"
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_closure_key_normalizes_generated_identity_but_keeps_equation_literals() {
+        let source = "model Assembly__101_System\n parameter Real gain=101; Real x(start=1);\n equation der(x)=-gain*x;\n annotation(Documentation(info=\"Assembly_101 network\"));\nend Assembly__101_System;";
+        let renamed = source
+            .replace("Assembly__101_System", "Assembly__202_System")
+            .replace("Assembly_101 network", "Assembly_202 network");
+        let first = prepared_hash_of(
+            "Assembly__101_System",
+            source,
+            "generated/Assembly__101_System.mo",
+            Vec::new(),
+        );
+        let second = prepared_hash_of(
+            "Assembly__202_System",
+            &renamed,
+            "generated/Assembly__202_System.mo",
+            Vec::new(),
+        );
+        assert_eq!(
+            first, second,
+            "generated root identity is not equation identity"
+        );
+        assert_ne!(
+            first,
+            prepared_hash_of(
+                "Assembly__202_System",
+                &renamed.replace("gain=101", "gain=202"),
+                "generated/Assembly__202_System.mo",
+                Vec::new()
+            ),
+            "numeric parameters remain structural"
+        );
+    }
+
+    #[test]
+    fn prepared_closure_key_remains_with_shared_artifact_after_overlay_release() {
+        let unit = assemble_compile_unit(
+            "model Probe Real x(start=1); equation der(x)=-x; end Probe;",
+            Vec::new(),
+        );
+        let mut compiler = ModelicaCompiler::new();
+        let mut artifacts = CompiledArtifactCache::new(std::num::NonZeroUsize::new(2).unwrap());
+        let first = compile_shared(&mut artifacts, &mut compiler, "Probe", &unit, "first.mo", 0)
+            .expect("strict compile and identity capture succeed");
+        compiler.clear_user_documents();
+        let reused = compile_shared(
+            &mut artifacts,
+            &mut compiler,
+            "Probe",
+            &unit,
+            "second.mo",
+            0,
+        )
+        .expect("shared artifact retains captured identity without seated overlays");
+        assert_eq!(first.prepared_source_key, reused.prepared_source_key);
+        assert!(std::sync::Arc::ptr_eq(
+            &first.compiled.dae,
+            &reused.compiled.dae
+        ));
     }
 
     #[test]

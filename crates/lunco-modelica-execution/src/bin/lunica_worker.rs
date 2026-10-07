@@ -323,7 +323,9 @@ mod wasm {
                     .as_ref()
                     .map_err(|error| error.clone())
                     .and_then(|compiled| {
-                        state.compiler().compiled_source_content_identity(compiled)
+                        state
+                            .compiler()
+                            .compiled_source_content_identity(compiled, str::to_owned)
                     })
                     .map(|cid| lunco_experiments::SourceContentIdentity::Available { cid })
                     .unwrap_or_else(|reason| {

@@ -60,6 +60,19 @@ standard USD endpoint paths and types. Keep the controller's continuous law in
 Modelica and the phase/mission policy in Rhai; these facades only inspect and
 return dry typed USD plans. See the [model-authoring guide](../../docs/scripting-guide.md#model-and-assembly-authoring-human-and-ai).
 
+When propellant changes a hull's mass properties, connect the Modelica mass,
+body-local COM, and diagonal inertia outputs to the physical Avian `inputs:mass`,
+`inputs:com_x/y/z`, and `inputs:inertia_xx/yy/zz` through the document API.
+Controller inputs such as `controller_inertia_xx/yy/zz` consume separate wires;
+those inputs do not update the physical body. The live physical endpoint retains
+native f64 solver values through collider recomputation. Scalar inertia updates
+require an axis-aligned tensor and reject nonzero cross terms before commit;
+they cannot represent a coupled tensor update. Keep articulated appendages as
+their own bodies: the joint-island mass outputs are complete translational mass,
+not an assumed rigid assembly inertia. Verify live burn mass, COM, and inertia
+against `QueryPhysicsState` in the owning authored Rhai scene test. See the
+[lander mass-property contract](../../docs/architecture/lander-actuation-modelica.md#visualization-and-live-state).
+
 ## 1. The control law → a Modelica model
 
 The model reads what the vessel **senses** and outputs force/torque. It is a PROGRAM,
@@ -104,7 +117,14 @@ end MyController;
   branch-free arithmetic blend (`a*x+(1-a)*y`) for selection, never a nested `if`.
 
 For a rover route, the drivetrain and any continuous control law remain the
-actuator-side Modelica/USD contract. A scene-level Rhai route program reads
+actuator-side Modelica/USD contract. Both skid `RoverDrivetrain` and wheel-steered
+`RoverAckermannDrivetrain` consume `parameters:forward_yaw_offset` on the
+drivetrain prim to align guidance with the wheel travel frame. Navigation uses
+−Z forward by default; a body-local +X wheel heading requires −π/2. Derive the
+travel direction from the authored steering axis crossed with the wheel axle,
+and keep that frame parameter when switching drive laws. Verify waypoint
+arrival in the authored production route test with its actual axle frame.
+A scene-level Rhai route program reads
 the route's composed point prims, waits for generic sensor enter events, and
 publishes current named-port guidance through the shared bridge. The route is
 not stored on the rover. User possession controls the local `ControlLink`, HUD,

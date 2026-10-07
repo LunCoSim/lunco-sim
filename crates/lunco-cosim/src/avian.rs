@@ -782,7 +782,7 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         // burn lightens mass, shifts COM, and shrinks inertia — so a Modelica
         // tank model (or a script, or a wire) can keep all three consistent
         // through the one port surface. See [`write_mass`] for the avian write
-        // contract (`NoAuto*` markers + `Computed*`).
+        // contract (native `Computed*` values + `NoAuto*` markers).
         AvianPort {
             name: "mass",
             contract: AvianPortContract::MASS,
@@ -851,21 +851,21 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         },
         AvianPort {
             name: "com_x",
-            contract: AvianPortContract::LENGTH_BODY_FINITE,
+            contract: AvianPortContract::LENGTH_BODY,
             dir: PortDirection::InOut,
             read: Some(|w, e| center_of_mass(w, e).map(|c| c.x)),
             write: Some(|w, e, v| write_com_axis(w, e, 0, v)),
         },
         AvianPort {
             name: "com_y",
-            contract: AvianPortContract::LENGTH_BODY_FINITE,
+            contract: AvianPortContract::LENGTH_BODY,
             dir: PortDirection::InOut,
             read: Some(|w, e| center_of_mass(w, e).map(|c| c.y)),
             write: Some(|w, e, v| write_com_axis(w, e, 1, v)),
         },
         AvianPort {
             name: "com_z",
-            contract: AvianPortContract::LENGTH_BODY_FINITE,
+            contract: AvianPortContract::LENGTH_BODY,
             dir: PortDirection::InOut,
             read: Some(|w, e| center_of_mass(w, e).map(|c| c.z)),
             write: Some(|w, e, v| write_com_axis(w, e, 2, v)),
@@ -1063,32 +1063,16 @@ fn write_kinematic_position_axis(world: &mut World, entity: Entity, value: f64, 
 
 // ── Mass-property read/write helpers ────────────────────────────────────────
 //
-// Avian splits user *overrides* (`Mass`/`AngularInertia`/`CenterOfMass`) from the
-// `Computed*` components the integrator actually reads. **Reads** return the
-// effective `Computed*` value (what the solver uses). **Writes** set the
-// *override* component AND its `NoAuto*` marker — writing `Computed*` directly
-// would be clobbered by the next recompute.
+// The f64 solver owns `Computed*`; Avian's local authoring overrides are f32.
+// Live writes remove the corresponding local override and install `NoAuto*`.
+// Avian's MassPropertyHelper retains the native computed value when automatic
+// computation is disabled and no local override exists. Thus collider changes
+// cannot overwrite the value or narrow it during a later recomputation.
 //
-// The marker is NOT optional, which is what this comment used to get wrong: it
-// claimed "an override takes precedence over collider-derived mass, so no
-// `NoAuto*` marker is needed". Avian says otherwise — `MassPropertyHelper`
-// (avian3d `dynamics/rigid_body/mass_properties/system_param.rs:95-120`) only
-// consults the override *inside* `if no_auto_inertia { .. }`, and on the `else`
-// branch ASSIGNS the collider-derived tensor over the top. Without the marker an
-// override survives exactly until the next `update_mass_properties`, which any
-// collider or `RigidBody` add re-triggers.
-//
-// That is precisely the reported symptom: `set inertia_xx 4625` returned `true`
-// (the insert does succeed) yet read back UNCHANGED, because the read returns
-// `ComputedAngularInertia` and avian had already recomputed it from the collider
-// at `ColliderDensity` 1.0. The descent lander measured Ixx=159.3, Iyy=274.3,
-// Izz=229.4 against the ~4625/6250/4625 its hull and 2000 kg imply — and
-// Ixx != Izz on an axisymmetric hull is the giveaway that those numbers are
-// collider geometry rather than anything authored.
-//
-// Overrides are `f32`; we model the principal (diagonal) inertia only —
-// off-diagonal cross-terms are left to static USD authoring. A body with no
-// `Computed*` yet simply doesn't list the port.
+// Scalar inertia inputs require an axis-aligned body tensor. The owner rejects
+// them before commit when cross terms are present; authored full tensors retain
+// their matrix and remain readable. A scalar cannot express a coupled tensor
+// update or validate its positive definiteness.
 
 fn read_mass(w: &World, e: Entity) -> Option<f64> {
     w.get::<ComputedMass>(e).map(|m| m.value())
@@ -1099,15 +1083,44 @@ fn write_mass(w: &mut World, e: Entity, v: f64) {
         w.get::<RigidBody>(e).is_some(),
         "prepared mass input retains RigidBody"
     );
-    let mass = Mass(validated_f32_port_value(v));
-    if w.get::<Mass>(e) != Some(&mass) || w.get::<NoAutoMass>(e).is_none() {
-        w.entity_mut(e).insert((mass, NoAutoMass));
+    let mass = ComputedMass::new(v);
+    if w.get::<ComputedMass>(e) != Some(&mass)
+        || w.get::<NoAutoMass>(e).is_none()
+        || w.get::<Mass>(e).is_some()
+    {
+        w.entity_mut(e).remove::<Mass>().insert((mass, NoAutoMass));
     }
 }
 
 fn inertia_diagonal(w: &World, e: Entity) -> Option<DVec3> {
-    w.get::<ComputedAngularInertia>(e)
-        .map(|i| i.value().diagonal())
+    w.get::<ComputedAngularInertia>(e).map(|inertia| {
+        let inverse = inertia.inverse_tensor();
+        if inverse.m01 == 0.0 && inverse.m02 == 0.0 && inverse.m12 == 0.0 {
+            // Component-wise reciprocals avoid determinant overflow/underflow
+            // for diagonal tensors spanning the native f64 scalar range.
+            DVec3::from_array(
+                inverse.diagonal().to_array().map(
+                    |value| {
+                        if value == 0.0 { 0.0 } else { value.recip() }
+                    },
+                ),
+            )
+        } else {
+            inertia.tensor().diagonal()
+        }
+    })
+}
+
+/// Whether scalar inputs can update the current native body-frame tensor.
+///
+/// Positive diagonal inputs describe a complete positive-definite tensor only
+/// when its cross terms are zero. Coupled tensors need an atomic matrix input;
+/// scalar writes must not flatten or reinterpret their local inertial frame.
+pub(crate) fn scalar_inertia_writable(w: &World, e: Entity) -> bool {
+    w.get::<ComputedAngularInertia>(e).is_some_and(|inertia| {
+        let tensor = inertia.inverse_tensor();
+        tensor.is_finite() && tensor.m01 == 0.0 && tensor.m02 == 0.0 && tensor.m12 == 0.0
+    })
 }
 
 fn write_inertia_axis(w: &mut World, e: Entity, axis: usize, v: f64) {
@@ -1116,29 +1129,21 @@ fn write_inertia_axis(w: &mut World, e: Entity, axis: usize, v: f64) {
         "prepared inertia input retains RigidBody"
     );
     assert!(axis < 3, "inertia axis is declared by its owner");
-    // Start from the current override if present, else the effective computed
-    // diagonal — so writing one axis preserves the others (and the local frame).
-    let (mut principal, local_frame) = match w.get::<AngularInertia>(e) {
-        Some(ai) => (ai.principal, ai.local_frame),
-        None => (
-            inertia_diagonal(w, e)
-                .expect("writable inertia ports require an effective or authored baseline")
-                .as_vec3(),
-            Quat::IDENTITY,
-        ),
-    };
-    match axis {
-        0 => principal.x = validated_f32_port_value(v),
-        1 => principal.y = validated_f32_port_value(v),
-        2 => principal.z = validated_f32_port_value(v),
-        _ => unreachable!("inertia axis is declared by its owner"),
-    }
-    let inertia = AngularInertia {
-        principal,
-        local_frame,
-    };
-    if w.get::<AngularInertia>(e) != Some(&inertia) || w.get::<NoAutoAngularInertia>(e).is_none() {
-        w.entity_mut(e).insert((inertia, NoAutoAngularInertia));
+    assert!(
+        scalar_inertia_writable(w, e),
+        "prepared scalar inertia input retains an axis-aligned tensor"
+    );
+    let mut diagonal = inertia_diagonal(w, e)
+        .expect("writable inertia ports require an effective native baseline");
+    diagonal[axis] = v;
+    let inertia = ComputedAngularInertia::new(diagonal);
+    if w.get::<ComputedAngularInertia>(e) != Some(&inertia)
+        || w.get::<NoAutoAngularInertia>(e).is_none()
+        || w.get::<AngularInertia>(e).is_some()
+    {
+        w.entity_mut(e)
+            .remove::<AngularInertia>()
+            .insert((inertia, NoAutoAngularInertia));
     }
 }
 
@@ -1152,34 +1157,18 @@ fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) {
         "prepared centre-of-mass input retains RigidBody"
     );
     assert!(axis < 3, "centre-of-mass axis is declared by its owner");
-    let mut c = match w.get::<CenterOfMass>(e) {
-        Some(com) => com.0,
-        None => center_of_mass(w, e)
-            .expect("writable centre-of-mass ports require an effective or authored baseline")
-            .as_vec3(),
-    };
-    match axis {
-        0 => c.x = validated_f32_port_value(v),
-        1 => c.y = validated_f32_port_value(v),
-        2 => c.z = validated_f32_port_value(v),
-        _ => unreachable!("centre-of-mass axis is declared by its owner"),
+    let mut c = center_of_mass(w, e)
+        .expect("writable centre-of-mass ports require an effective native baseline");
+    c[axis] = v;
+    let center = ComputedCenterOfMass(c);
+    if w.get::<ComputedCenterOfMass>(e) != Some(&center)
+        || w.get::<NoAutoCenterOfMass>(e).is_none()
+        || w.get::<CenterOfMass>(e).is_some()
+    {
+        w.entity_mut(e)
+            .remove::<CenterOfMass>()
+            .insert((center, NoAutoCenterOfMass));
     }
-    let center = CenterOfMass(c);
-    if w.get::<CenterOfMass>(e) != Some(&center) || w.get::<NoAutoCenterOfMass>(e).is_none() {
-        w.entity_mut(e).insert((center, NoAutoCenterOfMass));
-    }
-}
-
-/// Convert a metadata-validated scalar at an Avian component's native `f32`
-/// boundary. The owning port contract bounds these values to the finite `f32`
-/// range before this function is reached.
-fn validated_f32_port_value(value: f64) -> f32 {
-    let narrowed = value as f32;
-    assert!(
-        narrowed.is_finite(),
-        "port metadata allowed a non-finite f32 conversion"
-    );
-    narrowed
 }
 
 /// Apply each entity's nonzero accumulated [`PendingForces`] into avian, then
@@ -1515,40 +1504,107 @@ mod tests {
     }
 
     #[test]
-    fn unchanged_mass_property_writes_do_not_dirty_avian_state() {
+    fn native_live_mass_properties_preserve_precision_recomputation_and_change_detection() {
         let mut world = World::new();
-        let body = world.spawn(RigidBody::Dynamic).id();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
+        let body = world
+            .spawn((
+                RigidBody::Dynamic,
+                Mass(4000.0),
+                AngularInertia::new(Vec3::new(4625.0, 6250.0, 4625.0)),
+                CenterOfMass(Vec3::ZERO),
+                ComputedMass::new(4000.0),
+                ComputedAngularInertia::new(DVec3::new(4625.0, 6250.0, 4625.0)),
+                ComputedCenterOfMass(DVec3::ZERO),
+            ))
+            .id();
+        let mut registry = lunco_port_core::ports::PortRegistry::default();
+        crate::ports::register_builtin_port_backends(&mut registry);
+        let values = [
+            ("mass", 4000.00000001),
+            ("inertia_xx", 4625.00000001),
+            ("inertia_yy", 6250.00000001),
+            ("inertia_zz", 4625.00000001),
+            ("com_x", 0.00000001),
+            ("com_y", 0.40000000001),
+            ("com_z", -0.00000001),
+        ];
+        for (name, value) in values {
+            registry.write_port(&mut world, body, name, value).unwrap();
+        }
+        assert!(world.get::<Mass>(body).is_none());
+        assert!(world.get::<AngularInertia>(body).is_none());
+        assert!(world.get::<CenterOfMass>(body).is_none());
+        assert!(world.get::<NoAutoMass>(body).is_some());
+        assert!(world.get::<NoAutoAngularInertia>(body).is_some());
+        assert!(world.get::<NoAutoCenterOfMass>(body).is_some());
 
-        write_mass(&mut world, body, 4000.0);
-        write_inertia_axis(&mut world, body, 0, 4625.0);
-        write_inertia_axis(&mut world, body, 1, 6250.0);
-        write_inertia_axis(&mut world, body, 2, 4625.0);
-        write_com_axis(&mut world, body, 0, 0.0);
-        write_com_axis(&mut world, body, 1, 0.4);
-        write_com_axis(&mut world, body, 2, 0.0);
-
-        assert_eq!(world.get::<Mass>(body).unwrap().0, 4000.0);
-        assert_eq!(
-            world.get::<AngularInertia>(body).unwrap().principal,
-            Vec3::new(4625.0, 6250.0, 4625.0)
-        );
-        assert_eq!(
-            world.get::<CenterOfMass>(body).unwrap().0,
-            Vec3::new(0.0, 0.4, 0.0)
-        );
+        // Exercise the dependency's real recompute seam: an unrelated collider
+        // update must retain the live native values when local overrides are absent.
+        let mut state =
+            bevy::ecs::system::SystemState::<avian3d::prelude::MassPropertyHelper>::new(&mut world);
+        state
+            .get_mut(&mut world)
+            .expect("mass-property helper query is valid")
+            .update_mass_properties(body);
+        state.apply(&mut world);
+        for (name, expected) in values {
+            let actual = registry.read_port(&world, body, name).unwrap();
+            assert!(
+                (actual - expected).abs() <= expected.abs() * f64::EPSILON * 2.0,
+                "{name}: {actual} != {expected}"
+            );
+            assert_ne!(actual, (expected as f32) as f64, "{name} narrowed to f32");
+        }
         world.clear_trackers();
-
-        write_mass(&mut world, body, 4000.0);
-        write_inertia_axis(&mut world, body, 0, 4625.0);
-        write_inertia_axis(&mut world, body, 1, 6250.0);
-        write_inertia_axis(&mut world, body, 2, 4625.0);
-        write_com_axis(&mut world, body, 0, 0.0);
-        write_com_axis(&mut world, body, 1, 0.4);
-        write_com_axis(&mut world, body, 2, 0.0);
+        for (name, value) in values {
+            registry.write_port(&mut world, body, name, value).unwrap();
+        }
 
         let body_ref = world.entity(body);
-        assert!(!body_ref.get_ref::<Mass>().unwrap().is_changed());
-        assert!(!body_ref.get_ref::<AngularInertia>().unwrap().is_changed());
-        assert!(!body_ref.get_ref::<CenterOfMass>().unwrap().is_changed());
+        assert!(!body_ref.get_ref::<ComputedMass>().unwrap().is_changed());
+        assert!(
+            !body_ref
+                .get_ref::<ComputedAngularInertia>()
+                .unwrap()
+                .is_changed()
+        );
+        assert!(
+            !body_ref
+                .get_ref::<ComputedCenterOfMass>()
+                .unwrap()
+                .is_changed()
+        );
+
+        for name in ["mass", "inertia_xx", "com_y"] {
+            registry.write_port(&mut world, body, name, 1.0e50).unwrap();
+            let actual = registry.read_port(&world, body, name).unwrap();
+            assert!((actual / 1.0e50 - 1.0).abs() <= f64::EPSILON * 2.0);
+        }
+    }
+
+    #[test]
+    fn native_live_mass_properties_reject_coupled_scalar_inertia_without_mutation() {
+        let mut world = World::new();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
+        let inertia = ComputedAngularInertia::new_with_local_frame(
+            DVec3::new(4.0, 6.0, 8.0),
+            bevy::math::DQuat::from_rotation_z(0.4),
+        );
+        let body = world.spawn((RigidBody::Dynamic, inertia)).id();
+        let mut registry = lunco_port_core::ports::PortRegistry::default();
+        crate::ports::register_builtin_port_backends(&mut registry);
+        for name in ["inertia_xx", "inertia_yy", "inertia_zz"] {
+            let error = registry
+                .write_port(&mut world, body, name, 5.0)
+                .unwrap_err();
+            assert!(matches!(
+                error.kind,
+                lunco_port_core::ports::PortWriteErrorKind::NotWritable
+            ));
+            assert_eq!(world.get::<ComputedAngularInertia>(body), Some(&inertia));
+            assert!(registry.read_port(&world, body, name).unwrap() > 0.0);
+        }
+        assert!(world.get::<NoAutoAngularInertia>(body).is_none());
     }
 }

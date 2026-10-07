@@ -211,8 +211,10 @@ Confirm generated-network source-set stability across launches: identical
 generated text must not acquire unrelated open documents as compile siblings.
 Use the runtime-owned bundled `generated/` provenance classifier for structural
 identity, and retain authored multi-document compilation. Inspect typed
-persistent-cache rejection warnings separately from commit-time in-memory reuse:
-a commit's `cache=hit` does not prove persistent startup reuse.
+persistent-cache rejection warnings and the native preparation owner logs.
+`cache=memory-hit`, `cache=disk-hit`, and `cache=miss` identify the actual lookup;
+compare lookup, lowering, and total preparation durations for the same source
+key. Stepper construction timing alone does not establish persistent reuse.
 
 Count domain discovery and publication separately. Content prim GIDs do not
 enter ordinary scene-network namespaces; instance identities and stage/source

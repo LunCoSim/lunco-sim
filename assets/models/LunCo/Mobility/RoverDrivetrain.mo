@@ -17,6 +17,7 @@ model RoverDrivetrain
   extends LunCo.Icons.Mobility;
   parameter Real tau_m = 0.15 "Motor electrical + inertia lag (s)";
   parameter Real steer_gain = 1.0 "Differential authority of steer vs throttle";
+  parameter Real forward_yaw_offset = 0.0 "Body-local travel heading relative to native -Z (rad)";
 
   input Real throttle "Normalized forward command, -1..1";
   input Real steer "Normalized right command, -1..1";
@@ -55,7 +56,7 @@ equation
   guidance.target_z = autopilot_target_z;
   guidance.position_x = autopilot_position_x;
   guidance.position_z = autopilot_position_z;
-  guidance.yaw = autopilot_yaw;
+  guidance.yaw = autopilot_yaw + forward_yaw_offset;
   guidance.yaw_rate = autopilot_yaw_rate;
   guidance.speed = autopilot_speed;
   guidance.radius = autopilot_radius;

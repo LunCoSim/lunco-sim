@@ -22,9 +22,7 @@
 //! Registration order *is* resolution precedence (first match wins): Modelica,
 //! avian, then the single-value ports — see [`register_builtin_port_backends`].
 
-use avian3d::prelude::{
-    AngularInertia, CenterOfMass, ComputedAngularInertia, ComputedCenterOfMass,
-};
+use avian3d::prelude::ComputedCenterOfMass;
 use bevy::prelude::*;
 use lunco_engineering_values::{
     CoordinateFrameId, Dimension, Unit, UnitReference, UnitScaleExactness,
@@ -90,11 +88,6 @@ impl AvianPortContract {
         AvianUnit::Meter,
         AvianFrame::OwningBody,
         AvianRange::Unbounded,
-    );
-    pub const LENGTH_BODY_FINITE: Self = Self::new(
-        AvianUnit::Meter,
-        AvianFrame::OwningBody,
-        AvianRange::FiniteF32,
     );
     pub const SPEED: Self = Self::new(
         AvianUnit::MeterPerSecond,
@@ -164,15 +157,11 @@ impl AvianPortContract {
         AvianFrame::None,
         AvianRange::TorqueActuatorLimit,
     );
-    pub const MASS: Self = Self::new(
-        AvianUnit::Kilogram,
-        AvianFrame::None,
-        AvianRange::PositiveF32,
-    );
+    pub const MASS: Self = Self::new(AvianUnit::Kilogram, AvianFrame::None, AvianRange::Positive);
     pub const INERTIA_BODY: Self = Self::new(
         AvianUnit::KilogramMeterSquared,
         AvianFrame::OwningBody,
-        AvianRange::PositiveF32,
+        AvianRange::Positive,
     );
     pub const DISPLACEMENT: Self = Self::new(
         AvianUnit::Meter,
@@ -265,8 +254,8 @@ pub enum AvianFrame {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AvianRange {
     Unbounded,
-    PositiveF32,
-    FiniteF32,
+    /// Positive native solver values with finite reciprocal storage.
+    Positive,
     RevoluteLimits,
     PrismaticLimits,
     ForceActuatorLimit,
@@ -385,8 +374,7 @@ fn avian_metadata(
         .expect("Avian metadata is requested only for a listed owner port");
     let (min, max) = match port.contract.range {
         AvianRange::Unbounded => (None, None),
-        AvianRange::PositiveF32 => (Some(f32::from_bits(1) as f64), Some(f32::MAX as f64)),
-        AvianRange::FiniteF32 => (Some(-(f32::MAX as f64)), Some(f32::MAX as f64)),
+        AvianRange::Positive => (Some(f64::MIN_POSITIVE), Some(f64::MIN_POSITIVE.recip())),
         AvianRange::RevoluteLimits => world
             .get::<avian3d::prelude::RevoluteJoint>(entity)
             .and_then(|joint| joint.angle_limit)
@@ -413,13 +401,9 @@ fn avian_metadata(
     let writable = port.write.is_some()
         && match port.name {
             "inertia_xx" | "inertia_yy" | "inertia_zz" => {
-                world.get::<AngularInertia>(entity).is_some()
-                    || world.get::<ComputedAngularInertia>(entity).is_some()
+                crate::avian::scalar_inertia_writable(world, entity)
             }
-            "com_x" | "com_y" | "com_z" => {
-                world.get::<CenterOfMass>(entity).is_some()
-                    || world.get::<ComputedCenterOfMass>(entity).is_some()
-            }
+            "com_x" | "com_y" | "com_z" => world.get::<ComputedCenterOfMass>(entity).is_some(),
             _ => true,
         };
     PortMetadata::scalar(

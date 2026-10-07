@@ -1,5 +1,12 @@
 # High-quality realtime performance handover
 
+## Griffin compile and load measurements — 2026-10-07
+
+Prepared-solver reuse now keys the successfully seated strict source closure, with generated runtime identities normalized and participating library bytes exact. An unrelated authored overlay no longer invalidates this solver cache. Native logs distinguish memory hits, disk hits and lowering misses.
+
+In the owned Griffin runs, the identical FLIP source key `0bfee35bccb31102` lowered in 4.373 s on a miss and loaded from disk in 13.4 ms on a subsequent process. The warm full visual scene materialized in 5.7 s; individual prepared-solver disk lookups were approximately 12–26 ms. Cold AttitudePropulsion lowering took 105.6 s during a concurrent focused Cargo check, so that value is diagnostic rather than uncontended acceptance. Compilation itself was about 0.1–0.2 s per generated model; cold solver lowering remains the dominant preparation cost. The API responded during the preparation hold, and simulation remained at tick zero. These measurements do not establish sustained FPS or faster cold lowering. Further optimization should profile the lowering owner and measure a clean cold/warm pair, preserving deterministic admission and the actual model equations.
+
+
 > Status: Open · Worktree: optimization · Scene: Summer Space School Apollo
 
 ## Objective
@@ -1197,9 +1204,10 @@ slow time was solver lowering, not queue admission. Its persistent cache entry
 was saved by 13.224 s from process launch. The other three lookups hit disk and
 did not lower. This is a cold, worker-side readiness cost; it is not a
 synchronous app-thread stall, though the worker load can still compete for CPU.
-The following warm-cache launch reused the persistent entries: all eight
-solver-preparation commits logged `cache=hit` and took at most 2.03 ms each.
-This confirms cache reuse, but its readiness timing remains contention-affected.
+The following warm-cache launch's eight solver-preparation commits took at
+most 2.03 ms each. These commit timings do not establish the persistent lookup
+outcome. Verify native preparation-owner disk-hit/miss logs for reuse evidence;
+the readiness timings remain contention-affected.
 
 The joint-wait path still needs attribution. The new wait-reason strings were
 present in the running binary, but the app log contains no USD-Avian joint

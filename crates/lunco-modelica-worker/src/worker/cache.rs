@@ -69,9 +69,6 @@ impl<K: Clone + Eq + Hash, V> BoundedReuseCache<K, V> {
     }
 }
 
-pub(super) type CompiledArtifactCache =
-    BoundedReuseCache<u64, Box<rumoca_compile::compile::DaeCompilationResult>>;
-
 /// Native optional solve-cache byte and retention budgets captured at worker startup.
 /// Insert this resource before `ModelicaExecutionPlugin` to change the budgets.
 /// The codec ceiling is an admission invariant; a larger artifact is recomputed
