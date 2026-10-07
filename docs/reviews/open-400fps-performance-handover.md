@@ -1,5 +1,12 @@
 # High-quality realtime performance handover
 
+## Griffin compile and load measurements — 2026-10-07
+
+Prepared-solver reuse now keys the successfully seated strict source closure, with generated runtime identities normalized and participating library bytes exact. An unrelated authored overlay no longer invalidates this solver cache. Native logs distinguish memory hits, disk hits and lowering misses.
+
+In the owned Griffin runs, the identical FLIP source key `0bfee35bccb31102` lowered in 4.373 s on a miss and loaded from disk in 13.4 ms on a subsequent process. The warm full visual scene materialized in 5.7 s; individual prepared-solver disk lookups were approximately 12–26 ms. Cold AttitudePropulsion lowering took 105.6 s during a concurrent focused Cargo check, so that value is diagnostic rather than uncontended acceptance. Compilation itself was about 0.1–0.2 s per generated model; cold solver lowering remains the dominant preparation cost. The API responded during the preparation hold, and simulation remained at tick zero. These measurements do not establish sustained FPS or faster cold lowering. Further optimization should profile the lowering owner and measure a clean cold/warm pair, preserving deterministic admission and the actual model equations.
+
+
 > Status: Open · Worktree: optimization · Scene: Summer Space School Apollo
 
 ## Objective
@@ -95,23 +102,23 @@ The post-fix paired run waited 90 seconds before measuring and completed all
 eight windows with zero retained runtime errors at every checkpoint. Camera,
 geometry, Twin and topology checks stayed stable and each window advanced
 72–189 physics steps. Logs, samples, screenshots and 29 process-workload
-snapshots are retained under `target/perf/*final-20261007*`. Concurrent builds
+snapshots were stored under `target/perf/*final-20261007*`; those artifacts
+are absent after this checkout's target cleanup. Concurrent builds
 substantially affected this run (sampled frame medians 22.89–98.18 ms); it proves
 healthy idle event admission and guarded editor operation, not FPS or physics
 acceptance. The regenerated merged runtime command reference is unchanged at
 262 commands. The post-fix production source-isolation gate also passed 8/8
 with diagnostic findings included in its assertions; its screenshot reveals
 `/SkidRover/Motor_RR` in the virtualized tree. That owned API 49127 session
-exited and released the port. Evidence is in
-`target/perf/source-isolation-final-pass-20261007.*`.
+exited and released the port. That evidence was stored in
+`target/perf/source-isolation-final-pass-20261007.*` and is now absent.
 
-Library-default warnings also show conflicting leaf names from independent
-Modelica classes (`enabled`, `available_fuel_mass_kg`, and
-`available_oxidizer_mass_kg`). The current compiler combines library defaults
-by unqualified input name and the worker can match multiple qualified slots
-by that suffix. Class-scoped default resolution needs a separate owning
-compiler/worker change and validation; changing model input names would not
-repair that ownership problem. Fresh Griffin acceptance remains open.
+Declaration-scoped Modelica initialization is fixed in the compiler's DAE phase
+and editor compile dispatch. The production scoped-defaults gate passes 20 checks
+including integration, override, reset, expressions, arrays, and batch execution.
+See `2026-10-07-scoped-modelica-defaults.md` for owner contracts and evidence.
+Fresh Griffin runs remain held by MainPropulsion and AttitudePropulsion preparation;
+landing and engine-command verifications have no verdict and are not accepted.
 
 Earlier dated measurements are historical diagnostics. Their raw captures,
 logs and screenshots are absent from this checkout's current `target/`, so
@@ -1197,9 +1204,10 @@ slow time was solver lowering, not queue admission. Its persistent cache entry
 was saved by 13.224 s from process launch. The other three lookups hit disk and
 did not lower. This is a cold, worker-side readiness cost; it is not a
 synchronous app-thread stall, though the worker load can still compete for CPU.
-The following warm-cache launch reused the persistent entries: all eight
-solver-preparation commits logged `cache=hit` and took at most 2.03 ms each.
-This confirms cache reuse, but its readiness timing remains contention-affected.
+The following warm-cache launch's eight solver-preparation commits took at
+most 2.03 ms each. These commit timings do not establish the persistent lookup
+outcome. Verify native preparation-owner disk-hit/miss logs for reuse evidence;
+the readiness timings remain contention-affected.
 
 The joint-wait path still needs attribution. The new wait-reason strings were
 present in the running binary, but the app log contains no USD-Avian joint

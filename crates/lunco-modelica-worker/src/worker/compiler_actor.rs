@@ -4,9 +4,8 @@
 //! mailbox with every compile request. The simulation worker sends immutable
 //! source units and commits returned artifacts on its own ordered lane.
 
-use super::cache::CompiledArtifactCache;
 use super::{
-    BackendCompileResult, CompileUnit, ModelicaCompiler, PreparedSourceRoot,
+    BackendCompileResult, CompileUnit, CompiledArtifactCache, ModelicaCompiler, PreparedSourceRoot,
     WorkerPreparationResult, compile_shared,
 };
 use crossbeam_channel::{Receiver, Sender};

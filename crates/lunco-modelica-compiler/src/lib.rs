@@ -1231,10 +1231,14 @@ impl ModelicaCompiler {
     /// Portable identity of the successfully seated compile input closure.
     /// Includes the target, actual transformed overlays, and admitted library
     /// bytes. Runtime mount IDs and host paths never contribute to this CID.
+    /// `normalize_overlay` removes caller-owned generated identity from the
+    /// target and participating user overlays; authored callers pass `str::to_owned`.
+    /// Library bytes remain exact and are never normalized.
     /// Capture before clearing the admitted user-document overlay.
     pub fn compiled_source_content_identity(
         &self,
         compiled: &rumoca_compile::compile::DaeCompilationResult,
+        normalize_overlay: impl Fn(&str) -> String,
     ) -> Result<lunco_hash::content::Cid, String> {
         fn field(bytes: &mut Vec<u8>, value: &[u8]) {
             bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
@@ -1248,7 +1252,7 @@ impl ModelicaCompiler {
             return Err("strict compile has no participating source files".into());
         }
         let mut bytes = b"LunCoModelicaCompileClosure\0\x01".to_vec();
-        field(&mut bytes, closure.target.as_bytes());
+        field(&mut bytes, normalize_overlay(&closure.target).as_bytes());
         let mut overlays = Vec::new();
         let mut contributing_roots = std::collections::HashSet::new();
         for participant in &closure.files {
@@ -1257,7 +1261,9 @@ impl ModelicaCompiler {
                     .session
                     .get_document(&participant.uri)
                     .ok_or("participating overlay no longer has seated text")?;
-                overlays.push(lunco_hash::content::cid(document.content.as_bytes()));
+                overlays.push(lunco_hash::content::cid(
+                    normalize_overlay(&document.content).as_bytes(),
+                ));
             } else {
                 if participant.source_set_keys.is_empty() {
                     return Err(format!(
@@ -1960,7 +1966,7 @@ end Controls;"
             1
         );
         let identity = compiler
-            .compiled_source_content_identity(&first)
+            .compiled_source_content_identity(&first, str::to_owned)
             .expect("unused parsed-only root is excluded");
         compiler.clear_user_documents();
         let second = compiler
@@ -1969,7 +1975,7 @@ end Controls;"
         assert_eq!(
             identity,
             compiler
-                .compiled_source_content_identity(&second)
+                .compiled_source_content_identity(&second, str::to_owned)
                 .expect("portable identity")
         );
         let changed = source.replace("start=1", "start=2");
@@ -1979,7 +1985,7 @@ end Controls;"
         assert_ne!(
             identity,
             compiler
-                .compiled_source_content_identity(&third)
+                .compiled_source_content_identity(&third, str::to_owned)
                 .expect("changed identity")
         );
         let required = "model RequiredProbe Unused.Part part; end RequiredProbe;";
@@ -1987,7 +1993,7 @@ end Controls;"
             .compile_str("RequiredProbe", required, "RequiredProbe.mo")
             .expect("parsed-only dependency remains compilable");
         let error = compiler
-            .compiled_source_content_identity(&compiled)
+            .compiled_source_content_identity(&compiled, str::to_owned)
             .expect_err("participating parsed-only bytes are unavailable");
         assert!(error.contains("parsed definitions but no source text"));
     }

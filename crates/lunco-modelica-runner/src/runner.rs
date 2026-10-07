@@ -804,7 +804,9 @@ fn run_inner(
                 let identity = result
                     .as_ref()
                     .map_err(|error| error.clone())
-                    .and_then(|compiled| compiler.compiled_source_content_identity(compiled))
+                    .and_then(|compiled| {
+                        compiler.compiled_source_content_identity(compiled, str::to_owned)
+                    })
                     .map(|cid| lunco_experiments::SourceContentIdentity::Available { cid })
                     .unwrap_or_else(|reason| {
                         lunco_experiments::SourceContentIdentity::Unavailable { reason }

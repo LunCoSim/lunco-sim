@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 import time
 from pathlib import Path
 
-from runtime import BINARY, POLL_INTERVAL_S, ProductionSession, ROOT
+from runtime import BINARY, POLL_INTERVAL_S, ProductionSession, ROOT, get_json
 
 
 def tail(path: Path, lines: int = 20) -> str:
@@ -143,6 +144,9 @@ def run(port: int, timeout: float, scene: str, log_path: Path, scenario: str | N
                 raise RuntimeError(f"could not start the editor test simulation: {transport!r}")
             offset = 0
             if scenario:
+                log_path.with_suffix(".schema.json").write_text(
+                    json.dumps(get_json(port, "/api/commands/schema")), encoding="utf-8"
+                )
                 offset = log_path.stat().st_size
                 library = session.post({"type": "ExecuteCommand", "command": "GetToolLibrary",
                                         "params": {"name": "runtime_ui"}})

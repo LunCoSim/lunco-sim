@@ -157,9 +157,19 @@ callers.
 The policy list does not replace composed USD facts for member-class
 discovery. The worker's prepared-solve cache keys library state from the
 revisions that `ModelicaCompiler` records while admitting source roots. Its
-source key is based on primary and sibling source text, not per-session sibling
-document IDs or worker-local library-generation counters. It does not scan the
-complete Modelica tree during the first live stepper build.
+source key is captured from the successful strict compiler's participating-source
+closure before clearing user overlays. Generated class/network-title identity is
+normalized; equations, parameters, initial values, participating siblings, and
+contributing library bytes remain structural. Unrelated sibling edits and runtime
+document IDs do not invalidate prepared solve IR. The captured key remains with
+the immutable DAE through shared reuse and resets; the precompile DAE cache uses
+the full submitted input set until the strict closure is known. It does not scan
+the complete Modelica tree during the first live stepper build.
+
+For preparation evidence, use actual owner INFO logs: `cache=memory-hit` at
+in-memory admission, `cache=disk-hit` after persistent lookup, and `cache=miss`
+when lowering runs. Disk preparation includes lookup, lowering, and total
+duration plus the source key. Stepper construction is not evidence of cache reuse.
 
 Generated USD networks compile their complete synthesized source plus admitted
 source roots; unrelated editor documents are not sibling inputs. The reserved

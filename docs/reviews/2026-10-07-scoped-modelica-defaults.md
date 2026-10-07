@@ -55,3 +55,21 @@ readback issue: its integrated state consumes the correct equation, but the
 aggregate output alias reads zero. The current regression validates the
 continuous state and qualified slots; alias reconstruction needs separate solver
 coverage and correction. It does not establish full Twin output acceptance.
+
+## Integration with current main
+
+Main commit `804c54144` was merged into optimization after the defaults fix.
+The conflict resolution retains its strict compiled-content identity for solver
+cache reuse and removes runtime default maps from both cached rebuild paths.
+The integrated production build passes, and the owned windowed defaults gate
+passes `TESTS_OK 20` again. Its runtime schema regenerated the unchanged command
+reference: 262 commands across 54 crates. Integrated logs and schema are under
+`target/perf/scoped-defaults-merged-*`.
+
+The bounded post-merge default-Twin recheck on port 4264 reports zero retained
+runtime errors and a clear manifest/SysML contract. It remains held during cold
+solver preparation; the final sampled readiness still included the propulsion,
+actuation, and FLIP assemblies. Some preparations completed before Exit, but
+physics readiness and mission acceptance were not reached in this bounded run.
+Evidence is `target/perf/griffin-default-merged.{log,json}`. All owned ports are
+released. Main and the Twin's authored files were not modified by this fix/merge.

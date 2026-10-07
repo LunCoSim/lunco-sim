@@ -216,6 +216,29 @@ The UI mirrors all notice severities into Recent status as discrete entries.
 Preparation notifications do not change simulation time, outputs, compile
 completion, or the required participant admission hold.
 
+Prepared-solver reuse captures `ModelicaCompiler::compiled_source_content_identity`
+while the successful strict compilation's participating overlays are still
+seated. The source key includes only that closure, with generated wrapper
+class and network-title identity normalized; authored parameters, initial
+values, equations, participating siblings, and admitted contributing library
+bytes remain structural. Unrelated open sibling documents do not invalidate
+prepared solve IR. The captured key travels with the immutable DAE through
+shared-artifact reuse and participant resets. Precompile DAE admission retains
+the conservative full submitted input-set hash until strict resolution supplies
+the actual participating closure.
+
+Native INFO preparation logs distinguish `cache=memory-hit`, `cache=disk-hit`,
+and `cache=miss` at their actual lookup owners. Disk preparation reports lookup,
+lowering, and total preparation duration plus source key and success. Stepper
+construction consumes already admitted solve IR and does not claim that a newly
+lowered model was a cache hit. These timings describe preparation, not settled
+solver stepping or uncontended frame performance.
+Cold misses still run the admitted DAE lowering algorithm. Generated-network
+source isolation already excludes editor siblings before compilation; closure
+identity extends reuse to unrelated submitted authored documents. A speed claim
+requires a repeated exact-source run showing the actual lookup outcome and
+lowering duration, rather than attributing existing source isolation to this key.
+
 ## 2. Architecture in layers
 
 ```

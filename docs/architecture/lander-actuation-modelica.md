@@ -105,6 +105,32 @@ Avian's native prismatic joint in the existing substep schedule.
 
 ## Visualization and live state
 
+`LunCo.Propulsion.PropellantStatus` owns each hull's dry-airframe and live
+propellant mass properties. USD connects its mass, local COM, and inertia
+outputs to the body's Avian `inputs:mass`, `inputs:com_x/y/z`, and
+`inputs:inertia_xx/yy/zz`. Separate `controller_inertia_xx/yy/zz` inputs feed
+the control law; connecting those alone does not change physical inertia.
+Collinear tank stations and an axis-aligned dry tensor give zero cross terms,
+so the three live diagonal inertia inputs describe that complete hull tensor.
+
+The Avian port backend commits live values to native f64 `ComputedMass`,
+`ComputedCenterOfMass`, and `ComputedAngularInertia`. It removes each corresponding
+local authoring override and installs the `NoAuto*` marker, so Avian retains
+the solver value through later collider mass recomputation. Positive mass and
+inertia inputs are bounded to finite reciprocal storage. Scalar inertia writes
+are rejected before commit when the existing tensor has nonzero cross terms;
+full authored tensors remain intact and readable. Scalar inputs cannot express
+an atomic coupled-tensor update.
+
+These are per-body properties. Articulated legs, ramps, and payloads retain
+their own Avian mass tensors and joint dynamics. The read-only
+`dynamic_joint_island_mass_kg` and `_valid` ports provide the complete live
+translational mass for guidance; they do not replace the hull inertia with an
+assumed rigid assembly tensor. Rhai production evidence must compare the
+propulsion outputs against solver-owned physics state during a burn and after
+the tank mass changes, including COM motion and physical inertia rather than
+controller telemetry alone.
+
 Every reusable propulsion component has a semantic Modelica `Icon` and
 `Placement` is emitted for every generated component. A generated network also
 receives a class-level assembly icon and diagram banner. The Modelica canvas:
