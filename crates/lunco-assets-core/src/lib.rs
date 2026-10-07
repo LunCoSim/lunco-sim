@@ -1072,14 +1072,15 @@ mod asset_directory_tests {
         )
         .unwrap();
         assert_eq!(admitted.label(), None);
-        assert_eq!(admitted.to_string(), address);
+        let admitted_address = asset_path::anchor_of(&admitted);
+        assert_eq!(admitted_address, address);
         let resolve = |source: &str| {
             bevy::tasks::futures_lite::future::block_on(resolve_asset_directory_on_worker(
                 source,
                 Some(&roots),
             ))
         };
-        let directory = resolve(&admitted.to_string()).unwrap();
+        let directory = resolve(&admitted_address).unwrap();
         assert_eq!(
             directory.path(),
             lunco_storage::canonicalize_file_path(&authored).unwrap()
