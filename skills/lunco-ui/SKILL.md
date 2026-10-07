@@ -47,7 +47,10 @@ recovery surfaces available over Builder and Editor. `lunco-workbench` is the
 concrete shell: it owns
 docking, egui/bevy integration, persistence, source editing, and shell-only
 widgets such as icons and tree renderers. `lunco-workbench-widgets` owns the
-shell-independent icon, text-editor, and tree helpers. `lunco-workbench-browser` is the
+shell-independent icon, text-editor, and tree helpers. Virtualized trees use
+`tree::branch_header` for a fixed row stride; recursive trees use `tree::branch`
+for an indented body, sharing the same disclosure state and controls.
+`lunco-workbench-browser` is the
 optional reusable Twin/Files feature: it owns browser state, standard panels,
 and filesystem/library sections, including the asset-provisioning dependency.
 Domain crates must not read the shell's private `WorkbenchLayout`; use
@@ -66,8 +69,13 @@ the view caches metadata, its invalidation must use the owner-provided
 observers and change-filtered structural identity checks; Avian groups declare
 their identity key and invalidation hook beside their membership predicate. Do
 not use a broad scene revision or entity-count poll as a port-topology signal.
-Large inspection surfaces must virtualize their fixed-height browser rows and request live values
-only for expanded/visible bodies; the normal sample path reads those values
+Large inspection surfaces must virtualize their fixed-height browser rows and
+request live values only for expanded/visible bodies through the existing owner.
+The USD Prim tree caches open rows and uses the
+shared tree disclosure controls with preview-scoped identities; preserve
+selection reveal, offscreen scrolling, and the typed display-mode commands.
+The bundled-library browser consumes the asset manifest's revision, not a
+per-frame hash of all paths. The normal sample path reads live values
 through the registry rather than rerunning backend list/metadata callbacks.
 
 For USD topology, extend the existing Connections projector in
@@ -82,6 +90,13 @@ Scene selection uses mount-scoped entity targets, documents use `SelectUsdPrim`.
 Use `Edit connections` / `OpenUsdSourceDocument` to establish the document
 boundary without replacing the scene. The USD document owner resolves the exact
 registered source on a worker and reuses its file-preparation lifecycle.
+USD browser clicks use this source-only command too. `OpenFile` can open a
+different workspace/Twin and is not an additional-preview command. Verify
+source isolation through `assets/scenarios/tests/usd_source_isolation.rhai`,
+launched by `scripts/api/test_usd_source_isolation.py` with an exact scene,
+source and composed selection path in an owned production session. Successful
+and rejected sources preserve the
+active Twin and physics topology, and physics continues while a preview opens.
 Use the composed USD reader's runtime-provider schema contract to display exact
 authored interface references before runtime projection. Runtime owners validate
 availability and types; the diagram does not admit connections to simulation.
@@ -313,7 +328,7 @@ generic `scene_file_` lifetime/publication seams and the asset-owner closure
 budget/error test; see the
 [closure contract](../../docs/architecture/16-document-identity-and-collaboration.md#dependency-closure-separates-asset-traversal-from-usd-interpretation).
 
-For hierarchy rows, use `lunco_workbench_widgets::tree::{branch, leaf}` and
+For hierarchy rows, use `lunco_workbench_widgets::tree::{branch, branch_header, leaf}` and
 `tree::{label, selectable_label}` for row text. The shared renderer resolves
 `Theme.typography.tree` and owns the
 disclosure control, full-width row geometry, left-aligned label presentation,

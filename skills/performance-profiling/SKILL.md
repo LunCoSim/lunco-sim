@@ -57,6 +57,24 @@ several previews must not add bodies, colliders, or joints to the mounted scene.
 For SysML requirements rebuilds, inspect `sysml_requirements_rebuild` input
 flags. Domain notification publishers check `has_pending_events` before
 mutably draining their registry; an empty queue must not invalidate readers.
+Workspace document focus and USD editor open/close are not SysML inputs. The
+requirements producer compares the active Twin identity, root, manifest, and
+file index before reacting to workspace change detection. Verify both an
+unrelated editor change (no rebuild) and a Twin/source/evidence change (fresh
+projection); do not suppress domain registry invalidation.
+Source links use `DocumentRegistry::doc_for_file`, which checks all exact paths
+before resolving file aliases. Preserve symlink identity and dirty-document
+semantics; do not build a panel-local path registry.
+Inspect scenario preparation separately from lifecycle execution. Unchanged
+actors borrow their canonical source; only admitted compile/retry work copies
+worker inputs. Do not defer initialization or change actor commit order to
+reduce this preparation cost.
+For fixed-step port costs, `write_resolved` uses canonical input-write
+preparation once, compares the live owner with its locator, then commits within
+the same exclusive World boundary without a single-element batch allocation.
+Preserve live precedence, metadata, topology revision, slot, value checks, and
+rejection ordering. Separately prepared batches still revalidate every write
+before committing any of them.
 The shell's steady `WorkbenchSnapshot` check compares borrowed dock and
 perspective iterators before materializing owned vectors; preserve that
 allocation-free stable path when changing layout publication.
@@ -79,7 +97,9 @@ For large Builder hierarchies, derive a lightweight row index from the cached
 tree and current expansion state, retain that index across repaints, then use
 `ScrollArea::show_rows` to create widgets only for rows in the viewport. Rebuild
 the index only after a source revision, active filter/scope change, or a branch
-disclosure change reported by the shared tree helper. Keep foldout state keyed
+disclosure change reported by the shared `tree::branch_header` helper. Its
+header-only allocation preserves the fixed row stride; ordinary recursive
+trees use `tree::branch` to allocate their indented body. Keep foldout state keyed
 by stable entity/group identity and preserve selection, drag, and tooltip
 behavior on painted rows. Immediate-mode widgets are expected to be repainted;
 the domain tree and entry records should be borrowed or shared, not cloned into
@@ -187,6 +207,22 @@ factors fixed geometry through `WᵀW`; preserve bounded cyclic sweep semantics,
 iteration count and command limits. Validate the numeric allocation and physical
 mission after reassociation, then compare preparation and settled-step profiles.
 
+Confirm generated-network source-set stability across launches: identical
+generated text must not acquire unrelated open documents as compile siblings.
+Use the runtime-owned bundled `generated/` provenance classifier for structural
+identity, and retain authored multi-document compilation. Inspect typed
+persistent-cache rejection warnings separately from commit-time in-memory reuse:
+a commit's `cache=hit` does not prove persistent startup reuse.
+
+Count domain discovery and publication separately. Content prim GIDs do not
+enter ordinary scene-network namespaces; instance identities and stage/source
+events still invalidate their owners. Initial prepared results publish a
+bounded four-root prefix only under their own fixed-clock admission holds,
+with no prior installed projection. Live replacements remain one per Update,
+and repeated roots wait for the ECS publication boundary. Preserve the oldest
+request and every generation fence; do not admit physics early to shorten
+loading measurements.
+
 Application policy startup has separate Tracy spans for
 `application_policy_source_prepare_offthread`,
 `application_policy_compile_offthread`,
@@ -224,6 +260,14 @@ queued until replacement facts commit. A required preparation failure,
 including a host without worker transport, must be visible through the scene
 fault owner. Do not run a whole-stage topology traversal synchronously in
 `Update`.
+
+For USD simulation admission, check whether visual-only prims consume the
+participant prefix. The vehicle owner excludes ordinary prims using only its
+current-generation topology index, alongside existing preview exclusion;
+missing/stale facts and runtime-instance plans remain eligible. Keep the same
+simulation-work limit, stable stage/instance/path order, and readiness markers.
+Inspect physical-wheel fixtures through the shared reflected `PhysicalWheel`
+contract, and run simulation queries under their real Twin-owned scenario route.
 
 For route-edit latency, record four separate spans: the bounded Rhai input
 hook, the durable route `ApplyUsdOps` and its one incremental projection,
@@ -306,9 +350,19 @@ light's finite range sphere or a conservative bound of each extracted spotlight
 frustum with every active extracted `Camera3d` frustum and compatible
 `RenderLayers` before Bevy prepares shadow views. Do not mutate authored lights,
 omit offscreen cameras, or infer relevance from the light origin alone.
-Uncertain bounds and boundary cases keep the map. This saves only maps
+Disjoint layers prove irrelevance even when spotlight bounds are unavailable.
+Uncertain bounds and boundary cases keep the map for compatible layers. Restore
+the extracted main-world shadow intent before every frame's relevance check;
+native light extraction is incremental, so focusing a parked preview must
+restore its shadows without requiring a light edit. This saves only maps
 provably irrelevant to all outputs; Bevy's main-world per-light caster
 visibility pass is still a separate cost to measure.
+Count shadow roots independently of active cameras. Invisible extracted local
+lights retire their native `PointAndSpotLightViewEntities` through the renderer
+adapter; Bevy's cleanup observer removes the associated views. A deferred
+retirement must retain a light already re-extracted in that boundary. Verify
+one/many parked-preview counts and text-to-Visual reactivation separately from
+authored shadow intent or a camera's `is_active` flag.
 
 Bevy's camera driver also executes `Core3d` for point/spot shadow roots. Admit
 camera-only Core3d stage sets only for camera roots; keep the shared shadow
@@ -536,6 +590,16 @@ array after the measurement window. The query also returns the current
 `step_time_ms` and `step_number`, and the editor publishes the same current
 sample through `engine-health.physics_step_ms`. Query once per window because
 `PhysicsPerformance` also counts live topology and is not a per-step sampler.
+The editor-count diagnostic additionally checks it at one-second checkpoints
+to reject a stall after an early advance, along with full readiness and stable
+physics topology. It also rejects retained errors from `RuntimeDiagnostics`,
+including scene-scoped telemetry delivery holds that do not fault physics.
+That polling overhead is part of the diagnostic window.
+`scripts/perf/usd_editor_tabs.py` compares yaw, pitch, target, distance,
+projection, orthographic scale, measured viewport rectangle and window scale
+factor both within a window and between equal-camera windows. Its negative
+guard tests cover rotation, resizing, faults, retained runtime errors, late
+waits and stopped physics.
 
 Record the clean FPS window, physics and render timings, Tracy capture path,
 scene/settings, and whether the result is startup or settled. Rebuild the

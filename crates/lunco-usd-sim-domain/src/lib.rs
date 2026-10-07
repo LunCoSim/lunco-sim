@@ -566,6 +566,36 @@ impl PendingDomainProjections {
     }
 }
 
+/// Publication budget for prepared networks that still own their initial
+/// fixed-clock admission hold. Live replacements remain one per Update.
+#[derive(Resource, Debug, Clone)]
+pub struct DomainProjectionPublicationSettings {
+    pub max_initial_network_commits_per_update: usize,
+}
+
+impl Default for DomainProjectionPublicationSettings {
+    fn default() -> Self {
+        Self {
+            max_initial_network_commits_per_update: 4,
+        }
+    }
+}
+
+fn initial_domain_publication_is_admitted(
+    settings: &DomainProjectionPublicationSettings,
+    commits: usize,
+    published: &HashSet<Entity>,
+    entity: Entity,
+    initial_hold: bool,
+) -> bool {
+    let limit = if initial_hold {
+        settings.max_initial_network_commits_per_update
+    } else {
+        1
+    };
+    commits < limit && !published.contains(&entity)
+}
+
 /// Domain-root candidates discovered from USD entity and source lifecycles.
 /// Discovery and projection are separate queues so settled class assets can
 /// reproject only the networks that use them.
@@ -948,12 +978,40 @@ pub fn queue_added_domain_prim(
     pending.discovery.insert(trigger.entity);
 }
 
+/// An ordinary content prim's own GID is not an input to its Modelica
+/// namespace. Instance roots/members and unsettled provenance still require
+/// identity admission; the shared instance-key reader owns their final scope.
+fn identity_can_affect_domain_namespace(
+    (provenance, instance_root, instance_member, projection): (
+        Option<&lunco_core::Provenance>,
+        bool,
+        bool,
+        Option<&UsdInstanceProjection>,
+    ),
+) -> bool {
+    instance_root
+        || instance_member
+        || projection.is_some()
+        || !matches!(provenance, Some(lunco_core::Provenance::Content { .. }))
+}
+
 pub fn queue_added_domain_identity(
     trigger: On<Add, lunco_core::GlobalEntityId>,
-    prims: Query<(), With<UsdPrimPath>>,
+    prims: Query<
+        (
+            Option<&lunco_core::Provenance>,
+            Has<lunco_usd_bevy_stage::UsdInstanceRoot>,
+            Has<lunco_usd_bevy_stage::UsdInstanceMember>,
+            Option<&UsdInstanceProjection>,
+        ),
+        With<UsdPrimPath>,
+    >,
     mut pending: ResMut<PendingDomainProjectionCandidates>,
 ) {
-    if prims.contains(trigger.entity) {
+    if prims
+        .get(trigger.entity)
+        .is_ok_and(identity_can_affect_domain_namespace)
+    {
         pending.discovery.insert(trigger.entity);
     }
 }
@@ -970,10 +1028,21 @@ pub fn queue_added_domain_instance_projection(
 
 pub fn queue_removed_domain_identity(
     trigger: On<Remove, lunco_core::GlobalEntityId>,
-    prims: Query<(), With<UsdPrimPath>>,
+    prims: Query<
+        (
+            Option<&lunco_core::Provenance>,
+            Has<lunco_usd_bevy_stage::UsdInstanceRoot>,
+            Has<lunco_usd_bevy_stage::UsdInstanceMember>,
+            Option<&UsdInstanceProjection>,
+        ),
+        With<UsdPrimPath>,
+    >,
     mut pending: ResMut<PendingDomainProjectionCandidates>,
 ) {
-    if prims.contains(trigger.entity) {
+    if prims
+        .get(trigger.entity)
+        .is_ok_and(identity_can_affect_domain_namespace)
+    {
         pending.discovery.insert(trigger.entity);
     }
 }
@@ -1824,8 +1893,8 @@ pub fn project_domain_islands(
     }
 }
 
-/// Publish completed domain synthesis in request order and bound live-world
-/// result application to one network per Update.
+/// Publish completed domain synthesis in request order. Initial held networks
+/// use a bounded batch; live replacements remain one network per Update.
 pub fn poll_domain_projection_tasks(
     mut commands: Commands,
     preview: (
@@ -1849,8 +1918,23 @@ pub fn poll_domain_projection_tasks(
     scene_transitions: Option<Res<lunco_core::SceneTransitionCoordinator>>,
     modelica_channels: Option<Res<ModelicaChannels>>,
     mut notices: MessageWriter<ModelicaNotice>,
+    publication: (
+        Res<DomainProjectionPublicationSettings>,
+        Res<lunco_core_runtime::SimulationProgress>,
+        ResMut<lunco_core::RuntimeFaults>,
+    ),
 ) {
     if modelica_channels.is_none() {
+        return;
+    }
+    let (settings, progress, mut faults) = publication;
+    if settings.max_initial_network_commits_per_update == 0 {
+        faults.raise(
+            "usd-domain-publication-budget",
+            None,
+            "usd-domain",
+            "USD domain publication requires a nonzero initial work limit",
+        );
         return;
     }
     let current_scene_generation = scene_transitions
@@ -1881,8 +1965,8 @@ pub fn poll_domain_projection_tasks(
     }
 
     // Worker completion is independent of publication order. Collect every
-    // finished slot, then commit only the oldest request so completion timing
-    // cannot select the order of authoritative Modelica participants.
+    // finished slot, then commit only a prefix of the oldest requests so
+    // completion timing cannot select authoritative Modelica participant order.
     for task in &mut pending.tasks {
         if task.completed.is_none() {
             task.completed = task
@@ -1892,14 +1976,28 @@ pub fn poll_domain_projection_tasks(
                 .take();
         }
     }
-    const MAX_DOMAIN_PROJECTION_COMMITS_PER_UPDATE: usize = 1;
     let mut commits = 0;
-    while commits < MAX_DOMAIN_PROJECTION_COMMITS_PER_UPDATE {
-        if pending
+    let mut published = HashSet::new();
+    loop {
+        let Some(front) = pending
             .tasks
             .front()
-            .is_none_or(|task| task.completed.is_none())
-        {
+            .filter(|task| task.completed.is_some())
+        else {
+            break;
+        };
+        let initial_hold = progress.contains(
+            lunco_core_runtime::SimulationProgressKey::usd_domain_projection(front.entity),
+        ) && prims
+            .get(front.entity)
+            .is_ok_and(|(_, previous, _, _)| previous.is_none());
+        if !initial_domain_publication_is_admitted(
+            &settings,
+            commits,
+            &published,
+            front.entity,
+            initial_hold,
+        ) {
             break;
         }
         let mut task = pending.tasks.pop_front().expect("front task was checked");
@@ -1971,6 +2069,9 @@ pub fn poll_domain_projection_tasks(
             },
             &mut notices,
         );
+        // Commands publish at the system boundary. Do not apply another result
+        // for this entity against the same pre-publication ECS snapshot.
+        published.insert(task.entity);
         commits += 1;
     }
 }
@@ -2921,6 +3022,10 @@ pub fn resolve_member_classes(
                 entity,
                 select_synthesizer_name_from_member_roles(view, &root, member_roles),
             );
+            bevy::log::debug!(
+                "[domain-projection] discovered `{}`: stage_generation={stage_generation} initial={newly_pending}",
+                prim.path
+            );
             candidates.queue_projection(entity);
         }
     }
@@ -3012,6 +3117,45 @@ pub fn resolve_member_classes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_domain_publication_requires_a_hold_and_distinct_roots() {
+        let settings = DomainProjectionPublicationSettings::default();
+        let root = Entity::from_bits(1);
+        let other = Entity::from_bits(2);
+        let mut published = HashSet::new();
+        for count in 0..settings.max_initial_network_commits_per_update {
+            assert!(initial_domain_publication_is_admitted(
+                &settings, count, &published, root, true
+            ));
+        }
+        assert!(!initial_domain_publication_is_admitted(
+            &settings, 4, &published, root, true
+        ));
+        assert!(initial_domain_publication_is_admitted(
+            &settings, 0, &published, root, false
+        ));
+        assert!(!initial_domain_publication_is_admitted(
+            &settings, 1, &published, root, false
+        ));
+        published.insert(root);
+        assert!(!initial_domain_publication_is_admitted(
+            &settings, 1, &published, root, true
+        ));
+        assert!(initial_domain_publication_is_admitted(
+            &settings, 1, &published, other, true
+        ));
+        let zero = DomainProjectionPublicationSettings {
+            max_initial_network_commits_per_update: 0,
+        };
+        assert!(!initial_domain_publication_is_admitted(
+            &zero,
+            0,
+            &HashSet::new(),
+            root,
+            true
+        ));
+    }
     use lunco_usd_bevy_stage::canonical::CanonicalStage;
 
     #[test]
@@ -3312,7 +3456,7 @@ mod tests {
     }
 
     #[test]
-    fn domain_discovery_observers_coalesce_path_and_identity_arrivals() {
+    fn domain_discovery_observers_admit_only_identity_dependent_namespaces() {
         let mut app = App::new();
         app.insert_resource(PendingDomainProjectionCandidates {
             discovery: HashSet::new(),
@@ -3328,11 +3472,28 @@ mod tests {
 
         let entity = app
             .world_mut()
-            .spawn(UsdPrimPath {
-                stage_handle: Handle::default(),
-                path: "/Scene/Body".into(),
-            })
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: Handle::default(),
+                    path: "/Scene/Body".into(),
+                },
+                lunco_core::Provenance::Content {
+                    namespace: "scene".into(),
+                    source: "inline".into(),
+                    path: "/Scene/Body".into(),
+                },
+            ))
             .id();
+        assert!(
+            app.world()
+                .resource::<PendingDomainProjectionCandidates>()
+                .discovery
+                .contains(&entity)
+        );
+        app.world_mut()
+            .resource_mut::<PendingDomainProjectionCandidates>()
+            .discovery
+            .clear();
         app.world_mut()
             .entity_mut(entity)
             .insert(lunco_core::GlobalEntityId::from_raw(12));
@@ -3340,10 +3501,31 @@ mod tests {
             .spawn(lunco_core::GlobalEntityId::from_raw(13));
 
         let pending = app.world().resource::<PendingDomainProjectionCandidates>();
-        assert_eq!(pending.discovery.len(), 1);
-        assert!(pending.discovery.contains(&entity));
+        assert!(pending.discovery.is_empty());
         assert!(pending.projection.is_empty());
 
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<lunco_core::GlobalEntityId>();
+        assert!(
+            app.world()
+                .resource::<PendingDomainProjectionCandidates>()
+                .discovery
+                .is_empty()
+        );
+
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(lunco_usd_bevy_stage::UsdInstanceRoot);
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(lunco_core::GlobalEntityId::from_raw(14));
+        assert!(
+            app.world()
+                .resource::<PendingDomainProjectionCandidates>()
+                .discovery
+                .contains(&entity)
+        );
         app.world_mut()
             .resource_mut::<PendingDomainProjectionCandidates>()
             .discovery
@@ -3357,6 +3539,29 @@ mod tests {
                 .discovery
                 .contains(&entity)
         );
+
+        assert!(identity_can_affect_domain_namespace((
+            None, false, false, None
+        )));
+        assert!(identity_can_affect_domain_namespace((
+            Some(&lunco_core::Provenance::Derived {
+                parent: 14,
+                role: "member".into()
+            }),
+            false,
+            false,
+            None,
+        )));
+        assert!(identity_can_affect_domain_namespace((
+            Some(&lunco_core::Provenance::Content {
+                namespace: "scene".into(),
+                source: "inline".into(),
+                path: "/Scene/Member".into(),
+            }),
+            false,
+            true,
+            None,
+        )));
     }
 
     #[test]

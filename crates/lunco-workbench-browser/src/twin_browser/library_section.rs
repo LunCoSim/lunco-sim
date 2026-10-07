@@ -1,9 +1,6 @@
 //! Read-only browser for the engine's bundled source library.
 
-use std::{
-    hash::{Hash, Hasher},
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use egui;
 
@@ -25,18 +22,15 @@ struct LibraryEntry {
 /// The LunCo Library browser section.
 #[derive(Default)]
 pub struct LuncoLibrarySection {
-    manifest_fingerprint: u64,
+    manifest_revision: Option<u64>,
     tree: PathTree<LibraryEntry>,
-    populated: bool,
 }
 
 impl LuncoLibrarySection {
     /// Rebuild only when the immutable bundle manifest changes (not every frame).
     fn refresh(&mut self, manifest: &lunco_assets_runtime::discovery::AssetManifest) {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        manifest.rels().hash(&mut hasher);
-        let fingerprint = hasher.finish();
-        if self.populated && self.manifest_fingerprint == fingerprint {
+        let revision = manifest.revision();
+        if self.manifest_revision == Some(revision) {
             return;
         }
 
@@ -59,8 +53,7 @@ impl LuncoLibrarySection {
                 },
             )
         }));
-        self.manifest_fingerprint = fingerprint;
-        self.populated = true;
+        self.manifest_revision = Some(revision);
     }
 }
 
@@ -224,4 +217,35 @@ fn tree_matches(node: &PathTree<LibraryEntry>, query: &super::BrowserQuery) -> b
         .subdirs
         .iter()
         .any(|(directory, child)| query.matches(directory) || tree_matches(child, query))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn library_projection_consumes_manifest_revisions() {
+        let mut manifest = lunco_assets_runtime::discovery::AssetManifest::default();
+        let mut section = LuncoLibrarySection::default();
+        manifest.set(vec!["one.rhai".into()]);
+        section.refresh(&manifest);
+        assert_eq!(section.tree.files.len(), 1);
+        let allocation = section.tree.files.as_ptr();
+        section.refresh(&manifest);
+        assert_eq!(section.tree.files.as_ptr(), allocation);
+        assert_eq!(section.manifest_revision, Some(manifest.revision()));
+        manifest.set(vec!["two.rhai".into(), "three.rhai".into()]);
+        section.refresh(&manifest);
+        assert_eq!(section.tree.files.len(), 2);
+        assert!(
+            section
+                .tree
+                .files
+                .iter()
+                .all(|entry| entry.file_name != "one.rhai")
+        );
+        manifest.set(Vec::new());
+        section.refresh(&manifest);
+        assert!(section.tree.files.is_empty() && section.tree.subdirs.is_empty());
+    }
 }

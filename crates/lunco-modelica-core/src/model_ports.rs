@@ -177,10 +177,13 @@ fn publish_modelica_input_topology(
             &ModelicaModel,
             Option<&lunco_modelica_runtime::ModelicaSignalLayout>,
         ),
-        Or<(
-            Changed<ModelicaModel>,
-            Changed<lunco_modelica_runtime::ModelicaSignalLayout>,
-        )>,
+        (
+            Without<SimComponent>,
+            Or<(
+                Changed<ModelicaModel>,
+                Changed<lunco_modelica_runtime::ModelicaSignalLayout>,
+            )>,
+        ),
     >,
     mut state: ResMut<PortTopologyState>,
     mut revision: ResMut<PortTopologyRevision>,
@@ -197,5 +200,49 @@ fn publish_modelica_input_topology(
         if model_changed || signal_contract_changed {
             revision.bump();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standalone_topology_publication_excludes_cosim_and_ignores_live_samples() {
+        let mut app = App::new();
+        app.init_resource::<PortTopologyState>()
+            .init_resource::<PortTopologyRevision>()
+            .add_systems(Update, publish_modelica_input_topology);
+        let model = || ModelicaModel {
+            model_name: "inline model".into(),
+            inputs: [("throttle".into(), 0.25)].into(),
+            ..Default::default()
+        };
+        let standalone = app.world_mut().spawn(model()).id();
+        let cosim = app
+            .world_mut()
+            .spawn((model(), SimComponent::default()))
+            .id();
+        app.update();
+        let seeded = app.world().resource::<PortTopologyRevision>().0;
+        app.world_mut()
+            .get_mut::<ModelicaModel>(cosim)
+            .unwrap()
+            .inputs
+            .insert("cosim-only".into(), 0.5);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(standalone)
+            .unwrap()
+            .inputs
+            .insert("throttle".into(), 0.75);
+        app.update();
+        assert_eq!(app.world().resource::<PortTopologyRevision>().0, seeded);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(standalone)
+            .unwrap()
+            .inputs
+            .insert("brake".into(), 0.0);
+        app.update();
+        assert_eq!(app.world().resource::<PortTopologyRevision>().0, seeded + 1);
     }
 }

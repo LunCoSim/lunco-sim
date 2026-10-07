@@ -44,7 +44,10 @@ routes. This bound is independent of the model hierarchy size.
 as an Editor preview. It matches `ListOpenDocuments` file origins to preview
 identities, waits for projection readiness, then samples each settled Visual
 tab and the final authored/composed text views. It records physics counts before
-and after, API state, frame samples, and a screenshot. It does not edit sources.
+and after, API state, frame samples, and a screenshot. Every measurement
+checkpoint rejects retained errors from `RuntimeDiagnostics`, including event
+delivery holds that leave physics and readiness operational. It does not edit sources.
+It dispatches `OpenUsdSourceDocument`, not the workspace-opening `OpenFile`.
 
 ```sh
 python3 scripts/perf/usd_editor_tabs.py --port 4749 --scene /absolute/scene.usda \
@@ -54,3 +57,51 @@ python3 scripts/perf/usd_editor_tabs.py --port 4749 --scene /absolute/scene.usda
 
 This Linux driver verifies the launched process through `/proc`. Record other
 running workloads and use a separate unprofiled run for product acceptance.
+Pass `--compare-first` to keep the first Visual view and camera visible while
+additional files remain open. Compare its settled windows and physics topology
+checkpoints, then inspect authored/composed text with all previews retained.
+Add `--paired-first` to close only the extra previews opened by this driver,
+measure the warmed first view alone, then reopen the same sources and measure
+that first view again. Frame samples and per-window physics snapshots are saved
+separately as `.samples.json` and `.windows.json`.
+The first settled source is explicitly framed. Equal-camera windows record the
+focused view and reject changes to its identity, target, distance, or projection.
+Closed preview leases are reopened through `OpenUsdPreview`; their source
+documents remain open and unchanged.
+Paired runs capture the warmed one/many Visual views, then return from text to
+the same Visual view without editing its lights. This exercises parked-view
+reactivation alongside the camera-guarded editor-count comparison.
+Screenshot requests wait for a fresh published file before proceeding or
+closing the owned session; an existing stale artifact is rejected.
+Each window checks full readiness, unchanged physics topology and advancing
+steps at one-second checkpoints and at its end. A late hold, fault or stalled
+checkpoint rejects the window. The exact source scene must be mounted and its
+time selection committed before a five-second clear-readiness soak; the active
+Twin must remain unchanged through each window. Camera comparisons include orbit yaw/pitch,
+projection, target, distance, orthographic scale, measured image rectangle and
+window scale factor; the visible pose must also remain fixed within a window.
+These additional API queries contribute diagnostic sampling overhead.
+Run the negative measurement checks with
+`python3 -m unittest discover -s scripts/perf -p test_usd_editor_tabs.py`.
+The standard per-file mode intentionally changes the visible asset and is not
+an equal-camera editor-count comparison.
+
+Run the source-isolation Rhai verdict separately through the existing
+production asset-launch command:
+
+```sh
+python3 scripts/api/test_usd_source_isolation.py --port 4750 \
+  --scene assets/scenes/luncosim/sandbox_scene.usda \
+  --source assets/vessels/rovers/skid_rover.usda \
+  --selection-path /SkidRover/Motor_RR \
+  --log target/perf/source-isolation.log \
+  --screenshot target/perf/source-isolation.png
+```
+
+The driver waits for the exact mounted scene and a five-second clear-readiness
+soak, supplies all three required scenario parameters, and requires the
+eight-check `USD_SOURCE_ISOLATION` verdict before API shutdown. It can capture
+the selected preview with its exact viewport/selection state;
+the shared `ProductionSession.capture_screenshot` waits for fresh publication.
+It does not establish the startup latency milestone, which additionally requires
+all startup producers' initial admission passes to complete.

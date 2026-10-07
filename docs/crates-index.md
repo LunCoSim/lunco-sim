@@ -140,7 +140,7 @@ identifier; authored bytes and serialization retain their original values.
 | **`lunco-usd-avian-lint`** | Render-free composed `UsdPhysics` fact producer for the authored Rhai lint policy. It reuses Avian's authoritative geometry/joint readers without making the runtime physics crate own lint orchestration. |
 | **`lunco-usd-sim`** | Vehicle-specific simulation-schema bridge (`UsdSimPlugin`): intercepts specialized schemas such as PhysX Vehicles and maps them to LunCo mobility models. It registers the vehicle wheel owner with `lunco-usd-bevy-core` for in-place live edits. It publishes avatar role/spatial identity only; camera behavior is owned by the avatar runtime and authored Rhai. It no longer installs the heavy USD cosim translator. |
 | **`lunco-usd-sim-authoring`** | Render-free composed readers for PhysX vehicle wheel-attachment and gear-drive authoring, shared by vehicle projection and scene validation; it also publishes the corresponding typed USD lint facts. Runtime ECS resynchronization remains in `lunco-usd-sim`, registered through the generic live-edit owner in `lunco-usd-bevy-core`. |
-| **`lunco-usd-sim-core`** | Small render-free protocol package for the shared USD simulation schedule, processed marker, coalesced `PendingEntityWork`, pending differential contract, physical-wheel display state, and ground-collider readiness state used by vehicle, cosim, editor, and scene-runner packages. It contains no projection systems. |
+| **`lunco-usd-sim-core`** | Small render-free protocol package for the shared USD simulation schedule, processed marker, coalesced `PendingEntityWork`, pending differential contract, reflected physical-wheel display state, and ground-collider readiness state used by vehicle, cosim, editor, authored vessel inspection, and scene-runner packages. It contains no projection systems. |
 | **`lunco-usd-sim-cosim`** | USD-authored program discovery, connection wiring, readiness, and Modelica/Rhai participant projection (`UsdSimCosimPlugin`). API query providers are isolated in `lunco-usd-sim-cosim-api`; generic scene admission and mounting belong to `lunco-usd-bevy-runtime-core`. |
 | **`lunco-usd-sim-cosim-api`** | Optional API query providers for cosimulation ports, status, causal traces, binding diagnostics, camera audits, and broken-connection reports. It depends on the runtime projection but keeps API/JSON serialization out of the default cosimulation crate's direct source and dependency set. |
 | **`lunco-usd-sim-domain`** | Render-free USD domain projection: its public `network` module reads and validates component-network facts, `synthesis` owns Rhai-backed policies and generated-plan contracts, and the parent module owns Modelica member-class lifecycle, ECS projection, and lifecycle-queued generated-source document synchronization using `lunco-usd-sim-core::PendingEntityWork`. Generic USD actuator lowering lives in `lunco-usd-actuation`; its optional API query providers live in `lunco-usd-sim-domain-api`. |
@@ -189,7 +189,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | :--- | :--- |
 | **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance tabs, tab/source-view commands, scene display state, pending close state, panel registration, perspective layout plans, menu contributions, the published `WorkbenchSnapshot`, and shell scheduling labels. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
 | **`lunco-viewport-core`** | Small renderer-independent measured viewport geometry contract. Owns the physical-pixel `PanelRect` value shared by scene, camera, editor, and shell adapters without coupling that value to egui or the Workbench implementation. |
-| **`lunco-workbench-widgets`** | Shell-independent egui presentation primitives: semantic vector icons, standard text editors, and consistent hierarchy rows styled by `Theme.typography.tree`. Lightweight panel crates use it without linking the concrete dock shell. |
+| **`lunco-workbench-widgets`** | Shell-independent egui presentation primitives: semantic vector icons, standard text editors, and consistent hierarchy rows styled by `Theme.typography.tree`. Recursive and header-only branches share disclosure state; virtualized trees allocate only a fixed-height header. Lightweight panel crates use it without linking the concrete dock shell. |
 | **`lunco-workbench-layout`** | Renderer-independent `egui_dock` layout state: perspective registration/activation, dock snapshots, panel placement, split sanitization, and scene-interaction synchronization. It consumes workbench contracts/state without the concrete Bevy/egui shell. |
 | **`lunco-workbench-perf-ui`** | Reusable performance capability: persisted HUD settings, typed toggle command, Bevy frame diagnostics, and live `PerfStats`. Physics adapters publish optional step timing into this package; the concrete shell only renders the values. |
 | **`lunco-workbench`** | The concrete IDE-like shell: `bevy_egui` rendering, panel-host consumption, viewport integration, and shell-owned command observers. Dock layout state and perspective materialization are supplied by `lunco-workbench-layout`; headless adapters use the core/layout contracts without linking this shell. |
@@ -216,7 +216,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-usd-prim-tree-ui`** | Reusable composed-USD prim hierarchy panel and reactive view model. It is independent of the domain Inspector and its physics/environment authoring dependencies. |
 | **`lunco-render`** | Render-free appearance intent, including screen-constant marker sizing and visibility, and typed graphics settings; `RenderQualityPolicyPlugin` resolves Rhai-owned profiles for graphical and headless scene projection. Names `Mesh3d`, never `MeshMaterial3d`. |
 | **`lunco-render-recovery`** | Render-bound GPU health and presentation recovery: wgpu error handling, adapter shadow-capability admission, bounded failure escalation, presentation gating, and scene-teardown rearming. It is independent of the workbench shell. |
-| **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`, capability-gated Bevy GPU camera culling, conservative local-light shadow relevance, and camera-only Core3d stage admission for light shadow roots. Headless never adds it. |
+| **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`, capability-gated Bevy GPU camera culling, conservative local-light shadow relevance with extracted source intent and shadow-view lifetime cleanup, and camera-only Core3d stage admission for light shadow roots. Headless never adds it. |
 | **`lunco-web`** | Shared web frontend for wasm apps: streaming loader, `WebReadyPlugin`, and the HTML/CSS/Rhai tool host routed through `lunco_rhai`. |
 
 ---
@@ -998,7 +998,9 @@ alongside the runtime; default cosimulation hosts do not inherit its direct
 Render-free USD domain projection. It reads composed component-network facts,
 resolves Modelica member classes through a source-to-root dependency index,
 waits for all referenced classes to settle before synthesis, invokes authored
-Rhai synthesizers, and publishes generated Modelica sources.
+Rhai synthesizers, and publishes generated Modelica sources. Its
+`DomainProjectionPublicationSettings` bounds initial, clock-held result
+publication; live replacements keep their single-network boundary.
 Generic force/torque actuator lowering belongs to `lunco-usd-actuation`, while
 USD wiring and participant lifecycle belong to `lunco-usd-sim-cosim`. Optional
 generated-source API queries are provided by the separate
@@ -1184,8 +1186,10 @@ directly rather than through the shell.
 Reusable navigation feature for a rendered host. It owns the Twin and Files
 panels, browser query/actions/resources, built-in filesystem and library
 sections, while consuming shell-neutral panel, source-view, scene-state, and
-rename command contracts from their owning crates. Domain UI crates register
-their own `BrowserSection` implementations;
+rename command contracts from their owning crates. The library section consumes
+the asset manifest's monotonic revision and retains its tree between replacements
+instead of hashing the inventory at paint. Domain UI crates register their own
+`BrowserSection` implementations;
 optional dataset controls live in `lunco-workbench-datasets-ui`, which depends
 only on the lightweight `lunco-assets-datasets` contract; the native
 asset-provisioning runtime is composed separately by the application. This keeps
@@ -1256,6 +1260,9 @@ gate that avoids rescanning a quiescent scene. The egui Inspector consumes its
 Reusable composed-USD prim hierarchy panel and change-driven view model. It
 owns no editor interaction implementation and can be installed by any
 workbench host that provides the shared viewport and selection contracts.
+Its panel retains the open-row projection per focused preview revision and
+paints only the scroll viewport; selection reveal and disclosure changes
+invalidate that presentation cache without changing the authored hierarchy.
 
 **`lunco-render`**
 Appearance **intent** and persisted Graphics quality policy — **render-free**. The vocabulary a domain crate uses to say what a thing should look like without naming a renderer: `PbrLook` (a plain surface as data — colour, roughness, metallic, emissive, alpha mode, texture channels), `ProceduralSkybox`, `ScreenConstantMarker` and its view visibility gate, `SceneCamera`, `WorldLabel`, the sun/shadow look settings, and `RenderingQualitySettings` for shared camera, light, sky, terrain, shadow, and tessellation budgets. It names `Mesh3d` but **never `MeshMaterial3d`** — that one line is the whole rule.

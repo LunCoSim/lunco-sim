@@ -298,9 +298,13 @@ plane uses process-local slots.
   `resolve_output`/`resolve_input` (name → opaque `u64` **slot**) and
   `read_slot`/`read_input_slot`/`write_slot` (exchange by slot). `None` ⇒ no
   fast path.
-- The registry resolves an endpoint to a `ResolvedPort { backend, slot, side }` once,
-  then `read_resolved`/`write_resolved` dispatch straight to the owning backend —
-  **no fold, no group scan**.
+- The registry resolves an endpoint to a `ResolvedPort` carrying its backend,
+  slot, side, revision, direction, and metadata. Reads dispatch by slot. Writes
+  use the canonical input-write preparation to verify the live precedence-winning
+  owner, metadata, topology revision, slot, and proposed value once, then commit
+  directly within the same exclusive World boundary. A single resolved write does not allocate
+  a prepared batch or duplicate its validation; batch writes retain all-or-none
+  admission before any commit.
 - Dynamic name/value surfaces use `PortMap<T>`: one shared name allocation is
   indexed by `Arc<str>` and stored beside a dense value slot. Existing-name
   sample updates do not touch topology identity. Adds/removes advance the

@@ -99,6 +99,11 @@ and an `atan` only after relevant ECS inputs change and publishes at a bounded
 cadence; the reflection-crossing consumer is rhai, which only ever asks at
 configuration time.
 
+`vessel_wheel_summary()` and `vessel_wheels_match()` inspect both `WheelRaycast`
+and the vehicle plugin's reflected `PhysicalWheel` contract. The same shared
+physical-wheel component remains the render/editor motion owner; inspection
+does not introduce a second wheel-parameter store.
+
 **Guidance the prelude states explicitly:** a rhai task that wants this every tick
 must read it once into `this` in `on_start`. The limit does not change while you
 drive, and each call walks children with one reflected read per wheel.

@@ -225,6 +225,10 @@ ordered pre-tick lifecycle pass; the scenario's preparation hold remains active
 until `on_start` completes. A fresh process therefore starts `on_start` at
 `SimTick=0` and admits its first `on_tick` at `SimTick=1`, without advancing a
 physics or Modelica step during scene admission.
+The preparation pass borrows canonical script documents while checking revision
+and eligibility. It copies source and asset identity only when an actual compile
+or capacity retry is admitted; unchanged actors do not copy their source per
+frame. Worker ordering and the lifecycle commit boundary remain unchanged.
 
 Fixed-step time is not a wall-clock service guarantee. In the production GUI,
 Bevy drains `FixedMain` synchronously before `Update`; LunCoSim's rate-scaled
@@ -824,6 +828,14 @@ Likewise, a live OpenUSD stage is thread-affine; moving immutable source
 preparation off-thread does not mean sharing the stage object with a worker.
 
 ## 5. Rhai execution and safe parallelism
+
+The language-neutral telemetry inbox is bounded and drained at the scenario
+pass boundary even when no script actors exist. Idle traffic is unobservable
+by actors created later and is discarded without resetting its sequence or a
+latched overflow fault. A driver with no actors preserves events when another
+language has a potential consumer. Overflow remains a scene-scoped error in
+`RuntimeDiagnostics`, holding event delivery until scene teardown; continuing
+physics and green readiness alone do not establish a healthy event stream.
 
 Rhai inline-root parsing and immutable compilation artifacts are prepared
 through shared admission. File-backed source assets are parsed in Bevy's async

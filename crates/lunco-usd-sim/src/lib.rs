@@ -296,9 +296,23 @@ const MAX_PREPARED_JOINT_TOPOLOGY_TASKS: usize = 4;
 #[derive(Resource)]
 struct PendingUsdSimPrimWork(PendingEntityWork, Vec<lunco_core::RuntimeDiagnostic>);
 
-// Deferred Commands are applied at the end of this Update system. Admit the
-// lowest authored paths while limiting selection and command work per UI frame.
-const MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE: usize = 32;
+/// Bounded live-world work for the vehicle projection owner.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct UsdSimulationProjectionSettings {
+    /// Maximum simulation-bearing prims projected in one Update.
+    pub max_simulation_prims_per_update: usize,
+    /// Maximum ownerless prims marked processed in one Update.
+    pub max_ownerless_prims_per_update: usize,
+}
+
+impl Default for UsdSimulationProjectionSettings {
+    fn default() -> Self {
+        Self {
+            max_simulation_prims_per_update: 32,
+            max_ownerless_prims_per_update: 128,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StableUsdSimWork<T> {
@@ -425,16 +439,17 @@ fn stable_usd_physics_order_key(
     Ok(lunco_physics::PhysicsOrderKey(key))
 }
 
-/// Find the lowest-ranked simulation rows without charging preview rows to the
+/// Find the lowest-ranked simulation rows without charging ownerless rows to the
 /// bounded simulation-work prefix.
 fn select_bounded_sim_prim_work<T>(
     mut candidates: Vec<T>,
     maximum: usize,
+    ownerless_maximum: usize,
     mut entity_of: impl FnMut(&T) -> Entity,
     mut compare: impl FnMut(&T, &T) -> std::cmp::Ordering,
-    mut is_preview: impl FnMut(Entity) -> bool,
+    mut has_no_simulation_owner: impl FnMut(Entity) -> bool,
 ) -> (Vec<T>, Vec<Entity>, Vec<Entity>) {
-    if maximum == 0 {
+    if maximum == 0 || ownerless_maximum == 0 {
         return (
             Vec::new(),
             candidates.iter().map(&mut entity_of).collect(),
@@ -447,8 +462,8 @@ fn select_bounded_sim_prim_work<T>(
     // Prefix expansion reuses membership so each candidate's hierarchy is
     // checked at most once.
     let mut checked = HashSet::new();
-    let mut preview_set = HashSet::new();
-    let mut previews = Vec::new();
+    let mut ownerless_set = HashSet::new();
+    let mut ownerless = Vec::new();
     loop {
         if prefix_count < candidate_count {
             candidates.select_nth_unstable_by(prefix_count, &mut compare);
@@ -456,18 +471,20 @@ fn select_bounded_sim_prim_work<T>(
         let mut eligible_count = 0;
         for candidate in candidates.iter().take(prefix_count) {
             let entity = entity_of(candidate);
-            if checked.insert(entity) && is_preview(entity) {
-                preview_set.insert(entity);
-                previews.push(entity);
+            if checked.insert(entity) && has_no_simulation_owner(entity) {
+                ownerless_set.insert(entity);
             }
-            if !preview_set.contains(&entity) {
+            if !ownerless_set.contains(&entity) {
                 eligible_count += 1;
             }
         }
-        if eligible_count >= maximum || prefix_count == candidate_count {
+        if eligible_count >= maximum
+            || ownerless_set.len() >= ownerless_maximum
+            || prefix_count == candidate_count
+        {
             break;
         }
-        // Earlier authored paths were previews; widen the window to find the
+        // Earlier authored paths had no simulation owner; widen the window to find the
         // same bounded count of simulation-owned work.
         prefix_count = prefix_count
             .saturating_mul(2)
@@ -481,7 +498,12 @@ fn select_bounded_sim_prim_work<T>(
     prefix.sort_by(&mut compare);
     for candidate in prefix {
         let entity = entity_of(&candidate);
-        if preview_set.contains(&entity) {
+        if ownerless_set.contains(&entity) {
+            if ownerless.len() < ownerless_maximum {
+                ownerless.push(entity);
+            } else {
+                deferred.push(entity);
+            }
             continue;
         }
         if selected.len() < maximum {
@@ -491,7 +513,7 @@ fn select_bounded_sim_prim_work<T>(
         }
     }
     deferred.extend(candidates.iter().map(&mut entity_of));
-    (selected, deferred, previews)
+    (selected, deferred, ownerless)
 }
 
 impl Default for PendingUsdSimPrimWork {
@@ -532,6 +554,21 @@ impl JointTopologyIndex {
                 && topology.simulation_candidates_ready
                 && topology.canonical_generation == Some(generation)
         })
+    }
+
+    fn has_no_simulation_work(
+        &self,
+        stage: bevy::asset::AssetId<UsdStageAsset>,
+        generation: u64,
+        path: &str,
+        instanced: bool,
+    ) -> bool {
+        !instanced
+            && self.is_current(stage, generation)
+            && self
+                .by_stage
+                .get(&stage)
+                .is_some_and(|topology| !topology.simulation_candidates.contains(path))
     }
 
     fn has_committed(&self, stage: bevy::asset::AssetId<UsdStageAsset>) -> bool {
@@ -1046,6 +1083,8 @@ mod runtime_safety_tests {
 
 impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
+        app.register_type::<PhysicalWheel>();
+        app.init_resource::<UsdSimulationProjectionSettings>();
         if !app.is_plugin_added::<lunco_core_runtime::AsyncWorkAdmissionPlugin>() {
             app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
         }
@@ -1212,7 +1251,10 @@ fn process_usd_sim_prims(
             Without<UsdSimProcessed>,
         ),
     >,
-    mut pending: ResMut<PendingUsdSimPrimWork>,
+    projection_work: (
+        ResMut<PendingUsdSimPrimWork>,
+        Res<UsdSimulationProjectionSettings>,
+    ),
     all_prims: Query<(
         Entity,
         &UsdPrimPath,
@@ -1234,6 +1276,7 @@ fn process_usd_sim_prims(
     mut physics_holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut runtime_diagnostics: ResMut<lunco_core::RuntimeDiagnostics>,
 ) {
+    let (mut pending, settings) = projection_work;
     let JointTopologyPreparationParams {
         index: mut topology_index,
         tasks: mut topology_tasks,
@@ -1243,6 +1286,16 @@ fn process_usd_sim_prims(
         stages,
         asset_server,
     } = stage_identity;
+    if settings.max_simulation_prims_per_update == 0 || settings.max_ownerless_prims_per_update == 0
+    {
+        runtime_faults.raise(
+            "usd-sim-projection-budget",
+            None,
+            "usd-sim",
+            "USD simulation projection requires nonzero simulation and ownerless work limits",
+        );
+        return;
+    }
     let started = web_time::Instant::now();
     let mut processed = 0usize;
     let mut authored_diagnostics = Vec::new();
@@ -1377,21 +1430,34 @@ fn process_usd_sim_prims(
                         .unwrap_or(false)
             });
         }
-        let (unprocessed, deferred, previews) = select_bounded_sim_prim_work(
+        let (unprocessed, deferred, ownerless) = select_bounded_sim_prim_work(
             candidates,
-            MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE,
+            settings.max_simulation_prims_per_update,
+            settings.max_ownerless_prims_per_update,
             |candidate| candidate.item.0,
             compare_stable_usd_sim_work,
             |entity| {
-                preview_cache
+                let preview = preview_cache
                     .get(&entity)
                     .copied()
-                    .unwrap_or_else(|| is_preview_only(entity, &q_child_of, &q_preview_only))
+                    .unwrap_or_else(|| is_preview_only(entity, &q_child_of, &q_preview_only));
+                preview
+                    || query.get(entity).is_ok_and(|item| {
+                        let stage = item.1.stage_handle.id();
+                        topology_index.has_no_simulation_work(
+                            stage,
+                            canonical.generation_for(stage),
+                            &item.1.path,
+                            item.6.is_some(),
+                        )
+                    })
             },
         );
         pending.0.extend(deferred);
-        // Preview prims have no simulation owner and need no stage topology.
-        for entity in previews {
+        // Preview prims and current topology-proven visual-only prims have no
+        // simulation work. Publish their marker in stable prefix order without
+        // delaying the bounded admission of real simulation participants.
+        for entity in ownerless {
             commands.entity(entity).try_insert(UsdSimProcessed);
         }
         unprocessed
@@ -1643,15 +1709,18 @@ fn process_usd_sim_prims(
             pending.0.queue(entity);
             continue;
         };
-        let (reader, _generation) =
+        let (reader, generation) =
             canonical.reader_for_entity(id, stage_asset, instance_projection);
         let Some(topology) = topology_index.get(id) else {
             pending.0.queue(entity);
             continue;
         };
-        if instance_projection.is_none()
-            && !topology.simulation_candidates.contains(&prim_path.path)
-        {
+        if topology_index.has_no_simulation_work(
+            id,
+            generation,
+            &prim_path.path,
+            instance_projection.is_some(),
+        ) {
             // Keep readiness accounting complete without running USD readers
             // for a prim whose schemas and authored properties have no sim owner.
             commands.entity(entity).try_insert(UsdSimProcessed);
@@ -4403,6 +4472,7 @@ mod pending_sim_work_tests {
             let (selected, deferred, _) = select_bounded_sim_prim_work(
                 candidates,
                 1,
+                128,
                 |candidate| candidate.item.0,
                 compare_stable_usd_sim_work,
                 |_| false,
@@ -4487,6 +4557,7 @@ mod pending_sim_work_tests {
         let (selected, deferred, _) = select_bounded_sim_prim_work(
             vec![second_instance, first_instance],
             1,
+            128,
             |candidate| candidate.item.0,
             compare_stable_usd_sim_work,
             |_| false,
@@ -4543,6 +4614,79 @@ mod pending_sim_work_tests {
     }
 
     #[test]
+    fn ownerless_admission_requires_current_noninstance_topology() {
+        let stage = bevy::asset::AssetId::<UsdStageAsset>::default();
+        let mut topology = JointTopologyIndex::default();
+        let mut prepared = StageJointTopology::default();
+        prepared.simulation_candidates_ready = true;
+        prepared.simulation_candidates.insert("/Body".into());
+        topology.commit_prepared(stage, 4, prepared);
+        assert!(topology.has_no_simulation_work(stage, 4, "/Visual", false));
+        assert!(!topology.has_no_simulation_work(stage, 4, "/Body", false));
+        assert!(!topology.has_no_simulation_work(stage, 5, "/Visual", false));
+        assert!(!topology.has_no_simulation_work(stage, 4, "/Visual", true));
+
+        for reverse in [false, true] {
+            let mut candidates = (0..40)
+                .chain(100..103)
+                .map(|rank| {
+                    (
+                        Entity::from_bits(rank + 1),
+                        rank,
+                        if rank < 40 { "/Visual" } else { "/Body" },
+                    )
+                })
+                .collect::<Vec<_>>();
+            if reverse {
+                candidates.reverse();
+            }
+            let (selected, deferred, ownerless) = select_bounded_sim_prim_work(
+                candidates,
+                2,
+                128,
+                |candidate| candidate.0,
+                |left, right| left.1.cmp(&right.1),
+                |entity| {
+                    topology.has_no_simulation_work(
+                        stage,
+                        4,
+                        if entity.to_bits() <= 40 {
+                            "/Visual"
+                        } else {
+                            "/Body"
+                        },
+                        false,
+                    )
+                },
+            );
+            assert_eq!(
+                selected
+                    .iter()
+                    .map(|candidate| candidate.1)
+                    .collect::<Vec<_>>(),
+                [100, 101]
+            );
+            assert_eq!(deferred, [Entity::from_bits(103)]);
+            assert_eq!(
+                ownerless,
+                (1..=40).map(Entity::from_bits).collect::<Vec<_>>()
+            );
+        }
+        let candidates = (1..=20).map(Entity::from_bits).collect::<Vec<_>>();
+        let (selected, deferred, ownerless) =
+            select_bounded_sim_prim_work(candidates, 2, 4, |entity| *entity, Entity::cmp, |_| true);
+        assert!(selected.is_empty());
+        assert_eq!(
+            ownerless,
+            (1..=4).map(Entity::from_bits).collect::<Vec<_>>()
+        );
+        assert_eq!(deferred.len(), 16);
+        topology.mark_stale(stage);
+        assert!(!topology.has_no_simulation_work(stage, 4, "/Visual", false));
+        assert!(!JointTopologyIndex::default().has_no_simulation_work(stage, 4, "/Visual", false));
+    }
+
+    #[test]
     fn preview_prims_do_not_consume_bounded_simulation_admission() {
         let preview_entities = (0..40)
             .map(|rank| Entity::from_bits(rank + 1))
@@ -4555,6 +4699,7 @@ mod pending_sim_work_tests {
         let (selected, deferred, preview_only) = select_bounded_sim_prim_work(
             candidates,
             2,
+            128,
             |candidate| candidate.0,
             |left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)),
             |entity| preview_entities.contains(&entity),
@@ -4584,6 +4729,7 @@ mod pending_sim_work_tests {
         let (selected, deferred, previews) = select_bounded_sim_prim_work(
             candidates,
             2,
+            128,
             |candidate| candidate.0,
             |left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)),
             |entity| {

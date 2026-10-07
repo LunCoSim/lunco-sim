@@ -1436,6 +1436,15 @@ where
     /// The document backing `path`, if that file is open. **The path IS the
     /// identity** of a file-backed document.
     pub fn doc_for_file(&self, path: &std::path::Path) -> Option<DocumentId> {
+        // Most callers already hold the document's canonical path. Complete
+        // the cheap pass before resolving aliases of unrelated open files.
+        if let Some(id) = self.ids().find(|id| {
+            self.host(*id)
+                .and_then(|host| host.document().origin().canonical_path())
+                == Some(path)
+        }) {
+            return Some(id);
+        }
         self.ids().find(|id| {
             self.host(*id)
                 .and_then(|h| match h.document().origin() {
@@ -1973,6 +1982,33 @@ mod tests {
         let host = registry.host(doc).unwrap();
         assert_eq!(host.document().source, "fourth");
         assert_eq!(host.undo_depth(), 0);
+    }
+
+    #[test]
+    fn file_lookup_tracks_exact_origins_without_a_stale_path_index() {
+        let mut registry = DocumentRegistry::<RegistryDocument>::default();
+        let first = std::path::PathBuf::from("/document-identity-test/first.txt");
+        let second = std::path::PathBuf::from("/document-identity-test/second.txt");
+        let renamed = std::path::PathBuf::from("/document-identity-test/renamed.txt");
+        let (first_id, _) = registry.open_file(first.clone(), "first".into());
+        let (second_id, _) = registry.open_file(second.clone(), "second".into());
+        assert_eq!(registry.doc_for_file(&first), Some(first_id));
+        assert_eq!(registry.doc_for_file(&second), Some(second_id));
+        registry
+            .apply(second_id, RegistryOp::Replace("draft".into()))
+            .unwrap();
+        let (reopened, outcome) = registry.open_file(second.clone(), "disk".into());
+        assert_eq!(reopened, second_id);
+        assert_eq!(outcome, lunco_doc::OpenOutcome::KeptDirty);
+        assert_eq!(registry.host(second_id).unwrap().document().source, "draft");
+        registry.host_mut(second_id).unwrap().document_mut().origin = DocumentOrigin::File {
+            path: renamed.clone(),
+            writable: true,
+        };
+        assert_eq!(registry.doc_for_file(&second), None);
+        assert_eq!(registry.doc_for_file(&renamed), Some(second_id));
+        registry.remove_document(second_id);
+        assert_eq!(registry.doc_for_file(&renamed), None);
     }
 
     #[test]

@@ -573,7 +573,8 @@ active document or constructs another resolver/cache.
 `InspectUsdViewport` is the read-only presentation query for the same
 headful session. It reports the focused preview/view pair and every explicit
 preview lease with its document, edit target, projected generation, and
-independent view ids. Each view also reports its measured image rectangle in
+independent view ids. Each view reports orbit target, yaw, pitch, distance,
+projection and orthographic scale, plus its measured image rectangle in
 physical pixels and the primary window scale factor when available; Rhai mouse
 tests can derive logical coordinates from the live dock layout. An agent
 correlates this typed state with `CaptureScreenshot` and `view_image` before

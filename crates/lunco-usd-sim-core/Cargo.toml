@@ -8,6 +8,7 @@ description = "Shared USD simulation projection contracts"
 [dependencies]
 bevy_ecs = { workspace = true }
 bevy_math = { workspace = true }
+bevy_reflect = { workspace = true }
 lunco-mobility = { path = "../lunco-mobility" }
 
 [lints]

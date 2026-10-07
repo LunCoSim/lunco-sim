@@ -85,6 +85,22 @@ scans may overlap, their typed results commit in open order, and closing a Twin
 retires its pending result. Keep UI and physics responsive while scans are
 pending.
 
+USD browser selections dispatch `OpenUsdSourceDocument`: an inspection preview
+must not replace the active Twin or enter its physics world. The USD command
+owner resolves and prepares the exact source asynchronously. `OpenFile` retains
+its explicit file/workspace-opening intent; do not use it to inspect additional
+USD layers in a running scene. The production `usd_source_isolation.rhai` gate
+checks successful previews and rejected sources against the live Twin and
+physics topology.
+
+The LunCo Library browser consumes `AssetManifest::revision()` instead of
+hashing the full library inventory in paint. The USD Prim tree caches its open
+row index for the preview, stage/document generation, and selected reveal path.
+Disclosure changes invalidate that index. It paints only the scroll viewport's
+rows through the shared tree controls, retaining preview-scoped expansion,
+selection, and visibility commands; revealing a new selection also sets the
+scroll offset when its row is offscreen.
+
 The application-wide recent Twin/file list follows the same boundary. Read the
 config record, decode it, canonicalize its paths, and perform cleanup or later
 saves on a worker; commit the typed list during `Update`. If a Twin or loose
@@ -157,6 +173,14 @@ transition-driven: stable visible previews are not disabled/re-enabled each
 frame. Their measured rect updates `UsdViewportState` only when it actually
 changes, so camera presentation does not reopen preview subtree walks on idle
 frames.
+
+The SysML requirements projection compares the active Twin's identity, root,
+manifest, and indexed files when the workspace changes. Document focus and
+unrelated USD tabs do not invalidate this source-backed model. SysML analysis,
+document, and evidence registries retain their own invalidation boundaries;
+Twin replacement clears the projection. Source-document linking uses the
+document registry's file-identity lookup, whose exact-path pass precedes alias
+resolution. No panel maintains a second filesystem identity cache.
 
 Physics has the same frame-budget boundary even though its consumer is not UI.
 Avian's collider-tree optimizer may use a worker task, but Avian joins that task
@@ -282,7 +306,8 @@ package — none of these belong on the UI thread every frame. Patterns:
   entities. Validate the selected active grid with a direct entity lookup.
 - **Builder tree rows**: retain each panel's flattened visible-row index and
   rebuild it only when its source revision, filter/scope options, or expansion
-  state changes. The shared `tree::branch` reports disclosure changes so the
+  state changes. The shared `tree::branch_header` paints one fixed-height row
+  without an indented body and reports disclosure changes so the
   panel can invalidate its index without querying every branch on every paint.
   Reuse the row vector's capacity. `ScrollArea::show_rows` still creates the
   interactive egui widgets for the viewport each frame; those widgets consume

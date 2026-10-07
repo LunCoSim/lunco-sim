@@ -41,10 +41,6 @@ fn row_size(ui: &egui::Ui, width: f32) -> [f32; 2] {
 /// active search results) and cannot be closed by a user click until the
 /// caller stops supplying the forced value.
 ///
-/// The returned state lets a virtualized panel render a branch header in one
-/// pass and its body in another without introducing a second disclosure
-/// implementation. `changed` lets a panel invalidate a cached visible-row
-/// index after the user expands or collapses a branch.
 pub fn branch(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -53,6 +49,38 @@ pub fn branch(
     add_header: impl FnOnce(&mut egui::Ui) -> bool,
     add_body: impl FnOnce(&mut egui::Ui),
 ) -> BranchState {
+    let (state, header_rect) = paint_branch_header(ui, id, default_open, open, add_header);
+    if state.is_open {
+        ui.indent(id, |ui| {
+            ui.expand_to_include_x(header_rect.right());
+            add_body(ui);
+        });
+    }
+    state
+}
+
+/// Paint only a branch's disclosure and header, allocating one row regardless
+/// of expansion. Virtualized trees paint descendants through their flat row
+/// index, so they must not allocate an indented body here. `changed` invalidates
+/// that index after a user disclosure action. State and controls are shared
+/// with [`branch`].
+pub fn branch_header(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    default_open: bool,
+    open: Option<bool>,
+    add_header: impl FnOnce(&mut egui::Ui) -> bool,
+) -> BranchState {
+    paint_branch_header(ui, id, default_open, open, add_header).0
+}
+
+fn paint_branch_header(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    default_open: bool,
+    open: Option<bool>,
+    add_header: impl FnOnce(&mut egui::Ui) -> bool,
+) -> (BranchState, egui::Rect) {
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
         id,
@@ -80,17 +108,14 @@ pub fn branch(
         state.set_open(open);
     }
     let is_open = state.is_open();
-    if is_open {
-        ui.indent(id, |ui| {
-            ui.expand_to_include_x(header.response.rect.right());
-            add_body(ui);
-        });
-    }
     state.store(ui.ctx());
-    BranchState {
-        is_open,
-        changed: was_open != is_open,
-    }
+    (
+        BranchState {
+            is_open,
+            changed: was_open != is_open,
+        },
+        header.response.rect,
+    )
 }
 
 /// Render one full-width leaf row using the same horizontal allocation as a
@@ -147,4 +172,39 @@ pub fn selectable_label(
         .right_text(egui::Atom::grow())
         .truncate(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn virtualized_disclosure_has_one_row_stride() {
+        let context = egui::Context::default();
+        let mut strides = Vec::new();
+        let _ = context.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                lunco_theme::TypographyScale::default().apply_to_style(ui.style_mut());
+                let expected = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+                for open in [false, true] {
+                    let start = ui.cursor().top();
+                    super::branch_header(
+                        ui,
+                        egui::Id::new(("row", open)),
+                        open,
+                        Some(open),
+                        |ui| {
+                            super::label(ui, "branch", ui.available_width(), egui::Sense::click())
+                                .clicked()
+                        },
+                    );
+                    strides.push((expected, ui.cursor().top() - start));
+                }
+            });
+        });
+        for (expected, actual) in strides {
+            assert!(
+                (expected - actual).abs() < 0.01,
+                "expected {expected}, allocated {actual}"
+            );
+        }
+    }
 }

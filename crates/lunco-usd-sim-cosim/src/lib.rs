@@ -2288,6 +2288,7 @@ impl Plugin for UsdSimCosimPlugin {
             .init_resource::<lunco_usd_sim_domain::MemberClasses>()
             .init_resource::<lunco_usd_sim_domain::DomainClassUsers>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjections>()
+            .init_resource::<lunco_usd_sim_domain::DomainProjectionPublicationSettings>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjectionCandidates>()
             .init_resource::<lunco_usd_sim_domain::AuthoredTelemetryIndexes>()
             .init_resource::<lunco_usd_sim_domain::PendingGeneratedSourceDocuments>()

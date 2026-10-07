@@ -362,6 +362,12 @@ the integrator state.
    field, so a worker-local generation counter does not prevent reuse across
    launches.
 
+   Generated-network compile requests use only their synthesized document and
+   admitted roots. Their bundled `generated/` filenames use the runtime owner's
+   provenance classifier for structural reuse. Unrelated open documents and
+   other generated-network completions do not enter their source identity;
+   authored multi-document compilation still includes its sibling sources.
+
    Live solve-IR lowering is an immutable operation over the compiled DAE, so
    native startup submits cache misses to a small bounded Rayon pool. The
    worker thread remains the sole owner of compiler/session state and commits

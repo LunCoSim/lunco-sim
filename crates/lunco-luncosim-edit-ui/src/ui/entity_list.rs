@@ -1004,7 +1004,7 @@ fn render_node_row(
 
     let mut header_select = None;
     let mut header_focus = None;
-    let branch_state = lunco_workbench_widgets::tree::branch(
+    let branch_state = lunco_workbench_widgets::tree::branch_header(
         ui,
         id,
         lunco_workbench_widgets::tree::default_open_at_depth(row.depth),
@@ -1021,7 +1021,6 @@ fn render_node_row(
                 &mut header_focus,
             )
         },
-        |_| {},
     );
     *tree_changed |= branch_state.changed;
     if header_select.is_some() {

@@ -10596,6 +10596,7 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "bevy_math",
+ "bevy_reflect",
  "lunco-mobility",
 ]
 

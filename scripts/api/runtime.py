@@ -147,6 +147,22 @@ class ProductionSession:
     def post(self, payload: dict[str, Any]) -> dict[str, Any]:
         return request_json(self.port, payload)
 
+    def capture_screenshot(self, path: Path, timeout_s: float = 10) -> None:
+        """Require a newly published capture before shutting down this session."""
+        path = path.resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        started = time.time_ns()
+        response = self.post({"type": "ExecuteCommand", "command": "CaptureScreenshot",
+                              "params": {"save_to_file": True, "path": str(path)}})
+        if response.get("error"):
+            raise RuntimeError(f"CaptureScreenshot: {response}")
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if path.is_file() and path.stat().st_mtime_ns >= started:
+                return
+            time.sleep(.05)
+        raise RuntimeError(f"Screenshot was not published: {path}")
+
     def close(self) -> None:
         if self.process is None:
             return

@@ -77,6 +77,8 @@ impl ApiQueryProvider for InspectUsdViewportProvider {
                             "text_layer": view.text_layer().as_str(),
                             "projection": view.projection().as_str(),
                             "target": api_value!(view.orbit().target.to_array()),
+                            "yaw": view.orbit().yaw,
+                            "pitch": view.orbit().pitch,
                             "distance": view.orbit().distance,
                             "orthographic_scale": view.orthographic_scale(),
                             "image_rect": view.interactive_rect().map(|rect| api_value!({

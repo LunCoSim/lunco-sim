@@ -45,6 +45,377 @@ later regression.
 
 ## Current implementation
 
+### 2026-10-07 — integration and evidence refresh
+
+Optimization was fast-forwarded to local main `7a20f4f8c` before the saved
+changes were reapplied. The integrated tree includes `af6e0f7bf` and the
+current pressure-fed propulsion models. The old Griffin failure below needs
+a new run against this solver; it is neither a current failure verdict nor
+evidence that the solver update fixes it.
+
+The focused Modelica worker, SysML UI, USD domain and scripting test-target
+compile check passed. Integration updated the worker test to the pinned
+document runtime owner and added the current optional member-path input to
+eight inline hook-synthesizer contexts. Main's typed bounded persistent-cache
+rejections remain authoritative.
+
+A measured egui layout regression showed that an expanded header allocated
+24 pixels against a 21-pixel virtualized row stride. Both virtualized tree
+consumers now use the shared header-only disclosure path. Its layout seam
+passes for open and closed branches. The editor diagnostic now records orbit
+yaw/pitch and rejects changed viewport geometry, late readiness waits, runtime
+faults, topology changes and physics stalls between one-second checkpoints.
+Four negative Python guard tests pass. The source-isolation Rhai gate has a
+checked-in production invocation supplying its exact source and selection
+parameters through `RunScenarioAsset`.
+
+The merged production binary passed sandbox smoke (7/7) on owned API 49128.
+Source-isolation gates passed (8/8 each) on owned API 49127 for both an already
+open source and `assets/vessels/rovers/skid_rover.usda` outside the running
+Twin's folder. The new-source screenshot shows the rendered rover and the
+selected `/SkidRover/Motor_RR` row revealed through its hierarchy. These
+sessions exited through their API and released their ports. Logs and exact
+screenshot metadata are under `target/perf/*merge-20261007*`.
+
+The first longer paired Editor diagnostic on API 49129 preserved camera,
+viewport geometry, Twin, preview population and physics topology, advancing
+219–233 physics steps per four-second window. Sampled frame medians were
+7.27–11.35 ms; recent physics steps were approximately 1–3 ms. Other checkout
+builds and a simulator overlapped this run. It also exposed
+`telemetry-event-overflow`: the no-actor driver returned before draining its
+neutral inbox. That run is excluded from acceptance. The scripting owner now
+discards unobservable idle traffic, preserves another language's pending
+consumers, and retains overflow fault semantics and sequence numbering. The
+idle-drain, overflow-diagnostic, reverse-completion and pre-start event seams
+pass. The diagnostic driver checks `RuntimeDiagnostics` at each measurement
+checkpoint so a nonterminal event-delivery hold invalidates the window even
+when physics continues and readiness stays green.
+
+The post-fix paired run waited 90 seconds before measuring and completed all
+eight windows with zero retained runtime errors at every checkpoint. Camera,
+geometry, Twin and topology checks stayed stable and each window advanced
+72–189 physics steps. Logs, samples, screenshots and 29 process-workload
+snapshots are retained under `target/perf/*final-20261007*`. Concurrent builds
+substantially affected this run (sampled frame medians 22.89–98.18 ms); it proves
+healthy idle event admission and guarded editor operation, not FPS or physics
+acceptance. The regenerated merged runtime command reference is unchanged at
+262 commands. The post-fix production source-isolation gate also passed 8/8
+with diagnostic findings included in its assertions; its screenshot reveals
+`/SkidRover/Motor_RR` in the virtualized tree. That owned API 49127 session
+exited and released the port. Evidence is in
+`target/perf/source-isolation-final-pass-20261007.*`.
+
+Library-default warnings also show conflicting leaf names from independent
+Modelica classes (`enabled`, `available_fuel_mass_kg`, and
+`available_oxidizer_mass_kg`). The current compiler combines library defaults
+by unqualified input name and the worker can match multiple qualified slots
+by that suffix. Class-scoped default resolution needs a separate owning
+compiler/worker change and validation; changing model input names would not
+repair that ownership problem. Fresh Griffin acceptance remains open.
+
+Earlier dated measurements are historical diagnostics. Their raw captures,
+logs and screenshots are absent from this checkout's current `target/`, so
+they cannot be re-inspected here. Uncontended FPS/physics and startup
+acceptance remain required; no historical number is promoted to current
+acceptance by this merge.
+
+### 2026-10-05 — bounded editor and live-exchange work
+
+Four application-owned changes preserve the existing mechanisms and policy:
+
+- `lunco-sysml-ui` compares the active Twin identity, root, manifest, and file
+  index before treating a workspace notification as projection invalidation.
+  SysML source, analysis, and evidence changes still invalidate the view.
+- `lunco-doc-bevy` checks every exact file origin before resolving aliases;
+  SysML source links use that canonical registry lookup. There is no parallel
+  path index, and document origins remain authoritative after rename/close.
+- `lunco-scripting` borrows unchanged script documents during preparation and
+  copies worker inputs only for admitted compile/retry work. Eligibility,
+  submission order, result admission, and lifecycle commits are unchanged.
+- `lunco-port-core` prepares a resolved input write once and commits within
+  that exclusive World boundary. It avoids a second live validation and a
+  single-element batch allocation. Validation ordering, rejected-write results,
+  f64 values, precedence, stale handles, and batch atomicity are retained.
+
+The named SysML workspace-focus, document-origin lookup, resolved-input safety,
+and reverse-worker-completion lifecycle seam tests pass. The last test forces
+`beta` to finish before `alpha` and verifies ordered `alpha, beta` commits.
+These are focused mechanism checks, not whole-runtime determinism acceptance.
+
+Owned High-quality Tracy sessions on API `4101` exercised Summer Space School's
+`traverse_apollo15.usda` and lunar-base-model's `griffin_flip_visual.usda`.
+The Griffin Requirements, Traceability, and Structure screenshots retain 424
+requirement elements, 23 sources, and 342 structural elements. With ten USD
+editors retained, the trace contains no workspace-only SysML rebuild during
+editor opening/focus. The one remaining workspace-only call is Twin admission
+at trace time 1.109 s, taking 0.055 ms. The baseline had 12 such calls totaling
+450.319 ms (37.527 ms mean). Mounted counts remain 17 bodies and 18 colliders;
+the failed Griffin participant holds its dynamic bodies, so these counts do
+not certify full Griffin physics behavior.
+
+Whole-capture self-time diagnostics, in milliseconds per call:
+
+| Owner work | Apollo baseline / updated | Griffin baseline / updated |
+| --- | ---: | ---: |
+| Port propagation | 0.5235 / 0.3367 | 2.7584 / 1.7674 |
+| Rhai compile preparation | 0.0809 / 0.0539 | 0.2920 / 0.2832 |
+
+These captures have different startup cache state and UI-window durations;
+they are owner-level diagnostics, not product FPS acceptance. Another terrain
+simulator was active throughout; a sibling Cargo build also overlapped the
+aborted UI attempt, whose frame numbers are excluded. Griffin later reaches
+tick 3600 without further steps, so its retained physics history after that
+point is not fresh measurement of five/ten-editor windows. The maintained
+`usd_editor_tabs.py --compare-first` driver records advanced steps per window
+and keeps the first Visual camera fixed as more source documents stay open.
+
+Apollo's full-ready transition was 10.526 s after Twin open in the cold baseline
+and 1.756 s in the warm updated capture, validated by a five-second soak.
+The baseline lowered three solve models (largest worker span 8.482 s); the warm
+capture used disk cache and has no lowering spans. The cache was not changed,
+so this is not evidence of a cold-start optimization. Both app window and API
+health were available within two seconds of process launch.
+
+The historical Griffin run was blocked by unavailable `PressureFedValve.mo`
+and `PressureFedCombustionChamber.mo` assets required by MainPropulsion.
+UI-only captures retained that explicit `program_failed` item. Both assets
+are present after the current main integration; full Griffin readiness still
+needs a fresh verdict. The exact isolated FLIP scene is the narrower
+lunar-base-model full-readiness fixture.
+
+Artifacts are under `target/apollo-{baseline,post}-20261005.json*` and
+`target/griffin-editors-{baseline,post-complete}-20261005.json*`; the corresponding
+self-time/rebuild exports are in `target/*self.tsv` and
+`target/griffin-editors-post-complete-rebuilds.tsv`. The updated Apollo
+`editor_preview` window requested an incorrect source path and is excluded;
+its four View/Builder/Editor/return windows are valid. Unprofiled acceptance and
+production behavior checks are recorded separately below when complete.
+
+### 2026-10-05 — sandbox loading priority
+
+Loading was the first acceptance gate, before FPS or Griffin ramp unfolding
+work. The sandbox baseline reached full readiness in 12.170 s from
+launch. Repeated warm launches varied from 3.033 to 9.611 s despite identical
+generated source text: generated compile requests captured unrelated open
+Modelica documents as siblings, so asynchronous publication changed the
+persistent solve-cache key. The production document origin also uses the
+reserved `generated/` filename namespace. Structural sharing now recognizes
+that authoritative runtime provenance, and generated compiles carry only their
+complete generated source plus the existing admitted class roots. Authored
+multi-document compilation remains unchanged. Numeric equations and graphic
+coordinates remain part of structural identity.
+
+Both focused `lunco-modelica-worker` tests selected by `generated_` pass. Warm
+diagnostic launches use disk solver IR without lowering. The subsequent owned,
+unprofiled High-quality sandbox run still took 5.290 s from launch, so the
+two-second loading target is not accepted. A sibling simulator remained live;
+no other session was stopped to improve this number.
+
+The vehicle projector now checks its existing current-generation topology
+classification before charging ordinary visual-only prims to simulation
+admission. The simulation-bearing prefix remains 32; independently bounded
+ownerless markers publish in stable order. Missing/stale topology and runtime
+instances cannot use that fast path. The named
+`ownerless_admission_requires_current_noninstance_topology` test passes,
+including reverse candidates, marker bounds, stale facts, and instance
+exclusion. The owned unprofiled sandbox run with this change reached stable
+full readiness in 3.311 s from launch (health at 0.719 s), and the production
+Rhai smoke scenario passed all seven checks. Subsequent preserve-edits
+`RestartScene` operations reached stable full readiness in 1.143 and 0.989 s;
+these hot reloads do not certify the two-second fresh-launch target.
+
+The sandbox scenario now declares the wheel/pose entities it reads. Its
+physical-wheel inspection uses the same reflected `PhysicalWheel` component
+registered by the vehicle plugin. Earlier application-owned diagnostic
+scenario launches failed 1/7 checks and are not passing behavior evidence;
+scene USD queries require the real Twin-owned simulation route. The task-local
+driver obtains that validated owner from the existing tool-library query
+instead of assuming a Twin ID. The Twin-owned production run passes wheel
+realization, composed topology, ground/ramp, visual metadata, wiring,
+oscillator, and fixed-joint checks (`TESTS_OK 7`). This is not the separate
+serial/default-thread determinism comparison.
+
+Domain discovery now excludes ordinary content-GID lifecycle edges, which do
+not enter the shared Modelica instance namespace. The focused
+`domain_discovery_observers_admit_only_identity_dependent_namespaces` test
+passes content exclusion, path admission, instance identity add/remove, and
+unsettled/derived provenance. Stage/source and instance-projection events keep
+their existing invalidation routes. The owned production sandbox smoke still
+passes 7/7 after this change; its unprofiled launch took 4.083 s, followed by a
+1.163 s preserve-edits restart. A diagnostic warm launch confirms seven
+initial network discoveries and no duplicate discoveries, reaching readiness
+in 2.647 s from launch / 1.896 s after Twin open. These measurements do not
+yet accept a two-second fresh-process launch, and another simulator remained
+running during them.
+
+The bounded initial-publication change passes
+`initial_domain_publication_requires_a_hold_and_distinct_roots`. It batches
+only roots without an installed projection that still own their initial
+fixed-clock hold; live replacements retain the one-per-Update limit. The
+owned unprofiled, uncontended High sandbox run reached readiness in 2.815 s
+from launch / 1.465 s after Twin open, with a 0.758 s preserve-edits restart.
+The seven production Rhai checks pass and the generated source is exactly
+equal to the previous passing run. This restores the under-two-second scene
+loading milestone, not a two-second complete fresh-process launch. FPS and
+Griffin ramp tests follow that scene-load milestone.
+
+The separate filtered startup Tracy capture contains seven synthesis calls
+(81.998 ms total self time), a 0.228 ms maximum publication-system body, and
+877.257 ms renderer-plugin construction. Source-root and compile publication
+remain ordered. Its repeated Core3d schedules include Bevy auxiliary local
+light shadow views. The subsequent API camera audit reports one active scene
+camera and zero USD previews; that audit used the Tracy-enabled executable
+and is not unprofiled performance acceptance.
+
+Griffin ramp unfolding follows the restored scene-loading milestone. No
+ramp-motion FPS claim is made from static inspection or held-propulsion captures.
+All application outputs removed during disk recovery were generated in this
+checkout; authored source, sibling worktrees, and shared caches were retained.
+
+### 2026-10-06 — admitted Apollo FPS and source-preview isolation
+
+The separate owned, unprofiled High Apollo run has no competing simulator or
+Cargo build. API-deduplicated frame medians were 4.567 ms in View, 7.274 ms in
+Builder, and 4.259 ms in Editor; the movement/rotation window measured 5.101 ms
+median and 9.856 ms maximum. Native input produced 89.660 m of displacement and
+a 90-degree turn. Physics advances throughout; whole-step medians were
+0.389–0.420 ms, but tails exceed 0.5 ms. These sampled windows do not certify
+every rendered frame or the complete 150 FPS / 0.5 ms target. The first Apollo
+launch after the cache-key change took 8.554 s; a later diagnostic launch shows
+all three solver IR disk hits. All-Twin two-second loading remains unaccepted.
+
+The initial ten-editor driver incorrectly used `OpenFile` for external USD
+sources. Its first open replaced the active Twin and stopped physics. That
+window is rejected, not reported as editor FPS acceptance. USD browser actions
+now dispatch the existing `OpenUsdSourceDocument` inspection intent. The named
+browser-outbox seam test passes; non-USD browser actions remain available to
+their owner. The driver uses the same source-only command and rejects windows
+without new physics steps. The authored `usd_source_isolation.rhai` production
+gate covers successful preview and invalid-source isolation.
+The owned Apollo production run passes all seven isolation checks
+(`TESTS_OK 7`, `USD_SOURCE_ISOLATION: PASS`), including new physics steps during
+preview preparation and rejection without changing the document count. Its
+registered scenario URI is `lunco://scenarios/tests/usd_source_isolation.rhai`;
+native filenames are not scenario asset identities. The earlier native-path
+launch was rejected by the asset owner and produced no verdict.
+
+The corrected unprofiled ten-source comparison retains 624 bodies, 618
+colliders, one dynamic body, and advancing physics throughout. Its same-camera
+Visual medians range from 5.631 to 8.887 ms; ten previews measure 8.359 ms.
+Authored/composed text medians are 8.326/8.648 ms. This is not yet editor FPS
+acceptance. The separate 82-second Tracy capture contains no recurring parked
+preview camera rendering or tree re-projection. Local-light shadow views are
+separate from that camera observation. The sidebar Prim tree and Twin browser
+cost about 0.7–0.8 ms each per paint in the one/five/ten-preview windows.
+
+The library browser now consumes its owner's manifest revision, and the Prim
+tree caches open rows and paints only the scroll viewport. Their named
+manifest-revision and visible-row seam tests pass, including replacement,
+empty inventory, descendant reveal, unrelated path rejection, and independent
+preview disclosure state. The source-isolation production gate now also
+checks preview selection alongside invalid-source rejection. These presentation changes
+do not change authoritative clocks or simulation admission.
+
+The eight-check source gate uses the shared Rhai task sequence and reads
+`InspectUsdSelection` in the exact preview lease. Generic scene selection IDs
+are not the preview selection contract. Initial pending selection is waited
+for, not counted as a missing authoritative result. The settled production
+screenshot shows the selected Motor RR row revealed and highlighted.
+
+A fresh 93-second Tracy capture after virtualization measures Prim-tree paint
+self time at 0.232 ms mean (0.771 ms before). Browser paint remains about
+0.739 ms mean. These are whole-capture diagnostics with different window
+durations, not an unprofiled FPS gain. Its paired one/many windows retain the
+same recorded camera target and distance. The maintained driver now explicitly
+frames the settled source, records focused view geometry per window, and
+rejects an equal-camera comparison if its pose changes. Reopening an explicitly
+closed preview uses `OpenUsdPreview`, not a source-document open. The earlier
+comparison without recorded poses cannot prove an equal-camera editor-count
+effect; its physics-advancement evidence remains valid.
+
+The subsequent unprofiled guarded paired run retains exactly the same camera
+pose and advancing physics. Warm one/ten-preview medians are 5.622/8.614 ms,
+so the editor-count penalty remains. Per-window exports of the fresh Tracy
+capture show about three shadow/Core3d passes per frame with one preview and
+17 with ten, while Prim-tree paint stays near 0.26 ms. The parked previews'
+local-light shadow-view work is the next rendering-owner target; these counts
+do not justify disabling shadows in visible views. Artifacts are
+`target/apollo-editor-paired-camera-guard-20261006.*` and
+`target/apollo-editor-virtual-paired-20261006.tracy`.
+
+The rendering-owner trace confirms that parked lights have already lost their
+`ExtractedPointLight`, but their native shadow-view trackers retain graph roots.
+The adapter now retires that tracker through Bevy's cleanup observer when the
+light remains absent at deferred commit. Main-world lights and documents are
+untouched. The named retirement seam test passes, including active-light
+retention and a fresh tracker on re-extraction. The shadow-filter seam covers
+incremental extraction, source shadow-intent changes, layer-disjoint unbounded
+spots, and camera reactivation; all eleven filter tests passed before the
+focused source-intent assertion was extended and passed separately.
+
+In `target/apollo-editor-shadow-lifetime-fixed-20261006.tracy`, the warmed
+one/ten-preview windows each execute three shadow/Core3d roots per frame, rather
+than three/17. The counts are 795/265 and 693/231 shadow-pass/preparation calls;
+the initial ten-preview window has one call crossing its sampling edge. These
+are profiler diagnostics, not FPS acceptance. The settled screenshot after
+text-to-Visual return retains the same assembly and lighting.
+
+The separate uncontended High-quality run in
+`target/apollo-editor-shadow-lifetime-acceptance-20261006.*` records warmed
+one/ten-preview medians of 5.838/5.984 ms, with the same guarded camera pose and
+advancing physics (624 bodies, 618 colliders). The editor-count penalty is now
+0.146 ms rather than 2.992 ms. This is scoped acceptance of the warmed editor
+count, not overall FPS acceptance: p99 is 10.423/10.743 ms and the later
+text-to-Visual return median is 8.273 ms.
+
+The subsequent unprofiled sandbox run reaches full readiness 2.216 s after
+process launch and passes all seven production smoke assertions. Its first
+View/Builder windows have medians of 11.676/11.630 ms; a foreign Cargo build
+overlaps later windows, which are excluded from acceptance. The final screenshot
+was not published before shutdown, so it is not visual evidence. The diagnostic
+driver now waits for a newly published screenshot before closing the session.
+
+The fresh sandbox Tracy capture
+`target/sandbox-fps-tracy-lifetime-20261006.json.tracy` attributes 0.316 ms per
+frame to duplicate standalone Modelica topology publication for co-simulation
+entities. That publisher now matches the standalone backend's
+`Without<SimComponent>` scope. The named generic resource-seam test proves
+co-simulation exclusion, unchanged live samples, and standalone membership
+invalidation. The updated production build passes the seven sandbox smoke
+assertions with no runtime errors in
+`target/sandbox-standalone-owner-final-20261006.json*`. Window creation and API
+health occur 1.914/1.924 s after process launch; full readiness occurs 3.637 s
+after launch, or 1.541 s after the `StartupScene opened` Twin origin, and remains
+clear for the five-second soak. All four screenshots are published before API
+shutdown; the settled return-to-View screenshot retains the scene and shadows.
+The concurrent sibling Cargo test affects the frame windows, so they do not
+establish a clean FPS gain from the final topology-publication change.
+
+The final diagnostic capture
+`target/sandbox-standalone-owner-tracy-20261006.json.tracy` measures the
+standalone topology publisher at 0.0051 ms mean over 1,673 calls, compared with
+0.3158 ms in the preceding sandbox capture. The sibling Cargo build still
+affects whole-frame times; this is owner-cost attribution, not FPS acceptance.
+The earlier disk-recovery run retained original baselines, paired shadow-root
+captures and final sandbox exports at that time. Those artifacts are not
+present in the current checkout; reproducing them requires fresh profiling.
+
+The bounded serial sensor startup run reports `TESTS_OK 58`, first tick 1, and
+actor order PASS, but also reports two Twin-scoped policy manifests under the
+generic test folder and an undeclared sensor actor read. It is not accepted as
+a clean determinism gate. The cross-run serial/default comparison remains open;
+the ordered reverse-worker seam and exact sandbox generated-source comparison
+do not substitute for that runtime acceptance.
+
+The diagnostic Griffin run uses this checkout's owned production executable
+with `LUNCO_ASSET_ROOT` explicitly selecting local main's committed asset
+library. It reaches admission after 49.672 s, then stops physics at step 264:
+the older solver reports non-finite `network_system.NozzleDesign.expansion_ratio`.
+The new physics-step guard rejects the baseline before any unfold command;
+no ramp FPS result is claimed. The committed solver/propulsion update is now
+integrated through main; a fresh Griffin run remains required. No physics
+model was substituted, changed, or bypassed to obtain a performance number.
+
 ### 2026-09-30 — skip hidden status history and performance HUD samples
 
 The status bar previously cloned and rebuilt the complete discrete event

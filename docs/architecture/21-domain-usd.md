@@ -100,10 +100,21 @@ vehicle wheel attachments and gear drives, plus their authored lint facts;
 `lunco-usd-sim-domain-api` owns optional generated-source API queries;
 `lunco-usd-sim` owns vehicle projection and registers its in-place wheel edit
 owner with the generic USD runtime. Prim admission is capped at 32 candidates
-per Update, ordered by authored path with entity identity as the tie-breaker. It
+with simulation work per Update, ordered by stable stage source, instance root,
+and authored prim path. Preview prims and ordinary prims excluded by the
+current-generation topology index do not consume that prefix. Their processed
+markers publish in stable prefix order without USD traversal; stale, missing,
+or runtime-instance topology is never used to skip work. The projector
 selects that prefix without sorting the full pending population and retains the
 remainder for the next pass. This bounds discovery spikes while preserving
 deterministic projection order.
+`UsdSimulationProjectionSettings` keeps simulation and ownerless marker work
+separately bounded (32 and 128 per Update by default); zero limits raise a
+runtime fault before consuming queued work. Neither limit changes physics
+substeps or tick admission.
+The shared `PhysicalWheel` component is registered for normal typed reflection
+by the vehicle plugin, so authored vessel inspection reads the same runtime
+radius contract used by render/editor consumers rather than a parallel query.
 `lunco-usd-sim-shader` owns shader intent
 projection and its port backend; `lunco-usd-sim-cosim` owns participant
 discovery, wiring, readiness, and Modelica/script exchange; and

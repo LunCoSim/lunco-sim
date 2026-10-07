@@ -770,8 +770,12 @@ example, stale-source rejection or a safety-critical missing relationship).
 In the desktop workbench, open **Editor → SysML Requirements** to inspect the
 active Twin, search requirements, filter by evidence, test, and coverage status,
 and open a linked source at its declaration. A failed structured check also
-offers direct navigation to the associated requirement declaration. The detail
-pane initially selects a requirement with a Twin-mapped test when one is
+offers direct navigation to the associated requirement declaration. The view
+projection reacts to active Twin/root/manifest/file-index and SysML domain
+changes, not to unrelated document focus or USD editor tabs. Opening or closing
+USD editors must not rebuild the SysML model; source, evidence, manifest, and
+Twin lifecycle changes must still invalidate it.
+The detail pane initially selects a requirement with a Twin-mapped test when one is
 available. **Run selected tests** runs the distinct mapped cases
 for the selected requirement. **Run all mapped tests** runs each distinct case
 linked from any requirement once, sequentially. The completed suite retains its

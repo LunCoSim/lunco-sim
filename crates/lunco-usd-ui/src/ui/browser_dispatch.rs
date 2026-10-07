@@ -3,9 +3,8 @@
 //!
 //! A browser click means **open and preview this source**, never **replace the
 //! running scene**. A Twin contains reusable vehicle, material, and support
-//! layers as well as scene roots; treating every layer as a `LoadScene` tore
-//! down the current world when a user merely inspected a referenced rover.
-//! Loading a world is an explicit Scenarios action.
+//! layers as well as scene roots. Source inspection uses
+//! [`OpenUsdSourceDocument`]; loading a world is an explicit Scenarios action.
 //!
 //! ## File partitioning
 //!
@@ -22,8 +21,7 @@
 //! `UsdUiPlugin`.
 
 use bevy::prelude::*;
-use lunco_doc_bevy::OpenFile;
-use lunco_usd_core::commands::is_usd_path;
+use lunco_usd_core::commands::{OpenUsdSourceDocument, is_usd_path};
 use lunco_workbench_browser::{BrowserAction, BrowserActions};
 use lunco_workspace::WorkspaceResource;
 
@@ -56,7 +54,7 @@ fn browser_document_path(
 }
 
 /// Drain Twin-browser `OpenFile` actions whose path looks like USD and hand
-/// each off to the document pipeline through the shared [`OpenFile`] command.
+/// each off to the document pipeline through [`OpenUsdSourceDocument`].
 /// This deliberately does not trigger the scene-load command.
 pub fn drain_browser_actions_for_usd(world: &mut World) {
     let actions: Vec<BrowserAction> = {
@@ -87,8 +85,8 @@ pub fn drain_browser_actions_for_usd(world: &mut World) {
             );
             continue;
         };
-        world.trigger(OpenFile {
-            path: abs.to_string_lossy().into_owned(),
+        world.trigger(OpenUsdSourceDocument {
+            source: abs.to_string_lossy().into_owned(),
         });
     }
 }
@@ -96,6 +94,38 @@ pub fn drain_browser_actions_for_usd(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_usd_dispatch_emits_source_intent_and_keeps_other_actions() {
+        #[derive(Resource, Default)]
+        struct Sources(Vec<String>);
+        let mut app = App::new();
+        app.init_resource::<BrowserActions>()
+            .init_resource::<Sources>()
+            .add_observer(
+                |event: On<OpenUsdSourceDocument>, mut sources: ResMut<Sources>| {
+                    sources.0.push(event.event().source.clone());
+                },
+            );
+        for path in ["/external/assembly.usda", "/external/model.mo"] {
+            app.world_mut()
+                .resource_mut::<BrowserActions>()
+                .push(BrowserAction::OpenFile {
+                    relative_path: path.into(),
+                });
+        }
+        drain_browser_actions_for_usd(app.world_mut());
+        assert_eq!(
+            app.world().resource::<Sources>().0,
+            ["/external/assembly.usda"]
+        );
+        let remaining = app.world_mut().resource_mut::<BrowserActions>().drain();
+        assert_eq!(remaining.len(), 1);
+        assert!(
+            matches!(&remaining[0], BrowserAction::OpenFile { relative_path }
+            if relative_path == std::path::Path::new("/external/model.mo"))
+        );
+    }
 
     #[test]
     fn browser_usd_selection_stays_within_the_active_twin() {

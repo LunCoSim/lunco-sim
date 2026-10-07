@@ -145,6 +145,7 @@ fn a_rhai_policy_can_be_the_synthesizer() {
     let classes = fixture_classes();
     let ctx = SynthContext {
         classes: &classes,
+        member_paths: None,
         runtime_context: synthesis_test_context(),
     };
 
@@ -182,6 +183,7 @@ fn a_rhai_policy_can_replace_the_merge_partition_and_layout() {
     let classes = fixture_classes();
     let ctx = SynthContext {
         classes: &classes,
+        member_paths: None,
         runtime_context: synthesis_test_context(),
     };
 
@@ -220,6 +222,7 @@ fn a_policy_that_returns_the_wrong_shape_is_an_authoring_error() {
     let classes = fixture_classes();
     let ctx = SynthContext {
         classes: &classes,
+        member_paths: None,
         runtime_context: synthesis_test_context(),
     };
 
@@ -254,6 +257,7 @@ fn a_policy_must_return_the_complete_synthesis_schema() {
             "Rig_System",
             &SynthContext {
                 classes: &fixture_classes(),
+                member_paths: None,
                 runtime_context: synthesis_test_context(),
             },
         )
@@ -283,6 +287,7 @@ fn a_policy_with_syntactically_valid_but_incomplete_source_is_rejected() {
             "Rig_System",
             &SynthContext {
                 classes: &fixture_classes(),
+                member_paths: None,
                 runtime_context: synthesis_test_context(),
             },
         )
@@ -315,6 +320,7 @@ fn a_policy_cannot_extend_the_authored_boundary_surface() {
             "Rig_System",
             &SynthContext {
                 classes: &fixture_classes(),
+                member_paths: None,
                 runtime_context: synthesis_test_context(),
             },
         )
@@ -350,6 +356,7 @@ fn a_policy_cannot_promote_an_output_missing_from_the_loaded_class() {
             "Rig_System",
             &SynthContext {
                 classes: &fixture_classes(),
+                member_paths: None,
                 runtime_context: synthesis_test_context(),
             },
         )
@@ -375,6 +382,7 @@ fn a_policy_cannot_overlap_generated_member_layout_positions() {
             "Rig_System",
             &SynthContext {
                 classes: &fixture_classes(),
+                member_paths: None,
                 runtime_context: synthesis_test_context(),
             },
         )

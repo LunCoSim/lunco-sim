@@ -8,6 +8,7 @@
 
 use bevy_ecs::prelude::*;
 use bevy_math::{Quat, Vec3};
+use bevy_reflect::Reflect;
 use std::collections::HashSet;
 
 /// Ordered phases shared by the USD simulation projections.
@@ -136,7 +137,8 @@ pub struct GroundColliderPending(pub bool);
 /// systems consume this shared component to identify its visual child and
 /// reconstruct proxy motion. Keeping the data contract here prevents those
 /// consumers from depending on the complete vehicle projector.
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, Reflect)]
+#[reflect(Component)]
 pub struct PhysicalWheel {
     /// The visual mesh child (the entity whose local rotation we author on a
     /// client proxy). `None` if the wheel prim carried no mesh.

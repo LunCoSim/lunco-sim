@@ -49,7 +49,7 @@ pub struct UsdPrimTreeUiPlugin;
 
 impl Plugin for UsdPrimTreeUiPlugin {
     fn build(&self, app: &mut App) {
-        app.register_panel(UsdPrimTreePanel)
+        app.register_panel(UsdPrimTreePanel::default())
             .init_resource::<UsdPrimTreeView>()
             .add_view_model(produce_usd_prim_tree, editor_prim_tree_changed);
     }
@@ -352,7 +352,71 @@ pub fn produce_usd_prim_tree(
 }
 
 /// USD prim tree panel.
-pub struct UsdPrimTreePanel;
+#[derive(Default)]
+pub struct UsdPrimTreePanel {
+    rows: VisiblePrimRows,
+}
+
+#[derive(Default)]
+struct VisiblePrimRows {
+    revision: Option<(
+        UsdPreviewId,
+        Option<AssetId<UsdStageAsset>>,
+        u64,
+        Option<u64>,
+        u64,
+    )>,
+    reveal_path: Option<String>,
+    dirty: bool,
+    rows: Vec<VisiblePrimRow>,
+}
+
+struct VisiblePrimRow {
+    key: NodeKey,
+    depth: usize,
+    branch_id: Option<egui::Id>,
+    forced_open: bool,
+}
+
+fn collect_visible_prim_rows(
+    ctx: &egui::Context,
+    preview: UsdPreviewId,
+    key: &NodeKey,
+    depth: usize,
+    view: &UsdPrimTreeSessionView,
+    reveal_path: Option<&str>,
+    rows: &mut Vec<VisiblePrimRow>,
+) {
+    let Some(node) = view.nodes.get(key) else {
+        return;
+    };
+    let branch_id =
+        (!node.children.is_empty()).then(|| egui::Id::new(("usd_prim_tree", preview.0, key)));
+    let forced_open = reveal_path.is_some_and(|path| is_path_or_descendant(path, key));
+    rows.push(VisiblePrimRow {
+        key: key.clone(),
+        depth,
+        branch_id,
+        forced_open,
+    });
+    let Some(id) = branch_id else {
+        return;
+    };
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ctx,
+        id,
+        lunco_workbench_widgets::tree::default_open_at_depth(depth),
+    );
+    if forced_open {
+        state.set_open(true);
+        state.store(ctx);
+    }
+    if state.is_open() {
+        for child in &node.children {
+            collect_visible_prim_rows(ctx, preview, child, depth + 1, view, reveal_path, rows);
+        }
+    }
+}
 
 impl Panel for UsdPrimTreePanel {
     fn id(&self) -> PanelId {
@@ -374,11 +438,11 @@ impl Panel for UsdPrimTreePanel {
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         ctx.panel_content_frame()
-            .show(ui, |ui| prim_tree_content(ui, ctx));
+            .show(ui, |ui| prim_tree_content(ui, ctx, &mut self.rows));
     }
 }
 
-fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx, rows: &mut VisiblePrimRows) {
     let mut to_select: Option<Entity> = None;
     let mut to_display_mode: Option<(String, UsdPrimDisplayMode)> = None;
     let focused_preview = {
@@ -416,31 +480,73 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let reveal_path =
             primary.and_then(|entity| ctx.get::<UsdPrimPath>(entity).map(|path| path.path.clone()));
 
-        // The dock deliberately disables its generic tab scroll wrapper, so
-        // this panel owns one full-width scroll area. On a new selection, open
-        // the selected path's ancestors and ask the selected row to reveal
-        // itself; stable selections do not fight the user's manual scrolling.
-        egui::ScrollArea::vertical()
+        let revision = (
+            preview,
+            view.stage_id,
+            view.generation,
+            view.canonical_generation,
+            view.hash,
+        );
+        if rows.dirty || rows.revision != Some(revision) || rows.reveal_path != reveal_path {
+            rows.rows.clear();
+            for root in &view.roots {
+                collect_visible_prim_rows(
+                    ui.ctx(),
+                    preview,
+                    root,
+                    0,
+                    view,
+                    reveal_path.as_deref(),
+                    &mut rows.rows,
+                );
+            }
+            rows.revision = Some(revision);
+            rows.reveal_path = reveal_path;
+            rows.dirty = false;
+        }
+        let row_height = ui.spacing().interact_size.y;
+        let mut scroll = egui::ScrollArea::vertical()
             .id_salt(scroll_id)
-            .auto_shrink([false; 2])
-            .show(ui, |ui| {
-                for root in &view.roots {
-                    render_prim_node(
-                        ui,
-                        root,
-                        view,
-                        selected,
-                        primary,
-                        reveal_path.as_deref(),
-                        selection_changed,
-                        &mut to_select,
-                        &mut to_display_mode,
-                        preview,
-                        display_modes,
-                        0,
-                    );
-                }
-            });
+            .auto_shrink([false; 2]);
+        if selection_changed
+            && let Some(index) = rows.rows.iter().position(|row| {
+                primary.is_some()
+                    && view
+                        .nodes
+                        .get(&row.key)
+                        .is_some_and(|node| node.entity == primary)
+            })
+        {
+            let row_stride = row_height + ui.spacing().item_spacing.y;
+            scroll = scroll.vertical_scroll_offset(
+                (index as f32 * row_stride - ui.available_height() * 0.5).max(0.0),
+            );
+        }
+        scroll.show_rows(ui, row_height, rows.rows.len(), |ui, range| {
+            for index in range {
+                let row = &rows.rows[index];
+                ui.push_id(("usd_prim_tree_row", preview.0, &row.key), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_space(ui.spacing().indent * row.depth as f32);
+                        ui.vertical(|ui| {
+                            render_prim_node(
+                                ui,
+                                row,
+                                view,
+                                selected,
+                                primary,
+                                selection_changed,
+                                &mut to_select,
+                                &mut to_display_mode,
+                                preview,
+                                display_modes,
+                                &mut rows.dirty,
+                            );
+                        });
+                    });
+                });
+            }
+        });
         if selection_changed {
             ui.ctx()
                 .data_mut(|data| data.insert_temp(selection_id, selected.entities.clone()));
@@ -464,23 +570,21 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     }
 }
 
-/// Render one prim node + its descendants. A node that maps to an entity is a
-/// selectable label; a node with children gets an expander whose header is the
-/// (possibly selectable) label; a childless intermediate is a dim, inert label.
+/// Paint one visible row using the shared disclosure and selection controls.
 fn render_prim_node(
     ui: &mut egui::Ui,
-    key: &NodeKey,
+    row: &VisiblePrimRow,
     view: &UsdPrimTreeSessionView,
     selected: &lunco_scene_selection::SelectedEntities,
     primary: Option<Entity>,
-    reveal_path: Option<&str>,
     selection_changed: bool,
     to_select: &mut Option<Entity>,
     to_display_mode: &mut Option<(String, UsdPrimDisplayMode)>,
     preview: UsdPreviewId,
     display_modes: Option<&UsdPrimDisplayModes>,
-    depth: usize,
+    rows_dirty: &mut bool,
 ) {
+    let key = &row.key;
     let Some(node) = view.nodes.get(key) else {
         return;
     };
@@ -504,21 +608,16 @@ fn render_prim_node(
         });
         return;
     }
-    // Top two levels open by default so the scene structure is visible without
-    // drilling; deeper subtrees (a rover's per-wheel joints) start collapsed.
-    let default_open = lunco_workbench_widgets::tree::default_open_at_depth(depth);
-    // The document path is stable and already scoped by this panel's active
-    // document, so it is sufficient for collapse-state identity.
-    let id = ui.make_persistent_id(("usd_prim_tree", key));
-    let open = reveal_path.is_some_and(|path| is_path_or_descendant(path, key));
+    let Some(id) = row.branch_id else {
+        return;
+    };
     let mut header_select = None;
     let mut header_display_mode = None;
-    let mut body_display_mode = None;
-    lunco_workbench_widgets::tree::branch(
+    let branch = lunco_workbench_widgets::tree::branch_header(
         ui,
         id,
-        default_open,
-        open.then_some(true),
+        lunco_workbench_widgets::tree::default_open_at_depth(row.depth),
+        row.forced_open.then_some(true),
         |ui| {
             prim_select_label(
                 ui,
@@ -534,29 +633,12 @@ fn render_prim_node(
                 key,
             )
         },
-        |ui| {
-            for child in &node.children {
-                render_prim_node(
-                    ui,
-                    child,
-                    view,
-                    selected,
-                    primary,
-                    reveal_path,
-                    selection_changed,
-                    to_select,
-                    &mut body_display_mode,
-                    preview,
-                    display_modes,
-                    depth + 1,
-                );
-            }
-        },
     );
+    *rows_dirty |= branch.changed;
     if header_select.is_some() {
         *to_select = header_select;
     }
-    if let Some(mode) = header_display_mode.or(body_display_mode) {
+    if let Some(mode) = header_display_mode {
         *to_display_mode = Some(mode);
     }
 }
@@ -674,4 +756,88 @@ fn is_path_or_descendant(path: &str, node: &str) -> bool {
         || path
             .strip_prefix(node)
             .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+#[cfg(test)]
+mod visible_row_tests {
+    use super::*;
+
+    #[test]
+    fn visible_prim_rows_preserve_hierarchy_reveal_and_preview_scope() {
+        let context = egui::Context::default();
+        let mut view = UsdPrimTreeSessionView::default();
+        let paths = [
+            "/Root",
+            "/Root/Branch",
+            "/Root/Branch/Deep",
+            "/Root/Branch/Deep/Leaf",
+        ];
+        for (index, path) in paths.iter().enumerate() {
+            view.nodes.insert(
+                (*path).into(),
+                PrimTreeNode {
+                    display_name: (*path).into(),
+                    camera_identity: None,
+                    type_name: String::new(),
+                    entity: None,
+                    children: paths
+                        .get(index + 1)
+                        .map(|child| vec![(*child).into()])
+                        .unwrap_or_default(),
+                },
+            );
+        }
+        let preview = UsdPreviewId(1);
+        let root = paths[0].to_owned();
+        let mut rows = Vec::new();
+        collect_visible_prim_rows(&context, preview, &root, 0, &view, None, &mut rows);
+        assert_eq!(
+            rows.iter().map(|row| row.key.as_str()).collect::<Vec<_>>(),
+            paths[..3]
+        );
+        assert_eq!(
+            rows.iter().map(|row| row.depth).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        rows.clear();
+        collect_visible_prim_rows(
+            &context,
+            preview,
+            &root,
+            0,
+            &view,
+            Some(paths[3]),
+            &mut rows,
+        );
+        assert_eq!(rows.len(), 4);
+        assert!(rows[..3].iter().all(|row| row.forced_open));
+        let id = rows[0].branch_id.unwrap();
+        let mut collapse =
+            egui::collapsing_header::CollapsingState::load_with_default_open(&context, id, true);
+        collapse.set_open(false);
+        collapse.store(&context);
+        rows.clear();
+        collect_visible_prim_rows(
+            &context,
+            preview,
+            &root,
+            0,
+            &view,
+            Some("/RootOther"),
+            &mut rows,
+        );
+        assert_eq!(
+            rows.len(),
+            1,
+            "an unrelated selection must not force the branch open"
+        );
+        rows.clear();
+        collect_visible_prim_rows(&context, UsdPreviewId(2), &root, 0, &view, None, &mut rows);
+        assert_eq!(
+            rows.len(),
+            3,
+            "another preview owns independent disclosure state"
+        );
+        assert_ne!(rows[0].branch_id, Some(id));
+    }
 }

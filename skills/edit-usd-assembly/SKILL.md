@@ -323,8 +323,9 @@ the active simulation viewport.
    do not author USD camera or transform values. Pan converts logical pointer
    deltas through the active projection and measured render-target viewport.
    `Frame` uses the projected
-   visual bounds, and `InspectUsdViewport` reports projection, target, distance,
-   and orthographic scale for screenshot correlation.
+   visual bounds, and `InspectUsdViewport` reports projection, target, yaw,
+   pitch, distance, orthographic scale, image rectangle and window scale factor
+   for screenshot correlation and equal-camera comparisons.
 
    For multi-part inspection, wait for `projection_ready: true`, then use the
    same explicit preview/document handles with

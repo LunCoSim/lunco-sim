@@ -85,9 +85,12 @@ curl -s -X POST http://127.0.0.1:4101/api/commands -H "Content-Type: application
 - Use production `luncosim` for scene-test and visual evidence. Use
   `luncosim-server` or `luncosim --no-ui` for numeric/API evidence only, and
   report the binary, revision, readiness state, and evidence type separately.
-- **If an app is already running on 4101, do NOT start another and do NOT
-  `Exit` it** — reuse it. Killing it destroys the user's open tabs/state. Only
-  restart when the user says so or the binary is verifiably stale after a rebuild.
+- Launch your own session on an explicitly free API port. Never reuse or stop
+  another session. Verify PID, executable, and checkout before controlling your
+  session; use its API `Exit` and verify shutdown before replacing its binary.
+- Standalone Modelica ports exclude entities with `SimComponent`; the
+  co-simulation backend owns their topology publication. Live sample changes
+  must not invalidate resolved handles without a structural contract change.
 
 ### No-API alternative
 The standalone runner is owned by `lunco-modelica-execution`, not
@@ -157,6 +160,23 @@ revisions that `ModelicaCompiler` records while admitting source roots. Its
 source key is based on primary and sibling source text, not per-session sibling
 document IDs or worker-local library-generation counters. It does not scan the
 complete Modelica tree during the first live stepper build.
+
+Generated USD networks compile their complete synthesized source plus admitted
+source roots; unrelated editor documents are not sibling inputs. The reserved
+bundled `generated/` filename namespace drives provenance and structural cache
+classification. Verify repeat-load cache reuse while changing document-open
+order; authored Modelica documents retain their multi-document source sets.
+
+Domain discovery does not resynthesize ordinary scene-owned networks when a
+content prim receives its GID: that identity does not enter their namespace.
+Instance-scoped identities and unsettled provenance remain discovery inputs,
+alongside prim paths, stage revisions, wiring, and member-source events.
+
+Initial network results may publish as a bounded four-root prefix only while
+their own fixed-clock admission hold is present and no prior projection is
+installed. Live replacements remain one per Update; repeated results for a
+root wait for ECS publication. Worker completion never bypasses the oldest
+request or its Twin/stage/instance validation.
 
 On native runs, one dedicated Rumoca actor owns the mutable session and shared
 DAE cache. Source-root installation, `Compile`, `Reset`, parameter updates, and

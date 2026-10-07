@@ -13,7 +13,7 @@ use lunco_sysml_ast::{
 };
 use lunco_sysml_ir::VerificationVerdict;
 use lunco_telemetry_core::TelemetryValue;
-use lunco_twin::Twin;
+use lunco_twin::{FileEntry, Twin, TwinManifest};
 use lunco_workspace::{TwinClosed, TwinId, WorkspaceResource};
 
 use crate::panel::DocumentView;
@@ -182,6 +182,44 @@ pub struct SysmlRequirementsViewModel {
     pub(crate) stale_verification: bool,
 }
 
+/// Workspace facts consumed by this projection, excluding document focus and
+/// unrelated open-document entries. Domain registries invalidate their own inputs.
+#[derive(Default)]
+pub(crate) struct SysmlWorkspaceInputs {
+    active_twin: Option<TwinId>,
+    twin: Option<(PathBuf, Option<TwinManifest>, Vec<FileEntry>)>,
+}
+
+impl SysmlWorkspaceInputs {
+    fn matches(&self, workspace: Option<&WorkspaceResource>) -> bool {
+        let active_twin = workspace.and_then(|workspace| workspace.active_twin);
+        let twin = active_twin.and_then(|id| workspace?.twin(id));
+        self.active_twin == active_twin
+            && match (&self.twin, twin) {
+                (None, None) => true,
+                (Some((root, manifest, files)), Some(twin)) => {
+                    root == &twin.root && manifest == &twin.manifest && files == twin.files()
+                }
+                _ => false,
+            }
+    }
+
+    fn capture(workspace: Option<&WorkspaceResource>) -> Self {
+        let active_twin = workspace.and_then(|workspace| workspace.active_twin);
+        let twin = active_twin.and_then(|id| workspace?.twin(id));
+        Self {
+            active_twin,
+            twin: twin.map(|twin| {
+                (
+                    twin.root.clone(),
+                    twin.manifest.clone(),
+                    twin.files().to_vec(),
+                )
+            }),
+        }
+    }
+}
+
 pub(crate) fn produce_sysml_requirements_view_model(
     workspace: Option<Res<WorkspaceResource>>,
     roots: Option<Res<TwinRoots>>,
@@ -190,9 +228,14 @@ pub(crate) fn produce_sysml_requirements_view_model(
     evidence: Option<Res<SysmlVerificationEvidence>>,
     mut view_model: ResMut<SysmlRequirementsViewModel>,
     mut initialized: Local<bool>,
+    mut workspace_inputs: Local<SysmlWorkspaceInputs>,
 ) {
-    let changed = !*initialized
-        || workspace.as_ref().is_some_and(Res::is_changed)
+    let first = !*initialized;
+    let workspace_changed = (workspace.is_none()
+        || workspace.as_ref().is_some_and(Res::is_changed))
+        && !workspace_inputs.matches(workspace.as_deref());
+    let changed = first
+        || workspace_changed
         || roots.as_ref().is_some_and(Res::is_changed)
         || analyses.as_ref().is_some_and(Res::is_changed)
         || documents.as_ref().is_some_and(Res::is_changed)
@@ -201,9 +244,12 @@ pub(crate) fn produce_sysml_requirements_view_model(
         return;
     }
     *initialized = true;
+    if first || workspace_changed {
+        *workspace_inputs = SysmlWorkspaceInputs::capture(workspace.as_deref());
+    }
     let _span = bevy::log::info_span!(
         "sysml_requirements_rebuild",
-        workspace = workspace.as_ref().is_some_and(Res::is_changed),
+        workspace = workspace_changed,
         roots = roots.as_ref().is_some_and(Res::is_changed),
         analyses = analyses.as_ref().is_some_and(Res::is_changed),
         documents = documents.as_ref().is_some_and(Res::is_changed),
@@ -474,17 +520,7 @@ fn build_source_file_views(
                     && twin_uri(twin_name, &entry.relative_path) == file.name
             })?;
             let absolute_path = twin.root.join(&indexed.relative_path);
-            let document_id = documents.and_then(|registry| {
-                registry.ids().find(|doc_id| {
-                    let Some(host) = registry.host(*doc_id) else {
-                        return false;
-                    };
-                    host.document()
-                        .origin()
-                        .canonical_path()
-                        .is_some_and(|path| lunco_doc::same_file(path, &absolute_path))
-                })
-            });
+            let document_id = documents.and_then(|registry| registry.doc_for_file(&absolute_path));
             Some(SourceFileView {
                 logical_uri: file.name.clone(),
                 relative_path: indexed.relative_path.clone(),
@@ -1561,6 +1597,46 @@ impl SourceFileView {
 #[cfg(test)]
 mod model_view_tests {
     use super::*;
+
+    #[test]
+    fn workspace_focus_does_not_rebuild_sysml_projection() {
+        let mut app = App::new();
+        app.init_resource::<WorkspaceResource>()
+            .init_resource::<SysmlRequirementsViewModel>()
+            .add_systems(Update, produce_sysml_requirements_view_model);
+        app.update();
+        app.world_mut().clear_trackers();
+        app.world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .active_document = Some(lunco_doc::DocumentId::new(7));
+        app.world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .active_perspective = Some("editor".to_owned());
+        app.update();
+        assert!(
+            !app.world()
+                .get_resource_ref::<SysmlRequirementsViewModel>()
+                .unwrap()
+                .is_changed()
+        );
+
+        app.world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .active_twin = Some(TwinId::new(1));
+        app.update();
+        assert!(matches!(
+            app.world().resource::<SysmlRequirementsViewModel>().state,
+            AnalysisState::Failed(_)
+        ));
+        app.world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .active_twin = None;
+        app.update();
+        assert_eq!(
+            app.world().resource::<SysmlRequirementsViewModel>().state,
+            AnalysisState::NoActiveTwin
+        );
+    }
 
     #[test]
     fn model_views_preserve_requirement_links_and_nested_structure() {

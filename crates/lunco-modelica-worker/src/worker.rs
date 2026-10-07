@@ -1423,7 +1423,8 @@ const GENERATED_INSTANCE_MARKER: &str = "__LUNCO_GENERATED_INSTANCE__";
 
 /// Whether this is a generated USD wrapper whose root name is instance-local.
 fn is_generated_structural_unit(model_name: &str, unit: &CompileUnit, doc_uri: &str) -> bool {
-    doc_uri.starts_with("generated://") && unit.source.contains(model_name)
+    lunco_modelica_runtime::generated_source::is_generated_filename(doc_uri)
+        && unit.source.contains(model_name)
 }
 
 /// Remove only identity emitted by the generated USD wrapper.  The generated
@@ -1442,13 +1443,15 @@ fn generated_structural_source(model_name: &str, source: &str) -> String {
     if instance_id.is_empty() || !instance_id.bytes().all(|byte| byte.is_ascii_digit()) {
         return normalized;
     }
-    // The generated policy puts the runtime-root suffix in the network-title
-    // graphic. Restrict the replacement to that authored identity line so a
-    // legitimate equation literal equal to the root id remains structural.
+    // Only the suffix immediately preceding the graphic's network label is
+    // instance identity. Coordinates, colors, unit counts, and equation
+    // literals remain structural even when they contain the same digits.
+    let title_suffix = format!("_{instance_id} network");
+    let title_marker = format!("_{GENERATED_INSTANCE_MARKER} network");
     let mut title_normalized = String::with_capacity(normalized.len());
     for line in normalized.split_inclusive('\n') {
-        if line.contains(" network") {
-            title_normalized.push_str(&line.replace(instance_id, GENERATED_INSTANCE_MARKER));
+        if line.contains("annotation(") {
+            title_normalized.push_str(&line.replace(&title_suffix, &title_marker));
         } else {
             title_normalized.push_str(line);
         }
@@ -4807,16 +4810,23 @@ mod artifact_cache_tests {
 
     #[test]
     fn generated_shared_hash_ignores_instance_root_identity() {
+        let normalized = generated_structural_source(
+            "Rig__1_System",
+            "model Rig__1_System\n  Real network_system = 1;\nannotation(Text(textString=\"Rig_1 network | 1 unit(s)\", extent={{-110,-120},{110,120}}));\nend Rig__1_System;\n",
+        );
+        assert!(normalized.contains("Real network_system = 1;"));
+        assert!(normalized.contains("extent={{-110,-120},{110,120}}"));
+        assert!(normalized.contains("Rig___LUNCO_GENERATED_INSTANCE__ network | 1 unit(s)"));
         let first = shared_hash_of(
             "Traverse_x2f_rocker__bogie__101_System",
             "model Traverse_x2f_rocker__bogie__101_System\n  input Real throttle;\nend Traverse_x2f_rocker__bogie__101_System;\nannotation(Documentation(info=\"rocker_bogie_101 network\"));",
-            "generated://Traverse_x2f_rocker__bogie__101_System.mo",
+            "generated/Traverse_x2f_rocker__bogie__101_System.mo",
             Vec::new(),
         );
         let second = shared_hash_of(
             "Traverse_x2f_rocker__bogie__202_System",
             "model Traverse_x2f_rocker__bogie__202_System\n  input Real throttle;\nend Traverse_x2f_rocker__bogie__202_System;\nannotation(Documentation(info=\"rocker_bogie_202 network\"));",
-            "generated://Traverse_x2f_rocker__bogie__202_System.mo",
+            "generated/Traverse_x2f_rocker__bogie__202_System.mo",
             Vec::new(),
         );
         assert_eq!(
@@ -4827,12 +4837,12 @@ mod artifact_cache_tests {
             prepared_hash_of(
                 "Traverse_x2f_rocker__bogie__101_System",
                 "model Traverse_x2f_rocker__bogie__101_System\n  input Real throttle;\nend Traverse_x2f_rocker__bogie__101_System;\nannotation(Documentation(info=\"rocker_bogie_101 network\"));",
-                "generated://Traverse_x2f_rocker__bogie__101_System.mo",
+                "generated/Traverse_x2f_rocker__bogie__101_System.mo",
             ),
             prepared_hash_of(
                 "Traverse_x2f_rocker__bogie__202_System",
                 "model Traverse_x2f_rocker__bogie__202_System\n  input Real throttle;\nend Traverse_x2f_rocker__bogie__202_System;\nannotation(Documentation(info=\"rocker_bogie_202 network\"));",
-                "generated://Traverse_x2f_rocker__bogie__202_System.mo",
+                "generated/Traverse_x2f_rocker__bogie__202_System.mo",
             ),
             "generated instance identity must not defeat persistent solve-IR reuse"
         );
@@ -4840,13 +4850,13 @@ mod artifact_cache_tests {
             shared_hash_of(
                 "Traverse_x2f_rocker__bogie__101_System",
                 "model Traverse_x2f_rocker__bogie__101_System\n  parameter Real retained_literal = 101;\nend Traverse_x2f_rocker__bogie__101_System;\nannotation(Documentation(info=\"rocker_bogie_101 network\"));",
-                "generated://Traverse_x2f_rocker__bogie__101_System.mo",
+                "generated/Traverse_x2f_rocker__bogie__101_System.mo",
                 Vec::new(),
             ),
             shared_hash_of(
                 "Traverse_x2f_rocker__bogie__202_System",
                 "model Traverse_x2f_rocker__bogie__202_System\n  parameter Real retained_literal = 202;\nend Traverse_x2f_rocker__bogie__202_System;\nannotation(Documentation(info=\"rocker_bogie_202 network\"));",
-                "generated://Traverse_x2f_rocker__bogie__202_System.mo",
+                "generated/Traverse_x2f_rocker__bogie__202_System.mo",
                 Vec::new(),
             ),
             "generated normalization must not rewrite equation literals"

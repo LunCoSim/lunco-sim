@@ -1293,7 +1293,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 let Some(document) = world
                     .get_resource::<ScriptRegistry>()
                     .and_then(|registry| registry.documents.get(&DocumentId::new(raw)))
-                    .map(|host| host.document().clone())
+                    .map(|host| host.document())
                 else {
                     // Closing or detaching a document is terminal for this
                     // preparation. Release its exact hold even if queued work
@@ -1362,6 +1362,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 if pending_same && !retry_queued || !needs_recompile && !retry_queued {
                     continue;
                 }
+
+                // Copy worker inputs only after this revision needs preparation.
+                // Steady admission checks borrow the canonical document.
+                let source = document.source.clone();
+                let asset_id = document.asset_id.clone();
 
                 let gid = scenario_self_id(world, *entity);
                 retire_pending_compile(world, &mut driver, *entity, false);
@@ -1437,9 +1442,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     generation,
                     operation_id,
                 );
-                let preparation = driver
-                    .runtime
-                    .prepare_compile(document.source, document.asset_id);
+                let preparation = driver.runtime.prepare_compile(source, asset_id);
                 driver.fsm.get_mut(entity).unwrap().pending_compile = Some(PendingCompile {
                     key,
                     progress_key,
@@ -2053,6 +2056,15 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             .get_resource::<Self>()
             .is_some_and(|driver| !driver.fsm.is_empty());
         if !has_driver_state && !has_scenario_models(world, language) {
+            // The neutral inbox still receives telemetry when no actors exist.
+            // No future actor can observe traffic preceding its start watermark.
+            // Preserve events when another language has a potential consumer.
+            let mut models = world.query::<&ScriptedModel>();
+            if !models.iter(world).any(|model| model.language.is_some())
+                && let Some(mut inbox) = world.get_resource_mut::<ScriptEventInbox>()
+            {
+                inbox.pending.clear();
+            }
             return;
         }
         let committed_generation = committed_scene_generation(world);
@@ -3711,6 +3723,63 @@ mod lifecycle_readiness_tests {
         let unknown_directive = ScenarioDirectives::from_source("// @peerhost\n");
         assert!(!unknown_directive.is_supported());
         assert_eq!(unknown_directive.diagnostics().len(), 1);
+    }
+
+    #[test]
+    fn idle_driver_discards_unobservable_traffic_without_resetting_sequence_or_faults() {
+        let mut world = World::new();
+        world.init_resource::<ScriptEventInbox>();
+        for _ in 0..=SCRIPT_EVENT_INBOX_CAPACITY {
+            let event = lunco_telemetry_core::TelemetryEvent {
+                name: "idle-traffic".into(),
+                source: 0,
+                severity: lunco_telemetry_core::Severity::Info,
+                data: lunco_telemetry_core::TelemetryValue::F64(1.0),
+                timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: 0,
+            };
+            assert!(world.resource_mut::<ScriptEventInbox>().enqueue(event));
+            ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        }
+        let inbox = world.resource::<ScriptEventInbox>();
+        assert!(inbox.pending.is_empty());
+        assert!(!inbox.faulted);
+        assert_eq!(
+            inbox.next_sequence,
+            (SCRIPT_EVENT_INBOX_CAPACITY + 1) as u64
+        );
+
+        // A different language's actors own their delivery; this driver must
+        // neither consume their events nor repair a previously latched fault.
+        let other = world
+            .spawn(ScriptedModel {
+                language: Some(ScriptLanguage::Python),
+                ..Default::default()
+            })
+            .id();
+        world
+            .resource_mut::<ScriptEventInbox>()
+            .pending
+            .push(QueuedScenarioEvent {
+                sequence: 0,
+                event: lunco_telemetry_core::TelemetryEvent {
+                    name: "other-language".into(),
+                    source: 0,
+                    severity: lunco_telemetry_core::Severity::Info,
+                    data: lunco_telemetry_core::TelemetryValue::F64(1.0),
+                    timestamp: 0.0,
+                    sim_secs: 0.0,
+                    sim_tick: 0,
+                },
+            });
+        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        assert_eq!(world.resource::<ScriptEventInbox>().pending.len(), 1);
+        world.despawn(other);
+        world.resource_mut::<ScriptEventInbox>().faulted = true;
+        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        assert!(world.resource::<ScriptEventInbox>().faulted);
+        assert!(world.resource::<ScriptEventInbox>().pending.is_empty());
     }
 
     #[test]

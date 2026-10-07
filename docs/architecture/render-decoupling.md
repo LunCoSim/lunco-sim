@@ -129,16 +129,29 @@ the light's influence: a point light uses its finite range sphere, while a
 spotlight uses a sphere enclosing its finite cone frustum. False positives keep
 extra maps; a map is skipped only when the bound is disjoint from every
 layer-compatible camera. Boundary tests include a floating-point error pad,
-and missing or malformed bounds keep the map.
+and missing or malformed bounds keep the map for layer-compatible cameras.
+Disjoint render layers prove irrelevance without requiring a cone bound.
 
 The adapter changes only `ExtractedPointLight.shadow_maps_enabled` in the render
-world for that frame. It does not mutate the authored point/spot light, suppress
+world for that frame. A typed `LocalLightShadowIntent` component is extracted
+from changed main-world point/spot lights and render identities. The filter
+restores that intent before each frame's relevance check, including when no
+output camera remains: Bevy's native light extraction is incremental, so camera
+reactivation cannot depend on another light edit. It does not mutate the authored point/spot light, suppress
 direct illumination where it can reach visible geometry, alter shadow
 resolution, or change quality settings. It considers all active extracted 3D
 cameras, including offscreen capture cameras, rather than assuming the primary
 window is the only output. This removes only irrelevant local-light shadow-view
 preparation and rendering; Bevy's main-world per-light caster visibility pass
 still runs before extraction and remains a separate profiling target.
+
+An extracted local light and its shadow-view tracker share one lifetime.
+When Bevy removes an invisible `ExtractedPointLight`, the adapter retires its
+`PointAndSpotLightViewEntities` only if the light is still absent at deferred
+commit. Removing that native tracker invokes Bevy's existing shadow-view cleanup;
+re-extraction supplies a fresh required tracker. Parked lights therefore cannot
+leave render-graph roots behind, and same-boundary re-extraction retains live
+views. Main-world light and document lifetimes are unchanged.
 
 When adding a crate to the simulation core, check both sides before merging:
 

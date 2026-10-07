@@ -124,6 +124,16 @@ whole-source replacement, and the preview's projected-generation lifecycle
 through the production editor runner. Keep Rust coverage for the focused
 USD-to-render-intent mapping mechanism, where the mapping itself is the subject.
 
+For source-preview isolation, run `scripts/api/test_usd_source_isolation.py`
+with an exact `--scene`, `--source`, composed `--selection-path`, free `--port`
+and `--log`. Its `RunScenarioAsset` invocation supplies all required parameters
+to `assets/scenarios/tests/usd_source_isolation.rhai` and requires eight authored
+checks, including invalid-source rejection, unchanged Twin/topology and
+advancing physics. `--screenshot` records the exact viewport/selection context;
+the shared `ProductionSession.capture_screenshot` requires fresh publication
+before API Exit. Pair the resulting image with those handles when checking
+Prim-tree reveal and highlight.
+
 For spatial safety coverage, keep malformed authored transforms in the USD
 projection layer: that layer must reject them before ECS materialization. Test
 runtime-state admission at the `lunco-usd-avian` bridge owner, where a finite

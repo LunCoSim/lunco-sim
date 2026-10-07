@@ -15,8 +15,13 @@ use lunco_doc::{DocumentId, DocumentOrigin};
 pub fn is_generated_origin(origin: &DocumentOrigin) -> bool {
     matches!(
         origin,
-        DocumentOrigin::Bundled { filename } if filename.starts_with("generated/")
+        DocumentOrigin::Bundled { filename } if is_generated_filename(filename)
     )
+}
+
+/// Reserved bundled filename namespace for synthesized network documents.
+pub fn is_generated_filename(filename: &str) -> bool {
+    filename.starts_with("generated/")
 }
 
 /// Runtime-generated Modelica documents projected from composed USD networks.

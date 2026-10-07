@@ -1036,8 +1036,8 @@ pub struct PortBackend {
 /// value references). Produced by [`PortRegistry::resolve_output`],
 /// [`PortRegistry::resolve_input`], or [`PortRegistry::resolve_input_read`], consumed by
 /// [`read_resolved`](PortRegistry::read_resolved) /
-/// [`write_resolved`](PortRegistry::write_resolved): the resolver folds over
-/// backends ONCE, then the hot loop exchanges by slot with no re-scan.
+/// [`write_resolved`](PortRegistry::write_resolved). Reads dispatch by slot;
+/// writes preflight the live owner contract once before committing that slot.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedPort {
     /// Index of the owning backend in the registry (its registration order).
@@ -1181,7 +1181,6 @@ pub struct PreparedPortWrite {
     backend: usize,
     entity: Entity,
     name: Arc<str>,
-    owner: String,
     direction: PortDirection,
     metadata: PortMetadata,
     revision: u64,
@@ -1851,7 +1850,6 @@ impl PortRegistry {
             backend: owner,
             entity,
             name: Arc::from(name),
-            owner: metadata.source.clone(),
             direction,
             metadata,
             revision,
@@ -1876,7 +1874,7 @@ impl PortRegistry {
             if !unique.insert((write.entity, Arc::clone(&write.name))) {
                 return Err(PortWriteError {
                     port: write.name.to_string(),
-                    owner: Some(write.owner.clone()),
+                    owner: Some(write.metadata.source.clone()),
                     kind: PortWriteErrorKind::DuplicateWrite,
                 });
             }
@@ -1896,13 +1894,13 @@ impl PortRegistry {
     ) -> Result<fn(&mut World, Entity, u64, f64), PortWriteError> {
         let stale = || PortWriteError {
             port: prepared.name.to_string(),
-            owner: Some(prepared.owner.clone()),
+            owner: Some(prepared.metadata.source.clone()),
             kind: PortWriteErrorKind::StaleResolution,
         };
         let Some(revision) = world.get_resource::<PortTopologyRevision>() else {
             return Err(PortWriteError {
                 port: prepared.name.to_string(),
-                owner: Some(prepared.owner.clone()),
+                owner: Some(prepared.metadata.source.clone()),
                 kind: PortWriteErrorKind::TopologyRevisionUnavailable,
             });
         };
@@ -1966,7 +1964,7 @@ impl PortRegistry {
         }
         backend.write_slot.ok_or_else(|| PortWriteError {
             port: prepared.name.to_string(),
-            owner: Some(prepared.owner.clone()),
+            owner: Some(prepared.metadata.source.clone()),
             kind: PortWriteErrorKind::UnsupportedWritePath,
         })
     }
@@ -2086,7 +2084,18 @@ impl PortRegistry {
                 kind: PortWriteErrorKind::StaleResolution,
             });
         }
-        self.apply_prepared_input_writes(world, std::slice::from_ref(&prepared))
+        // Preparation and commit share this exclusive World boundary. Nothing
+        // can change the validated owner between them; batch revalidation is
+        // needed only when separately prepared writes are admitted together.
+        let commit = self.backends[prepared.backend]
+            .write_slot
+            .ok_or_else(|| PortWriteError {
+                port: prepared.name.to_string(),
+                owner: Some(prepared.metadata.source.clone()),
+                kind: PortWriteErrorKind::UnsupportedWritePath,
+            })?;
+        commit(world, entity, prepared.slot, prepared.value);
+        Ok(())
     }
 
     fn port_metadata_for_backend(
@@ -2554,6 +2563,151 @@ mod tests {
             ports
                 .iter()
                 .any(|port| port.name == "arm" && port.direction == super::PortDirection::In)
+        );
+    }
+
+    #[test]
+    fn resolved_input_write_preflights_once_and_rejects_invalid_or_stale_contracts() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        #[derive(Component)]
+        struct Input {
+            value: f64,
+            writable: bool,
+        }
+        #[derive(Resource, Default)]
+        struct MetadataReads(AtomicUsize);
+        let mut world = test_world();
+        world.init_resource::<MetadataReads>();
+        let entity = world
+            .spawn(Input {
+                value: 0.0,
+                writable: true,
+            })
+            .id();
+        let registry = PortRegistry {
+            backends: vec![PortBackend {
+                list_entities: |_, _| {},
+                topology_key: |_, _| 0,
+                list: |world, entity, ports| {
+                    if world.get::<Input>(entity).is_some() {
+                        ports.push(PortDeclaration {
+                            name: "signal".to_owned(),
+                            direction: PortDirection::In,
+                        });
+                    }
+                },
+                metadata: |world, entity, _, direction| {
+                    world
+                        .resource::<MetadataReads>()
+                        .0
+                        .fetch_add(1, Ordering::Relaxed);
+                    PortMetadata::scalar(
+                        direction,
+                        None,
+                        Some(0.0),
+                        Some(1.0),
+                        "probe",
+                        "probe",
+                        world.get::<Input>(entity).unwrap().writable,
+                        None,
+                    )
+                },
+                read_output: no_read,
+                read_input: no_read,
+                resolve_output: None,
+                resolve_input: Some(|world, entity, name| {
+                    (name == "signal" && world.get::<Input>(entity).is_some()).then_some(7)
+                }),
+                read_slot: None,
+                read_input_slot: None,
+                write_slot: Some(|world, entity, slot, value| {
+                    assert_eq!(slot, 7);
+                    world.get_mut::<Input>(entity).unwrap().value = value;
+                }),
+            }],
+        };
+        let locator = registry.resolve_input(&world, entity, "signal").unwrap();
+        world
+            .resource::<MetadataReads>()
+            .0
+            .store(0, Ordering::Relaxed);
+        registry
+            .write_resolved(&mut world, entity, &locator, 0.5)
+            .unwrap();
+        assert_eq!(
+            world.resource::<MetadataReads>().0.load(Ordering::Relaxed),
+            1
+        );
+        for value in [f64::NAN, f64::INFINITY, -0.1, 1.1] {
+            assert!(matches!(
+                registry.write_resolved(&mut world, entity, &locator, value),
+                Err(super::PortWriteError {
+                    kind: super::PortWriteErrorKind::InvalidValue { .. },
+                    ..
+                })
+            ));
+            assert_eq!(world.get::<Input>(entity).unwrap().value, 0.5);
+        }
+        let other = world
+            .spawn(Input {
+                value: 0.0,
+                writable: true,
+            })
+            .id();
+        let first = registry
+            .prepare_input_write(&world, entity, "signal", 0.75)
+            .unwrap();
+        let second = registry
+            .prepare_input_write(&world, other, "signal", 0.25)
+            .unwrap();
+        world.get_mut::<Input>(other).unwrap().writable = false;
+        assert!(
+            registry
+                .apply_prepared_input_writes(&mut world, &[first.clone(), second])
+                .is_err()
+        );
+        assert_eq!(world.get::<Input>(entity).unwrap().value, 0.5);
+        assert_eq!(world.get::<Input>(other).unwrap().value, 0.0);
+        assert!(matches!(
+            registry.apply_prepared_input_writes(&mut world, &[first.clone(), first]),
+            Err(super::PortWriteError {
+                kind: super::PortWriteErrorKind::DuplicateWrite,
+                ..
+            })
+        ));
+        assert_eq!(world.get::<Input>(entity).unwrap().value, 0.5);
+        world.get_mut::<Input>(entity).unwrap().writable = false;
+        assert!(matches!(
+            registry.write_resolved(&mut world, entity, &locator, 0.75),
+            Err(super::PortWriteError {
+                kind: super::PortWriteErrorKind::NotWritable,
+                ..
+            })
+        ));
+        let read_only = registry.resolve_input(&world, entity, "signal").unwrap();
+        assert!(matches!(
+            registry.write_resolved(&mut world, entity, &read_only, 0.75),
+            Err(super::PortWriteError {
+                kind: super::PortWriteErrorKind::NotWritable,
+                ..
+            })
+        ));
+        world.get_mut::<Input>(entity).unwrap().writable = true;
+        let current = registry.resolve_input(&world, entity, "signal").unwrap();
+        world.resource_mut::<PortTopologyRevision>().bump();
+        assert!(matches!(
+            registry.write_resolved(&mut world, entity, &current, 0.75),
+            Err(super::PortWriteError {
+                kind: super::PortWriteErrorKind::StaleResolution,
+                ..
+            })
+        ));
+        let current = registry.resolve_input(&world, entity, "signal").unwrap();
+        world.entity_mut(entity).remove::<Input>();
+        assert!(
+            registry
+                .write_resolved(&mut world, entity, &current, 0.75)
+                .is_err()
         );
     }
 

@@ -464,20 +464,25 @@ before the worker's single DAE compile, while the standard completion event
 reprojects the same source/AST canvas.
 
 The generated-domain projector is also lifecycle-driven at the ECS boundary.
-It first applies the shared `is_domain_network_root` predicate, then uses
-Bevy's `Added<UsdPrimPath>` and `Added<GlobalEntityId>` change sets to process
-only prims whose identity can have changed. A full root pass is reserved for
-the existing USD wiring and member-source invalidation signals. This keeps
-ownership resolution on the composed USD reader without scanning every scene
-prim when an unrelated runtime instance descendant receives its identity.
+Prim-path arrivals queue discovery. Identity arrivals/removals queue only
+instance-scoped projections or unsettled provenance: an ordinary content
+prim's own GID is not an input to its generated Modelica namespace. The shared
+instance-key reader still resolves instance-root and derived ownership. Stage,
+USD wiring, and member-source invalidations retain their existing root passes.
+Discovery applies the shared `is_domain_network_root` predicate through the
+composed USD reader; unrelated visual identities do not resynthesize networks.
 
 Network synthesis is admitted through the shared bounded async-work owner.
 Immutable prepared USD plans run graph extraction, Rhai policy, source parsing,
 and validation on workers. A live canonical OpenUSD reader remains
 main-thread-owned, so the projector snapshots typed network facts there and
 dispatches the policy and validation work to a worker. Results publish in
-request order, at most one network commit per Update, after Twin, stage, and
-instance generation checks. Live readers snapshot at most one network per
+request order after Twin, stage, and instance generation checks. Initial
+networks that still own their fixed-clock admission hold publish a bounded
+prefix of distinct roots (four per Update by default), configured by
+`DomainProjectionPublicationSettings`. A zero budget faults at the owner before
+consuming work. Live replacements remain one network per Update, and repeated
+results for one root wait for the next ECS publication boundary. Live readers snapshot at most one network per
 Update so independent edits cannot stack their extraction cost in one frame.
 Admission pressure defers candidates until capacity changes; it never falls
 back to synchronous synthesis. Prepared-plan telemetry ownership
@@ -605,6 +610,13 @@ budgets, owned-only cleanup, concurrent publication, and rejection; storage
 `cache_directory_transaction_` tests cover independent handles, real process
 contention, lock release, and regular-file enumeration on native platforms.
 
+Generated-network compilation consumes its complete synthesized document and
+the admitted source roots, not other open Modelica documents. Their reserved
+bundled `generated/` filename namespace is classified by the runtime metadata
+owner and used by structural hashing. Opening editor documents or completing
+another generated network cannot change this compile source set. Authored
+documents retain sibling-document compilation for cross-document definitions.
+
 Session IDs fence stale results: when a Compile or UpdateParameters bumps
 the session, any in-flight Step for the old session is discarded.
 
@@ -660,6 +672,11 @@ The remaining cross-domain admission and replay requirements are recorded in
 [`62-deterministic-runtime-and-async-boundaries.md`](62-deterministic-runtime-and-async-boundaries.md).
 
 See [`22-domain-cosim.md`](22-domain-cosim.md) for the full pipeline.
+
+Standalone Modelica port topology publication excludes entities with
+`SimComponent`, matching its port backend. The co-simulation port owner
+publishes those entities' topology instead. Live input values do not invalidate
+either contract; input membership and signal metadata do.
 
 The render/update-side engine synchronizer is separately revision-gated: the
 document registry advances one monotonic revision for document membership or

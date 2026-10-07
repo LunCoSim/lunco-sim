@@ -177,6 +177,8 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
     let source = lunco_modelica_source_roots::compile_overlay_source(document);
     let source_uri = document.origin().session_uri();
     let generation = document.generation_owned();
+    let generated =
+        lunco_modelica_runtime::generated_source::is_generated_origin(document.origin());
 
     let mut parameters = HashMap::new();
     let mut inputs_with_defaults = HashMap::new();
@@ -215,7 +217,10 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
     let mut extra_sources = Vec::new();
     let mut sibling_documents: Vec<_> = documents
         .docs()
-        .filter(|(other_doc, _)| *other_doc != doc)
+        // A synthesized network contains its complete unit definitions and
+        // admits external classes through source roots. Editor documents are
+        // not dependencies of that immutable production compile snapshot.
+        .filter(|(other_doc, _)| !generated && *other_doc != doc)
         .collect();
     sibling_documents.sort_unstable_by_key(|(other_doc, _)| other_doc.raw());
     for (other_doc, host) in sibling_documents {
@@ -529,6 +534,83 @@ fn write_notice(world: &mut World, level: NoticeLevel, text: String) {
 mod tests {
     use super::*;
     use lunco_doc::PathlessOrigin;
+
+    #[test]
+    fn generated_compile_source_set_is_independent_of_editor_documents() {
+        for generated in [true, false] {
+            let mut documents = ModelicaDocuments::default();
+            let source = "model Plant Real x; equation der(x) = 1; end Plant;";
+            let origin = if generated {
+                PathlessOrigin::bundled("generated/Plant.mo")
+            } else {
+                PathlessOrigin::untitled("Plant")
+            };
+            let doc = documents.allocate(source.to_owned(), origin);
+            let other = documents.allocate(
+                "model Other Real y; equation der(y) = 2; end Other;".to_owned(),
+                PathlessOrigin::untitled("Other"),
+            );
+            for id in [doc, other] {
+                documents
+                    .host_mut(id)
+                    .unwrap()
+                    .document_mut()
+                    .refresh_ast_now();
+            }
+            let mut app = App::new();
+            app.add_message::<ModelicaNotice>()
+                .init_resource::<lunco_doc_bevy::DocumentDiagnostics>()
+                .insert_resource(documents);
+            let (tx, rx) = crossbeam_channel::unbounded();
+            let (_result_tx, result_rx) = crossbeam_channel::unbounded();
+            app.insert_resource(ModelicaChannels { tx, rx: result_rx });
+            let entity = app
+                .world_mut()
+                .spawn(ModelicaModel {
+                    model_name: "Plant".to_owned(),
+                    document: doc,
+                    ..Default::default()
+                })
+                .id();
+            dispatch_one(
+                app.world_mut(),
+                CompileRequested {
+                    source: lunco_workspace::PinnedDocumentRuntimeOwner {
+                        document: doc,
+                        runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+                    },
+                    entity: Some(entity),
+                    class: Some("Plant".to_owned()),
+                    force: false,
+                    resume_after_compile: true,
+                },
+            );
+            let ModelicaCommand::Compile {
+                source: compiled,
+                extra_sources,
+                doc_uri,
+                ..
+            } = rx.try_recv().expect("compile dispatch")
+            else {
+                panic!("expected compile command");
+            };
+            assert_eq!(compiled, source);
+            if generated {
+                assert_eq!(doc_uri, "generated/Plant.mo");
+                assert!(
+                    extra_sources.is_empty(),
+                    "generated network must be self-contained"
+                );
+            } else {
+                assert_eq!(
+                    extra_sources.len(),
+                    1,
+                    "authored multi-document compilation remains intact"
+                );
+                assert!(extra_sources[0].1.contains("model Other"));
+            }
+        }
+    }
 
     #[test]
     fn document_compile_dispatch_runs_without_ui_resources() {

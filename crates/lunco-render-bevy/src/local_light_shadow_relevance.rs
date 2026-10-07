@@ -13,16 +13,30 @@ use bevy::{
         primitives::{Frustum, Sphere},
         visibility::RenderLayers,
     },
-    pbr::ExtractedPointLight,
-    prelude::{App, IntoScheduleConfigs, Query, With},
-    render::{Render, RenderApp, RenderSystems, camera::ExtractedCamera},
+    pbr::{ExtractedPointLight, PointAndSpotLightViewEntities},
+    prelude::{
+        AnyOf, App, Changed, Commands, Component, Entity, IntoScheduleConfigs, On, Or, PointLight,
+        Query, Remove, SpotLight, With, World,
+    },
+    render::{
+        Extract, ExtractSchedule, Render, RenderApp, RenderSystems, camera::ExtractedCamera,
+        sync_world::RenderEntity,
+    },
 };
+
+/// The main-world light's shadow intent, independent of render-frame culling.
+#[derive(Component)]
+struct LocalLightShadowIntent(bool);
 
 pub(super) fn build(app: &mut App) {
     let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
         return;
     };
 
+    render_app.add_systems(ExtractSchedule, extract_local_light_shadow_intent);
+    render_app
+        .world_mut()
+        .add_observer(retire_removed_local_light_shadow_views);
     render_app.add_systems(
         Render,
         suppress_irrelevant_local_light_shadows
@@ -31,48 +45,93 @@ pub(super) fn build(app: &mut App) {
     );
 }
 
+fn retire_removed_local_light_shadow_views(
+    event: On<Remove, ExtractedPointLight>,
+    mut commands: Commands,
+) {
+    let entity = event.entity;
+    commands.queue(move |world: &mut World| retire_absent_local_light_shadow_views(world, entity));
+}
+
+fn retire_absent_local_light_shadow_views(world: &mut World, entity: Entity) {
+    let Ok(mut light) = world.get_entity_mut(entity) else {
+        return;
+    };
+    if !light.contains::<ExtractedPointLight>() {
+        // Removing the native tracker invokes Bevy's own shadow-view cleanup.
+        // Re-extraction installs a fresh required tracker before prepare_lights.
+        light.remove::<PointAndSpotLightViewEntities>();
+    }
+}
+
+fn extract_local_light_shadow_intent(
+    mut commands: Commands,
+    lights: Extract<
+        Query<
+            (&RenderEntity, AnyOf<(&PointLight, &SpotLight)>),
+            Or<(
+                Changed<RenderEntity>,
+                Changed<PointLight>,
+                Changed<SpotLight>,
+            )>,
+        >,
+    >,
+) {
+    for (entity, (point, spot)) in &lights {
+        let enabled = point
+            .map(|light| light.shadow_maps_enabled)
+            .or_else(|| spot.map(|light| light.shadow_maps_enabled));
+        if let Some(enabled) = enabled {
+            commands
+                .entity(entity.id())
+                .try_insert(LocalLightShadowIntent(enabled));
+        }
+    }
+}
+
 fn suppress_irrelevant_local_light_shadows(
-    mut lights: Query<(&mut ExtractedPointLight, &RenderLayers, Option<&Frustum>)>,
+    mut lights: Query<(
+        &mut ExtractedPointLight,
+        &LocalLightShadowIntent,
+        &RenderLayers,
+        Option<&Frustum>,
+    )>,
     cameras: Query<(&Frustum, Option<&RenderLayers>), (With<Camera3d>, With<ExtractedCamera>)>,
 ) {
-    // Keep authored state intact if there is no extracted output view to judge
-    // against. Extracted cameras are Bevy's active, renderable Camera3d views.
-    if cameras.is_empty() {
-        return;
-    }
-
     let default_layers = RenderLayers::default();
-    for (mut light, light_layers, light_frustum) in &mut lights {
-        if !light.shadow_maps_enabled {
-            continue;
-        }
-
-        let light_bounds = if light.spot_light_angles.is_some() {
-            let Some(light_frustum) = light_frustum else {
-                continue;
-            };
-            conservative_frustum_sphere(light_frustum)
-        } else {
-            Some(point_light_influence_sphere(
-                light.transform.translation(),
-                light.range,
-            ))
-        };
-
-        let Some(light_bounds) = light_bounds else {
-            continue;
-        };
-
-        let camera_views = cameras
+    for (mut light, intent, light_layers, light_frustum) in &mut lights {
+        // Native light extraction is incremental; always restore the source
+        // intent before evaluating this frame's active output views.
+        let shadow_maps_enabled = if !intent.0 || cameras.is_empty() {
+            intent.0
+        } else if cameras
             .iter()
-            .map(|(frustum, layers)| (frustum, layers.unwrap_or(&default_layers)));
-        let irrelevant_to_all_cameras =
-            local_light_shadow_is_irrelevant(light_bounds, light_layers, camera_views);
+            .all(|(_, layers)| !light_layers.intersects(layers.unwrap_or(&default_layers)))
+        {
+            // Layer separation is exact and does not require a finite cone bound.
+            false
+        } else {
+            let light_bounds = if light.spot_light_angles.is_some() {
+                light_frustum.and_then(conservative_frustum_sphere)
+            } else {
+                Some(point_light_influence_sphere(
+                    light.transform.translation(),
+                    light.range,
+                ))
+            };
+            light_bounds.is_none_or(|bounds| {
+                !local_light_shadow_is_irrelevant(
+                    bounds,
+                    light_layers,
+                    cameras
+                        .iter()
+                        .map(|(frustum, layers)| (frustum, layers.unwrap_or(&default_layers))),
+                )
+            })
+        };
 
-        if irrelevant_to_all_cameras {
-            // This is render-world extracted state only. extract_lights refreshes
-            // it from the authored local light before the next render schedule.
-            light.shadow_maps_enabled = false;
+        if light.shadow_maps_enabled != shadow_maps_enabled {
+            light.shadow_maps_enabled = shadow_maps_enabled;
         }
     }
 }
@@ -340,12 +399,14 @@ mod tests {
         let offscreen_light = world
             .spawn((
                 extracted_point_light(Vec3::new(100.0, 0.0, 0.0), 20.0),
+                super::LocalLightShadowIntent(true),
                 RenderLayers::default(),
             ))
             .id();
         let visible_light = world
             .spawn((
                 extracted_point_light(Vec3::new(0.0, 0.0, -20.0), 100.0),
+                super::LocalLightShadowIntent(true),
                 RenderLayers::default(),
             ))
             .id();
@@ -365,6 +426,142 @@ mod tests {
                 .get::<bevy::pbr::ExtractedPointLight>(visible_light)
                 .unwrap()
                 .shadow_maps_enabled
+        );
+    }
+
+    #[test]
+    fn render_filter_restores_incremental_light_intent_and_parks_unbounded_spots() {
+        let mut world = bevy::prelude::World::new();
+        let camera = world
+            .spawn((
+                Camera3d::default(),
+                extracted_camera(),
+                perspective_frustum(Vec3::ZERO, 30.0, 60.0_f32.to_radians()),
+                RenderLayers::layer(1),
+            ))
+            .id();
+        let mut spot = extracted_point_light(Vec3::ZERO, 20.0);
+        spot.spot_light_angles = Some((0.1, 0.2));
+        let light = world
+            .spawn((
+                spot,
+                super::LocalLightShadowIntent(true),
+                RenderLayers::layer(2),
+            ))
+            .id();
+        let disabled = world
+            .spawn((
+                extracted_point_light(Vec3::ZERO, 20.0),
+                super::LocalLightShadowIntent(false),
+                RenderLayers::layer(1),
+            ))
+            .id();
+        let mut schedule = bevy::prelude::Schedule::default();
+        schedule.add_systems(super::suppress_irrelevant_local_light_shadows);
+        schedule.run(&mut world);
+        assert!(
+            !world
+                .get::<bevy::pbr::ExtractedPointLight>(light)
+                .unwrap()
+                .shadow_maps_enabled
+        );
+        assert!(
+            !world
+                .get::<bevy::pbr::ExtractedPointLight>(disabled)
+                .unwrap()
+                .shadow_maps_enabled
+        );
+        // No native light update occurs while a matching output becomes active.
+        world.entity_mut(camera).insert(RenderLayers::layer(2));
+        schedule.run(&mut world);
+        assert!(
+            world
+                .get::<bevy::pbr::ExtractedPointLight>(light)
+                .unwrap()
+                .shadow_maps_enabled
+        );
+        assert!(
+            !world
+                .get::<bevy::pbr::ExtractedPointLight>(disabled)
+                .unwrap()
+                .shadow_maps_enabled
+        );
+        world
+            .get_mut::<super::LocalLightShadowIntent>(light)
+            .unwrap()
+            .0 = false;
+        schedule.run(&mut world);
+        assert!(
+            !world
+                .get::<bevy::pbr::ExtractedPointLight>(light)
+                .unwrap()
+                .shadow_maps_enabled
+        );
+        world
+            .get_mut::<super::LocalLightShadowIntent>(light)
+            .unwrap()
+            .0 = true;
+        schedule.run(&mut world);
+        assert!(
+            world
+                .get::<bevy::pbr::ExtractedPointLight>(light)
+                .unwrap()
+                .shadow_maps_enabled
+        );
+        world.entity_mut(camera).insert(RenderLayers::layer(1));
+        schedule.run(&mut world);
+        assert!(
+            !world
+                .get::<bevy::pbr::ExtractedPointLight>(light)
+                .unwrap()
+                .shadow_maps_enabled
+        );
+        world.despawn(camera);
+        schedule.run(&mut world);
+        assert!(
+            world
+                .get::<bevy::pbr::ExtractedPointLight>(light)
+                .unwrap()
+                .shadow_maps_enabled
+        );
+    }
+
+    #[test]
+    fn extracted_light_removal_retires_only_absent_light_view_trackers() {
+        let mut world = bevy::prelude::World::new();
+        world.add_observer(super::retire_removed_local_light_shadow_views);
+        let light = world.spawn(extracted_point_light(Vec3::ZERO, 20.0)).id();
+        let view = world.spawn_empty().id();
+        world
+            .get_mut::<super::PointAndSpotLightViewEntities>(light)
+            .unwrap()
+            .push(view);
+        // A queued retirement must not discard a light already re-extracted.
+        super::retire_absent_local_light_shadow_views(&mut world, light);
+        assert_eq!(
+            world
+                .get::<super::PointAndSpotLightViewEntities>(light)
+                .unwrap()
+                .len(),
+            1
+        );
+        world
+            .entity_mut(light)
+            .remove::<bevy::pbr::ExtractedPointLight>();
+        world.flush();
+        assert!(
+            world
+                .get::<super::PointAndSpotLightViewEntities>(light)
+                .is_none()
+        );
+        world
+            .entity_mut(light)
+            .insert(extracted_point_light(Vec3::ZERO, 20.0));
+        assert!(
+            world
+                .get::<super::PointAndSpotLightViewEntities>(light)
+                .unwrap()
+                .is_empty()
         );
     }
 

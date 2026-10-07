@@ -16,6 +16,23 @@
 const WAIT_S = 30.0;
 
 fn simulation_dependencies(me, ctx) {
+    let rovers = [
+        find_path("/SandboxScene/Skid_Raycast_1"),
+        find_path("/SandboxScene/Skid_Raycast_2"),
+        find_path("/SandboxScene/Skid_Physical_1"),
+        find_path("/SandboxScene/Ackermann_Raycast_1"),
+        find_path("/SandboxScene/Ackermann_Physical_1"),
+        find_path("/SandboxScene/Skid_Battery_Thermal_1"),
+    ];
+    let reads = [
+        find_path("/SandboxScene/CosimTarget"),
+        find_path("/SandboxScene/JointTestA"),
+        find_path("/SandboxScene/JointTestB"),
+        find_path("/SandboxScene/Base/Arm"),
+    ];
+    for rover in rovers {
+        for descendant in vessel_descendants(rover) { reads.push(descendant); }
+    }
     #{
         modelica_entities: [
             find_path("/SandboxScene/Oscillator"),
@@ -26,8 +43,8 @@ fn simulation_dependencies(me, ctx) {
             find_path("/SandboxScene/Ackermann_Physical_1"),
             find_path("/SandboxScene/Skid_Battery_Thermal_1"),
         ],
-        entity_reads: [], entity_writes: [],
-        query_reads: ["BindingStatus", "GeneratedModelicaSource", "ListUsdAssetMetadata"],
+        entity_reads: reads, entity_writes: [],
+        query_reads: ["BindingStatus", "GeneratedModelicaSource", "ListUsdAssetMetadata", "QueryUsdPrim"],
         required_inputs: [],
     }
 }
