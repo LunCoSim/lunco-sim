@@ -9,6 +9,7 @@ description = "USD co-simulation, participant readiness, and connection projecti
 python = ["lunco-scripting/python", "dep:lunco-doc"]
 
 [dependencies]
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }

@@ -159,7 +159,20 @@ fn request_dataset_artifact(
     };
 
     let asset_uri = entry.artifact_uri();
-    let handle = asset_server.load::<TextAsset>(asset_uri.clone());
+    let asset_path =
+        match lunco_assets_core::asset_path::load_asset_path(&asset_uri, None, None, None) {
+            Ok(path) => path,
+            Err(error) => {
+                report_dataset_request_failure(
+                    id,
+                    format!("invalid dataset artifact `{asset_uri}`: {error}"),
+                    reads,
+                    commands,
+                );
+                return;
+            }
+        };
+    let handle = asset_server.load::<TextAsset>(asset_path);
     if let Some(asset) = assets.and_then(|assets| assets.get(&handle)) {
         reads.delivered.insert(id.to_owned());
         reads.failed.remove(id);

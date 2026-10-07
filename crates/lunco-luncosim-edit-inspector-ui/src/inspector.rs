@@ -3360,9 +3360,16 @@ fn shader_schema_of(
     if path.is_empty() {
         return None;
     }
+    let path = match lunco_assets_core::asset_path::load_asset_path(path, None, None, None) {
+        Ok(path) => path,
+        Err(error) => {
+            warn!("invalid inspector shader address: {error}");
+            return None;
+        }
+    };
     let handle = ctx
         .resource::<AssetServer>()?
-        .load::<bevy::shader::Shader>(path.to_string());
+        .load::<bevy::shader::Shader>(path);
     let id = handle.id();
     let cached = ctx.resource_scope(|ctx, cache: &mut ShaderSchemaCache| {
         let shaders = ctx.resource::<Assets<bevy::shader::Shader>>()?;

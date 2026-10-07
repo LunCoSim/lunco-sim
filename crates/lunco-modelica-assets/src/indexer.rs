@@ -1316,7 +1316,7 @@ fn bundled_class_node(
 ///   1. `--warm-only NAME[,NAME...]` — explicit qualified names or .mo
 ///      file paths. Anything containing `/`, `\`, or ending in `.mo`
 ///      is treated as a path; everything else as a source-library qualified name.
-///   2. `LUNCOSIM_WARM_DIRS` env var — `:`-separated list of directories
+///   2. `LUNCOSIM_WARM_DIRS` env var — platform path-list of directories (`;` on Windows, `:` on Unix)
 ///      to scan for `*.mo` files. Every top-level model in each file
 ///      is warmed under its `<file_stem_or_package>.<model_name>`
 ///      qualified path.
@@ -1354,9 +1354,7 @@ fn warm_compile_pass(opts: &Options) {
 
     // (2) LUNCOSIM_WARM_DIRS — scan dirs for .mo files.
     if let Some(dirs) = std::env::var_os("LUNCOSIM_WARM_DIRS") {
-        let dirs = dirs.to_string_lossy().to_string();
-        for dir in dirs.split(':').filter(|s| !s.is_empty()) {
-            let path = std::path::PathBuf::from(dir);
+        for path in std::env::split_paths(&dirs).filter(|path| !path.as_os_str().is_empty()) {
             if !path.exists() {
                 eprintln!(
                     "[warm] LUNCOSIM_WARM_DIRS entry does not exist: {}",

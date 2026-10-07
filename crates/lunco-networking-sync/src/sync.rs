@@ -1752,12 +1752,15 @@ pub fn drain_sync_inbox(
                             m.assets.len(),
                             &incoming_rev[..4]
                         );
-                        ctx.scenario.replace_manifest(
+                        if let Err(error) = ctx.scenario.replace_manifest(
                             &mut commands,
                             connection,
                             lunco_workspace::TwinId::new(m.mount_id),
                             m,
-                        );
+                        ) {
+                            warn!("[net] scenario manifest rejected: {error}");
+                            continue;
+                        }
                         // Phase 3 will emit AssetRequest for missing CIDs here.
                         // Phase 4 will trigger the scene load once assets land.
                     }

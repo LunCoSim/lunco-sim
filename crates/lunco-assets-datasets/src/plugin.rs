@@ -221,12 +221,8 @@ struct PendingEngineManifestScan(Option<Task<Result<DatasetRegistry, String>>>);
 fn start_engine_manifest_scan(mut pending: ResMut<PendingEngineManifestScan>) {
     pending.0 = Some(AsyncComputeTaskPool::get().spawn(async move {
         let _scan_span = bevy::log::info_span!("dataset_engine_manifest_scan").entered();
-        let manifests = lunco_assets_core::engine_manifests().map_err(|error| {
-            format!(
-                "cannot enumerate engine manifests in {}: {error}",
-                lunco_assets_core::manifests_dir().display()
-            )
-        })?;
+        let manifests = lunco_assets_core::engine_manifests()
+            .map_err(|error| format!("cannot enumerate engine manifests: {error}"))?;
         let mut prepared = DatasetRegistry::default();
         for (group, path) in manifests {
             match std::fs::read_to_string(&path) {

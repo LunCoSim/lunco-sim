@@ -83,9 +83,13 @@ evaluated ad hoc, not browsed as an authored asset.
 
 `lunco://<rel>` = the runtime `assets/<rel>`, with that root's packed cache and
 the shared cache after authored assets. The runtime root is selected by
-`lunco_assets_core::assets_dir_abs()` from the executable/package ancestry before
-the current-directory ancestry; the complete order is built by
-`lunco_assets_core::library_roots()` (`crates/lunco-assets-core/src/lunco_source.rs`).
+the fallible `lunco_assets_core::assets_dir_abs()` from `LUNCO_ASSET_ROOT` when
+set, otherwise executable/package ancestry before current-directory ancestry.
+An invalid override or unresolved library stops admission with an error;
+callers propagate that error instead of inventing a root. The asset owner
+provides typed Bevy load addresses, preserving literal `#` and `%` filenames.
+The complete read order comes from `lunco_assets_core::library_roots()` in
+`crates/lunco-assets-core/src/lib.rs`.
 `twin://<assigned-mount>/<rel>` is the same shape one level down: the Twin's authored
 root, its `<twin>/.cache`, then the global cache. This lets Twins reuse a
 global downloaded product without putting a machine path into USD.

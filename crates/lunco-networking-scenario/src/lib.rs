@@ -92,6 +92,25 @@ pub struct ScenarioAsset {
     pub media_type: Option<String>,
 }
 
+/// Validate a scenario's portable materialization paths before publishing or caching.
+/// Both peers use the same declaration boundary; native paths are not rewritten.
+pub fn validate_manifest_paths(manifest: &ScenarioManifestMsg) -> Result<(), String> {
+    let mut paths = lunco_assets_path::PortablePathSet::default();
+    for asset in &manifest.assets {
+        paths.insert(&asset.path)?;
+    }
+    if let Some(scene) = &manifest.default_scene {
+        if !lunco_assets_path::is_portable_relative_path(scene)
+            || !manifest.assets.iter().any(|asset| &asset.path == scene)
+        {
+            return Err(format!(
+                "scenario entry `{scene}` is not a portable manifest file"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Compute the scenario **revision** — a Git-style Merkle root over the sorted
 /// `(path, cid)` descriptor list. The client compares this `[u8; 32]` against
 /// its cached scenario's revision to decide "nothing to do" vs "sync".
@@ -292,6 +311,46 @@ pub struct AssetOfferMsg {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scenario_paths_admit_literal_names_and_reject_materialization_conflicts() {
+        let mut manifest = ScenarioManifestMsg {
+            mount_id: 1,
+            scenario_id: [1; 16],
+            revision: [1; 32],
+            name: "portable".into(),
+            default_scene: Some("scenes/main#% Δ.usda".into()),
+            assets: vec![ScenarioAsset {
+                path: "scenes/main#% Δ.usda".into(),
+                cid: vec![],
+                size: 0,
+                media_type: None,
+            }],
+            journal_head: None,
+            asset_base_url: None,
+            twin_scene: None,
+        };
+        assert!(validate_manifest_paths(&manifest).is_ok());
+        for path in [
+            "SCENES/other.usda",
+            "scenes/main#% Δ.usda",
+            "scenes",
+            "NUL.txt",
+            "name:stream",
+            "../escape",
+        ] {
+            manifest.assets.push(ScenarioAsset {
+                path: path.into(),
+                cid: vec![1],
+                size: 0,
+                media_type: None,
+            });
+            assert!(validate_manifest_paths(&manifest).is_err(), "{path}");
+            manifest.assets.pop();
+        }
+        manifest.default_scene = Some("scenes/missing.usda".into());
+        assert!(validate_manifest_paths(&manifest).is_err());
+    }
 
     #[test]
     fn cid_for_content_is_deterministic_and_ipfs_shaped() {

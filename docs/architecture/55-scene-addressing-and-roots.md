@@ -147,6 +147,13 @@ to a reusable logical name.
 
 ### Document source admission and lifetime
 
+The document projection owner records the committed `UsdStageAsset` ID.
+Document queries, typed edit validation, and Rhai entity lookup read that ID
+through `stage_asset_for_document`; they do not rediscover it by filename.
+Source-text and stage assets can share a literal path while retaining different
+typed identities. Before projection commits an ID, no live document stage is
+available through this boundary.
+
 A file location is the transport and save identity, independent of the document's
 runtime owner. `FileDocumentAdmission::capture` records the current canonical
 Workspace roots and exact replicated owner before dispatch. Its shared `read`
@@ -229,6 +236,16 @@ inside the existing terrain I/O worker; mounted browser Twins stay in OPFS.
 The existing bake task/job checks its never-rebound mount authority before
 publication and scene teardown cancels it. Directory lookup never runs on the UI
 thread and does not read a directory as an asset file.
+The Twin directory resolver accepts the manifest's `.` root designator for
+Modelica source directories and retains the admitted mount identity. Concrete
+file references keep their stricter child-path contract; parent traversal is
+rejected in either case.
+
+Native USD composition normalizes authored Windows drive-absolute and UNC
+references through `lunco-storage::windows_file_reference_uri` to standard
+`file:` URIs. Drive-relative references are rejected, and a foreign Windows
+filesystem reference on another host produces an explicit resolution error.
+Logical root-relative `/...` references retain the engine/Twin URI rules.
 
 Native USD composition uses standard `file:` URIs. Bevy does not register a
 filesystem source. `lunco-assets-core::asset_path::PreparedAssetPaths` prepares
@@ -236,8 +253,17 @@ native references through `lunco-storage::canonicalize_file_path` on the stage
 worker, checks canonical containment, and returns Twin-relative typed
 `AssetPath` results. Filesystem canonicalization owns Windows case-variant
 directory names, UNC/verbatim prefixes, and symlink/junction resolution;
-projection never performs filesystem lookup or case folding. The stage's
-`AssetServer` origin supplies the exact lifetime authority. Manifest names and
+projection never performs filesystem lookup or case folding. All consumers
+pass the asset owner's typed `AssetPath` to Bevy for loads and handle lookup,
+so a literal `#` in a filename cannot become an asset label. Labels remain
+explicit fields at the typed boundary. Catalog spawns reject an invalid load
+address before creating an entity. Modelica/Python bindings and Modelica
+network-member discovery resolve source loads through the stage's prepared
+native paths; pending participant sources retain the admitted load address
+for parameter recompilation. The shared program-format reader interprets
+query/fragment separators only for HTTP URLs;
+named and native filenames retain literal `#` when selecting an executor.
+The stage's `AssetServer` origin supplies the exact lifetime authority. Manifest names and
 native recipe roots cannot replace it. Missing, retired, non-Twin, malformed,
 and outside-root references retain terminal errors for their owning consumer.
 

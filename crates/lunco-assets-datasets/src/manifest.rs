@@ -198,14 +198,12 @@ pub fn entry_dest_path(
     entry: &AssetEntry,
     dest_root: Option<&Path>,
 ) -> Result<PathBuf, std::io::Error> {
-    if !entry.shared {
-        if let Some(dest) = entry.dest.as_deref() {
-            if !lunco_assets_path::is_safe_relative_path(dest) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("asset destination {dest:?} must be a safe relative path"),
-                ));
-            }
+    if let Some(dest) = entry.dest.as_deref() {
+        if !lunco_assets_path::is_portable_relative_path(dest) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("asset destination {dest:?} must be a portable relative path"),
+            ));
         }
     }
     let root = if entry.shared {
@@ -215,7 +213,7 @@ pub fn entry_dest_path(
     };
     Ok(match entry.dest.as_deref() {
         Some(destination) => root.join(destination),
-        None => source_pool_path(&root, &entry.url),
+        None => source_pool_path(&root, &entry.url)?,
     })
 }
 
@@ -339,7 +337,7 @@ pub fn installed_destination_present(entry: &AssetEntry, destination: &Path) -> 
 }
 
 /// Resolve a URL-keyed source-pool location under `root`.
-pub fn source_pool_path(root: &Path, url: &str) -> PathBuf {
+pub fn source_pool_path(root: &Path, url: &str) -> std::io::Result<PathBuf> {
     use sha2::{Digest, Sha256};
 
     let hash: String = Sha256::digest(url.as_bytes())
@@ -350,9 +348,15 @@ pub fn source_pool_path(root: &Path, url: &str) -> PathBuf {
         .split(['?', '#'])
         .next()
         .and_then(|url| url.rsplit('/').next())
-        .filter(|name| !name.is_empty() && lunco_assets_path::is_safe_relative_path(name))
+        .filter(|name| !name.is_empty())
         .unwrap_or("download.bin");
-    root.join("sources").join(&hash[..16]).join(base)
+    if !lunco_assets_path::is_portable_relative_path(base) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("URL source filename {base:?} is not portable; declare a portable destination"),
+        ));
+    }
+    Ok(root.join("sources").join(&hash[..16]).join(base))
 }
 
 /// Current processing pipeline identity used by bake completion stamps.
@@ -364,17 +368,17 @@ pub fn process_output_path(
     cache_root: Option<&Path>,
     twin_root: Option<&Path>,
 ) -> Result<PathBuf, std::io::Error> {
-    if !lunco_assets_path::is_safe_relative_path(&process.output) {
+    if !lunco_assets_path::is_portable_relative_path(&process.output) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
-                "process output {:?} must be a safe relative path",
+                "process output {:?} must be a portable relative path",
                 process.output
             ),
         ));
     }
     match process.output_root.as_str() {
-        "assets" => Ok(lunco_assets_core::assets_dir_abs().join(&process.output)),
+        "assets" => Ok(lunco_assets_core::assets_dir_abs()?.join(&process.output)),
         "twin" => twin_root
             .ok_or_else(|| {
                 std::io::Error::new(
@@ -484,4 +488,34 @@ pub fn processed_output_present(
     let stamp = stamp.trim();
     !stamp.is_empty()
         && source_path.is_none_or(|source| bake_key(source, process).is_ok_and(|key| key == stamp))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_pool_names_preserve_literals_and_reject_nonportable_url_names() {
+        let root = Path::new("cache");
+        let path = source_pool_path(root, "https://example.invalid/Δ file%20.bin?q=1").unwrap();
+        assert!(path.starts_with(root.join("sources")));
+        assert_eq!(path.file_name().unwrap(), "Δ file%20.bin");
+        assert_eq!(
+            source_pool_path(root, "https://example.invalid/")
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "download.bin"
+        );
+        for url in [
+            "https://example.invalid/NUL",
+            "https://example.invalid/data:stream",
+            "https://example.invalid/file.",
+        ] {
+            assert_eq!(
+                source_pool_path(root, url).unwrap_err().kind(),
+                std::io::ErrorKind::InvalidInput
+            );
+        }
+    }
 }

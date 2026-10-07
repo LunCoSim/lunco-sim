@@ -687,6 +687,7 @@ async fn prepare(
                 path
             } else {
                 lunco_assets_core::engine_asset_local_path(&path.to_string_lossy())
+                    .map_err(|error| error.to_string())?
                     .filter(|path| path.is_file())
                     .unwrap_or(path)
             };
@@ -700,7 +701,11 @@ async fn prepare(
                         lunco_usd_compose::recipe_from_bytes_with_roots(
                             &id,
                             std::mem::take(&mut bytes),
-                            Some(crate::validate::engine_assets_root().as_path()),
+                            Some(
+                                crate::validate::engine_assets_root()
+                                    .map_err(|error| error.to_string())?
+                                    .as_path(),
+                            ),
                             None,
                             limits,
                         )
@@ -886,7 +891,11 @@ async fn prepare_twin_sources(
                             lunco_usd_compose::recipe_from_bytes_with_roots(
                                 &id,
                                 std::mem::take(&mut bytes),
-                                Some(crate::validate::engine_assets_root().as_path()),
+                                Some(
+                                    crate::validate::engine_assets_root()
+                                        .map_err(|error| error.to_string())?
+                                        .as_path(),
+                                ),
                                 Some(&input.root),
                                 lunco_usd_compose::recipe::StageClosureLimits {
                                     max_bytes: limits.max_bytes.saturating_sub(retained_bytes),

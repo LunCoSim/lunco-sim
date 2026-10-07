@@ -507,7 +507,15 @@ impl ModelicaCompiler {
         if self.failed_source_roots.contains_key(root) {
             return false;
         }
-        let live_dir = lunco_assets_core::models_package_root_path(root);
+        let live_dir = match lunco_assets_core::models_package_root_path(root) {
+            Ok(path) => path,
+            Err(error) => {
+                self.failed_source_roots
+                    .insert(root.to_owned(), error.to_string());
+                log::error!("[ModelicaCompiler] invalid model asset root: {error}");
+                return false;
+            }
+        };
         let files = lunco_assets_runtime::models::package_files_live(root);
         if let Ok(files) = files {
             if files.is_empty() {
@@ -664,6 +672,15 @@ impl ModelicaCompiler {
             return self.compile_loaded(&qualified);
         }
         if self.class_is_owned_by_installed_root(model_name) {
+            let cid = lunco_hash::content::cid(source.as_bytes());
+            let source_is_admitted = self.source_root_content_closures.values().any(|closure| {
+                closure
+                    .as_ref()
+                    .is_ok_and(|root| root.files.iter().any(|file| file.cid == cid))
+            });
+            if source_is_admitted {
+                return self.compile_loaded(model_name);
+            }
             return Err(format!(
                 "`{filename}` declares `{model_name}`, but that class is already owned by a \
                  loaded Modelica source root; edit the source-root document or use a new \
@@ -1833,6 +1850,31 @@ end Controls;"
                 .class_lookup_query("Shared.Component")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn flat_source_root_reuses_exact_content_and_rejects_conflicting_definition() {
+        let mut compiler = ModelicaCompiler::new();
+        let source = "model Probe output Real x; equation x = 2; end Probe;";
+        let report = compiler.load_source_root_in_memory(
+            "twin:probe",
+            "inline",
+            vec![("Probe # %.mo".into(), source.into())],
+        );
+        assert!(report.diagnostics.is_empty(), "{report:?}");
+        assert!(
+            compiler
+                .compile_str("Probe", source, "twin://probe/Probe # %.mo")
+                .is_ok()
+        );
+        let error = compiler
+            .compile_str(
+                "Probe",
+                "model Probe output Real x; equation x = 3; end Probe;",
+                "other.mo",
+            )
+            .unwrap_err();
+        assert!(error.contains("already owned"), "{error}");
     }
 
     #[test]

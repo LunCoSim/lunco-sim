@@ -210,7 +210,8 @@ impl ClientScenarioLifecycle<'_> {
         connection: Entity,
         owner: lunco_workspace::TwinId,
         manifest: ScenarioManifestMsg,
-    ) {
+    ) -> Result<(), String> {
+        lunco_networking_scenario::validate_manifest_paths(&manifest)?;
         let cache_admission = match CacheAdmission::new() {
             Ok(admission) => Some(admission),
             Err(error) => {
@@ -227,6 +228,7 @@ impl ClientScenarioLifecycle<'_> {
         self.remote.host_twin = Some(owner);
         self.remote.manifest = Some(manifest);
         self.remote.cache_admission = cache_admission;
+        Ok(())
     }
 }
 
@@ -686,7 +688,7 @@ pub fn scenario_cache_root(scenario_id: &[u8; 16], revision: &[u8; 32]) -> PathB
 /// comes from a remote host and must never escape a target root. `None` if unsafe
 /// or empty.
 pub fn safe_rel_path(rel: &str) -> Option<PathBuf> {
-    if !lunco_assets_path::is_safe_relative_path(rel) {
+    if !lunco_assets_path::is_portable_relative_path(rel) {
         warn!("[net] rejecting unsafe scenario asset path: {rel:?}");
         return None;
     }

@@ -175,7 +175,9 @@ re-derives that mapping:
 |---|---|
 | Scheme parsing and URI construction | `lunco-assets-path::{split_scheme, uri}` |
 | Canonicalize against a document or root | `lunco-assets-path::{canonicalize, canonicalize_root}` |
-| Validate a relative asset path | `lunco-assets-path::{is_safe_relative_path, relative_path}` |
+| Validate a relative read address | `lunco-assets-path::{is_safe_relative_path, relative_path}` |
+| Validate transferable filenames and a materialized tree | `lunco-assets-path::{is_portable_relative_path, PortablePathSet}` |
+| Native destination overlap identity | `lunco-storage::FilePathIdentity` (prepare on the scan worker, compare without I/O) |
 | Register the sources | `lunco-assets-runtime::asset_sources::register_lunco_asset_sources` |
 | Build a Twin URI | `twin_uri(name, rel)` |
 | Parse a Twin URI | `parse_twin_uri` |
@@ -195,8 +197,10 @@ and preserves the document's registered source authority; the production
 surface, while the runtime shader loader calls the Rust owner directly.
 
 `LUNCO_ASSET_ROOT` is an explicit native launch/test boundary. It names the
-directory containing the selected `assets/` library and fails at startup when
-the directory does not exist; it never silently falls through to the packaged
+directory containing the selected `assets/` library. `assets_dir_abs`, derived
+library paths, source registration, and application builders return a fallible
+result. Invalid overrides, missing discovery, and unreadable roots produce a
+terminal startup error; it never silently falls through to the packaged
 binary root. This is how a production binary from another worktree can be run
 against the current checkout's authored assets while retaining one resolver.
 
@@ -328,6 +332,24 @@ but cannot publish a stale artifact after close returns. The update scan
 discovers new roots only; it is not the teardown mechanism. A registry lock
 failure is reported as an error; it is never treated as a successful mount or
 unmount.
+
+Transferable dataset destinations and scenario manifests use portable relative
+components: Windows devices, control characters, reserved punctuation, trailing
+dots/spaces, absolute paths, and traversal are rejected on every host. Literal
+`#`, `%`, spaces and Unicode remain valid filenames. `PortablePathSet` also
+rejects duplicate files, file/directory conflicts, and case-alias components
+using a conservative Unicode uppercase key. Both server publication and client
+admission validate the complete manifest before replacing a mounted scenario.
+This portability key is not used for native filesystem identity.
+
+Dataset scan workers prepare native source/output identities through
+`FilePathIdentity`: canonical existing ancestors resolve links and Windows
+verbatim prefixes; missing descendants inherit the ancestor's native directory
+case mode. Windows comparisons use ordinal filesystem-name comparison. An
+unknown case mode rejects ambiguous ownership visibly. Admission and worker
+merge compare the prepared identities without I/O, rejecting outputs that
+could replace another output or source. These snapshots do not lock out
+external filesystem changes. Read roots travel with the prepared declaration.
 
 ### Where a download lands
 

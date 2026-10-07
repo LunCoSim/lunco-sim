@@ -52,7 +52,7 @@ fn boot_app() -> App {
     // Twin asset source + `TwinRoots` — must be registered BEFORE `AssetPlugin`
     // (Bevy snapshots asset sources at its build). The doc-backed viewport mounts
     // through the `twin://` source, so the projection path needs it.
-    lunco_assets_runtime::register_lunco_asset_sources(&mut app);
+    lunco_assets_runtime::register_lunco_asset_sources(&mut app).unwrap();
     app.add_plugins(AssetPlugin::default());
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();

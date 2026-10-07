@@ -941,7 +941,14 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
     // Resolve the absolute path to find the enclosing Twin folder. This is
     // deliberately shared by shipped scenes and external Twin roots: a CLI
     // spelling must never change which document root gets mounted.
-    let abs_path = resolve_scene_cli_path(&scene_path);
+    let abs_path = match resolve_scene_cli_path(&scene_path) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("startup scene resolution failed: {error}");
+            world.write_message(AppExit::error());
+            return;
+        }
+    };
 
     // The root that owns this scene — nearest `twin.toml` ancestor, else the
     // containing folder. Shared with the runtime open path (`OpenFile` →
@@ -1009,29 +1016,29 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
 /// path, including a custom Twin's symlink/layout, and report a precise error
 /// if it does not exist.
 #[cfg(not(target_arch = "wasm32"))]
-fn resolve_scene_cli_path(input: &str) -> std::path::PathBuf {
+fn resolve_scene_cli_path(input: &str) -> std::io::Result<std::path::PathBuf> {
     use std::path::Path;
 
     let path = Path::new(input);
     if path.is_absolute() {
-        return path.to_path_buf();
+        return Ok(path.to_path_buf());
     }
 
     if let Ok(cwd) = std::env::current_dir() {
         let cwd_relative = cwd.join(path);
         if cwd_relative.exists() {
-            return cwd_relative;
+            return Ok(cwd_relative);
         }
     }
 
     if let Ok(without_assets) = path.strip_prefix(lunco_assets_core::ASSETS_DIR_NAME) {
-        let asset_spelling = lunco_assets_core::assets_dir_abs().join(without_assets);
+        let asset_spelling = lunco_assets_core::assets_dir_abs()?.join(without_assets);
         if asset_spelling.exists() {
-            return asset_spelling;
+            return Ok(asset_spelling);
         }
     }
 
-    lunco_assets_core::assets_dir_abs().join(path)
+    Ok(lunco_assets_core::assets_dir_abs()?.join(path))
 }
 
 /// Tracks an explicitly requested startup scene so the two startup failguards

@@ -356,9 +356,8 @@ fn source_path(entry: &DatasetEntry) -> Result<std::path::PathBuf, String> {
     let source = std::iter::once(entry.path.clone())
         .chain(
             entry
-                .scope
                 .read_roots()
-                .into_iter()
+                .iter()
                 .map(|root| root.join(source_relative)),
         )
         .find(|path| path.is_file())

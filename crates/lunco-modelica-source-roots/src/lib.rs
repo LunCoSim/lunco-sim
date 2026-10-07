@@ -198,11 +198,16 @@ impl SourceRootRegistry {
             if roots.contains_key(&root_name) {
                 continue;
             }
-            let kind = lunco_assets_core::models_package_root_path(&root_name)
-                .map(|root_dir| SourceRootKind::Disk { root_dir })
-                .unwrap_or_else(|| SourceRootKind::BundledPackage {
+            let kind = match lunco_assets_core::models_package_root_path(&root_name) {
+                Ok(Some(root_dir)) => SourceRootKind::Disk { root_dir },
+                Ok(None) => SourceRootKind::BundledPackage {
                     root: root_name.clone(),
-                });
+                },
+                Err(error) => {
+                    bevy::log::error!("[source-roots] model root `{root_name}` failed: {error}");
+                    continue;
+                }
+            };
             roots.insert(
                 root_name.clone(),
                 SourceRoot {

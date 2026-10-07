@@ -2827,7 +2827,8 @@ fn build_world_engine_base(
         |document: ImmutableString,
          relative: ImmutableString|
          -> Result<ImmutableString, Box<rhai::EvalAltResult>> {
-            let path = bevy::asset::AssetPath::parse(document.as_str()).into_owned();
+            let path = lunco_assets_core::asset_path::load_asset_path(document.as_str(), None, None, None)
+                .map_err(|error| Box::<rhai::EvalAltResult>::from(format!("invalid source address `{document}`: {error}")))?;
             lunco_assets_core::asset_path::source_relative_uri(&path, relative.as_str())
                 .map(Into::into)
                 .ok_or_else(|| {

@@ -1966,10 +1966,16 @@ pub fn run() -> u8 {
     //
     // The core builder receives the compute-pool override at plugin-group build
     // time, keeping scene tests on the same production composition as the server.
-    let mut app = lunco_luncosim_runtime::build_headless_app_with_scene(
+    let mut app = match lunco_luncosim_runtime::build_headless_app_with_scene(
         (cli.threads > 0).then_some(cli.threads),
         Some(cli.scene.clone()),
-    );
+    ) {
+        Ok(app) => app,
+        Err(error) => {
+            eprintln!("scene-test startup failed: {error}");
+            return 2;
+        }
+    };
     app.add_plugins(LunCoSimHeadlessPlugin::default());
     if let Err(error) = install_scene_test_queries(&mut app, &cli, determinism_reference) {
         eprintln!("scene-test query setup failed: {error}");
@@ -2943,8 +2949,20 @@ pub fn run() -> u8 {
 /// Print the authoritative scene-test catalog without constructing Bevy or a
 /// renderer. The shell gates consume this as `KIND<TAB>assets-relative-scene`.
 fn list_scene_tests() -> u8 {
-    let scenes_dir = lunco_assets_core::engine_scene_tests_root();
-    let assets_root = lunco_assets_core::assets_dir_abs();
+    let assets_root = match lunco_assets_core::assets_dir_abs() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("scene-test asset root failed: {error}");
+            return 2;
+        }
+    };
+    let scenes_dir = match lunco_assets_core::engine_scene_tests_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("scene-test catalog root failed: {error}");
+            return 2;
+        }
+    };
     let tests = match lunco_scene_validation::test_discovery::discover_scene_tests(&scenes_dir) {
         Ok(tests) => tests,
         Err(error) => {

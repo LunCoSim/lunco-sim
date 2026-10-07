@@ -6,6 +6,7 @@ license.workspace = true
 description = "Transport-neutral scenario manifest and asset wire contracts"
 
 [dependencies]
+lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-hash = { path = "../lunco-hash", features = ["cid"] }
 serde = { workspace = true }
 sha2 = { workspace = true }

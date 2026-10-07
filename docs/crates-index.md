@@ -28,8 +28,8 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-twin-journal`** | Canonical Twin-scoped op log: Lamport-ordered entries, DAG parents (for future merges), Streams + Composition, ChangeSets, Markers (named milestones), Branches, `UndoManager`. CRDT-shapable schema; in-memory backend today, yrs-swap-ready. |
 | **`lunco-doc`** | Foundation for structured artifacts (Modelica, USD, SysML): process-wide live document handle allocation, the `DocumentHost` container and atomic `DocumentOp` pattern with built-in undo/redo; typed named diagram view documents store source bindings, scopes, and independent layouts without copying source topology. |
 | **`lunco-doc-bevy`** | Bevy ECS integration for the Document System: lifecycle events, document-identity command payloads such as `rename::RenameOpenDocument`, `JournalResource` (Bevy wrapper around the canonical Twin journal), `BevyJournalSink` for remote-replay, `EditorIntent` keybindings, `Presence` collab seed, and prepared file opens that retain registry path identity and dirty-document policy. |
-| **`lunco-storage`** | I/O abstraction layer (`Storage` trait, native filesystem, memory and browser backends), bounded file reads and lexical direct-file listing. The single write path; raw `std::fs` is disallowed. |
-| **`lunco-assets-path`** | Platform-neutral URI and relative-path algebra: scheme parsing, canonicalization, separator normalization, and traversal checks. It has no Bevy, filesystem, storage, or application dependency. |
+| **`lunco-storage`** | I/O abstraction layer (`Storage` trait, native filesystem, memory and browser backends), bounded file reads, lexical direct-file listing, and worker-prepared native destination identities. The single write path; raw `std::fs` is disallowed. |
+| **`lunco-assets-path`** | Platform-neutral URI and relative-path algebra: scheme parsing, canonicalization, separator normalization, traversal checks, and portable materialization tree validation. It has no Bevy, filesystem, storage, or application dependency. |
 | **`lunco-assets-core`** | Lightweight asset identity and resolution: canonical `lunco://`/`twin://` sources, cache/Twin roots, traversal-safe path/cache operations, worker-prepared native asset paths and OpenUSD search-path resolutions pinned to live Twin mounts, and storage-facing identity contracts. It excludes source catalogs, scripting, text loaders, discovery, network, and archive/runtime integration. |
 | **`lunco-assets-runtime`** | Bevy asset-source and authored-text runtime: source registration, discovery/catalogs, library/model/script/text loaders, policy-requested dataset artifact reads, web fetch integration, and the asset-manifest tool. It consumes `lunco-assets-core` without making the identity layer depend on runtime services. |
 | **`lunco-assets-datasets`** | Lightweight `Assets.toml` declarations, scoped dataset identity, artifact-path contracts, process-output ownership validation, lifecycle state, and the typed request/process/cancel command contracts. It has no HTTP, archive, image, GeoTIFF, or native processing dependencies. |
@@ -369,6 +369,8 @@ Foundation for structured, mutable artifacts (Modelica, USD, etc.) with built-in
 I/O abstraction layer providing a unified `Storage` trait for reading, writing,
 renaming, entry-kind inspection, directory listing/preparation, and backend
 selection through handles.
+Owns worker-prepared `FilePathIdentity` snapshots for native destination
+ownership, including missing paths and Windows directory case semantics.
 Owns standard native file URI decoding/encoding through `file_uri_to_path`
 and `file_path_to_uri`; malformed addresses fail before filesystem access.
 Supports native FS, memory, browser localStorage and OPFS. Native and OPFS

@@ -110,7 +110,10 @@ fn main() {
     let headless = false;
 
     let mut app = App::new();
-    lunco_assets_runtime::register_lunco_asset_sources(&mut app);
+    if let Err(error) = lunco_assets_runtime::register_lunco_asset_sources(&mut app) {
+        eprintln!("lunica startup failed: {error}");
+        std::process::exit(1);
+    }
 
     // Physics fixed timestep (lunco_core_runtime::FIXED_HZ). Modelica stepping runs in
     // FixedUpdate so the worker receives a predictable per-tick dt.
@@ -441,8 +444,16 @@ fn request_web_workbench(
             return;
         }
     };
+    let path = match lunco_assets_core::asset_path::load_asset_path(&asset_path, None, None, None) {
+        Ok(path) => path,
+        Err(error) => {
+            bevy::log::error!("[lunica] invalid Modelica deep link `{asset_path}`: {error}");
+            commands.insert_resource(WebWorkbenchStarted);
+            return;
+        }
+    };
     commands.insert_resource(BundledModelInfo {
-        source: server.load(asset_path.clone()),
+        source: server.load(path),
         asset_path,
     });
 }

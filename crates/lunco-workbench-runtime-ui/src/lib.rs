@@ -810,8 +810,8 @@ impl RuntimeUiSurface {
         template: Handle<HtmlTemplate>,
         stylesheet: Handle<StyleSheet>,
         server: Option<&AssetServer>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, String> {
+        Ok(Self {
             layout_id: definition.id.clone(),
             namespace: definition.namespace.clone(),
             template,
@@ -820,15 +820,27 @@ impl RuntimeUiSurface {
             collections: definition
                 .collections
                 .iter()
-                .map(|collection| RuntimeUiCollection {
-                    source: collection.source.clone(),
-                    container: collection.container.clone(),
-                    template: server
-                        .map(|server| server.load(collection.template.clone()))
-                        .unwrap_or_default(),
-                    key: collection.key.clone(),
+                .map(|collection| {
+                    let template = match server {
+                        Some(server) => server.load(
+                            lunco_assets_core::asset_path::load_asset_path(
+                                &collection.template,
+                                None,
+                                None,
+                                None,
+                            )
+                            .map_err(|error| error.to_string())?,
+                        ),
+                        None => Handle::default(),
+                    };
+                    Ok(RuntimeUiCollection {
+                        source: collection.source.clone(),
+                        container: collection.container.clone(),
+                        template,
+                        key: collection.key.clone(),
+                    })
                 })
-                .collect(),
+                .collect::<Result<_, String>>()?,
             visible_in_perspective: definition.visible_in_perspective.clone(),
             gate: definition.gate.clone(),
             setting: definition.setting.clone(),
@@ -844,7 +856,7 @@ impl RuntimeUiSurface {
             placement: (&definition.placement).into(),
             applied_revision: 0,
             applied_placement: None,
-        }
+        })
     }
 
     /// Return the exposure namespace owned by this surface.
@@ -1261,13 +1273,30 @@ fn spawn_runtime_ui_surface(
     definition: &RuntimeUiSurfaceDefinition,
     server: &AssetServer,
 ) {
-    let template: Handle<HtmlTemplate> = server.load(definition.template.clone());
-    let stylesheet: Handle<StyleSheet> = server.load(definition.stylesheet.clone());
-    let mut entity = commands.spawn((
-        Node::default(),
-        RuntimeUiSurface::from_definition(definition, template, stylesheet, Some(server)),
-        Visibility::Hidden,
-    ));
+    let admitted = (|| -> Result<_, String> {
+        let template = server.load(
+            lunco_assets_core::asset_path::load_asset_path(&definition.template, None, None, None)
+                .map_err(|error| error.to_string())?,
+        );
+        let stylesheet = server.load(
+            lunco_assets_core::asset_path::load_asset_path(
+                &definition.stylesheet,
+                None,
+                None,
+                None,
+            )
+            .map_err(|error| error.to_string())?,
+        );
+        RuntimeUiSurface::from_definition(definition, template, stylesheet, Some(server))
+    })();
+    let surface = match admitted {
+        Ok(surface) => surface,
+        Err(error) => {
+            lunco_core::trigger_runtime_error(commands, "ui-asset-address-invalid", error);
+            return;
+        }
+    };
+    let mut entity = commands.spawn((Node::default(), surface, Visibility::Hidden));
     if definition.draggable {
         entity.observe(emit_runtime_ui_surface_drag);
     }
@@ -2415,7 +2444,10 @@ fn is_descendant_of_runtime_surface(
 
 /// Computed node bounds in logical window coordinates, shared by input and
 /// scene-label occlusion so DPI and retained layout use the same geometry.
-pub fn runtime_ui_input_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> Option<egui::Rect> {
+pub fn runtime_ui_input_rect(
+    node: &ComputedNode,
+    transform: &UiGlobalTransform,
+) -> Option<egui::Rect> {
     if node.is_empty() || !node.inverse_scale_factor.is_finite() || node.inverse_scale_factor <= 0.0
     {
         return None;
@@ -2831,7 +2863,8 @@ mod tests {
             Handle::default(),
             Handle::default(),
             None,
-        );
+        )
+        .unwrap();
         let mut layouts = RuntimeSurfaceLayouts::default();
         layouts.set(
             "window",

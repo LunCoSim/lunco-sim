@@ -38,7 +38,10 @@ For queued pointer/menu calls, follow the canonical
   policy replacement.
 - Put a Twin-specific builder, component lint, or requirement helper in
   `<twin>/tools/<name>.rhai`. It is persisted with that Twin and must not leak
-  into unrelated Twins.
+  into unrelated Twins. Persisted library names are portable single file stems;
+  Windows device names, reserved punctuation and trailing dots/spaces are
+  rejected on every host. Literal `#`, `%`, spaces and Unicode are supported;
+  runtime discovery uses typed asset paths to preserve their spelling.
 - Edit an existing Twin `.rhai` asset through the source Editor: open its
   Twin-relative path with `OpenTwinSource`, edit the buffer, and persist it
   with `SaveSourceText`. Use Save & Update when the source needs to be

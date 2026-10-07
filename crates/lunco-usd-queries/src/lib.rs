@@ -5,7 +5,7 @@
 //! projection. It does not maintain a second asset graph or infer an active
 //! document from UI state.
 
-use bevy::asset::{AssetServer, Assets};
+use bevy::asset::Assets;
 use bevy::prelude::{App, Plugin, Vec3, World};
 use lunco_api::queries::{
     ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, api_param_bool,
@@ -99,8 +99,7 @@ fn document_stage_recipe<'a>(
     doc: DocumentId,
 ) -> Option<&'a lunco_usd_compose::recipe::StageRecipe> {
     let backed = world.get_resource::<DocBackedTwinScenes>()?;
-    let asset_server = world.get_resource::<AssetServer>()?;
-    let stage_id = stage_asset_for_document(backed, asset_server, doc)?;
+    let stage_id = stage_asset_for_document(backed, doc)?;
     world
         .get_resource::<Assets<UsdStageAsset>>()?
         .get(stage_id)?

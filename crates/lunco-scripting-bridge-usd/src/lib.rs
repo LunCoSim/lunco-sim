@@ -58,8 +58,7 @@ pub fn find_path_in_document(doc_id: u64, path: &str) -> i64 {
     with_world(|world| {
         let doc = lunco_doc::DocumentId::new(doc_id);
         let backed = world.get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()?;
-        let asset_server = world.get_resource::<AssetServer>()?;
-        let stage = lunco_usd_bevy_twin::stage_asset_for_document(backed, asset_server, doc)?;
+        let stage = lunco_usd_bevy_twin::stage_asset_for_document(backed, doc)?;
         let mut prims = world.query::<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>();
         let entities = world.get_resource::<ApiEntityRegistry>()?;
         prims

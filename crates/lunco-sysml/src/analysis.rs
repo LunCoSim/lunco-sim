@@ -320,14 +320,19 @@ fn prepare_twin_sysml_analysis(
         .ok_or_else(|| "SysML analysis operation id exhausted".to_owned())?;
     let sources: Vec<SourceHandle> = expected
         .into_iter()
-        .map(|relative| SourceHandle {
-            relative_path: relative
-                .to_str()
-                .expect("UTF-8 SysML path checked above")
-                .to_owned(),
-            handle: asset_server.load::<SysmlSource>(twin_uri(&request.name, &relative)),
+        .map(|relative| {
+            let uri = twin_uri(&request.name, &relative);
+            let path = lunco_assets_core::asset_path::load_asset_path(&uri, None, None, None)
+                .map_err(|error| format!("invalid SysML source `{uri}`: {error}"))?;
+            Ok(SourceHandle {
+                relative_path: relative
+                    .to_str()
+                    .expect("UTF-8 SysML path checked above")
+                    .to_owned(),
+                handle: asset_server.load::<SysmlSource>(path),
+            })
         })
-        .collect();
+        .collect::<Result<_, String>>()?;
     analyses.source_sets.insert(
         request.twin_id,
         (

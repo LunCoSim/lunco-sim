@@ -76,15 +76,15 @@ impl DatasetScope {
     }
 
     /// Roots searched for a delivered artifact, in precedence order.
-    pub fn read_roots(&self) -> Vec<PathBuf> {
-        match self {
-            Self::Engine => lunco_assets_core::library_roots(&lunco_assets_core::assets_dir_abs()),
+    pub fn read_roots(&self) -> std::io::Result<Vec<PathBuf>> {
+        Ok(match self {
+            Self::Engine => lunco_assets_core::library_roots(&lunco_assets_core::assets_dir_abs()?),
             Self::Twin { root, .. } => vec![
                 root.clone(),
                 lunco_assets_core::twin_cache_dir(root),
                 lunco_assets_core::cache_dir(),
             ],
-        }
+        })
     }
 
     /// Human-readable grouping label.
@@ -119,6 +119,9 @@ pub struct DatasetEntry {
     pub state: DatasetState,
     /// Full declaration, including domain metadata.
     pub spec: AssetEntry,
+    read_roots: Vec<PathBuf>,
+    source_identity: lunco_storage::FilePathIdentity,
+    output: Option<(PathBuf, lunco_storage::FilePathIdentity)>,
 }
 
 fn artifact_present(spec: &AssetEntry, path: &Path, source_path: Option<&Path>) -> bool {
@@ -137,9 +140,14 @@ fn artifact_present(spec: &AssetEntry, path: &Path, source_path: Option<&Path>) 
 }
 
 impl DatasetEntry {
+    /// Exact read roots validated with this declaration on its scan worker.
+    pub fn read_roots(&self) -> &[PathBuf] {
+        &self.read_roots
+    }
+
     /// Resolve the first readable copy of the delivered artifact.
     pub fn artifact_path(&self) -> PathBuf {
-        for root in self.scope.read_roots() {
+        for root in &self.read_roots {
             let candidate = root.join(&self.artifact_rel);
             if artifact_present(&self.spec, &candidate, None) {
                 return candidate;
@@ -159,8 +167,7 @@ impl DatasetEntry {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let source_rel = self
-                .scope
-                .read_roots()
+                .read_roots
                 .iter()
                 .find_map(|root| self.path.strip_prefix(root).ok().map(Path::to_path_buf));
             source_rel
@@ -272,7 +279,8 @@ impl DatasetRegistry {
         self.register_scoped(assets_toml, group, DatasetScope::Engine)
     }
 
-    /// Register a manifest under an explicit scope.
+    /// Register a manifest under an explicit scope on the owning I/O worker.
+    /// Native destination identities are prepared here; admission compares them without I/O.
     pub fn register_scoped(
         &mut self,
         assets_toml: &str,
@@ -340,14 +348,39 @@ impl DatasetRegistry {
             } else {
                 None
             };
-            if let Some(conflict) =
-                self.process_output_conflict(&key, &path, output_path.as_deref())
+            let identities = (|| -> Result<_, lunco_storage::StorageError> {
+                let source = lunco_storage::FilePathIdentity::prepare(&path)?;
+                let output = output_path
+                    .map(|path| {
+                        lunco_storage::FilePathIdentity::prepare(&path)
+                            .map(|identity| (path, identity))
+                    })
+                    .transpose()?;
+                Ok((source, output))
+            })();
+            let (source_identity, output) = match identities {
+                Ok(identities) => identities,
+                Err(error) => {
+                    self.record_failure(format!(
+                        "dataset '{key}' destination identity failed: {error}"
+                    ));
+                    continue;
+                }
+            };
+            if let Err(conflict) =
+                self.process_output_conflict(&key, &path, &source_identity, output.as_ref())
             {
                 self.record_failure(conflict);
                 continue;
             }
-            let state = if scope
-                .read_roots()
+            let read_roots = match scope.read_roots() {
+                Ok(roots) => roots,
+                Err(error) => {
+                    self.record_failure(format!("dataset '{key}' read root failed: {error}"));
+                    continue;
+                }
+            };
+            let state = if read_roots
                 .iter()
                 .any(|root| artifact_present(&spec, &root.join(&artifact_rel), None))
             {
@@ -366,6 +399,9 @@ impl DatasetRegistry {
                 artifact_rel,
                 state,
                 spec,
+                read_roots,
+                source_identity,
+                output,
             });
             added += 1;
         }
@@ -392,32 +428,12 @@ impl DatasetRegistry {
                 ));
                 continue;
             }
-            let output_path = if let Some(process) = &entry.spec.process {
-                let twin_root = match &entry.scope {
-                    DatasetScope::Twin { root, .. } => Some(root.as_path()),
-                    DatasetScope::Engine => None,
-                };
-                match process_output_path(
-                    process,
-                    Some(&entry.scope.cache_root(entry.spec.shared)),
-                    twin_root,
-                ) {
-                    Ok(path) => Some(path),
-                    Err(error) => {
-                        self.record_failure(format!(
-                            "dataset '{}' in scope '{}' has an invalid processed output: {error}",
-                            entry.key,
-                            entry.scope.label()
-                        ));
-                        continue;
-                    }
-                }
-            } else {
-                None
-            };
-            if let Some(conflict) =
-                self.process_output_conflict(&entry.key, &entry.path, output_path.as_deref())
-            {
+            if let Err(conflict) = self.process_output_conflict(
+                &entry.key,
+                &entry.path,
+                &entry.source_identity,
+                entry.output.as_ref(),
+            ) {
                 self.record_failure(conflict);
                 continue;
             }
@@ -431,74 +447,57 @@ impl DatasetRegistry {
         &self,
         key: &str,
         source_path: &Path,
-        output_path: Option<&Path>,
-    ) -> Option<String> {
-        if let Some(output_path) = output_path {
-            if paths_overlap(source_path, output_path) {
-                return Some(format!(
+        source_identity: &lunco_storage::FilePathIdentity,
+        output: Option<&(PathBuf, lunco_storage::FilePathIdentity)>,
+    ) -> Result<(), String> {
+        let overlaps = |left: &lunco_storage::FilePathIdentity,
+                        right: &lunco_storage::FilePathIdentity| {
+            left.overlaps(right).map_err(|error| {
+                format!("dataset '{key}' output ownership could not be established: {error}")
+            })
+        };
+        if let Some((path, identity)) = output {
+            if overlaps(source_identity, identity)? {
+                return Err(format!(
                     "dataset '{key}' process output {} overlaps its downloaded source {}",
-                    output_path.display(),
+                    path.display(),
                     source_path.display()
                 ));
             }
         }
-
         for entry in &self.entries {
-            let entry_output = if let Some(process) = &entry.spec.process {
-                let twin_root = match &entry.scope {
-                    DatasetScope::Twin { root, .. } => Some(root.as_path()),
-                    DatasetScope::Engine => None,
-                };
-                match process_output_path(
-                    process,
-                    Some(&entry.scope.cache_root(entry.spec.shared)),
-                    twin_root,
-                ) {
-                    Ok(path) => Some(path),
-                    Err(error) => {
-                        return Some(format!(
-                            "dataset '{}' has an invalid process output while checking dataset '{key}': {error}",
-                            entry.key
-                        ));
-                    }
-                }
-            } else {
-                None
-            };
-
-            if let Some(output_path) = output_path {
-                if paths_overlap(output_path, &entry.path) {
-                    return Some(format!(
+            if let Some((path, identity)) = output {
+                if overlaps(identity, &entry.source_identity)? {
+                    return Err(format!(
                         "dataset '{key}' process output {} overlaps dataset '{}' source {}",
-                        output_path.display(),
+                        path.display(),
                         entry.key,
                         entry.path.display()
                     ));
                 }
             }
-
-            if let Some(entry_output) = entry_output {
-                if let Some(output_path) = output_path {
-                    if paths_overlap(output_path, &entry_output) {
-                        return Some(format!(
+            if let Some((entry_path, entry_identity)) = &entry.output {
+                if let Some((path, identity)) = output {
+                    if overlaps(identity, entry_identity)? {
+                        return Err(format!(
                             "dataset '{key}' process output {} overlaps dataset '{}' process output {}",
-                            output_path.display(),
+                            path.display(),
                             entry.key,
-                            entry_output.display()
+                            entry_path.display()
                         ));
                     }
                 }
-                if paths_overlap(source_path, &entry_output) {
-                    return Some(format!(
+                if overlaps(source_identity, entry_identity)? {
+                    return Err(format!(
                         "dataset '{key}' source {} overlaps dataset '{}' process output {}",
                         source_path.display(),
                         entry.key,
-                        entry_output.display()
+                        entry_path.display()
                     ));
                 }
             }
         }
-        None
+        Ok(())
     }
 
     /// Scan and register an opened Twin's `Assets.toml`.
@@ -570,7 +569,7 @@ impl DatasetRegistry {
             ) {
                 continue;
             }
-            let installed = entry.scope.read_roots().iter().any(|root| {
+            let installed = entry.read_roots.iter().any(|root| {
                 let artifact = root.join(&entry.artifact_rel);
                 artifact_present(
                     &entry.spec,
@@ -723,10 +722,6 @@ impl DatasetRegistry {
         entry.state = state;
         true
     }
-}
-
-fn paths_overlap(left: &Path, right: &Path) -> bool {
-    left.starts_with(right) || right.starts_with(left)
 }
 
 /// Build the stable registry id for a scoped manifest entry.

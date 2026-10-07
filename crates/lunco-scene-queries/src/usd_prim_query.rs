@@ -1557,11 +1557,7 @@ fn twin_stage_id_for_document(
     world: &World,
     document: DocumentId,
 ) -> Option<bevy::asset::AssetId<UsdStageAsset>> {
-    stage_asset_for_document(
-        world.get_resource::<DocBackedTwinScenes>()?,
-        world.get_resource::<AssetServer>()?,
-        document,
-    )
+    stage_asset_for_document(world.get_resource::<DocBackedTwinScenes>()?, document)
 }
 
 fn read_prim_from_reader(

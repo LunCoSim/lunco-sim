@@ -337,6 +337,10 @@ admission order, then uses a compile entry point that rejects any dependency
 not already admitted. A failed root is recorded in the compiler session, so
 dependent compiles return the root error instead of repeating synchronous file
 discovery.
+Root-owned unqualified source assets reuse the loaded definition when their
+exact source CID belongs to the admitted content closure. A changed definition
+is rejected until the source root is updated and readmitted; no user overlay
+replaces a durable root definition.
 The source-root registry records an explicit Application or Twin owner. Twin
 root IDs include the stable `TwinId`, so equal asset names in two mounted Twins
 cannot alias one compiler source set. `TwinClosed` removes only that Twin's

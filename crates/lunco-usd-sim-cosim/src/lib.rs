@@ -493,6 +493,7 @@ pub(crate) fn process_usd_cosim_prims(
     // use the live canonical stage selected by the shared reader boundary.
     canonical: NonSend<CanonicalStages>,
     asset_server: Res<AssetServer>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     mut wiring_dirty: ResMut<UsdWiringDirty>,
     mut python_unavailable: ResMut<PythonUnavailablePrograms>,
 ) {
@@ -591,6 +592,8 @@ pub(crate) fn process_usd_cosim_prims(
             &asset_server,
             &mut wiring_dirty,
             &mut python_unavailable,
+            roots.as_deref(),
+            canonical.native_asset_paths_for(id, stage_asset),
         );
     }
 }
@@ -1047,6 +1050,8 @@ fn process_usd_cosim_prim_read(
     asset_server: &AssetServer,
     wiring_dirty: &mut UsdWiringDirty,
     python_unavailable: &mut PythonUnavailablePrograms,
+    roots: Option<&lunco_assets_core::TwinRoots>,
+    prepared: Option<&lunco_assets_core::asset_path::PreparedAssetPaths>,
 ) {
     if reader.type_name(sdf_path).as_deref() == Some("LunCoEvent") {
         let sources = reader.connections(sdf_path, "inputs:trigger");
@@ -1271,7 +1276,25 @@ fn process_usd_cosim_prim_read(
             })
         }
     };
-    let communication_period_secs = match communication_period_result {
+    let source = match backend {
+        lunco_usd_bevy_core::program::ProgramBackend::Modelica => modelica_path.as_deref(),
+        lunco_usd_bevy_core::program::ProgramBackend::Python => python_path.as_deref(),
+        _ => None,
+    };
+    let admitted_source = source
+        .ok_or_else(|| "external program has no selected source".to_owned())
+        .and_then(|source| {
+            lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
+                asset_server,
+                prim_path.stage_handle.id(),
+                source,
+                roots,
+                prepared,
+            )
+            .map_err(|error| format!("{}: invalid program source: {error}", prim_path.path))
+        })
+        .and_then(|path| communication_period_result.map(|period| (path, period)));
+    let (source_load_path, communication_period_secs) = match admitted_source {
         Ok(value) => value,
         Err(reason) => {
             let model_name = modelica_path
@@ -1438,19 +1461,19 @@ fn process_usd_cosim_prim_read(
             communication_period_secs,
         });
     }
-    if let Some(asset_path) = modelica_path {
+    if modelica_path.is_some() {
         commands.entity(entity).try_insert(PendingModelicaSource {
-            handle: asset_server.load(asset_path.clone()),
-            asset_path,
+            handle: asset_server.load(source_load_path.clone()),
+            asset_path: lunco_assets_core::asset_path::anchor_of(&source_load_path),
             session_id: 0,
             resume_after_compile: true,
         });
     }
     #[cfg(feature = "python")]
-    if let Some(asset_path) = python_path {
+    if python_path.is_some() {
         commands.entity(entity).try_insert(PendingPythonSource {
-            handle: asset_server.load(asset_path.clone()),
-            asset_path,
+            handle: asset_server.load(source_load_path.clone()),
+            asset_path: lunco_assets_core::asset_path::anchor_of(&source_load_path),
         });
     }
 
@@ -2110,6 +2133,20 @@ pub(crate) fn request_modelica_parameter_recompile(
         let session_id = model.session_id.checked_add(1).unwrap_or(1);
         let resume_after_compile = !model.paused;
         let asset_path = model.source_uri.clone();
+        let load_path =
+            match lunco_assets_core::asset_path::load_asset_path(&asset_path, None, None, None) {
+                Ok(path) => path,
+                Err(error) => {
+                    let error =
+                        format!("invalid Modelica recompile source `{asset_path}`: {error}");
+                    model.paused = true;
+                    model.is_stepping = false;
+                    model.last_error = Some(error.clone());
+                    component.status = SimStatus::Error(error.clone());
+                    error!("[usd-cosim] {error}");
+                    continue;
+                }
+            };
 
         model.session_id = session_id;
         model.is_compiling = true;
@@ -2130,7 +2167,7 @@ pub(crate) fn request_modelica_parameter_recompile(
         component.status = SimStatus::Compiling;
 
         commands.entity(entity).try_insert(PendingModelicaSource {
-            handle: asset_server.load(asset_path.clone()),
+            handle: asset_server.load(load_path),
             asset_path,
             session_id,
             resume_after_compile,

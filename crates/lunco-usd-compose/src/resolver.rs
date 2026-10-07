@@ -88,6 +88,9 @@ pub fn canonicalize_at(asset_path: &str, anchor: Option<&ResolvedPath>) -> anyho
     if let Some(path) = lunco_storage::file_uri_to_path(asset_path)? {
         return Ok(lunco_storage::file_path_to_uri(&path)?);
     }
+    if let Some(uri) = lunco_storage::windows_file_reference_uri(asset_path)? {
+        return Ok(uri);
+    }
     let Some(anchor) = anchor else {
         return Ok(canonicalize_root(asset_path));
     };

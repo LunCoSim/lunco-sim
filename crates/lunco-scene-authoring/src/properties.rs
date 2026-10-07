@@ -419,7 +419,14 @@ fn shader_schema(
     asset_server: &AssetServer,
     shaders: &Assets<bevy::shader::Shader>,
 ) -> Option<ParamSchema> {
-    let handle = asset_server.load::<bevy::shader::Shader>(path.to_string());
+    let path = match lunco_assets_core::asset_path::load_asset_path(path, None, None, None) {
+        Ok(path) => path,
+        Err(error) => {
+            warn!("invalid shader schema address: {error}");
+            return None;
+        }
+    };
+    let handle = asset_server.load::<bevy::shader::Shader>(path);
     let src = match &shaders.get(&handle)?.source {
         bevy::shader::Source::Wgsl(s) => s.as_ref().to_string(),
         _ => return None,
@@ -741,7 +748,7 @@ fn shader_path_candidates(requested: &str) -> Vec<String> {
 /// Whether `path` is a standalone WGSL asset path accepted by the shader
 /// commands. Shader sub-assets are not valid command targets.
 fn is_wgsl_shader_path(path: &str) -> bool {
-    let Ok(path) = bevy::asset::AssetPath::try_parse(path) else {
+    let Ok(path) = lunco_assets_core::asset_path::load_asset_path(path, None, None, None) else {
         return false;
     };
     // Bevy's embedded source contains engine-internal WGSL modules, not
@@ -831,7 +838,9 @@ pub fn apply_shader_source_live(
     };
 
     for path in &paths {
-        let handle = asset_server.load::<bevy::shader::Shader>(path.clone());
+        let load_path = lunco_assets_core::asset_path::load_asset_path(path, None, None, None)
+            .map_err(|error| error.to_string())?;
+        let handle = asset_server.load::<bevy::shader::Shader>(load_path);
         let shader = bevy::shader::Shader::from_wgsl(source.to_owned(), path.clone());
         let _ = shaders.insert(handle.id(), shader);
     }
@@ -1023,6 +1032,10 @@ fn install_shader(
     q_look: &Query<&ShaderLook>,
     commands: &mut Commands,
 ) -> Option<String> {
+    if let Err(error) = lunco_assets_path::validate_portable_file_name(&format!("{stem}.wgsl")) {
+        warn!("INSTALL_SHADER: invalid filename: {error}");
+        return None;
+    }
     // Gate: must be a self-describing `Material` shader, and every `//!@engine`
     // field it declares must be one a plain prop entity actually receives —
     // `prop_fillable` in the engine-param registry. Otherwise it would render
@@ -1056,10 +1069,24 @@ fn install_shader(
         ),
         None => (
             lunco_assets_core::engine_shader_asset_rel(stem),
-            lunco_assets_core::engine_shader_path(stem),
+            match lunco_assets_core::engine_shader_path(stem) {
+                Ok(path) => path,
+                Err(error) => {
+                    error!("INSTALL_SHADER: engine asset root failed: {error}");
+                    return None;
+                }
+            },
         ),
     };
 
+    let load_path =
+        match lunco_assets_core::asset_path::load_asset_path(&asset_path, None, None, None) {
+            Ok(path) => path,
+            Err(error) => {
+                warn!("INSTALL_SHADER: invalid asset address: {error}");
+                return None;
+            }
+        };
     // Persist to disk (native). Non-fatal on failure — the in-memory insert
     // below still makes it usable this session.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1074,7 +1101,7 @@ fn install_shader(
 
     // Insert the compiled source live under the asset path, so any material
     // bound to it renders immediately (no disk round-trip / watcher wait).
-    let shader_handle = asset_server.load::<bevy::shader::Shader>(asset_path.clone());
+    let shader_handle = asset_server.load::<bevy::shader::Shader>(load_path);
     let shader = bevy::shader::Shader::from_wgsl(source.to_string(), asset_path.clone());
     let _ = shaders.insert(shader_handle.id(), shader);
 
@@ -1306,6 +1333,9 @@ mod shader_reload_tests {
         assert!(is_wgsl_shader_path("lunco://shaders/wheel.wgsl"));
         assert!(is_wgsl_shader_path("twin://moonbase/shaders/wheel.WGSL"));
         assert!(is_wgsl_shader_path("custom://shaders/wheel.wgsl"));
+        assert!(is_wgsl_shader_path(
+            "twin://moonbase/shaders/literal#% probe.wgsl"
+        ));
         assert!(!is_wgsl_shader_path("embedded://bevy_pbr/render/pbr.wgsl"));
         assert!(!is_wgsl_shader_path("shaders/wheel.wgsl#fragment"));
         assert!(!is_wgsl_shader_path("shaders/wheel.rhai"));

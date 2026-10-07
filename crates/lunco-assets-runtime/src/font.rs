@@ -38,7 +38,13 @@ pub fn load_dejavu_sans_bytes(settings: &lunco_settings::DownloadSettings) -> Re
 fn load_into(tx: Sender<Vec<u8>>, _settings: &lunco_settings::DownloadSettings) {
     // One-shot startup font read — a direct `std::fs::read` is correct here
     // (this crate is the I/O boundary; the wasm path below replaces it).
-    let path = lunco_assets_core::dejavu_sans_path();
+    let path = match lunco_assets_core::dejavu_sans_path() {
+        Ok(path) => path,
+        Err(error) => {
+            bevy::log::warn!("font root resolution failed: {error}");
+            return;
+        }
+    };
     match std::fs::read(&path) {
         Ok(bytes) => {
             let _ = tx.send(bytes);

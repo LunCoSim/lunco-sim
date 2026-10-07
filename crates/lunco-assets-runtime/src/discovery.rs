@@ -110,11 +110,15 @@ impl AssetManifest {
 /// deliberately separate from [`list_assets`]: the latter answers a typed
 /// catalog question across the library and open Twins, while this answers which
 /// source files the shipped library itself exposes.
-pub fn list_library_assets(manifest: &AssetManifest) -> Vec<AssetFile> {
+pub fn list_library_assets(
+    manifest: &AssetManifest,
+) -> Result<Vec<AssetFile>, lunco_assets_core::TwinRootsError> {
     #[cfg(not(target_arch = "wasm32"))]
-    let assets_dir = lunco_assets_core::assets_dir_abs();
+    let assets_dir = lunco_assets_core::assets_dir_abs().map_err(|error| {
+        lunco_assets_core::TwinRootsError::AssetResolution(error.kind(), error.to_string())
+    })?;
 
-    manifest
+    Ok(manifest
         .rels()
         .iter()
         .map(|rel| AssetFile {
@@ -127,7 +131,7 @@ pub fn list_library_assets(manifest: &AssetManifest) -> Vec<AssetFile> {
             twin: None,
             rel: rel.clone(),
         })
-        .collect()
+        .collect())
 }
 
 /// Resolve a registered asset address to its native file record.
@@ -141,7 +145,7 @@ pub fn resolve_asset(
     roots: &TwinRoots,
     asset_path: &str,
 ) -> Result<Option<AssetFile>, lunco_assets_core::TwinRootsError> {
-    if let Some(asset) = list_library_assets(manifest)
+    if let Some(asset) = list_library_assets(manifest)?
         .into_iter()
         .find(|asset| asset.asset_path == asset_path)
     {
@@ -246,8 +250,18 @@ impl Plugin for AssetDiscoveryPlugin {
 /// Native: walk the runtime `assets/` root once. The filesystem IS the manifest here — there
 /// is no artifact to go stale against.
 #[cfg(not(target_arch = "wasm32"))]
-fn load_manifest_native(mut manifest: ResMut<AssetManifest>) {
-    let dir = lunco_assets_core::assets_dir_abs();
+fn load_manifest_native(mut manifest: ResMut<AssetManifest>, mut commands: Commands) {
+    let dir = match lunco_assets_core::assets_dir_abs() {
+        Ok(root) => root,
+        Err(error) => {
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                "asset-root-unavailable",
+                error.to_string(),
+            );
+            return;
+        }
+    };
     let rels = scan_library(&dir);
     info!(
         "ASSET_MANIFEST: {} file(s) under {}",
@@ -444,7 +458,9 @@ pub fn list_assets_with_extensions(
 
     // Engine library, addressed by the default source (plain relative paths).
     #[cfg(not(target_arch = "wasm32"))]
-    let assets_dir = lunco_assets_core::assets_dir_abs();
+    let assets_dir = lunco_assets_core::assets_dir_abs().map_err(|error| {
+        lunco_assets_core::TwinRootsError::AssetResolution(error.kind(), error.to_string())
+    })?;
     for rel in manifest
         .rels()
         .iter()

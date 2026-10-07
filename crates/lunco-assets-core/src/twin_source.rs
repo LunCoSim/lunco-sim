@@ -286,6 +286,20 @@ pub(crate) fn resolve_twin_relative_directory(
     root: &Path,
     relative: &Path,
 ) -> Result<Option<PathBuf>, TwinRootsError> {
+    // Domain manifests designate the admitted Twin directory itself with `.`.
+    if relative == Path::new(".") {
+        #[cfg(not(target_arch = "wasm32"))]
+        return match lunco_storage::entry_kind_file_sync(root) {
+            Ok(lunco_storage::StorageEntryKind::Directory) => Ok(Some(root.to_path_buf())),
+            Ok(_) | Err(lunco_storage::StorageError::NotFound) => Ok(None),
+            Err(error) => Err(TwinRootsError::AssetResolution(
+                std::io::ErrorKind::Other,
+                format!("{}: {error}", root.display()),
+            )),
+        };
+        #[cfg(target_arch = "wasm32")]
+        return Ok(Some(root.to_path_buf()));
+    }
     Ok(resolve_twin_relative_path(root, relative)?.filter(|path| path.is_dir()))
 }
 
@@ -619,6 +633,7 @@ impl TwinRoots {
     /// Processed datasets such as DEM sites deliver a directory containing
     /// their runtime products. Directory consumers use this boundary instead
     /// of reconstructing the Twin cache path themselves.
+    /// `.` designates the admitted Twin root for domain source directories.
     pub fn resolve_directory(
         &self,
         name: &str,
@@ -1428,6 +1443,29 @@ mod tests {
             roots.resolve_directory(&name, Path::new("terrain/luna2")),
             Ok(Some(cached)),
             "processed Twin directories must resolve through the asset boundary"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn directory_root_designator_retains_mount_ownership_and_rejects_parent_escape() {
+        let twin = tempfile::tempdir().unwrap();
+        let roots = TwinRoots::default();
+        let name = roots.register("native-root", twin.path()).unwrap();
+        assert_eq!(
+            roots.resolve_directory(&name, Path::new(".")).unwrap(),
+            roots.root_for(&name).unwrap()
+        );
+        assert!(
+            roots
+                .resolve_directory(&name, Path::new("../outside"))
+                .is_err()
+        );
+        assert!(roots.resolve_file(&name, Path::new(".")).is_err());
+        roots.unregister_name(&name).unwrap();
+        assert_eq!(
+            roots.resolve_directory(&name, Path::new(".")).unwrap(),
+            None
         );
     }
 

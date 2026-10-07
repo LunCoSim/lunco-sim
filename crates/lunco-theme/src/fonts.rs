@@ -55,14 +55,21 @@ pub struct FontsInstalled(pub bool);
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::disallowed_methods)]
 pub fn install_fallback_fonts(ctx: &egui::Context) {
-    let dejavu = match std::fs::read(lunco_assets_core::dejavu_sans_path()) {
+    let path = match lunco_assets_core::dejavu_sans_path() {
+        Ok(path) => path,
+        Err(error) => {
+            bevy::log::warn!("font root resolution failed: {error}");
+            return;
+        }
+    };
+    let dejavu = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(e) => {
             bevy::log::warn!(
                 "[lunco-theme] DejaVu Sans not found at {}: {e} — math \
                  / Greek / arrow glyphs will tofu. Populate the asset cache \
                  before launching a packaged build.",
-                lunco_assets_core::dejavu_sans_path().display()
+                path.display()
             );
             return;
         }

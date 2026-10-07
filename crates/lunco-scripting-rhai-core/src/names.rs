@@ -17,7 +17,7 @@ pub fn validate_file_stem(name: &str) -> Result<(), String> {
     {
         return Err("name must be one non-empty file stem".to_string());
     }
-    Ok(())
+    lunco_assets_path::validate_portable_file_name(name).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -28,11 +28,24 @@ mod tests {
     fn accepts_one_normal_component() {
         assert!(validate_file_stem("approach_v1").is_ok());
         assert!(validate_file_stem("Δelta").is_ok());
+        assert!(validate_file_stem("literal#% probe").is_ok());
     }
 
     #[test]
     fn rejects_path_or_empty_names() {
-        for name in ["", ".", "..", "../escape", "nested/name", r"nested\name"] {
+        for name in [
+            "",
+            ".",
+            "..",
+            "../escape",
+            "nested/name",
+            r"nested\name",
+            "NUL",
+            "COM1",
+            "stream:alias",
+            "name?",
+            "name.",
+        ] {
             assert!(
                 validate_file_stem(name).is_err(),
                 "{name:?} must be rejected"

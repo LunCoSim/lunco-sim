@@ -774,6 +774,13 @@ fn commit_runtime_spawn(
         rotation.as_quat(),
         SpawnAnchor::scene_root(scene_root),
     );
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            reject(&mut commands, error);
+            return;
+        }
+    };
     commands.entity(result.root_entity).insert((
         *spawned_root,
         lunco_core_session::NetReplicate,
@@ -900,6 +907,17 @@ pub fn apply_replicated_spawns(
             local_rotation.as_quat(),
             SpawnAnchor::scene_root(scene_root),
         );
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                lunco_core::trigger_runtime_error(
+                    &mut commands,
+                    "scene-spawn-asset-invalid",
+                    error,
+                );
+                continue;
+            }
+        };
         // Pin the host id; the shared constructor already suppresses content
         // identity and marks the instance root. Forced Kinematic by
         // `force_kinematic_proxies` so snapshots drive it.

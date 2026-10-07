@@ -43,12 +43,22 @@ pub enum SchemeRegistryError {
     /// A registry mutation or lookup observed a poisoned lock.
     #[error("scheme registry is unavailable because its lock is poisoned")]
     RegistryPoisoned,
+    /// A registered source could not resolve its configured filesystem root.
+    #[error("asset path resolution failed: {0}")]
+    AssetResolution(String),
+}
+
+impl From<std::io::Error> for SchemeRegistryError {
+    fn from(error: std::io::Error) -> Self {
+        Self::AssetResolution(error.to_string())
+    }
 }
 
 /// Maps a scheme's remainder (everything after `scheme://`) to a local path, or
 /// `None` when this scheme has no local bytes right now — an unopened Twin, or a
 /// scheme like `http(s)://` that has no filesystem form at all.
-pub type SchemeRoot = Arc<dyn Fn(&str) -> Option<PathBuf> + Send + Sync>;
+pub type SchemeRoot =
+    Arc<dyn Fn(&str) -> Result<Option<PathBuf>, SchemeRegistryError> + Send + Sync>;
 
 /// Scheme → local root. Cloning shares one registry (same `Arc`), so a handler
 /// registered after startup is visible to every holder.
@@ -66,7 +76,7 @@ impl SchemeRegistry {
     pub fn register(
         &self,
         scheme: impl Into<String>,
-        root: impl Fn(&str) -> Option<PathBuf> + Send + Sync + 'static,
+        root: impl Fn(&str) -> Result<Option<PathBuf>, SchemeRegistryError> + Send + Sync + 'static,
     ) -> Result<(), SchemeRegistryError> {
         self.handlers
             .write()
@@ -85,7 +95,7 @@ impl SchemeRegistry {
     /// relative, which would resolve it to a path that does not exist.
     pub fn local_path(&self, reference: &str) -> Result<Option<PathBuf>, SchemeRegistryError> {
         let Some((scheme, rest)) = crate::asset_path::split_scheme(reference) else {
-            return Ok(crate::engine_asset_local_path(reference));
+            return crate::engine_asset_local_path(reference).map_err(Into::into);
         };
         let handler = self
             .handlers
@@ -93,7 +103,10 @@ impl SchemeRegistry {
             .map_err(|_| SchemeRegistryError::RegistryPoisoned)?
             .get(scheme)
             .cloned();
-        Ok(handler.and_then(|handler| handler(rest)))
+        match handler {
+            Some(handler) => handler(rest),
+            None => Ok(None),
+        }
     }
 
     /// Every registered scheme, sorted — for diagnostics when a lookup misses.
@@ -118,7 +131,7 @@ mod tests {
         let reg = SchemeRegistry::default();
         assert_eq!(
             reg.local_path("shaders/wheel.wgsl").unwrap(),
-            Some(crate::engine_shader_path("wheel"))
+            Some(crate::engine_shader_path("wheel").unwrap())
         );
     }
 
@@ -131,7 +144,7 @@ mod tests {
     #[test]
     fn a_registered_scheme_dispatches_on_its_remainder() {
         let reg = SchemeRegistry::default();
-        reg.register("pack", |rest| Some(PathBuf::from("/packs").join(rest)))
+        reg.register("pack", |rest| Ok(Some(PathBuf::from("/packs").join(rest))))
             .unwrap();
         assert_eq!(
             reg.local_path("pack://a/b.usda").unwrap(),
@@ -140,12 +153,29 @@ mod tests {
         assert_eq!(reg.schemes().unwrap(), vec!["pack".to_string()]);
     }
 
+    #[test]
+    fn registered_scheme_reports_resolution_failure() {
+        let reg = SchemeRegistry::default();
+        reg.register("broken", |_| {
+            Err(SchemeRegistryError::AssetResolution(
+                "unreadable root".into(),
+            ))
+        })
+        .unwrap();
+        assert_eq!(
+            reg.local_path("broken://asset"),
+            Err(SchemeRegistryError::AssetResolution(
+                "unreadable root".into()
+            ))
+        );
+    }
+
     /// The stateful case: a handler may decline (Twin not open) without the
     /// registry knowing anything about Twins.
     #[test]
     fn a_handler_may_decline() {
         let reg = SchemeRegistry::default();
-        reg.register("twin", |_| None).unwrap();
+        reg.register("twin", |_| Ok(None)).unwrap();
         assert_eq!(reg.local_path("twin://ep1/x.usda").unwrap(), None);
     }
 }
