@@ -10,7 +10,7 @@ use std::collections::{HashMap, VecDeque};
 ///
 /// This thread owns live steppers and command ordering. A separate single-owner
 /// actor owns the mutable Rumoca session and compiled-artifact cache. Native
-/// source-root reads, input-default extraction, and parsing run on the bounded
+/// source-root reads and parsing run on the bounded
 /// preparation pool; source-root installs and ordinary compiles are sent to the
 /// actor in FIFO order and return as ordered completions. The two lanes
 /// prioritize runnable Steps for initialized entities while holding commands

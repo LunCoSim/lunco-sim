@@ -10,7 +10,6 @@ use super::{
     WorkerPreparationResult, compile_shared,
 };
 use crossbeam_channel::{Receiver, Sender};
-use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::thread::JoinHandle;
 
@@ -30,7 +29,6 @@ pub(super) enum CompilerCompletion {
         source_root_operation_id: u64,
         removed: bool,
         error: Option<String>,
-        library_defaults: HashMap<String, f64>,
         library_revision: u64,
     },
 }
@@ -40,7 +38,6 @@ pub(super) struct SourceRootCommit {
     pub error: Option<String>,
     pub inserted_file_count: usize,
     pub parsed_file_count: usize,
-    pub library_defaults: HashMap<String, f64>,
     pub library_revision: u64,
 }
 
@@ -94,26 +91,18 @@ impl CompilerActor {
         unit: CompileUnit,
         doc_uri: String,
         library_gen: u64,
-    ) -> Result<u64, (String, CompileUnit)> {
-        let id = match self.allocate_id() {
-            Ok(id) => id,
-            Err(error) => return Err((error, unit)),
-        };
-        match self.sender().send(Request::CompileAsync {
-            id,
-            model_name,
-            unit,
-            doc_uri,
-            library_gen,
-        }) {
-            Ok(()) => Ok(id),
-            Err(error) => match error.0 {
-                Request::CompileAsync { unit, .. } => {
-                    Err(("Rumoca compiler actor is unavailable".to_owned(), unit))
-                }
-                _ => unreachable!("the failed request was a compile"),
-            },
-        }
+    ) -> Result<u64, String> {
+        let id = self.allocate_id()?;
+        self.sender()
+            .send(Request::CompileAsync {
+                id,
+                model_name,
+                unit,
+                doc_uri,
+                library_gen,
+            })
+            .map_err(|_| "Rumoca compiler actor is unavailable".to_owned())?;
+        Ok(id)
     }
 
     pub(super) fn submit_source_root(
@@ -251,7 +240,7 @@ fn compiler_actor_loop(
                 root_id,
                 source_root_operation_id,
             } => {
-                let (removed, error, library_defaults, library_revision) = unload_source_root(
+                let (removed, error, library_revision) = unload_source_root(
                     &mut compiler,
                     &mut compiled_artifacts,
                     &mut terminal_error,
@@ -265,7 +254,6 @@ fn compiler_actor_loop(
                             source_root_operation_id,
                             removed,
                             error,
-                            library_defaults,
                             library_revision,
                         },
                     ))
@@ -286,7 +274,7 @@ fn compile_artifact(
     compiled_artifacts: &mut CompiledArtifactCache,
     terminal_error: &mut Option<String>,
     model_name: &str,
-    mut unit: CompileUnit,
+    unit: CompileUnit,
     doc_uri: &str,
     library_gen: u64,
 ) -> BackendCompileResult {
@@ -301,7 +289,7 @@ fn compile_artifact(
     }
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
-        unit.merge_library_defaults(compiler.library_input_defaults());
+
         let outcome = compile_shared(
             compiled_artifacts,
             compiler,
@@ -362,7 +350,6 @@ fn install_source_root(
             error: Some(format!("Rumoca compiler actor faulted: {error}")),
             inserted_file_count: 0,
             parsed_file_count: 0,
-            library_defaults: HashMap::new(),
             library_revision: 0,
         };
     }
@@ -385,7 +372,6 @@ fn install_source_root(
                 error,
                 inserted_file_count: report.inserted_file_count,
                 parsed_file_count: report.parsed_file_count,
-                library_defaults: compiler.library_input_defaults().clone(),
                 library_revision: compiler.library_revision(),
             }
         }
@@ -400,7 +386,6 @@ fn install_source_root(
                 error: Some(fault),
                 inserted_file_count: 0,
                 parsed_file_count: 0,
-                library_defaults: HashMap::new(),
                 library_revision: 0,
             }
         }
@@ -423,17 +408,16 @@ fn unload_source_root(
     compiled_artifacts: &mut CompiledArtifactCache,
     terminal_error: &mut Option<String>,
     root_id: &str,
-) -> (bool, Option<String>, HashMap<String, f64>, u64) {
+) -> (bool, Option<String>, u64) {
     if let Some(error) = terminal_error {
         return (
             false,
             Some(format!("Rumoca compiler actor faulted: {error}")),
-            HashMap::new(),
             0,
         );
     }
     let Some(session) = compiler.as_mut() else {
-        return (false, None, HashMap::new(), 0);
+        return (false, None, 0);
     };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         session.remove_source_root(root_id)
@@ -443,12 +427,7 @@ fn unload_source_root(
             if removed {
                 compiled_artifacts.clear();
             }
-            (
-                removed,
-                None,
-                session.library_input_defaults().clone(),
-                session.library_revision(),
-            )
+            (removed, None, session.library_revision())
         }
         Err(payload) => {
             let message = panic_message(payload.as_ref());
@@ -456,7 +435,7 @@ fn unload_source_root(
             *terminal_error = Some(fault.clone());
             *compiler = None;
             compiled_artifacts.clear();
-            (false, Some(fault), HashMap::new(), 0)
+            (false, Some(fault), 0)
         }
     }
 }
@@ -500,8 +479,6 @@ mod tests {
                 CompileUnit {
                     source: "model ActorCompileProbe\n  ActorLibrary.Rate rate;\n  Real x(start=0);\nequation\n  der(x) = rate.y;\nend ActorCompileProbe;\n".into(),
                     extras: Vec::new(),
-                    input_defaults: HashMap::new(),
-                    default_diagnostics: Vec::new(),
                 },
                 "ActorCompileProbe.mo".into(),
                 0,

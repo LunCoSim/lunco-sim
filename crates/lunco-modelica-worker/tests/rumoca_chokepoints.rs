@@ -147,18 +147,9 @@ fn source_is_never_regenerated_through_the_rumoca_emitter() {
     );
 }
 
-/// **User model source enters rumoca only through `seat_user_source`.**
-///
-/// rumoca demotes a bound `input Real g = 9.81` to an algebraic, so it never
-/// reaches `input_names()` and every `set_input` on it fails. The strip lives
-/// inside `ModelicaCompiler::compile_str` / `compile_str_multi`; any code that
-/// calls `session.update_document(...)` or `session.add_document(...)` directly
-/// on the COMPILE session seats unstripped text and re-opens the bug.
-///
-/// (`engine.rs` / `indexer.rs` / `class_cache.rs` run a *different*, query-side
-/// session that never produces a DAE, so they are exempt.)
+/// User overlays enter through one owner so source capture and eviction agree.
 #[test]
-fn user_source_is_seated_only_through_the_strip_chokepoint() {
+fn user_source_is_seated_through_one_owner() {
     let compiler_lib =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../lunco-modelica-compiler/src/lib.rs");
     let text = lunco_storage::read_text_file_sync(&compiler_lib).expect("compiler lib.rs readable");
@@ -180,10 +171,7 @@ fn user_source_is_seated_only_through_the_strip_chokepoint() {
     assert_eq!(
         seats.len(),
         1,
-        "a new site seats documents into the COMPILE session. User model source must go \
-         through `seat_user_source` (which applies strip_input_defaults) — otherwise bound \
-         inputs are silently demoted. See docs/architecture/29-rumoca-workarounds.md §2.\n\
-         Sites found:\n  {}",
+        "user overlays must enter through seat_user_source; sites: {}",
         seats.join("\n  ")
     );
 }

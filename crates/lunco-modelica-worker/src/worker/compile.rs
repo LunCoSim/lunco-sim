@@ -181,35 +181,19 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
         lunco_modelica_runtime::generated_source::is_generated_origin(document.origin());
 
     let mut parameters = HashMap::new();
-    let mut inputs_with_defaults = HashMap::new();
-    let mut runtime_inputs = Vec::new();
-    for entry in &document.index().components {
-        let numeric = entry
+    for entry in document.index().components_in_class(&model_name) {
+        if matches!(
+            entry.variability,
+            lunco_modelica_index::index::Variability::Parameter
+                | lunco_modelica_index::index::Variability::Constant
+        ) && let Some(value) = entry
             .binding
             .as_ref()
-            .and_then(|value| value.parse::<f64>().ok());
-        match (entry.variability, entry.causality) {
-            (
-                lunco_modelica_index::index::Variability::Parameter
-                | lunco_modelica_index::index::Variability::Constant,
-                _,
-            ) => {
-                if let Some(value) = numeric {
-                    parameters.insert(entry.name.clone(), value);
-                }
-            }
-            (_, lunco_modelica_index::index::Causality::Input) => {
-                if let Some(value) = numeric {
-                    inputs_with_defaults.insert(entry.name.clone(), value);
-                } else {
-                    runtime_inputs.push(entry.name.clone());
-                }
-            }
-            _ => {}
+            .and_then(|value| value.parse::<f64>().ok())
+        {
+            parameters.insert(entry.name.clone(), value);
         }
     }
-    runtime_inputs.sort();
-    runtime_inputs.dedup();
 
     let mut claimed: HashSet<String> = ast.classes.iter().map(|(name, _)| name.clone()).collect();
     let mut dependency_roots =
@@ -319,22 +303,12 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
         return;
     }
 
-    let old_inputs = existing
+    // Retain explicit runtime values. Omitted inputs are initialized by the
+    // compiled DAE, never by an index spanning multiple declaring classes.
+    let inputs = existing
         .as_ref()
         .map(|(_, inputs, _, _, _, _, _)| inputs.clone())
         .unwrap_or_default();
-    let mut inputs = HashMap::new();
-    for (name, value) in inputs_with_defaults {
-        inputs.insert(
-            name.clone(),
-            old_inputs.get(&name).copied().unwrap_or(value),
-        );
-    }
-    for name in runtime_inputs {
-        inputs
-            .entry(name.clone())
-            .or_insert_with(|| old_inputs.get(&name).copied().unwrap_or(0.0));
-    }
 
     let previous_session = existing
         .as_ref()

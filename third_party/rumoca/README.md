@@ -1,8 +1,8 @@
 # Rumoca compile provenance, solver lifecycle, and output admission
 
 Source: https://github.com/LunCoSim/rumoca at
-`31d5a831cb2ce53a524354e0319572b0de995538`, Apache-2.0 (see LICENSE).
-Only `rumoca-compile`, `rumoca-solver`, and `rumoca-eval-solve` are vendored; all other Rumoca
+`eaa5291ff610085cfc02f9673fcb393245feaa9b`, Apache-2.0 (see LICENSE).
+`rumoca-compile`, `rumoca-phase-dae`, `rumoca-solver`, and `rumoca-eval-solve` are vendored; all other Rumoca
 packages retain that exact Git revision. Their manifests are standalone and
 retain the upstream dependency versions and features.
 
@@ -31,3 +31,11 @@ LunCo's compiler captures portable source-content CIDs from these exact
 contributions before evicting user documents; host paths and runtime mount IDs
 never enter the persisted identity. Parsed-only participating roots explicitly
 lack authoritative byte identity. Unrelated parsed roots do not block artifacts.
+
+The DAE phase retains external input bindings as initialization expressions at
+their fully qualified variable paths. Internal and connected inputs retain
+equation ownership. Binding conversion omits only actual DAE inputs, preserving
+class, instance, inheritance, and parameter-expression scope without rewriting
+source. The compiler declaration-scope test covers library admission, repeated
+instances, internal bindings, and invalid defaults; production readback is
+covered by `modelica_scoped_input_defaults.rhai`.

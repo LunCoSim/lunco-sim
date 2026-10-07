@@ -2,24 +2,11 @@
 
 > Status: Active · Audience: contributors compiling Modelica through rumoca
 >
-> Pinned to rumoca `main` @ `e6884d03` (v0.9.20), verified 2026-07-14.
+> Pinned to rumoca `eaa5291ff610085cfc02f9673fcb393245feaa9b` (v0.9.20).
 
-Each entry below is a bug in rumoca that we work around downstream. Every one was
-**re-probed at the 0.9.20 bump** and is still real — none of this is cargo-culted
-from an older version.
-
-The point of this file is twofold:
-
-1. **These belong upstream.** Each entry carries the exact probe that tells you
-   whether rumoca has fixed it, and exactly what we get to delete when it has.
-   Run the probes at every rumoca bump; delete the workaround the moment its
-   probe goes green.
-2. **A workaround only works if nothing bypasses it.** Each entry names its
-   single chokepoint. Anything reaching the raw rumoca API directly re-opens the
-   bug silently, so new code must route through the chokepoint — never around it.
-
-> Fixing these in rumoca itself is the preferred end state; this file is the
-> to-do list for that work, not a defence of the workarounds.
+This file records the owning compiler and solver boundaries for the pinned
+Rumoca dependency. Recheck these contracts when updating the pin. Local owner
+patches are documented in `third_party/rumoca/README.md`.
 
 ---
 
@@ -54,63 +41,23 @@ which is the signal to revisit the `u32::MAX` sentinel.
 
 ---
 
-## 2. A bound `input` is demoted to an algebraic
+## 2. Declaration-scoped runtime input initialization
 
-**Bug.** `input Real g = 9.81` (an input with a default) is demoted to an
-algebraic variable, so it never appears in `SimulationSession::input_names()` and
-`set_input("g", …)` fails. rumoca offers no compile-time "runtime override" API,
-so the only lever is the source text.
+The vendored `rumoca-phase-dae` owns external input initialization. It preserves
+an external declaration binding as the DAE input's start expression at its full
+qualified path. Internal and connected input bindings retain equation ownership.
+Native live stepping, browser stepping, reset, and batch simulation all consume
+that compiled initialization through the existing solver.
 
-**Workaround.** `lunco-modelica-ast::ast_extract::strip_input_defaults()` blanks the `= <expr>` bytes
-(length-preserving, so diagnostic offsets still map to the editor buffer) and
-returns the defaults separately, to be re-seeded via `set_input`.
+Original source declarations enter `ModelicaCompiler` unchanged. Library source
+sets and user overlays share the same DAE phase. Class defaults cannot collide
+through short names, and function argument defaults retain their binding semantics.
+Invalid declarations fail at compiler admission or solver initialization.
 
-**Ideal upstream fix.** Keep a bound top-level `input` as an input, treating the
-binding as its default value (MLS §4.4.1 reading), or expose a parameter/input
-override API on the compiled DAE so no source rewriting is needed.
-
-**Chokepoint.** `ModelicaCompiler::seat_user_source` (`lunco-modelica-compiler/src/lib.rs`)
-— the single place user model text enters the compile session. Both
-`compile_str` and `compile_str_multi` go through it, so **the strip happens
-inside the compiler and no caller can forget it**.
-
-It did not always live there, and the cost of that was steep: an audit at the
-0.9.20 bump found the strip missing on the *entire* experiments/FastRun surface
-(native `lunco-modelica-runner` **and** the wasm `lunica_worker.rs` twin), on the
-worker's disk-backed compile, and in `modelica_tester` — i.e. the sweep feature
-whose whole purpose is overriding inputs was silently demoting every bound input
-it swept. Moving the strip into the chokepoint fixed all four at once. Don't move
-it back out.
-
-The strip is idempotent (it blanks the binding bytes in place, so a second pass
-finds nothing), so callers that also need the defaults map — the worker, to
-re-seed values via `set_input` — can still call `strip_input_defaults` themselves.
-
-**A library member is user source too.** A `.mo` declaring `within P;` is compiled
-out of its *package*, not seated as a document (§3), and that path used to hand
-the package directory to rumoca's own source-root loader — which reads the files
-itself, so the strip never ran. Every bound `input` in a library class was
-demoted, `input_names()` came back EMPTY, and each cosim wire into the model was
-rejected: the model held its declared defaults for the whole run while the
-simulation completed and published plausible numbers.
-`LunCo.Propulsion.PlumePhotometry` took `throttle` that way, so a descent burn lit
-no plume. `ensure_root_installed` now reads the members itself and seats them
-through `seat_library_files`, which strips each one. The shipped package path
-is exercised by authored scenes such as `lander_plume_activity`, `lander_rcs`,
-and `sun_tracker`; Rust tests do not read the assets tree.
-
-**Enforced by** `crates/lunco-modelica-worker/tests/rumoca_chokepoints.rs::user_source_is_seated_only_through_the_strip_chokepoint`
-(fails if a new site seats documents into the compile session directly),
-`crates/lunco-modelica-worker/tests/rumoca_api_coverage.rs::compile_str_keeps_bound_input_as_runtime_slot`
-(feeds `compile_str` RAW source and asserts `g` survives as a runtime slot).
-
-**Diagnosed by** `lunco_modelica_worker::worker::apply_input_defaults_validated`: a model whose source
-declares inputs but whose stepper exposes **none** logs at ERROR, because that is
-the shape of a run that simulates nothing and looks fine.
-
-**Probe.** Compile `model M input Real g = 9.81; ... end M;` **unstripped** and
-read `session.input_names()`. Today: `[]` (empty). When it lists `g`, delete
-`strip_input_defaults` and all its call sites.
+The inline compiler test `runtime_input_defaults_follow_declaration_scope`
+checks class and instance ownership, inheritance, internal equations, and invalid
+bindings. The production `modelica_scoped_input_defaults.rhai` gate checks actual
+solver observations, explicit override, reset, and batch execution.
 
 ---
 

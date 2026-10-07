@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-from runtime import POLL_INTERVAL_S, ProductionSession, ROOT
+from runtime import BINARY, POLL_INTERVAL_S, ProductionSession, ROOT
 
 
 def tail(path: Path, lines: int = 20) -> str:
@@ -109,7 +109,7 @@ def wait_for_scene_time_selection(
     )
 
 
-def run(port: int, timeout: float, scene: str, log_path: Path) -> int:
+def run(port: int, timeout: float, scene: str, log_path: Path, scenario: str | None = None) -> int:
     verdict = ""
     error = ""
     try:
@@ -119,6 +119,13 @@ def run(port: int, timeout: float, scene: str, log_path: Path) -> int:
             log_path=log_path,
             windowed=True,
         ) as session:
+            pid = session.process.pid
+            if sys.platform.startswith("linux") and (
+                Path(f"/proc/{pid}/cwd").resolve() != ROOT
+                or Path(f"/proc/{pid}/exe").resolve() != BINARY.resolve()
+            ):
+                raise RuntimeError("runtime process does not match this checkout and binary")
+            print(f"OWNED pid={pid} port={port} cwd={ROOT}", flush=True)
             wait_for_scene(session, scene, min(timeout, 45.0))
             # Wait for the scene-time selection boundary before issuing this
             # test's transport command while asynchronous scene preparation is
@@ -134,11 +141,25 @@ def run(port: int, timeout: float, scene: str, log_path: Path) -> int:
             })
             if transport.get("error") or transport.get("data", {}).get("accepted") is not True:
                 raise RuntimeError(f"could not start the editor test simulation: {transport!r}")
+            offset = 0
+            if scenario:
+                offset = log_path.stat().st_size
+                library = session.post({"type": "ExecuteCommand", "command": "GetToolLibrary",
+                                        "params": {"name": "runtime_ui"}})
+                owner = library.get("data", {}).get("active_twin")
+                if owner is None:
+                    raise RuntimeError("scenario fixture requires an admitted Twin owner")
+                attached = session.post({"type": "ExecuteCommand", "command": "RunScenarioAsset",
+                                         "params": {"source_asset": scenario, "owner_twin_id": owner}})
+                if attached.get("error"):
+                    raise RuntimeError(f"could not attach authored scenario: {attached!r}")
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 if session.process is None or session.process.poll() is not None:
                     break
-                output = tail(log_path, lines=10000)
+                with log_path.open(encoding="utf-8", errors="replace") as log:
+                    log.seek(offset)
+                    output = log.read()
                 if "[rhai] TESTS_FAIL" in output:
                     verdict = "FAIL"
                     break
@@ -170,12 +191,13 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, required=True)
     parser.add_argument("--scene", required=True)
     parser.add_argument("--log", type=Path, required=True)
+    parser.add_argument("--scenario", help="root-qualified Rhai asset attached after the fixture settles")
     args = parser.parse_args()
     if args.port < 1 or args.port > 65535:
         parser.error("--port must be a valid TCP port")
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
-    return run(args.port, args.timeout, args.scene, args.log)
+    return run(args.port, args.timeout, args.scene, args.log, args.scenario)
 
 
 if __name__ == "__main__":

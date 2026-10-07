@@ -489,7 +489,6 @@ fn setup_web_workbench(
         .clone()
         .unwrap_or_else(|| "Model".to_string());
     let initial_params = asset.interface.parameters.clone();
-    let initial_inputs = asset.interface.input_defaults.clone();
 
     workbench_state.editor_buffer = source.clone();
 
@@ -515,7 +514,6 @@ fn setup_web_workbench(
             ModelicaModel {
                 model_name: model_name.clone(),
                 parameters: initial_params,
-                inputs: initial_inputs,
                 paused: true, // Start paused; compile result will unpause
                 document: doc_id,
                 ..default()

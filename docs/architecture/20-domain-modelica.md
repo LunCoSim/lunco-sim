@@ -320,14 +320,14 @@ cannot alias one compiler source set. `TwinClosed` removes only that Twin's
 registry entries and queues ordered unloads to the Rumoca owner; application
 roots and roots owned by other Twins stay installed. Monotonic per-root
 operation IDs fence source reads that finish after close, while the compiler
-actor removes the admitted source set and recomputes its roots, defaults,
+actor removes the admitted source set and recomputes its roots,
 revision, and content closure. If the worker channel has not been created yet,
 the pending unload stays queued and is sent before a later Twin load. A closed
 channel makes unload dispatch terminal: the registry reports a runtime fault,
 retains the queued operation, and rejects later Twin source-root admission
 instead of retrying every update or assuming the old compiler state was cleared.
 Synchronous compiler convenience methods remain for CLI and batch callers. Root
-reads, bound-input extraction, and parsing run on the bounded preparation
+reads and parsing run on the bounded preparation
 pool. Session installation and ordinary Rumoca DAE compilation remain
 synchronous on the serialized worker owner. A later compile is valid only for
 an actual authored source/topology change or an explicit library-set change;
@@ -1685,3 +1685,15 @@ from matching the replacement participant. Captured compilation outcomes and
 diagnostics release their user-source overlays; application libraries retain
 their own lifetime. Generated domain documents carry the exact source mount's
 runtime attribution before first compile admission, including replicated scenes.
+
+### Declaration-scoped input defaults
+
+Original input bindings remain in admitted Modelica source. The patched Rumoca
+DAE phase initializes external input slots at fully qualified paths; internal
+and connected inputs retain equation ownership. Live, reset, and batch solvers
+consume that same DAE initialization, including parameter expressions. The
+Editor compile dispatch retains runtime overrides and admits source parameter
+metadata only from the selected class. It never seeds input values from the
+document-wide class index. The production gate
+`modelica_scoped_input_defaults.rhai` checks distinct class
+defaults, repeated instances, overrides, reset, and invalid-default diagnostics.

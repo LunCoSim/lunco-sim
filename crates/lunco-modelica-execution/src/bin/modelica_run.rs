@@ -222,18 +222,10 @@ mod native {
             .unwrap_or_else(|e| die(&format!("failed to read {}: {e}", opts.file.display())));
         eprintln!("[modelica_run] read {} bytes", source.len());
 
-        // Strip Modelica `input Real x = K` defaults into a separate map so
-        // the stepper exposes them as runtime-settable input slots. Same
-        // pre-processing the worker thread does (lib.rs ~894). Without it,
-        // those declarations bake into the DAE as constants and `set_input`
-        // can't reach them.
-        let (stripped_source, input_defaults) =
-            lunco_modelica_ast::ast_extract::strip_input_defaults(&source);
-
         eprintln!("[modelica_run] compiling {} ...", opts.class);
         let t_compile = Instant::now();
         let mut compiler = ModelicaCompiler::new();
-        let comp_res = match compiler.compile_str(&opts.class, &stripped_source, "model.mo") {
+        let comp_res = match compiler.compile_str(&opts.class, &source, "model.mo") {
             Ok(r) => r,
             Err(e) => die(&format!("compile failed: {e}")),
         };
@@ -265,16 +257,8 @@ mod native {
                 Err(e) => die(&format!("stepper init failed: {e:?}")),
             };
 
-        // Apply Modelica-source default values FIRST, then CLI --input
-        // overrides. Same precedence as the workbench: source defaults
-        // populate the slots, user-supplied values override.
-        for (name, val) in &input_defaults {
-            let _ = stepper.set_input(name, *val);
-        }
-        let mut applied_inputs: HashMap<String, f64> = input_defaults
-            .iter()
-            .map(|(n, v)| (n.clone(), *v))
-            .collect();
+        // DAE initialization supplies scoped defaults before explicit CLI overrides.
+        let mut applied_inputs: HashMap<String, f64> = HashMap::new();
         for (name, val) in &opts.inputs {
             if !stepper.input_names().iter().any(|n| n == name) {
                 eprintln!(

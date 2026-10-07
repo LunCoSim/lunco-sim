@@ -4,17 +4,7 @@
 //! AST/token locations. They deliberately do not duplicate the retired regex
 //! component scanner or compare a replacement against historical output.
 
-/// **Chokepoint pin: `compile_str` strips bound-`input` defaults itself.**
-///
-/// rumoca demotes a bound `input Real g = 9.81` to an algebraic, so it never
-/// reaches `input_names()` (`docs/architecture/29-rumoca-workarounds.md` §2).
-/// The strip lives INSIDE `ModelicaCompiler::compile_str`, so no compile path
-/// can bypass it by forgetting to call `strip_input_defaults` first — which is
-/// exactly what `modelica_tester` used to do.
-///
-/// This test deliberately passes RAW, unstripped source. If someone moves the
-/// strip back out to the callers, `g` disappears from `input_names()` and this
-/// fails.
+/// Bound external declarations remain writable runtime inputs.
 #[test]
 fn compile_str_keeps_bound_input_as_runtime_slot() {
     let src = "model M\n  input Real g = 9.81;\n  Real x;\nequation\n  der(x) = g;\nend M;\n";
@@ -32,7 +22,7 @@ fn compile_str_keeps_bound_input_as_runtime_slot() {
     assert!(
         inputs.iter().any(|n| n == "g"),
         "a bound `input` must survive compile_str as a runtime slot; got {inputs:?} \
-         — the strip was bypassed"
+        "
     );
 }
 
@@ -52,10 +42,9 @@ fn compile_str_keeps_bound_input_as_runtime_slot() {
 #[test]
 fn simulation_session_clamps_advance_at_t_end() {
     let source = "model HorizonFixture\n  Real x(start = 0, fixed = true);\nequation\n  der(x) = 1;\nend HorizonFixture;\n";
-    let (stripped, _) = lunco_modelica_ast::ast_extract::strip_input_defaults(source);
     let mut compiler = lunco_modelica_compiler::ModelicaCompiler::new();
     let dae = compiler
-        .compile_str("HorizonFixture", &stripped, "horizon_fixture.mo")
+        .compile_str("HorizonFixture", source, "horizon_fixture.mo")
         .expect("HorizonFixture compiles");
 
     let opts = rumoca_sim::SimOptions {

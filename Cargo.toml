@@ -701,3 +701,4 @@ strip = "none"
 rumoca-compile = { path = "third_party/rumoca/rumoca-compile" }
 rumoca-solver = { path = "third_party/rumoca/rumoca-solver" }
 rumoca-eval-solve = { path = "third_party/rumoca/rumoca-eval-solve" }
+rumoca-phase-dae = { path = "third_party/rumoca/rumoca-phase-dae" }

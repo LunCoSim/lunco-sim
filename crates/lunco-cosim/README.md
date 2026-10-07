@@ -190,10 +190,9 @@ input Real height = 0;   // runtime-settable, default 0
 input Real velocity = 0;
 ```
 
-The default value (`= 0`) is stripped by `lunco-modelica-core` at compile time
-(`strip_input_defaults`) so the variable becomes a true runtime slot
-settable via `stepper.set_input("height", ...)`. Without the `input` keyword
-at all, the variable would vanish like the algebraics did.
+Rumoca retains the binding as the initialization expression for that qualified
+external input slot. `stepper.set_input("height", ...)` overrides it at runtime.
+Internal inputs retain their equation bindings.
 
 ### Checklist when adding a new Modelica model to lunco-cosim
 

@@ -279,10 +279,8 @@ pub struct PreparedSourceRoot {
     label: String,
     files: Vec<(String, String)>,
     parsed: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)>,
-    input_defaults: Vec<(String, f64, String)>,
     parsed_roots: std::collections::HashSet<String>,
     diagnostics: Vec<String>,
-    warnings: Vec<String>,
     content_closure: Result<ModelicaSourceRootContent, ModelicaSourceRootContentError>,
 }
 
@@ -302,8 +300,8 @@ impl PreparedSourceRoot {
     }
 
     /// Prepare a complete source set without touching a compiler session.
-    /// Files are canonicalized by URI so parser input, diagnostics, and
-    /// first-wins library defaults do not depend on filesystem enumeration or
+    /// Files are canonicalized by URI so parser input and diagnostics
+    /// do not depend on filesystem enumeration or
     /// worker completion order. Read errors are terminal for the source set;
     /// no parseable subset is published.
     pub fn prepare(
@@ -320,50 +318,11 @@ impl PreparedSourceRoot {
         }
 
         let mut parsed = Vec::with_capacity(files.len());
-        let mut input_defaults = Vec::new();
-        let mut warnings = Vec::new();
         for (uri, text) in &files {
-            let (stripped, defaults, issues) =
-                lunco_modelica_ast::ast_extract::strip_input_defaults_with_report(text);
-            for issue in issues {
-                match issue {
-                    lunco_modelica_ast::ast_extract::InputDefaultIssue::ParseFailed => {
-                        diagnostics.push(format!(
-                            "source root `{id}`: the bound-`input` strip could not parse {uri} — \
-                             the file is unstripped, so bound inputs could be demoted and their \
-                             wires discarded"
-                        ));
-                    }
-                    lunco_modelica_ast::ast_extract::InputDefaultIssue::Unresolvable {
-                        name,
-                        binding,
-                        ..
-                    } => warnings.push(format!(
-                        "source root `{id}`: {uri} declares `input {name} = {binding}` — an \
-                         expression, not a literal, so the slot starts at 0.0 unless wired"
-                    )),
-                    lunco_modelica_ast::ast_extract::InputDefaultIssue::Collision {
-                        name,
-                        kept_scope,
-                        kept,
-                        dropped_scope,
-                        dropped,
-                    } => warnings.push(format!(
-                        "source root `{id}`: {uri} declares `{name}` in `{kept_scope}` and \
-                         `{dropped_scope}` with different defaults; keeping {kept}, dropping \
-                         {dropped}"
-                    )),
+            match lunco_modelica_ast::parse_to_ast(text, uri) {
+                Ok(ast) => {
+                    parsed.push((uri.clone(), ast));
                 }
-            }
-            let mut defaults = defaults.into_iter().collect::<Vec<_>>();
-            defaults.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-            input_defaults.extend(
-                defaults
-                    .into_iter()
-                    .map(|(name, value)| (name, value, uri.clone())),
-            );
-            match lunco_modelica_ast::parse_to_ast(&stripped, uri) {
-                Ok(ast) => parsed.push((uri.clone(), ast)),
                 Err(error) => diagnostics.push(format!(
                     "source root `{id}`: could not parse {uri}: {error:?}"
                 )),
@@ -377,10 +336,8 @@ impl PreparedSourceRoot {
             label,
             files,
             parsed,
-            input_defaults,
             parsed_roots,
             diagnostics,
-            warnings,
             content_closure,
         }
     }
@@ -416,10 +373,9 @@ pub struct ModelicaCompiler {
     /// Root names owned by the resident application bundle.
     resident_source_roots: std::collections::HashSet<String>,
     /// Admitted source-set contributions retained so unloading one set can
-    /// recompute roots, defaults, revisions, and content closures accurately.
+    /// recompute roots, revisions, and content closures accurately.
     source_set_contributions: std::collections::HashMap<String, SourceSetContribution>,
-    /// Successful source-set admission order defines first-wins input-default
-    /// precedence deterministically when roots share a leaf input name.
+    /// Source sets are replayed in their deterministic admission order.
     source_set_order: Vec<String>,
     /// Root segments referenced by the active source document. This is the
     /// compiler's parsed view of the current Modelica search path and keeps
@@ -438,25 +394,6 @@ pub struct ModelicaCompiler {
     /// because the two docs legitimately have different URIs; the session
     /// itself must hold only the active compile's user docs.
     seated_user_uris: std::collections::HashSet<String>,
-    /// Numeric `input` defaults captured from every library member seated
-    /// through [`Self::load_source_root_in_memory`], keyed by the LEAF
-    /// component name.
-    ///
-    /// The strip that makes a bound `input Real x = 3.0` a real runtime slot
-    /// runs on every one of those members — but until this map existed the
-    /// captured defaults were dropped on the floor (`let (stripped, _defaults)`),
-    /// so a library class's input reached the stepper as a slot sitting at 0.0
-    /// instead of at its authored default. That is precisely the silent fold the
-    /// strip exists to prevent, just moved one seam along. The worker folds this
-    /// map into each `CompileUnit` and re-seeds it through the same
-    /// `apply_input_defaults_validated` the primary document uses.
-    ///
-    /// Leaf-keyed because that is what `SimulationSession::set_input` addresses;
-    /// a library class is only ever reached by INSTANTIATION, so the worker
-    /// resolves these against the flattened `<instance>.<leaf>` slots. Root
-    /// source documents are not compiled as user targets, so they are not
-    /// represented in this map.
-    library_input_defaults: std::collections::HashMap<String, f64>,
     /// Content revisions of the source roots admitted into this session.
     /// These are computed from bytes already read by the admission boundary;
     /// the prepared solve cache uses the aggregate without rescanning disk.
@@ -474,7 +411,6 @@ pub struct ModelicaCompiler {
 #[derive(Clone)]
 struct SourceSetContribution {
     roots: std::collections::HashSet<String>,
-    input_defaults: Vec<(String, f64, String)>,
     revision: u64,
     content_closure: Result<ModelicaSourceRootContent, ModelicaSourceRootContentError>,
 }
@@ -503,7 +439,6 @@ impl ModelicaCompiler {
             source_set_order: Vec::new(),
             requested_source_roots: std::collections::HashSet::new(),
             seated_user_uris: std::collections::HashSet::new(),
-            library_input_defaults: std::collections::HashMap::new(),
             library_revisions: std::collections::HashMap::new(),
             source_root_content_closures: std::collections::HashMap::new(),
             failed_source_roots: std::collections::HashMap::new(),
@@ -563,14 +498,8 @@ impl ModelicaCompiler {
     /// already reads; taking the library from anywhere else would make an edited
     /// member compile as its last-built self while the scene loaded the new text.
     ///
-    /// A library member is seated through [`Self::seat_user_source`] like any other
-    /// user model, one document per `.mo`, so the bound-`input` strip applies to it.
-    /// It did not when the disk copy went through rumoca's source-root loader: that
-    /// reads the files itself, the strip never ran, and every `input Real x = <d>` in
-    /// a library class was demoted to an algebraic — `input_names()` came back EMPTY,
-    /// the cosim wire into it was rejected, and the model held its declared default
-    /// for the whole run. `LunCo.Propulsion.PlumePhotometry` took `throttle` that way,
-    /// which is why a descent burn lit no plume.
+    /// Original member declarations enter the same compiler source-set path as
+    /// other libraries. Rumoca owns scoped runtime input initialization.
     pub fn ensure_source_root_installed(&mut self, root: &str) -> bool {
         if self.installed_roots.contains(root) {
             return true;
@@ -641,10 +570,7 @@ impl ModelicaCompiler {
         true
     }
 
-    /// Seat a whole library's members as documents, each through the
-    /// bound-`input` strip — see [`Self::ensure_source_root_installed`].
-    /// The strip itself lives in [`Self::load_source_root_in_memory`],
-    /// so every in-memory root shares it.
+    /// Admit a library as one parsed source set.
     fn seat_library_files(
         &mut self,
         id: &str,
@@ -747,33 +673,17 @@ impl ModelicaCompiler {
         let mut keep = std::collections::HashSet::new();
         keep.insert(filename.to_string());
         self.evict_user_docs_except(&keep);
-        self.seat_user_source(filename, source);
+        self.seat_user_source(filename, source)?;
         self.seated_user_uris = keep;
         self.compile_loaded(model_name)
     }
 
-    /// Seat one user source into the session — **the single chokepoint where
-    /// user model text enters rumoca**, and therefore the one place the
-    /// bound-`input` workaround is applied.
-    ///
-    /// rumoca demotes a bound `input Real g = 9.81` to an algebraic, so it never
-    /// reaches `input_names()` and `set_input("g", …)` fails
-    /// (`docs/architecture/29-rumoca-workarounds.md` §2). Stripping here rather
-    /// than at each caller means no compile path can forget it — `modelica_tester`
-    /// silently did, and every future entry point would have been one `git grep`
-    /// away from the same bug.
-    ///
-    /// Safe to apply to already-stripped source: [`strip_input_defaults`] blanks
-    /// the binding bytes in place, so a second pass finds nothing to strip and is
-    /// a no-op. Callers that need the defaults back (the worker, to re-seed them
-    /// via `set_input`) still call it themselves — they get the same answer.
-    ///
-    /// The blanking is LENGTH-PRESERVING, so byte offsets into the raw source the
-    /// caller still holds (diagnostic spans → editor click-to-source) keep
-    /// pointing at the same characters.
-    fn seat_user_source(&mut self, filename: &str, source: &str) {
-        let (stripped, _defaults) = lunco_modelica_ast::ast_extract::strip_input_defaults(source);
-        self.session.update_document(filename, &stripped);
+    /// Admit parsed source with declaration-scoped runtime input initialization,
+    /// retaining original text and locations for source identity and diagnostics.
+    fn seat_user_source(&mut self, filename: &str, source: &str) -> Result<(), String> {
+        self.session
+            .add_document(filename, source)
+            .map_err(|error| format!("could not parse {filename}: {error}"))
     }
 
     /// Release user-document overlays after a caller has captured its compile
@@ -950,10 +860,10 @@ impl ModelicaCompiler {
             if extra_filename == filename {
                 continue;
             }
-            self.seat_user_source(extra_filename, extra_source);
+            self.seat_user_source(extra_filename, extra_source)?;
         }
         if primary_owned_class.is_none() {
-            self.seat_user_source(filename, source);
+            self.seat_user_source(filename, source)?;
         }
         self.seated_user_uris = keep;
         match primary_owned_class {
@@ -1128,12 +1038,7 @@ impl ModelicaCompiler {
         id: &str,
         root_dir: &std::path::Path,
     ) -> rumoca_compile::compile::SourceRootLoadReport {
-        // Every disk root holds classes that can be compile targets, so each
-        // file must pass the bound-`input` strip. `load_source_root_tolerant`
-        // parses off disk directly and would skip it (the `within P;`
-        // member trap: rumoca demotes a bound input to an algebraic, the
-        // model loses its runtime input slots and every wire is dropped),
-        // so read the tree here and seat it through the in-memory path.
+        // Asset discovery owns reads; admission retains exact contributing bytes.
         let (files, read_diagnostics) =
             lunco_assets_runtime::discovery::read_files_with_extension(root_dir, "mo");
         for diagnostic in &read_diagnostics {
@@ -1162,16 +1067,7 @@ impl ModelicaCompiler {
     /// of `(uri, source)` pairs; each `uri` is the filename rumoca
     /// will report errors against.
     ///
-    /// Every file passes the bound-`input` strip here — this is the
-    /// chokepoint for all in-memory roots (bundled deps, workspace
-    /// files, twin libraries, disk roots read by
-    /// [`Self::load_source_root`]), so no root member can reach the
-    /// compiler with a demotable `input x = default` binding.
-    ///
-    /// Stripping alone is only half the contract: the defaults it removes are
-    /// accumulated into [`Self::library_input_defaults`] so the worker can
-    /// re-seed them onto the fresh stepper. These defaults keep each bound
-    /// library input at its authored initial value when it is not wired.
+    /// Original declarations are retained for scope-aware DAE initialization.
     pub fn load_source_root_in_memory(
         &mut self,
         id: &str,
@@ -1183,7 +1079,7 @@ impl ModelicaCompiler {
 
     /// Commit a prepared source set into the session that owns Modelica
     /// compiler state. Failed file reads or parses leave both the session and
-    /// captured library defaults unchanged.
+    /// contributing source contents unchanged.
     pub fn install_source_root(
         &mut self,
         prepared: PreparedSourceRoot,
@@ -1193,16 +1089,11 @@ impl ModelicaCompiler {
             label,
             files,
             parsed,
-            input_defaults,
             parsed_roots,
             mut diagnostics,
-            warnings,
             content_closure,
         } = prepared;
         let file_count = files.len();
-        for warning in warnings {
-            log::warn!("[ModelicaCompiler] {warning}");
-        }
         // A source root is one semantic unit. Do not publish a partial package:
         // the compile owner must either see every member or a terminal load
         // diagnostic. Bulk installation also keeps Rumoca's source-set index
@@ -1223,7 +1114,6 @@ impl ModelicaCompiler {
                     id.clone(),
                     SourceSetContribution {
                         roots: parsed_roots,
-                        input_defaults,
                         revision,
                         content_closure: content_closure.clone(),
                     },
@@ -1286,7 +1176,6 @@ impl ModelicaCompiler {
 
     fn rebuild_source_set_indexes(&mut self) {
         self.installed_roots = self.resident_source_roots.clone();
-        self.library_input_defaults.clear();
         self.library_revisions
             .retain(|source_set_id, _| source_set_id == "source-bundle");
         self.source_root_content_closures
@@ -1302,32 +1191,7 @@ impl ModelicaCompiler {
                 .insert(source_set_id.clone(), contribution.revision);
             self.source_root_content_closures
                 .insert(source_set_id.clone(), contribution.content_closure.clone());
-            for (name, value, uri) in &contribution.input_defaults {
-                match self.library_input_defaults.entry(name.clone()) {
-                    std::collections::hash_map::Entry::Vacant(slot) => {
-                        slot.insert(*value);
-                    }
-                    std::collections::hash_map::Entry::Occupied(slot) if *slot.get() != *value => {
-                        log::warn!(
-                            "[ModelicaCompiler] source root `{source_set_id}`: input default `{name}` = {value} \
-                             in {uri} conflicts with {} already captured from another member — \
-                             keeping the first. Rename one if they are different signals.",
-                            slot.get(),
-                        );
-                    }
-                    std::collections::hash_map::Entry::Occupied(_) => {}
-                }
-            }
         }
-    }
-
-    /// The `input` defaults captured from every seated library member — the
-    /// other half of the strip that happens in
-    /// [`Self::load_source_root_in_memory`]. The worker folds these into each
-    /// `CompileUnit` so they are re-seeded through the SAME
-    /// `apply_input_defaults_validated` path as the primary document's.
-    pub fn library_input_defaults(&self) -> &std::collections::HashMap<String, f64> {
-        &self.library_input_defaults
     }
 
     /// Return one deterministic revision for the complete set of admitted
@@ -1721,6 +1585,57 @@ mod source_root_smoke {
     }
 
     #[test]
+    fn runtime_input_defaults_follow_declaration_scope() {
+        let mut compiler = ModelicaCompiler::new();
+        let library = PreparedSourceRoot::prepare(
+            "Controls",
+            "inline library",
+            vec![(
+                "Controls/package.mo".into(),
+                "package Controls
+model On input Real enabled=1.0; output Real y; equation y=enabled; end On;
+model Off input Real enabled=0.0; output Real y; equation y=enabled; end Off;
+model Base input Real enabled=5.0; output Real y; equation y=enabled; end Base;
+model Derived extends Base; end Derived;
+end Controls;"
+                    .into(),
+            )],
+            Vec::new(),
+        );
+        assert!(compiler.install_source_root(library).diagnostics.is_empty());
+        let compiled = compiler.compile_str("Root",
+            "model Root input Real enabled=9.0; input Controls.On a; input Controls.On again; input Controls.Off b; input Controls.Derived d; output Real y; equation y=enabled+a.y+again.y+b.y+d.y; end Root;", "root.mo")
+            .expect("scoped defaults compile");
+        for (name, value) in [
+            ("enabled", 9.0),
+            ("a.enabled", 1.0),
+            ("again.enabled", 1.0),
+            ("b.enabled", 0.0),
+            ("d.enabled", 5.0),
+        ] {
+            let var = &compiled.dae.variables.inputs[&rumoca_compile::compile::VarName::new(name)];
+            let Some(rumoca_compile::compile::core::Expression::Literal {
+                value: rumoca_compile::compile::core::Literal::Real(actual),
+                ..
+            }) = &var.start
+            else {
+                panic!("{name}: unexpected default {:?}", var.start);
+            };
+            assert_eq!(
+                *actual, value,
+                "{name} retains its declaring class's default"
+            );
+        }
+        let internal = compiler.compile_str("Internal",
+            "model Internal Controls.On a; Controls.Off b; output Real y; equation y=a.y+b.y; end Internal;", "internal.mo")
+            .expect("internal defaults retain their equations");
+        assert!(internal.dae.variables.inputs.is_empty());
+        assert!(compiler.compile_str("Invalid",
+            "model Invalid input Real enabled=missing; output Real y; equation y=enabled; end Invalid;", "invalid.mo").is_err(),
+            "invalid defaults produce a diagnostic rather than a fabricated value");
+    }
+
+    #[test]
     fn unloading_one_source_set_rebuilds_only_its_compiler_contribution() {
         let mut compiler = ModelicaCompiler::new();
         let application = PreparedSourceRoot::prepare(
@@ -1751,22 +1666,12 @@ mod source_root_smoke {
         assert!(compiler.install_source_root(twin).diagnostics.is_empty());
         assert!(compiler.installed_roots.contains("ApplicationControls"));
         assert!(compiler.installed_roots.contains("LessonModelica"));
-        assert_eq!(
-            compiler.library_input_defaults().get("retained"),
-            Some(&2.0)
-        );
-        assert_eq!(compiler.library_input_defaults().get("retired"), Some(&7.0));
         let revision_before = compiler.library_revision();
 
         assert!(compiler.remove_source_root("twin:17:lesson:modelica:0"));
 
         assert!(!compiler.installed_roots.contains("LessonModelica"));
         assert!(compiler.installed_roots.contains("ApplicationControls"));
-        assert!(!compiler.library_input_defaults().contains_key("retired"));
-        assert_eq!(
-            compiler.library_input_defaults().get("retained"),
-            Some(&2.0)
-        );
         assert!(
             compiler
                 .source_root_content_closure("twin:17:lesson:modelica:0")
@@ -1776,7 +1681,7 @@ mod source_root_smoke {
     }
 
     #[test]
-    fn source_root_reports_unstrippable_bound_input_files() {
+    fn source_root_reports_malformed_input_declarations() {
         let mut compiler = ModelicaCompiler::new();
         let report = compiler.load_source_root_in_memory(
             "Broken",
@@ -1792,7 +1697,7 @@ mod source_root_smoke {
                 .diagnostics
                 .iter()
                 .any(|message| message.contains("could not parse Broken.mo")),
-            "a source root must not report Ready when its bound-input strip failed: {:?}",
+            "a malformed source root must not report Ready: {:?}",
             report.diagnostics
         );
     }

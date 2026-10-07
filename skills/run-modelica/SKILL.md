@@ -788,3 +788,21 @@ components in generated USD networks. Explicit authored inputs take precedence.
 The worker's initialized solver observation supplies runtime readback; do not
 copy defaults into each Twin to compensate for a lifecycle bridge replacing
 unbound slots with zero. Verify after advancing physics, not only at compile time.
+
+Rumoca owns these defaults as qualified DAE input initialization expressions;
+internal and connected bindings remain equation-owned. Verify class and instance
+isolation, override, reset, batch execution, and invalid-default diagnostics with
+`modelica_scoped_input_defaults.rhai` in an owned production session.
+
+Run the focused production regression after building the normal `luncosim`:
+
+```sh
+LUNCOSIM_BIN=target/debug/luncosim LUNCOSIM_EPHEMERAL_SETTINGS=1 \
+LUNCOSIM_ISOLATED_RUN=1 python3 scripts/api/run_editor_scene_test.py \
+  --port 4261 --timeout 90 --scene scenes/fixtures/usd_query_api/site.usda \
+  --scenario lunco://scenarios/tests/modelica_scoped_input_defaults.rhai \
+  --log target/modelica-scoped-input-defaults.log
+```
+
+The fixture admits a Twin owner; the runner attaches the observer to that owner,
+requires a real Rhai verdict, then verifies API Exit and port release.

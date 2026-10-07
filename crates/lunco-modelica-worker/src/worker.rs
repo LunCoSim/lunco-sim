@@ -17,7 +17,6 @@ use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 
 use lunco_experiments::solver;
-use lunco_modelica_ast::ast_extract::{InputDefaultIssue, strip_input_defaults_with_report};
 use lunco_modelica_compiler::{ModelicaCompiler, PreparedSourceRoot};
 use lunco_modelica_runtime::{
     CompileRequested, InFlightModelicaStep, LoadSourceRootPayload, MAX_MACRO_STEP_DT,
@@ -30,7 +29,7 @@ use lunco_modelica_solver::simulation_session::LiveStepper;
 use lunco_signal::{SimSnapshot, SimStream};
 
 #[cfg(not(target_arch = "wasm32"))]
-const PREPARED_SOLVE_CACHE_VERSION: u32 = 5;
+const PREPARED_SOLVE_CACHE_VERSION: u32 = 6;
 
 mod cache;
 #[cfg(not(target_arch = "wasm32"))]
@@ -790,7 +789,7 @@ fn finish_compile_work(
         prepared_solve_cache,
     );
     match stepper_result {
-        Ok((mut stepper, live_solver_snapshot)) => {
+        Ok((stepper, live_solver_snapshot)) => {
             let CompileWork {
                 entity,
                 session_id,
@@ -808,12 +807,6 @@ fn finish_compile_work(
                 plan: _,
                 intent,
             } = work;
-            let defaults_context = match &intent {
-                CompileIntent::Reset => "Reset",
-                CompileIntent::StepInit(_) => "Init",
-                _ => "Compile",
-            };
-            apply_input_defaults_validated(&mut stepper, &unit.input_defaults, defaults_context);
             let input_names = stepper.input_names().to_vec();
             let symbols = collect_stepper_observables(&stepper);
             let unit_hash = compile_unit_hash(&model_name, &doc_uri, &unit);
@@ -849,7 +842,7 @@ fn finish_compile_work(
                             detected_input_names: input_names,
                             compiled_model_name: Some(model_name),
                             loaded_source_root_id: None,
-                            compile_diagnostics: unit.default_diagnostics,
+                            compile_diagnostics: Vec::new(),
                             live_solver_snapshot: Some(live_solver_snapshot.clone()),
                             ..Default::default()
                         },
@@ -859,7 +852,7 @@ fn finish_compile_work(
                 CompileIntent::Reset => {
                     let mut result =
                         reset_ok(entity, session_id, symbols, input_names, "Reset complete.");
-                    result.compile_diagnostics = unit.default_diagnostics;
+                    result.compile_diagnostics = Vec::new();
                     result.live_solver_snapshot = Some(live_solver_snapshot.clone());
                     let _ = tx.send(result);
                 }
@@ -876,7 +869,7 @@ fn finish_compile_work(
                         is_parameter_update: true,
                         is_reset: false,
                         detected_input_names: input_names,
-                        compile_diagnostics: unit.default_diagnostics,
+                        compile_diagnostics: Vec::new(),
                         live_solver_snapshot: Some(live_solver_snapshot),
                         ..Default::default()
                     });
@@ -1173,7 +1166,6 @@ fn commit_ready_compiler_completions(
     pending_compiles: &mut HashMap<u64, PendingCompile>,
     current_sessions: &HashMap<Entity, u64>,
     library_gen: &mut u64,
-    library_defaults: &mut HashMap<String, f64>,
     library_revision: &mut u64,
     prepared_solve_cache: &mut PreparedSolveCache,
     solve_preparation_pool: &mut SolvePreparationPool,
@@ -1200,7 +1192,6 @@ fn commit_ready_compiler_completions(
                     *library_gen = library_gen.wrapping_add(1);
                     prepared_solve_cache.clear();
                 }
-                *library_defaults = commit.library_defaults;
                 *library_revision = commit.library_revision;
                 log::info!(
                     "[modelica-runtime] LoadSourceRoot `{}`: {} parsed / {} inserted",
@@ -1221,7 +1212,6 @@ fn commit_ready_compiler_completions(
                 source_root_operation_id,
                 removed,
                 error,
-                library_defaults: updated_defaults,
                 library_revision: updated_revision,
                 ..
             } => {
@@ -1253,7 +1243,6 @@ fn commit_ready_compiler_completions(
                     *library_gen = library_gen.wrapping_add(1);
                     prepared_solve_cache.clear();
                 }
-                *library_defaults = updated_defaults;
                 *library_revision = updated_revision;
                 log::info!(
                     "[modelica-runtime] unloaded Modelica source root `{root_id}` operation={source_root_operation_id} (removed={removed})"
@@ -1360,7 +1349,7 @@ use std::sync::Arc;
 /// and lowering run through the asynchronous preparation pool.
 ///
 /// The artifact is valid only for what it was built from: `unit_hash` keys the
-/// assembled [`CompileUnit`] (stripped primary + extras + model name + session
+/// assembled [`CompileUnit`] (original primary + extras + model name + session
 /// URI), and `library_gen` records the worker's library generation (bumped on
 /// every `LoadSourceRoot`). Native rebuilds validate both before reusing the
 /// artifact; wasm rebuilds refresh it through [`rebuild_from_cache`].
@@ -1391,7 +1380,7 @@ struct CachedModel {
 }
 
 /// Key identifying WHAT a cached artifact was compiled from: the assembled
-/// [`CompileUnit`] (stripped primary + stripped extras), the model name, and
+/// [`CompileUnit`] (original primary + extras), the model name, and
 /// the session URI it was seated under. Library roots are covered separately
 /// by the worker's library generation — they mutate the shared session, not
 /// the unit.
@@ -1557,7 +1546,6 @@ struct BackendCompileResult {
 
 #[cfg(target_arch = "wasm32")]
 trait CompileBackend {
-    fn library_input_defaults(&self) -> &HashMap<String, f64>;
     fn library_revision(&self) -> u64;
     fn compile(
         &mut self,
@@ -1576,13 +1564,6 @@ struct InlineCompileBackend<'a> {
 
 #[cfg(target_arch = "wasm32")]
 impl CompileBackend for InlineCompileBackend<'_> {
-    fn library_input_defaults(&self) -> &HashMap<String, f64> {
-        self.compiler
-            .as_ref()
-            .map(ModelicaCompiler::library_input_defaults)
-            .unwrap_or_else(|| empty_library_input_defaults())
-    }
-
     fn library_revision(&self) -> u64 {
         self.compiler
             .as_ref()
@@ -1622,12 +1603,6 @@ impl CompileBackend for InlineCompileBackend<'_> {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-fn empty_library_input_defaults() -> &'static HashMap<String, f64> {
-    static DEFAULTS: std::sync::OnceLock<HashMap<String, f64>> = std::sync::OnceLock::new();
-    DEFAULTS.get_or_init(HashMap::new)
-}
-
 /// Whether a cached artifact built at (`cached_hash`, `cached_gen`) may be
 /// reused for the unit currently hashing to `hash` under `library_gen`.
 /// Factored out of [`rebuild_from_cache`] so the invalidation rule is
@@ -1648,9 +1623,6 @@ struct CacheRebuild {
     parameter_overrides: Vec<(String, f64)>,
     /// Stable source-set identity used by the cross-process solve-IR cache.
     unit_key: u64,
-    /// Assembled from the cached source set — carries the `input_defaults`
-    /// to re-seed and the stripped primary for error diagnostics.
-    unit: CompileUnit,
     /// `Ok` = artifact to build the stepper from; `Err` = rumoca's formatted
     /// compile summary.
     outcome: Result<Box<rumoca_compile::compile::DaeCompilationResult>, String>,
@@ -1681,14 +1653,9 @@ fn rebuild_from_cache(
             c.library_gen,
         )
     };
-    let mut unit = assemble_compile_unit(&source, extras);
+    let unit = assemble_compile_unit(&source, extras);
     let hash = compile_unit_hash(&model_name, &doc_uri, &unit);
     let unit_key = prepared_unit_hash(&model_name, &doc_uri, &unit);
-    // Library defaults are folded in AFTER hashing on purpose: the hash keys the
-    // source set, and `library_gen` already invalidates the artifact when the
-    // seated libraries change. Both the reuse and the recompile path below need
-    // the merged map, so it happens before either returns.
-    unit.merge_library_defaults(backend.library_input_defaults());
     if artifact_still_valid(cached_hash, cached_gen, hash, library_gen) {
         let library_revision = Some(backend.library_revision());
         let compiled = cached_models
@@ -1701,7 +1668,6 @@ fn rebuild_from_cache(
             library_revision,
             parameter_overrides,
             unit_key,
-            unit,
             outcome: Ok(compiled),
             compile_diagnostics: Vec::new(),
         });
@@ -1719,7 +1685,6 @@ fn rebuild_from_cache(
         library_revision: Some(result.library_revision),
         parameter_overrides,
         unit_key,
-        unit: result.unit,
         outcome: result.outcome,
         compile_diagnostics: result.diagnostics,
     })
@@ -1813,13 +1778,12 @@ impl NativeCachedRebuild {
 fn native_cached_rebuild(
     cached_models: &HashMap<Entity, CachedModel>,
     entity: Entity,
-    library_defaults: &HashMap<String, f64>,
     library_revision: u64,
 ) -> Option<NativeCachedRebuild> {
     let cached = cached_models.get(&entity)?;
-    let mut unit = assemble_compile_unit(&cached.source, cached.extra_sources.clone());
+    let unit = assemble_compile_unit(&cached.source, cached.extra_sources.clone());
     let unit_key = prepared_unit_hash(&cached.model_name, &cached.doc_uri, &unit);
-    unit.merge_library_defaults(library_defaults);
+
     Some(NativeCachedRebuild {
         model_name: cached.model_name.clone(),
         source: Arc::clone(&cached.source),
@@ -1840,14 +1804,11 @@ fn cached_solve_is_prepared(
     cached_models: &HashMap<Entity, CachedModel>,
     entity: Entity,
     library_gen: u64,
-    library_defaults: &HashMap<String, f64>,
     library_revision: u64,
     profile: solver::RuntimeProfile,
     prepared_solve_cache: &PreparedSolveCache,
 ) -> bool {
-    let Some(cached) =
-        native_cached_rebuild(cached_models, entity, library_defaults, library_revision)
-    else {
+    let Some(cached) = native_cached_rebuild(cached_models, entity, library_revision) else {
         return false;
     };
     if !cached.artifact_is_valid(library_gen) {
@@ -1890,8 +1851,8 @@ fn submit_pending_compile(
             compiler_order.push_back(operation_id);
             pending_compiles.insert(operation_id, pending);
         }
-        Err((error, unit)) => {
-            send_compile_artifact_error(tx, &pending, error, unit.default_diagnostics);
+        Err(error) => {
+            send_compile_artifact_error(tx, &pending, error, Vec::new());
         }
     }
 }
@@ -2279,354 +2240,18 @@ pub fn panic_result_for_command(cmd: &ModelicaCommand, message: &str) -> Modelic
     failed_result_for_command(cmd, format!("Modelica worker panic: {message}"))
 }
 
-/// Where a captured default was declared, which decides how its leaf name is
-/// matched against the compiled model's runtime input slots.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DefaultOrigin {
-    /// Declared in the PRIMARY document. The compile target's own components
-    /// flatten to UNQUALIFIED slot names, so match exactly first; fall back to
-    /// instance-qualified slots for a default declared in a nested class of the
-    /// primary, which flattens as `<instance>.<leaf>`.
-    Primary,
-    /// Declared in a sibling document or a seated library member. Such a class
-    /// is only ever reached by INSTANTIATION, so its inputs can only appear as
-    /// `<instance path>.<leaf>` — an exact unqualified hit would be some OTHER
-    /// class's slot that merely shares the leaf name, so qualified matches only.
-    Instanced,
-}
-
-/// One captured `input` default plus the matching rule its origin implies.
-///
-/// Deliberately ONE map for all origins rather than a second "library defaults"
-/// / "extras defaults" map beside it: the seeding rule is the only thing that
-/// differs, so it travels as data on the value.
-#[derive(Debug, Clone, Copy)]
-struct InputDefault {
-    value: f64,
-    origin: DefaultOrigin,
-}
-
-/// Which of the compiled model's runtime input slots a captured default applies
-/// to — see [`DefaultOrigin`]. Multiple hits are correct and expected: two
-/// instances of the same library class share the class's authored default.
-fn resolve_default_slots(known: &[String], name: &str, origin: DefaultOrigin) -> Vec<String> {
-    if origin == DefaultOrigin::Primary && known.iter().any(|k| k == name) {
-        return vec![name.to_string()];
-    }
-    let suffix = format!(".{name}");
-    known
-        .iter()
-        .filter(|k| k.ends_with(&suffix))
-        .cloned()
-        .collect()
-}
-
-/// Apply parsed input defaults to a stepper at init time, logging any
-/// mismatch between the rumoca-detected names and the stepper's actual
-/// input slots. The mismatch case is a rumoca-vs-flatten disagreement —
-/// rare, but silent failure here would mean a user-set default never
-/// reaches the simulator. Logged once per init, not per-call.
-///
-/// This is the ONE re-seed mechanism: every source of stripped defaults
-/// (primary document, sibling docs, seated library members) arrives here in the
-/// same map and is resolved by [`resolve_default_slots`].
-fn apply_input_defaults_validated(
-    stepper: &mut LiveStepper,
-    input_defaults: &HashMap<String, InputDefault>,
-    ctx: &str,
-) {
-    if input_defaults.is_empty() {
-        return;
-    }
-    let known: Vec<String> = stepper.input_names().to_vec();
-    let mut to_set: Vec<(String, f64)> = Vec::new();
-    // Only a PRIMARY default that matches nothing is a signal. An `Instanced`
-    // default that matches nothing just means the library class it came from is
-    // not instantiated by this model — the common case, and not a problem.
-    let mut unknown: Vec<&str> = Vec::new();
-    for (name, def) in input_defaults {
-        let slots = resolve_default_slots(&known, name, def.origin);
-        if slots.is_empty() {
-            if def.origin == DefaultOrigin::Primary {
-                unknown.push(name.as_str());
-            }
-            continue;
-        }
-        for slot in slots {
-            to_set.push((slot, def.value));
-        }
-    }
-    if !unknown.is_empty() {
-        // ALL of them missing is categorically worse than some of them: the model
-        // exposes NO runtime slot at all, so every wire into it is rejected and it
-        // runs on its declared defaults for the whole session — a simulation that
-        // completes, publishes plausible numbers, and simulates nothing. That is
-        // the expensive failure (it renders as usable footage), so it is an ERROR
-        // and it names the two causes worth checking.
-        if known.is_empty() {
-            bevy::log::error!(
-                "[{ctx}] the compiled model exposes NO runtime inputs at all, but the \
-                 source declares {}: {:?}. Every wired value into this model will be \
-                 DISCARDED and it will run on its declared defaults. rumoca demotes a \
-                 bound `input Real x = <default>` to an algebraic, so this means the \
-                 source reaching the compiler was NOT stripped — check that it entered \
-                 through `seat_user_source` / `seat_library_files`.",
-                unknown.len(),
-                unknown,
-            );
-        } else {
-            bevy::log::warn!(
-                "[{ctx}] {} parsed input default(s) not in stepper.input_names(): {:?} (known: {:?})",
-                unknown.len(),
-                unknown,
-                known,
-            );
-        }
-    }
-    for (name, val) in to_set {
-        if let Err(e) = stepper.set_input(&name, val) {
-            bevy::log::warn!("[{ctx}] set_input({name}) failed: {e:?}");
-        }
-    }
-}
-
-/// The complete source set one rumoca compile receives — primary plus any
-/// sibling docs — with the bound-`input` workaround applied to EVERY member.
-///
-/// All worker compile paths (Compile, Reset, Step auto-init, UpdateParameters;
-/// native and inline) assemble their sources through
-/// [`assemble_compile_unit`], so no path can hand rumoca an unstripped string:
-/// rumoca demotes a bound `input Real x = <default>` to an algebraic, which
-/// deletes the runtime slot and silently drops every wire into it (see
-/// `strip_input_defaults`). The compiler applies the same strip again at its
-/// own `seat_user_source` chokepoint; the strip is a length-preserving no-op
-/// on already-stripped text, so the two layers compose.
+/// Immutable source set admitted to the compiler. Input initialization stays
+/// with each parsed declaration and is resolved by Rumoca, including libraries.
 #[derive(Clone)]
 struct CompileUnit {
-    /// Primary source with input bindings blanked (length-preserving, so
-    /// diagnostic byte offsets still index the editor's original buffer).
     source: String,
-    /// Extra sibling docs, each stripped like the primary.
     extras: Vec<(String, String)>,
-    /// Numeric input defaults captured from EVERY member of the source set —
-    /// primary, sibling docs, and (folded in by
-    /// [`CompileUnit::merge_library_defaults`]) the seated library members —
-    /// re-seeded into the fresh stepper via [`apply_input_defaults_validated`].
-    ///
-    /// One map, not one per origin: the origin only changes how the leaf name is
-    /// matched against the flattened slots, so it rides on the value.
-    input_defaults: HashMap<String, InputDefault>,
-    /// One diagnostic per default that could NOT be carried across the strip —
-    /// a non-literal binding (`= 2*3.14/T`), a leaf-name collision between two
-    /// scopes, or a source the strip could not parse at all. Each one means an
-    /// input that starts at 0.0 (or is folded to a constant) unless wired, which
-    /// must never be silent. Attached to the compile result's
-    /// `compile_diagnostics`.
-    default_diagnostics: Vec<lunco_doc::Diagnostic>,
 }
 
 fn assemble_compile_unit(source: &str, extra_sources: Vec<(String, String)>) -> CompileUnit {
-    let (stripped_source, primary_defaults, primary_issues) =
-        strip_input_defaults_with_report(source);
-    log_parse_failures("the primary document", &primary_issues);
-    // The primary document is the only one with an editor buffer behind it, so
-    // it is the only one whose diagnostics can be located for click-to-source.
-    let mut default_diagnostics: Vec<lunco_doc::Diagnostic> = primary_issues
-        .iter()
-        .map(|issue| located_default_diagnostic(source, issue))
-        .collect();
-    let mut input_defaults: HashMap<String, InputDefault> = primary_defaults
-        .into_iter()
-        .map(|(name, value)| {
-            (
-                name,
-                InputDefault {
-                    value,
-                    origin: DefaultOrigin::Primary,
-                },
-            )
-        })
-        .collect();
-    let extras = extra_sources
-        .into_iter()
-        .map(|(uri, text)| {
-            let (stripped, defaults, issues) = strip_input_defaults_with_report(&text);
-            log_parse_failures(&uri, &issues);
-            // Message-only, since click-to-source targets the primary document.
-            for issue in &issues {
-                default_diagnostics.push(lunco_doc::Diagnostic::warning(
-                    format!("{} (in {uri})", default_issue_message(issue)),
-                    None,
-                    None,
-                ));
-            }
-            // An extra's numeric defaults ARE seeded. They used to be dropped
-            // because "their inputs flatten under instance-qualified names the
-            // leaf keys can't address" — true of the KEY, but the fix is to
-            // resolve the leaf against the qualified slots
-            // (`resolve_default_slots`), not to throw the authored value away
-            // and let the slot start at 0.0.
-            merge_instanced_defaults(
-                &mut input_defaults,
-                defaults,
-                &uri,
-                &mut default_diagnostics,
-            );
-            (uri, stripped)
-        })
-        .collect();
     CompileUnit {
-        source: stripped_source,
-        extras,
-        input_defaults,
-        default_diagnostics,
-    }
-}
-
-impl CompileUnit {
-    /// Fold the seated libraries' captured `input` defaults into this unit.
-    ///
-    /// This is the C7 seam: `ModelicaCompiler::load_source_root_in_memory`
-    /// strips every library member, so without this the bound `input`s in the
-    /// `within LunCo.*` members reach the stepper as runtime slots sitting at
-    /// 0.0 instead of at their authored defaults. Seeded as
-    /// [`DefaultOrigin::Instanced`] — a library class is only reached by
-    /// instantiation.
-    fn merge_library_defaults(&mut self, library: &HashMap<String, f64>) {
-        if library.is_empty() {
-            return;
-        }
-        merge_instanced_defaults(
-            &mut self.input_defaults,
-            library.iter().map(|(k, v)| (k.clone(), *v)),
-            "a seated library member",
-            &mut self.default_diagnostics,
-        );
-    }
-}
-
-/// Fold non-primary defaults into the unit's ONE defaults map.
-///
-/// The primary document wins any leaf-name clash (its slot is the unqualified
-/// one and its value is the one the user is editing), and a clash between two
-/// non-primary sources keeps the first. Either way the loser is NAMED rather
-/// than silently overwritten.
-fn merge_instanced_defaults(
-    into: &mut HashMap<String, InputDefault>,
-    defaults: impl IntoIterator<Item = (String, f64)>,
-    origin_label: &str,
-    diagnostics: &mut Vec<lunco_doc::Diagnostic>,
-) {
-    for (name, value) in defaults {
-        // `.copied()` so the map is not borrowed across the arms — the `None`
-        // arm inserts into it.
-        match into.get(&name).copied() {
-            None => {
-                into.insert(
-                    name,
-                    InputDefault {
-                        value,
-                        origin: DefaultOrigin::Instanced,
-                    },
-                );
-            }
-            // The same number from two places costs nothing.
-            Some(existing) if existing.value == value => {}
-            Some(existing) => {
-                let held = match existing.origin {
-                    DefaultOrigin::Primary => "the primary document",
-                    DefaultOrigin::Instanced => "another member of the source set",
-                };
-                let held_value = existing.value;
-                diagnostics.push(lunco_doc::Diagnostic::warning(
-                    format!(
-                        "input default `{name}` = {value} in {origin_label} clashes with \
-                         {held_value} from {held}. The defaults map is keyed by the leaf \
-                         component name (that is what `set_input` addresses), so only one can \
-                         be seeded — {held_value} is used. Rename one if they are different \
-                         signals."
-                    ),
-                    None,
-                    None,
-                ));
-            }
-        }
-    }
-}
-
-/// A source the strip could not parse reaches rumoca UNSTRIPPED, so every bound
-/// `input` in it is folded to a constant and every wire into those inputs is
-/// discarded for the whole session. The diagnostic for it is only a warning (so
-/// a compile rumoca accepts is not falsely reported as failed), so the log
-/// carries the weight — same reasoning as the `NO runtime inputs at all` error
-/// in [`apply_input_defaults_validated`].
-fn log_parse_failures(label: &str, issues: &[InputDefaultIssue]) {
-    if issues
-        .iter()
-        .any(|i| matches!(i, InputDefaultIssue::ParseFailed))
-    {
-        bevy::log::error!(
-            "[compile] the bound-`input` strip could not parse {label} — it goes to rumoca \
-             UNSTRIPPED, so every `input x = <default>` in it is demoted to a constant, those \
-             runtime slots do not exist, and wired values into them are DISCARDED for the whole \
-             session."
-        );
-    }
-}
-
-/// The compile-result diagnostic for one [`InputDefaultIssue`], located against
-/// the primary document's buffer where the issue carries an offset.
-fn located_default_diagnostic(source: &str, issue: &InputDefaultIssue) -> lunco_doc::Diagnostic {
-    match issue {
-        InputDefaultIssue::Unresolvable { byte_offset, .. } => {
-            let (line, col) = lunco_modelica_document::document::core::byte_offset_to_line_col(
-                source,
-                *byte_offset,
-            );
-            lunco_doc::Diagnostic::warning(default_issue_message(issue), Some(line), Some(col))
-        }
-        // Warning severity ON PURPOSE even though this is the worst of the
-        // three: rumoca drives its own parse and may compile the file fine, and
-        // an Error diagnostic would then make a SUCCESSFUL compile read as
-        // failed (`DocDiagnostics::error_message` picks the first Error). The
-        // loudness goes to the log instead — see `log_parse_failures`.
-        InputDefaultIssue::ParseFailed => {
-            lunco_doc::Diagnostic::warning(default_issue_message(issue), None, None)
-        }
-        InputDefaultIssue::Collision { .. } => {
-            lunco_doc::Diagnostic::warning(default_issue_message(issue), None, None)
-        }
-    }
-}
-
-fn default_issue_message(issue: &InputDefaultIssue) -> String {
-    match issue {
-        InputDefaultIssue::Unresolvable { name, binding, .. } => format!(
-            "input `{name} = {binding}`: the default is an expression, not a literal — the \
-             binding is stripped so `{name}` stays a runtime input slot, but its default \
-             cannot be captured and the slot starts at 0.0 unless wired. Precompute the \
-             value or move the expression to a `parameter`."
-        ),
-        InputDefaultIssue::Collision {
-            name,
-            kept_scope,
-            kept,
-            dropped_scope,
-            dropped,
-        } => format!(
-            "input `{name}` is declared with default {kept} in `{kept_scope}` and {dropped} in \
-             `{dropped_scope}`. Defaults are keyed by the leaf component name (that is what \
-             `set_input` addresses), so only {kept} is seeded and `{dropped_scope}.{name}` starts \
-             at {kept} instead of {dropped}. Rename one of them."
-        ),
-        InputDefaultIssue::ParseFailed => {
-            "the bound-`input` strip could not parse this source, so it reaches rumoca \
-             UNSTRIPPED: every `input x = <default>` in it is demoted to a constant, the model \
-             loses those runtime input slots, and wired values into them are DISCARDED. Fix the \
-             syntax error — rumoca may compile the file anyway, in which case this is the only \
-             warning you get."
-                .to_string()
-        }
+        source: source.to_owned(),
+        extras: extra_sources,
     }
 }
 
@@ -2646,10 +2271,7 @@ fn set_input_or_warn(
             "[modelica] {entity:?} rejected input '{name}' — the \
              compiled model exposes no such runtime slot, so the \
              wired value is DISCARDED and the model keeps its \
-             declared default forever. Usual cause: the `.mo` \
-             declares `input Real {name} = <default>`, which \
-             rumoca demotes to an algebraic (see \
-             `strip_input_defaults`)."
+             declared default. Verify the admitted model's runtime input names."
         );
     }
 }
@@ -2726,7 +2348,6 @@ pub fn modelica_worker(
     // invalidates all of them (see `CachedModel::library_gen`).
     let mut library_gen: u64 = 0;
     let mut library_revision: u64 = 0;
-    let mut library_defaults: HashMap<String, f64> = HashMap::new();
     // M8: the two scheduling lanes — see `enqueue_command` for the contract.
     let mut compile_lane: VecDeque<ModelicaCommand> = VecDeque::new();
     let mut step_lane: VecDeque<ModelicaCommand> = VecDeque::new();
@@ -2830,7 +2451,6 @@ pub fn modelica_worker(
             &mut pending_compiles,
             &current_sessions,
             &mut library_gen,
-            &mut library_defaults,
             &mut library_revision,
             &mut prepared_solve_cache,
             &mut solve_preparation_pool,
@@ -2903,7 +2523,6 @@ pub fn modelica_worker(
             &mut pending_compiles,
             &current_sessions,
             &mut library_gen,
-            &mut library_defaults,
             &mut library_revision,
             &mut prepared_solve_cache,
             &mut solve_preparation_pool,
@@ -2975,7 +2594,6 @@ pub fn modelica_worker(
                         &cached_models,
                         *entity,
                         library_gen,
-                        &library_defaults,
                         library_revision,
                         profile_for(*entity, &realtime_models),
                         &prepared_solve_cache,
@@ -3099,12 +2717,9 @@ pub fn modelica_worker(
                         // Rebuild from the cached DAE. A changed library set
                         // recompiles through the Rumoca actor; a missing solve
                         // model is loaded/lowered through the preparation pool.
-                        if let Some(cached) = native_cached_rebuild(
-                            &cached_models,
-                            entity,
-                            &library_defaults,
-                            library_revision,
-                        ) {
+                        if let Some(cached) =
+                            native_cached_rebuild(&cached_models, entity, library_revision)
+                        {
                             if !cached.artifact_is_valid(library_gen) {
                                 let (pending, unit) = cached.into_pending_compile(
                                     entity,
@@ -3249,10 +2864,9 @@ pub fn modelica_worker(
                                 compiler_order.push_back(operation_id);
                                 pending_compiles.insert(operation_id, pending);
                             }
-                            Err((error, unit)) => {
+                            Err(error) => {
                                 let mut result = result_ok(entity, session_id);
                                 result.error = Some(format!("Compiler Error: {error}"));
-                                result.compile_diagnostics = unit.default_diagnostics;
                                 result.is_new_model = true;
                                 let _ = tx_inner.send(result);
                             }
@@ -3289,12 +2903,9 @@ pub fn modelica_worker(
                                 .get(&entity)
                                 .is_some_and(|c| c.model_name == model_name);
                             if cached_name_matches {
-                                if let Some(cached) = native_cached_rebuild(
-                                    &cached_models,
-                                    entity,
-                                    &library_defaults,
-                                    library_revision,
-                                ) {
+                                if let Some(cached) =
+                                    native_cached_rebuild(&cached_models, entity, library_revision)
+                                {
                                     if !cached.artifact_is_valid(library_gen) {
                                         let pipeline_load = compiler_order.len()
                                             + pending_compile_works.len()
@@ -3770,11 +3381,6 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                 rb.library_revision,
                                 &mut w.prepared_solve_cache,
                             ) {
-                                apply_input_defaults_validated(
-                                    &mut s,
-                                    &rb.unit.input_defaults,
-                                    "Compile",
-                                );
                                 for (name, val) in &inputs {
                                     let _ = s.set_input(name, *val);
                                 }
@@ -3916,10 +3522,10 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             w.current_sessions.insert(entity, session_id);
             // Raw sibling docs for the cache — see the native Compile arm.
             let raw_extras = extra_sources.clone();
-            let mut unit = assemble_compile_unit(&source, extra_sources);
+            let unit = assemble_compile_unit(&source, extra_sources);
 
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
-            unit.merge_library_defaults(compiler.library_input_defaults());
+
             let compile_outcome = compile_shared(
                 &mut w.compiled_artifacts,
                 compiler,
@@ -3939,12 +3545,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         &mut w.prepared_solve_cache,
                     );
                     match stepper_result {
-                        Ok((mut stepper, live_solver_snapshot)) => {
-                            apply_input_defaults_validated(
-                                &mut stepper,
-                                &unit.input_defaults,
-                                "Compile",
-                            );
+                        Ok((stepper, live_solver_snapshot)) => {
                             let input_names: Vec<String> = stepper.input_names().to_vec();
                             let symbols = collect_stepper_observables(&stepper);
                             let unit_hash = compile_unit_hash(&model_name, &doc_uri, &unit);
@@ -3980,10 +3581,6 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                     detected_input_names: input_names,
                                     compiled_model_name: Some(model_name.clone()),
                                     loaded_source_root_id: None,
-                                    // Unresolvable input defaults (non-literal bindings)
-                                    // surface even on a green compile — that is exactly
-                                    // when they'd otherwise run at 0.0 in silence.
-                                    compile_diagnostics: unit.default_diagnostics,
                                     live_solver_snapshot: Some(live_solver_snapshot),
                                     ..Default::default()
                                 },
@@ -4046,7 +3643,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             if let Some(rb) = rebuild {
                 match rb.outcome {
                     Ok(comp_res) => {
-                        if let Ok((mut stepper, live_solver_snapshot)) = build_stepper(
+                        if let Ok((stepper, live_solver_snapshot)) = build_stepper(
                             &comp_res,
                             profile_for(entity, &w.realtime_models),
                             &rb.parameter_overrides,
@@ -4054,11 +3651,6 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                             rb.library_revision,
                             &mut w.prepared_solve_cache,
                         ) {
-                            apply_input_defaults_validated(
-                                &mut stepper,
-                                &rb.unit.input_defaults,
-                                "Compile",
-                            );
                             let input_names: Vec<String> = stepper.input_names().to_vec();
                             let symbols = collect_stepper_observables(&stepper);
                             w.steppers
@@ -4135,7 +3727,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                 return;
             }
             w.current_sessions.insert(entity, session_id);
-            let mut unit = assemble_compile_unit(&source, Vec::new());
+            let unit = assemble_compile_unit(&source, Vec::new());
 
             // Re-seat under the model's original session URI (see the threaded
             // handler) so the reused session never holds it under two filenames.
@@ -4146,7 +3738,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                 .unwrap_or_else(|| model_name.clone());
 
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
-            unit.merge_library_defaults(compiler.library_input_defaults());
+
             match compile_shared(
                 &mut w.compiled_artifacts,
                 compiler,
@@ -4164,12 +3756,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         Some(compiler.library_revision()),
                         &mut w.prepared_solve_cache,
                     ) {
-                        Ok((mut stepper, live_solver_snapshot)) => {
-                            apply_input_defaults_validated(
-                                &mut stepper,
-                                &unit.input_defaults,
-                                "Compile",
-                            );
+                        Ok((stepper, live_solver_snapshot)) => {
                             let input_names: Vec<String> = stepper.input_names().to_vec();
                             let symbols = collect_stepper_observables(&stepper);
                             let unit_hash = compile_unit_hash(&model_name, &doc_uri, &unit);
@@ -4204,7 +3791,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                 is_parameter_update: true,
                                 is_reset: false,
                                 detected_input_names: input_names,
-                                compile_diagnostics: unit.default_diagnostics,
+                                compile_diagnostics: Vec::new(),
                                 live_solver_snapshot: Some(live_solver_snapshot),
                                 ..Default::default()
                             });
