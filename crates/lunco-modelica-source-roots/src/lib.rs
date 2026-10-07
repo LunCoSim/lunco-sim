@@ -99,6 +99,9 @@ pub struct SourceRoot {
     /// A package rooted at `Modelica` or another authored package name uses
     /// that name here; bundled examples use their own authored root.
     pub id: String,
+    /// Parsed authored namespaces installed by the current load operation.
+    /// Scoped source-set IDs remain the authoritative lifetime owner.
+    pub namespaces: Vec<String>,
     /// How to actually load this root when the gate decides to.
     pub kind: SourceRootKind,
     /// Scope that owns this registration. Shared application roots survive
@@ -174,6 +177,7 @@ impl SourceRootRegistry {
                 id.to_string(),
                 SourceRoot {
                     id: id.to_string(),
+                    namespaces: Vec::new(),
                     kind: SourceRootKind::Bundled { filename },
                     owner: SourceRootOwner::Application,
                     operation_id: 0,
@@ -212,6 +216,7 @@ impl SourceRootRegistry {
                 root_name.clone(),
                 SourceRoot {
                     id: root_name,
+                    namespaces: Vec::new(),
                     kind,
                     owner: SourceRootOwner::Application,
                     operation_id: 0,
@@ -261,6 +266,7 @@ impl SourceRootRegistry {
             id.clone(),
             SourceRoot {
                 id,
+                namespaces: Vec::new(),
                 kind: SourceRootKind::Disk { root_dir },
                 owner: SourceRootOwner::Application,
                 operation_id: 0,
@@ -281,6 +287,7 @@ impl SourceRootRegistry {
             id.clone(),
             SourceRoot {
                 id,
+                namespaces: Vec::new(),
                 kind: SourceRootKind::Disk { root_dir },
                 owner: SourceRootOwner::Twin(twin),
                 operation_id: 0,
@@ -316,6 +323,7 @@ impl SourceRootRegistry {
             id.clone(),
             SourceRoot {
                 id,
+                namespaces: Vec::new(),
                 kind,
                 owner: SourceRootOwner::Application,
                 operation_id: 0,
@@ -327,6 +335,70 @@ impl SourceRootRegistry {
     /// Borrow an entry's load state.
     pub fn state(&self, id: &str) -> Option<&LoadState> {
         self.roots.get(id).map(|r| &r.state)
+    }
+
+    /// Commit parsed namespace facts only for the currently admitted load.
+    /// Stale worker results cannot revive a retired/replaced source set.
+    pub fn complete_load(
+        &mut self,
+        id: &str,
+        operation_id: u64,
+        mut namespaces: Vec<String>,
+        error: Option<String>,
+    ) -> bool {
+        let Some(entry) = self
+            .roots
+            .get_mut(id)
+            .filter(|entry| entry.operation_id == operation_id)
+        else {
+            return false;
+        };
+        namespaces.sort_unstable();
+        namespaces.dedup();
+        let error = error.or_else(|| {
+            (namespaces.is_empty() || namespaces.iter().any(|name| name.trim().is_empty())).then(
+                || {
+                    "source-root installation returned no valid authored namespace identities"
+                        .to_owned()
+                },
+            )
+        });
+        match error {
+            Some(error) => {
+                entry.namespaces.clear();
+                entry.state = LoadState::Failed(error);
+            }
+            None => {
+                entry.namespaces = namespaces;
+                entry.state = LoadState::Ready;
+            }
+        }
+        true
+    }
+
+    /// Resolve a qualified Modelica root to its unique source-set owner.
+    /// Registration IDs identify ordinary application roots before first load;
+    /// completed parsed namespaces identify Twin-scoped source sets.
+    pub fn resolve_source_root(&self, namespace: &str) -> Result<String, String> {
+        let mut owners = self
+            .roots
+            .iter()
+            .filter_map(|(id, entry)| {
+                (id == namespace || entry.namespaces.iter().any(|name| name == namespace))
+                    .then(|| id.clone())
+            })
+            .collect::<Vec<_>>();
+        owners.sort_unstable();
+        match owners.as_slice() {
+            [id] => Ok(id.clone()),
+            [] => Err(format!(
+                "Modelica source root `{namespace}` is not registered"
+            )),
+            _ => Err(format!(
+                "Modelica namespace `{namespace}` has multiple registered source-set owners: {}",
+                owners.join(", ")
+            )),
+        }
     }
 
     fn allocate_operation_id(&mut self) -> Result<u64, String> {
@@ -919,7 +991,10 @@ pub fn admit_compile_roots(
     roots: impl IntoIterator<Item = String>,
     channels: &ModelicaChannels,
 ) -> Result<(), String> {
-    let roots = roots.into_iter().collect::<std::collections::BTreeSet<_>>();
+    let roots = roots
+        .into_iter()
+        .map(|namespace| registry.resolve_source_root(&namespace))
+        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
     for id in &roots {
         let Some(state) = registry.state(id) else {
             return Err(format!("Modelica source root `{id}` is not registered"));
@@ -968,7 +1043,12 @@ pub fn log_compile_deps(registry: &SourceRootRegistry, model_name: &str, ast: &S
     let mut failed = Vec::new();
     let mut unknown = Vec::new();
     for root in &deps {
-        match registry.state(root) {
+        match registry
+            .resolve_source_root(root)
+            .ok()
+            .as_deref()
+            .and_then(|id| registry.state(id))
+        {
             Some(LoadState::Ready) => ready.push(root.clone()),
             Some(LoadState::NotLoaded) => not_loaded.push(root.clone()),
             Some(LoadState::Loading { .. }) => loading.push(root.clone()),
@@ -995,6 +1075,7 @@ mod tests {
     fn twin_root(id: &str, twin: lunco_workspace::TwinId, operation_id: u64) -> SourceRoot {
         SourceRoot {
             id: id.to_owned(),
+            namespaces: Vec::new(),
             kind: SourceRootKind::Disk {
                 root_dir: PathBuf::from("/inline/test/root"),
             },
@@ -1017,6 +1098,7 @@ mod tests {
             "application:control".into(),
             SourceRoot {
                 id: "application:control".into(),
+                namespaces: Vec::new(),
                 kind: SourceRootKind::Disk {
                     root_dir: PathBuf::from("/inline/application"),
                 },
@@ -1044,6 +1126,51 @@ mod tests {
         assert!(registry.roots.contains_key("application:control"));
         assert!(registry.roots.contains_key("twin:23:lesson:modelica:0"));
         assert!(!registry.roots.contains_key("twin:17:lesson:modelica:0"));
+    }
+
+    #[test]
+    fn parsed_namespaces_follow_exact_source_set_admission_and_retirement() {
+        let twin = lunco_workspace::TwinId::new(17);
+        let first = "twin:17:lesson:modelica:first";
+        let second = "twin:17:lesson:modelica:second";
+        let mut registry = SourceRootRegistry::default();
+        registry.next_operation_id = 3;
+        registry
+            .roots
+            .insert(first.into(), twin_root(first, twin, 1));
+        assert!(registry.resolve_source_root("Shared").is_err());
+        assert!(!registry.complete_load(first, 0, vec!["Stale".into()], None));
+        assert!(registry.resolve_source_root("Stale").is_err());
+        assert!(registry.complete_load(first, 1, vec!["Shared".into()], None));
+        assert_eq!(registry.resolve_source_root("Shared").unwrap(), first);
+        assert!(matches!(registry.state(first), Some(LoadState::Ready)));
+
+        registry
+            .roots
+            .insert(second.into(), twin_root(second, twin, 2));
+        assert!(registry.complete_load(second, 2, vec!["Shared".into()], None));
+        assert!(
+            registry
+                .resolve_source_root("Shared")
+                .unwrap_err()
+                .contains("multiple registered")
+        );
+        registry.take_twin_roots(twin).unwrap();
+        assert!(registry.resolve_source_root("Shared").is_err());
+        assert!(!registry.complete_load(first, 1, vec!["Shared".into()], None));
+    }
+
+    #[test]
+    fn missing_namespace_identity_cannot_publish_ready() {
+        let id = "twin:17:lesson:modelica:first";
+        let mut registry = SourceRootRegistry::default();
+        registry.roots.insert(
+            id.into(),
+            twin_root(id, lunco_workspace::TwinId::new(17), 1),
+        );
+        assert!(registry.complete_load(id, 1, Vec::new(), None));
+        assert!(matches!(registry.state(id), Some(LoadState::Failed(error))
+            if error.contains("namespace identities")));
     }
 
     #[test]

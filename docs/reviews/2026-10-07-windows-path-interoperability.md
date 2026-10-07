@@ -86,19 +86,17 @@ Windows job now runs the focused native path tests and the literal-filename
 production scene gate. Windows CI and a native Windows windowed rename/model
 save session remain required acceptance evidence.
 
-The integrated `modelica_drive_law` gate still fails its motion assertion
-(`target/windows-interop-drive-main-final.log`). Before integration, the gate compiled its network
-and exposed both outputs but failed its motion assertion at 0.02 m. The earlier
-task production build reproduced that failure before the participant/network
-source-load changes. This establishes that those changes did not introduce
-that particular failure; it is not a clean untouched-HEAD baseline.
-The existing `scripting_asset_contracts` gate also failed because it references
-`scripting/prelude/readiness.rhai`, which is absent from the committed tree.
-These results do not count as passing acceptance and their assertions were not
-weakened.
+The scripting asset gate reads one shared inventory of the current prelude and
+policy sources. Readiness is a policy asset, and terrain sensing belongs to the
+sensing prelude. The Modelica drive-law gate acquires manual control before
+writing throttle and releases the same authority after its verdict; its motion
+threshold remains unchanged.
 
-A separate integrated Twin library dependency issue was observed: a package
-loaded under its Twin-scoped source-set ID reaches `Ready`, but admission of its
-authored namespace reports that namespace as unregistered. The flat source
-path probe does not depend on that package namespace. This is recorded as an
-open Modelica registry issue, outside the filesystem/path fixes.
+Twin package installation publishes parsed namespace identities with the exact
+scoped source-set operation. The registry retains these identities on the owned
+entry, resolves compile dependencies to a unique source-set owner, and rejects
+missing or ambiguous namespace ownership. Stale results cannot restore names
+removed by Twin close. The existing path-interoperability Rhai assertions cover
+a qualified package wrapper's solved output and terminal unknown-namespace
+rejection. Focused compile and production evidence for these changes remains
+pending.

@@ -755,17 +755,30 @@ pub fn handle_modelica_responses(
         // `Entity::PLACEHOLDER`).
         if let Some(root_id) = result.loaded_source_root_id.as_ref() {
             if let Some(roots) = source_roots.as_deref_mut() {
-                if let Some(entry) = roots
-                    .roots
-                    .get_mut(root_id)
-                    .filter(|entry| Some(entry.operation_id) == result.source_root_operation_id)
-                {
-                    if let Some(err) = result.error.as_ref() {
-                        bevy::log::warn!("[source-roots] `{}` load failed: {}", root_id, err,);
-                        entry.state = lunco_modelica_source_roots::LoadState::Failed(err.clone());
-                    } else {
-                        bevy::log::info!("[source-roots] `{}` is now Ready", root_id,);
-                        entry.state = lunco_modelica_source_roots::LoadState::Ready;
+                if let Some(operation_id) = result.source_root_operation_id {
+                    if roots.complete_load(
+                        root_id,
+                        operation_id,
+                        result.loaded_source_root_namespaces.clone(),
+                        result.error.clone(),
+                    ) {
+                        match roots.state(root_id) {
+                            Some(lunco_modelica_source_roots::LoadState::Ready) => {
+                                bevy::log::info!(
+                                    "[source-roots] `{}` is now Ready namespaces={:?}",
+                                    root_id,
+                                    result.loaded_source_root_namespaces
+                                );
+                            }
+                            Some(lunco_modelica_source_roots::LoadState::Failed(error)) => {
+                                bevy::log::warn!(
+                                    "[source-roots] `{}` load failed: {}",
+                                    root_id,
+                                    error
+                                );
+                            }
+                            _ => {}
+                        }
                     }
                 }
             }

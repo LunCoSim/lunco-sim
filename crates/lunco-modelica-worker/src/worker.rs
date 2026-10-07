@@ -29,7 +29,7 @@ use lunco_modelica_solver::simulation_session::LiveStepper;
 use lunco_signal::{SimSnapshot, SimStream};
 
 #[cfg(not(target_arch = "wasm32"))]
-const PREPARED_SOLVE_CACHE_VERSION: u32 = 6;
+const PREPARED_SOLVE_CACHE_VERSION: u32 = 7;
 
 mod cache;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1203,6 +1203,7 @@ fn commit_ready_compiler_completions(
                 );
                 let _ = tx.send(ModelicaResult {
                     loaded_source_root_id: Some(commit.root_id),
+                    loaded_source_root_namespaces: commit.namespaces,
                     source_root_operation_id: Some(source_root_operation_id),
                     error: commit.error,
                     ..Default::default()
@@ -3932,8 +3933,14 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             } else {
                 Some(report.diagnostics.join("; "))
             };
+            let namespaces = if err.is_none() {
+                compiler.source_root_namespaces(&id)
+            } else {
+                Vec::new()
+            };
             send(ModelicaResult {
                 loaded_source_root_id: Some(id),
+                loaded_source_root_namespaces: namespaces,
                 source_root_operation_id: Some(operation_id),
                 error: err,
                 ..Default::default()

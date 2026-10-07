@@ -258,7 +258,13 @@ fn source_roots_from_parsed_docs(
 ) -> std::collections::HashSet<String> {
     docs.iter()
         .flat_map(|(_, definition)| {
-            let within = definition.within.as_ref().map(ToString::to_string);
+            // An authored `within;` denotes the global namespace. Its empty
+            // name does not prefix the top-level package's qualified identity.
+            let within = definition
+                .within
+                .as_ref()
+                .map(ToString::to_string)
+                .filter(|prefix| !prefix.is_empty());
             definition.classes.keys().filter_map(move |class_name| {
                 let qualified = within
                     .as_deref()
@@ -1174,6 +1180,18 @@ impl ModelicaCompiler {
         report
     }
 
+    /// Authored namespaces belonging to one admitted source set. The source-set
+    /// identity owns loading/lifetime; these names own qualified Modelica lookup.
+    pub fn source_root_namespaces(&self, source_set_id: &str) -> Vec<String> {
+        let mut namespaces = self
+            .source_set_contributions
+            .get(source_set_id)
+            .map(|contribution| contribution.roots.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        namespaces.sort_unstable();
+        namespaces
+    }
+
     /// Remove one previously installed source set and recompute all derived
     /// source-root metadata without disturbing the resident application bundle
     /// or other loaded sets.
@@ -1689,11 +1707,20 @@ end Controls;"
         assert!(compiler.install_source_root(twin).diagnostics.is_empty());
         assert!(compiler.installed_roots.contains("ApplicationControls"));
         assert!(compiler.installed_roots.contains("LessonModelica"));
+        assert_eq!(
+            compiler.source_root_namespaces("twin:17:lesson:modelica:0"),
+            vec!["LessonModelica"]
+        );
         let revision_before = compiler.library_revision();
 
         assert!(compiler.remove_source_root("twin:17:lesson:modelica:0"));
 
         assert!(!compiler.installed_roots.contains("LessonModelica"));
+        assert!(
+            compiler
+                .source_root_namespaces("twin:17:lesson:modelica:0")
+                .is_empty()
+        );
         assert!(compiler.installed_roots.contains("ApplicationControls"));
         assert!(
             compiler
@@ -1884,9 +1911,16 @@ end Controls;"
         let report = compiler.load_source_root_in_memory(
             "twin:demo",
             "in-memory:demo",
-            vec![("demo/Part.mo".to_string(), member.to_string())],
+            vec![
+                (
+                    "demo/package.mo".to_string(),
+                    "within; package Demo end Demo;".to_string(),
+                ),
+                ("demo/Part.mo".to_string(), member.to_string()),
+            ],
         );
-        assert_eq!(report.inserted_file_count, 1);
+        assert_eq!(report.inserted_file_count, 2);
+        assert_eq!(compiler.source_root_namespaces("twin:demo"), vec!["Demo"]);
         assert!(report.diagnostics.is_empty(), "{report:?}");
 
         // The source root is keyed by a transport id (`twin:demo`), but the

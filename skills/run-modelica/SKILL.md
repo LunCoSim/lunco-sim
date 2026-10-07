@@ -154,6 +154,16 @@ manifest. The worker commits root preparations in admission order before
 compilation, rejects unadmitted roots, and reports failed roots without retrying
 synchronous discovery. Synchronous compiler helpers remain for CLI and batch
 callers.
+The worker's successful load acknowledgement carries the authored top-level
+namespaces parsed by that exact source-set operation. The registry retains those
+names on the scoped owner entry, and compile admission resolves each qualified
+namespace to its unique source-set ID. Missing or ambiguous namespace ownership
+is a terminal diagnostic. Failed or stale acknowledgements cannot publish Ready
+or recreate a retired namespace; Twin close removes the entry and its names.
+Verify Twin package admission through the existing authored
+`path_interoperability.rhai` namespace assertions: load a Twin package, compile a
+separate wrapper using its qualified member, inspect the solved output, then
+verify a missing namespace produces a terminal compile error.
 An unqualified source asset already present in an admitted root compiles the
 root-owned class only when its exact source CID is in the admitted content
 closure. Changed or conflicting source text is rejected; update and readmit

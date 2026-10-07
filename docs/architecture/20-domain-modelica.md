@@ -337,6 +337,12 @@ admission order, then uses a compile entry point that rejects any dependency
 not already admitted. A failed root is recorded in the compiler session, so
 dependent compiles return the root error instead of repeating synchronous file
 discovery.
+The worker's successful load acknowledgement carries the authored top-level
+namespaces parsed by that exact source-set operation. The registry retains those
+names on the scoped owner entry, and compile admission resolves each qualified
+namespace to its unique source-set ID. Missing or ambiguous namespace ownership
+is a terminal diagnostic. Failed or stale acknowledgements cannot publish Ready
+or recreate a retired namespace; Twin close removes the entry and its names.
 Root-owned unqualified source assets reuse the loaded definition when their
 exact source CID belongs to the admitted content closure. A changed definition
 is rejected until the source root is updated and readmitted; no user overlay

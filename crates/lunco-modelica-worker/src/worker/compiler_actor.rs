@@ -34,6 +34,7 @@ pub(super) enum CompilerCompletion {
 
 pub(super) struct SourceRootCommit {
     pub root_id: String,
+    pub namespaces: Vec<String>,
     pub error: Option<String>,
     pub inserted_file_count: usize,
     pub parsed_file_count: usize,
@@ -346,6 +347,7 @@ fn install_source_root(
     if let Some(error) = terminal_error {
         return SourceRootCommit {
             root_id,
+            namespaces: Vec::new(),
             error: Some(format!("Rumoca compiler actor faulted: {error}")),
             inserted_file_count: 0,
             parsed_file_count: 0,
@@ -368,6 +370,11 @@ fn install_source_root(
             }
             SourceRootCommit {
                 root_id: root_id.clone(),
+                namespaces: if error.is_none() {
+                    compiler.source_root_namespaces(&root_id)
+                } else {
+                    Vec::new()
+                },
                 error,
                 inserted_file_count: report.inserted_file_count,
                 parsed_file_count: report.parsed_file_count,
@@ -382,6 +389,7 @@ fn install_source_root(
             compiled_artifacts.clear();
             SourceRootCommit {
                 root_id: root_id.clone(),
+                namespaces: Vec::new(),
                 error: Some(fault),
                 inserted_file_count: 0,
                 parsed_file_count: 0,
@@ -497,6 +505,7 @@ mod tests {
                 assert_eq!(source_root_operation_id, 1);
                 assert_eq!(commit.root_id, "actor-test-root");
                 assert_eq!(commit.inserted_file_count, 1);
+                assert_eq!(commit.namespaces, vec!["ActorLibrary"]);
                 assert_eq!(commit.error, None);
             }
             _ => panic!("source-root result must precede the later compile result"),

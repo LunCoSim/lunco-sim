@@ -6,6 +6,35 @@ import "lunco://scripting/tools/asset_preflight" as preflight;
 
 const TEST_KIND = "headless";
 
+fn rhai_contract_sources() {
+    [
+        "lunco://scripting/prelude/_intro.rhai",
+        "lunco://scripting/prelude/authoring.rhai",
+        "lunco://scripting/prelude/auto_tests.rhai",
+        "lunco://scripting/prelude/control.rhai",
+        "lunco://scripting/prelude/coordinates.rhai",
+        "lunco://scripting/prelude/hud.rhai",
+        "lunco://scripting/prelude/input.rhai",
+        "lunco://scripting/prelude/links.rhai",
+        "lunco://scripting/prelude/math.rhai",
+        "lunco://scripting/prelude/mission.rhai",
+        "lunco://scripting/prelude/nav.rhai",
+        "lunco://scripting/prelude/ports.rhai",
+        "lunco://scripting/prelude/recording.rhai",
+        "lunco://scripting/prelude/science.rhai",
+        "lunco://scripting/prelude/select.rhai",
+        "lunco://scripting/prelude/sensing.rhai",
+        "lunco://scripting/prelude/tasks.rhai",
+        "lunco://scripting/prelude/vessel.rhai",
+        "lunco://scripting/policy/lint_modelica.rhai",
+        "lunco://scripting/policy/lint_rhai.rhai",
+        "lunco://scripting/policy/lint_twin.rhai",
+        "lunco://scripting/policy/lint_usd.rhai",
+        "lunco://scripting/policy/readiness.rhai",
+        "lunco://scripting/policy/source_classification.rhai",
+    ]
+}
+
 fn contains_name(entries, name) {
     for entry in entries {
         if entry.name == name { return true; }
@@ -56,7 +85,9 @@ fn simulation_dependencies(me, ctx) {
 fn on_start(me, ctx) {
     this.done = false;
     this.elapsed = 0.0;
-    this.preflight = preflight::create(["lunco://scripting/prelude/_intro.rhai", "lunco://scripting/prelude/authoring.rhai", "lunco://scripting/prelude/auto_tests.rhai", "lunco://scripting/prelude/control.rhai", "lunco://scripting/prelude/coordinates.rhai", "lunco://scripting/prelude/links.rhai", "lunco://scripting/prelude/math.rhai", "lunco://scripting/prelude/mission.rhai", "lunco://scripting/prelude/nav.rhai", "lunco://scripting/prelude/ports.rhai", "lunco://scripting/prelude/readiness.rhai", "lunco://scripting/prelude/tasks.rhai", "lunco://scripting/prelude/terrain.rhai", "lunco://scripting/prelude/vessel.rhai", "lunco://scripting/policy/lint_modelica.rhai", "lunco://scripting/policy/lint_rhai.rhai", "lunco://scripting/policy/lint_twin.rhai", "lunco://scripting/policy/lint_usd.rhai", "lunco://scripting/policy/source_classification.rhai", "lunco://schemas/lunco/generatedSchema.usda"]);
+    let sources = rhai_contract_sources();
+    sources.push("lunco://schemas/lunco/generatedSchema.usda");
+    this.preflight = preflight::create(sources);
 }
 
 fn on_tick(me, ctx) {
@@ -177,27 +208,7 @@ fn on_tick(me, ctx) {
             "assembly_ui panel_templates did not evaluate"));
     }
 
-    for path in [
-        "lunco://scripting/prelude/_intro.rhai",
-        "lunco://scripting/prelude/authoring.rhai",
-        "lunco://scripting/prelude/auto_tests.rhai",
-        "lunco://scripting/prelude/control.rhai",
-        "lunco://scripting/prelude/coordinates.rhai",
-        "lunco://scripting/prelude/links.rhai",
-        "lunco://scripting/prelude/math.rhai",
-        "lunco://scripting/prelude/mission.rhai",
-        "lunco://scripting/prelude/nav.rhai",
-        "lunco://scripting/prelude/ports.rhai",
-        "lunco://scripting/prelude/readiness.rhai",
-        "lunco://scripting/prelude/tasks.rhai",
-        "lunco://scripting/prelude/terrain.rhai",
-        "lunco://scripting/prelude/vessel.rhai",
-        "lunco://scripting/policy/lint_modelica.rhai",
-        "lunco://scripting/policy/lint_rhai.rhai",
-        "lunco://scripting/policy/lint_twin.rhai",
-        "lunco://scripting/policy/lint_usd.rhai",
-        "lunco://scripting/policy/source_classification.rhai"
-    ] {
+    for path in rhai_contract_sources() {
         validate_rhai(path, failures, this.preflight.reports);
     }
 

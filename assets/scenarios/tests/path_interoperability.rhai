@@ -66,3 +66,37 @@ fn verify_usd_path(id, filename) {
         t_true(literal_model_ready(), "literal Modelica source compiled and published its authored equation result"),
     ], "Portable USD and Modelica runtime", "PATH_USD_MODELICA")
 }
+
+// The API driver installs a Twin package through its scoped source-root owner,
+// then compiles a separate wrapper referring to that package's authored namespace.
+fn verify_namespace_model(doc_id, entity_path, output_name, expected_value) {
+    let compile = query("CompileStatus", #{doc_id: doc_id});
+    let entity = find_path(entity_path);
+    let value = ();
+    if entity >= 0 {
+        let ports = query("ReadPorts", #{api_id: entity, port_names: [output_name]});
+        if ports != () && ports.ports != () {
+            for port in ports.ports {
+                if port.name == output_name && port.direction == "out" { value = port.value; }
+            }
+        }
+    }
+    report_verdict([
+        t_true(compile != () && compile.state == "ok" && compile.is_compiled == true,
+            "Twin-authored namespace compiled through the scoped library owner"),
+        t_true(value != () && value.is_finite() && (value - expected_value).abs() < 0.000001,
+            "Twin namespace model published its equation result"),
+    ], "Twin Modelica namespace", "PATH_MODELICA_NAMESPACE")
+}
+
+fn verify_namespace_rejection(doc_id, namespace) {
+    let compile = query("CompileStatus", #{doc_id: doc_id});
+    report_verdict([
+        t_true(compile != () && compile.state == "error" && compile.is_compiling == false,
+            "unregistered namespace returned a terminal compile diagnostic"),
+        t_true(compile != () && compile.error_message != ()
+            && compile.error_message.contains(namespace)
+            && compile.error_message.contains("not registered"),
+            "namespace rejection names the unavailable source owner"),
+    ], "Rejected Modelica namespace", "PATH_MODELICA_NAMESPACE_REJECTED")
+}

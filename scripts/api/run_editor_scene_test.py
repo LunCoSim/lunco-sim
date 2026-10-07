@@ -116,7 +116,7 @@ def run(port: int, timeout: float, scene: str, log_path: Path, scenario: str | N
     try:
         with ProductionSession(
             port,
-            extra_args=("--scene", scene),
+            extra_args=("--no-throttle", "--scene", scene),
             log_path=log_path,
             windowed=True,
         ) as session:

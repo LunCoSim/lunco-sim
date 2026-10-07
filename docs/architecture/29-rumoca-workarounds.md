@@ -2,11 +2,12 @@
 
 > Status: Active · Audience: contributors compiling Modelica through rumoca
 >
-> Pinned to rumoca `eaa5291ff610085cfc02f9673fcb393245feaa9b` (v0.9.20).
+> Pinned to rumoca `c3ef5b308054778b2cfd90b4408ce4c856aadfc6` (v0.9.20).
 
 This file records the owning compiler and solver boundaries for the pinned
-Rumoca dependency. Recheck these contracts when updating the pin. Local owner
-patches are documented in `third_party/rumoca/README.md`.
+Rumoca dependency. Recheck these contracts when updating the pin. Compiler provenance, declaration-scoped initialization, retained output
+producers, and scoped solver cancellation/budgets are implemented in the pinned
+[LunCoSim Rumoca fork](https://github.com/LunCoSim/rumoca/tree/c3ef5b308054778b2cfd90b4408ce4c856aadfc6).
 
 ---
 
@@ -43,7 +44,7 @@ which is the signal to revisit the `u32::MAX` sentinel.
 
 ## 2. Declaration-scoped runtime input initialization
 
-The vendored `rumoca-phase-dae` owns external input initialization. It preserves
+The pinned `rumoca-phase-dae` owns external input initialization. It preserves
 an external declaration binding as the DAE input's start expression at its full
 qualified path. Internal and connected input bindings retain equation ownership.
 Native live stepping, browser stepping, reset, and batch simulation all consume
@@ -270,3 +271,12 @@ On every rumoca bump, in this order:
 5. `cargo test --workspace` **and** `cargo test -p lunco-modelica-ui -- --ignored`
    (the ignored set is where the upstream-bug pins live — that's how the 0.9.20
    bump revealed 7 fixed bugs).
+
+## Aggregate outputs consumed as derivatives
+
+`rumoca-phase-structural` preserves an output producer when its candidate
+elimination equation contains a state derivative. Ordinary output aliases still
+eliminate. Live and batch observations read the resulting produced output slot;
+`modelica_aggregate_output.rhai` verifies initial values, qualified overrides,
+reset and batch results, including invalid-source rejection. Prepared solve cache
+version 7 fences artifacts produced by a different output-elimination contract.

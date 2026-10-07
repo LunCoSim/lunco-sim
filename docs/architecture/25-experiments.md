@@ -441,7 +441,7 @@ are released after compilation while admitted application libraries stay install
 "⏳ Queued"; the Run button queues rather than disabling.
 
 Native solves install a scoped thread-local cancellation guard backed by the
-admitted run flag. The two pinned solver crates under `third_party/rumoca` check
+admitted run flag. The pinned Rumoca solver and evaluator crates check
 that flag at evaluation and simulation-driver boundaries. An executing numerical
 kernel returns before its next checkpoint; cancellation prevents trajectory
 publication and worker exit releases the scheduling slot.
