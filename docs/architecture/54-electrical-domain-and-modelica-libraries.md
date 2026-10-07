@@ -321,6 +321,21 @@ For a fixed rover panel, the minimum end-to-end acceptance is:
 4. the battery reports charging current, or its state of charge changes during a
    parked observation.
 
+The reusable `components/power/solar_panel.usda` owns its mount-frame environment
+probe and its Sun-direction connections. An enclosing generated network declares
+its external `target_mount_x/y/z` boundary inputs from that same probe; the panel
+inherits its own connections instead of routing them back through the wrapper.
+The collecting area remains a Modelica parameter and irradiance is the authored
+input consumed by `SolarPanel.mo`.
+
+The panel exposes solved terminal voltage, generated current, available power,
+and delivered power. Its voltage is the shared battery bus voltage, including at
+night; generated current and delivered power go to zero when incidence is zero.
+Voltage alone therefore does not prove generation. Public voltage/current and
+available-power telemetry declarations target the panel and resolve to the one
+generated electrical participant. For a charging observation, begin below full
+SOC: the finite battery cannot increase above 100% even with positive bus current.
+
 The mesh and the presence of a `SolarPanel` entity are not enough. A useful live
 `ReadPorts` filter addresses only the network-root boundary:
 

@@ -806,6 +806,21 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   (`RunExperiment`/`ListRuns`/`GetExperimentResult`) have **no dedicated MCP
   tool** — use curl (or the generic `mcp__lunco__execute_command`).
 
+### Solar generation and charging
+
+Use the reusable `components/power/solar_panel.usda` probe and Sun-direction
+connections. A generated assembly exposes `target_mount_x/y/z` boundary inputs
+from the panel's `Environment.outputs:sun_mount_*` source; inherit the panel's
+input wiring. Keep `parameters:area` as a parameter and author only inputs that
+the current Modelica source declares.
+
+Observe delivered power together with generated current and shared terminal
+voltage. The panel's public voltage/current/available-power channels target its
+physical USD prim and resolve through the generated participant. Bus voltage can
+remain positive at night while solar current is zero. To verify charging, use an
+owned session with a temporary partly discharged battery and observe SOC rising;
+a full pack cannot rise above 100%. Do not persist diagnostic battery overrides.
+
 ### Omitted library inputs
 
 Omitted inputs retain the owning Modelica library's defaults, including nested

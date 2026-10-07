@@ -35,11 +35,11 @@ def Xform "SolarPanel" (
     string lunco:telemetry:description = "Solved power delivered by the solar panel at its terminals."
     float physics:mass = 15.0
     custom double inputs:target_mount_x
-    double inputs:target_mount_x.connect = []
+    double inputs:target_mount_x.connect = </SolarPanel/Environment.outputs:sun_mount_x>
     custom double inputs:target_mount_y
-    double inputs:target_mount_y.connect = []
+    double inputs:target_mount_y.connect = </SolarPanel/Environment.outputs:sun_mount_y>
     custom double inputs:target_mount_z
-    double inputs:target_mount_z.connect = []
+    double inputs:target_mount_z.connect = </SolarPanel/Environment.outputs:sun_mount_z>
     def Scope "Looks"
     {
         def Material "SolarPanel"
@@ -84,5 +84,49 @@ def Xform "SolarPanel" (
         color3f[] primvars:displayColor = [(0.05000000074505806, 0.05000000074505806, 0.8500000238418579)]
         bool physics:collisionEnabled = true
         rel material:binding = </SolarPanel/Looks/SolarPanel>
+    }
+    def Xform "Environment" (
+        prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
+    )
+    {
+        custom double outputs:sun_mount_x
+        custom double outputs:sun_mount_y
+        custom double outputs:sun_mount_z
+    }
+    def Scope "VoltageTelemetry" (
+        prepend apiSchemas = ["LunCoTelemetryAPI"]
+    )
+    {
+        bool lunco:telemetry = true
+        string ui:displayName = "Solar voltage"
+        token lunco:telemetry:port = "terminal_voltage_v"
+        token lunco:telemetry:name = "power.solar_terminal_voltage_v"
+        token lunco:telemetry:unit = "V"
+        string lunco:telemetry:description = "Solved voltage at the solar panel terminals on the electrical bus."
+        rel lunco:telemetry:target = </SolarPanel>
+    }
+    def Scope "CurrentTelemetry" (
+        prepend apiSchemas = ["LunCoTelemetryAPI"]
+    )
+    {
+        bool lunco:telemetry = true
+        string ui:displayName = "Solar current"
+        token lunco:telemetry:port = "generated_current_a"
+        token lunco:telemetry:name = "power.solar_generated_current_a"
+        token lunco:telemetry:unit = "A"
+        string lunco:telemetry:description = "Current delivered by the solar panel into the electrical bus."
+        rel lunco:telemetry:target = </SolarPanel>
+    }
+    def Scope "AvailablePowerTelemetry" (
+        prepend apiSchemas = ["LunCoTelemetryAPI"]
+    )
+    {
+        bool lunco:telemetry = true
+        string ui:displayName = "Available solar"
+        token lunco:telemetry:port = "available_power_w"
+        token lunco:telemetry:name = "power.solar_available_power_w"
+        token lunco:telemetry:unit = "W"
+        string lunco:telemetry:description = "Solar electrical power available before bus loading."
+        rel lunco:telemetry:target = </SolarPanel>
     }
 }
