@@ -9,12 +9,12 @@ homepage = "https://github.com/CogniPilot/rumoca"
 
 [dependencies]
 indexmap = { version = "2.7", features = ["serde"] }
-rumoca-core = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-ir-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-solver = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
+rumoca-core = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-ir-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-solver = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
 thiserror = { version = "2.0" }
 tracing = { version = "0.1" }
 
 [dev-dependencies]
-rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-eval-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
+rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-eval-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }

@@ -7,8 +7,8 @@ license = "Apache-2.0"
 repository = "https://github.com/CogniPilot/rumoca"
 
 [dependencies]
-rumoca-core = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-ir-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
+rumoca-core = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-ir-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
 nalgebra = "0.34"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = { version = "1.0", features = ["preserve_order", "unbounded_depth"] }

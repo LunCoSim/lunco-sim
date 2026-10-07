@@ -18,20 +18,20 @@ tracing = [
 ]
 
 [dependencies]
-rumoca-ir-ast = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-ir-flat = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-phase-resolve = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-phase-typecheck = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-phase-instantiate = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-phase-flatten = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-phase-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-phase-structural = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-phase-codegen = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-ir-galec = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-galec-codegen = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-core = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
+rumoca-ir-ast = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-ir-flat = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-phase-resolve = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-phase-typecheck = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-phase-instantiate = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-phase-flatten = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-phase-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-phase-structural = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-phase-codegen = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-ir-galec = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-galec-codegen = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-core = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
 anyhow = "1.0"
 indexmap = { version = "2.7", features = ["serde"] }
 minijinja = { version = "2.5", features = ["debug", "preserve_order"] }

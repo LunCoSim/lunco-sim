@@ -265,9 +265,8 @@ transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gi
 [patch."https://github.com/LunCoSim/openusd"]
 openusd = { path = "third_party/openusd" }
 
-# Rumoca consumed from the `main` branch of LunCoSim/rumoca (see
-# [workspace.dependencies]). The fixes are merged into that `main`, so we
-# consume the canonical git version rather than a local checkout.
+# Rumoca is consumed at the pinned LunCoSim/rumoca revision in
+# [workspace.dependencies], not from a local checkout.
 # To develop against a local rumoca checkout, uncomment the [patch] block
 # and point it at `../rumoca`.
 #
@@ -446,20 +445,21 @@ lunco-web = { path = "crates/lunco-web" }
 
 # Rumoca crates — single source-of-truth for the Git URL + revision.
 # Crates opt in via `rumoca-xxx = { workspace = true }`.
-# Pin the upstream algebraic refresh fix (fix/algebraic-refresh-roundoff).
-rumoca-core        = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-ir-ast      = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-ir-solve    = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-compile     = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-sim         = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
+# Pin the MLS §15.2 stream-connection fix (fix/stream-connection-semantics),
+# which builds on the algebraic refresh fix (fix/algebraic-refresh-roundoff).
+rumoca-core        = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-ir-ast      = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-ir-solve    = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-compile     = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-sim         = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
 # Structural diagnostics need rumoca-sim's analysis API but not its native solver backends.
-rumoca-sim-diagnostics = { package = "rumoca-sim", git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538", default-features = false }
-rumoca-solver-rk45 = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-solver      = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-eval-solve  = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-tool-fmt    = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
-rumoca-tool-lint   = { git = "https://github.com/LunCoSim/rumoca", rev = "31d5a831cb2ce53a524354e0319572b0de995538" }
+rumoca-sim-diagnostics = { package = "rumoca-sim", git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b", default-features = false }
+rumoca-solver-rk45 = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-solver      = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-eval-solve  = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-tool-fmt    = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
+rumoca-tool-lint   = { git = "https://github.com/LunCoSim/rumoca", rev = "eaa5291ff610085cfc02f9673fcb393245feaa9b" }
 
 # Centralised here so version drift across crates is visible in one
 # place. Each crate opts in via `dep = { workspace = true }`.

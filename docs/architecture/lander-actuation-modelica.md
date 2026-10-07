@@ -13,7 +13,7 @@ projections of one composed USD design.
 | Mission composition and topology | USD | `inputs:*`, `outputs:*`, `connectors:*`, collection membership, transforms, actuator direction and limits; structural actuator command targets use USD relationships |
 | Sensor frame conversion | USD sensor projection + Modelica sensor component | The control law receives body-local gyro and attitude error, never world-frame pose or wrench |
 | Guidance and control equations | Modelica | `Lander.mo` produces a normalized main-valve request and body-local torque demand; PID tuning is exposed through authored inputs |
-| Propellant hydraulics and engine performance | Modelica | Acausal `LunCo.Propulsion.FluidPort` connections carry pressure, conserved mass flow, and stream specific enthalpy; tanks, turbopumps, and chamber are reusable package members |
+| Propellant hydraulics and engine performance | Modelica | Acausal `LunCo.Propulsion.FluidPort` connections carry pressure, conserved mass flow, and stream specific enthalpy; tanks and one `PressureFedEngine` per engine are reusable package members |
 | Actuator allocation | Generic projection + reusable Modelica allocator | USD actuator geometry is factorized once; `LunCo.Actuation.WrenchAllocator` evaluates normalized valve demands at runtime |
 | Applied force and torque | Avian projection | Each physical actuator applies force at its authored local mount and direction, so adding an actuator requires no vehicle-specific Rust code |
 | Flame and RCS visuals | USD render wiring | Flame throttle/activity is connected to the corresponding Modelica output; no script mirrors actuator state |
@@ -29,18 +29,30 @@ member roles are rejected as authoring errors.
 
 ## Signal and fluid paths
 
-The main engine is a generated `CollectionAPI:components` network. USD connects:
+The main propulsion is a generated `CollectionAPI:components` network. Each
+main engine is one reusable `LunCo.Propulsion.PressureFedEngine` member (its own
+fuel and oxidizer valves and choked chamber); the synthesizer emits one network
+from the USD member set, so the engine count is a USD fact, not a Modelica
+model variant. USD connects:
 
 ```text
-Lander.throttle
-       │
-       ├── valve opening ──► FuelPump ──FluidPort──► MainChamber
-       │                         ▲                       │
-       │                         │                       ├── thrust_n ──► Nozzle ──► Avian
-       └── valve opening ──► OxidizerPump ─FluidPort──►  └── activity ──► plume/light
-                                  ▲
-                            FuelTank / OxidizerTank
+Lander.throttle ──► MainPropulsion.flow_fraction_command ──► every EngineNN
+                                                               ▲
+MainPropulsion.engineNN_enabled (engine health, default 1) ────┘
+FuelTank.outlet ──FluidPort──► Engine01..NN.fuel_in      (one N-way stream set)
+OxidizerTank.outlet ─FluidPort─► Engine01..NN.oxidizer_in
+EngineNN.thrust_n ──► engineNN_thrust_n ──► that bell's force actuator ──► Avian
+EngineNN.activity ──► EngineNNPlume ──► that bell's flame and light
 ```
+
+Each bell applies its own engine's thrust at its station, so an engine-out
+removes that engine's force and produces the matching torque for the attitude
+loop to hold. Consumers that need a cluster total sum the per-engine root
+outputs; the network has no aggregate thrust output. A shared tank outlet with
+several engine inlets is an N-way stream connection set, and each engine's
+`fuel_in`/`oxidizer_in` passes the stream through its inner valve. Rumoca
+resolves both per MLS §15.2: every outside connector receives its stream
+equation and `inStream` is the flow-weighted mixture of the other members.
 
 The attitude path is intentionally generic:
 
