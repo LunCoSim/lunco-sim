@@ -141,6 +141,8 @@ a positive `surface_binding_count`, and exactly one segment per authored leg;
 the separate mesh stays hidden. Right-click identity comes from a foreground
 terrain hit against the published stroke. Use `route_surface_annotation.rhai`
 through `RunScenarioAsset` for publication, long-path and missing-coverage evidence.
+During pending route edits, require retained `displayed_surface_binding_count`
+and `surface_texture`; current-revision bindings may still be pending.
 Its positive fixture needs terrain covering a 40 m circle around the first
 waypoint and a connector 300 m away along positive X/Z. Pass
 its explicit `view_owner` scenario so the gate can isolate and restore that writer. The

@@ -276,11 +276,19 @@ hook, the durable route `ApplyUsdOps` and its one incremental projection,
 reference-marker admission, and `UpdateUsdCurveView`'s stroke preparation and
 terrain annotation-image publication. Fragment lookup uses bounded spatial bins;
 verify idle camera/terrain changes do not rebuild the stroke index.
+Visited-marker recoloring uses the existing route-view key and must not resubmit
+unchanged ribbon geometry.
 Ribbon presentation preparation is presentation-only and must not issue another
 `ApplyUsdTransientOps`, change document generation, or run inside the fixed
 scenario event that observes a projected route. Compare the UI hook and fixed
 tick against frame/physics budgets; a fast worker result does not excuse a
 slow synchronous query or document edit in the input path.
+For surface-annotation flicker, inspect `InspectUsdCurveView`'s
+`displayed_surface_binding_count` and `surface_texture` across pending revisions.
+Route edits and arriving wheel sources retain the displayed texture until the
+replacement commits; current-revision readiness remains a separate result.
+The `route_surface_annotation` gate checks retained bindings and texture identity
+alongside long-path publication and missing-coverage rejection.
 
 For general `SpawnEntity`/`DeleteEntity`, measure the command, USD add/remove,
 live structural reconciliation, and referenced asset admission separately.

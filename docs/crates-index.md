@@ -1233,7 +1233,8 @@ Rendered scene-editing presentation. Implements the egui/workbench panels,
 selection and USD preview interaction, physics diagnostic visualization, and
 the bounded async preparation/commit path for transient curve views and terrain-local annotation sources.
 `InspectUsdCurveView` reports request/completion/application revisions,
-sparse segment count, projection kind, terrain binding count, local mesh visibility, and terminal errors to API and Rhai
+sparse segment count, projection kind, requested and displayed terrain bindings,
+displayed texture identity, local mesh visibility, and terminal errors to API and Rhai
 consumers. It depends on
 `lunco-luncosim-edit-core` and composes the focused
 `lunco-luncosim-edit-gizmo-ui` package; the core package does not depend back on

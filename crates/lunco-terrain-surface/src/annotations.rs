@@ -3,7 +3,7 @@
 //! Curves stay in terrain-local f64 coordinates. A bounded background job builds
 //! a spatial index, not a height-fitting mesh. GPU lookup is independent of LOD,
 //! geomorph, edits to elevation, and camera movement. The source entity owns the
-//! annotation; removal retires its contribution before another image is admitted.
+//! annotation; snapshot replacement atomically retires its previous contribution.
 
 use bevy::math::DVec2;
 use bevy::prelude::*;
@@ -471,6 +471,7 @@ pub(crate) fn prepare_surface_annotations(
     state
         .source_revisions
         .retain(|terrain, _| terrains.contains(*terrain));
+    state.tasks.retain(|terrain, _| terrains.contains(*terrain));
     if dirty {
         let mut grouped: BTreeMap<Entity, Vec<(Entity, SurfaceCurveAnnotation)>> = BTreeMap::new();
         for (entity, annotation) in &annotations {
@@ -522,9 +523,25 @@ pub(crate) fn prepare_surface_annotations(
                 state.next_revision += 1;
                 let revision = state.next_revision;
                 state.revisions.insert(terrain, revision);
-                state.published.remove(&terrain);
                 revision
             };
+            // Keep the displayed snapshot and its texture identity while a
+            // replacement is prepared. Route edits and arriving wheel sources
+            // must not unbind every terrain material in the meantime. The
+            // generation still fences workers from retired source snapshots.
+            if sources.is_empty() {
+                state.queued.remove(&terrain);
+                state.tasks.remove(&terrain);
+                state.published.insert(
+                    terrain,
+                    PublishedSurfaceAnnotations {
+                        sources: keys,
+                        image: None,
+                        error: None,
+                    },
+                );
+                continue;
+            }
             if !(1..=2).contains(&settings.max_active_builds) {
                 state.queued.remove(&terrain);
                 let error =

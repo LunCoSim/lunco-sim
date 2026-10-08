@@ -73,6 +73,12 @@ fn on_tick(me, ctx) {
         return;
     }
     let view = inspect_view(this);
+    if this.phase == 4 && view != () {
+        this.retained_bindings = this.retained_bindings
+            && to_int(view.displayed_surface_binding_count) > 0;
+        this.retained_texture = this.retained_texture
+            && view.surface_texture == this.surface_texture;
+    }
     if view == () || view.state == "pending" { return; }
     if this.phase == 0 {
         if view.state != "ready" || view.projection != "terrain_surface" { return; }
@@ -91,6 +97,9 @@ fn on_tick(me, ctx) {
         }
         long_path.push(outer);
         this.previous_revision = view.requested_revision;
+        this.surface_texture = view.surface_texture;
+        this.retained_bindings = true;
+        this.retained_texture = true;
         this.checks.push(t_true(submit_view(this, long_path).ok, "long-path presentation accepted"));
         this.phase = 4; return;
     }
@@ -99,6 +108,8 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(view.state == "ready" && view.projection == "terrain_surface"
             && to_int(view.result_segment_count) == 2002 && view.applied_revision == view.requested_revision,
             "all five-kilometre path legs publish without density retirement"));
+        this.checks.push(t_true(this.retained_bindings && this.retained_texture,
+            "snapshot replacement keeps the displayed terrain bindings and texture identity"));
         this.long_ready_tick = this.ticks;
         print("[route-gate] long path published");
         this.phase = 5; return;

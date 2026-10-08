@@ -599,20 +599,22 @@ fn refresh_route_view(me, state, snapshot) {
     state.subject_path = ();
     state.route_points = read.paths;
     state.safe_stopped = false;
-    let result = waypoint_editor::update_ribbon_view(doc, state.route_path, read.points);
-    // The ribbon is a disposable presentation view. It must never prevent a
-    // valid authored program from starting or advancing when surface preparation
-    // or transient rendering is still settling.
-    let presentation_ready = result != () && result.ok == true;
-    if !presentation_ready {
-        let presentation_error = if result == () || result.error == () {
-            "route presentation is not ready"
-        } else { result.error };
-        if result == () || result.retryable != true {
-            emit("route_presentation_unavailable", presentation_error);
+    // Marker colours do not change the route geometry. Only a changed point
+    // key or an unfinished ribbon admission submits another presentation build.
+    if state.route_view_key != view_key || state.ribbon_sync_pending {
+        let result = waypoint_editor::update_ribbon_view(doc, state.route_path, read.points);
+        // Presentation admission does not gate authoritative route progression.
+        let presentation_ready = result != () && result.ok == true;
+        if !presentation_ready {
+            let presentation_error = if result == () || result.error == () {
+                "route presentation is not ready"
+            } else { result.error };
+            if result == () || result.retryable != true {
+                emit("route_presentation_unavailable", presentation_error);
+            }
         }
+        state.ribbon_sync_pending = !presentation_ready || result.pending == true;
     }
-    state.ribbon_sync_pending = !presentation_ready || result.pending == true;
     if state.marker_sync_pending {
         let marker = waypoint_editor::sync_marker_states(
             doc, state.route_path, state.visited_points,

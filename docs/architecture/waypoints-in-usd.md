@@ -123,9 +123,11 @@ including CDLOD morphs and stitched seams. Camera movement and elevation edits
 require no route resampling. The separate curve mesh is hidden, while a
 foreground terrain hit resolves its annotation identity for authored click
 policy. Scenes without declared terrain render the authored 3D curve directly.
-The public inspection reports sparse segment count and current terrain-image
-publication. Missing coverage, unsupported shaders and exceeded work/precision
-bounds are terminal presentation errors, independent of navigation. Removing
+The public inspection distinguishes displayed terrain bindings from publication
+of the current requested revision. Snapshot replacements keep the displayed
+texture until the replacement commits. Missing coverage, unsupported shaders
+and exceeded work/precision bounds are terminal presentation errors, independent
+of navigation. Removing
 the curve entity removes its annotation; source revisions fence background
 results. This presentation changes neither USD generation nor waypoint topology.
 See [USD-driven visuals](50-usd-driven-visuals.md) for the rendering ABI and gate.
@@ -149,7 +151,8 @@ remove a spec from a layer that does not own it. Durable changes are journaled
 and feed the live ribbon presentation owner. Route moves, adds, deletes, and external
 document edits refresh through the route-follow program after the complete
 projected change event. Visited-marker colors synchronize only when the visited
-set changes. Runtime-layer snapshots
+set changes; that synchronization does not resubmit unchanged ribbon geometry.
+Runtime-layer snapshots
 are serialized and written asynchronously, with newer revisions coalesced
 while a write is in flight; no whole-scene serialization or file I/O runs in
 the pointer handler. Derived surface annotations are not serialized as document point3f opinions.

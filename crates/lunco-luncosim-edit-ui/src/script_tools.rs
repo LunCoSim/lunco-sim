@@ -475,7 +475,7 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
             ]),
             exactly_one_of: Vec::new(),
             response: Some(
-                "{ doc_id, entity_id, path, state, requested_revision, completed_revision, applied_revision, local_visibility, result_segment_count, projection, surface_binding_count, error }"
+                "{ doc_id, entity_id, path, state, requested_revision, completed_revision, applied_revision, local_visibility, result_segment_count, projection, surface_binding_count, displayed_surface_binding_count, surface_texture, error }"
                     .to_owned(),
             ),
         }
@@ -555,18 +555,19 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
                     "InspectUsdCurveView has no build result for this curve",
                 )
             })?;
-        let publication = world
-            .get::<SurfaceCurveAnnotation>(entity)
-            .and_then(|annotation| {
-                world
-                    .get_resource::<SurfaceAnnotationImages>()
-                    .and_then(|images| images.published.get(&annotation.terrain))
-                    .filter(|published| {
-                        published
-                            .sources
-                            .contains(&(entity, status.requested_revision))
-                    })
-            });
+        let displayed_publication =
+            world
+                .get::<SurfaceCurveAnnotation>(entity)
+                .and_then(|annotation| {
+                    world
+                        .get_resource::<SurfaceAnnotationImages>()
+                        .and_then(|images| images.published.get(&annotation.terrain))
+                });
+        let publication = displayed_publication.filter(|published| {
+            published
+                .sources
+                .contains(&(entity, status.requested_revision))
+        });
         let surface_pending =
             world.get::<SurfaceCurveAnnotation>(entity).is_some() && publication.is_none();
         let error = status
@@ -597,9 +598,10 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
             }
         };
         let annotation = world.get::<SurfaceCurveAnnotation>(entity);
-        let surface_binding_count = if let (Some(annotation), Some(image)) =
-            (annotation, publication.and_then(|p| p.image.as_ref()))
-        {
+        let displayed_surface_binding_count = if let (Some(annotation), Some(image)) = (
+            annotation,
+            displayed_publication.and_then(|p| p.image.as_ref()),
+        ) {
             world
                 .iter_entities()
                 .filter(|candidate| {
@@ -619,6 +621,11 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
         } else {
             0
         };
+        let surface_binding_count = if publication.and_then(|p| p.image.as_ref()).is_some() {
+            displayed_surface_binding_count
+        } else {
+            0
+        };
         Ok(Some(api_value!({
             "doc_id": raw_doc,
             "entity_id": raw_entity,
@@ -631,6 +638,8 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
             "result_segment_count": status.segment_count as u64,
             "projection": if annotation.is_some() { "terrain_surface" } else { "authored_curve" },
             "surface_binding_count": surface_binding_count as u64,
+            "displayed_surface_binding_count": displayed_surface_binding_count as u64,
+            "surface_texture": displayed_publication.and_then(|p| p.image.as_ref()).map(|image| format!("{:?}", image.id())),
             "error": error.cloned().unwrap_or_default(),
         })))
     }

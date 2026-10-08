@@ -56,8 +56,12 @@ A 32-by-32 root grid subdivides crowded cells into four children, to depth 12.
 A fragment walks one child per level and evaluates at most 64 nearby segments.
 Every retained source segment is indexed; local density does not retire history.
 Explicit segment, node, reference, depth or precision overflow fails visibly.
-Source removal withdraws its publication; stale worker results cannot return
-it. Elevation edits, CDLOD morphs, seam stitching and camera movement need no
+Snapshot edits and source-set changes retain the displayed image and its
+texture identity until the replacement index commits. Removal of the last
+source clears the image immediately; other removals retire with the replacement
+snapshot. Generation fences prevent retired worker results from returning.
+Preparation errors clear the image and report the owner diagnostic.
+Elevation edits, CDLOD morphs, seam stitching and camera movement need no
 annotation rebuild because the terrain's own fragments consume the strokes.
 There are no height-fitting vertices, clearance offsets or terrain raycasts in
 the render loop. Width is measured in the terrain-local horizontal plane.
@@ -73,8 +77,11 @@ vehicles/props and the curve's authored pointer policy.
 
 `InspectUsdCurveView` reports requested/completed/applied revisions, sparse
 segment count, projection kind, terrain binding count, local mesh visibility
-and terminal errors. Surface readiness includes publication of the current
-stroke image. The `route_surface_annotation.rhai` production GUI gate accepts
+and terminal errors. `displayed_surface_binding_count` and `surface_texture`
+identify the displayed snapshot even while the requested revision is pending;
+`surface_binding_count` counts bindings for the current requested revision only.
+Surface readiness includes publication of the current stroke image.
+The `route_surface_annotation.rhai` production GUI gate accepts
 an existing DEM route through `RunScenarioAsset` with an addressable scene
 `target` and explicit `doc_id`/`route_path`/`view_owner` parameters. The gate
 pauses that scenario writer and restores its prior pause state on completion
@@ -154,7 +161,7 @@ head keeps moving. Successive images update one persistent texture identity,
 so material readiness does not restart on every frame. The render binder refreshes
 dependent material bind groups when an image descriptor changes: resizing keeps
 the asset identity but replaces the GPU texture. Texture capacity grows geometrically
-and never shrinks within a publication generation. Ordinary content uploads reuse
+and never shrinks while that terrain retains a displayed image. Ordinary content uploads reuse
 the existing binding. Producers precede the
 typed `SurfaceAnnotationSet::Prepare` admission boundary. Added/removed sources,
 snapshot revisions, shader interfaces and settings advance the generation and fence old work. Precision violations
