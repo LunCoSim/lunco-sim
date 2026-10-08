@@ -3196,7 +3196,7 @@ fn close_preview_view(world: &mut World, view: UsdPreviewViewId) {
 }
 
 fn release_preview_projection(world: &mut World, doc: DocumentId) {
-    let Some((name, _rel)) = world
+    let Some(name) = world
         .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
         .release_preview(doc)
     else {
@@ -3359,6 +3359,9 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
         }
         return None;
     }
+    world
+        .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
+        .track_private_mount(doc, name.clone());
     Some((name, rel))
 }
 

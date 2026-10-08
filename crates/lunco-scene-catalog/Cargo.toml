@@ -23,6 +23,7 @@ lunco-core-session = { path = "../lunco-core-session" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-scene-validation = { path = "../lunco-scene-validation" }
 lunco-settings = { path = "../lunco-settings" }
+lunco-workspace = { path = "../lunco-workspace" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 crossbeam-channel = { workspace = true }
 futures-lite = { workspace = true }

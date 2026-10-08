@@ -312,11 +312,20 @@ editing panels, and Lunica owns Modelica workbench panels. Put shared panels in
 their primary home once; leave `Other` for integrations with no workflow home
 and `Hidden` for internal panels that should not be user-toggleable.
 
+Document-private viewport mounts retire at `DocumentClosed`, or when their
+final preview lease ends with no workspace projection owner. Mount-set changes
+prune their catalog entries before replacement scans; closing a preview must
+not unregister a shared workspace authority.
+
 For Twin-browser work, use `lunco_workbench_browser::BrowserQuery` as the single
 transient search field. Sections filter their own authoritative view-models by
 human-readable names/paths, retain matching ancestors, and emit the existing
 typed navigation actions. Do not add a per-domain search resource or make the
 browser search generated ids.
+Shared scene-catalog choices retire closed-mount entries at `TwinClosed`; the
+catalog owner invalidates scan generations while preserving application library
+and surviving-mount entries. See the
+[lifecycle contract](../../docs/architecture/61-scene-lifecycle-and-teardown.md).
 
 Native USD Scene Files reads the published `SceneFileView`; never traverse or
 stat files during paint or its main-thread input capture. Its single bounded
@@ -324,7 +333,11 @@ worker pins source owners/generations and a `TwinRootsSnapshot`, coalesces the
 latest request, and rejects stale publication after source or mount retirement.
 Keep valid rows during same-scope refresh, clear them on scope change, and make
 preparation/admission errors visible without automatic retries. Verify the
-generic `scene_file_` lifetime/publication seams and the asset-owner closure
+active `TwinClosed` edge cancels the pending task, coalesced request and refresh
+state immediately. `DocumentClosed` removes published USD rows at that edge.
+Snapshots resolve authored logical Twin names against live mounts; publication
+still requires the captured scope and revision. Verify the generic
+`browser_retirement` and `scene_file_` lifetime/publication seams and the asset-owner closure
 budget/error test; see the
 [closure contract](../../docs/architecture/16-document-identity-and-collaboration.md#dependency-closure-separates-asset-traversal-from-usd-interpretation).
 

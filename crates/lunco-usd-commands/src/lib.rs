@@ -229,9 +229,15 @@ fn forget_backed_document_on_closed(
     mut backed: ResMut<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     twins: Res<lunco_assets_core::twin_source::TwinRoots>,
 ) {
-    if let Some((name, _rel)) = backed.forget_document(trigger.event().doc) {
+    let doc = trigger.event().doc;
+    let coords = backed.coords_of(doc);
+    if let Some(name) = backed.forget_document(doc) {
         if let Err(error) = twins.unregister_name(&name) {
             warn!("[usd] could not unregister closed preview Twin `{name}`: {error}");
+        }
+    } else if let Some((name, rel)) = coords {
+        if let Err(error) = twins.clear_overlay(&name, &rel) {
+            warn!("[usd] could not clear closed document overlay: {error}");
         }
     }
 }

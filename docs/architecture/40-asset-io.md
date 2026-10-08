@@ -33,6 +33,14 @@ their spelling; spaces, Unicode, percent and URI/path delimiters are encoded
 injectively. Manifest metadata and filesystem folder names remain unchanged.
 Low-level `register` consumes source components and still rejects unsafe
 unencoded delimiters; consumers use its returned mount authority for loading.
+Unmount retires that authority permanently. Reopening assigns a fresh authority
+while keeping the authored logical source identity. `load_asset_path` binds
+authored logical dependencies to current mounts only when the requesting Twin
+origin is still live; worker search-path preparation uses the same binding.
+A retired origin fails before binding. Origin-free
+transport requests retain their exact authority and cannot revive a closed
+source. Background file-closure snapshots resolve authored logical names and
+publish only against their captured scope and mount revision.
 
 Native synchronous USD composition encodes its resolved root through
 `file_path_to_uri`. `lunco-usd-compose::canonicalize_at` returns `Result` and

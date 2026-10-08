@@ -1901,12 +1901,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         // generation, never on the render loop.
         let (cur_gen, pending_ops) = {
             let Some(host) = world.resource::<DocumentRegistry<UsdDocument>>().host(doc) else {
-                if let Err(error) = world.resource::<TwinRoots>().clear_overlay(&name, &rel) {
-                    warn!("[usd-e1b] could not clear closed document overlay: {error}");
-                }
-                world
-                    .resource_mut::<DocBackedTwinScenes>()
-                    .forget_document(doc);
+                // DocumentClosed owns projection bookkeeping and private mount retirement.
                 continue;
             };
             let document = host.document();

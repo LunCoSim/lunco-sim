@@ -57,6 +57,7 @@ struct TwinSceneRef {
 pub struct DocBackedTwinScenes {
     map: HashMap<DocumentId, TwinSceneRef>,
     user_owned: HashSet<DocumentId>,
+    private_mounts: HashMap<DocumentId, String>,
 }
 
 impl DocBackedTwinScenes {
@@ -271,6 +272,12 @@ impl DocBackedTwinScenes {
         );
     }
 
+    /// Record an asset authority created exclusively for this document.
+    /// Workspace ownership and preview leases do not transfer this authority.
+    pub fn track_private_mount(&mut self, doc: DocumentId, name: String) {
+        self.private_mounts.insert(doc, name);
+    }
+
     /// Acquire one editor preview lease for a tracked document.
     pub fn acquire_preview(&mut self, doc: DocumentId) {
         if let Some(scene) = self.map.get_mut(&doc) {
@@ -278,17 +285,17 @@ impl DocBackedTwinScenes {
         }
     }
 
-    /// Release one editor preview lease and return synthetic coordinates when
+    /// Release one editor preview lease and return its private authority when
     /// the final preview was the document's last owner.
-    pub fn release_preview(&mut self, doc: DocumentId) -> Option<(String, String)> {
+    pub fn release_preview(&mut self, doc: DocumentId) -> Option<String> {
         let scene = self.map.get_mut(&doc)?;
         if scene.preview_leases == 0 {
             return None;
         }
         scene.preview_leases -= 1;
         if scene.preview_leases == 0 && scene.owners.is_empty() {
-            let scene = self.map.remove(&doc)?;
-            return Some((scene.name, scene.rel));
+            self.map.remove(&doc);
+            return self.private_mounts.remove(&doc);
         }
         None
     }
@@ -313,13 +320,10 @@ impl DocBackedTwinScenes {
     }
 
     /// Forget a document after its registry host has been removed.
-    pub fn forget_document(&mut self, doc: DocumentId) -> Option<(String, String)> {
-        let synthetic = self
-            .map
-            .remove(&doc)
-            .and_then(|scene| scene.owners.is_empty().then_some((scene.name, scene.rel)));
+    pub fn forget_document(&mut self, doc: DocumentId) -> Option<String> {
+        self.map.remove(&doc);
         self.user_owned.remove(&doc);
-        synthetic
+        self.private_mounts.remove(&doc)
     }
 
     /// Drop current workspace projection coordinates while retaining preview
@@ -437,16 +441,36 @@ mod tests {
         let doc = DocumentId::new(1);
         let mut backed = DocBackedTwinScenes::default();
         backed.track_preview(doc, "assembly".into(), "scene.usda".into());
+        backed.track_private_mount(doc, "assembly".into());
         backed.acquire_preview(doc);
         backed.acquire_preview(doc);
 
         assert!(backed.release_preview(doc).is_none());
         assert!(backed.coords_of(doc).is_some());
-        assert_eq!(
-            backed.release_preview(doc),
-            Some(("assembly".into(), "scene.usda".into()))
-        );
+        assert_eq!(backed.release_preview(doc), Some("assembly".into()));
         assert!(backed.coords_of(doc).is_none());
+    }
+
+    #[test]
+    fn private_mount_retirement_is_independent_of_projection_leases() {
+        let doc = DocumentId::new(1);
+        let twin = TwinId::new(1);
+        let mut backed = DocBackedTwinScenes::default();
+        backed.track_private_mount(doc, "private".into());
+        backed.track(doc, twin, "private".into(), "scene.usda".into());
+        assert_eq!(backed.release_twin(twin), vec![doc]);
+        assert_eq!(backed.forget_document(doc), Some("private".into()));
+        assert!(backed.forget_document(doc).is_none());
+
+        backed.track(doc, twin, "shared".into(), "scene.usda".into());
+        backed.acquire_preview(doc);
+        backed.release_twin(twin);
+        assert!(backed.release_preview(doc).is_none());
+        assert!(backed.forget_document(doc).is_none());
+
+        backed.track_private_mount(doc, "private-again".into());
+        backed.track(doc, twin, "private-again".into(), "scene.usda".into());
+        assert_eq!(backed.forget_document(doc), Some("private-again".into()));
     }
 
     #[test]

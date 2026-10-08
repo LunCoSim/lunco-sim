@@ -104,11 +104,32 @@ then removes the metadata. Workspace replacement drains these handlers before
 `TwinAdded` and also closes loose and library editor documents without deleting
 shared source caches; replicated documents follow their replication session.
 USD previews snapshot document ownership at the close edge, before deferred
-registry removal. Modelica core owns document closure and linked-entity
+registry removal. `DocBackedTwinScenes` records document-private asset mounts
+separately from workspace and preview leases. The final preview lease releases a private mount when no workspace projection
+owner remains. `DocumentClosed` releases it regardless of projection leases;
+shared workspace authorities remain workspace-owned. `DocumentClosed` is the
+sole registry-closure owner for this bookkeeping. Modelica core owns document
+closure and linked-entity
 retirement in both headless and UI hosts. File reads capture a
 `FileDocumentAdmission`, and completions whose admitted runtime owner has
 retired are rejected. Pending workspace restore is canceled at that same Twin
 edge. Closing a non-active Twin does not clear the active simulation scene.
+
+The USD browser removes each published document row at `DocumentClosed`, before
+the next producer update. At active `TwinClosed`, its Scene file owner clears
+published rows, refresh requests and capacity waits, and drops the pending task
+handle. Scope changes and an empty source set use the same retirement path;
+operation identities stay monotonic. A retired preparation cannot occupy the
+replacement's pending task slot or publish into it. Shared application library
+caches retain their application lifetime.
+
+The shared scene catalog retires closed-mount metadata, spawn entries and shader
+choices at `TwinClosed`, preserving engine and surviving-mount entries. It also
+invalidates pending listings and metadata batches at that edge, so a late scan
+cannot republish the closed source. Spawn category indexes follow the retained
+entries. Private document mounts close without `TwinClosed`: the existing
+mount-set change detector prunes their catalog rows before dispatching the
+replacement listing, including shader choices and queued program listings.
 
 SysML document closure uses the same domain command for clean files and dirty
 drafts; its Twin source loader owns only pending asset handles. Modelica document

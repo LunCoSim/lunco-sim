@@ -203,10 +203,35 @@ pub struct SceneFilePreparation {
     deferred_at_capacity: Option<u64>,
 }
 
+impl SceneFilePreparation {
+    /// Release all scope-owned work without recycling operation identities.
+    fn retire(&mut self) {
+        self.requested = None;
+        self.desired = None;
+        self.pending = None;
+        self.deferred_at_capacity = None;
+    }
+}
+
 /// Set by the section's ↻ button to force one rebuild — the roots did not change,
 /// but the files on disk may have.
 #[derive(Resource, Default)]
 pub struct SceneFileRescan(pub bool);
+
+/// Clear published rows and cancel the outgoing scope's worker at Twin close,
+/// before another Twin is admitted or the producer next runs.
+pub(crate) fn retire_scene_file_view_on_twin_closed(
+    trigger: On<lunco_workspace::TwinClosed>,
+    mut preparation: ResMut<SceneFilePreparation>,
+    mut view: ResMut<SceneFileView>,
+    mut rescan: ResMut<SceneFileRescan>,
+) {
+    if trigger.event().was_active {
+        preparation.retire();
+        *view = SceneFileView::default();
+        rescan.0 = false;
+    }
+}
 
 /// Resolve a schemed reference to a file. `lunco://` re-roots on the shipped
 /// asset library, `twin://` on the named Twin's root; anything else (a leading
@@ -227,7 +252,7 @@ fn resolve_scheme(
     }
     if let Some((name, rel)) = lunco_assets_core::parse_twin_uri(reference) {
         let relative = lunco_assets_path::relative_path(rel)?;
-        return match twins?.resolve_file(name, &relative) {
+        return match twins?.resolve_authored_file(name, &relative) {
             Ok(path) => path,
             Err(error) => {
                 error!("[scene-files] Twin asset lookup failed for `{reference}`: {error}");
@@ -426,23 +451,8 @@ pub fn produce_scene_file_view(world: &mut World) {
         let inputs = match current {
             Ok(inputs) => inputs,
             Err(error) => {
-                state.requested = None;
-                state.desired = None;
-                if let Some(pending) = state.pending.as_mut() {
-                    if bevy::tasks::futures_lite::future::block_on(
-                        bevy::tasks::futures_lite::future::poll_once(&mut pending.task),
-                    )
-                    .is_some()
-                    {
-                        state.pending = None;
-                    }
-                }
-                {
-                    let mut view = world.resource_mut::<SceneFileView>();
-                    view.roots.clear();
-                    view.rows.clear();
-                    view.unresolved = 0;
-                }
+                state.retire();
+                *world.resource_mut::<SceneFileView>() = SceneFileView::default();
                 scene_file_preparation_failed(world, error);
                 return;
             }
@@ -453,6 +463,7 @@ pub fn produce_scene_file_view(world: &mut World) {
                 .as_ref()
                 .is_some_and(|previous| previous.same_scope(&inputs));
             if !same_scope || inputs.documents.is_empty() {
+                state.retire();
                 *world.resource_mut::<SceneFileView>() = SceneFileView::default();
             }
             world.resource_mut::<SceneFileView>().roots = inputs.roots();
@@ -762,6 +773,77 @@ mod tests {
     use super::*;
     use lunco_assets_core::TwinRoots;
     use lunco_storage::Storage;
+
+    #[test]
+    fn browser_retirement_cancels_file_preparation_at_active_twin_close() {
+        use lunco_workspace::{DocumentRuntimeOwner, TwinClosed, TwinId};
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(lunco_usd_commands::UsdCommandsPlugin)
+            .add_plugins(crate::UsdUiPlugin);
+        let twin = TwinId::new(7);
+        let inputs = SceneFileInputs {
+            documents: Vec::new(),
+            scope: DocumentRuntimeOwner::LocalTwin(twin),
+            replication: None,
+            mount_revision: Some(1),
+            limits: FileClosureLimits::default(),
+        };
+        let pending = SceneFileTask {
+            inputs: inputs.clone(),
+            operation: 3,
+            task: bevy::tasks::IoTaskPool::get().spawn(std::future::pending()),
+        };
+        *app.world_mut().resource_mut::<SceneFilePreparation>() = SceneFilePreparation {
+            requested: Some(inputs.clone()),
+            desired: Some((inputs, 4)),
+            pending: Some(pending),
+            operation: 4,
+            deferred_at_capacity: Some(2),
+        };
+        app.world_mut()
+            .resource_mut::<SceneFileView>()
+            .roots
+            .push("outgoing/scene.node".into());
+        app.world_mut().resource_mut::<SceneFileView>().preparing = true;
+        app.world_mut().resource_mut::<SceneFileRescan>().0 = true;
+        // Closing a background Twin cannot cancel the active browser's work.
+        app.world_mut().trigger(TwinClosed {
+            twin: TwinId::new(8),
+            root: "background".into(),
+            was_active: false,
+        });
+        app.world_mut().flush();
+        assert!(
+            app.world()
+                .resource::<SceneFilePreparation>()
+                .pending
+                .is_some()
+        );
+        assert!(!app.world().resource::<SceneFileView>().roots.is_empty());
+
+        app.world_mut().trigger(TwinClosed {
+            twin,
+            root: "outgoing".into(),
+            was_active: true,
+        });
+        app.world_mut().flush();
+        let state = app.world().resource::<SceneFilePreparation>();
+        assert!(
+            state.pending.is_none(),
+            "closed Twin must release its worker handle"
+        );
+        assert!(state.requested.is_none());
+        assert!(state.desired.is_none());
+        assert!(state.deferred_at_capacity.is_none());
+        assert_eq!(
+            state.operation, 4,
+            "operation identities cannot be recycled"
+        );
+        assert!(app.world().resource::<SceneFileView>().roots.is_empty());
+        assert!(!app.world().resource::<SceneFileView>().preparing);
+        assert!(!app.world().resource::<SceneFileRescan>().0);
+    }
 
     #[test]
     fn scene_file_publication_rejects_retired_owner_and_superseded_refresh() {

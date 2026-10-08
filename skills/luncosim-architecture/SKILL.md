@@ -181,6 +181,15 @@ uses this path for native USDA parse and persistent-source serialization;
 runtime sidecar restore and the browser worker transport remain separate open
 boundaries.
 
+Twin teardown releases domain documents and browser preparations before the
+replacement is admitted. Reopening keeps logical source identity but receives
+a fresh load authority. Resolve authored dependencies through
+`lunco-assets-core::asset_path::load_asset_path` with the admitted live origin;
+retired origins fail before rebinding, and origin-free requests keep exact
+transport authority. Background file snapshots resolve logical source names
+and fence publication by scope and mount revision. See
+[`61-scene-lifecycle-and-teardown.md`](../../docs/architecture/61-scene-lifecycle-and-teardown.md).
+
 Lifecycle work that changes authoritative scene state participates in
 `lunco-core-runtime::SimulationProgress`. Acquire with a typed owner/operation
 key, carry that identity through async preparation, and release it only after
@@ -686,6 +695,12 @@ collision or provenance is an explicit diagnostic record, not a fabricated
 default. Keep positive and negative contracts in the production Rhai scene
 gate; do not duplicate these observable assertions in Rust unit tests.
 
+Document-private viewport mounts are recorded separately from workspace/preview
+leases in `DocBackedTwinScenes`. Release them at `DocumentClosed`, or when the
+final preview lease ends with no workspace projection owner. The projection
+synchronizer must not consume that closure bookkeeping. Catalog mount-set
+changes also prune private authorities before replacement scans.
+
 ### Shared asset catalog discovery
 
 Asset enumeration belongs to `lunco_assets_runtime::discovery` and runs through the
@@ -695,6 +710,10 @@ they must not add a second filesystem walk or a UI-thread scan. A new
 manifest/Twin snapshot advances the listing generation, reopens the USD read
 set, and drops older metadata completions. This keeps a Twin opened during an
 initial scan complete without allowing stale work to populate its catalog.
+`TwinClosed` retires closed-mount metadata, spawn and shader choices before
+replacement. It invalidates pending listing/metadata generations while retaining
+engine and surviving-mount entries; late completions cannot republish a retired
+source.
 
 Asset provisioning follows the same dependency split: `lunco-assets-datasets`
 owns declarations and lifecycle state, `lunco-assets-transport` owns native

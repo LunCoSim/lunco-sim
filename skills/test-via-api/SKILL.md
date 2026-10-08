@@ -71,6 +71,24 @@ The windowed switch/reopen/rejected-candidate gate is
 an explicit free `LUNCOSIM_API_PORT`. Its assertions are authored in
 `assets/scenarios/tests/twin_session_retirement.rhai`, and its process wrapper
 verifies API `Exit` and port release.
+The driver waits for the fresh document's scene projection and readiness after
+each replacement and captures generated
+documents as well as editor documents. `LUNCOSIM_TEST_TWIN_A` and
+`LUNCOSIM_TEST_TWIN_B` select exact native Twin roots; otherwise it uses the
+maintained fixtures. `LUNCOSIM_TEST_SCREENSHOT` optionally captures the final
+replacement before cleanup. Require the `TWIN_BROWSER_RETIREMENT` Rhai verdict
+for the current file index and runtime owners, `TWIN_MODELICA_RETIREMENT` for
+the Models document registry, and `TWIN_CATALOG_RETIREMENT` for retired metadata
+and spawn sources. The driver covers OpenTwin, OpenFolder and native/file-URI
+OpenFile replacement. Include a round trip: reopening
+a Twin must resolve its authored logical dependencies through the fresh mount,
+while requests from its retired origin remain rejected.
+Set `LUNCOSIM_TEST_RECENT_MENU=1` to exercise the actual native Recent Twin menu
+at the default desktop scale (the same coordinates as the loading-replacement
+driver). The scene-only LoadScene and RestartScene checks preserve the open
+Twin and require the replacement/restarted projection before their verdicts.
+AddTwin and AddFolderToWorkspace preserve the existing documents and active
+Twin; subsequent replacement must retire all added source catalogs too.
 
 Tutorial behavior is authored in `assets/tutorials/**/*.rhai` and should be
 tested through its production scene gate in `assets/scenes/tests/` with the

@@ -9218,6 +9218,7 @@ dependencies = [
  "lunco-storage",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",
+ "lunco-workspace",
  "tempfile",
  "wasm-bindgen-futures",
 ]

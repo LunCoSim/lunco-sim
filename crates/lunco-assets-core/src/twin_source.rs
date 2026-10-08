@@ -131,21 +131,24 @@ struct TwinRootRegistry {
     revision: u64,
 }
 
-/// Immutable live mount paths for background native readers. No overlay bytes
+/// Immutable live logical source paths for background authored-file readers. No overlay bytes
 /// or retired identity metadata are retained. Publication checks the revision
 /// against the live registry before consuming derived results.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TwinRootsSnapshot {
     pub revision: u64,
-    roots: HashMap<String, PathBuf>,
+    logical_roots: HashMap<String, PathBuf>,
 }
 impl TwinRootsSnapshot {
-    pub fn resolve_file(
+    /// Resolve an authored logical Twin name in this admitted scope snapshot.
+    /// Transport authorities and stale-origin rejection belong to the live
+    /// registry; snapshot consumers fence publication by scope and revision.
+    pub fn resolve_authored_file(
         &self,
         name: &str,
         relative: &Path,
     ) -> Result<Option<PathBuf>, TwinRootsError> {
-        match self.roots.get(name) {
+        match self.logical_roots.get(name) {
             Some(root) => resolve_twin_relative_file(root, relative),
             None => Ok(None),
         }
@@ -304,7 +307,7 @@ pub(crate) fn resolve_twin_relative_directory(
 }
 
 impl TwinRoots {
-    /// Capture current live authorities without reading filesystem metadata.
+    /// Capture current live logical sources without reading filesystem metadata.
     pub fn snapshot(&self) -> Result<TwinRootsSnapshot, TwinRootsError> {
         let registry = self
             .registry
@@ -312,11 +315,17 @@ impl TwinRoots {
             .map_err(|_| TwinRootsError::RegistryPoisoned)?;
         Ok(TwinRootsSnapshot {
             revision: registry.revision,
-            roots: registry
+            logical_roots: registry
                 .roots
                 .iter()
-                .map(|(name, mount)| (name.clone(), mount.root.clone()))
-                .collect(),
+                .map(|(authority, mount)| {
+                    registry
+                        .identities
+                        .get(authority)
+                        .map(|logical| (logical.clone(), mount.root.clone()))
+                        .ok_or_else(|| TwinRootsError::UnknownAuthority(authority.clone()))
+                })
+                .collect::<Result<_, _>>()?,
         })
     }
 
@@ -883,9 +892,9 @@ mod tests {
         roots.unregister_name(&authority).unwrap();
         let retired = roots.snapshot().unwrap();
         assert!(retired.revision > admitted.revision);
-        assert!(!retired.roots.contains_key(&authority));
+        assert!(!retired.logical_roots.contains_key("generic"));
         assert_eq!(
-            admitted.roots.get(&authority),
+            admitted.logical_roots.get("generic"),
             Some(&canonical_root(root.path()).unwrap()),
             "immutable preparation retains only its admitted path snapshot"
         );
