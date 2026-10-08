@@ -584,9 +584,11 @@ fn on_load_twin_modelica_source_root(
     }
     let authority_root = roots
         .as_deref()
-        .and_then(|roots| roots.name_for_root(&twin.root).ok().flatten())
+        .ok_or_else(|| "TwinRoots is not installed".to_owned())?
+        .root_for(&request.name)
+        .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("Twin asset authority `{}` is unavailable", request.name))?;
-    if authority_root != request.name {
+    if authority_root != twin.root {
         return Err(format!(
             "Twin asset authority `{}` does not belong to Twin {}",
             request.name, request.twin_id

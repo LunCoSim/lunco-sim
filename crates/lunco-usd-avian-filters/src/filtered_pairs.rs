@@ -178,11 +178,15 @@ pub fn on_remove_joint_collision_pair(
 /// see the current component value.
 pub fn enable_collision_hook(commands: &mut Commands, entity: Entity, hook: ActiveCollisionHooks) {
     commands.queue(move |world: &mut World| {
-        let current = world
-            .get::<ActiveCollisionHooks>(entity)
+        // Scene teardown can retire the collider before this queued hook applies.
+        let Ok(mut entity) = world.get_entity_mut(entity) else {
+            return;
+        };
+        let current = entity
+            .get::<ActiveCollisionHooks>()
             .copied()
             .unwrap_or_default();
-        world.entity_mut(entity).insert(current | hook);
+        entity.insert(current | hook);
     });
 }
 

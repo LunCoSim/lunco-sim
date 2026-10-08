@@ -136,11 +136,12 @@ fn on_open_twin_scene(
             request.relative_path
         ));
     }
-    if !roots
+    let mounted_root = roots
         .as_deref()
-        .and_then(|roots| roots.name_for_root(&twin.root).ok().flatten())
-        .is_some_and(|name| name == request.name)
-    {
+        .ok_or_else(|| "TwinRoots is not installed".to_owned())?
+        .root_for(&request.name)
+        .map_err(|error| error.to_string())?;
+    if mounted_root.as_deref() != Some(twin.root.as_path()) {
         return Err(format!(
             "Twin asset authority `{}` does not belong to Twin {}",
             request.name, request.twin_id

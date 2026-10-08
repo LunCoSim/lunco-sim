@@ -154,7 +154,11 @@ private dock layout.
    right-side transport, perspective, and window-control group. When those
    groups cannot coexist, File and View stay direct and the remaining
    registered menus are exposed under an accessible `More` menu; no command
-   callback or menu state is duplicated.
+   callback or menu state is duplicated. The menu/title panel owns a separate
+   foreground egui `Ui`; the background body uses its remaining rectangle.
+   Scene-loading backdrops, notices, HUDs, and dock windows therefore cannot
+   hide the menu or take its input. File's open and recent-Twin actions remain
+   available while a scene is loading.
 2. **Workbench body (below the title bar)** — activity bar, side browser,
    viewport, properties/inspector, and the toggleable bottom panel are arranged
    around the persistent central viewport.
@@ -766,7 +770,12 @@ asynchronously. Domain codecs prepare file-backed buffers on the task pool,
 then reopen documents through their existing registry and lifecycle path; saved
 dock trees are reconciled against the live tabs. For USD, clean file-backed
 documents refresh from their current source file, while dirty buffers restore
-from the saved snapshot. A file keeps one `UsdDocument` identity and one
+from the saved snapshot. Reconciliation with an already admitted Twin or
+replicated USD document preserves its source and runtime owner and applies
+only the saved view state. Private buffer restoration rejects collisions with
+those documents, including clean buffers; it cannot reassign their owner to
+Application.
+A file keeps one `UsdDocument` identity and one
 projected preview session. Additional saved USD tabs are explicit view
 identities over that session, so they share live edits and stage projection
 while retaining their own camera and presentation settings. Normal file opens

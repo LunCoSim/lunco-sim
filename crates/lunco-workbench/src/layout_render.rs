@@ -158,15 +158,18 @@ pub(super) fn render_layout(
     // window control buttons (─ ▢ ✕) sit on the far right on
     // Linux/Windows. macOS keeps native traffic lights — we just inset
     // the menu past them.
-    // egui 0.35 unified the panel API: panels, the central area, and the dock
-    // now render *inside* a `Ui` rather than directly onto the `Context`. Build
-    // one root Ui spanning the whole viewport; every panel below shows into it,
-    // consuming edges in call order, and the dock/centre takes the remainder.
-    let mut viewport_ui = egui::Ui::new(
+    // Panels render inside a `Ui`. Menus own the foreground tier so loading
+    // notices, HUDs and dock windows cannot cover their labels or capture their
+    // input. The body consumes the remaining rectangle after the menu panel
+    // reserves its measured height.
+    let mut menu_ui = egui::Ui::new(
         ctx.clone(),
-        "lunco_workbench_viewport".into(),
+        "lunco_workbench_menus".into(),
         egui::UiBuilder::new()
-            .layer_id(egui::LayerId::background())
+            .layer_id(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("lunco_workbench_menus"),
+            ))
             .max_rect(ctx.viewport_rect()),
     );
 
@@ -180,7 +183,7 @@ pub(super) fn render_layout(
         // Match the dock tab-bar height so the merged title-bar
         // doesn't read as a thin sliver above thicker rows below.
         .exact_size(titlebar_height)
-        .show(&mut viewport_ui, |ui| {
+        .show(&mut menu_ui, |ui| {
         // egui::MenuBar normally creates an 18px compact row of its own.
         // Make that row use the whole title-bar height before constructing
         // any menu or control, so every response is centred against the same
@@ -870,6 +873,14 @@ pub(super) fn render_layout(
         });
     });
     });
+
+    let mut viewport_ui = egui::Ui::new(
+        ctx.clone(),
+        "lunco_workbench_viewport".into(),
+        egui::UiBuilder::new()
+            .layer_id(egui::LayerId::background())
+            .max_rect(menu_ui.available_rect_before_wrap()),
+    );
 
     // ── Status bar ──────────────────────────────────────────────────
     // Drives off the cross-cutting `StatusBus` resource. Latest event

@@ -244,9 +244,9 @@ fn prepare_twin_sysml_analysis(
     }
     let roots = roots.ok_or_else(|| "TwinRoots is not installed".to_owned())?;
     if !roots
-        .name_for_root(&twin.root)
+        .root_for(&request.name)
         .map_err(|error| error.to_string())?
-        .is_some_and(|name| name == request.name)
+        .is_some_and(|root| root == twin.root)
     {
         return Err(format!(
             "Twin asset authority `{}` does not belong to Twin {}",

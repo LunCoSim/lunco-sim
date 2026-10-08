@@ -184,6 +184,16 @@ BigSpace/frame conversion.
 
 ## Verify each observable boundary
 
+For menu availability during scene loading, run
+`python3 scripts/api/test_twin_loading_replacement.py --port <free-port>`.
+It opens File and selects the second recent Twin while a sandbox load is still
+pending. The driver saves `target/twin-loading-menu.png` and
+`target/twin-loading-replaced.png`; inspect them and the authored
+`TWIN_LOADING_REPLACEMENT` verdict. Its logical pointer coordinates come from
+the desktop screenshot; use `--file X Y`, `--recent X Y`, and
+`--replacement X Y` for another UI scale. A load that finishes before the
+replacement gesture fails the gate and is not cancellation evidence.
+
 After a gesture, check the owning public surface instead of relying on the
 absence of a notification:
 

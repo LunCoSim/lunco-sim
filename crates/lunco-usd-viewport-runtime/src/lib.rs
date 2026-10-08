@@ -1469,7 +1469,15 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
                 "usd-preview-open-failed",
                 format!("document {doc} is not open"),
             );
+            return;
         }
+        let owner = match preview_runtime_owner(world, doc) {
+            Ok(owner) => owner,
+            Err(error) => {
+                report_preview_error(world, "usd-preview-open-failed", error);
+                return;
+            }
+        };
         let requested_view = world
             .resource_mut::<UsdViewportState>()
             .take_restore_primary_view(preview);
@@ -1627,9 +1635,14 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             instance: primary_view.0,
         });
         request_preview_text_read(world, preview);
-        world
-            .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
-            .track_preview(doc, name, rel);
+        {
+            let mut backed = world.resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>();
+            if let Some(twin) = owner.runtime.local_twin() {
+                backed.track(doc, twin, name, rel);
+            } else {
+                backed.track_preview(doc, name, rel);
+            }
+        }
         world
             .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
             .acquire_preview(doc);
@@ -2998,6 +3011,26 @@ fn drain_preview_view_closes(pending: Option<ResMut<PendingTabCloses>>, mut comm
 // Asset install / rebuild
 // ─────────────────────────────────────────────────────────────────────
 
+/// Validate the admitted document lifetime before allocating a preview mount.
+fn preview_runtime_owner(
+    world: &World,
+    doc: DocumentId,
+) -> Result<lunco_workspace::PinnedDocumentRuntimeOwner, String> {
+    let replication = lunco_core_session::current_replication_owner_in(world);
+    let workspace = world.get_resource::<WorkspaceResource>();
+    let owner = lunco_workspace::PinnedDocumentRuntimeOwner::for_document(
+        doc,
+        workspace.map(|workspace| &workspace.0),
+    )?;
+    if !owner.is_current(
+        workspace.map(|workspace| &workspace.0),
+        replication.as_ref(),
+    ) {
+        return Err(format!("document {doc} belongs to a retired runtime owner"));
+    }
+    Ok(owner)
+}
+
 /// Mount the document selected by one existing preview session. This is the
 /// only viewport-side stage binding; all ordinary and structural edits are
 /// still consumed by `sync_twin_overlays` and the canonical stage sink.
@@ -3009,31 +3042,13 @@ fn mount_preview_session(world: &mut World, preview: UsdPreviewId) {
     else {
         return;
     };
-    let replication = lunco_core_session::current_replication_owner_in(world);
-    let workspace = world.get_resource::<WorkspaceResource>();
-    let owner = lunco_workspace::PinnedDocumentRuntimeOwner::for_document(
-        doc,
-        workspace.map(|workspace| &workspace.0),
-    );
-    match owner {
-        Ok(owner)
-            if owner.is_current(
-                workspace.map(|workspace| &workspace.0),
-                replication.as_ref(),
-            ) => {}
-        Ok(_) => {
-            report_preview_error(
-                world,
-                "usd-preview-open-failed",
-                format!("document {doc} belongs to a retired runtime owner"),
-            );
-            return;
-        }
+    let owner = match preview_runtime_owner(world, doc) {
+        Ok(owner) => owner,
         Err(error) => {
             report_preview_error(world, "usd-preview-open-failed", error);
             return;
         }
-    }
+    };
     let Some((name, rel)) = viewport_twin_coords(world, doc) else {
         return;
     };
@@ -3050,9 +3065,14 @@ fn mount_preview_session(world: &mut World, preview: UsdPreviewId) {
         }
     };
     let handle = world.resource::<AssetServer>().load::<UsdStageAsset>(path);
-    world
-        .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
-        .track_preview(doc, name, rel);
+    {
+        let mut backed = world.resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>();
+        if let Some(twin) = owner.runtime.local_twin() {
+            backed.track(doc, twin, name, rel);
+        } else {
+            backed.track_preview(doc, name, rel);
+        }
+    }
     lunco_usd_bevy_twin::wake_twin_projection(world);
     let Some(scene_root) = world
         .resource::<UsdViewportState>()

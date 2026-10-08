@@ -116,6 +116,24 @@ the same teardown and fresh admission; it does not reuse resident documents.
 `AddTwin` and `AddFolderToWorkspace` remain explicitly additive. A rejected
 replacement leaves the current Twin and its documents intact.
 
+A newer replacement request discards superseded folder scans. Once its valid
+candidate is admitted, outgoing `TwinClosed` handlers also retire any loading
+scene owner, cancel queued preparation and fence running results before the
+new scene mounts. Replacement does not wait for the outgoing scene to finish.
+Deferred collision-hook installation discards colliders already retired by
+scene teardown; it cannot mutate an outgoing collider after its removal.
+Preview admission validates the pinned document owner before allocating a
+stage or asset authority. Local previews retain the exact Twin's document
+lease, so closing a preview cannot unregister that Twin's shared authority.
+Twin scene, SysML, and Modelica loading validate the exact requested asset
+authority against the admitted Twin root. Another preview mount for that
+folder does not change the identity of the replacement Twin's authority.
+The windowed `scripts/api/test_twin_loading_replacement.py` gate chooses a
+recent Twin through the File menu during a pending scene load; its Rhai verdict
+checks document retirement, replacement projection, and invalid-candidate
+preservation. The driver requires that loading still be pending at the menu
+gesture and captures both the open menu and the settled replacement.
+
 Individual Twin closure retires the documents whose admitted runtime owner is
 that Twin, with other open Twins left intact. Domain owners cancel or fence pending
 work at `TwinClosed`; a late result cannot reopen a retired editor session.

@@ -42,7 +42,9 @@ def wait_for(session: ProductionSession, predicate, detail: str):
 def open_twin(session: ProductionSession, root, previous_ids=()) -> list[int]:
     execute(session, "OpenTwin", path=str(root))
     def admitted():
-        docs = documents(session)
+        # The authored probe creates and closes transient scratch documents;
+        # retain the scene documents whose lifetime is the Twin itself.
+        docs = [doc for doc in documents(session) if doc["kind"] == "usd"]
         paths = [str(doc.get("origin", {}).get("path", "")).replace("\\", "/") for doc in docs]
         ids = [doc["doc_id"] for doc in docs]
         if any(str(root).replace("\\", "/") in path for path in paths) and not set(ids).intersection(previous_ids):
@@ -96,11 +98,15 @@ def main() -> None:
         # Repeated replacement cannot accumulate source documents or previews.
         ids_return = open_twin(session, TWIN_A, ids_reload)
         verdict("verify_editor_retirement", ids_reload, ids_return)
+        # Retire the probe Twin before cleanup: its authored task can still
+        # create dirty scratch documents after a viewport-only ClearScene.
+        ids_final = open_twin(session, TWIN_B, ids_return)
+        verdict("verify_editor_retirement", ids_return, ids_final)
         execute(session, "ClearScene")
         for doc in documents(session):
             execute(session, "CloseDocument", doc_id=doc["doc_id"])
         wait_for(session, lambda: not documents(session), "test document cleanup before Exit")
-        verdict("verify_editor_retirement", ids_return, [])
+        verdict("verify_editor_retirement", ids_final, [])
         print(f"PASS: Twin switching, same-Twin reopening, rejected replacement; owned PID={session.process.pid}, port={PORT}")
     print("API Exit completed; owned process and port released")
 

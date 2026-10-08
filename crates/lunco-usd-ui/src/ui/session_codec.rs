@@ -41,9 +41,6 @@ fn restore_usd_document(world: &mut World, snapshot: &DocumentSnapshot) -> Optio
     if let DocumentOrigin::File { path, .. } = &snapshot.origin {
         let registry = world.get_resource::<DocumentRegistry<UsdDocument>>()?;
         if let Some(doc) = registry.doc_for_file(path)
-            && registry
-                .host(doc)
-                .is_some_and(|host| host.document().is_dirty())
             && world
                 .get_resource::<lunco_workspace::WorkspaceResource>()
                 .is_some_and(|workspace| {
@@ -53,7 +50,7 @@ fn restore_usd_document(world: &mut World, snapshot: &DocumentSnapshot) -> Optio
                 })
         {
             warn!(
-                "[WorkspaceState] refusing to rebind dirty USD document {doc} to private Application restore"
+                "[WorkspaceState] refusing to rebind admitted USD document {doc} to private Application restore"
             );
             return None;
         }
@@ -291,6 +288,17 @@ impl DocumentSessionCodec for UsdSessionCodec {
         live_id: u64,
     ) -> Option<u64> {
         if !matches!(snapshot.origin, DocumentOrigin::File { .. }) {
+            return Some(live_id);
+        }
+        // View-state reconciliation must preserve an admitted scene's source
+        // and runtime owner. Only private Application buffers are restored.
+        if world
+            .get_resource::<lunco_workspace::WorkspaceResource>()
+            .and_then(|workspace| workspace.document(DocumentId::new(live_id)))
+            .is_some_and(|entry| {
+                entry.runtime_context != lunco_workspace::DocumentRuntimeOwner::Application
+            })
+        {
             return Some(live_id);
         }
         let restored = restore_usd_document(world, snapshot)?;
