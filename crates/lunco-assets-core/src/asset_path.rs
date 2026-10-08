@@ -113,7 +113,12 @@ impl PreparedAssetPaths {
                     identifier,
                     authored,
                 } => {
-                    let result = prepare_search_path(&identifier, &authored, roots);
+                    let result = prepare_search_path(
+                        &identifier,
+                        &authored,
+                        prepared.origin.as_ref(),
+                        roots,
+                    );
                     prepared.searches.insert((identifier, authored), result);
                 }
             }
@@ -132,7 +137,12 @@ impl PreparedAssetPaths {
         &self,
         roots: Option<&crate::TwinRoots>,
     ) -> Result<(), crate::TwinRootsError> {
-        if !self.entries.is_empty() {
+        if !self.entries.is_empty()
+            || (!self.searches.is_empty()
+                && self.origin.as_ref().is_some_and(|origin| {
+                    origin.source() == &AssetSourceId::Name(crate::TWIN_SCHEME.into())
+                }))
+        {
             native_origin_root("native preparation", self.origin.as_ref(), roots)?;
         }
         for path in self.searches.values().flatten() {
@@ -270,9 +280,12 @@ fn prepare_native_path(
 fn prepare_search_path(
     identifier: &str,
     authored: &str,
+    origin: Option<&AssetPath<'_>>,
     roots: Option<&crate::TwinRoots>,
 ) -> Prepared {
-    let (authority, anchored) = crate::parse_twin_uri(identifier).ok_or_else(|| {
+    let address = load_asset_path(identifier, origin, roots, None)?;
+    let identifier = anchor_of(&address);
+    let (authority, anchored) = crate::parse_twin_uri(&identifier).ok_or_else(|| {
         invalid_asset(format!("search path `{identifier}` is not a Twin address"))
     })?;
     let roots = roots.ok_or(crate::TwinRootsError::RegistryUnavailable)?;
@@ -294,6 +307,8 @@ fn prepare_search_path(
 
 /// Resolve a load reference without filesystem access. Native file URIs require
 /// a worker-prepared result for the exact origin and its still-live Twin mount.
+/// Authored logical Twin dependencies bind to live mounts only through a live
+/// Twin origin. Origin-free transport requests keep their exact authority.
 /// Labels must be attached separately to the returned typed path.
 pub fn load_asset_path(
     reference: &str,
@@ -319,10 +334,27 @@ pub fn load_asset_path(
             ))
         })?;
     }
-    let canonical = match origin {
+    let mut canonical = match origin {
         Some(origin) => lunco_assets_path::canonicalize(reference, &anchor_of(origin)),
         None => lunco_assets_path::canonicalize_root(reference),
     };
+    // Authored logical references bind within an admitted live source. A late
+    // request from an old source must fail before it can follow a new mount.
+    // Requests without an origin retain their exact transport authority.
+    if let (Some(origin), Some(roots)) = (origin, roots)
+        && let Some((authority, _)) = crate::parse_twin_uri(&anchor_of(origin))
+    {
+        if roots.root_for(authority)?.is_none() {
+            return Err(crate::TwinRootsError::UnknownAuthority(
+                authority.to_owned(),
+            ));
+        }
+        if let Some((logical, relative)) = crate::parse_twin_uri(&canonical)
+            && let Some(authority) = roots.mounted_name_for_logical(logical)?
+        {
+            canonical = crate::twin_uri(authority, relative);
+        }
+    }
     let (source, path) = match split_scheme(&canonical) {
         Some((source, path)) => (AssetSourceId::Name(source.to_owned().into()), path),
         None => (AssetSourceId::Default, canonical.as_str()),
@@ -378,6 +410,77 @@ pub fn web_url(reference: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authored_dependencies_bind_to_reopened_mount_without_reviving_retired_origins() {
+        let folder = tempfile::tempdir().unwrap();
+        let roots = crate::TwinRoots::default();
+        let first = roots.register("fixture", folder.path()).unwrap();
+        let old_origin =
+            load_asset_path(&crate::twin_uri(&first, "main.node"), None, None, None).unwrap();
+        roots.unregister_name(&first).unwrap();
+        let second = roots.register("fixture", folder.path()).unwrap();
+        assert_ne!(first, second);
+        let origin =
+            load_asset_path(&crate::twin_uri(&second, "main.node"), None, None, None).unwrap();
+        let bound = load_asset_path(
+            "twin://fixture/part.node",
+            Some(&origin),
+            Some(&roots),
+            None,
+        )
+        .unwrap();
+        assert_eq!(anchor_of(&bound), crate::twin_uri(&second, "part.node"));
+        assert!(
+            load_asset_path(
+                "twin://fixture/part.node",
+                Some(&old_origin),
+                Some(&roots),
+                None
+            )
+            .is_err()
+        );
+        // A transport request without an admitted origin keeps its exact authority.
+        let direct = load_asset_path("twin://fixture/part.node", None, Some(&roots), None).unwrap();
+        assert_eq!(anchor_of(&direct), "twin://fixture/part.node");
+        assert!(roots.root_for(&first).unwrap().is_none());
+        let search = AssetReference::Search {
+            identifier: "twin://fixture/scenes/parts".into(),
+            authored: "parts".into(),
+        };
+        let prepared =
+            PreparedAssetPaths::prepare_on_worker([search.clone()], Some(origin), Some(&roots));
+        assert_eq!(
+            anchor_of(
+                prepared
+                    .search_resolution("twin://fixture/scenes/parts", "parts")
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+            ),
+            crate::twin_uri(&second, "parts")
+        );
+        let retired =
+            PreparedAssetPaths::prepare_on_worker([search], Some(old_origin), Some(&roots));
+        assert!(
+            retired
+                .search_resolution("twin://fixture/scenes/parts", "parts")
+                .unwrap()
+                .is_err()
+        );
+        lunco_storage::write_file_sync(&folder.path().join("part.node"), b"part").unwrap();
+        assert_eq!(
+            roots
+                .snapshot()
+                .unwrap()
+                .resolve_authored_file("fixture", std::path::Path::new("part.node"))
+                .unwrap(),
+            Some(folder.path().join("part.node"))
+        );
+        assert!(prepared.validate_owner(Some(&roots)).is_ok());
+        roots.unregister_name(&second).unwrap();
+        assert!(prepared.validate_owner(Some(&roots)).is_err());
+    }
 
     #[test]
     fn logical_load_addresses_preserve_filename_characters_without_labels() {

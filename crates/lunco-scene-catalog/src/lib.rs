@@ -29,6 +29,7 @@ impl Plugin for SceneCatalogPlugin {
         app.init_resource::<catalog::CatalogScan>();
         app.init_resource::<catalog::AssetMetaStore>();
         app.init_resource::<lunco_materials::ShaderCatalog>();
+        app.add_observer(catalog::retire_catalogs_on_twin_closed);
         app.add_systems(
             Update,
             (

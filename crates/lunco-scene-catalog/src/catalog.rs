@@ -240,7 +240,7 @@ impl SpawnCatalog {
         &self.entries
     }
 
-    /// Clear the published catalog and its indexes after a completed rescan.
+    /// Clear the published catalog and its indexes.
     pub fn clear(&mut self) {
         if self.entries.is_empty() {
             return;
@@ -652,6 +652,78 @@ impl CatalogScan {
     }
 }
 
+/// Retire closed source entries and invalidate in-flight catalog publication.
+/// Root removal and this observer may run in either order at the close edge.
+pub(crate) fn retire_catalogs_on_twin_closed(
+    trigger: On<lunco_workspace::TwinClosed>,
+    roots: Res<lunco_assets_core::TwinRoots>,
+    mut scan: ResMut<CatalogScan>,
+    mut store: ResMut<AssetMetaStore>,
+    mut catalog: ResMut<SpawnCatalog>,
+    mut shaders: ResMut<lunco_materials::ShaderCatalog>,
+    mut commands: Commands,
+) {
+    let live = roots.names().and_then(|names| {
+        names
+            .into_iter()
+            .try_fold(std::collections::HashSet::new(), |mut live, name| {
+                if roots
+                    .root_for(&name)?
+                    .is_some_and(|root| root != trigger.event().root)
+                {
+                    live.insert(name);
+                }
+                Ok(live)
+            })
+    });
+    let live = match live {
+        Ok(live) => live,
+        Err(error) => {
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                "catalog-retirement-failed",
+                error.to_string(),
+            );
+            return;
+        }
+    };
+    retain_live_catalog_sources(&live, &mut store, &mut catalog, &mut shaders);
+    scan.listing_generation = scan.listing_generation.wrapping_add(1);
+    let generation = scan.listing_generation;
+    scan.begin_usd_snapshot(generation);
+    scan.program_listing = None;
+    scan.replace_on_publish = false;
+}
+
+fn retain_live_catalog_sources(
+    live: &std::collections::HashSet<String>,
+    store: &mut AssetMetaStore,
+    catalog: &mut SpawnCatalog,
+    shaders: &mut lunco_materials::ShaderCatalog,
+) {
+    let retained = |path: &str| {
+        lunco_assets_core::parse_twin_uri(path)
+            .is_none_or(|(authority, _)| live.contains(authority))
+    };
+    store.by_path.retain(|path, _| retained(path));
+    shaders.entries.retain(|entry| retained(&entry.path));
+    let entries: Vec<_> = catalog
+        .entries
+        .iter()
+        .filter(|entry| {
+            let SpawnSource::UsdFile(path) = &entry.source;
+            retained(path)
+        })
+        .cloned()
+        .collect();
+    if entries.len() != catalog.entries.len() {
+        catalog.clear();
+        for entry in entries {
+            catalog.push_entry(entry);
+        }
+    }
+}
+
 /// Move the shared asset enumeration off the frame schedule.
 ///
 /// The include flags select which catalog projections should be published from
@@ -736,6 +808,9 @@ pub fn maintain_catalogs(
     manifest: Res<lunco_assets_runtime::discovery::AssetManifest>,
     mut scan: ResMut<CatalogScan>,
     mut last_twins: Local<Vec<String>>,
+    mut store: ResMut<AssetMetaStore>,
+    mut catalog: ResMut<SpawnCatalog>,
+    mut shaders: ResMut<lunco_materials::ShaderCatalog>,
 ) {
     let Some(roots) = twin_roots.as_deref() else {
         return;
@@ -751,6 +826,17 @@ pub fn maintain_catalogs(
     let twins_changed = names != *last_twins;
     if !manifest.is_changed() && !twins_changed {
         return;
+    }
+    if twins_changed {
+        // Private document mounts retire without a workspace TwinClosed event.
+        // Prune before dispatch so their rows disappear while the new scan runs.
+        retain_live_catalog_sources(
+            &names.iter().cloned().collect(),
+            &mut store,
+            &mut catalog,
+            &mut shaders,
+        );
+        scan.program_listing = None;
     }
     *last_twins = names;
 
@@ -1184,6 +1270,110 @@ mod spawn_anchor_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_retirement_removes_closed_sources_and_fences_late_results() {
+        let outgoing = tempfile::tempdir().unwrap();
+        let surviving = tempfile::tempdir().unwrap();
+        let roots = lunco_assets_core::TwinRoots::default();
+        let first = roots.register("outgoing", outgoing.path()).unwrap();
+        let second = roots.register("surviving", surviving.path()).unwrap();
+        let mut app = App::new();
+        app.insert_resource(roots.clone())
+            .init_resource::<CatalogScan>()
+            .init_resource::<AssetMetaStore>()
+            .init_resource::<SpawnCatalog>()
+            .init_resource::<lunco_materials::ShaderCatalog>()
+            .add_observer(retire_catalogs_on_twin_closed);
+        let asset = |path: String| AssetFile {
+            stem: path.clone(),
+            rel: path.clone(),
+            abs_path: path.clone().into(),
+            twin: None,
+            asset_path: path,
+        };
+        let paths = [
+            "lunco://parts/shared.node".to_string(),
+            lunco_assets_core::twin_uri(&first, "part.node"),
+            lunco_assets_core::twin_uri(&second, "part.node"),
+        ];
+        for path in &paths {
+            let meta = SpawnMeta::default();
+            app.world_mut()
+                .resource_mut::<AssetMetaStore>()
+                .by_path
+                .insert(path.clone(), meta.clone());
+            app.world_mut()
+                .resource_mut::<SpawnCatalog>()
+                .add_unique(entry_for(&asset(path.clone()), &meta));
+            app.world_mut()
+                .resource_mut::<lunco_materials::ShaderCatalog>()
+                .add(path.clone());
+        }
+        let tx = app.world().resource::<CatalogScan>().tx.clone();
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: lunco_workspace::TwinId::new(1),
+            root: outgoing.path().to_path_buf(),
+            was_active: false,
+        });
+        app.world_mut().flush();
+        assert_eq!(app.world().resource::<AssetMetaStore>().len(), 2);
+        assert!(
+            app.world()
+                .resource::<AssetMetaStore>()
+                .get(&paths[1])
+                .is_none()
+        );
+        let catalog = app.world().resource::<SpawnCatalog>();
+        assert_eq!(catalog.entries().len(), 2);
+        for entry in catalog.entries() {
+            assert!(
+                catalog
+                    .by_category(&entry.category)
+                    .any(|indexed| indexed.id == entry.id),
+                "category indexes follow retirement"
+            );
+        }
+        assert_eq!(
+            app.world()
+                .resource::<lunco_materials::ShaderCatalog>()
+                .entries
+                .len(),
+            2
+        );
+        assert_eq!(app.world().resource::<CatalogScan>().metadata_generation, 1);
+        tx.send(Scanned {
+            generation: 0,
+            asset: asset(paths[1].clone()),
+            meta: SpawnMeta::default(),
+        })
+        .unwrap();
+        app.add_systems(Update, drain_usd_scan);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<AssetMetaStore>()
+                .get(&paths[1])
+                .is_none()
+        );
+        // The close edge must also work after the asset owner has unmounted.
+        roots.unregister_name(&second).unwrap();
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: lunco_workspace::TwinId::new(2),
+            root: surviving.path().to_path_buf(),
+            was_active: true,
+        });
+        app.world_mut().flush();
+        assert_eq!(app.world().resource::<AssetMetaStore>().len(), 1);
+        assert_eq!(app.world().resource::<SpawnCatalog>().entries().len(), 1);
+        assert_eq!(
+            app.world()
+                .resource::<lunco_materials::ShaderCatalog>()
+                .entries
+                .len(),
+            1
+        );
+    }
 
     #[test]
     fn test_title_case() {

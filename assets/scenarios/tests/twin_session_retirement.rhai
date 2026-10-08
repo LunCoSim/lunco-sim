@@ -42,6 +42,38 @@ fn verify_editor_retirement(retired_ids, retained_ids) {
     report_verdict(checks, "Twin editor retirement", "TWIN_SESSION_RETIREMENT")
 }
 
+fn verify_twin_browser_retirement(retired_ids, retained_ids, replacement_root) {
+    replacement_root.replace("\\", "/");
+    let checks = retirement_checks(retired_ids, retained_ids);
+    let twin = query("ListTwin");
+    if twin == () || twin.open != true { throw "replacement Twin inventory missing"; }
+    let browser_root = twin.root;
+    browser_root.replace("\\", "/");
+    checks.push(t_true(browser_root == replacement_root, "browser inventory belongs to the replacement Twin"));
+    checks.push(t_true(!twin.files.is_empty(), "replacement publishes its indexed files"));
+    for file in twin.files {
+        let path = file.absolute_path;
+        path.replace("\\", "/");
+        checks.push(t_true(path.starts_with(replacement_root + "/"),
+            "indexed file belongs to the replacement root"));
+    }
+    let docs = query("ListOpenDocuments");
+    let current_owner = ();
+    for doc in docs.open_documents {
+        if doc.runtime_context.kind == "local_twin" {
+            if current_owner == () { current_owner = doc.runtime_context.twin; }
+            checks.push(t_true(doc.runtime_context.twin == current_owner,
+                "current documents share the replacement Twin owner"));
+        } else {
+            // Workspace restoration also admits private editor buffers.
+            checks.push(t_true(doc.runtime_context.kind == "application",
+                "private restored buffer keeps its application owner"));
+        }
+    }
+    checks.push(t_true(current_owner != (), "replacement publishes Twin-owned documents"));
+    report_verdict(checks, "Twin browser inventory retirement", "TWIN_BROWSER_RETIREMENT")
+}
+
 fn verify_session_preserved(ids) {
     if ids.is_empty() { throw "preservation requires an open document"; }
     let checks = [];
@@ -49,6 +81,31 @@ fn verify_session_preserved(ids) {
         checks.push(t_true(document_present(id), "rejected replacement preserves its document"));
     }
     report_verdict(checks, "Rejected Twin replacement", "TWIN_SESSION_PRESERVED")
+}
+
+fn verify_additive_workspace(ids, active_root) {
+    let checks = [];
+    for id in ids {
+        checks.push(t_true(document_present(id), "additive opening preserves the existing document"));
+    }
+    let twin = query("ListTwin");
+    checks.push(t_true(twin.open == true && twin.root == active_root,
+        "additive opening preserves the active Twin"));
+    report_verdict(checks, "Additive Twin workspace", "TWIN_ADDITIVE_WORKSPACE")
+}
+
+fn verify_catalog_retirement(retired_paths) {
+    if retired_paths.is_empty() { throw "catalog retirement requires an outgoing source"; }
+    let metadata = query("ListUsdAssetMetadata");
+    let palette = query("ListSpawnCatalog");
+    let present = #{};
+    for entry in metadata.entries { present[entry.path] = true; }
+    for entry in palette.entries { present[entry.source.path] = true; }
+    let checks = [];
+    for retired in retired_paths {
+        checks.push(t_true(!present.contains(retired), "retired catalog source is absent: " + retired));
+    }
+    report_verdict(checks, "Twin catalog retirement", "TWIN_CATALOG_RETIREMENT")
 }
 
 fn sysml_registry_retired(id) {
@@ -64,6 +121,18 @@ fn verify_sysml_retirement(ids) {
         checks.push(t_true(sysml_registry_retired(id), "SysML domain registry released its retired document"));
     }
     report_verdict(checks, "SysML registry retirement", "TWIN_SYSML_RETIREMENT")
+}
+
+fn verify_modelica_retirement(ids) {
+    if ids.is_empty() { throw "Modelica retirement requires a document"; }
+    let checks = [];
+    for id in ids {
+        let result = query("ListCompileCandidates", #{ doc_id: id });
+        checks.push(t_true(result.ok == false && result.status == "not_found"
+            && result.error.contains("doc_id " + id.to_string() + " not in registry"),
+            "closed Modelica document is absent from the Models registry"));
+    }
+    report_verdict(checks, "Twin Models registry retirement", "TWIN_MODELICA_RETIREMENT")
 }
 
 fn simulation_dependencies(me, ctx) {

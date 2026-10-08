@@ -94,6 +94,7 @@ impl Plugin for UsdUiPlugin {
             app.init_resource::<SceneFileView>();
             app.init_resource::<SceneFilePreparation>();
             app.init_resource::<SceneFileRescan>();
+            app.add_observer(scene_files::retire_scene_file_view_on_twin_closed);
             app.add_systems(Update, produce_scene_file_view);
             app.world_mut()
                 .resource_mut::<BrowserSectionRegistry>()
@@ -426,15 +427,54 @@ fn register_workspace_stage(doc: DocumentId, loaded: &mut LoadedUsdStages) {
 fn drop_workspace_stage_on_doc_closed(
     trigger: On<DocumentClosed>,
     mut loaded: ResMut<LoadedUsdStages>,
+    mut view: ResMut<UsdBrowserView>,
 ) {
     let doc = trigger.event().doc;
     let id = format!("workspace-usd:{}", doc.raw());
     loaded.unregister(&id);
+    view.stages.retain(|row| row.doc_id != Some(doc));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_retirement_drops_published_document_row_at_close_edge() {
+        let mut app = App::new();
+        app.init_resource::<LoadedUsdStages>()
+            .init_resource::<UsdBrowserView>()
+            .add_observer(drop_workspace_stage_on_doc_closed);
+        for raw in [1, 2] {
+            let doc = DocumentId::new(raw);
+            register_workspace_stage(doc, &mut app.world_mut().resource_mut::<LoadedUsdStages>());
+            app.world_mut()
+                .resource_mut::<UsdBrowserView>()
+                .stages
+                .push(loaded_stages::UsdStageRow {
+                    salt: format!("workspace-usd:{raw}"),
+                    doc_id: Some(doc),
+                    name: format!("document-{raw}"),
+                    writable: true,
+                    dirty: false,
+                    edit_proposals: Vec::new(),
+                    default_open: true,
+                    data: None,
+                    parse_error: None,
+                });
+        }
+        app.world_mut()
+            .trigger(DocumentClosed::local(DocumentId::new(1)));
+        app.world_mut().flush();
+        let rows = &app.world().resource::<UsdBrowserView>().stages;
+        assert_eq!(
+            rows.len(),
+            1,
+            "published rows must retire without another Update"
+        );
+        assert_eq!(rows[0].doc_id, Some(DocumentId::new(2)));
+        assert_eq!(app.world().resource::<LoadedUsdStages>().entries.len(), 1);
+    }
 
     /// Smoke-test: opening a USD document via the registry surfaces
     /// it as a `WorkspaceStage` after the events drain.
