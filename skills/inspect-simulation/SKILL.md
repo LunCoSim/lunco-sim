@@ -195,3 +195,11 @@ publication reads with screenshots after sustained movement past a waypoint.
 CPU publication alone cannot establish that a resized annotation image reached
 the material's GPU binding. The render binder owns descriptor-change rebinding;
 ordinary content uploads must preserve readiness.
+
+For incremental terrain strokes, compare `InspectUsdCurveView.index_patch_bytes`
+with `uploaded_patch_bytes` and `uploaded_patch_batches`. The first describes
+worker output; the latter acknowledge writes queued by the render adapter.
+`index_full_uploads` must remain unchanged for local edits within resident
+capacity. Source revisions identify CPU publication, not completion of a GPU
+submission. `uploaded_patch_sequence` at or beyond `index_upload_sequence`
+acknowledges inclusion of the source patch despite render-side coalescing.

@@ -436,7 +436,7 @@ fn surface_annotation_color(data: texture_2d<f32>, p: vec2<f32>, base: vec4<f32>
     var tint = vec4<f32>(0.0);
     for (var i = 0u; i < u32(cell.y); i += 1u) {
         let segment = u32(annotation_texel(data, u32(cell.x) + i).x);
-        let record = u32(header.z) + segment * 3u;
+        let record = segment;
         let endpoints = annotation_texel(data, record);
         let delta = endpoints.zw - endpoints.xy;
         let t = clamp(dot(p - endpoints.xy, delta) / dot(delta, delta), 0.0, 1.0);

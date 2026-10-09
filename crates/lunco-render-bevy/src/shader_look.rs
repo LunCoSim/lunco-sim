@@ -1409,7 +1409,11 @@ fn refresh_resized_image_materials(
         })
         .collect();
     for id in affected {
-        let _ = materials.get_mut(id);
+        if let Some(material) = materials.get_mut(id) {
+            // AssetMut is lazy: explicitly publish the descriptor-dependent
+            // bind-group refresh even though material fields stay unchanged.
+            let _ = material.into_inner();
+        }
     }
 }
 
@@ -1696,7 +1700,7 @@ mod tests {
     }
 
     #[test]
-    fn resized_images_refresh_dependent_materials_without_content_rebinds() {
+    fn surface_annotation_resize_refreshes_only_dependent_materials() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Image>().init_asset::<ShaderMaterial>();
@@ -1704,7 +1708,8 @@ mod tests {
             .world_mut()
             .resource_mut::<Assets<Image>>()
             .add(Image::default());
-        app.world_mut()
+        let material = app
+            .world_mut()
             .resource_mut::<Assets<ShaderMaterial>>()
             .add(ShaderMaterial {
                 surface_annotations: Some(image.clone()),
@@ -1715,16 +1720,24 @@ mod tests {
         app.world_mut()
             .run_system_cached(refresh_resized_image_materials)
             .unwrap();
-        app.world_mut().clear_trackers();
+        app.update();
+        let mut events = app
+            .world()
+            .resource::<Messages<AssetEvent<ShaderMaterial>>>()
+            .get_cursor_current();
         app.world_mut()
             .write_message(AssetEvent::<Image>::Modified { id: image.id() });
         app.world_mut()
             .run_system_cached(refresh_resized_image_materials)
             .unwrap();
+        app.update();
         assert!(
-            !app.world()
-                .resource_ref::<Assets<ShaderMaterial>>()
-                .is_changed()
+            !events
+                .read(
+                    app.world()
+                        .resource::<Messages<AssetEvent<ShaderMaterial>>>()
+                )
+                .any(|event| matches!(event,AssetEvent::Modified { id } if *id==material.id()))
         );
         app.world_mut()
             .resource_mut::<Assets<Image>>()
@@ -1739,10 +1752,14 @@ mod tests {
         app.world_mut()
             .run_system_cached(refresh_resized_image_materials)
             .unwrap();
+        app.update();
         assert!(
-            app.world()
-                .resource_ref::<Assets<ShaderMaterial>>()
-                .is_changed()
+            events
+                .read(
+                    app.world()
+                        .resource::<Messages<AssetEvent<ShaderMaterial>>>()
+                )
+                .any(|event| matches!(event,AssetEvent::Modified { id } if *id==material.id()))
         );
     }
 

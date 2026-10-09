@@ -379,9 +379,11 @@ bound worker admission, and commit only current results to the existing render
 entity. For example, route edits update their normal authored projection once,
 then `UpdateUsdCurveView` prepares sparse surface strokes without a second USD
 generation. Terrain fragments own the drape, so LOD/elevation changes need no
-route tessellation. Inspect current publication through `InspectUsdCurveView`.
-Snapshot replacement keeps the displayed surface texture until a current
-replacement commits; removing the last annotation clears it immediately.
+route tessellation. Stable segment identities preserve unchanged legs across
+route edits. Inspect current publication and dirty-range work through
+`InspectUsdCurveView`.
+Incremental index patches keep the displayed surface texture until the current
+patch commits; removing the last annotation clears it immediately.
 
 `usd.document.projected` includes the reconciled `changed_prim_paths` in its
 typed event data. A policy that caches composed facts should check this path set

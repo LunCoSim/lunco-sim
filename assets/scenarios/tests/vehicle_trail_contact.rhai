@@ -19,6 +19,7 @@ fn on_start(me, ctx) {
     this.continuous = false;
     this.publication_continuous = true;
     this.claimed = false;
+    this.incremental = true;
     this.start = world_pos(this.rover);
     this.rotation = world_rotation(this.rover);
     if this.start == () || this.rotation == () { throw "trail gate requires a live vehicle pose"; }
@@ -95,6 +96,7 @@ fn on_tick(me, ctx) {
         this.phase = "drive"; this.t = 0.0; return;
     }
     if this.phase == "drive" {
+        this.incremental = this.incremental && to_int(trail.annotation_edits) <= trail.lanes.len() * 4;
         if observe_continuity(trail, this.previous) { this.continuous = true; }
         this.publication_continuous = this.publication_continuous
             && retained_publication(trail, this.previous);
@@ -114,6 +116,7 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(measured > 0, "no grounded wheel trails were measured"));
         this.checks.push(t_true(widths_ok, "rendered track width differs from the physical tire width"));
         this.checks.push(t_true(published, "ground tracks did not publish on terrain"));
+        this.checks.push(t_true(this.incremental, "ground producer emits bounded contact edits per update"));
         this.checks.push(t_true(this.continuous, "no moving endpoint was observed below history spacing"));
         this.checks.push(t_true(this.publication_continuous,
             "displayed ground-track publication is retained throughout the drive"));

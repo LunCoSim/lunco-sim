@@ -274,7 +274,9 @@ contract, and run simulation queries under their real Twin-owned scenario route.
 For route-edit latency, record four separate spans: the bounded Rhai input
 hook, the durable route `ApplyUsdOps` and its one incremental projection,
 reference-marker admission, and `UpdateUsdCurveView`'s stroke preparation and
-terrain annotation-image publication. Fragment lookup uses bounded spatial bins;
+terrain index-patch publication. Inspect `surface_annotation_incremental_worker`
+separately from app-thread admission and render uploads. Fragment lookup uses
+bounded spatial bins;
 verify idle camera/terrain changes do not rebuild the stroke index.
 Visited-marker recoloring uses the existing route-view key and must not resubmit
 unchanged ribbon geometry.
@@ -286,9 +288,17 @@ slow synchronous query or document edit in the input path.
 For surface-annotation flicker, inspect `InspectUsdCurveView`'s
 `displayed_surface_binding_count` and `surface_texture` across pending revisions.
 Route edits and arriving wheel sources retain the displayed texture until the
-replacement commits; current-revision readiness remains a separate result.
+patch commits; current-revision readiness remains a separate result.
 The `route_surface_annotation` gate checks retained bindings and texture identity
-alongside long-path publication and missing-coverage rejection.
+alongside long-path publication and missing-coverage rejection. It edits one
+vertex after admitting 2002 legs and verifies `index_updated_segments`,
+`index_touched_nodes`, `index_patch_bytes`, `index_full_uploads` and actual render
+`uploaded_patch_bytes`/`uploaded_patch_batches`, with `uploaded_patch_sequence`
+at or beyond the source's `index_upload_sequence`. Ordinary movement must not copy
+history, resize the texture or upload its full contents. `InspectVehicleTrail`
+reports producer `annotation_edits`; compare that count with active wheels, not
+retained sample count. Initial admission, capacity growth and explicit grid reset
+are separate full-upload events.
 
 For general `SpawnEntity`/`DeleteEntity`, measure the command, USD add/remove,
 live structural reconciliation, and referenced asset admission separately.

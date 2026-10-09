@@ -475,7 +475,7 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
             ]),
             exactly_one_of: Vec::new(),
             response: Some(
-                "{ doc_id, entity_id, path, state, requested_revision, completed_revision, applied_revision, local_visibility, result_segment_count, projection, surface_binding_count, displayed_surface_binding_count, surface_texture, error }"
+                "{ doc_id, entity_id, path, state, requested_revision, completed_revision, applied_revision, local_visibility, result_segment_count, projection, surface_binding_count, displayed_surface_binding_count, surface_texture, index_updated_segments, index_touched_nodes, index_patch_bytes, index_full_uploads, uploaded_patch_bytes, uploaded_patch_batches, index_upload_sequence, uploaded_patch_sequence, error }"
                     .to_owned(),
             ),
         }
@@ -626,6 +626,13 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
         } else {
             0
         };
+        let uploaded = displayed_publication
+            .and_then(|p| p.image.as_ref())
+            .and_then(|image| {
+                world
+                    .get_resource::<lunco_materials::float_texture::FloatTextureUpdates>()
+                    .and_then(|updates| updates.uploaded.get(&image.id()))
+            });
         Ok(Some(api_value!({
             "doc_id": raw_doc,
             "entity_id": raw_entity,
@@ -640,6 +647,14 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
             "surface_binding_count": surface_binding_count as u64,
             "displayed_surface_binding_count": displayed_surface_binding_count as u64,
             "surface_texture": displayed_publication.and_then(|p| p.image.as_ref()).map(|image| format!("{:?}", image.id())),
+            "index_updated_segments": displayed_publication.and_then(|p|p.source_work.get(&entity)).map(|w|w.updated_segments),
+            "index_touched_nodes": displayed_publication.and_then(|p|p.source_work.get(&entity)).map(|w|w.touched_nodes),
+            "index_patch_bytes": displayed_publication.and_then(|p|p.source_work.get(&entity)).map(|w|w.patch_bytes),
+            "index_full_uploads": displayed_publication.map(|p|p.work.full_uploads),
+            "uploaded_patch_bytes": uploaded.map(|s|s.last_patch_bytes),
+            "uploaded_patch_batches": uploaded.map(|s|s.batches),
+            "index_upload_sequence": displayed_publication.and_then(|p|p.source_work.get(&entity)).map(|w|w.upload_sequence),
+            "uploaded_patch_sequence": uploaded.map(|s|s.sequence),
             "error": error.cloned().unwrap_or_default(),
         })))
     }
@@ -831,6 +846,7 @@ pub(crate) fn prepare_pending_usd_curve_views(
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_root: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
+    annotations: Query<&SurfaceCurveAnnotation>,
     mut q_curve: Query<
         (&lunco_usd_bevy_scene::UsdPrimPath, &Mesh3d, &mut Visibility),
         With<UsdCurveMesh>,
@@ -959,6 +975,10 @@ pub(crate) fn prepare_pending_usd_curve_views(
             continue;
         };
         let terrain = terrain.clone();
+        let previous = annotations
+            .get(entity)
+            .map(SurfaceCurveAnnotation::snapshot_for_edit)
+            .ok();
         let task_request = request;
         let task = AsyncComputeTaskPool::get().spawn(async move {
             let result = prepare_usd_curve_view_product(
@@ -966,7 +986,22 @@ pub(crate) fn prepare_pending_usd_curve_views(
                 terrain.as_ref(),
                 parent_position,
                 parent_rotation,
-            );
+            )
+            .map(|product| {
+                product.map(|product| match product {
+                    CurveViewProduct::Surface(annotation) => {
+                        if let Some(mut previous) = previous
+                            && previous.terrain == annotation.terrain
+                        {
+                            previous.replace_snapshot(annotation);
+                            CurveViewProduct::Surface(previous)
+                        } else {
+                            CurveViewProduct::Surface(annotation)
+                        }
+                    }
+                    product => product,
+                })
+            });
             UsdCurveViewBuild {
                 revision: task_request.revision,
                 root: task_request.root,
@@ -1051,9 +1086,17 @@ pub(crate) fn poll_pending_usd_curve_views(
         };
         match build_result {
             Some(CurveViewProduct::Surface(annotation)) => {
-                let count = annotation.segments.len();
+                let count = annotation.len();
                 *visibility = Visibility::Hidden;
-                commands.entity(entity).try_insert(annotation);
+                commands.queue(move |world: &mut World| {
+                    if let Some(mut current) = world.get_mut::<SurfaceCurveAnnotation>(entity)
+                        && current.terrain == annotation.terrain
+                    {
+                        current.commit_snapshot_edit(annotation);
+                    } else if let Ok(mut target) = world.get_entity_mut(entity) {
+                        target.insert(annotation);
+                    }
+                });
                 complete_curve_view_status(&mut pending, entity, revision, count, None);
             }
             Some(CurveViewProduct::Authored(mesh, anchor, count)) => {
@@ -1144,14 +1187,15 @@ fn prepare_usd_curve_view_product(
             .map(|point| parent_position + parent_rotation * *point)
             .collect();
         let (owner, points) = terrain.project_curve(&world, request.width_m)?;
-        return Ok(Some(CurveViewProduct::Surface(SurfaceCurveAnnotation {
-            terrain: owner,
-            revision: request.revision,
-            segments: points.windows(2).map(|pair| [pair[0], pair[1]]).collect(),
-            streaming: false,
-            width_m: request.width_m,
-            color: request.color,
-        })));
+        return Ok(Some(CurveViewProduct::Surface(
+            SurfaceCurveAnnotation::snapshot(
+                owner,
+                request.revision,
+                points.windows(2).map(|pair| [pair[0], pair[1]]).collect(),
+                request.width_m,
+                request.color,
+            ),
+        )));
     }
     let anchor = local[0];
     let points: Vec<_> = local

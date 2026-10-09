@@ -204,6 +204,11 @@ impl Plugin for TerrainSurfaceVisualizationPlugin {
         app.add_systems(PreUpdate, crate::stream_viz::advance_terrain_stream_cadence);
         app.init_resource::<crate::annotations::SurfaceAnnotationSettings>();
         app.init_resource::<crate::annotations::SurfaceAnnotationImages>();
+        app.init_resource::<lunco_materials::float_texture::FloatTextureUpdates>();
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            crate::annotations::clear_surface_annotations,
+        );
         app.add_systems(
             Update,
             (

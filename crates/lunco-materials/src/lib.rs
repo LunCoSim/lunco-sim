@@ -29,6 +29,7 @@
 pub mod catalog;
 pub mod dyn_params;
 pub mod engine_params;
+pub mod float_texture;
 pub mod image_mips;
 pub mod look;
 pub mod naming;

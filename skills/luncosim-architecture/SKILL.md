@@ -741,6 +741,13 @@ labels, and look remain separate owners. Stable frames must do no route
 parsing, binding lookup, mesh generation, or marker writes; camera-dependent
 label projection is the only remaining per-frame presentation work.
 
+Terrain strokes use producer-owned segment IDs and the mutable
+`lunco-terrain-surface` index. Ordinary edits publish dirty texels through
+`lunco-materials::float_texture` and the renderer's partial-upload adapter;
+capacity growth follows the shared image descriptor and material refresh path.
+See `docs/architecture/50-usd-driven-visuals.md` for the ownership and lifecycle
+contract.
+
 The same boundary applies across document domains: user Rhai/Modelica edits
 use their `DocumentHost` operation path, while file-backed, USD-embedded, and
 generated source refreshes use the shared `FileBacked::reload_base` contract.

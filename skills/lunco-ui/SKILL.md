@@ -645,6 +645,9 @@ crates/lunco-*/src/ui/     ← domain-specific panels
 Wheel-track history uses `VehicleTrailSettings.max_points_per_wheel` (default
 32768, about 16 km at half-metre spacing). Terrain annotations preserve retained
 history through adaptive spatial subdivision; they never shorten a lane because
-a root cell is crowded. Budget errors are terminal publication diagnostics.
+a root cell is crowded. Moving heads and retirement emit stable segment deltas;
+`InspectVehicleTrail.annotation_edits` exposes the consumed update count.
+Dirty-range uploads preserve the resident texture and its material bindings.
+Budget errors are terminal publication diagnostics.
 Validate long curved paths as well as live contact, and inspect actual GPU
 output after image capacity grows.

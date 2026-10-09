@@ -96,6 +96,7 @@ fn on_tick(me, ctx) {
             long_path.push([centre[0] + 40.0 * cos(angle), centre[1], centre[2] + 40.0 * sin(angle)]);
         }
         long_path.push(outer);
+        this.long_path = long_path;
         this.previous_revision = view.requested_revision;
         this.surface_texture = view.surface_texture;
         this.retained_bindings = true;
@@ -115,7 +116,33 @@ fn on_tick(me, ctx) {
         this.phase = 5; return;
     }
     if this.phase == 5 {
-        if this.ticks - this.long_ready_tick < 120 { return; }
+        if this.ticks - this.long_ready_tick < 600 { return; }
+        this.full_uploads = view.index_full_uploads;
+        this.previous_revision = view.requested_revision;
+        this.patch_batches = view.uploaded_patch_batches;
+        this.long_path[1][0] += 0.1;
+        this.checks.push(t_true(submit_view(this, this.long_path).ok, "local long-path edit accepted"));
+        this.phase = 6; return;
+    }
+    if this.phase == 6 {
+        if to_int(view.requested_revision) <= to_int(this.previous_revision) || view.state != "ready" { return; }
+        this.checks.push(t_true(view.index_full_uploads == this.full_uploads
+            && to_int(view.index_updated_segments) == 4 && to_int(view.index_touched_nodes) > 0 && to_int(view.index_patch_bytes) < 65536
+            && view.surface_texture == this.surface_texture,
+            "one vertex edits local index ranges without full upload or texture replacement"));
+        print("[route-gate] local edit work " + [view.index_updated_segments, view.index_touched_nodes, view.index_patch_bytes, view.index_full_uploads].to_string());
+        this.upload_sequence = view.index_upload_sequence;
+        this.local_ready_tick = this.ticks;
+        this.phase = 7; return;
+    }
+    if this.phase == 7 {
+        if this.ticks - this.local_ready_tick < 60 { return; }
+        this.checks.push(t_true(view.uploaded_patch_sequence != ()
+            && to_int(view.uploaded_patch_sequence) >= to_int(this.upload_sequence)
+            && view.uploaded_patch_batches != ()
+            && (this.patch_batches == () || to_int(view.uploaded_patch_batches) > to_int(this.patch_batches))
+            && to_int(view.uploaded_patch_bytes) < 65536,
+            "render adapter writes only bounded dirty texel ranges"));
         // A finite route outside the DEM must fail at its surface owner.
         let invalid = submit_view(this, [[1.0e12, 0.0, 1.0e12], [1.0e12 + 10.0, 0.0, 1.0e12]]);
         this.previous_revision = view.requested_revision;

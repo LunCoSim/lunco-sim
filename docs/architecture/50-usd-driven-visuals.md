@@ -50,16 +50,15 @@ Fewer than two points removes the presentation immediately.
 
 `lunco-terrain-surface::annotations` owns surface presentation. Each disposable
 curve entity carries its terrain identity, source revision, independent segments,
-width and colour. At most two background jobs build spatially indexed stroke
-records per terrain. The RGBA32Float image is shared by every terrain tile;
+width and colour. At most two background jobs update persistent spatial indexes, with one serial
+batch per terrain. The RGBA32Float image is shared by every terrain tile;
 A 32-by-32 root grid subdivides crowded cells into four children, to depth 12.
 A fragment walks one child per level and evaluates at most 64 nearby segments.
 Every retained source segment is indexed; local density does not retire history.
 Explicit segment, node, reference, depth or precision overflow fails visibly.
 Snapshot edits and source-set changes retain the displayed image and its
-texture identity until the replacement index commits. Removal of the last
-source clears the image immediately; other removals retire with the replacement
-snapshot. Generation fences prevent retired worker results from returning.
+texture identity until an atomic index patch commits. Removal of the last
+source clears the image immediately; other removals retire through the next index patch. Generation fences prevent retired worker results from returning.
 Preparation errors clear the image and report the owner diagnostic.
 Elevation edits, CDLOD morphs, seam stitching and camera movement need no
 annotation rebuild because the terrain's own fragments consume the strokes.
@@ -144,32 +143,59 @@ samples. Non-DEM static supports use solved contact-plane triangle strips;
 terrain tracks never acquire an independent mesh. Neither product edits USD,
 alters physics, or models terrain deformation.
 
-The annotation owner indexes complete snapshot and retained streaming history.
-It simplifies each continuous ground stroke in blocks of at most 64 legs,
-with centreline error bounded by one percent of the half-width; turns and gaps
-are retained. Spatial subdivision preserves long history under local density.
-Default global bounds are 262144 segments, 65536 nodes and 1048576 references;
-these bound allocation without increasing the 64-segment fragment leaf budget.
-The encoded 256-wide image and geometric capacity growth stay within 8192 rows.
-Immutable source arrays are shared with queued/worker snapshots, avoiding
-history copies during admission. Pointer authoring excludes non-USD wheel
-history before scanning curve distances. Immutable index preparation stays
-on the bounded worker pool. Continuous source
-revision changes retain the last image and coalesce the next snapshot within
-one publication generation, allowing completed builds to display while the
-head keeps moving. Successive images update one persistent texture identity,
-so material readiness does not restart on every frame. The render binder refreshes
-dependent material bind groups when an image descriptor changes: resizing keeps
-the asset identity but replaces the GPU texture. Texture capacity grows geometrically
-and never shrinks while that terrain retains a displayed image. Ordinary content uploads reuse
-the existing binding. Producers precede the
-typed `SurfaceAnnotationSet::Prepare` admission boundary. Added/removed sources,
-snapshot revisions, shader interfaces and settings advance the generation and fence old work. Precision violations
-and malformed inputs remain explicit owner errors.
+The annotation owner indexes exact retained segments in a fixed DEM-local grid.
+Each segment has a stable identity and a reusable three-texel record slot. Leaves
+reference record addresses directly; node and reference blocks are recycled.
+Moving a head removes its old cell memberships, edits its record and inserts its
+new memberships. Only intersected nodes are visited. Route edits preserve the
+identities of unchanged legs by comparing shared immutable geometry on their
+preparation worker; the app commits the prepared deltas. Wheel history emits
+append, head-update and oldest
+segment retirement deltas without copying, converting or hashing older contacts.
+Default global bounds are 262144 segments, 65536 nodes and 1048576 resident
+references; fragments still evaluate at most 64 candidates per leaf.
+
+A worker owns the index exclusively and applies ordered source/segment edits
+transactionally. Invalid input or allocation/density overflow restores its
+previous topology and texels, clears presentation and reports a terminal error.
+An explicit source/settings/interface change can re-admit canonical inputs;
+there is no automatic failure retry. Snapshot and source-set generations fence
+stale publication; streaming revisions coalesce without starving completed work.
+Unpublished dirty ranges survive a generation fence. Scene teardown cancels
+workers, drops indexes and retires pending uploads.
+
+Workers prepare dirty texels and any capacity-growth bytes. The render-free
+`lunco-materials::float_texture` contract carries typed completed patches to
+`lunco-render-bevy::float_texture`. Its extraction coalesces by texel address;
+its render preparation queues contiguous row writes into the resident RGBA32Float
+texture before drawing. All patch rows are queued within one render preparation
+boundary. No ordinary patch changes `Assets<Image>`, material bindings or image
+readiness. The CPU index retains canonical f64 geometry; checked narrowing occurs
+only when writing GPU records. The 256-wide image grows geometrically, never
+shrinks while displayed and stays within 8192 rows. Initial allocation, capacity
+growth and explicit grid reset use worker-prepared complete images. The shared
+render binder refreshes dependent bind groups when a descriptor change replaces
+the GPU texture. Descriptor changes explicitly mark each dependent material
+modified through `AssetMut::into_inner`; obtaining the lazy mutable handle alone
+does not emit the asset event needed to refresh its GPU bind group.
+
+`InspectUsdCurveView` reports `index_updated_segments`, `index_touched_nodes`,
+`index_patch_bytes` for the last committed edits to that source, and cumulative
+`index_full_uploads` for its shared terrain image. Source counters survive later
+updates to other sources on the same terrain.
+`uploaded_patch_bytes` and `uploaded_patch_batches` acknowledge actual queued
+render writes, independently of CPU publication. `index_upload_sequence` and
+`uploaded_patch_sequence` fence acknowledgements: a render sequence at or beyond
+the source sequence proves its patch was included, even after coalescing. The production route gate moves
+one vertex of a 2002-leg path and checks bounded local work, no full upload and
+stable texture identity. Pointer authoring excludes non-USD wheel histories
+before distance scans. Producers precede `SurfaceAnnotationSet::Prepare`;
+publication belongs to `SurfaceAnnotationSet::Publish`.
 
 `InspectVehicleTrail { id }` exposes the same bounded contact history and
 render publication: wheel and render widths, current contact, stroke endpoints,
-sample counts, projection kind and publication errors. The production
+sample counts, projection kind and publication errors. `annotation_edits` counts
+contact deltas consumed during the latest presentation update. The production
 `vehicle_trail_contact.rhai` gate exercises grounded motion, sub-spacing head
 updates, airborne/inverted rejection and a disconnected landing in an owned
 visual session. The plugin is shared by the interactive viewport and GPU
