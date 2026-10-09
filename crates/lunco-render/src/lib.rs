@@ -13,6 +13,8 @@
 //! exposure/earthshine controls, additional authored sky/Earth looks, and
 //! further Graphics UI refinements.
 
+use bevy::ecs::reflect::ReflectComponent;
+
 pub mod appearance;
 pub mod camera;
 pub mod quality;
@@ -66,6 +68,13 @@ pub struct CommunicationLineSettings {
 pub struct SceneBloomOverride {
     pub intensity: Option<f32>,
 }
+
+/// This entity's mesh asset is immutable and may be shared by other entities.
+/// Entity-specific mesh writers must attach a private asset and remove this
+/// marker before changing geometry or vertex attributes.
+#[derive(bevy::prelude::Component, bevy::prelude::Reflect, Clone, Copy, Debug)]
+#[reflect(Component)]
+pub struct SharedMeshAsset;
 
 impl lunco_settings::SettingsSection for CommunicationLineSettings {
     const KEY: &'static str = "communication_lines";

@@ -22,5 +22,9 @@ lunco-control-core = { path = "../lunco-control-core" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-time = { path = "../lunco-time" }
+
+[dev-dependencies]
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+
 [lints]
 workspace = true

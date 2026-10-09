@@ -1085,7 +1085,7 @@ fn read_link_port_slot(world: &World, entity: Entity, slot: u64) -> Option<f64> 
 /// the dangling wire it is, instead of feeding a model a number that looks like an
 /// angle. Same rule the rest of this module follows — no snapping to a fake value.
 ///
-/// `list` and `read_output` both go through here, so the two can never disagree
+/// `declare_ports` and `read_output` both go through here, so the two can never disagree
 /// about which ports exist.
 fn class_ports(p: &LinkPeer) -> impl Iterator<Item = (&'static str, f64)> + '_ {
     [
@@ -1154,7 +1154,7 @@ fn link_port_topology_key(world: &World, entity: Entity) -> u64 {
 /// Build the exact names and values exposed for one link entity.
 ///
 /// Keeping the fallback declaration and the live reduction in one helper makes
-/// the list callback and its structural key observe the same port contract.
+/// the declaration callback and its structural key observe the same port contract.
 fn link_port_rows(world: &World, entity: Entity) -> Vec<(String, f64)> {
     let authored_classes = authored_peer_classes(world, entity);
     link_port_rows_from_state(world.get::<LinkState>(entity), &authored_classes)
@@ -1257,12 +1257,12 @@ pub const LINK_PORT_BACKEND: lunco_port_core::ports::PortBackend =
             );
         },
         topology_key: link_topology_key,
-        list: |world, entity, out| {
+        declare_ports: |world, entity, out| {
+            if !out.accepts_direction(lunco_port_core::ports::PortDirection::Out) {
+                return;
+            }
             for (name, _) in link_port_rows(world, entity) {
-                out.push(lunco_port_core::ports::PortDeclaration {
-                    name,
-                    direction: lunco_port_core::ports::PortDirection::Out,
-                });
+                out.declare(&name, lunco_port_core::ports::PortDirection::Out);
             }
         },
         metadata: |_world, _entity, name, direction| {
@@ -1441,7 +1441,11 @@ mod tests {
         assert_eq!(port(&world, e, "link_base_connected"), Some(1.0));
 
         let mut listed = Vec::new();
-        (LINK_PORT_BACKEND.list)(&world, e, &mut listed);
+        (LINK_PORT_BACKEND.declare_ports)(
+            &world,
+            e,
+            &mut lunco_port_core::ports::PortDeclarationQuery::all(&mut listed),
+        );
         assert_eq!(listed.len(), 3, "range + verdict + elevation, enumerable");
         assert!(
             listed
@@ -1477,7 +1481,11 @@ mod tests {
         });
 
         let mut listed = Vec::new();
-        (LINK_PORT_BACKEND.list)(&world, rover, &mut listed);
+        (LINK_PORT_BACKEND.declare_ports)(
+            &world,
+            rover,
+            &mut lunco_port_core::ports::PortDeclarationQuery::all(&mut listed),
+        );
 
         assert!(listed.iter().any(|port| port.name == "link_base_range_m"));
         assert!(listed.iter().any(|port| port.name == "link_base_connected"));
@@ -1711,7 +1719,11 @@ mod tests {
             .id();
 
         let mut listed = Vec::new();
-        (LINK_PORT_BACKEND.list)(&world, e, &mut listed);
+        (LINK_PORT_BACKEND.declare_ports)(
+            &world,
+            e,
+            &mut lunco_port_core::ports::PortDeclarationQuery::all(&mut listed),
+        );
         assert_eq!(listed.len(), 3, "only the classed peer is addressable");
         assert_eq!(port(&world, e, "link_base_range_m"), Some(674.0));
     }

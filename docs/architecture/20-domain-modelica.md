@@ -550,6 +550,14 @@ worker thread; the main Bevy thread communicates via `crossbeam` channels:
 - `ModelicaResult { entity, session_id, outputs, variables, error, ... }`
   — returned after each command
 
+The response bridge validates the session, step identity and communication
+endpoint before taking the in-flight transaction. Its sampled inputs move into
+the accepted-step record; observable variables reuse existing map keys, with
+step outputs applied after detected symbols. The accepted record retains its
+own output snapshot, while the response's owned outputs and detected symbols
+move into the bounded UI sample queue in that order. These ownership transfers
+preserve the admission boundary, sample order and native `f64` values.
+
 The shared compiler owns native diagnostic heartbeat threads per compile.
 An RAII guard closes their stop channel and joins them on normal return,
 compiler rejection, or unwind; interruptible waiting avoids a five-second
@@ -684,12 +692,16 @@ diagnostics; when no successful sample exists, the message says so explicitly.
 
 ## 4. Execution pipeline
 
-All cosim and stepping happens in `FixedUpdate` at a shared fixed
-timestep (60 Hz by default). Ordering is enforced via system sets:
+Co-simulation exchange and stepping use `FixedUpdate` at a shared fixed
+timestep (60 Hz by default). Worker completion admission precedes clock
+projection, independently of the fixed clock. Ordering uses these system sets:
 
 ```
+First:
+  ModelicaSet::HandleResponses    — validate worker results and release completed causal holds
+  ClockProjectionSet             — project remaining holds before TimeSystems samples time
+
 FixedUpdate:
-  ModelicaSet::HandleResponses    — drain results from worker channel
   (sync_modelica_outputs)         — ModelicaModel.variables → SimComponent.outputs
   CosimSet::Propagate             — propagate_connections
   CosimApplySet::ApplyForces       — apply_sim_forces
@@ -768,18 +780,21 @@ State on `ModelicaModel`:
 Staleness: `stale = !is_compiled || compiled_generation != gen`, where
 `gen` is the document's current `generation_owned()`.
 
-Worker lifecycle and simulation time are separate schedule domains. The core
-plugin registers `handle_modelica_responses` in `Update`, so an off-thread
-compile or step can settle while a host holds the fixed clock during scene
-readiness. It registers `spawn_modelica_requests` in `FixedUpdate`, where the
+Worker lifecycle and simulation time are separate schedule domains. The execution
+host registers `handle_modelica_responses` in `First`, after message rotation
+and before `ClockProjectionSet`. An off-thread compile or step can settle while
+the fixed clock is held, and a completed causal step releases its hold before
+the virtual clock samples this update. Remaining participants and runtime faults
+retain the hold. Compile-intent admission stays in the `Update` lifecycle cycle.
+The plugin registers `spawn_modelica_requests` in `FixedUpdate`, where the
 master clock advances and the next deterministic communication request is
 issued. `ModelicaExecutionPlugin` consumes `CompileRequested` intent and the
 worker validates the pinned document runtime owner before gathering the current
 snapshot; sibling documents must share that exact admitted runtime. The UI
 command only resolves class selection. A requested target entity that has been
-removed is rejected; it cannot create an editor actor implicitly. Coupling the response drain to `FixedUpdate` (or
-forgetting either registration when splitting the crate) leaves `is_compiling`
-stuck forever in a max-speed/readiness loop even though the worker has finished.
+removed is rejected; it cannot create an editor actor implicitly. Completion
+admission continues while the fixed clock is held, so readiness can observe
+the terminal worker result and release its preparation hold.
 
 Verb semantics:
 

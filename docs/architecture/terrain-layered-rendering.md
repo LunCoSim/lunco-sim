@@ -206,13 +206,15 @@ reported through `RuntimeDiagnostics`, and leaves the material unbound until an
 explicit USD/Rhai edit repairs or replaces it. Height, collider, streaming, and
 lighting/time ownership remain unchanged by this decision.
 
-Filterable authored RGBA8 roles are prepared once per image asset version by the
-render binder. The CPU mip chain is built off-thread and deduplicated across all tiles:
-colour roles are filtered in linear light, scalar roles in their stored linear
-space, and normal roles are renormalized after filtering. The binder then opts
-the image into linear/trilinear filtering with the active anisotropy profile.
-This preserves the authored raster and its resolution while removing minification
-aliasing; changing a terrain tile or camera does not rebuild the chain.
+Filterable authored RGBA8 roles use `ShaderTexture` prepared-source requests.
+The native asset worker decodes and builds the full CPU mip chain before
+publishing the native child image, with distinct typed source identities for
+color, scalar and normal roles. All tiles share those handles. Color roles filter
+in linear light, scalar roles in their stored linear space, and normals are
+renormalized. Native image settings carry linear/trilinear filtering and the
+validated anisotropy profile. Generated derived maps already supply complete
+native images. The render binder consumes these products without copying pixels;
+changing a terrain tile or camera does not rebuild the chain.
 
 The shared performance reference is the open High-quality Apollo target:
 200 FPS sustained, 5.0 ms p95 frame time. It is a budget to measure against,
@@ -603,6 +605,13 @@ Remaining work, in dependency order:
   (satellite angular rate); likely the latter.
 
 ### Mesh inspection
+
+`TerrainLodStatus.stream` reports selected-cover fulfilment and render-resource
+publication. Its `derived` object reads `TerrainDerivedStatus` directly:
+`active`, `ready`, `total`, and `pending` describe the optional surface/normal-map
+lifecycle. A fully prepared quality measurement requires no pending stream or
+derived work, a resident selected cover, and `derived.ready == derived.total`.
+These read-only facts do not add a simulation hold or change tile admission.
 
 `TerrainLodStatus` exposes admitted continuation sources, material values, native
 corners, and corner spokes in the active physics frame. `include_geometry: true`

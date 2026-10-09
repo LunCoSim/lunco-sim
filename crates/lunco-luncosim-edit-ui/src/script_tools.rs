@@ -614,6 +614,7 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
                             .is_some_and(|look| {
                                 look.textures
                                     .get(&lunco_materials::TextureLayer::SurfaceAnnotations)
+                                    .and_then(lunco_materials::ShaderTexture::image)
                                     == Some(image)
                             })
                 })

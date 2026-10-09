@@ -164,17 +164,43 @@ result to Bevy's `PbrInput.diffuse_occlusion` (the shared
 therefore applied to indirect diffuse light only; it is not an albedo term and
 must not be multiplied into the authored colour raster or direct sunlight.
 
-The render binder also materialises a complete mip chain for filterable authored
-RGBA8 maps when a `ShaderLook` first references them or an image version changes.
-This is a deduplicated,
-off-thread operation keyed by image asset id, not a per-tile or per-frame bake:
-Albedo and Mineral mips average in linear light, Surface mips average scalar
-channels, and Normal mips average and renormalize vectors. The resulting image
-uses linear minification, trilinear mip selection, and the active terrain
-anisotropy setting. A sampler's `mipmap_filter` alone cannot create mip levels
-for an ordinary PNG, so this renderer-owned preparation is required to prevent
-real orthophoto detail from shimmering at distance. Height and ShadowCache keep
-their dedicated non-RGBA access contracts.
+`lunco-materials::LuncoImagePlugin` prepares filterable authored RGBA8
+rasters inside the native asynchronous asset pipeline. `ShaderTexture` carries
+either an owner-built `Image` or a typed `PreparedShaderImage` request for color,
+scalar or normal filtering. Each role has its own native root type and labeled
+image identity, so one source file can supply different roles without settings
+races. Requests use native asset paths and `ImageLoaderSettings`; decoding stays
+in Bevy's native loader. These typed loaders register no extensions and do not
+replace ordinary image or glTF loading.
+
+`ShaderTexture::load_raster` admits physical raster paths and returns a typed
+error for container labels before issuing an asset request. USD shader admission
+reports that error through its texture-source diagnostic. Importer-owned labeled
+images bind through `ShaderTexture::Image`; their container loader owns decoding,
+child publication and reload. The same native variant accepts complete generated
+images.
+
+The loader moves its owned decoded image to the async compute pool, awaits it
+without occupying an I/O worker, and builds the complete chain
+before publishing the source and its native child image. The render binder waits
+for prepared sources and refreshes affected looks on asset events. Intent keeps
+the root handle for reload provenance and native dependency lifetime. Reloads
+publish complete chains through the same loading boundary; generated terrain
+images already contain their chains and use the native-image variant directly.
+Prepared child images use native `RenderAssetUsages::RENDER_WORLD`: GPU
+extraction moves the texel vector and retains the descriptor/handle in the main
+asset store. Shader and terrain-source readers require that metadata, not CPU
+texels. Native source reloads supply a new complete vector. No resident-base
+snapshot or mip worker is dispatched by the render binder.
+
+Albedo, Mineral and ContinuationAlbedo filter in linear light; Surface and
+ContinuationSurface average scalar channels; Normal averages and renormalizes
+vectors. Requests select linear/trilinear sampling and the validated terrain
+anisotropy profile. Height, ShadowCache and SurfaceAnnotations retain their
+dedicated native-image access contracts. Compressed chains, arrays and other
+formats retain their native layouts. Invalid RGBA8 pixels fail the asset load.
+The shared `rgba8_mip_chain` evaluates the exact sRGB decode transfer once for
+each of the 256 encoded byte values, preserving summation order and pixel bytes.
 
 The shared CPU chain follows the GPU texture extent rule: every axis becomes
 `max(1, floor(previous / 2))`. It must not use ceil-halving or merely clamp an

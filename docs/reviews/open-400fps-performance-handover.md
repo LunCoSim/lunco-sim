@@ -1,5 +1,1452 @@
 # High-quality realtime performance handover
 
+## Local-main integration validation — 2026-10-09
+
+The optimization tree includes main `43f130184` without dropping its incremental
+terrain annotations, typed float-texture uploads or dependent-material refresh.
+The integrated normal production build passes. Artifact
+`7afd0dd35d4b49ed1659b43e6da6b90c9f00741693bb047a9d66cc250b606edd`
+passes 68 rendered history, replacement and mesh-sharing assertions in owned
+PID 1846124/API 4208, eight physics-frame rejection/recovery assertions in PID
+1852940/API 4206, and 48 exact-state replay assertions in PIDs 1855813/1856086
+on APIs 4207/4209. The existing reference remains unchanged, deliberate mismatch
+rejection still passes, and all sessions exit zero with closed ports. The full
+360-assertion replay matrix below remains the broader determinism evidence.
+
+The focused native test
+`surface_annotation_resize_refreshes_only_dependent_materials` passes. Its
+unused test import is removed afterwards, followed by one formatter pass on
+that file; these non-behavioral edits do not invalidate its result. The 43-skill
+catalog validates. Evidence lives under `target/image-loader-perf/` with the
+`main-integration-` prefix. The rendered screenshot retains scene geometry,
+rover, headlights and shadows. Warm-cache readiness is 2.954 s; the short
+View/Builder/View observations are integration evidence, not controlled FPS
+or loading-gain acceptance.
+
+The networking-feature production build also passes. Owned PID 1904839/API 4205
+captures a settled 273-command schema and exits zero with its port closed;
+the 262 contracts common to the normal host are identical. Regeneration from
+both schemas preserves all 57 documented crates and all optional networking
+commands. Neither multiplayer launch flag is supplied. Verified gzip archives
+retain both builds, and the exact tested normal executable is restored.
+
+Disk recovery cleans only this checkout's `bevy_render`, `faer` and
+`lunco-luncosim` build outputs and losslessly compresses this task's three large profiler CSVs:
+`frame-contract-cpu-20261009.csv.gz`, `native-vsop-cpu-20261009.csv.gz` and
+`architecture-next-cpu-20261009.csv.gz`. Source, sibling worktrees and shared
+Cargo/sccache caches are preserved. Use `gzip -dc` to read those evidence files.
+
+## Prepared-solve cache identity audit — 2026-10-09
+
+A read-only native zstd/bincode header audit finds 32 retained records for 30
+source identities. Two source/solver/override combinations each occupy two
+entries solely because the global admitted-library revision differs. The
+Oscillator SolveModel payloads are byte-identical. Balloon differs in a serialized
+debug-expression string containing compiler DefId 108 versus 1508; this audit
+does not establish semantic interchangeability for every model. Both sources
+use `rk45` with no overrides. Evidence:
+`target/image-loader-perf/prepared-solve-cache-header-audit-20261009.json` and
+`target/image-loader-perf/prepared-solve-cache-payload-audit-20261009.json`.
+
+The compiler's strict participating-source content identity already excludes
+unrelated roots, whereas the worker's prepared-solve key also includes the
+complete admitted-library revision. This demonstrates duplicate retention
+pressure and identifies the owner boundary to investigate. It does not yet
+explain the earlier multi-second rover miss: its current source/solver/override
+combination has one retained entry and hits in the integrated runs. No cache
+key or solver semantics are changed from this evidence alone. A scoped revision
+change and exact-state replay must establish safe reuse before removing any
+identity field. Loading, visual-FPS and physics-FPS acceptance remain open.
+
+## Physics-frame lifecycle invalidation — 2026-10-09
+
+`lunco-usd-avian-core` replaces repeated component-change scans with native
+lifecycle observers and a change-ticked resource. Admission and fixed-frame
+consumers independently observe physical membership, Grid/CellCoord presence,
+immutable ChildOf insertion/removal and active-frame changes/removal. Ordinary
+pose values do not invalidate connectivity. The full validator, owner
+diagnostics, solver holds, precision and schedule boundaries remain unchanged.
+No external library is modified.
+
+The settled 10–16 s Tracy slices exclude startup, deferred flushes and injected
+scenario checks. The gate-system body has 534/742 events before/after: p50 falls
+from 0.037319 to 0.001463 ms (96.08%), and p95 from 0.094256 to 0.007675 ms.
+The first scenario command occurs after 22 s in both captures. This establishes
+lower caller cost; different hardware clocks and event counts prevent a causal
+product-FPS claim. Comparison:
+`target/image-loader-perf/frame-contract-tracy-comparison-20261009.json`.
+
+The generic lifecycle test passes. Eight production Rhai checks disconnect a
+runtime body, require the `usd-avian`/`physics-frame` diagnostic and stopped
+solver ticks (139 to 139), then replace the scene and require recovery (154 to
+275). Topology remains 50 bodies, 33 colliders and 20 joints. The ten-profile
+production replay matrix passes 360 exact-state assertions against the unchanged
+reference, including deliberate mismatch rejection. Its initial 20-rover serial
+attempt reaches the helper's 60 s timeout during Modelica preparation under
+concurrent CPU load; it has no determinism verdict. The resumed run allows the
+runner's existing admission bound to complete and passes. Evidence prefixes:
+`frame-contract-runtime-20261009` and `frame-contract-current-replay-20261009`
+under `target/image-loader-perf/`.
+
+Normal artifact
+`3b7648b8ac5fd7fc1951857ac6e35047267fc02cfffe1dcd04b66108de104594`
+passes 26 rendered history/smoke/replacement checks in owned PID 1821445/API
+4198. View/Builder/View retain High quality, 1280×720, an exact stable camera
+pose, advancing stable physics topology and zero clipped demand. Frame
+observation p50 is 10.950/10.760/10.977 ms; native physics-ring p50 is
+1.227/1.235/1.275 ms, and whole fixed-tick p50 is 2.311/2.453/2.617 ms.
+Readiness first clears at 13.655 s. GPU clock is 2610 MHz, versus about 367 MHz
+in the earlier normal observations, so these values are not a controlled A/B.
+The screenshot retains geometry and shadows. Evidence:
+`target/image-loader-perf/frame-contract-normal-20261009.json`.
+
+Tracy artifact
+`5abae475d75611751aecffd5eb3edb52ab9dd3912e7405185bdcba8df4ad0df7`
+runs in owned PID 1828061/API 4196 with collector 1828060/8086. Readiness,
+diagnostics, stable camera pose, physics topology and 25 production checks pass.
+All successful apps and collectors exit zero and their ports close. Verified
+gzip archives retain both artifacts; the tested normal binary is restored.
+The owner Rust file receives one formatter pass after validation, containing
+only layout and trailing-comma changes.
+
+The normal loading log records rover Modelica lowering misses of 4.8–7.3 s,
+including a thermal child queued for 6.47 s. Headless probes hit the prepared
+cache for a source identity that the rendered run misses. Source identity alone
+does not establish the complete cache key: library revision, solver, parameter
+overrides and cache location still need comparison. Loading, visual-FPS and
+physics-FPS acceptance remain open.
+
+## Exact-epoch native ephemeris operand reuse — 2026-10-09
+
+`lunco-celestial-ephemeris` retains the native f64 heliocentric ICRF EMB/Earth
+operands alongside its existing final-position cache. Earth, Moon and EMB
+consumers share those samples at one exact Julian-Date bit pattern. An epoch
+change clears both maps, including missing results. Subtraction, coordinate
+rotation, parent composition, schedule order and simulation precision remain
+unchanged. This is generic analytical reuse at the provider's existing mutex
+boundary; it introduces no policy hook, worker or external-library change.
+
+The 10–16 s Tracy slices exclude injected scenario tests and deferred command
+flushes. Same-thread ephemeris spans are counted only when fully contained in
+the link system body:
+
+| Owner | Before p50 (ms) | After p50 (ms) | Events before/after |
+| --- | ---: | ---: | ---: |
+| Link sweep | 1.953829 | 1.281443 | 23/22 |
+| Earth evaluation | 0.700889 | 0.665944 | 23/21 |
+| Moon evaluation | 0.683276 | 0.201957 | 23/21 |
+| EMB evaluation | 0.156833 | 0.000200 | 23/21 |
+
+Link p50 is 34.41% lower; p95 is 2.523623/1.405003 ms. Earth still performs
+the native evaluations when it first requests them; the later Moon and EMB
+calculations reuse them. The Moon duration includes its ELP child span, which
+is not added again. These are instrumented caller costs with different camera
+conditions, not a controlled visual A/B or product-throughput claim. The first
+scenario command occurs at 17.001 s before and 22.584 s after. Evidence:
+`target/image-loader-perf/native-vsop-tracy-comparison-20261009.json`.
+The before capture is `scenario-model-query-tracy-20261009.tracy`; the after
+capture is `native-vsop-tracy-20261009.tracy`, executable
+`9f8e076f6ac49c2988f7b6abd84405548176cc21198e4a39e476ade66c296cc8`,
+owned PID 1667873/API 4193, collector 1667872. Listener and connection ownership,
+readiness, diagnostics and advancing stable physics topology pass. The 17-check
+history and seven-check smoke gates pass on the same replaced host; the empty
+replacement negative gate passes with unchanged script status and inspection.
+The screenshot shows geometry and shadows, but the camera rotation changes
+during capture and reflected projection text is empty. Neither supplies visual
+A/B acceptance. App and collector exit zero; ports close.
+
+Normal executable
+`89a68199ec55f062c3542fa4dec0cb8afd9c6802c32fbfe341661b0d028bc86e`
+passes 64 production Rhai checks against 32 public `BodyPosition` baseline
+samples for Moon, Earth, EMB and Sun at adjacent, revisited and separated epochs.
+Queries alternate body order, repeat results exactly and reject deliberately
+altered expected points. Both position-probe processes exit zero and API 4191
+closes. The unchanged ten-profile production replay matrix passes 360 exact
+state checks, including mismatch rejection; every process exits zero and API
+4180 closes. `comms_demo.usda` passes all eight authored routing/off-cycle hook
+checks, exits zero and closes API 4194. The generic native-cache seam test and
+both production builds pass without warnings. Evidence uses the
+`native-vsop-positions-*`, `native-vsop-current-replay-*` and
+`native-vsop-comms-*` prefixes under `target/image-loader-perf/`.
+
+Two normal visual measurement attempts reject their first window because the
+camera moves. The second records hundreds of metres of active-frame movement
+with a 2560×1568 render target, versus the earlier 1280×720 accepted run. Their
+readiness observations are 2.496/2.313 s; neither is a causal loading or FPS gain.
+Both apps exit zero and API 4192 closes. The rejected evidence is preserved in
+`native-vsop-normal-20261009.json` and
+`native-vsop-normal-camera-audit-20261009.json`.
+
+Verified gzip archives retain both binaries; the tested normal executable is
+restored byte-for-byte. The touched Rust file receives one focused formatter
+pass after validation. Changes remain uncommitted and nothing is pushed.
+The overall loading, visual-FPS and physics-FPS objective remains open; native
+GPU shadow work and whole-simulation command/snapshot ownership still need
+architectural work and product acceptance.
+
+## Native scenario-model query reuse — 2026-10-09
+
+`lunco-scripting` shares one World-owned native Bevy query state across
+preparation, startup, fixed ticks and visualization. It caches archetype matches,
+not actors or values. Every pass reads current model, authority and scope facts
+and releases model borrows before hooks or structural commands. Existing stable
+actor sorting, execution contexts, fixed schedules and precision remain intact.
+The existing `RebuildOnChange` owner already retains its native query state;
+it is not changed. No external library or authored USD is changed.
+
+The same pre-test 10–16 s Tracy slice has these caller-system p50 costs:
+
+| System | Before (ms) | After (ms) | Events before/after |
+| --- | ---: | ---: | ---: |
+| Scenario startup | 0.015049 | 0.004358 | 173/187 |
+| Scenario preparation | 0.027611 | 0.018374 | 173/187 |
+| Scenario fixed ticks | 0.015258 | 0.004418 | 357/359 |
+| Scenario visualization | 0.014156 | 0.006422 | 173/187 |
+
+These instrumented caller costs establish an owner-cost reduction, not a pure
+query benchmark or product-throughput gain. The 10–18 s after slice includes
+injected test assertions, including a 473 ms tick. It is retained separately;
+native command events place the first replacement at 18.416 s before and
+17.001 s after, outside the selected slice. Comparison:
+`target/image-loader-perf/scenario-model-query-tracy-comparison-20261009.json`.
+The before capture is `scenario-retirement-tracy-20261009.tracy`; the after
+artifact is `4cc9ecf2290f46ce72e8115431bbf0af56c20c8903f90db020850d6e82d43944`,
+PID 1643140/API 4190, collector 1643139. Profiler listener/connection ownership,
+readiness, diagnostics, stable within-run camera pose and advancing stable
+physics topology pass. The reflected projection text is empty, so it supplies
+no projection-equality evidence. Both app and collector exit zero; their ports
+close. The reviewed screenshot retains geometry and shadows.
+
+The tested normal artifact is
+`a890c284384d91d83e6ff5c62dfa7f6f1d624c9cbd1ee10da8da9750cd764414`.
+All ten production replay profiles pass 360 exact-state checks against the
+unchanged current-main reference, including deliberate mismatch rejection.
+Authored replay source and tracked reference remain unchanged. Each process
+exits zero and API 4180 closes between profiles. Evidence:
+`target/image-loader-perf/scenario-model-query-current-replay-20261009.json`.
+The focused neutral-driver test
+`async_compiles_commit_as_one_stable_batch_after_reverse_completion` passes
+with `--features rhai`; the initial default-feature command executes zero tests
+and is not counted. Normal and Tracy production builds pass without warnings.
+
+Owned normal PID 1636788/API 4189 passes the 17-check history and seven-check
+smoke gates through a newly admitted host and its replacement. Two empty or
+whitespace replacement checks reject with identical before/after `ScriptStatus`
+and full `ScriptInspect` snapshots. View/Builder/View retain High quality,
+1280×720, readiness, diagnostics, stable camera pose and advancing stable physics
+topology. Frame-observation p50 is 32.282/33.089/33.104 ms; native physics-ring
+p50 is 0.933/0.914/0.930 ms, and whole fixed-tick p50 is
+1.852/1.693/1.860 ms. Clipped demand stays zero. Readiness first clears at
+2.922 s; GPU utilization is 99%, clock 367 MHz and power 19.97 W. App exit is
+zero and the port closes. Screenshot geometry and shadows pass visual inspection.
+Evidence: `target/image-loader-perf/scenario-model-query-normal-20261009.json`.
+
+The historical normal and current normal runs differ by one float ULP in one
+camera rotation component, although each run preserves its pose exactly.
+Together with the single run per artifact, this prevents a strict visual A/B
+or causal loading/FPS claim. The observations and camera difference are recorded
+in `scenario-model-query-normal-comparison-20261009.json`. All task-owned sessions
+are closed. Verified gzip archives retain both exact binaries, and the tested
+normal executable is restored byte-for-byte. Changes remain uncommitted and
+nothing is pushed. The touched Rust file is formatted once after validation;
+the 43-skill catalogue and `git diff --check` pass. The full performance goal
+remains open: dominant GPU shadow
+work and whole-simulation command/snapshot ownership still need architectural
+work and product acceptance.
+
+## Native scenario-retirement query reuse — 2026-10-09
+
+`lunco-scripting-rhai-runtime` retains Bevy's native `QueryState` for pending
+scenario hosts in its serial `PreUpdate` retirement system. The query reads
+current membership and admits newly matched archetypes; host identities are
+collected before teardown mutates the world. Retirement order, lifecycle policy,
+fixed schedules, simulation precision and external libraries are unchanged.
+Empty or whitespace-only `RunScenarioAsset` sources reject before URI conversion
+or pending-host publication. The production negative gate exposed that the
+input check had followed conversion to a nonempty library URI.
+
+The existing before capture and owned after capture compare the 10–18 s slice.
+Retirement system p50 falls from 0.081873 to 0.002074 ms (97.47%); p95 falls
+from 0.181699 to 0.006061 ms, with 234/231 events. These instrumented system
+durations establish an owner-cost reduction, not product FPS. Comparison:
+`target/image-loader-perf/scenario-retirement-tracy-comparison-20261009.json`.
+The after executable is `dea9f8e33c40b4c01f59eba7c3c5acecc90302b2be7124965987fb024ec99b7a`,
+PID 1606368/API 4187, collector 1606367. Listener/connection identity, camera
+pose/projection, readiness and advancing stable physics topology pass. Its
+17-check history and seven-check smoke gates use the same host. A later
+empty-source negative assertion fails before the command-input repair; the
+preceding timing window and capture remain complete. API Exit is processed
+and the process/port close; the driver does not retain the app return code
+after that assertion. Collector exit is zero. The final retirement function
+matches the captured source exactly; the command-input fix is outside it.
+
+Final normal executable `6415f599b1d4198ec97cbbe056973b6f607602c354a318890e8a56fbd23958f0`
+passes the 17-check history, seven-check smoke and two empty/whitespace rejection
+checks on PID 1609295/API 4188. `ScriptStatus` and complete `ScriptInspect`
+snapshots remain identical across rejections. View/Builder/View windows retain
+equal camera poses, High quality, readiness, diagnostics and advancing stable
+physics topology. Frame p50 is 33.007/33.791/34.007 ms; physics-service p50 is
+1.030/0.971/1.065 ms and whole fixed-tick p50 is 2.045/1.901/1.989 ms. Clipped
+demand remains zero. GPU utilization is 99%, clock 352 MHz and power 19.98 W.
+There is no demonstrated loading or product-FPS improvement. The normal
+and Tracy screenshots retain geometry and shadows on visual inspection.
+Evidence: `target/image-loader-perf/scenario-retirement-final-normal-20261009.json`.
+App exit is zero and port 4188 closes. An earlier normal measurement completes
+its windows and two positive gates before a harness `ScriptStatus` query omits
+its required target; it is retained separately, not counted as the final gate.
+
+The focused scripting-runtime check and production builds pass without warnings.
+The touched Rust file is formatted once after validation; skill validation and
+`git diff --check` pass. All task-owned ports 4185–4188 and the collector are
+closed. Changes remain uncommitted and nothing is pushed. The full performance
+goal remains open; native GPU shadows still dominate visual frames.
+
+## Relative shadow-pose evidence — 2026-10-09
+
+Owned normal PID 1559815/API 4185 uses the prior exact normal artifact
+`9c5d65cc450467b491fa12a8c0984afa57c4fc8078276de77905b3274d2f98c3`.
+After full readiness and twelve seconds of settling, 24 production API snapshots
+over 4.25 seconds contain all 206 meshes and twelve spotlights. The camera and
+physics topology stay fixed while physics advances. All render affines change;
+198 mesh positions, 133 mesh rotations, twelve light positions and eight light
+rotations also change in the active simulation frame. Four lights have 25
+exactly stable active-frame relative mesh poses each, but no complete scene or
+light has stable relative render affines. These comparisons invert the sampled
+affines in double precision; they are not GPU shader bit-equivalence tests.
+
+Native spot shadow views additionally derive their basis from forward direction,
+not full authored roll. Native preparation creates current depth attachments
+and clears them at first use each frame. The measured inputs therefore do not
+justify unchanged-map reuse, and no shadow cache is added. The snapshot and
+analysis files are `target/image-loader-perf/shadow-relative-pose-samples-20261009.json`
+and `shadow-relative-pose-analysis-20261009.json`. App exit is zero and port
+4185 closes. A later screenshot request occurs after its bounded session
+already closes and supplies no image; source and shadow draws are unchanged.
+
+## Retained fixed-cycle demand — 2026-10-09
+
+`lunco-time` admits the complete running virtual delta and drains at most 64
+complete causal cycles per app update. All remaining duration stays in
+`Time<Fixed>::overstep`; pause, solver and scene holds retain that balance.
+The fixed timestep, serial World access, per-cycle admission check, ordered
+physics/Modelica/Rhai work and completed-tick calendar are unchanged. The
+telemetry query reports the full balance as
+`fixed_loop.latest_pending_simulation_secs`. Manual scene-test and recording
+consumers share this owner; the recorder waits for every whole admitted cycle
+before readback. The standalone Lunica composition no longer overwrites its
+workbench-installed clock. Current contracts are in
+[unified time](../architecture/19-unified-time-and-clock.md) and
+[offline recording](../offline-recording.md).
+
+The new generic runner seam first fails on a 100 ms frame at 0.1x: only 3.3 ms
+is admitted instead of 10 ms. It now passes at 0.1x/1x/64x, proving exact
+completed-plus-pending conservation, the 64-cycle work bound, pause retention
+and full later draining with no additional input duration. All 54 existing
+and replacement time-owner tests pass using that same built test binary.
+No repository/Twin asset is embedded in these generic Rust tests.
+
+The normal production artifact is SHA-256
+`9c5d65cc450467b491fa12a8c0984afa57c4fc8078276de77905b3274d2f98c3`.
+All ten production replay profiles pass 360 exact-state checks against the
+unchanged current-main reference, including deliberately mismatched-state
+rejection. The authored source and tracked reference remain unchanged. Evidence:
+`target/image-loader-perf/fixed-clock-budget-current-replay-20261009.json`.
+The production `sensor` scene passes 58 checks through `luncosim test` on
+API 4183, including the renamed pending-duration field and negative query
+cases; its process exits zero and its port closes. Log:
+`target/image-loader-perf/fixed-clock-budget-sensor-20261009.log`.
+
+The owned normal High-quality sandbox (PID 1406381/API 4181) uses the same
+fixed epoch, settings, camera pose, warmup and View/Builder/View windows as the
+metadata-after baseline. Frame-observation p50 is 30.776/31.146/31.270 ms and
+p95 is 33.006/34.658/34.306 ms. Native physics-ring p50 is
+1.055/0.972/0.943 ms. Whole fixed-tick service p50 is 1.949/1.958/1.952 ms;
+loop p50 is 3.600/3.730/3.688 ms. Latest pending duration is
+0.009555/0.005378/0.017136 s. Cumulative clipped demand is zero in every
+window, versus 0.665 s by the final baseline window. Both windows and later
+17-check history / seven-check smoke gates pass; the camera, readiness,
+diagnostics and advancing stable physics topology are checked per window.
+The app exits zero and API 4181 closes. There is no demonstrated loading,
+visual-FPS or tick-service speedup; the improvement is retained simulation
+demand. Comparison:
+`target/image-loader-perf/fixed-clock-budget-normal-comparison-20261009.json`.
+
+The combined driver subsequently fails its first new recording attempt on a
+signed/unsigned comparison in the test script; those comparisons are corrected.
+A startup-only harness attempt calls a nonexistent lifecycle method, and a
+subsequent attempt rejects still-pending scene admission. Neither supplies a
+recording verdict; their diagnostic artifacts remain separate. The corrected
+sandbox attempt passes five of six checks, but Modelica barriers prevent it
+from witnessing a full 64-cycle update. On the existing lightweight
+`diagnostic_visuals` fixture, PID 1414375/API 4182 passes all six recording
+checks: three PNGs are saved, full budget and pending duration are witnessed,
+and readback never starts with whole cycles pending. Exit is zero and the
+port closes. Its separate fixture observer logs an unrelated unsigned-count
+comparison error; this result certifies the six recorder assertions, not the
+fixture's diagnostic-lease test. Current evidence:
+`target/image-loader-perf/fixed-clock-budget-recording-current-20261009.json`.
+The normal sandbox screenshot and first recording PNG are visually inspected.
+
+A separate owned Tracy capture uses SHA-256
+`c0f49cb610497a088fd471a32a7aa9dbf42550018abaa2cf4003d86e2c87ff50`,
+PID 1430976/API 4184 and collector 1430975; listener/connection identity,
+readiness, diagnostics, stable camera and advancing stable topology pass.
+App and collector exit zero, and the API port closes. Trace:
+`target/image-loader-perf/fixed-clock-budget-tracy-20261009.tracy`.
+Its 10–18 s diagnostic slice contains 2,808 shared early shadow events
+(234 groups of 12 views), totaling 4,620.311 ms, and 233 camera early events,
+totaling 1,238.233 ms. Normalized aggregates are 19.745 ms per shared group
+and 5.314 ms per camera event; these are not paired per-frame samples.
+Opaque-pass p50 is 3.235 ms. The CPU fixed runner has 234 events with
+9.034/18.685/24.241 ms p50/p95/max under instrumentation. The timing query
+still reports zero clipped demand. Source snapshot, screenshot, CPU/GPU CSVs
+and analysis are retained; the screenshot preserves geometry and shadows.
+Analysis: `target/image-loader-perf/fixed-clock-budget-tracy-analysis-20261009.json`.
+These diagnostic costs do not replace the normal product measurement.
+
+Normal and Tracy production builds pass. The standalone Lunica binary passes
+`cargo check -p lunco-modelica-ui --bin lunica -j 4` without warnings. The
+five touched Rust files are formatted once after validation. No external
+library, authored USD, simulation scalar precision or tick order is changed.
+Full goal acceptance remains open: GPU shadow cost and a whole-simulation
+command/snapshot ownership boundary still dominate the next architectural work.
+Changes remain uncommitted and nothing is pushed. All owned ports 4180–4184
+and collector sessions are closed.
+
+Verified compression preserves the exact normal and Tracy executable bytes;
+the tested normal artifact is restored to `target/debug/luncosim`. Current
+archive mappings are
+`target/image-loader-perf/fixed-clock-executable-compression-20261009.json`.
+Source, sibling worktrees, registry and shared sccache are untouched.
+
+## Physics metadata ownership — 2026-10-09
+
+`lunco-usd-sim-telemetry` retains a publication flag per cached signal and moves
+new metadata into `SignalRegistry`. Descriptions, units, provenance, groups and
+presentation have one value owner. Per-source identity, global-owner tracking,
+path invalidation, scalar values and sampling clocks retain their contracts.
+In the observed 1,954-channel physics catalog, this removes 1,954 full metadata
+copies and at least 7,816 owned string copies (four non-empty fields per channel,
+with compound-presentation strings additional). This is a source-proven work and
+storage reduction, not a measured product speedup.
+
+The finer baseline trace is
+`target/image-loader-perf/telemetry-retention-phases-20261009.tracy` (SHA-linked
+executable `3b7894c5fb4bdb0ba2af8beafe37f02ed6d8783d54894c980a69be7dc2887b66`,
+PID 1323696/API 4176, collector 1323695). It finds 4,007 channel creations,
+maximum 0.921 ms, including a 0.420 ms creation at map size 1,792. Physics
+metadata spans total 2.981 ms; source retention peaks at 1.368 ms. The prior
+17.637 ms source spike does not recur, so its origin remains unproven.
+The after trace uses executable
+`faa3a4958a78682bcff3181fd5e3289c73ff78090c3578392d5e8d21f3c57deb`,
+PID 1326661/API 4177 and collector 1326660. The same 1,954 metadata spans
+now total 3.943 ms, and channel creation peaks at 2.227 ms. These profiler
+windows do not establish a timing gain. Both owned captures pass readiness,
+diagnostics, stable camera and advancing stable physics topology; their apps
+and collectors exit zero and ports close. Source snapshots and per-event CSVs
+are retained beside the traces. Comparison is
+`target/image-loader-perf/telemetry-metadata-owner-comparison-20261009.json`.
+
+Separate normal High-quality runs use a 12-second warmup and three six-second
+View/Builder/View windows, with identical authored scene, camera pose and quality.
+The root has the fixed authored epoch JD 2461395.5. Baseline PID 1329457/API 4178
+uses SHA-256 `9112d26d8e24086ed63aa48284edb99f67653cb801ba28adc3b162c9972c4b6b`;
+after PID 1339781/API 4179 uses
+`6d125ffa0d1506f11a5359620401c3797c3fd732598de081ba7aa02156588dba`.
+Frame-observation p50 is 30.478/30.723/31.323 ms before and
+30.233/31.253/31.660 ms after. Physics-ring p50 is 0.936/0.944/0.933 ms before
+and 0.945/1.013/1.000 ms after. First observed readiness is 2.389/2.854 s.
+These runs establish no overall loading, rendering or physics speedup.
+GPU utilization stays 99%, at 375/390 MHz and approximately 20 W; the owned app
+is the recorded GPU process. Raw frame exposures are revision-deduplicated API
+observations (95–98 per window), not every rendered frame. Native physics rings
+retain 120 steps. Both app exits are zero and both ports close. The reviewed
+screenshots retain scene geometry/shadows. Comparison is
+`target/image-loader-perf/telemetry-metadata-normal-comparison-20261009.json`.
+An initial baseline driver lost the process handle only while saving shutdown
+facts after all windows completed. Its app/port closed; its exit code is not
+claimed. The completed baseline above supplies the full lifecycle evidence.
+
+The production `telemetry_recording_history.rhai` gate passes 17 checks,
+including mass metadata, steady-value history, pacing/retention and absent-channel
+rejection; sandbox smoke passes seven. The fresh normal binary also passes all
+ten exact production replay profiles and 360 checks, including deliberate
+mismatch rejection, with scenario and tracked reference unchanged. Evidence is
+`target/image-loader-perf/telemetry-metadata-current-replay-20261009.json`.
+The after timing profile's whole fixed-tick p50 is 1.935–1.982 ms, with
+3.626–3.830 ms fixed-loop bursts. Its cumulative max-delta-limited simulation
+demand reaches 0.665 s; the final latest sample is 0.001209 s. Mean Avian timing
+alone therefore does not establish whole-loop or wall-clock cadence acceptance.
+
+Focused normal and Tracy builds pass without warnings. Touched Rust files were
+formatted once after validation; the diff check and 43-entry skill catalogue
+pass. No external library, authored USD, authoritative scalar or ordered tick
+boundary was changed. All owned ports 4176–4180 and collector sessions are
+closed. Changes remain uncommitted; nothing was pushed. Full loading, visual-FPS,
+physics-tail and UI-isolation acceptance stays open.
+
+Task-owned executable compression preserves exact bytes with verified restored
+SHA-256 hashes and frees 2.71 GB. Current archive mappings are in
+`target/image-loader-perf/archived-executable-compression-20261009.json`.
+Source, sibling worktrees, Cargo registry and shared sccache are untouched.
+
+## Owned shader-raster loading — 2026-10-09
+
+`lunco-materials` prepares decoded, owned images on the async-compute pool
+before publishing typed `PreparedShaderImage` roots and their native image
+children. `ShaderTexture` retains each colour/scalar/normal source independently
+and preserves native reload dependencies. Extension-free registration leaves
+native image and glTF decoding/settings intact. The render binder consumes
+complete children and reacts to source events; its resident-pixel snapshot,
+task/version registry and mip installation pass are removed. Prepared children
+use native render-only extraction, moving bytes into GPU preparation while
+retaining main-world descriptors. Generated terrain/annotation images retain
+their native ownership. The canonical contract is in
+[shader layers](../architecture/shader-layers-and-params.md).
+
+The focused production-feature test command
+`cargo test -p lunco-materials -p lunco-luncosim --lib image_ -j 4` passes ten
+tests, including initial/reload complete chains, independent same-file roles,
+native loader settings, sampler quality, render-only child usage, invalid PNG
+and invalid pixels, plus shared pixel math. Inline codec fixtures exercise the
+asset seam without repository/Twin paths. Evidence is in
+`target/perf/image-raster-source-seams-20261009.log`.
+`ShaderTexture::load_raster` accepts physical raster paths and rejects container
+labels with a typed error before issuing a prepared-root request. USD shader
+admission consumes that error through the existing texture-source diagnostic.
+Importer-owned labeled images use `ShaderTexture::Image`; an inline native
+container-loader test verifies their load, binding and reload, and verifies that
+a rejected raster request starts no prepared-root load. Physical asset identity
+and importer-owned labels remain separate contracts.
+
+The source-admission build has SHA-256
+`d8fa3aa3459fe09438760c7ddf96821bf08f6d541c034ea07a780ea7f9c6535f`.
+The production Rhai replay passes all ten serial/default/jitter profiles and
+360 checks against the unchanged current-main reference. It compares exact
+physics and articulated state plus all 438 Modelica variable names/value strings
+at maintained checkpoints, and rejects deliberate mismatches. Source and tracked
+reference files remain unchanged. Evidence is
+`target/image-loader-perf/image-raster-current-replay-20261009.json`.
+A separate current rendered sandbox run (PID 1297561/API 4173) passes seven
+smoke checks, readiness and diagnostics. Its reviewed screenshot retains
+geometry and shadows; API Exit returns zero and the port closes. This is
+rendering correctness evidence, not a new throughput window. Files are
+`target/image-loader-perf/image-raster-rendered-current-20261009.*`.
+
+The retained raster-worker Tracy executable SHA-256 is
+`c75aeb67f36172322549a7a68db0a1c0cc0e635c0f9f520aecfc7b7316d53c2b`.
+Owned PID 1257840/API 4168 and collector 1257839 verify the owned 8086 listener
+and connection. Two `lunco_shader_raster_prepare` jobs take 196.14/178.67 ms
+on worker threads 13/14. The removed app-thread preparation zone has no events.
+Native `GpuImage` extraction has a 0.875 ms maximum over 312 calls and 4.34 ms
+total in the first five traced seconds; these aggregate native spans are not
+isolated texture costs or a loading-critical-path measurement. Readiness,
+diagnostics, active-camera pose/audit, physics progress/topology and screenshot
+geometry/shadows pass. The reflected projection string is empty, so it does
+not independently validate projection fields. App and collector exit zero;
+API 4168 closes. Raw trace is
+`target/image-loader-perf/image-loader-after-20261009.tracy`, 210,454,898 bytes,
+SHA-256 `8c41fd20789aff4a125c9782f03b5e2a0e731c02ff29d7d00dee89d1eabd756d`.
+Source snapshots, individual worker/extraction CSVs and process facts are
+beside that capture.
+Both exact production executables are retained as verified gzip archives in
+`target/image-loader-perf/image-loader-{tracy,normal}-luncosim.gz`. The artifact
+manifest records original identities; the compression manifest records restored
+hashes and current archive paths.
+
+The retained render-only throughput executable SHA-256 is
+`44768b127d9f464ad74f12b51a3d69e14f4a05f4b3b71739d220bf9c09c258a2`.
+Owned PID 1269633/API 4169 measures High, 1280×720, no Vsync/throttle, a
+12-second warmup and three six-second View/Builder/View windows. First full
+readiness is 3.038 s. Retained 60 Hz app-frame observations have p50
+30.658/31.163/30.754 ms and p95 33.363/33.981/33.033 ms, 363 rows per window;
+these can repeat a rendered frame. Native 120-step physics-ring p50 is
+0.935/0.918/0.912 ms and p95 1.188/1.104/1.093 ms. This run establishes no
+overall loading, visual-FPS or physics gain. Readiness, diagnostics, camera
+pose/audit and physics progress/topology pass. The recording gate passes 15
+checks and sandbox smoke passes seven; the reviewed screenshot retains
+geometry and shadows. API Exit is zero and the port closes. Runtime evidence
+is in `target/image-loader-perf/image-loader-render-only-final-20261009.*`.
+The GPU remains near 99% utilization at about 405 MHz and 20 W; short normal
+observations do not establish uncontended hardware-independent acceptance.
+
+An earlier normal run before render-only extraction is retained in
+`target/perf/image-loader-final-20261009.*`; it had no authored scenario
+verdicts. Separate logs retain a wrong smoke asset request and an early
+readiness race, followed by a successful corrected seven-check smoke run.
+Neither failure is counted as negative-case coverage. The asset tests above
+are the intentional negative cases.
+
+Disk recovery preserved and SHA-verified all 665 performance-evidence files
+before cleaning this checkout's generated `target/` outputs. `target/perf`
+now links to `/var/tmp/luncosim-optimization-perf-20261009/evidence`; large new
+captures stay on the home filesystem. Archive/compression manifests retain
+artifact identities. Fresh standard-profile builds and the focused test pass
+after the clean. Source, sibling worktrees and shared caches are preserved.
+No external library, authored USD, authoritative simulation value or ordered
+tick boundary changes in this step. Image worker completion controls
+presentation asset availability, not authoritative simulation input order.
+The exact production replay above strengthens determinism evidence for this
+change; smoke gates alone do not prove it. Full loading, visual-FPS, physics-tail and
+determinism acceptance remain open. No commit or push was made.
+Source-admission validation reuses the passing replay after documentation-only
+edits; formatting and final review are recorded separately.
+
+The same capture identifies native `RenderMesh` extraction at 24.128 ms maximum
+and 36.226 ms total in the first five traced seconds. Current CPU consumers
+include editor mesh picking (`lunco-luncosim-edit-ui::selection` and the UI's
+native `MeshPickingPlugin`), horizon baking and mesh-terrain collision admission.
+Native render-only mesh extraction removes attributes/indices from main-world
+storage, so changing all mesh usage flags would break those readers. This is
+an ownership investigation requiring per-source attribution and retained
+reader semantics before an optimization, not evidence that the image usage
+choice can be applied indiscriminately to meshes.
+
+## Startup owner attribution — 2026-10-09
+
+The owned High-quality sandbox capture
+`target/image-loader-perf/startup-owner-phases-20261009.tracy` uses executable
+SHA-256 `1a292ba6d28c114cdc5c941ec5639d1c07c46cc0161e9da62b3f64a509b4d254`,
+PID 1304802/API 4174 and collector 1304801. Listener ownership, readiness,
+diagnostics, stable camera pose/audit and advancing stable physics topology
+pass. The reviewed image retains geometry/shadows; both processes exit zero
+and the API closes. The raw capture, exact executable and source snapshots are
+retained. Readiness at 4.132 s is profiler-run evidence, not loading acceptance.
+GPU utilization is 99% at 405 MHz/~20 W, with this app the recorded GPU process.
+
+Internal spans separate engine completion snapshot from document installation
+and physics channel retention from kinematics/contact collection. The engine's
+14 snapshot calls total 6.762 ms, maximum 3.235 ms. Seven per-document installs
+total 8.120 ms, maximum 3.791 ms. The outer engine maximum is 11.239 ms;
+its longest call is outside completion installation. Port-validation command
+flush maximum is 2.613 ms, versus 29.984 ms in the earlier capture with no
+validation implementation change. That variability does not prove a fix.
+Physics telemetry's maximum is 20.782 ms; 17.637 ms lies inside one source's
+metadata-discovery/registry-retention interval. One later non-discovery source
+also reaches 7.661 ms. The capture localizes wall time, not allocator versus
+scheduler CPU service. Registry discovery/growth needs further attribution
+before choosing a mechanism. The parsed-document install is not established as
+the dominant startup blocker. Per-event exports and aggregate evidence are in
+`target/image-loader-perf/startup-owner-phases-analysis-20261009.json`.
+
+These diagnostic spans use the native debug filter documented in the profiling
+skill; ordinary info-level runs do not enable them. No new cache, asynchronous
+commit path or physics scheduling decision was added. A separate owned
+`BindingStatus` inventory found 104 bound wires and 102 distinct sources:
+only two reads are redundant. That workload does not justify source fan-out
+indexing. Evidence is
+`target/image-loader-perf/cosim-source-fanout-20261009.json`.
+
+The final normal build passes without warnings. Its SHA-256 is
+`9112d26d8e24086ed63aa48284edb99f67653cb801ba28adc3b162c9972c4b6b`.
+One focused serial four-rover replay passes 24 exact-state/negative-control
+checks (PID 1312511/API 4175), exits zero and closes its port, with production
+scenario and tracked reference unchanged. This supplements the ten-profile
+source-admission replay; it is not a new full replay matrix. Evidence is
+`target/image-loader-perf/startup-owner-normal-replay-20261009.json`.
+Touched Rust files were formatted once after implementation and validation;
+`git diff --check` and the 43-entry skill catalogue pass. Owned ports
+4173/4174/4175 and the collector listener are closed. No commit or push was
+made. Full product loading, visual-FPS and physics-tail acceptance stays open.
+
+## sRGB mip filtering — 2026-10-09
+
+`lunco-materials::rgba8_mip_chain` decodes the 256 possible sRGB byte values
+once per colour chain instead of repeating the nonlinear transfer for every
+sample. It reuses the same native f32 transfer function, sample order,
+summation, encoding, alpha averaging and mip extents. Linear/normal chains do
+not build the table. This is shared pixel math consumed by shader-raster
+asset loading and terrain preparation; it adds no policy, hook,
+dependency, API, cache lifecycle or simulation scheduling boundary.
+The [canonical shader contract](../architecture/shader-layers-and-params.md)
+and profiling skill describe the owner and evidence boundaries.
+
+Seven native tests pass, including invalid inputs, normal/linear filtering,
+non-power-of-two/rectangular extents and an sRGB comparison covering 65,536 byte pairs
+against the transfer formula. The pure standard-library module was compiled
+directly with the repository toolchain using
+`rustc --edition 2024 --test -C opt-level=2 crates/lunco-materials/src/image_mips.rs -o target/perf/image-mips-mechanism-20261009`,
+then `target/perf/image-mips-mechanism-20261009`;
+the production builds separately validate package integration. A direct
+before/after comparison also verifies every byte of a 44,739,244-byte,
+13-level synthetic 4096×2048 chain. Its source and verdict are retained in
+`target/perf/image-mips-full-byte-comparison-20261009.{rs,log}`.
+
+The isolated same-toolchain/same-input A/B/B/A workload runs three repetitions
+per process. Before median filtering is 291.95/290.28 ms; after is
+88.08/88.46 ms, about 70% lower. Input construction and output verification
+remain outside the timed filter. Full outputs have matching level counts,
+sizes and checksums; the separate direct byte comparison above is stronger
+than checksum identity. Source, executable identity and timings are retained
+in `image-mips-bench-*-20261009.*`. These are owner-workload results, not
+loading or FPS acceptance.
+
+Temporary per-phase spans identify the production startup spike as base
+snapshot copying: two 4096×2048 RGBA8 images copy 64 MiB on the app thread,
+with one copy taking 51.14 ms. Event handling, request discovery, polling and
+installation are small; mip filtering already runs off-thread. Owned before
+PID 1079602/API 4161 has two worker jobs at 427.80/382.16 ms; after PID
+1087314/API 4162 has 154.63/162.27 ms. Both install two results and pass
+readiness, diagnostics, camera-audit stability, physics progress/topology and
+visual shadow/geometry checks. Their verified owned 8086 listeners and
+collector connections identify the captures. Both apps/collectors exit zero
+and the API ports close. The after snapshot copies are 6.75/5.15 ms; no
+snapshot mechanism changed in that measurement pair, so this variability
+does not prove a copy reduction. The owned-loading step above removes that
+resident snapshot at its asset owner.
+
+Raw captures remain at `/var/tmp/luncosim-optimization-perf-20261009/shader-image-phase-20261009.tracy`
+(210,152,621 bytes, SHA-256
+`3fb1849379e39febcbca369fbad674401497ab65150eedc68efbfb77a7219c8c`)
+and `/var/tmp/luncosim-optimization-perf-20261009/image-mips-decode-after-20261009.tracy`
+(208,668,283 bytes, SHA-256
+`d7a95fc5594bdde6cb5af1bb51354a5571700ade000e9de1e8ebae41fdbcd745`).
+Profiler executable SHAs are
+`559131e0b348318bd731244dc4b01786a0c9ad6f4c398423e9363910d0647574`
+before and
+`0bb1a807cd8543396eb37fec245956e5e9d1b842cfcdb32150fa7b9ce230d3f8`
+after. Sources, filtered inclusive/self exports and the phase comparison are
+in `shader-image-phase-*` and `image-mips-decode-phase-pair-20261009.json`.
+The temporary phase spans are removed.
+
+The final normal `target/debug/luncosim` SHA-256 is
+`115d08da22cc2cbf3e2522831d840cb24d166c2c6d06ac38586fadc53137ca90`.
+Owned PID 1093436/API 4163 measures High, 1280×720, no Vsync/throttle and three
+six-second View/Builder/View windows. Active-camera pose/projection,
+readiness, diagnostics and physics progress/topology pass. Retained 60 Hz raw
+app-frame observation p50 is 30.69/30.90/31.04 ms and p95 is
+33.60/33.84/33.62 ms; native 120-step physics-ring p50 is
+0.915/0.921/0.941 ms and p95 is 1.029/1.195/1.156 ms. Readiness first clears
+at 2.56 s. This short observation does not prove an app-level loading, visual
+FPS or physics gain. After measurement, the explicit recording gate passes
+15 checks and sandbox smoke passes 7. Screenshot review preserves scene
+geometry and shadows. API Exit returns zero and the port closes. Runtime
+data and verdicts are in `image-mips-decode-final-20261009.*`.
+
+Only the new math owner was formatted once after validation. Subsequent
+source changes are whitespace and a binder comment, with no behavior/input
+change. Targeted builds, `git diff --check` and the skill catalogue pass.
+The previously validated admission normal artifact is archived intact under
+`/var/tmp/luncosim-optimization-perf-20261009/modelica-telemetry-admission-luncosim`.
+An older task-owned archived profiler executable is losslessly gzip-compressed
+to fit that archive, with recovered bytes verified before retiring its
+uncompressed copy. The compression/archive manifests retain paths and hashes.
+Only this task's production package outputs were cleaned between links;
+cleanup preserved source and shared caches. No external library, authored USD
+or authoritative simulation value changed in this step. No commit/push was made. Full loading,
+visual-FPS, physics-tail and determinism acceptance remain open.
+
+## Telemetry recording and admission — 2026-10-09
+
+`lunco-modelica-telemetry` checks live history existence only when the scalar
+catalog is at its configured limit. Below that limit it records directly and
+reads `SignalRegistry::scalar_count` after acceptance, removing one repeated
+path hash per variable without another cache or API. A full catalog still
+admits existing channels, including after the configured limit is lowered;
+removed history must pass admission again. The generic registry/producer seam
+`channel_limit_uses_live_registry_admission_after_removal` passes (one test,
+six filtered), including removal and zero-limit rejection. No public command
+removes that registry history, so that lifecycle boundary is tested at the
+resource seam. The production history gate remains authored in Rhai.
+
+The matched admission Tracy capture is
+`/var/tmp/luncosim-optimization-perf-20261009/modelica-telemetry-admission-tracy-after-20261009.tracy`,
+327,897,859 bytes, SHA-256
+`c3f72eadd837b19992026e5124cd8d472b01fe9c0defede8c4a524576c569e36`.
+Profiler executable SHA is
+`01b7e3bab72bee34c2d4b867a8a77fa46ebbb99f3bf76b796a505be17071d225`.
+Owned PID 1061356/API 4159 and collector 1061352 verify the owned 8086 listener
+and connection. The camera pose/projection, readiness, diagnostics, physics
+progress/topology and screenshot shadow/geometry guards pass. Both processes
+exit zero and the API port closes. In the same activation +3.3 through +9.8 s
+windows, Modelica retention self-time p95 is 1.91/1.38/1.35 ms before and
+1.93/1.22/1.26 ms after. Total owner time per 6.5 s window is
+59.79/37.42/32.16 ms before and 58.19/30.20/30.68 ms after. Call counts differ,
+so the lower per-call means alone cannot establish improvement. This single
+pair does not prove consistent retention or app-throughput gain. Exact
+sorted-index percentiles and wall-normalized totals are in
+`target/perf/modelica-telemetry-admission-retention-pair-20261009.json`.
+
+The normal admission artifact is archived at
+`/var/tmp/luncosim-optimization-perf-20261009/modelica-telemetry-admission-luncosim`, SHA-256
+`b6a168c2cdb7cc3b2c7664e89ed59696fa1dae8eeb196a1c65a98603c1facccd`.
+Its owned PID 1072035/API 4160 measures High, 1280×720, no Vsync/throttle and
+three six-second View/Builder/View windows with the same camera and runtime
+guards. Retained 60 Hz raw app-frame observation p50 is
+29.78/29.77/30.01 ms and p95 is 32.33/32.51/32.56 ms. The native 120-step
+physics-ring p50 is 0.923/0.930/0.947 ms and p95 is 1.178/1.181/1.127 ms.
+Readiness first clears at 2.89 s. These are short-run observations, not proof
+of a loading, visual-FPS or physics-throughput gain. After measurement,
+explicit 10 Hz/eight-sample recording passes the 15-check history gate and
+seven-check sandbox smoke gate. API Exit returns zero and the port closes.
+Data and verdicts are in `modelica-telemetry-admission-final-20261009.*`.
+
+Filtered system self spans beginning in the capture's first four traced
+seconds identify shader-raster preparation at 61.39 ms total,
+with one 55.47 ms call. The later phase capture attributes the app-thread
+spike to resident base copying; the owned-loading step above removes that
+copy at the asset boundary. The export covers system spans, not constructors or the
+loading critical path. The unfiltered attempt terminated with status 143
+without usable output; the filtered export passes and retains 274,218 early
+rows as owner aggregates in `modelica-telemetry-startup-attribution-20261009.json`.
+
+Only the newly edited telemetry owner was formatted once after validation;
+formatting changes whitespace only. The canonical telemetry contract and
+profiling skill are current, `git diff --check` passes, and all 43 skills
+validate. Eight task-owned JSON evidence files and a completed archived seam
+executable are losslessly gzip-compressed, with recovered-byte hashes checked
+before the originals were retired; the compression manifests retain both
+paths and identities. An unreferenced incomplete `.mold` output from the
+task's earlier disk-full link was retired with a hash manifest after verifying
+no live producer/app. Only this task's production binary outputs were cleaned
+for profiler/normal linking. Source and shared caches remain intact. No
+external library, authoritative simulation value, actor ordering or clock
+boundary changed in this step. No commit/push was made. Full loading,
+visual-FPS and physics-tail acceptance remain open.
+
+`lunco-signal::SignalRegistry` admits and appends a rate-paced sample through
+one mutable history lookup. The public recording API and its consumers are
+unchanged. The shared append owner applies backwards-time clearing, retention,
+publisher reactivation and catalog notifications at the same accepted-sample
+boundary. Invalid/not-due samples leave those facts untouched. Native f64 sample
+values, timestamps, recording rate, simulation ordering and equations are
+unchanged. The [canonical contract](../architecture/telemetry-subsystem.md)
+records the ownership boundary.
+
+Filtered CPU events from the admitted primitive-sharing Tracy capture identify
+periodic recording batches: physics retention self-time p95 is
+1.02/1.02/1.00 ms and Modelica retention p95 is 1.78/1.44/1.41 ms in its settled
+View/Builder/View windows. Between-batch medians are much smaller. This is
+instrumented owner attribution, not raw physics acceptance. The filtered export
+and `target/perf/telemetry-retention-before-20261009.json` retain those windows.
+
+The isolated registry workload uses 2,000 cached long signal identities and
+200 accepted/rejected recording batches, checks each result and retained tail,
+and runs seven repetitions per process in A/B/B/A order. Before medians are
+88.75 and 63.69 ms; after medians are 51.30 and 50.61 ms. The warm comparison is
+about 20% lower. Baseline drift and different dependency feature closures limit
+this to the isolated owner workload; it does not establish production retention,
+physics or frame throughput. Source, binary hashes and all timings are retained
+in `target/perf/telemetry-recording-bench-*-20261009.*` and the retirement manifest.
+
+The focused registry seam passes steady-value recording, rejected-sample
+retention/activity isolation, backwards-time segments, owner preservation,
+catalog revisions and invalid input rejection. The production build passes.
+An owned fresh sandbox session, PID 1031772/API 4157, explicitly configures
+10 Hz/eight-sample retention through `ControlTelemetry`. Its bounded exact-name
+physics/Modelica history gate passes 15 checks, including steady values,
+advancing/paced timestamps, retention and an absent-channel negative. Sandbox
+smoke passes 7 checks. Readiness and retained runtime diagnostics pass; API Exit
+returns zero and the port closes. These authoritative verdicts are in
+`target/perf/telemetry-recording-final-gates-v2-20261009.{json,app.log}`.
+
+The normal executable is archived at
+`/var/tmp/luncosim-optimization-perf-20261009/telemetry-recording-luncosim`, SHA-256
+`eda53523606b38f9621cf8cb4789cc2ee051b3d90a5ccb9570be4fc39f00a1a8`.
+The prior mesh-complete artifact is
+`0e3295fe99ebf7ad3cd74e30abe8c9641e2ebc63736804b16a75717d8c9fd50a`.
+Owned PIDs 1003237/API 4156 and 1027667/API 4157 compare High, 1280×720,
+no Vsync/throttle and three six-second windows. Both verify actual active-camera
+pose/projection, readiness, diagnostics and physics progress/topology. Retained
+60 Hz raw app-frame observation p50 is 30.18/30.28/30.53 ms before and
+29.09/29.51/30.13 ms after; physics-service p50 is 0.947/0.942/0.919 ms before
+and 0.945/0.966/0.938 ms after. Full readiness first clears at 2.50/2.47 s.
+Window GPU clocks are 405/405/397 MHz before and 405/390/386 MHz after, with
+about 20 W observed draw. This short pair does not establish loading, visual-FPS
+or physics-step gain. The measurement JSONs retain failed post-measurement test
+attempts; use the separate fresh gate file above for final verdicts. Summarized
+artifact/source/session identity is in `telemetry-recording-result-20261009.json`.
+
+Only this newly edited Rust owner was formatted after validation. Completed
+task-owned seam/benchmark executables and the reproducible ordered-shadow CPU
+CSV were retired to fit the production link; hashes/logs and original raw
+captures remain. No external library changed, no simulation owner changed in
+this step, and no commit/push was made.
+
+The matched recording-only Tracy capture is
+`/var/tmp/luncosim-optimization-perf-20261009/telemetry-recording-tracy-after-20261009.tracy`,
+322,449,762 bytes, SHA-256
+`b889b29542ef4713b56aeb2b0320e07ad8be9437019849cd44cd03e90eeb66ef`.
+Its executable SHA is
+`ef3e80294565cff5eb504627be80305dbf6748d6c9c4f2e0f61de399ea561e7e`.
+Owned PID 1044338/API 4158 and collector 1044334 verify the owned 8086 listener
+and connection. Actual active-camera pose/projection, readiness, diagnostics,
+physics progress/topology and screenshot shadow/geometry checks pass. Both
+processes exit zero and the API port closes. The filtered CPU export uses
+perspective activation +3.3 through +9.8 seconds, matching the baseline rule;
+Rhai print markers are not present in the baseline Tracy messages.
+Physics retention p95 is 1.00/0.93/0.97 ms and Modelica retention p95 is
+1.91/1.38/1.35 ms. Means and tails move in both directions; this does not
+establish a consistent production retention improvement. Filtered exports and
+`telemetry-retention-after-20261009.json` retain the attribution. The full
+loading, visual-FPS and physics-tail targets remain open.
+
+## Shared analytic primitive preparation — 2026-10-09
+
+`lunco-usd-bevy-mesh::PrimitiveMeshAssets` now shares content-only CPU tasks
+and immutable native mesh handles. Canonical f64 dimensions, axis and
+primitive tessellation counts key the content; per-prim source admission
+remains at the existing stage/path/generation/full-profile boundary. The cache
+holds weak handles, releases retired readers/assets through events, and leaves
+physics geometry and authoritative scheduling unchanged. Quality changes
+replace shared assets; point instances follow their last inherited handle
+after retessellation while retaining appearance and private edits. Horizon UV
+installation and NURBS edits detach from shared assets before mutation. The
+[canonical contract](../architecture/render-decoupling.md#immutable-primitive-mesh-assets)
+records the owner and why existing terrain/globe/material caches do not cover it.
+
+Three focused resource/component seams pass: shared work/cancellation/native
+retirement and quality-key replacement; horizon UV isolation with native
+shadow reception; and point-instance inheritance/private-edit retention.
+Synthetic point-instance children lack a public entity identity, so their
+binding is verified at the component seam. The authored production sandbox
+sharing gate fails 36 of 42 checks on the archived pre-change executable and
+passes all 42 on the new one, including unlike-dimension isolation. The
+PointInstancer fixture passes 4 checks and sandbox smoke passes 7. Logs are
+`target/perf/primitive-sharing-*-20261009.log` and matching `.app.log` files.
+The mesh test build exposed a stale curve-test import already present in HEAD;
+its import now names the current invalidation helper.
+
+The unprofiled pair reduces distinct native mesh assets from 206 to 32 across
+206 public mesh entities, an 84.5% reduction. Before SHA is
+`6f2fabc94a4a2a17130f0b5e321e6e7548bef7240e87134963b3ea2d6572d26b`;
+after SHA is `604b49767819c7dba49816b5ff7e0274126962ae64446f1f993f48785f7dcbe1`.
+Owned PIDs 976154/API 4151 and 977516/API 4152 use High, 1280×720, no Vsync,
+no throttle and View/Builder/View windows. Retained raw app-frame observation
+p50 is 29.25/30.26/30.16 ms before and 30.64/31.07/31.43 ms after; physical
+service p50 remains about 0.91–0.94 ms. Full readiness first clears at 2.03 s
+before and 2.17 s after. GPU median clocks are 397/390 MHz under the 20 W cap.
+This pair demonstrates asset reduction, not a loading or frame-time gain.
+The frame channel samples at the fixed 60 Hz ceiling and may repeat a rendered
+frame; the driver collects it during each window to avoid its 240-observation
+retention truncating the window. The two runs verify camera roles/viewport but
+do not retain pose/projection audits. Screenshots preserve framing, geometry
+and shadows on visual inspection. Data, workloads and terminal results are in
+`target/perf/primitive-sharing-{before,after}-full-window-20261009.json`.
+The earlier `primitive-sharing-before-20261009.json` retains only four-second
+history tails and is labelled accordingly.
+
+The final normal mesh-only artifact passes a fresh 42-check sharing gate and
+seven-check smoke gate on PID 1005715/API 4156. Its exact artifact and normal
+window measurements are recorded in the telemetry section's baseline above
+and `primitive-sharing-final-gates-20261009.{json,app.log}`. A post-measurement
+2.32-second probe retains twenty snapshots of 206 native mesh transforms and
+twelve spotlight transforms; every transform changes. An unchanged-world-pose
+shadow cache therefore has no observed reuse opportunity in this scene. This
+does not prove anything about an independently designed relative-frame cache.
+
+The final scheduling change orders point-instance handle resolution after
+primitive retessellation in the same frame. Its production Tracy build passes.
+Owned PID 991254/API 4155 and the verified 8086 listener produce the intact raw
+capture `/var/tmp/luncosim-optimization-perf-20261009/primitive-sharing-tracy-after-20261009.tracy`,
+326,334,875 bytes, SHA-256
+`60172695213c53a6eaf26da3757d07777e8384b4463fc9b5180aec18af4beac6`.
+Executable SHA is `977a70387cf28b7e9f5665b65a8a010df33c657a9ef416194e16a21af654af9f`.
+All three windows verify active-camera pose/projection, readiness, retained
+diagnostics and physics progress/topology. Visual QA retains ground/object
+shadows and geometry. Shared spotlight early spans total 17.78/17.96/18.18 ms
+per camera event; directional early spans add 4.90/4.94/4.97 ms. All four shadow
+groups are present, with roughly twelve shared views per camera event; total
+shadow cost is 22.70/22.92/23.16 ms. The pre-change capture reports
+22.82/23.09/23.64 ms. These clock-affected diagnostic differences do not
+establish a shadow-time gain. All twelve settled headlights have positive
+120,000 lm input and enabled shadow maps, so inactive lights do not explain
+this workload. No native draw-count reduction is claimed from mesh IDs.
+
+GPU/message CSVs and `primitive-sharing-tracy-summary-20261009.json` retain
+this attribution. The 277 MiB derived CPU CSV filled disk space during the
+summary write; it is retired because this GPU analysis does not consume it,
+and the raw capture remains intact. The metadata update lost its final outer
+workload row/completion fields. Original prefix/source hashes and 47 complete
+rows are recovered; completion fields are verified from driver output, runtime
+JSON and the raw capture. The partial file is retained separately and recovery
+is explicitly marked in the `.meta.json`. The runtime JSON's independent
+complete workload monitor remains available. Only completed task executables
+and this reproducible CSV were removed; source and shared caches remain intact.
+Owned ports 4148–4155 are closed. Loading, visual FPS, physics-tail and full
+performance acceptance remain open. No external library changed.
+
+## Shared-shadow caster inventory — 2026-10-09
+
+A fresh owned unprofiled sandbox baseline uses the archived production
+executable `6f2fabc94a4a2a17130f0b5e321e6e7548bef7240e87134963b3ea2d6572d26b`.
+PID 917411/API 4144 passes View/Builder/View readiness, retained diagnostics,
+physics progress, topology, and exact within-window `SceneCameraAudit` equality.
+High quality, 1280×720, no Vsync and no throttle are unchanged. Sampled frame
+p50 is 31.67/31.68/31.91 ms; physics-service p50 is 0.946/0.928/0.925 ms.
+Continuous workload records identify the owned GPU process and a median GPU
+clock of 397 MHz. These are short sampled observations under the existing
+20 W cap, not a full-frame telemetry distribution or general FPS acceptance.
+`target/perf/empty-shadow-baseline-20261009.json` contains the camera audits,
+workloads, executable hash and terminal session result.
+
+The empty-depth-map reuse experiment reports zero settled reused attachments
+and zero empty clears, with twelve shared views taking the native path.
+Its three windows pass the same runtime checks. Their frame p50 values
+30.27/31.50/30.97 ms do not demonstrate a cache benefit because no map was
+reused. The experiment's generic submission/invalidation seam passes, but its
+code is removed. The result and raw counters remain in
+`target/perf/empty-shadow-result-20261009.json` and the matching `after` app log.
+No speed gain is claimed from this experiment.
+
+An owned settled caster probe, PID 926412/API 4146, reads native main-world
+visibility lists and mesh data once. All twelve shared views are rover
+headlight **spotlights**, with 4–73 candidate meshes per light,
+1,056–51,309 vertices and 3,090–211,380 indices. Every view includes the
+four-vertex ground plane. Sky and globe meshes are absent. These counts are
+CPU visibility candidates, not post-GPU-culling draw counts or per-mesh GPU
+timings. The canonical inventory and its source log are
+`target/perf/shadow-caster-inventory-20261009.json` and
+`target/perf/shadow-caster-probe-all-local-20261009.app.log`. Three bounded
+perspective windows pass readiness, diagnostics, physics progress/topology,
+and camera stability. The probe is removed and both touched render sources
+match their pre-probe hashes exactly. Owned ports 4144–4146 are closed.
+
+The restored production build passes. Its exact executable SHA-256 is
+`12b18c84ad138a61cb55ca8b38dcac56b95ff234444ddfc845671a47ffc3fd50`.
+An owned run of that artifact, PID 930644/API 4147, passes all three bounded
+perspective windows, readiness, diagnostics, physics progress/topology, and
+within-window camera equality. Ground and object shadows match the baseline
+on visual inspection. Frame p50 is 30.15/30.98/31.40 ms; these unchanged-source
+observations also show why small differences cannot establish an optimization
+gain. The process exits zero and port 4147 closes. Build/source-restoration
+and exact-artifact runtime evidence are recorded in
+`target/perf/shadow-investigation-restored-20261009.json` and its runtime file.
+
+The caster inventory identifies duplicate primitive mesh identity as a concrete
+application-owned preparation/upload issue. Its implemented ownership contract,
+verification and measured limits are recorded above. The twelve populated
+spotlight shadow passes remain the principal measured GPU cost.
+
+## Shadow GPU attribution — 2026-10-09
+
+`lunco-render-bevy` composes native shadow systems between begin/end timestamps
+through Bevy's existing render diagnostics recorder. Installation occurs only
+for diagnostics-enabled render hosts, after native plugin registration. The
+native delegate retains its implicit dependency set; PBR's system-local
+before/after rules are reapplied explicitly. Begin validates every native
+parameter before opening a span, and the read-only pipe keeps begin/native/end
+on one CPU thread and queues their render contexts in that order. Ordinary
+builds retain the native systems. No external source, simulation schedule,
+clock, equation, precision, shadow draw, map resolution or quality setting
+changes.
+
+The focused schedule seam passes. It covers dependencies targeting the native
+set and those owned by the native system, a single delegate call, paired-thread
+execution, deferred buffer order, and nonmatching-view admission without an
+orphan span. The production Tracy build passes. The owned corrected capture
+verifies PID 886934, API 4142 and the matching 8086 profiler connection. View,
+Builder and View pass readiness and physics-progress/topology checks. Ground
+and object shadows, geometry and framing match the baseline screenshot on
+inspection; this is visual QA, not a pixel equality assertion.
+
+The corrected GPU capture measures 22.82/23.09/23.64 ms of total shadow work per
+camera event. Shared point/spot early passes account for 17.79/18.06/18.53 ms
+and directional camera passes for 5.01/5.02/5.09 ms. Late spans contribute only
+0.0167/0.0171/0.0165 ms in this fixture. Opaque-pass means are 2.50/2.50/2.59 ms.
+All four groups are present, with twelve shared views per camera event apart
+from window-edge partial frames. This identifies shadow work as the principal
+GPU lead in the sandbox. GPU samples report roughly 98–99% utilization at
+382–450 MHz and 20 W with the software power cap active; the profiler consumes
+CPU. These are attribution results, not product FPS or uncontended hardware
+acceptance, and they establish no new speed gain.
+
+The canonical corrected evidence is
+`target/perf/shadow-diagnostics-ordered-tracy-summary-20261009.json` plus its
+`after-20261009.meta.json`, screenshot, raw capture and workload samples.
+Tracy executable SHA-256 is
+`f001e2b49ce8f85d5facd0333739b1ed76f205af9d1404f7bac3d5c438ec0da2`;
+capture SHA-256 is
+`f169f3ebf7719a89d25beee054d68398ddaecb22aac46ffeecc73d1eb8ec174e`.
+Only evidence whose metadata admits it after visual QA may inform attribution.
+The ordinary production build passes after focused production-package cleanup
+resolved a disk-full link. An owned unprofiled session, PID 891558/API 4143,
+passes the same three readiness, physics-progress and topology windows; its
+screenshot preserves shadows. Sampled frame p50 is 30.78/31.67/31.44 ms and
+physics-service p50 is 0.924/0.935/0.931 ms. These are short observations without
+a continuous workload or exact-pose audit, not paired FPS acceptance. Process
+health appears at 0.773 s and clear readiness at 2.426 s; this is a warm sandbox
+launch, not full Twin loading acceptance.
+
+The current unprofiled executable SHA-256 is `6f2fabc94a4a2a17130f0b5e321e6e7548bef7240e87134963b3ea2d6572d26b`.
+Both current executables and the passing generic seam-test binary are archived
+with verified hashes. Superseded task-owned executable copies were released;
+all raw captures and measurements remain. Source, Cargo registry and shared
+sccache were preserved. Owned API ports 4141–4143 and the profiler listener are
+closed. Changes remain uncommitted and unpushed.
+
+The deterministic replay matrix recorded below remains valid for the unchanged
+simulation owners. New loading, visual FPS and raw physics-tail acceptance
+remain open. The next rendering investigation must distinguish useful shadow
+draws from avoidable preparation or empty-view work while preserving image
+quality and the native dependency contract.
+
+## Change-aware structural fingerprint publication — 2026-10-09
+
+`PortTopologyState::observe_if_changed` extends the existing typed structural
+state owner. First observation derives a key; subsequent sample-only changes
+reuse auxiliary declaration and Modelica unit fingerprints. Their own component
+changes derive fresh keys. Newly admitted `SimComponent` owners refresh both
+facts, including edits made while that participant was absent. Removal observers
+retire each component's key. The composed fingerprint and publication boundary
+are unchanged; direct backend inspection and writes still derive the live
+contract independently of the publication pass. No policy, hook, scheduler,
+equation, timestep, substep, precision or external-library source changed.
+
+The focused generic resource tests pass 2/2. They cover cold observation,
+unchanged-owner derivation suppression, unit edits, same-size declaration
+replacement, sample-only changes, removal and re-admission. Direct backend keys
+change before structural publication when the live unit is edited. The owned
+Modelica AST dev dependency supplies the canonical metadata fixture type; it
+adds no production dependency or alternate parser. The complete production
+matrix matches unchanged main exactly: ten profiles, 1,120 state rows, all 438
+Modelica variables per participant and 360 authored Rhai checks including the
+deliberate mismatch. Temporary source instrumentation is restored and the old
+tracked reference is unchanged.
+
+Settled Tracy checker means fell from 0.244/0.204/0.199 ms to
+0.0164/0.0138/0.0140 ms per View/Builder/View frame, approximately 93% lower.
+Output publication remains 0.102/0.091/0.090 ms per fixed tick. The listener and
+connection are verified against owned PID 828341, API 4140. The screenshot
+retains scene geometry and shadows. GPU samples remain approximately 99%
+utilization at 375–405 MHz and 20 W, with the software power cap active. These
+are attribution results; profiler CPU/GPU overhead and different device clocks
+prevent treating the instrumented frame distribution as product acceptance.
+
+The unprofiled headless comparison reuses the unchanged prior artifact's valid
+sandbox run. Realtime cadence remains near 60 steps/s. Maximum-speed throughput
+changes from 303.32 to 307.95 steps/s, which does not establish a reliable gain.
+Realtime fixed-tick p50 is 1.592/1.633 ms versus 1.570/1.587 ms previously; this
+short pair shows no fixed-tick improvement. The optimized owner runs in
+`PostUpdate`, outside that metric. New clean visual-FPS, loading and raw
+physics-tail acceptance remain open.
+
+Evidence is retained in `target/perf/structural-observation-result-20261009.json`,
+`structural-observation-replay-matrix-result-20261009.json`,
+`structural-observation-tracy-summary-20261009.json` and the linked raw files.
+Production and Tracy builds pass. Touched Rust files were formatted once after
+validation; diff and skill-catalogue checks pass. Disk-full interrupted the
+initial test build;
+all 272 performance-evidence entries were verified before and after checkout
+build-output cleanup, and the successful focused run followed that clean.
+Source, registry and shared sccache data were preserved. Superseded task-owned
+executable archives were released; their recorded hashes and measurements
+remain in the retained evidence. The measured unprofiled executable had
+SHA-256 `bd450f4a856a62ad0123cddc7485d8179c44d6040636d60a3e1b448585d1198b`;
+its superseded archive was released after the current artifacts above passed.
+Its raw measurements and hash remain in the evidence.
+Owned API ports 4138–4140 and the profiler listener are closed. Changes remain
+uncommitted and unpushed.
+
+Shadow GPU attribution is recorded above. Modelica telemetry sampling spikes
+remain a separate measured CPU lead. Full loading, visual and physics
+requirements are not yet achieved.
+
+## Validated slot-backed snapshot publication — 2026-10-09
+
+`lunco-port-core::ScalarPortMap::upsert_samples` retains destination slot hints
+for borrowed named snapshots. Each reuse checks the live layout and exact name;
+source order or cardinality does not establish identity. Clone discards hints,
+and clear/compaction retire them through the existing slot owner. Modelica and
+scripted publication consume this mechanism at their existing fixed-step
+boundary. Modelica's reflected map, native `f64` samples, input/output ordering,
+equations, timestep, substeps and external-library sources remain unchanged.
+This is generic container work, with no new scheduling, policy or hook.
+
+The unprofiled sandbox pair reduced realtime fixed-tick service p50 from
+1.715/1.700 ms to 1.570/1.587 ms (8.45%/6.67%). Realtime cadence remains near
+60 steps/s. Maximum-speed fixed-tick p50 fell from 1.076 to 1.041 ms; throughput
+changed from 300.27 to 303.32 steps/s, too small to establish a robust throughput
+gain. Ordinary desktop CPU activity was not continuously audited during this
+pair. These are short headless observations, not visual or loading acceptance.
+The exact before/after hashes and complete diagnostics are retained in
+`target/perf/sample-copy-result-20261009.json` and `sample-copy-{before,after}-20261009.json`.
+
+A separate owned Tracy capture measures output-publication means of
+0.108/0.100/0.095 ms in settled View/Builder/View windows, compared with
+0.281/0.267/0.254 ms in the earlier diagnostic capture. Propagation remains
+0.155/0.146/0.144 ms. The capture verifies the profiler listener and connection
+against PID 701374 on API 4137. GPU samples report approximately 99% utilization,
+360–382 MHz and 20 W, with the software power cap active; only the owned app
+appears in the sampled GPU process inventory. The profiler itself consumes CPU.
+Exported opaque-pass medians of 2.818/2.818/2.941 ms cover that pass, not the full
+GPU frame; the exported GPU inventory contains no shadow-pass timings. Do not
+sum nested spans or treat instrumented frame/physics numbers as acceptance.
+Raw capture, workload audit and window statistics are retained through
+`target/perf/sample-copy-tracy-after-20261009.meta.json` and `sample-copy-tracy-summary-20261009.json`.
+
+The complete maintained replay matrix matches unchanged main `28c56ac25` exactly:
+all ten profiles and 1,120 physics/Modelica/articulated rows, with all 438 Modelica
+variables per participant. Production Rhai passes 24/36/72 checks for the
+4/8/20-rover scenes respectively, including the deliberate-mismatch negative
+control. Five passing profiles were retained after a disk-full capture
+interruption; only the interrupted profile and four remaining jitter profiles
+were resumed. Temporary row logging is restored byte-for-byte and the older
+tracked reference is unchanged. `sample-copy-replay-matrix-result-20261009.json`
+records the complete evidence. This is same-machine maintained-matrix evidence,
+not cross-machine or whole-session replay acceptance.
+
+The generic slot-copy contract test passes, including source reordering,
+same-size replacements, destination removal/reinsertion, clone, clear,
+compaction, signed zero and full-precision values. Production and Tracy builds
+pass. The two touched Rust files were formatted once after validation; diff
+and skill-catalogue checks pass. The inspected sandbox screenshot retains
+visible scene geometry and shadows. The measured unprofiled executable is
+restored at `target/debug/luncosim`
+with SHA-256 `49d6fde6204f4f9c9dda627bd88dc6dbffcca436ad2c565f006f2cd075a4a2f7`.
+Owned API ports 4134–4137 and the Tracy listener on 8086 are closed. Changes remain
+uncommitted and unpushed. Loading, visual FPS and raw physics-tail targets remain
+open. The port structural checker costs 0.244/0.204/0.199 ms per settled
+render frame. Its source recomputes unchanged signal-unit metadata while
+processing changed sample components. Modelica telemetry retention also has
+sampling spikes; its system body and command flush are exported separately.
+The change-aware publication section above records the checker optimization
+and its live-edit verification.
+
+## Settled Apollo quality and complete current-main replay — 2026-10-09
+
+`TerrainLodStatus.derived` now exposes the existing terrain owner's active,
+ready, total and pending map-preparation facts. The query is read-only and
+fails visibly if its required visual owner is unavailable; no new simulation
+hold, worker, policy or registry was added. Performance and inspection guidance
+uses this state alongside selected-cover fulfilment. Surface camera audits use
+existing `world_pos`/`world_rotation` reads in the active simulation frame:
+composed root coordinates move with celestial ancestors and cannot establish
+that a camera is stationary over the terrain.
+
+The owned High 1280×720 Apollo View/Builder/View run kept 256/256 selected tiles
+resident, zero pending stream work and one ready derived-map product throughout
+all three 15-second windows. Fifteen checkpoints per window verified terrain,
+quality, viewport identity and the exact active-frame camera pose. The inspected
+screenshot retains visible lunar terrain, rocks, route labels and shadows.
+Frame p50 is 4.701/5.343/4.648 ms; p95 is 8.485/9.275/8.796 ms. Full physics-step
+p50 is 0.439/0.422/0.438 ms and p95 is 0.577/0.572/0.615 ms, at 60.158/60.110/
+60.210 steps per wall second. API health appeared at process-clock 0.648 s,
+clear simulation readiness at 1.938 s, and the first observed fully prepared
+terrain at 3.002 s. These warm process-clock observations do not certify the
+separate app/Twin startup targets or a before/after loading improvement.
+
+Concurrent workload sampling observed only the owned process on the NVIDIA
+GPU; ordinary desktop CPU activity remained present. GPU utilization was
+33–52%, clocks 1170–1312 MHz and draw 19.47–19.86 W, with the software power cap
+active throughout. This is audited product timing under that device constraint,
+not an unconstrained GPU benchmark. Engine revisions were sampled at 20 Hz;
+the frame distribution does not observe every rendered frame. The measured
+process was PID 666570 on API 4132, with exact artifact
+`598df781dea0b34249c3676e13268615af9e9c6ae032941a65c21a854cf9ed1c`.
+Raw data, screenshot and summary are in `target/perf/apollo-settled-active-frame-20261009.{json,png}`
+and `settled-terrain-quality-result-20261009.json`.
+
+The complete maintained ten-profile replay comparison against fresh unchanged
+main `28c56ac25` is exact on this machine: 4/8/20 rovers at serial/default Compute
+widths, plus 0.25/0.5 jitter at both maintained seeds. All 1,120 selected and final
+physics/Modelica/articulated rows match, every participant retains all 438
+Modelica variables, and production Rhai passes 24/36/72 checks for the 4/8/20-rover scenes
+respectively, including the deliberate-mismatch negative control. The prior unchanged four-rover serial
+comparison is reused; the other nine profiles were captured from the archived
+unchanged-main artifact and compared through the production reference query.
+Serial/default trajectories also match exactly within both artifacts for each
+rover count. No tolerance, equation, timestep, substep or external-library source
+changed. This establishes current-main trajectory preservation for the maintained
+matrix on this machine; cross-machine and whole-session replay remain separate
+requirements. The older checked-in reference is unchanged and still differs
+from unchanged main; the current-main diagnostic reference lives only in
+`target/perf/full-current-main-trajectory-reference-20261009.json`.
+
+`full-main-replay-matrix-result-20261009.json` records commands, PIDs, hashes,
+all profile comparisons and width comparisons. Temporary row logging was
+restored byte-for-byte, and the old tracked reference hash remains
+`4f1785e86deb5e05083561007ec8e08891ca5a0d19c82e9edcdb8f70c92e3496`.
+The production build passes; the touched terrain query was formatted once after
+runtime verification, and diff checks pass. The skill catalogue check passes.
+All owned API ports 4130–4133 are closed, and no task runtime is left running.
+Changes remain uncommitted and unpushed. Settled visual and physics tails still
+miss the stated performance targets; loading and sandbox visual acceptance remain
+open. The slot-backed snapshot-publication section above records the subsequent
+owner optimization and its separate verification evidence.
+
+
+## Apollo telemetry admission and current-main replay — 2026-10-09
+
+The USD telemetry projector now reuses the composed network-membership cache
+to admit a member's self-targeted declaration while its generated surface is
+pending. The existing alias map binds the sampled output to its generated
+wrapper. A metadata Scope without a surface still requires an explicit target.
+The exact Apollo scene now reports zero retained runtime errors or warnings.
+Its production Rhai ownership check passes 6/6, including one live solar channel
+owned by the electrical wrapper, authored units and unknown-name rejection.
+The document API authored, saved and reopened the negative fixture; the
+production `telemetry_member_target_negative` gate passes 5/5, including a
+target diagnostic, no retained invalid channel, and malformed-filter rejection.
+
+`ListTelemetryChannels` now accepts an optional exact `name`, validated before
+reading the registry and filtered before metadata materialization. Apollo's
+full catalog contains 1,321 channels; a targeted read retrieves its one channel
+without transporting the full dictionary into Rhai. The complete catalog stays
+available when `name` is omitted. The retained signal registry remains the
+single catalog owner, with no new index or presentation policy.
+
+The owned High-quality 1280×720 Apollo View/Builder/View run measures frame
+p50 4.546/5.418/4.662 ms and p95 8.005/8.969/8.208 ms. Full physics-step p50 is
+0.442/0.419/0.439 ms and p95 0.630/0.549/0.628 ms. Process-clock clear readiness
+was 2.492 s; API health appeared at 0.892 s. These are observations, not a
+before/after speedup or acceptance of the separate app/Twin startup clocks.
+The inspected screenshot shows the terrain, rocks and route with shadows;
+terrain-derived completion and concurrent workloads were not audited during
+the windows, so this is not settled visual-quality acceptance. The exact
+measured artifact is `25fa4a8d696913006a06a9a1c68f027be9f330b8f135c7b3f3200e472bada18c`,
+retained under `/var/tmp/luncosim-optimization-perf-20261009/telemetry-member-luncosim`.
+
+A fresh unchanged local-main `28c56ac25` build supplies the complete current
+four-rover serial trajectory. The optimized production artifact matches every
+one of its 56 physics/Modelica/articulated rows through tick 780, retains all
+438 Modelica variables and passes all 24 authored checks, including deliberate
+mismatch rejection. This covers the admission-order, port-discovery and buffer
+changes for this profile. Other thread-width, rover-count and jitter profiles
+remain required. The older checked-in reference is unchanged; its physics and
+later Modelica states also differ from current main, beyond the four added
+guidance variables, so refreshing only the count would not establish replay.
+
+Evidence is in `target/perf/main-trajectory-determinism-result-20261009.json`,
+`telemetry-member-verify-20261009.json`, `telemetry-member-negative-20261009.{json,log}`
+and `apollo-telemetry-after-20261009.{json,png}`. The unchanged main artifact is
+`9c8c5560d1c89b004ee6176353449dd51887dd110fb645829c995dd262668ce3`.
+All 31 task-file hashes and the tracked diff were verified after restoring the
+scoped backup stash. The verified optimized executable is restored at
+`target/debug/luncosim` with hash
+`bbdd2420b536afd8b0f72e6834db0eddf83bea1153e9579fbe7bd4d4880add2d`.
+All task API ports are closed. No external-library sources, numerical equations,
+timesteps, physics substeps, quality settings or determinism tolerances changed.
+Changes remain uncommitted and unpushed; loading, sandbox visual FPS, physics
+tails and full replay acceptance remain open.
+
+## Worker response ownership and current trajectory comparison — 2026-10-09
+
+`lunco-modelica-worker::worker::bridge` now transfers validated in-flight input
+samples into the accepted-step record and moves response samples into the
+bounded UI queue. Existing observable-variable names reuse their map keys.
+The accepted record still owns a separate output snapshot. Session/step/endpoint
+validation, detected-symbol/output precedence, UI sample order and `f64` values
+are unchanged; this is buffer ownership within the existing admission mechanism,
+with no policy hook, scheduling or equation change.
+
+The nine worker bridge lifecycle tests pass, including stale-session rejection,
+exact signed-zero/full-precision values, input/output buffer transfer and reset
+retirement. The production build passes, and Earth-balloon passes 3/3 at tick
+720. Raw results are in `target/perf/response-buffers-{tests,build}-20261009.log`
+and `response-buffers-earth-20261009.{json,log}`.
+
+The four-rover serial production comparison captures all 56 existing exact-state
+rows: physics at ticks 0/1/180/360/540/720, Modelica at 0/1/180 and final tick
+780, articulated bodies at 11/80 and final tick 780, plus final physics. All 438
+Modelica variables per participant are retained. The pre-port-change artifact,
+post-port-change artifact and current buffer-change artifact match every row;
+the latter two pass all 24 scenario checks, including the deliberate mismatch
+negative case. The diagnostic reference lives only in `target/perf`; the
+checked-in reference remains unchanged and still rejects the current 438-variable
+model because it expects 434. Temporary Rhai row logging was restored after
+capture. `response-buffers-determinism-result-20261009.json` records exact binary,
+source and reference hashes. This proves this serial four-rover trajectory across
+the port/buffer changes, not the complete multi-profile determinism matrix or
+the earlier admission change against unchanged main.
+
+The unprofiled sandbox still sustains 60 steps/s in realtime. Fixed-tick medians
+are 1.692/1.748 ms versus the prior 1.694/1.695 ms; max-speed capacity is 289.93
+versus 297.19 steps/s. This run does not establish a throughput improvement from
+buffer transfer. It removes demonstrated copies, while output publication remains
+the larger measured fixed-step owner. The current production artifact is
+`0e35a5d19a5abf5d0ebd4626cb9d919e694c9d646c1fa2bbce9be1a6c8c8f872`.
+The measured sessions on API ports 4123/4127/4128 exited. Loading, visual FPS,
+raw physics cost, full replay and Apollo measurement admission remain open.
+
+## Selective live port declaration discovery — 2026-10-09
+
+`lunco-port-core` owns `PortDeclarationQuery`, consumed by every backend's
+`declare_ports` callback. Inspection collects the complete declaration rows in
+their existing order. A named query borrows the exact name and causality side,
+retaining only its first matching direction; map-backed owners use their name
+index directly. The fixed propagation consumer no longer builds and copies the
+owner's complete surface to validate one resolved target. Live owner precedence,
+metadata, writability, bounds, revision and slot validation still run before the
+exclusive commit. This is a generic discovery mechanism, with no new policy
+hook, scheduler, cache or numerical-state change.
+
+The owned unprofiled sandbox pair used the same scene and topology. Realtime
+fixed-tick service medians fell from 2.222/2.272 ms to 1.694/1.695 ms. Max-speed
+capacity rose from 271.04 to 297.19 steps/s; its fixed-tick median fell from
+1.519 to 1.084 ms. Realtime cadence remained near 60 steps/s. The exact before
+and after binary hashes, commands and raw samples are in
+`target/perf/ports-result-20261009.json` and `ports-{before,after}-20261009.json`.
+
+A separate owned Tracy capture measured propagation means of
+0.143/0.140/0.137 ms in settled View/Builder/View windows. The earlier diagnostic
+capture measured 0.626/0.645/0.620 ms. These profiler captures have different
+cadence and are attribution evidence; the unprofiled pair establishes the
+fixed-tick service saving. Modelica output publication now costs approximately
+0.25–0.28 ms per tick in this capture, exceeding propagation.
+
+The port-core resource/registry seam suite passes 20 tests, including exact-name
+and direction selection, owner precedence, invalid values, atomic rejection,
+and stale/removed locators. Production Rhai passes the Earth-balloon propagation
+gate 3/3 at 720 ticks and the negative duplicate-owner gate 11/11. The production
+and Tracy builds pass without new warnings. Format and diff review are complete.
+
+High-quality 1280×720 rendering still measures roughly 30–31 ms frame medians;
+full Avian step medians remain approximately 0.91–0.93 ms. The GPU remains near
+98–99% utilization with its software power cap active at about 20 W. Screenshots
+retain the same visible scene and shadows, and camera inventories were recorded;
+no exact camera-pose audit was performed. Warm clear-readiness observations were
+3.046 s before and 2.138 s after on the process clock, but this pair does not
+certify the separate full app/Twin readiness targets or a cold-loading saving.
+The existing exact multi-rover replay reference mismatch remains open. No
+external libraries, equations, timestep, substeps, visual quality, f64 state,
+authoritative ordering or commit boundaries changed.
+
+The current unprofiled executable is restored to the measured after artifact
+(`73ae720a788f2027cbc62df859a5ffa9b36dc3f2bd418e55b4526656df75806e`).
+All owned API ports 4122–4129 and the profiler listener on 8086 are closed.
+Changes remain uncommitted and unpushed. The next measurement scope is Modelica
+output publication and response/retention work; full Apollo performance also
+needs the generated-domain telemetry target admission issue resolved at its
+USD co-simulation owner. Loading, visual FPS, raw physics-cost and exact replay
+acceptance remain open.
+
+## Causal completion admission — 2026-10-09
+
+The Modelica execution host admits worker completions in `First`, after message
+rotation and before `ClockProjectionSet` samples the causal hold. Compile intent
+stays in the `Update` lifecycle cycle. The worker keeps its existing session,
+source, step, communication-endpoint and all-participant checks; fixed-clock
+overstep, timestep, solver settings and physics equations are unchanged. This
+placement is an engine admission invariant rather than a changeable Rhai policy.
+
+An owned unprofiled A/B from `28c56ac25` measured the same sandbox topology
+(50 bodies, 33 colliders, 20 joints). Headless realtime cadence increased from
+51.4–51.5 to 60.1–60.2 steps/s in the two measured windows. Median fixed-tick
+work remained approximately 2.2 ms. Max-speed capacity was 270 versus 263
+steps/s; this diagnostic does not establish a raw solver or physics-cost gain.
+Rendered High-quality, 1280×720 View/Builder windows increased from roughly
+46 to 60 physics steps/s. Median frame time remained around 30–31 ms, and
+median full Avian step cost remained around 0.92 ms. The GPU was software
+power capped at about 20 W. Visual FPS and the 0.5 ms physics target remain open.
+
+The eight focused worker bridge tests and the execution-host ordering test
+pass, including stale-session rejection before clock projection. The production
+Earth-balloon Rhai gate passes 3/3 checks at 720 ticks. Its declaration and the
+Python-chain test declaration now name the entities they read. The chain reaches
+a failure verdict in this default build, which does not enable its optional
+Python backend; it is not admission validation evidence. Exact multi-rover replay
+already fails on unchanged main because the reference expects 434 Modelica
+variables while the current model exposes 438. The reference is unchanged;
+full replay acceptance remains required.
+
+Raw evidence is under `target/perf/solver-handoff-{main,after}-20261009.json`,
+`target/perf/sandbox-{main-28c56ac25,admission-after}-20261009.json`, and the
+`admission-*-20261009.log` files. All owned ports 4122–4129 are closed.
+These runs establish a cadence improvement, not completion of the loading,
+visual FPS, raw physics-cost or determinism objectives. The selective declaration
+discovery section above records the subsequent port-propagation improvement.
+
 ## Griffin compile and load measurements — 2026-10-07
 
 Prepared-solver reuse now keys the successfully seated strict source closure, with generated runtime identities normalized and participating library bytes exact. An unrelated authored overlay no longer invalidates this solver cache. Native logs distinguish memory hits, disk hits and lowering misses.
@@ -2124,13 +3571,11 @@ reuse change and before/after measurements.
 Source review identifies real main-thread blockers, but does not yet attribute
 the measured steady-state frame tail to one of them. The production 60 Hz
 `Time<Fixed>` keeps integration delta constant; Bevy drains accumulated fixed
-steps synchronously before `Update`. At the highest transport rate the current
-raw-delta budget permits a burst of up to 64 ticks before UI/input runs. The
-raw-delta cap bounds catch-up work by excluding excess wall time, so this is
-neither a wall-clock 60-tick/s guarantee nor tick loss inside an admitted burst.
-A one-tick-per-Update cap would protect the main loop only by retaining lag or
-discarding causal time; it cannot by itself satisfy both constant-rate physics
-and UI responsiveness.
+steps synchronously before `Update`. The time owner drains at most 64 complete
+cycles per app update and retains all remaining admitted duration in the fixed
+accumulator. This preserves time and numerical step size, but does not guarantee
+wall-clock 60-tick/s service or isolate the next UI/input frame from a long
+causal cycle. Dedicated simulation ownership remains necessary for that boundary.
 
 Other verified tail-risk paths are:
 

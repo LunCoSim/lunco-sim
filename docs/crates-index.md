@@ -42,7 +42,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-precompute`** | Content-addressed precompute disk cache (`bake_or_load`): runs expensive pure functions once, persists results keyed by content hash (via `lunco-hash` + `lunco-storage`), and loads them on subsequent runs/peers. |
 | **`lunco-settings`** | Centralised user-settings: one JSON file (`<OS config dir>/lunco/settings.json`), namespaced sections, auto-persist on change; also owns the shared `DownloadSettings` retry/backoff policy. |
 | **`lunco-theme`** | Centralized design tokens (Catppuccin-based) for consistent UI across all panels and domains. |
-| **`lunco-time`** | Unified mission-time spine (architecture doc 19): `MissionClock`/`TimeTransport`/causal `WorldTime`, interpolated `SimulationPresentationTime`, one `CelestialTime` affine child of `WorldTime` with a 100,000× rate ceiling, explicitly bound `TimeDomain` preview transport, and the `scales` projection layer over `celestial-time`. |
+| **`lunco-time`** | Unified mission-time spine (architecture doc 19): `MissionClock`/`TimeTransport`/causal `WorldTime`, bounded complete fixed-cycle draining with retained pending duration, interpolated `SimulationPresentationTime`, one `CelestialTime` affine child of `WorldTime` with a 100,000× rate ceiling, explicitly bound `TimeDomain` preview transport, and the `scales` projection layer over `celestial-time`. |
 | **`lunco-worker-transport`** | Generic Web Worker pool transport (wasm-only): spawn / lazy-grow, boot wire-id handshake, byte + Transferable-`ArrayBuffer` post, crash respawn. Payload-agnostic (the caller supplies decode/route callbacks); shared by the Modelica Fast-Run workers and the DEM bake worker so neither reimplements the plumbing. |
 | **`lunco-status-core`** | Renderer-independent lifecycle, progress, and status infrastructure: `StatusBus`, scoped busy handles, tracked tasks, discrete diagnostics, and telemetry mirroring. Consumers such as the workbench status bar, busy widgets, and headless diagnostics read the same contract. |
 
@@ -127,7 +127,7 @@ identifier; authored bytes and serialization retain their original values.
 | **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection/look-at intent, camera roles/pose, mounted/cinematic camera pose, camera-track selection, the `camera.default_presentation` selection boundary, scene-owned transient avatar provisioning through `camera.scene_avatar`, and the single-authority viewport-camera reconciler. It contains no avatar behavior parser or raw input mapping and does not own geometry math or visual projection. |
 | **`lunco-usd-bevy-lathe`** | Independent parametric NURBS/lathe projection: reflected surface definitions, profile evaluation, and change-detected Bevy mesh regeneration. |
 | **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdVisualPlugin`): projects USD hierarchy, shapes, transforms, and material intent into Bevy entities/components on top of `lunco-usd-bevy-stage` and the focused runtime projection mechanisms. Owns async projection orchestration while consuming mesh geometry from `lunco-usd-bevy-mesh` and installing the independent camera and light adapters. |
-| **`lunco-usd-bevy-mesh`** | Render-free USD visual mesh projection for built-in primitives, native `UsdGeomMesh`, `BasisCurves`/`NurbsCurves`, and `NurbsPatch`, including path-scoped quality invalidation and transient curve-view ownership. |
+| **`lunco-usd-bevy-mesh`** | Render-free USD visual mesh projection for built-in primitives, native `UsdGeomMesh`, `BasisCurves`/`NurbsCurves`, and `NurbsPatch`, including shared analytic primitive preparation with weak mesh lifetime, path-scoped quality invalidation and transient curve-view ownership. |
 | **`lunco-usd-bevy-animation`** | Render-free animation adapter (`UsdAnimationPlugin`): binds projected USD prims to the shared time domains, plans authored `timeSamples` topology, and samples transform/visibility/material intent. It depends on the core reader and visual scene contract, not on mesh projection. |
 | **`lunco-usd-bevy-light`** | UsdLux light and textured dome projection: authored light components, ambient-dome semantics, HDRI equirectangular-to-cubemap conversion, environment-camera binding, and light-owned live refresh from the generic scene info-change boundary. It is independent from the visual mesh projector. |
 | **`lunco-usd-bevy-diagnostics`** | Optional visual USD asset-failure and placeholder diagnostics: glTF fallback hiding, load-time replacement stubs, and labeled failure geometry. Installed by `lunco-usd-bevy-runtime`; kept separate from the visual projector. |
@@ -147,7 +147,7 @@ identifier; authored bytes and serialization retain their original values.
 | **`lunco-usd-sim-domain-api`** | Optional API query providers for generated Modelica source inspection. Kept outside the render-free domain projector so its direct dependency set does not include the `lunco-api`/JSON query surface. |
 | **`lunco-usd-sim-celestial`** | Independent render-free projector for USD-authored celestial anchors, orbits, link nodes, occluders, and reflected-light metadata. It owns the celestial projection marker and does not depend on vehicle or cosimulation projection. |
 | **`lunco-usd-sim-shader`** | Independent render-free projector for `UsdShade` WGSL material intent. It authors `ShaderLook` and owns its shader-resolution marker; generic scene refresh invalidation arrives through the scene contract rather than a runtime-to-shader dependency. |
-| **`lunco-usd-sim-telemetry`** | Independent render-free Avian rigid-body and wheel telemetry recorder. It publishes through the shared signal/telemetry registries and is isolated from USD vehicle projection changes. |
+| **`lunco-usd-sim-telemetry`** | Independent render-free Avian rigid-body and wheel telemetry recorder. It publishes through the shared signal/telemetry registries and is isolated from USD vehicle projection changes. Its per-channel cursor retains identity, metadata-publication state and last global owner; the shared signal registry owns metadata values. |
 | **`lunco-usd-terrain`** | Terrain bridge: projects authored terrain prims into `lunco-terrain-surface`'s `DemTerrainRequest` + composable `TerrainLayerStack` (craters / rocks / edits), and carries hand edits back as journaled, undoable USD ops on the document's **runtime** layer. Standard `UsdShade` owns terrain material intent. |
 | **`lunco-scene-command-contracts`** | Typed scene-command payloads shared by editor producers and runtime handlers. It owns no observer behavior; UI packages depend on these contracts instead of the scene-handler implementation. |
 | **`lunco-scene-commands`** | The render-free scene/document **mutation handlers**: runtime spawn, move, delete, and USD connection edits. It owns command observers, API reflection registration, and `SpawnCommandPlugin`; catalog resources live in `lunco-scene-catalog`, document-backed property and shader authoring live in `lunco-scene-authoring`, and camera commands live in `lunco-scene-camera`. |
@@ -157,7 +157,7 @@ identifier; authored bytes and serialization retain their original values.
 | **`lunco-scene-queries`** | Production read-only scene boundary: `QueryEntity` for active-physics identity/pose, `QueryUsdPrim` for one composed USD prim, and `QueryUsdPrims` for deterministic multi-prim reads from one composed-stage snapshot. Installed by `SpawnCommandPlugin`; shared by Rhai, HTTP, MCP, and headless hosts. |
 | **`lunco-scene-authoring`** | Production USD authoring boundary: document ownership resolution, `SetObjectProperty`, standard USD property persistence, stage-scoped authorable-prim resolution, and journaled/live shader source commands. Installed by `SpawnCommandPlugin`; it has no dependency on scene mutation handlers. |
 | **`lunco-scene-validation`** | Production asset, loaded-stage, scene-test discovery, and Twin pre-flight: `ValidateAsset`, `ValidateTwin`, source-focused `ValidateSysml`, selectable typed-fact `AnalyzeSysml`, `luncosim test --list`, live `RunLint`, USD/SysML lint-fact aggregation, and Twin namespace inspection. It owns bounded one-shot runtime file-query and Twin `RunLint` preparation, exact source/owner publication fences, and composition/parse/lint integration while `lunco-scene-commands` owns scene mutation. |
-| **`lunco-materials`** | Shader appearance **intent**, render-free: `ShaderLook` (`.wgsl` path + open `dyn_params` + texture layers), WGSL-reflected param schema, CDLOD vertex attribute, and slot-backed live shader inputs through `lunco-port-core`. Carries typed float-texture patches to the renderer. Names no material type. |
+| **`lunco-materials`** | Shader appearance **intent**, render-free: `ShaderLook` (`.wgsl` path + open `dyn_params` + texture layers), WGSL-reflected param schema, typed `ShaderTexture`/`PreparedShaderImage` asset-worker preparation, CDLOD vertex attribute, and slot-backed live shader inputs through `lunco-port-core`. Carries typed float-texture patches to the renderer. Names no material type. |
 
 ---
 
@@ -216,7 +216,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-usd-prim-tree-ui`** | Reusable composed-USD prim hierarchy panel and reactive view model. It is independent of the domain Inspector and its physics/environment authoring dependencies. |
 | **`lunco-render`** | Render-free appearance intent, including screen-constant marker sizing and visibility, and typed graphics settings; `RenderQualityPolicyPlugin` resolves Rhai-owned profiles for graphical and headless scene projection. Names `Mesh3d`, never `MeshMaterial3d`. |
 | **`lunco-render-recovery`** | Render-bound GPU health and presentation recovery: wgpu error handling, adapter shadow-capability admission, bounded failure escalation, presentation gating, and scene-teardown rearming. It is independent of the workbench shell. |
-| **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`, partial float-texture GPU uploads, capability-gated Bevy GPU camera culling, conservative local-light shadow relevance with extracted source intent and shadow-view lifetime cleanup, and camera-only Core3d stage admission for light shadow roots. Headless never adds it. |
+| **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`, partial float-texture GPU uploads, capability-gated Bevy GPU camera culling, conservative local-light shadow relevance with extracted source intent and shadow-view lifetime cleanup, camera-only Core3d stage admission for light shadow roots, and diagnostics-enabled native shadow GPU spans. Headless never adds it. |
 | **`lunco-web`** | Shared web frontend for wasm apps: streaming loader, `WebReadyPlugin`, and the HTML/CSS/Rhai tool host routed through `lunco_rhai`. |
 
 ---
@@ -235,7 +235,7 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-modelica-core`** | Headless Modelica document/runtime host: document lifecycle, compiler-engine resource synchronization, the opt-in `ModelicaLintPlugin` for shared asynchronous Rumoca lint snapshots, and UI-agnostic runtime contracts. The workbench and Modelica API install the plugin and read the same generation-scoped results. It consumes the compiler, source-library, and source-root capabilities but does not own Twin-specific source admission, Rumoca compilation, source-library transport, solver workers, Fast Run execution, browser fetch, document editing, editor indexing, pure annotation values, solver implementation, API query registration, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
 | **`lunco-modelica-runner`** | Modelica experiment backend: source snapshots, compile-once DAE caching, native scheduling, shared batch/interactive run paths, run-bound resolution, and experiment-side Bevy resources. It consumes compiler and solver contracts without owning worker transport. |
 | **`lunco-modelica-worker`** | Stateful Modelica worker engine: headless typed document-compile dispatch, live steppers, a single-owner native Rumoca actor with ordered async compile/source-root commits, worker-local prepared-solve cache, native worker loop, and the Bevy co-simulation bridge. Compile results are fenced by exact runtime owner, per-entity session epoch, and captured document generation. User overlays retire after captured outcomes and diagnostics. It is a production runtime package, not a test harness. |
-| **`lunco-modelica-execution`** | Modelica execution host: plugin assembly, lifecycle compile-intent consumption, native worker launch, and wasm worker transport. It composes `lunco-modelica-worker` and `lunco-modelica-runner` through explicit contracts; compiler-only consumers do not inherit this host. |
+| **`lunco-modelica-execution`** | Modelica execution host: plugin assembly, worker completion admission in `First` before clock projection, lifecycle compile-intent consumption in `Update`, native worker launch, and wasm worker transport. It composes `lunco-modelica-worker` and `lunco-modelica-runner` through explicit contracts; compiler-only consumers do not inherit this host. |
 | **`lunco-modelica-solver`** | Renderer-free Modelica solver capability: Rumoca backend registration, solver-option translation, adaptive live sessions, and the deterministic fixed-step session. The execution host supplies lowered solve models and owns worker lifecycle; this package owns numerical integration construction and solver-specific dependencies. |
 | **`lunco-modelica-api`** | Production transport-free API capability for Modelica: registers document, compiler, experiment, solver, source, run, and parser/compiler/Rumoca-lint capabilities plus document edit, headless scratch-document creation, and explicit-snapshot solve commands. The shared `GetDiagnostics` query reads Modelica parser, compiler, and Rumoca lint channels. It depends on the headless document/runtime core and compiler contracts but is not part of the compiler host's default closure; Workspace queries remain in `lunco-workspace-api`. |
 | **`lunco-modelica-ui-core`** | Render-independent Modelica UI contracts: shared command/event payloads (`OpenClass`, `FocusDocumentByName`, `SetModelicaParameter`) and stable plot identities. It has no Modelica compiler, workbench shell, panel, or renderer dependency; observers remain in the owning UI package. |
@@ -336,7 +336,11 @@ types are reusable by UI, API, scripting, telemetry, and recovery consumers;
 the domain projection remains in `lunco-luncosim-exposures`.
 
 **`lunco-port-core`**
-Owns the shared scalar port substrate (`Port`, endpoint/control-surface components, `PortRegistry`, `PortInfo`, owner-supplied metadata, backend-owned topology keys, and the durable owner-published `PortTopologyRevision`/`PortTopologyState` structural invalidation pair) for software/hardware interaction. It is independent of `lunco-core`, so changes to engine-only core types do not rebuild the port implementation.
+Owns the shared scalar port substrate (`Port`, endpoint/control-surface components, `PortRegistry`, `PortInfo`, borrowed `PortDeclarationQuery` discovery for full inspection or an exact name and direction, owner-supplied metadata, backend-owned topology keys, and the durable owner-published `PortTopologyRevision`/`PortTopologyState` structural invalidation pair) for software/hardware interaction. It is independent of `lunco-core`, so changes to engine-only core types do not rebuild the port implementation.
+`PortTopologyState::observe_if_changed` derives component-owned fingerprints on
+first admission or changes. The cosimulation structural checker consumes it for
+declarations and Modelica unit contracts, refreshing both on participant
+re-admission; direct backend contract reads remain live.
 
 **`lunco-spatial`**
 Owns the BigSpace-specific boundary: arbitrary-grid f64 pose composition/conversion, the persistent world shell, atomic grid migration, `ActivePhysicsFrame`, spatial markers, hierarchy invariants, and the vehicle-neutral navigation law. The canonical `WorldGrid` carries deterministic content provenance so session records can identify the active coordinate frame. It depends on `lunco-core` for shared identity and runtime-diagnostic contracts; the dependency direction is one-way, so changing spatial code does not rebuild core.
@@ -486,6 +490,9 @@ Bevy/BigSpace runtime adapter for `lunco-celestial`. Owns scene hierarchy and gr
 
 **`lunco-celestial-ephemeris`**
 Analytic natural-body ephemeris provider for `lunco-celestial`. Pulls in `celestial-ephemeris` (VSOP2013 + ELP/MPP02), `celestial-time`, and `celestial-core` (none of which build on Windows MSVC). Apps that need real natural-body positions add `EphemerisPlugin`, which overwrites the default `EphemerisResource`; scene-authored motion remains standard USD animation.
+The provider owns exact-epoch final-position and native heliocentric ICRF operand
+reuse; every epoch bit-pattern change invalidates both caches without changing
+the analytical formulas or their f64 composition order.
 
 **`lunco-environment`**
 Position-dependent environmental state (gravity, atmosphere, radiation, etc.). Uses a provider-consumer pattern to compute local conditions for each entity based on its proximity to celestial bodies and their specific environment models.
@@ -515,7 +522,9 @@ contracts, shared connector constants, connection binding state, and generic
 fixed-step schedule anchors. The generic control relationship is owned by `lunco-control-core`, so
 co-simulation consumers can use it without making the control contract part of
 the co-simulation package. Its `SimComponent` input/output maps use the shared
-`lunco-port-core::ScalarPortMap` contract.
+`lunco-port-core::ScalarPortMap` contract. Its borrowed `upsert_samples` operation
+reuses destination slots only after live name/layout checks for Modelica and
+scripted snapshots; the source maps and publication schedule remain unchanged.
 
 **`lunco-experiments`**
 Backend-agnostic experiment / batch-run registry. Models a single Fast Run as a first-class artifact (params, bounds, trajectory), decoupled from any one solver via the `ExperimentRunner` trait that another crate plugs in. `RunStatus` is `Pending → Queued → Running { t_current } → Done { wall_time_ms } | Failed { error, partial } | Cancelled`; `RunBounds` carries start/stop/interval; parallel runs schedule across a worker pool.
@@ -909,14 +918,18 @@ packages and has no dependency back into `lunco-usd-bevy`.
 **`lunco-usd-bevy-mesh`**
 Render-free visual geometry projection for USD built-in primitives, native
 `UsdGeomMesh`, `BasisCurves`/`NurbsCurves`, and `NurbsPatch`. It owns mesh
-tessellation, quality invalidation, and the low-level geometry tests. The
+tessellation, quality invalidation, shared analytic primitive preparation in
+`src/primitive_assets.rs`, and the low-level geometry/resource tests. See the
+[immutable mesh ownership contract](architecture/render-decoupling.md#immutable-primitive-mesh-assets).
+The
 hierarchy loader retains async projection orchestration and material intent but
 does not depend directly on the heavy geometry evaluator stack.
 
 **`lunco-usd-avian-core`**
 Core Avian/BigSpace physics-frame bridge. Owns f64 pose synchronization,
 rootless collider propagation, active-frame transport/reset, backend admission
-validation, and `BridgeShadow`; it does not read USD stages or contain UI
+validation, lifecycle-driven frame-contract invalidation with independent native
+change-tick consumers, and `BridgeShadow`; it does not read USD stages or contain UI
 policy. Its bridge tests live with this production package so changing the USD
 reader does not rebuild the bridge implementation.
 
@@ -1274,7 +1287,7 @@ invalidate that presentation cache without changing the authored hierarchy.
 Appearance **intent** and persisted Graphics quality policy — **render-free**. The vocabulary a domain crate uses to say what a thing should look like without naming a renderer: `PbrLook` (a plain surface as data — colour, roughness, metallic, emissive, alpha mode, texture channels), `ProceduralSkybox`, `ScreenConstantMarker` and its view visibility gate, `SceneCamera`, `WorldLabel`, the sun/shadow look settings, and `RenderingQualitySettings` for shared camera, light, sky, terrain, shadow, and tessellation budgets. It names `Mesh3d` but **never `MeshMaterial3d`** — that one line is the whole rule.
 
 **`lunco-render-bevy`**
-The **only** crate that names `bevy_pbr`. Binds the intent above to real Bevy materials: `PbrLook` → `StandardMaterial`, `ShaderLook` → `ShaderMaterial` (the one general self-describing `AsBindGroup`, any `.wgsl` per-instance), plus `SceneCamera` → camera bundle, `WorldLabel` → billboard text, environment light and horizon shading. It also keeps camera-only Core3d stages off auxiliary point/spot shadow roots while preserving their shared shadow passes and GPU preprocessing. Headless simply never adds this plugin — which is why `--no-ui` links **no wgpu, no `bevy_render`, no `bevy_pbr`, no egui, no winit**. See [architecture/render-decoupling.md](architecture/render-decoupling.md).
+The **only** crate that names `bevy_pbr`. Binds the intent above to real Bevy materials: `PbrLook` → `StandardMaterial`, `ShaderLook` → `ShaderMaterial` (the one general self-describing `AsBindGroup`, any `.wgsl` per-instance), plus `SceneCamera` → camera bundle, `WorldLabel` → billboard text, environment light and horizon shading. It also keeps camera-only Core3d stages off auxiliary point/spot shadow roots while preserving their shared shadow passes and GPU preprocessing. Diagnostics-enabled hosts wrap the native shared and camera shadow passes with GPU timestamps, retaining their dependency sets and command-buffer order. Headless simply never adds this plugin — which is why `--no-ui` links **no wgpu, no `bevy_render`, no `bevy_pbr`, no egui, no winit**. See [architecture/render-decoupling.md](architecture/render-decoupling.md).
 
 **`lunco-render-recovery`**
 Render-bound resilience for the presentation boundary. It installs the

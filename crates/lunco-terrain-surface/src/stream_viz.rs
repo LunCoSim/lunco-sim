@@ -1834,13 +1834,21 @@ pub(crate) fn set_param(look: &mut ShaderLook, name: &str, v: ParamValue) {
 
 /// Bind a terrain's far-shadow cache onto one streamed tile look.
 pub(crate) fn apply_shadow_cache_to_look(look: &mut ShaderLook, cache: &TileShadowCache) {
-    set_texture(look, TextureLayer::ShadowCache, Some(&cache.image));
+    set_texture(
+        look,
+        TextureLayer::ShadowCache,
+        Some(&cache.image.clone().into()),
+    );
     set_param(look, "shadow_cache_on", ParamValue::F32(cache.on));
     // The horizon cache owns terrain self-shadow; the binder applies cast intent.
     look.no_shadow_cast = cache.on > 0.5;
 }
 
-fn set_texture(look: &mut ShaderLook, layer: TextureLayer, handle: Option<&Handle<Image>>) {
+fn set_texture(
+    look: &mut ShaderLook,
+    layer: TextureLayer,
+    handle: Option<&lunco_materials::ShaderTexture>,
+) {
     match handle {
         Some(handle) if look.textures.get(&layer) != Some(handle) => {
             look.textures.insert(layer, handle.clone());
@@ -1872,17 +1880,17 @@ pub(crate) fn apply_terrain_maps_to_look(
     let authored_normal = authored.is_some_and(TerrainAuthoredMaps::has_active_normal);
 
     let surface = if authored_surface {
-        authored.and_then(|maps| maps.surface.as_ref())
+        authored.and_then(|maps| maps.surface.clone())
     } else {
-        maps.map(|maps| &maps.surface)
+        maps.map(|maps| maps.surface.clone().into())
     };
-    set_texture(look, TextureLayer::Surface, surface);
+    set_texture(look, TextureLayer::Surface, surface.as_ref());
     let normal = if authored_normal {
-        authored.and_then(|maps| maps.normal.as_ref())
+        authored.and_then(|maps| maps.normal.clone())
     } else {
-        maps.map(|maps| &maps.normal)
+        maps.map(|maps| maps.normal.clone().into())
     };
-    set_texture(look, TextureLayer::Normal, normal);
+    set_texture(look, TextureLayer::Normal, normal.as_ref());
 
     set_param(
         look,
@@ -2049,8 +2057,8 @@ fn lunar_surface_continuation_look(
     let authored_surface = authored.filter(|maps| maps.has_active_surface());
     let derived_surface = derived.filter(|_| authored_surface.is_none());
     let surface_texture = authored_surface
-        .and_then(|maps| maps.surface.as_ref())
-        .or_else(|| derived_surface.map(|maps| &maps.surface));
+        .and_then(|maps| maps.surface.clone())
+        .or_else(|| derived_surface.map(|maps| maps.surface.clone().into()));
     if let Some(image) = surface_texture {
         look.textures
             .insert(TextureLayer::ContinuationSurface, image.clone());
@@ -4949,10 +4957,10 @@ mod draw_partition_tests {
             texel_size_m: 7.0,
         };
         let authored = TerrainAuthoredMaps {
-            surface: Some(Handle::default()),
+            surface: Some(Handle::<Image>::default().into()),
             weight_rough: 0.25,
             weight_ao: 0.75,
-            normal: Some(Handle::default()),
+            normal: Some(Handle::<Image>::default().into()),
             weight_normal: 0.5,
             ..Default::default()
         };
@@ -5049,9 +5057,9 @@ mod draw_partition_tests {
     #[test]
     fn initial_lit_material_waits_for_the_complete_source_projection() {
         let authored = TerrainAuthoredMaps {
-            surface: Some(Handle::default()),
+            surface: Some(Handle::<Image>::default().into()),
             weight_rough: 0.5,
-            normal: Some(Handle::default()),
+            normal: Some(Handle::<Image>::default().into()),
             weight_normal: 0.5,
             ..Default::default()
         };
@@ -5094,10 +5102,10 @@ mod draw_partition_tests {
         let mut shader_look = tile_entity.get_mut::<ShaderLook>().expect("tile look");
         shader_look
             .textures
-            .insert(TextureLayer::Surface, Handle::default());
+            .insert(TextureLayer::Surface, Handle::<Image>::default().into());
         shader_look
             .textures
-            .insert(TextureLayer::Normal, Handle::default());
+            .insert(TextureLayer::Normal, Handle::<Image>::default().into());
         set_param(&mut shader_look, "map_texel_size_m", ParamValue::F32(7.0));
         set_param(&mut shader_look, "derived_surface_on", ParamValue::F32(1.0));
         set_param(&mut shader_look, "derived_normal_on", ParamValue::F32(1.0));
@@ -5318,7 +5326,9 @@ mod draw_partition_tests {
         assert!(!tile_ref.contains::<bevy::light::NotShadowReceiver>());
         let look = tile_ref.get::<ShaderLook>().expect("tile look retained");
         assert_eq!(
-            look.textures.get(&TextureLayer::ShadowCache),
+            look.textures
+                .get(&TextureLayer::ShadowCache)
+                .and_then(lunco_materials::ShaderTexture::image),
             Some(&shadow_image)
         );
         assert_eq!(

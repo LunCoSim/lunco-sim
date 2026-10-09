@@ -121,21 +121,48 @@ fn committed_scene_generation(world: &World) -> Option<u64> {
         .completed_generation()
 }
 
+/// Live model, authority and scope facts read by the neutral driver.
+type ScenarioModels = QueryState<(
+    Entity,
+    &'static ScriptedModel,
+    Option<&'static ScriptAuthority>,
+    Has<crate::TwinOwnedScript>,
+    Has<crate::SceneOwnedScript>,
+)>;
+
+/// World-owned native match cache; never retains actor or document values.
+#[derive(Resource)]
+struct ScenarioModelQuery(ScenarioModels);
+
+impl FromWorld for ScenarioModelQuery {
+    fn from_world(world: &mut World) -> Self {
+        Self(world.query())
+    }
+}
+
+/// Retain native archetype matches across passes, reading live membership and
+/// releasing every model borrow before the driver runs lifecycle hooks.
+fn with_scenario_models<T>(
+    world: &mut World,
+    read: impl FnOnce(&World, &mut ScenarioModels) -> T,
+) -> T {
+    world.init_resource::<ScenarioModelQuery>();
+    world.resource_scope(|world, mut query: Mut<ScenarioModelQuery>| read(world, &mut query.0))
+}
+
 fn has_scenario_models(world: &mut World, language: ScriptLanguage) -> bool {
-    let mut models = world.query::<&ScriptedModel>();
-    models
-        .iter(world)
-        .any(|model| model.language == Some(language))
+    with_scenario_models(world, |world, models| {
+        models
+            .iter(world)
+            .any(|(_, model, _, _, _)| model.language == Some(language))
+    })
 }
 
 fn has_scene_owned_scenario_models(world: &mut World, language: ScriptLanguage) -> bool {
-    let mut models = world.query::<(
-        &ScriptedModel,
-        Option<&crate::TwinOwnedScript>,
-        Option<&crate::SceneOwnedScript>,
-    )>();
-    models.iter(world).any(|(model, twin, scene)| {
-        model.language == Some(language) && (twin.is_some() || scene.is_some())
+    with_scenario_models(world, |world, models| {
+        models
+            .iter(world)
+            .any(|(_, model, _, twin, scene)| model.language == Some(language) && (twin || scene))
     })
 }
 
@@ -1178,17 +1205,16 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             .get_resource::<lunco_readiness::ReadinessState>()
             .map(|state| state.held_entities.clone())
             .unwrap_or_default();
-        let mut models = {
-            let mut query = world.query::<(Entity, &ScriptedModel, Option<&ScriptAuthority>)>();
+        let mut models = with_scenario_models(world, |world, query| {
             query
                 .iter(world)
-                .filter(|(entity, model, _)| {
+                .filter(|(entity, model, _, _, _)| {
                     model.language == Some(language)
                         && (scene_generation_available
                             || !scenario_uses_scene_generation(world, *entity))
                         && (execution_enabled || !scenario_uses_scene_generation(world, *entity))
                 })
-                .map(|(entity, model, authority)| {
+                .map(|(entity, model, authority, _, _)| {
                     (
                         entity,
                         model.paused,
@@ -1199,7 +1225,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     )
                 })
                 .collect::<Vec<_>>()
-        };
+        });
         models.sort_unstable_by_key(|model| scenario_actor_order_key(world, model.0));
         let live: HashSet<Entity> = models.iter().map(|model| model.0).collect();
         world.resource_scope(
@@ -1945,16 +1971,15 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             .map(|state| state.held_entities.clone())
             .unwrap_or_default();
         let mut models = {
-            let model_facts = {
-                let mut query = world.query::<(Entity, &ScriptedModel, Option<&ScriptAuthority>)>();
+            let model_facts = with_scenario_models(world, |world, query| {
                 query
                     .iter(world)
-                    .filter(|(entity, model, _)| {
+                    .filter(|(entity, model, _, _, _)| {
                         model.language == Some(language)
                             && (scene_generation_available
                                 || !scenario_uses_scene_generation(world, *entity))
                     })
-                    .map(|(entity, model, authority)| {
+                    .map(|(entity, model, authority, _, _)| {
                         (
                             entity,
                             model.document_id,
@@ -1963,7 +1988,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         )
                     })
                     .collect::<Vec<_>>()
-            };
+            });
             let registry = world.get_resource::<ScriptRegistry>();
             model_facts
                 .into_iter()
@@ -2059,10 +2084,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             // The neutral inbox still receives telemetry when no actors exist.
             // No future actor can observe traffic preceding its start watermark.
             // Preserve events when another language has a potential consumer.
-            let mut models = world.query::<&ScriptedModel>();
-            if !models.iter(world).any(|model| model.language.is_some())
-                && let Some(mut inbox) = world.get_resource_mut::<ScriptEventInbox>()
-            {
+            let has_consumer = with_scenario_models(world, |world, models| {
+                models
+                    .iter(world)
+                    .any(|(_, model, _, _, _)| model.language.is_some())
+            });
+            if !has_consumer && let Some(mut inbox) = world.get_resource_mut::<ScriptEventInbox>() {
                 inbox.pending.clear();
             }
             return;
@@ -2126,7 +2153,6 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         let external_progress_blocked = scenario_startup_is_blocked(world);
         let live: HashSet<Entity>;
         {
-            let mut q = world.query::<(Entity, &ScriptedModel, Option<&ScriptAuthority>)>();
             let models: Vec<(
                 Entity,
                 bool,
@@ -2135,20 +2161,21 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 Option<SessionId>,
                 crate::doc::ScenarioReloadPolicy,
                 u64,
-            )> = q
-                .iter(world)
-                .map(|(e, m, auth)| {
-                    (
-                        e,
-                        m.paused,
-                        m.language,
-                        m.document_id,
-                        auth.and_then(|a| a.0),
-                        m.reload_policy,
-                        m.parameters_revision,
-                    )
-                })
-                .collect();
+            )> = with_scenario_models(world, |world, q| {
+                q.iter(world)
+                    .map(|(e, m, auth, _, _)| {
+                        (
+                            e,
+                            m.paused,
+                            m.language,
+                            m.document_id,
+                            auth.and_then(|a| a.0),
+                            m.reload_policy,
+                            m.parameters_revision,
+                        )
+                    })
+                    .collect()
+            });
             live = models
                 .iter()
                 .filter(|(entity, _, l, _, _, _, _)| {

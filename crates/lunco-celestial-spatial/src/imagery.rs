@@ -30,6 +30,7 @@
 
 use bevy::image::{ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
+use lunco_materials::{ColorMip, PreparedShaderImage, ShaderTexture};
 use lunco_materials::{ParamValue, TextureLayer};
 use serde::Deserialize;
 
@@ -66,13 +67,16 @@ pub(crate) struct BoundBodyImagery(
 #[derive(Debug, Clone)]
 enum BoundBodyImagerySource {
     Authored,
-    Dataset(Handle<Image>),
+    Dataset(Handle<PreparedShaderImage<ColorMip>>),
 }
 
 impl BoundBodyImagery {
     /// Dataset raster that remains the globe's albedo when its authored
     /// non-texture look is refreshed.
-    pub(crate) fn dataset_image(&self, globe: Entity) -> Option<Handle<Image>> {
+    pub(crate) fn dataset_image(
+        &self,
+        globe: Entity,
+    ) -> Option<Handle<PreparedShaderImage<ColorMip>>> {
         match self.0.get(&globe) {
             Some(BoundBodyImagerySource::Dataset(image)) => Some(image.clone()),
             Some(BoundBodyImagerySource::Authored) | None => None,
@@ -90,7 +94,7 @@ pub(crate) struct PendingBodyImagery {
     inflight: Vec<PendingBodyImage>,
     /// Authored maps are retained until the asset server publishes readiness.
     authored: Vec<PendingBodyImage>,
-    ready: bevy::platform::collections::HashSet<AssetId<Image>>,
+    ready: bevy::platform::collections::HashSet<AssetId<PreparedShaderImage<ColorMip>>>,
     /// Authored maps whose asset load failed, and how many times. A scene-authored
     /// choice remains authoritative even when its bytes are unavailable, so the
     /// dataset default is not allowed to replace it after the bounded retry.
@@ -128,16 +132,18 @@ const MAX_IMAGERY_ATTEMPTS: u8 = 3;
 fn load_body_image(
     asset_server: &AssetServer,
     path: bevy::asset::AssetPath<'static>,
-) -> Handle<Image> {
+    anisotropy: u16,
+) -> Handle<PreparedShaderImage<ColorMip>> {
     asset_server
         .load_builder()
-        .with_settings(|settings: &mut ImageLoaderSettings| {
+        .with_settings(move |settings: &mut ImageLoaderSettings| {
             let mut sampler = ImageSamplerDescriptor::linear();
+            sampler.set_anisotropic_filter(anisotropy);
             sampler.address_mode_u = bevy::image::ImageAddressMode::Repeat;
             sampler.address_mode_v = bevy::image::ImageAddressMode::ClampToEdge;
             settings.sampler = ImageSampler::Descriptor(sampler);
         })
-        .load::<Image>(path)
+        .load::<PreparedShaderImage<ColorMip>>(path)
 }
 
 /// Telemetry event published when a body's imagery is given up on.
@@ -153,7 +159,7 @@ pub(crate) const BODY_IMAGERY_FAILED: &str = "BODY_IMAGERY_FAILED";
 struct PendingBodyImage {
     naif_id: i32,
     dataset_key: String,
-    image: Handle<Image>,
+    image: Handle<PreparedShaderImage<ColorMip>>,
 }
 
 /// Bind an albedo map onto a globe's look and NEUTRALISE the body colour.
@@ -172,11 +178,11 @@ struct PendingBodyImage {
 /// they cannot disagree.
 pub(crate) fn bind_albedo(
     look: &lunco_materials::ShaderLook,
-    image: Handle<Image>,
+    image: Handle<PreparedShaderImage<ColorMip>>,
 ) -> lunco_materials::ShaderLook {
     look.clone()
         .with("surface_color", ParamValue::Vec3([1.0, 1.0, 1.0]))
-        .with_texture(TextureLayer::Albedo, image)
+        .with_texture(TextureLayer::Albedo, ShaderTexture::Color(image))
 }
 
 /// Adopt a body map AUTHORED on the body prim
@@ -190,13 +196,21 @@ pub(crate) fn bind_albedo(
 pub(crate) fn adopt_authored_body_albedo(
     q_decl: Query<(&crate::CelestialBodyDecl, &crate::AuthoredBodyAlbedo)>,
     asset_server: Res<AssetServer>,
-    images: Res<Assets<Image>>,
-    mut image_events: MessageReader<AssetEvent<Image>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
+    images: Res<Assets<PreparedShaderImage<ColorMip>>>,
+    mut image_events: MessageReader<AssetEvent<PreparedShaderImage<ColorMip>>>,
     mut bound: ResMut<BoundBodyImagery>,
     mut pending: ResMut<PendingBodyImagery>,
     mut q_globes: Query<(Entity, &CelestialBody, &mut GlobeLod, &mut GlobeTiles)>,
     mut commands: Commands,
 ) {
+    let profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(error) => {
+            error!("[celestial] image quality rejected: {error}");
+            return;
+        }
+    };
     // A live USD edit may replace or remove the authored asset while an old
     // request is still decoding. Keep only requests represented by the current
     // declaration, so an obsolete handle can never win the precedence rule.
@@ -268,7 +282,11 @@ pub(crate) fn adopt_authored_body_albedo(
                     continue;
                 }
             };
-            let image = load_body_image(&asset_server, path);
+            let image = load_body_image(
+                &asset_server,
+                path,
+                profile.terrain_derived_texture_anisotropy,
+            );
             // If the globe appeared after the asset event, capture the already
             // resident asset once; steady state is driven by AssetEvent<Image].
             if images.get(image.id()).is_some() {
@@ -384,12 +402,20 @@ fn declared_body(entry: &lunco_assets_datasets::DatasetEntry) -> Option<i32> {
 pub(crate) fn bind_dataset_body_imagery(
     registry: Option<Res<lunco_assets_datasets::DatasetRegistry>>,
     asset_server: Res<AssetServer>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
     authored: Query<&crate::CelestialBodyDecl, With<crate::AuthoredBodyAlbedo>>,
     mut bound: ResMut<BoundBodyImagery>,
     mut pending: ResMut<PendingBodyImagery>,
     mut q_globes: Query<(Entity, &CelestialBody, &mut GlobeLod, &mut GlobeTiles)>,
     mut commands: Commands,
 ) {
+    let profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(error) => {
+            error!("[celestial] image quality rejected: {error}");
+            return;
+        }
+    };
     let Some(registry) = registry else { return };
     // Forget globes that no longer exist, so a long session that loads many
     // scenes does not accumulate dead ids. Before the empty check: the
@@ -465,7 +491,11 @@ pub(crate) fn bind_dataset_body_imagery(
         pending.inflight.push(PendingBodyImage {
             naif_id,
             dataset_key: entry.id.clone(),
-            image: load_body_image(&asset_server, path),
+            image: load_body_image(
+                &asset_server,
+                path,
+                profile.terrain_derived_texture_anisotropy,
+            ),
         });
     }
 

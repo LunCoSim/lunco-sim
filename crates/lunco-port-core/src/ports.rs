@@ -31,7 +31,7 @@
 //! ## One registry, one discovery path and four thin access operations
 //!
 //! Every port-bearing backend is one [`PortBackend`] entry with an entity
-//! enumerator and the access operations (list / read-output / read-input /
+//! enumerator and the access operations (declare-ports / read-output / read-input /
 //! write-input), registered into the [`PortRegistry`] resource. Discovery and
 //! access fold over the registered backends in order, so a new backend is added
 //! by **registering** it — no consumer changes. Registration order *is*
@@ -490,17 +490,75 @@ impl<T: Copy> IndexMut<&str> for PortMap<T> {
 }
 
 /// Scalar specialization used by Modelica and command-value surfaces.
-#[derive(Clone, Debug, Reflect)]
+#[derive(Debug, Reflect)]
 #[reflect(opaque)]
-pub struct ScalarPortMap(PortMap<f64>);
+pub struct ScalarPortMap {
+    map: PortMap<f64>,
+    /// Destination handles aligned to the last borrowed sample iteration.
+    /// Every reuse checks its live name; these hints never establish identity.
+    sample_slots: Vec<u64>,
+}
+
+impl Clone for ScalarPortMap {
+    fn clone(&self) -> Self {
+        Self {
+            map: self.map.clone(),
+            sample_slots: Vec::new(),
+        }
+    }
+}
 
 impl Default for ScalarPortMap {
     fn default() -> Self {
-        Self(PortMap::default())
+        Self {
+            map: PortMap::default(),
+            sample_slots: Vec::new(),
+        }
     }
 }
 
 impl ScalarPortMap {
+    /// Copy borrowed named samples, retaining destination slot hints between
+    /// snapshots. Stable names avoid hashing and allocation. Source reordering
+    /// and destination edits are resolved against each live name and layout;
+    /// source cardinality or iteration order alone never validates a hint.
+    /// Returns only sample/topology changes, preserving exact `f64` bits.
+    pub fn upsert_samples<'a>(
+        &mut self,
+        samples: impl Iterator<Item = (&'a str, &'a f64)>,
+    ) -> bool {
+        let mut changed = false;
+        let mut count = 0;
+        for (index, (name, value)) in samples.enumerate() {
+            count = index + 1;
+            let retained = self.sample_slots.get(index).copied().filter(|slot| {
+                self.map
+                    .get_slot_entry(*slot)
+                    .is_some_and(|(current_name, _)| current_name == name)
+            });
+            match retained {
+                Some(slot) => {
+                    changed |= self
+                        .set_slot_existing(slot, *value)
+                        .expect("a checked sample slot stays live during its exclusive copy");
+                }
+                None => {
+                    changed |= self.set(name, *value);
+                    let slot = self
+                        .resolve_slot(name)
+                        .expect("an admitted named sample has a live destination slot");
+                    if let Some(retained) = self.sample_slots.get_mut(index) {
+                        *retained = slot;
+                    } else {
+                        self.sample_slots.push(slot);
+                    }
+                }
+            }
+        }
+        self.sample_slots.truncate(count);
+        changed
+    }
+
     /// Set a scalar by borrowed name and report whether its sample or topology
     /// changed. Existing names perform no allocation.
     #[inline]
@@ -544,7 +602,7 @@ impl Deref for ScalarPortMap {
     type Target = PortMap<f64>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.map
     }
 }
 
@@ -553,7 +611,7 @@ impl<'a> IntoIterator for &'a ScalarPortMap {
     type IntoIter = PortMapIter<'a, f64>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+        self.map.iter()
     }
 }
 
@@ -562,31 +620,37 @@ impl<'a> IntoIterator for &'a mut ScalarPortMap {
     type IntoIter = PortMapIterMut<'a, f64>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter_mut()
+        self.map.iter_mut()
     }
 }
 
 impl std::ops::DerefMut for ScalarPortMap {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.map
     }
 }
 
 impl From<HashMap<String, f64>> for ScalarPortMap {
     fn from(values: HashMap<String, f64>) -> Self {
-        Self(values.into())
+        Self {
+            map: values.into(),
+            sample_slots: Vec::new(),
+        }
     }
 }
 
 impl FromIterator<(String, f64)> for ScalarPortMap {
     fn from_iter<I: IntoIterator<Item = (String, f64)>>(iter: I) -> Self {
-        Self(iter.into_iter().collect())
+        Self {
+            map: iter.into_iter().collect(),
+            sample_slots: Vec::new(),
+        }
     }
 }
 
 impl Extend<(String, f64)> for ScalarPortMap {
     fn extend<I: IntoIterator<Item = (String, f64)>>(&mut self, iter: I) {
-        self.0.extend(iter);
+        self.map.extend(iter);
     }
 }
 
@@ -635,6 +699,23 @@ pub struct PortTopologyState {
 }
 
 impl PortTopologyState {
+    /// Observe a component-owned structural key, deriving it on first admission
+    /// or when that owner changed. The caller must also mark a new containing
+    /// owner changed if this component could have been edited outside its scope.
+    /// Returns the current key and whether an already-observed key differs.
+    pub fn observe_if_changed<T: 'static>(
+        &mut self,
+        entity: Entity,
+        owner_changed: bool,
+        derive_key: impl FnOnce() -> u64,
+    ) -> (u64, bool) {
+        if !owner_changed && let Some(key) = self.keys.get(&(TypeId::of::<T>(), entity)) {
+            return (*key, false);
+        }
+        let key = derive_key();
+        (key, self.changed::<T>(entity, key))
+    }
+
     /// Record one structural key and report whether an already-observed key
     /// differs. The first observation seeds the cache; the lifecycle observer
     /// has already published the add as the structural invalidation.
@@ -909,15 +990,108 @@ pub struct PortDeclaration {
     pub direction: PortDirection,
 }
 
-/// Append every declared name in `map` as a [`PortDeclaration`] of direction `dir`.
-/// Helper for map-backed backends (e.g. Modelica `inputs`/`outputs`).
+/// One backend declaration query. Inspection collects owned rows; a named
+/// query borrows its name and records only the first matching direction.
+/// Both paths consume the same owner declarations, independent of live samples.
+pub struct PortDeclarationQuery<'a> {
+    target: PortDeclarationTarget<'a>,
+}
+
+enum PortDeclarationTarget<'a> {
+    All(&'a mut Vec<PortDeclaration>),
+    Named {
+        name: &'a str,
+        side: ResolvedPortSide,
+        direction: Option<PortDirection>,
+    },
+}
+
+impl<'a> PortDeclarationQuery<'a> {
+    /// Collect every declaration in the backend's enumeration order.
+    pub fn all(out: &'a mut Vec<PortDeclaration>) -> Self {
+        Self {
+            target: PortDeclarationTarget::All(out),
+        }
+    }
+
+    fn named(name: &'a str, side: ResolvedPortSide) -> Self {
+        Self {
+            target: PortDeclarationTarget::Named {
+                name,
+                side,
+                direction: None,
+            },
+        }
+    }
+
+    /// The exact requested name, when discovery is limited to one port.
+    /// Owners with indexed storage can query it without traversing their surface.
+    pub fn requested_name(&self) -> Option<&'a str> {
+        match &self.target {
+            PortDeclarationTarget::All(_) => None,
+            PortDeclarationTarget::Named { name, .. } => Some(name),
+        }
+    }
+
+    /// Whether this query can consume a declaration with this causality.
+    pub fn accepts_direction(&self, direction: PortDirection) -> bool {
+        match &self.target {
+            PortDeclarationTarget::All(_) => true,
+            PortDeclarationTarget::Named { side, .. } => match side {
+                ResolvedPortSide::Input => {
+                    matches!(direction, PortDirection::In | PortDirection::InOut)
+                }
+                ResolvedPortSide::Output => {
+                    matches!(direction, PortDirection::Out | PortDirection::InOut)
+                }
+            },
+        }
+    }
+
+    /// Publish a borrowed declaration. Only an inspection query copies its name.
+    pub fn declare(&mut self, name: &str, direction: PortDirection) {
+        if !self.accepts_direction(direction) {
+            return;
+        }
+        match &mut self.target {
+            PortDeclarationTarget::All(out) => out.push(PortDeclaration {
+                name: name.to_owned(),
+                direction,
+            }),
+            PortDeclarationTarget::Named {
+                name: requested,
+                direction: found,
+                ..
+            } => {
+                if name == *requested && found.is_none() {
+                    *found = Some(direction);
+                }
+            }
+        }
+    }
+
+    fn direction(&self) -> Option<PortDirection> {
+        match &self.target {
+            PortDeclarationTarget::All(_) => None,
+            PortDeclarationTarget::Named { direction, .. } => *direction,
+        }
+    }
+}
+
+/// Declare map-backed ports through the owner's indexed name storage.
 #[inline]
-pub fn push_map(out: &mut Vec<PortDeclaration>, map: &PortMap<f64>, dir: PortDirection) {
-    for name in map.keys() {
-        out.push(PortDeclaration {
-            name: name.to_string(),
-            direction: dir,
-        });
+pub fn declare_map(out: &mut PortDeclarationQuery<'_>, map: &PortMap<f64>, dir: PortDirection) {
+    if !out.accepts_direction(dir) {
+        return;
+    }
+    if let Some(name) = out.requested_name() {
+        if map.contains_key(name) {
+            out.declare(name, dir);
+        }
+    } else {
+        for name in map.keys() {
+            out.declare(name, dir);
+        }
     }
 }
 
@@ -986,9 +1160,11 @@ pub struct PortBackend {
     /// is evaluated only on the changed-owner path. It lets consumers cache
     /// metadata while still observing dynamic authored surfaces.
     pub topology_key: fn(&World, Entity) -> u64,
-    /// Append this backend's declared ports on `entity` (outputs then inputs) to `out`.
-    pub list: fn(&World, Entity, &mut Vec<PortDeclaration>),
-    /// Describe every port returned by `list`. This callback is mandatory so
+    /// Publish this backend's live declarations (outputs then inputs) through
+    /// the query. Use its requested name for indexed discovery; never infer a
+    /// declaration from the presence of a numeric sample.
+    pub declare_ports: fn(&World, Entity, &mut PortDeclarationQuery<'_>),
+    /// Describe every port published by `declare_ports`. This callback is mandatory so
     /// the owning backend, rather than a registry fallback, defines each port's
     /// value, unit, bounds, authority, source, and writability contract.
     pub metadata: fn(&World, Entity, &str, PortDirection) -> PortMetadata,
@@ -1247,9 +1423,9 @@ const INPUT_PORTS_BACKEND: PortBackend = PortBackend {
             .get::<InputPorts>(entity)
             .map_or(0, |inputs| inputs.values.topology_key())
     },
-    list: |world, entity, out| {
+    declare_ports: |world, entity, out| {
         if let Some(inputs) = world.get::<InputPorts>(entity) {
-            push_map(out, &inputs.values, PortDirection::In);
+            declare_map(out, &inputs.values, PortDirection::In);
         }
     },
     metadata: |_world, _entity, _name, direction| {
@@ -1435,7 +1611,7 @@ impl PortRegistry {
         let mut out = Vec::new();
         for (backend_index, backend) in self.backends.iter().enumerate() {
             let mut ports = Vec::new();
-            (backend.list)(world, entity, &mut ports);
+            (backend.declare_ports)(world, entity, &mut PortDeclarationQuery::all(&mut ports));
             for port in ports {
                 if let Some(names) = requested_names
                     && !names.contains(port.name.as_str())
@@ -1496,7 +1672,7 @@ impl PortRegistry {
         let mut out = Vec::new();
         for (precedence, backend) in self.backends.iter().enumerate() {
             let mut ports = Vec::new();
-            (backend.list)(world, entity, &mut ports);
+            (backend.declare_ports)(world, entity, &mut PortDeclarationQuery::all(&mut ports));
             let mut by_name = BTreeMap::new();
             for port in ports {
                 by_name
@@ -1743,19 +1919,9 @@ impl PortRegistry {
             if resolver.is_some_and(|resolve| resolve(world, entity, name).is_some()) {
                 return true;
             }
-            let mut ports = Vec::new();
-            (backend.list)(world, entity, &mut ports);
-            ports.iter().any(|port| {
-                port.name == name
-                    && match side {
-                        ResolvedPortSide::Input => {
-                            matches!(port.direction, PortDirection::In | PortDirection::InOut)
-                        }
-                        ResolvedPortSide::Output => {
-                            matches!(port.direction, PortDirection::Out | PortDirection::InOut)
-                        }
-                    }
-            })
+            let mut query = PortDeclarationQuery::named(name, side);
+            (backend.declare_ports)(world, entity, &mut query);
+            query.direction().is_some()
         })
     }
 
@@ -2107,22 +2273,9 @@ impl PortRegistry {
         side: ResolvedPortSide,
     ) -> Option<(PortDirection, PortMetadata)> {
         let backend = self.backends.get(backend_index)?;
-        let mut ports = Vec::new();
-        (backend.list)(world, entity, &mut ports);
-        let direction = ports
-            .iter()
-            .find(|port| {
-                port.name == name
-                    && match side {
-                        ResolvedPortSide::Input => {
-                            matches!(port.direction, PortDirection::In | PortDirection::InOut)
-                        }
-                        ResolvedPortSide::Output => {
-                            matches!(port.direction, PortDirection::Out | PortDirection::InOut)
-                        }
-                    }
-            })?
-            .direction;
+        let mut query = PortDeclarationQuery::named(name, side);
+        (backend.declare_ports)(world, entity, &mut query);
+        let direction = query.direction()?;
         Some((
             direction,
             (backend.metadata)(world, entity, name, direction),
@@ -2133,10 +2286,46 @@ impl PortRegistry {
 #[cfg(test)]
 mod tests {
     use super::{
-        PortBackend, PortCollisionDirection, PortDeclaration, PortDirection, PortMetadata,
+        PortBackend, PortCollisionDirection, PortDeclarationQuery, PortDirection, PortMetadata,
         PortNameSetKey, PortRegistry, PortTopologyRevision, PortValueType, ScalarPortMap,
         port_name_set_key,
     };
+
+    #[test]
+    fn cached_structural_observation_derives_only_admitted_or_changed_owners() {
+        struct Owner;
+        let entity = World::new().spawn_empty().id();
+        let mut state = super::PortTopologyState::default();
+        let calls = std::cell::Cell::new(0);
+        let derive = |key| {
+            calls.set(calls.get() + 1);
+            key
+        };
+        assert_eq!(
+            state.observe_if_changed::<Owner>(entity, false, || derive(7)),
+            (7, false)
+        );
+        assert_eq!(
+            state.observe_if_changed::<Owner>(entity, false, || derive(8)),
+            (7, false)
+        );
+        assert_eq!(calls.get(), 1);
+        assert_eq!(
+            state.observe_if_changed::<Owner>(entity, true, || derive(7)),
+            (7, false)
+        );
+        assert_eq!(
+            state.observe_if_changed::<Owner>(entity, true, || derive(8)),
+            (8, true)
+        );
+        assert_eq!(calls.get(), 3);
+        state.forget::<Owner>(entity);
+        assert_eq!(
+            state.observe_if_changed::<Owner>(entity, false, || derive(9)),
+            (9, false)
+        );
+        assert_eq!(calls.get(), 4);
+    }
     use crate::InputPorts;
     use bevy::prelude::*;
 
@@ -2182,15 +2371,97 @@ mod tests {
         world
     }
 
-    fn duplicate_input_list(_world: &World, _entity: Entity, out: &mut Vec<PortDeclaration>) {
-        out.push(PortDeclaration {
-            name: "release".into(),
-            direction: PortDirection::In,
-        });
-        out.push(PortDeclaration {
-            name: "release".into(),
-            direction: PortDirection::In,
-        });
+    #[test]
+    fn declaration_queries_preserve_order_and_require_exact_name_and_side() {
+        let publish = |query: &mut PortDeclarationQuery<'_>| {
+            query.declare("other", PortDirection::In);
+            query.declare("signal", PortDirection::Out);
+            query.declare("signal", PortDirection::InOut);
+            query.declare("signal", PortDirection::In);
+        };
+        let mut rows = Vec::new();
+        publish(&mut PortDeclarationQuery::all(&mut rows));
+        assert_eq!(rows.len(), 4);
+        let mut input = PortDeclarationQuery::named("signal", super::ResolvedPortSide::Input);
+        publish(&mut input);
+        assert_eq!(input.direction(), Some(PortDirection::InOut));
+        let mut output = PortDeclarationQuery::named("signal", super::ResolvedPortSide::Output);
+        publish(&mut output);
+        assert_eq!(output.direction(), Some(PortDirection::Out));
+        let mut absent = PortDeclarationQuery::named("missing", super::ResolvedPortSide::Input);
+        publish(&mut absent);
+        assert_eq!(absent.direction(), None);
+
+        let mut ports = ScalarPortMap::default();
+        ports.insert("signal".into(), 0.0);
+        let mut query = PortDeclarationQuery::named("signal", super::ResolvedPortSide::Input);
+        super::declare_map(&mut query, &ports, PortDirection::Out);
+        assert_eq!(query.direction(), None);
+        super::declare_map(&mut query, &ports, PortDirection::In);
+        assert_eq!(query.direction(), Some(PortDirection::In));
+        let mut missing = PortDeclarationQuery::named("missing", super::ResolvedPortSide::Input);
+        super::declare_map(&mut missing, &ports, PortDirection::In);
+        assert_eq!(missing.direction(), None);
+    }
+
+    fn duplicate_input_list(_world: &World, _entity: Entity, out: &mut PortDeclarationQuery<'_>) {
+        out.declare("release", PortDirection::In);
+        out.declare("release", PortDirection::In);
+    }
+
+    #[test]
+    fn scalar_sample_copy_checks_live_names_and_retired_layouts() {
+        let precise = f64::from_bits(0x3ff0000000000001);
+        let mut ports = ScalarPortMap::default();
+        let samples = [("first", precise), ("second", -0.0)];
+        let copy = |ports: &mut ScalarPortMap, samples: &[(&str, f64)]| {
+            ports.upsert_samples(samples.iter().map(|(name, value)| (*name, value)))
+        };
+        assert!(copy(&mut ports, &samples));
+        let topology = ports.topology_key();
+        let storage = ports.sample_slots.as_ptr();
+        assert!(!copy(&mut ports, &samples));
+        assert_eq!(ports.topology_key(), topology);
+        assert_eq!(ports.sample_slots.as_ptr(), storage);
+        assert_eq!(ports["first"].to_bits(), precise.to_bits());
+        assert_eq!(ports["second"].to_bits(), (-0.0f64).to_bits());
+
+        // Source order can change independently of its cardinality.
+        assert!(copy(&mut ports, &[("second", 3.0), ("first", 4.0)]));
+        assert_eq!(ports["first"], 4.0);
+        assert_eq!(ports["second"], 3.0);
+        assert_eq!(ports.topology_key(), topology);
+        assert!(copy(&mut ports, &[("third", precise), ("first", -0.0)]));
+        assert_eq!(ports["third"].to_bits(), precise.to_bits());
+        assert_eq!(ports["first"].to_bits(), (-0.0f64).to_bits());
+
+        // A destination edit must retire the hint even when the name returns.
+        let retired = ports.resolve_slot("third").unwrap();
+        ports.remove("third");
+        ports.insert("third".into(), 8.0);
+        assert_eq!(ports.get_slot(retired), None);
+        assert!(copy(&mut ports, &[("third", precise)]));
+        assert_eq!(ports["third"].to_bits(), precise.to_bits());
+        assert_eq!(ports.sample_slots.len(), 1);
+
+        let mut cloned = ports.clone();
+        assert!(cloned.sample_slots.is_empty());
+        assert!(!copy(&mut cloned, &[("third", precise)]));
+        assert_eq!(cloned["third"].to_bits(), precise.to_bits());
+        cloned.clear();
+        assert!(copy(&mut cloned, &[("third", -0.0)]));
+        assert_eq!(cloned["third"].to_bits(), (-0.0f64).to_bits());
+
+        for index in 0..70 {
+            ports.insert(format!("temporary_{index}"), 0.0);
+        }
+        let previous_layout = ports.layout_key();
+        for index in 0..70 {
+            ports.remove(&format!("temporary_{index}"));
+        }
+        assert_ne!(ports.layout_key(), previous_layout);
+        assert!(!copy(&mut ports, &[("third", precise)]));
+        assert_eq!(ports["third"].to_bits(), precise.to_bits());
     }
 
     #[test]
@@ -2292,15 +2563,9 @@ mod tests {
         assert_eq!(key.finish(), port_name_set_key(std::iter::once(&names[0])));
     }
 
-    fn duplicate_inout_list(_world: &World, _entity: Entity, out: &mut Vec<PortDeclaration>) {
-        out.push(PortDeclaration {
-            name: "release".into(),
-            direction: PortDirection::InOut,
-        });
-        out.push(PortDeclaration {
-            name: "release".into(),
-            direction: PortDirection::InOut,
-        });
+    fn duplicate_inout_list(_world: &World, _entity: Entity, out: &mut PortDeclarationQuery<'_>) {
+        out.declare("release", PortDirection::InOut);
+        out.declare("release", PortDirection::InOut);
     }
 
     fn owner_a_metadata(
@@ -2359,7 +2624,7 @@ mod tests {
     const OWNER_A_INPUT: PortBackend = PortBackend {
         list_entities: |_world, _out| {},
         topology_key: |_world, _entity| 0,
-        list: duplicate_input_list,
+        declare_ports: duplicate_input_list,
         metadata: owner_a_metadata,
         read_output: no_read,
         read_input: no_read,
@@ -2373,7 +2638,7 @@ mod tests {
     const OWNER_B_INPUT: PortBackend = PortBackend {
         list_entities: |_world, _out| {},
         topology_key: |_world, _entity| 0,
-        list: duplicate_input_list,
+        declare_ports: duplicate_input_list,
         metadata: owner_b_metadata,
         read_output: no_read,
         read_input: no_read,
@@ -2387,7 +2652,7 @@ mod tests {
     const OWNER_A_INOUT: PortBackend = PortBackend {
         list_entities: |_world, _out| {},
         topology_key: |_world, _entity| 0,
-        list: duplicate_inout_list,
+        declare_ports: duplicate_inout_list,
         metadata: owner_a_metadata,
         read_output: no_read,
         read_input: no_read,
@@ -2401,7 +2666,7 @@ mod tests {
     const OWNER_B_INOUT: PortBackend = PortBackend {
         list_entities: |_world, _out| {},
         topology_key: |_world, _entity| 0,
-        list: duplicate_inout_list,
+        declare_ports: duplicate_inout_list,
         metadata: owner_b_metadata,
         read_output: no_read,
         read_input: no_read,
@@ -2426,12 +2691,9 @@ mod tests {
         registry.register(PortBackend {
             list_entities: |_world, _out| {},
             topology_key: |_world, _entity| 1,
-            list: |world, entity, out| {
+            declare_ports: |world, entity, out| {
                 if world.get::<StatePort>(entity).is_some() {
-                    out.push(PortDeclaration {
-                        name: "shared".into(),
-                        direction: PortDirection::InOut,
-                    });
+                    out.declare("shared", PortDirection::InOut);
                 }
             },
             metadata: read_only_test_metadata,
@@ -2454,12 +2716,9 @@ mod tests {
         registry.register(PortBackend {
             list_entities: |_world, _out| {},
             topology_key: |_world, _entity| 1,
-            list: |world, entity, out| {
+            declare_ports: |world, entity, out| {
                 if world.get::<ShadowedInput>(entity).is_some() {
-                    out.push(PortDeclaration {
-                        name: "shared".into(),
-                        direction: PortDirection::In,
-                    });
+                    out.declare("shared", PortDirection::In);
                 }
             },
             metadata: test_metadata,
@@ -2588,12 +2847,9 @@ mod tests {
             backends: vec![PortBackend {
                 list_entities: |_, _| {},
                 topology_key: |_, _| 0,
-                list: |world, entity, ports| {
+                declare_ports: |world, entity, ports| {
                     if world.get::<Input>(entity).is_some() {
-                        ports.push(PortDeclaration {
-                            name: "signal".to_owned(),
-                            direction: PortDirection::In,
-                        });
+                        ports.declare("signal", PortDirection::In);
                     }
                 },
                 metadata: |world, entity, _, direction| {
@@ -2856,12 +3112,9 @@ mod tests {
                 );
             },
             topology_key: |world, entity| u64::from(world.get::<ProbeInput>(entity).is_some()),
-            list: |world, entity, out| {
+            declare_ports: |world, entity, out| {
                 if world.get::<ProbeInput>(entity).is_some() {
-                    out.push(PortDeclaration {
-                        name: "shared".into(),
-                        direction: PortDirection::In,
-                    });
+                    out.declare("shared", PortDirection::In);
                 }
             },
             metadata: read_only_test_metadata,
@@ -2903,7 +3156,7 @@ mod tests {
         registry.register(PortBackend {
             list_entities: |_, _| {},
             topology_key: |_, _| 0,
-            list: |_, _, _| panic!("resolved presence must not enumerate port rows"),
+            declare_ports: |_, _, _| panic!("resolved presence must not enumerate port rows"),
             metadata: read_only_test_metadata,
             read_output: |_, _, _| None,
             read_input: |_, _, _| None,
@@ -2929,11 +3182,8 @@ mod tests {
         registry.register(PortBackend {
             list_entities: |_, _| {},
             topology_key: |_, _| 1,
-            list: |_, _, out| {
-                out.push(PortDeclaration {
-                    name: "signal".into(),
-                    direction: PortDirection::Out,
-                });
+            declare_ports: |_, _, out| {
+                out.declare("signal", PortDirection::Out);
             },
             metadata: test_metadata,
             read_output: |_, _, _| None,
@@ -2958,7 +3208,7 @@ mod tests {
         precedence.register(PortBackend {
             list_entities: |_, _| {},
             topology_key: |_, _| 1,
-            list: |_, _, _| {},
+            declare_ports: |_, _, _| {},
             metadata: read_only_test_metadata,
             read_output: |_, _, name| (name == "signal").then_some(1.0),
             read_input: |_, _, _| None,
@@ -2971,7 +3221,7 @@ mod tests {
         precedence.register(PortBackend {
             list_entities: |_, _| {},
             topology_key: |_, _| 1,
-            list: |_, _, _| {},
+            declare_ports: |_, _, _| {},
             metadata: read_only_test_metadata,
             read_output: |_, _, name| (name == "signal").then_some(2.0),
             read_input: |_, _, _| None,
@@ -3005,7 +3255,7 @@ mod tests {
                 );
             },
             topology_key: |_world, _entity| 0,
-            list: duplicate_input_list,
+            declare_ports: duplicate_input_list,
             metadata: read_only_test_metadata,
             read_output: no_read,
             read_input: no_read,
@@ -3108,7 +3358,7 @@ mod tests {
         registry.register(PortBackend {
             list_entities: |_, _| {},
             topology_key: |_, _| 0,
-            list: duplicate_input_list,
+            declare_ports: duplicate_input_list,
             metadata: owner_a_metadata,
             read_output: no_read,
             read_input: no_read,
@@ -3121,7 +3371,7 @@ mod tests {
         registry.register(PortBackend {
             list_entities: |_, _| {},
             topology_key: |_, _| 0,
-            list: duplicate_input_list,
+            declare_ports: duplicate_input_list,
             metadata: owner_b_metadata,
             read_output: no_read,
             read_input: |_, _, name| (name == "release").then_some(0.75),

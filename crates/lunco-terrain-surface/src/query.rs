@@ -561,6 +561,8 @@ impl ApiQueryProvider for TerrainRaycastProvider {
 /// entities waiting for `ShaderLookReady` (including the root fallback), so a
 /// zero pending count means the selected work has crossed the render-resource
 /// boundary rather than merely leaving a worker queue.
+/// `derived` reads the same optional-map lifecycle mirrored by the status bar;
+/// performance measurements can wait for it without holding simulation time.
 pub struct TerrainLodStatusProvider;
 
 impl ApiQueryProvider for TerrainLodStatusProvider {
@@ -604,6 +606,12 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
             return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "TerrainLodStatus: terrain streaming is unavailable",
+            ));
+        };
+        let Some(derived) = world.get_resource::<crate::TerrainDerivedStatus>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "TerrainLodStatus: terrain visual preparation is unavailable",
             ));
         };
         let Some(settings) = world.get_resource::<lunco_render::RenderingQualitySettings>() else {
@@ -832,6 +840,12 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 "budget_refused": status.budget_refused,
                 "focus_wanted": status.focus_wanted,
                 "focus_resident": status.focus_resident,
+            },
+            "derived": {
+                "active": derived.active,
+                "ready": derived.ready,
+                "total": derived.total,
+                "pending": derived.pending,
             },
             "viewport_camera": world
                 .get_resource::<lunco_viewport_core::SceneViewport>()

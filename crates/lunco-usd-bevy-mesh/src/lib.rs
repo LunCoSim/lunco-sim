@@ -10,6 +10,9 @@ use bevy::prelude::*;
 use openusd::schemas::geom::tokens as gtok;
 use openusd::sdf::Path as SdfPath;
 
+mod primitive_assets;
+pub use primitive_assets::{PrimitiveMeshAssets, PrimitiveMeshRequest, PrimitiveMeshResult};
+
 use lunco_usd_bevy_lathe as lathe;
 use lunco_usd_bevy_scene::{
     ShapeDims, UsdPrimPath, UsdSceneChangeBatch, read_usd_mesh_points, read_usd_mesh_topology,
@@ -242,7 +245,13 @@ pub fn build_primitive_mesh(
 /// does not repeat USD traversal or touch physics colliders.
 pub fn retessellate_primitive_meshes_on_quality_change(
     mut meshes: ResMut<Assets<Mesh>>,
-    q: Query<(&UsdPrimitiveMesh, &Mesh3d, Option<&Name>)>,
+    mut primitives: ResMut<PrimitiveMeshAssets>,
+    mut q: Query<(
+        &UsdPrimitiveMesh,
+        &mut Mesh3d,
+        Option<&Name>,
+        Has<lunco_render::SharedMeshAsset>,
+    )>,
     quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
     if !quality.is_changed() {
@@ -257,7 +266,20 @@ pub fn retessellate_primitive_meshes_on_quality_change(
             return;
         }
     };
-    for (primitive, handle, name) in &q {
+    for (primitive, mut handle, name, shared) in &mut q {
+        if shared {
+            if let Some(next) = primitives.resolve_quality_edit(primitive.0, profile, &mut meshes) {
+                if next.id() != handle.0.id() {
+                    handle.0 = next;
+                }
+            } else {
+                warn!(
+                    "[usd-bevy-mesh] {} shared primitive quality edit produced no asset; retaining its mesh",
+                    name.map_or("<unnamed>", |n| n.as_str())
+                );
+            }
+            continue;
+        }
         let Some(mesh) = build_primitive_mesh(primitive.0, profile) else {
             warn!(
                 "[usd-bevy-mesh] {} primitive mesh quality is invalid; retaining the previous mesh",
@@ -351,7 +373,7 @@ fn curve_mesh_path_resynced(changed: &str, curve: &str) -> bool {
 
 #[cfg(test)]
 mod curve_invalidation_tests {
-    use super::curve_mesh_path_affected;
+    use super::curve_mesh_path_resynced;
 
     #[test]
     fn curve_refresh_is_limited_to_its_resynced_subtree() {

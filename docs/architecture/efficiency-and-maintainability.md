@@ -268,10 +268,11 @@ precedence. A one-shot name read/write therefore pays, per call:
 - for the avian backend, up to **six group-presence `get`s + a name scan**
   (`find_avian_port` walked `AVIAN` groups, each gated on a component).
 
-The fixed propagation master must not repeat this resolution each tick. Its
-`CompiledWiring` resolves endpoints when connections or port topology change,
-then reads/writes through an owning-backend slot. This removes repeated
-registry folds and dynamic-name map lookups from opted-in backends. Earlier
+The fixed propagation master caches endpoint slots in `CompiledWiring` when
+connections or port topology change. Reads dispatch through the owner slot;
+writes validate live precedence and metadata through selective borrowed
+declarations before committing the cached slot. This avoids full-surface
+materialization while preserving immediate rejection of changed contracts. Earlier
 Tracy attribution identified propagation as a meaningful physics cost; the slot
 path is an architectural reduction, not a measured FPS claim.
 
@@ -300,6 +301,8 @@ plane uses process-local slots.
   fast path.
 - The registry resolves an endpoint to a `ResolvedPort` carrying its backend,
   slot, side, revision, direction, and metadata. Reads dispatch by slot. Writes
+  discover the live declaration through a borrowed exact-name
+  `PortDeclarationQuery`; indexed owners do not enumerate their other ports. They
   use the canonical input-write preparation to verify the live precedence-winning
   owner, metadata, topology revision, slot, and proposed value once, then commit
   directly within the same exclusive World boundary. A single resolved write does not allocate
@@ -315,6 +318,20 @@ plane uses process-local slots.
   used by `InputPorts` and `SimComponent`. `ShaderLook::live` uses the same
   substrate with predeclared optional parameter samples, so shader wires read
   and write by handle without a per-tick ordered-set walk or name lookup.
+  `ScalarPortMap::upsert_samples` retains destination handles for borrowed
+  snapshot copying. Every entry validates its current name and layout before
+  reuse, so source order and map cardinality never establish identity. Clone
+  retires these copy hints; changed source order and destination structure
+  resolve at the existing map owner. The copy reports native-bit value or
+  topology changes independently of its hint bookkeeping.
+- Structural publication observes each owning component's change tick.
+  `PortTopologyState::observe_if_changed` derives auxiliary declaration and
+  unit-contract fingerprints on initial observation or source changes, then
+  returns the retained key for sample-only updates. A new `SimComponent`
+  refreshes its auxiliary facts even when they were edited outside participant
+  scope. Component removal retires that type's key. Direct backend inspection
+  and writes continue to read the live owner contract; the publication cache
+  does not authorize stale values or metadata.
 - `ResolvedPort` is **process-local** (like an FMI value reference / a port slot):
   the `slot` is backend-private and MUST NOT be serialized or sent on the wire —
   resolve fresh on every peer. This keeps it inside the determinism firewall.

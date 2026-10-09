@@ -466,9 +466,7 @@ fn range_value(min: Option<f64>, max: Option<f64>) -> ApiValue {
 mod tests {
     use super::*;
     use lunco_engineering_values::{Dimension, Unit, UnitReference};
-    use lunco_port_core::ports::{
-        PortBackend, PortDeclaration, PortDirection, PortMetadata, PortRegistry,
-    };
+    use lunco_port_core::ports::{PortBackend, PortDirection, PortMetadata, PortRegistry};
 
     #[derive(Component)]
     struct TestActuator {
@@ -486,22 +484,11 @@ mod tests {
             );
         },
         topology_key: |_world, _entity| 1,
-        list: |world, entity, out| {
+        declare_ports: |world, entity, out| {
             if world.get::<TestActuator>(entity).is_some() {
-                out.extend([
-                    PortDeclaration {
-                        name: "target".to_owned(),
-                        direction: PortDirection::In,
-                    },
-                    PortDeclaration {
-                        name: "measured".to_owned(),
-                        direction: PortDirection::Out,
-                    },
-                    PortDeclaration {
-                        name: "rate".to_owned(),
-                        direction: PortDirection::Out,
-                    },
-                ]);
+                out.declare("target", PortDirection::In);
+                out.declare("measured", PortDirection::Out);
+                out.declare("rate", PortDirection::Out);
             }
         },
         metadata: |_world, _entity, name, direction| {

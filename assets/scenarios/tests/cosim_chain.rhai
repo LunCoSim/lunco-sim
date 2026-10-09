@@ -9,7 +9,8 @@ const WAIT_S = 30.0;
 fn simulation_dependencies(me, ctx) {
     #{
         modelica_entities: [find_path("/CosimChain/Oscillator")],
-        entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
+        entity_reads: [find_path("/CosimChain/Amplifier"), find_path("/CosimChain/CosimTarget")],
+        entity_writes: [], query_reads: [], required_inputs: [],
     }
 }
 

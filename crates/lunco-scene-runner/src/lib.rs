@@ -1989,18 +1989,9 @@ pub fn run() -> u8 {
 
     // ── Determinism, installed AFTER the core plugin so it wins ──────────────
     //
-    // `LunCoSimHeadlessPlugin` installs the same virtual clock admission used by
-    // the runtime. Under manual stepping there is no wall-clock jitter to cap,
-    // and the GUI's default cap would silently swallow steps for any `--tick-hz`
-    // below ~30. Keep that clock and its startup admission state; set only a cap
-    // just above our own step so it can never clamp us.
-    // The cap must clear the LARGEST step we will ever ask for, which under
-    // `--jitter` is `(1 + jitter) * dt` — a cap below that would clamp exactly the
-    // long frames we are trying to reproduce and quietly defang the experiment.
-    let max_dt = Duration::from_secs_f64(dt.as_secs_f64() * (1.0 + cli.jitter));
-    app.world_mut()
-        .resource_mut::<Time<Virtual>>()
-        .set_max_delta(max_dt * 2);
+    // `LunCoSimHeadlessPlugin` installs the runtime time owner. Keep its
+    // admission and retained fixed accumulator; the test driver only selects
+    // the manual input duration and integration timestep.
     // The fixed clock must match the manual step, or one `app.update()` is not
     // one physics tick and the "ticks" in `--max-ticks` stop meaning anything.
     // (Under `--jitter` that one-to-one relation is INTENTIONALLY broken — the

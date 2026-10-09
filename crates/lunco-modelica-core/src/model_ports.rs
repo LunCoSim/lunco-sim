@@ -9,8 +9,7 @@ use bevy::prelude::*;
 use lunco_cosim_core::SimComponent;
 use lunco_modelica_runtime::ModelicaModel;
 use lunco_port_core::ports::{
-    PortBackend, PortDeclaration, PortDirection, PortMetadata, PortRegistry, PortTopologyRevision,
-    PortTopologyState,
+    PortBackend, PortDirection, PortMetadata, PortRegistry, PortTopologyRevision, PortTopologyState,
 };
 use std::hash::{Hash, Hasher};
 
@@ -60,14 +59,19 @@ const MODELICA_INPUT_BACKEND: PortBackend = PortBackend {
             )
         })
     },
-    list: |world, entity, out| {
+    declare_ports: |world, entity, out| {
         if let Some(model) = world.get::<ModelicaModel>(entity)
             && world.get::<SimComponent>(entity).is_none()
         {
-            out.extend(model.inputs.keys().map(|name| PortDeclaration {
-                name: name.clone(),
-                direction: PortDirection::In,
-            }));
+            if let Some(name) = out.requested_name() {
+                if model.inputs.contains_key(name) {
+                    out.declare(name, PortDirection::In);
+                }
+            } else {
+                for name in model.inputs.keys() {
+                    out.declare(name, PortDirection::In);
+                }
+            }
         }
     },
     metadata: |world, entity, name, direction| {

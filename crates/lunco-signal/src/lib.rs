@@ -383,6 +383,14 @@ impl ScalarHistory {
     }
 
     pub fn push(&mut self, sample: ScalarSample) {
+        let _span = (self.tail.len() == self.tail.capacity()).then(|| {
+            bevy::log::debug_span!(
+                "signal_scalar_history_tail_growth",
+                retained = self.len,
+                tail_capacity = self.tail.capacity()
+            )
+            .entered()
+        });
         if self.len >= self.capacity {
             self.pop_front();
         }
@@ -515,21 +523,36 @@ impl SignalRegistry {
         sample: ScalarSample,
         capacity: usize,
         resize_existing: bool,
-    ) {
+        rate_hz: Option<f64>,
+    ) -> bool {
         let key = sig.as_ref();
-        let was_inactive = self.inactive.remove(key);
         if let Some(history) = self.scalar_history.get_mut(key) {
+            // Rate admission and append borrow the same live history. A rejected
+            // sample must not reactivate a source or resize its retention.
+            if let (Some(rate_hz), Some(previous)) = (rate_hz, history.back()) {
+                if sample.time < previous.time {
+                    history.clear();
+                } else if sample.time - previous.time < 1.0 / rate_hz {
+                    return false;
+                }
+            }
             if resize_existing && history.capacity != capacity.max(1) {
                 history.set_capacity(capacity);
             }
             history.push(sample);
-            if was_inactive {
+            if self.inactive.remove(key) {
                 self.descriptor_changes.insert(key.clone());
                 self.catalog_revision = self.catalog_revision.wrapping_add(1);
             }
-            return;
+            return true;
         }
 
+        let _span = bevy::log::debug_span!(
+            "signal_scalar_channel_create",
+            channels = self.scalar_history.len()
+        )
+        .entered();
+        let was_inactive = self.inactive.remove(key);
         let was_known = self.types.contains_key(key);
         let mut history = ScalarHistory::new(capacity);
         history.push(sample);
@@ -540,6 +563,7 @@ impl SignalRegistry {
             self.descriptor_changes.insert(sig);
             self.catalog_revision = self.catalog_revision.wrapping_add(1);
         }
+        true
     }
 
     /// Push a scalar (time, value) sample. Allocates the history buffer and records the
@@ -553,6 +577,7 @@ impl SignalRegistry {
             ScalarSample { time, value },
             self.capacity_default(),
             false,
+            None,
         );
     }
 
@@ -575,6 +600,7 @@ impl SignalRegistry {
             ScalarSample { time, value },
             capacity,
             true,
+            None,
         );
     }
 
@@ -648,25 +674,13 @@ impl SignalRegistry {
             return false;
         }
 
-        let previous = self
-            .scalar_history(sig)
-            .and_then(ScalarHistory::back)
-            .copied();
-        if let Some(previous) = previous {
-            if time < previous.time {
-                self.clear_history(sig);
-            } else if time - previous.time < 1.0 / rate_hz {
-                return false;
-            }
-        }
-
         self.push_scalar_sample(
             Cow::Borrowed(sig),
             ScalarSample { time, value },
             capacity,
             true,
-        );
-        true
+            Some(rate_hz),
+        )
     }
 
     pub fn update_meta(&mut self, sig: SignalRef, meta: SignalMeta) {
@@ -1182,7 +1196,7 @@ mod tests {
     }
 
     #[test]
-    fn recording_keeps_simulation_time_when_value_is_steady() {
+    fn recording_preserves_rate_history_lifecycle_and_retention() {
         let mut reg = SignalRegistry::default();
         let signal = SignalRef::global("steady");
         assert!(reg.record_scalar_at_rate(&signal, 0.0, 1.0, 10.0, 8));
@@ -1191,5 +1205,42 @@ mod tests {
         let history = reg.scalar_history(&signal).unwrap();
         assert_eq!(history.len(), 2);
         assert_eq!(history.back().unwrap().time, 0.11);
+
+        reg.deactivate_signal(&signal);
+        let catalog = reg.catalog_revision();
+        assert!(!reg.record_scalar_at_rate(&signal, 0.12, 2.0, 10.0, 1));
+        assert!(!reg.is_active(&signal));
+        assert_eq!(reg.catalog_revision(), catalog);
+        assert_eq!(reg.scalar_history(&signal).unwrap().capacity, 8);
+
+        assert!(reg.record_scalar_at_rate(&signal, 0.22, 2.0, 10.0, 1));
+        assert!(reg.is_active(&signal));
+        assert_eq!(reg.catalog_revision(), catalog.wrapping_add(1));
+        assert_eq!(reg.scalar_history(&signal).unwrap().len(), 1);
+
+        // A seek starts a new segment without losing channel identity or owner.
+        reg.associate_global_owner(&signal, GlobalEntityId::from_raw(42));
+        let catalog = reg.catalog_revision();
+        assert!(reg.record_scalar_at_rate(&signal, 0.0, 3.0, 10.0, 4));
+        let history = reg.scalar_history(&signal).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history.back().unwrap().time, 0.0);
+        assert_eq!(history.back().unwrap().value, 3.0);
+        assert_eq!(history.capacity, 4);
+        assert_eq!(
+            reg.global_owner(&signal),
+            Some(GlobalEntityId::from_raw(42))
+        );
+        assert_eq!(reg.catalog_revision(), catalog);
+
+        for (time, value, rate) in [
+            (f64::NAN, 1.0, 10.0),
+            (0.2, f64::INFINITY, 10.0),
+            (0.2, 1.0, 0.0),
+        ] {
+            assert!(!reg.record_scalar_at_rate(&signal, time, value, rate, 1));
+        }
+        assert_eq!(reg.scalar_history(&signal).unwrap().capacity, 4);
+        assert_eq!(reg.scalar_history(&signal).unwrap().len(), 1);
     }
 }

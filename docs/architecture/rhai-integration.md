@@ -246,6 +246,17 @@ policy.
 USD scenario asset markers and pending policy sources carry typed Bevy
 `AssetPath` values through the load boundary; native source admission follows
 the [asset-owner contract](55-scene-addressing-and-roots.md#native-payload-and-source-admission).
+
+`lunco-scripting-rhai-runtime` retires an attached program when a replacement
+asset request reaches its host, before the replacement import graph completes.
+The serial `PreUpdate` retirement system retains a native Bevy `QueryState`
+for pending hosts. Bevy updates its archetype matches as the world changes;
+the system reads current membership each pass and collects host identities
+before lifecycle teardown mutates the world.
+`RunScenarioAsset` rejects empty or whitespace-only source input before URI
+conversion, asset loading or pending-host publication. A rejected request leaves
+the attached program and its document intact.
+
 NB: `goto` is a reserved word in rhai — the nav helper is `nav_to`.
 
 The shared scene-selection package registers `InspectSelection` as a read-only
@@ -401,6 +412,14 @@ authored assets or compile a new engine per call. While startup preparation is
 pending, queued requests remain queued. A thread-local print destination
 captures output for the active request while scenario output continues to use
 the application log.
+
+The language-neutral `lunco-scripting` driver shares one World-owned native
+Bevy query state for scenario model facts across compilation, startup, fixed
+ticks and visualization. It caches archetype matches, never actor membership
+or model values. Each pass reads current facts and releases its query borrow
+before lifecycle hooks or structural commands run. Native queries admit new
+archetypes and read additions, removals, scope markers and authority changes;
+the existing stable actor sorting and execution contexts remain authoritative.
 
 The owning system supplies a typed `RuntimeExecutionContext` for each scenario
 phase and one-shot REPL or UI-tool evaluation. Rhai reads it with

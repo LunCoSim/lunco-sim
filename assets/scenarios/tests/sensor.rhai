@@ -837,7 +837,8 @@ fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first
             && fixed_loop.service_ms_p50 <= fixed_loop.service_ms_p95
             && fixed_loop.service_ms_p95 <= fixed_loop.service_ms_p99
             && fixed_loop.service_ms_p99 <= fixed_loop.service_ms_max
-            && fixed_loop.latest_fractional_overstep_secs != (),
+            && fixed_loop.latest_pending_simulation_secs != ()
+            && fixed_loop.latest_pending_simulation_secs.to_float() >= 0.0,
             "fixed-loop profile did not expose service, steps, and remaining overstep"));
         print("SENSOR_TIMING_PROFILE|tick_ms_p50=" + tick.service_ms_p50.to_string()
             + "|tick_ms_p95=" + tick.service_ms_p95.to_string()

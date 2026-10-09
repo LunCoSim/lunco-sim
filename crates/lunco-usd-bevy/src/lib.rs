@@ -47,7 +47,7 @@ use big_space::prelude::{CellCoord, Grid};
 // `MeshMaterial3d`/`StandardMaterial` (they live in `bevy_pbr` → wgpu + naga).
 // `lunco-render-bevy` observes these and binds the real material.
 // See docs/architecture/render-decoupling.md.
-use lunco_render::{PbrLook, PbrTextures, ProceduralSkybox, SurfaceAlpha};
+use lunco_render::{PbrLook, PbrTextures, ProceduralSkybox, SharedMeshAsset, SurfaceAlpha};
 use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
 
@@ -56,9 +56,9 @@ use lunco_usd_bevy_core::point_instancer::read_point_instancer;
 use lunco_usd_bevy_lathe as lathe;
 use lunco_usd_bevy_light::light;
 use lunco_usd_bevy_mesh::{
-    UsdCurveMesh, UsdPrimitiveMesh, build_primitive_mesh, build_usd_curve_mesh, build_usd_mesh,
-    build_usd_nurbs_patch_mesh, has_authored_nurbs_trim, read_nurbs_patch_surface,
-    refresh_curve_meshes_on_stage_or_quality_change,
+    PrimitiveMeshAssets, PrimitiveMeshRequest, PrimitiveMeshResult, UsdCurveMesh, UsdPrimitiveMesh,
+    build_usd_curve_mesh, build_usd_mesh, build_usd_nurbs_patch_mesh, has_authored_nurbs_trim,
+    read_nurbs_patch_surface, refresh_curve_meshes_on_stage_or_quality_change,
     retessellate_primitive_meshes_on_quality_change,
 };
 use lunco_usd_bevy_scene::{
@@ -95,6 +95,10 @@ impl Plugin for UsdVisualPlugin {
         // settings. Initialise the documented default at this boundary so
         // projectors never invent a separate quality profile.
         app.init_resource::<lunco_render::RenderingQualitySettings>();
+        app.init_resource::<PrimitiveMeshAssets>()
+            .register_type::<SharedMeshAsset>()
+            .add_message::<AssetEvent<Mesh>>()
+            .add_systems(PostUpdate, prune_primitive_mesh_requests);
         app.add_plugins((
             UsdScenePlugin,
             lunco_usd_bevy_camera::UsdCameraPlugin,
@@ -260,6 +264,7 @@ impl Plugin for UsdVisualPlugin {
                     resolve_point_instancer_meshes
                         .run_if(point_instance_render_inputs_changed)
                         .after(poll_pending_usd_meshes)
+                        .after(retessellate_primitive_meshes_on_quality_change)
                         .in_set(UsdVisualProjectionSet),
                     hide_point_instancer_prototypes
                         .run_if(point_instancer_visibility_inputs_changed)
@@ -306,7 +311,7 @@ impl Plugin for UsdVisualPlugin {
 /// on the main thread and is never captured by the worker.
 #[derive(Component)]
 struct PendingUsdMesh {
-    task: Task<Option<Mesh>>,
+    build: PendingUsdMeshBuild,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     path: SdfPath,
     /// Ordinary scene geometry is read from the canonical stage and must be
@@ -319,6 +324,16 @@ struct PendingUsdMesh {
     canonical_generation: Option<u64>,
     profile: lunco_render::RenderQualityProfile,
 }
+
+enum PendingUsdMeshBuild {
+    Primitive(PrimitiveMeshRequest),
+    Nurbs(Task<Option<Mesh>>),
+}
+
+/// Last mesh inherited from a point-instance prototype. A different current
+/// handle is an entity-specific edit and must not be replaced by prototype sync.
+#[derive(Component)]
+struct PointInstanceMeshBinding(AssetId<Mesh>);
 
 /// Marker: this prim's `xformOpOrder` begins with the `!resetXformStack!`
 /// sentinel, so UsdGeomXformable defines its local-to-world as its OWN op stack
@@ -566,6 +581,7 @@ fn instantiate_usd_prim(
     asset_server: &AssetServer,
     twin_roots: Option<&lunco_assets_core::TwinRoots>,
     meshes: &mut Assets<Mesh>,
+    primitives: &mut PrimitiveMeshAssets,
     quality: lunco_render::RenderQualityProfile,
     live_child_keys: &mut std::collections::HashSet<(Entity, AssetId<UsdStageAsset>, String)>,
     pending_children: &mut UsdPendingChildAdmissions,
@@ -594,6 +610,7 @@ fn instantiate_usd_prim(
         asset_server,
         twin_roots,
         meshes,
+        primitives,
         quality,
         stage_generation,
         live_child_keys,
@@ -621,6 +638,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
     asset_server: &AssetServer,
     twin_roots: Option<&lunco_assets_core::TwinRoots>,
     meshes: &mut Assets<Mesh>,
+    primitives: &mut PrimitiveMeshAssets,
     quality: lunco_render::RenderQualityProfile,
     stage_generation: u64,
     live_child_keys: &mut std::collections::HashSet<(Entity, AssetId<UsdStageAsset>, String)>,
@@ -1047,7 +1065,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                     e.try_insert((
                         surface,
                         PendingUsdMesh {
-                            task,
+                            build: PendingUsdMeshBuild::Nurbs(task),
                             stage_id: prim_path.stage_handle.id(),
                             path: sdf_path.clone(),
                             canonical_generation: instance_projection
@@ -1092,11 +1110,10 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 // `xformOp:scale` handles non-uniform dimensions (applied to the
                 // Transform below) — that is how UsdGeomCube spells a box.
                 Some(shape) => {
-                    let task = AsyncComputeTaskPool::get()
-                        .spawn(async move { build_primitive_mesh(shape, quality) });
+                    let request = primitives.request(shape, quality);
                     commands.entity(entity).try_insert((
                         PendingUsdMesh {
-                            task,
+                            build: PendingUsdMeshBuild::Primitive(request),
                             stage_id: prim_path.stage_handle.id(),
                             path: sdf_path.clone(),
                             canonical_generation: instance_projection
@@ -1119,6 +1136,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             commands
                 .entity(entity)
                 .remove::<Mesh3d>()
+                .remove::<SharedMeshAsset>()
                 .remove::<UsdPrimitiveMesh>()
                 .remove::<UsdCurveMesh>()
                 .remove::<PendingUsdMesh>()
@@ -1130,6 +1148,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         // worker-built mesh receives its authored appearance before the task
         // completes.
         let material_result = if let Some(ref m) = mesh_handle {
+            commands.entity(entity).try_remove::<SharedMeshAsset>();
             apply_standard_material(
                 reader,
                 &sdf_path,
@@ -1566,26 +1585,57 @@ fn project_point_instancer<R: UsdRead>(
 /// ordering.
 fn resolve_point_instancer_meshes(
     mut commands: Commands,
-    prototypes: Query<(&UsdPrimPath, Option<&Mesh3d>, Option<&PbrLook>)>,
-    instances: Query<(Entity, &UsdPointInstance), Without<Mesh3d>>,
+    prototypes: Query<(
+        &UsdPrimPath,
+        Option<&Mesh3d>,
+        Option<&PbrLook>,
+        Has<SharedMeshAsset>,
+    )>,
+    instances: Query<(
+        Entity,
+        &UsdPointInstance,
+        Option<&Mesh3d>,
+        Option<&PointInstanceMeshBinding>,
+        Has<SharedMeshAsset>,
+    )>,
 ) {
     let mut ready = std::collections::HashMap::new();
-    for (path, mesh, look) in &prototypes {
+    for (path, mesh, look, shared) in &prototypes {
         if let (Some(mesh), Some(look)) = (mesh, look) {
             ready.insert(
                 (path.stage_handle.id(), path.path.clone()),
-                (mesh.0.clone(), look.clone()),
+                (mesh.0.clone(), look.clone(), shared),
             );
         }
     }
-    for (entity, instance) in &instances {
-        let Some((mesh, look)) = ready.get(&(instance.stage_id, instance.prototype_path.clone()))
+    for (entity, instance, current, binding, current_shared) in &instances {
+        let Some((mesh, look, shared)) =
+            ready.get(&(instance.stage_id, instance.prototype_path.clone()))
         else {
             continue;
         };
-        commands
-            .entity(entity)
-            .try_insert((Mesh3d(mesh.clone()), look.clone()));
+        if current.is_none() {
+            commands.entity(entity).try_insert((
+                Mesh3d(mesh.clone()),
+                look.clone(),
+                PointInstanceMeshBinding(mesh.id()),
+            ));
+        } else if current
+            .is_some_and(|current| binding.is_none_or(|binding| current.0.id() != binding.0))
+        {
+            continue;
+        } else if current.is_some_and(|current| current.0.id() != mesh.id()) {
+            commands
+                .entity(entity)
+                .try_insert((Mesh3d(mesh.clone()), PointInstanceMeshBinding(mesh.id())));
+        }
+        if *shared != current_shared {
+            if *shared {
+                commands.entity(entity).try_insert(SharedMeshAsset);
+            } else {
+                commands.entity(entity).try_remove::<SharedMeshAsset>();
+            }
+        }
     }
 }
 
@@ -2050,6 +2100,7 @@ fn process_queued_usd_visuals(
     canonical: NonSend<CanonicalStages>,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut primitives: ResMut<PrimitiveMeshAssets>,
     quality: Res<lunco_render::RenderingQualitySettings>,
     settings: Res<UsdVisualProjectionSettings>,
     mut commands: Commands,
@@ -2182,6 +2233,7 @@ fn process_queued_usd_visuals(
             &asset_server,
             visual_state.twin_roots.as_deref(),
             &mut meshes,
+            &mut primitives,
             requested_profile,
             &mut visual_state.child_keys,
             &mut visual_state.pending_children,
@@ -2517,6 +2569,7 @@ fn fail_usd_projection(
 fn poll_pending_usd_meshes(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut primitives: ResMut<PrimitiveMeshAssets>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
     quality: Res<lunco_render::RenderingQualitySettings>,
@@ -2557,10 +2610,22 @@ fn poll_pending_usd_meshes(
             continue;
         }
 
-        let Some(result) = block_on(future::poll_once(&mut pending.task)) else {
-            continue;
+        let (result, shared) = match &mut pending.build {
+            PendingUsdMeshBuild::Primitive(request) => {
+                match primitives.poll(request, &mut meshes) {
+                    PrimitiveMeshResult::Pending => continue,
+                    PrimitiveMeshResult::Ready(handle) => (Some(handle), true),
+                    PrimitiveMeshResult::Rejected => (None, true),
+                }
+            }
+            PendingUsdMeshBuild::Nurbs(task) => {
+                let Some(result) = block_on(future::poll_once(task)) else {
+                    continue;
+                };
+                (result.map(|mesh| meshes.add(mesh)), false)
+            }
         };
-        let Some(result) = result else {
+        let Some(mesh_handle) = result else {
             warn!(
                 "[usd-bevy] {} CPU mesh build produced no geometry; visual mesh was not created",
                 pending.path.as_str()
@@ -2576,15 +2641,42 @@ fn poll_pending_usd_meshes(
             continue;
         };
 
-        let mesh_handle = meshes.add(result);
         let render_entity = visual_target.map_or(entity, |target| target.0);
         commands
             .entity(render_entity)
             .try_insert(Mesh3d(mesh_handle.clone()));
+        if shared {
+            commands.entity(render_entity).try_insert(SharedMeshAsset);
+        } else {
+            commands
+                .entity(render_entity)
+                .try_remove::<SharedMeshAsset>();
+        }
         commands
             .entity(entity)
             .try_remove::<PendingUsdMesh>()
             .try_remove::<UsdSceneGeometryPending>();
+    }
+}
+
+fn prune_primitive_mesh_requests(
+    mut removed: RemovedComponents<PendingUsdMesh>,
+    mut assets: MessageReader<AssetEvent<Mesh>>,
+    mut primitives: ResMut<PrimitiveMeshAssets>,
+) {
+    let retired_readers = removed.read().count() > 0;
+    let retired_assets = assets
+        .read()
+        .filter(|event| {
+            matches!(
+                event,
+                AssetEvent::Removed { .. } | AssetEvent::Unused { .. }
+            )
+        })
+        .count()
+        > 0;
+    if retired_readers || retired_assets {
+        primitives.prune();
     }
 }
 
@@ -3430,6 +3522,107 @@ fn detach_reset_xform_stack_prims(
             entity_commands.try_insert((ChildOf(anchor), reset_local, ResetXformStackApplied));
             entity_commands.try_remove::<CellCoord>();
         }
+    }
+}
+
+#[cfg(test)]
+mod point_instance_mesh_binding_tests {
+    use super::*;
+
+    #[test]
+    fn point_instance_binding_follows_prototype_and_preserves_private_edits() {
+        let mut app = App::new();
+        let mut meshes = Assets::<Mesh>::default();
+        let original = meshes.add(Mesh::from(Cuboid::new(1.0, 1.0, 1.0)));
+        let replacement = meshes.add(Mesh::from(Cuboid::new(2.0, 2.0, 2.0)));
+        let private = meshes.add(Mesh::from(Cuboid::new(3.0, 3.0, 3.0)));
+        app.insert_resource(meshes)
+            .add_systems(Update, resolve_point_instancer_meshes);
+        let stage = Handle::<UsdStageAsset>::default();
+        let prototype = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: "/Prototype".into(),
+                },
+                Mesh3d(original.clone()),
+                PbrLook::default(),
+                SharedMeshAsset,
+            ))
+            .id();
+        let instances = (0..2)
+            .map(|index| {
+                app.world_mut()
+                    .spawn(UsdPointInstance {
+                        stage_id: stage.id(),
+                        index,
+                        id: index as i64,
+                        prototype_path: "/Prototype".into(),
+                    })
+                    .id()
+            })
+            .collect::<Vec<_>>();
+        app.update();
+        for entity in &instances {
+            assert_eq!(
+                app.world().get::<Mesh3d>(*entity).unwrap().0.id(),
+                original.id()
+            );
+            assert!(app.world().get::<SharedMeshAsset>(*entity).is_some());
+        }
+        app.world_mut()
+            .get_mut::<PbrLook>(instances[0])
+            .unwrap()
+            .perceptual_roughness = 0.17;
+        app.world_mut()
+            .entity_mut(instances[1])
+            .insert(Mesh3d(private.clone()))
+            .remove::<SharedMeshAsset>();
+        app.world_mut()
+            .entity_mut(prototype)
+            .insert(Mesh3d(replacement.clone()));
+        app.update();
+        assert_eq!(
+            app.world().get::<Mesh3d>(instances[0]).unwrap().0.id(),
+            replacement.id()
+        );
+        assert_eq!(
+            app.world()
+                .get::<PbrLook>(instances[0])
+                .unwrap()
+                .perceptual_roughness,
+            0.17
+        );
+        assert_eq!(
+            app.world().get::<Mesh3d>(instances[1]).unwrap().0.id(),
+            private.id()
+        );
+        assert!(app.world().get::<SharedMeshAsset>(instances[1]).is_none());
+        app.world_mut()
+            .entity_mut(prototype)
+            .insert(Mesh3d(original.clone()))
+            .remove::<SharedMeshAsset>();
+        app.update();
+        assert_eq!(
+            app.world().get::<Mesh3d>(instances[0]).unwrap().0.id(),
+            original.id()
+        );
+        assert!(app.world().get::<SharedMeshAsset>(instances[0]).is_none());
+        app.world_mut()
+            .entity_mut(prototype)
+            .insert((Mesh3d(replacement.clone()), SharedMeshAsset));
+        app.update();
+        assert_eq!(
+            app.world().get::<Mesh3d>(instances[0]).unwrap().0.id(),
+            replacement.id()
+        );
+        assert!(app.world().get::<SharedMeshAsset>(instances[0]).is_some());
+        assert_eq!(
+            app.world().get::<Mesh3d>(instances[1]).unwrap().0.id(),
+            private.id()
+        );
+        assert!(app.world().get::<SharedMeshAsset>(instances[1]).is_none());
     }
 }
 

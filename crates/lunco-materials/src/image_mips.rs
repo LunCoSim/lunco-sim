@@ -59,6 +59,12 @@ pub fn rgba8_mip_chain(
     all.extend_from_slice(&base);
     all.resize(total_len, 0);
 
+    // RGBA8 has only 256 possible encoded channel values. Evaluate the same
+    // transfer function once per byte value, preserving its native f32 result
+    // while avoiding repeated nonlinear decoding for every source texel.
+    let srgb_decoded: Option<[f32; 256]> = (mode == Rgba8MipMode::SrgbColor)
+        .then(|| std::array::from_fn(|value| srgb_to_linear(value as f32 / 255.0)));
+
     let mut previous_offset = 0usize;
     for (&(previous_width, previous_height), &(next_width, next_height)) in
         dimensions.iter().zip(dimensions.iter().skip(1))
@@ -87,10 +93,13 @@ pub fn rgba8_mip_chain(
                 let mut rgb = [0.0f32; 3];
                 match mode {
                     Rgba8MipMode::SrgbColor => {
+                        let decoded = srgb_decoded
+                            .as_ref()
+                            .expect("sRGB mode initializes its decode table");
                         for channel in 0..3 {
                             rgb[channel] = samples
                                 .iter()
-                                .map(|&index| srgb_to_linear(all[index + channel] as f32 / 255.0))
+                                .map(|&index| decoded[all[index + channel] as usize])
                                 .sum::<f32>()
                                 / 4.0;
                             rgb[channel] = linear_to_srgb(rgb[channel]);
@@ -180,6 +189,49 @@ mod tests {
         // Linear 50% encoded as sRGB is approximately 188, not 128.
         assert!((187..=189).contains(&chain[16]));
         assert_eq!(&chain[16..20], &[chain[16], chain[16], chain[16], 255]);
+    }
+
+    #[test]
+    fn srgb_chain_preserves_transfer_for_every_byte_pair() {
+        let width = 512;
+        let base_len = width * width * 4;
+        let mut base = vec![0; base_len];
+        let mut expected = vec![0; 256 * 256 * 4];
+        for a in 0..256 {
+            for b in 0..256 {
+                let pixels = [
+                    [a as u8, b as u8, 255, a as u8],
+                    [b as u8, a as u8, 0, b as u8],
+                    [255, 0, a as u8, 0],
+                    [0, 255, b as u8, 255],
+                ];
+                for (i, pixel) in pixels.iter().enumerate() {
+                    let offset = ((a * 2 + i / 2) * width + b * 2 + i % 2) * 4;
+                    base[offset..offset + 4].copy_from_slice(pixel);
+                }
+                let output = &mut expected[(a * 256 + b) * 4..(a * 256 + b + 1) * 4];
+                for channel in 0..3 {
+                    let linear = pixels
+                        .iter()
+                        .map(|pixel| srgb_to_linear(pixel[channel] as f32 / 255.0))
+                        .sum::<f32>()
+                        / 4.0;
+                    output[channel] =
+                        (linear_to_srgb(linear).clamp(0.0, 1.0) * 255.0).round() as u8;
+                }
+                output[3] = pixels
+                    .iter()
+                    .map(|pixel| pixel[3] as u16)
+                    .sum::<u16>()
+                    .div_ceil(4) as u8;
+            }
+        }
+        let (chain, levels) = rgba8_mip_chain(base, width, width, Rgba8MipMode::SrgbColor).unwrap();
+        assert_eq!(levels, 10);
+        assert_eq!(
+            &chain[base_len..base_len + expected.len()],
+            expected.as_slice()
+        );
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! open-ended (the parameter set belongs to the `.wgsl`, not to Rust), so domain
 //! crates state it as [`lunco_materials::ShaderLook`] — a shader **path**, a
 //! `BTreeMap` of named [`ParamValue`](lunco_materials::ParamValue)s, and named
-//! [`TextureLayer`]s. Neither the path nor `Handle<Image>` touches `bevy_pbr`, so
+//! [`TextureLayer`]s. Neither the path nor `ShaderTexture` touches `bevy_pbr`, so
 //! the crate that authors the look (the terrain streamer, notably) links no GPU
 //! stack. This module is where it becomes a real `ShaderMaterial`.
 //!
@@ -34,17 +34,16 @@
 use crate::look_cache::{CachedLook, LookCache, sweep_look_cache};
 use crate::shader_material::{ShaderMaterial, build_shader_material, wgsl_source};
 use bevy::asset::AssetId;
-use bevy::image::{ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
-use bevy::render::render_resource::{TextureDimension, TextureFormat};
 use bevy::shader::Shader;
-use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
+use lunco_materials::image_loader::ShaderImageAssets;
+use lunco_materials::{ColorMip, LinearMip, NormalMip, PreparedShaderImage};
 use lunco_materials::{
-    ParamSchema, Rgba8MipMode, ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady,
-    ShaderLookSourceInterface, ShaderStage, TextureLayer, rgba8_mip_chain, validate_shader_stage,
+    ParamSchema, ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady,
+    ShaderLookSourceInterface, ShaderStage, TextureLayer, validate_shader_stage,
 };
 use lunco_render::{ProceduralSkybox, SurfaceAlpha};
 use std::sync::Arc;
@@ -108,7 +107,11 @@ fn shader_load_handles(
 }
 
 /// Build the concrete `ShaderMaterial` a look describes.
-fn shader_material(look: &ShaderLook, handles: &ShaderLoadHandles) -> ShaderMaterial {
+fn shader_material(
+    look: &ShaderLook,
+    handles: &ShaderLoadHandles,
+    rasters: &ShaderImageAssets,
+) -> ShaderMaterial {
     let mut m = ShaderMaterial {
         // A path, not a handle, in the intent — `bevy::shader` pulls naga, so the
         // domain crate cannot hold `Handle<Shader>`. Reuse the admitted handle.
@@ -149,7 +152,7 @@ fn shader_material(look: &ShaderLook, handles: &ShaderLoadHandles) -> ShaderMate
             TextureLayer::ContinuationSurface => &mut m.continuation_surface_map,
             TextureLayer::SurfaceAnnotations => &mut m.surface_annotations,
         };
-        *slot = Some(image.clone());
+        *slot = rasters.get(image).cloned();
     }
     // Packs against the (initially empty) schema; `reflect_shader_schemas` upgrades
     // it and repacks once the WGSL source lands. Same lifecycle as every other
@@ -345,9 +348,19 @@ fn material_for(
     cache: &mut ShaderLookCache,
     materials: &mut Assets<ShaderMaterial>,
     asset_server: &AssetServer,
-) -> Result<Handle<ShaderMaterial>, (ShaderStage, String)> {
+    rasters: &ShaderImageAssets,
+) -> Result<Option<Handle<ShaderMaterial>>, (ShaderStage, String)> {
+    if look
+        .textures
+        .values()
+        .any(|source| rasters.get(source).is_none())
+    {
+        return Ok(None);
+    }
     let handles = shader_load_handles(look, asset_server)?;
-    Ok(cache.resolve(look, materials, |look| shader_material(look, &handles)))
+    Ok(Some(cache.resolve(look, materials, |look| {
+        shader_material(look, &handles, rasters)
+    })))
 }
 
 /// Bind a shader look to its one render owner.
@@ -391,10 +404,9 @@ fn bind_shader_render_components(
 /// Does the material carry exactly the texture set the look states?
 ///
 /// Slot-by-slot identity compare, so a driven TEXTURED look can take the
-/// param-only update path: the old test was `!look.textures.is_empty()`, which
-/// classified every textured look as a structural change and rebuilt its
-/// material from scratch every tick the look moved.
-fn textures_match(m: &ShaderMaterial, look: &ShaderLook) -> bool {
+/// param-only update path. A textured look retains its material when its
+/// resolved image identities are unchanged.
+fn textures_match(m: &ShaderMaterial, look: &ShaderLook, rasters: &ShaderImageAssets) -> bool {
     use TextureLayer::*;
     [
         Height,
@@ -420,7 +432,12 @@ fn textures_match(m: &ShaderMaterial, look: &ShaderLook) -> bool {
             ContinuationSurface => &m.continuation_surface_map,
             SurfaceAnnotations => &m.surface_annotations,
         };
-        slot.as_ref().map(Handle::id) == look.textures.get(layer).map(Handle::id)
+        slot.as_ref().map(Handle::id)
+            == look
+                .textures
+                .get(layer)
+                .and_then(|image| rasters.get(image))
+                .map(Handle::id)
     })
 }
 
@@ -432,6 +449,7 @@ fn bind_shader_look(
     mut cache: ResMut<ShaderLookCache>,
     mut materials: ResMut<Assets<ShaderMaterial>>,
     asset_server: Res<AssetServer>,
+    rasters: ShaderImageAssets,
     shaders: Option<Res<Assets<Shader>>>,
     mut shader_cache: ResMut<ShaderSourceCache>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
@@ -448,8 +466,12 @@ fn bind_shader_look(
         }
         return;
     }
-    let handle = match material_for(look, &mut cache, &mut materials, &asset_server) {
-        Ok(handle) => handle,
+    let handle = match material_for(look, &mut cache, &mut materials, &asset_server, &rasters) {
+        Ok(Some(handle)) => handle,
+        Ok(None) => {
+            clear_shader_render_components(&mut commands, e);
+            return;
+        }
         Err((stage, detail)) => {
             clear_shader_render_components(&mut commands, e);
             error!("shader asset admission failed: {detail}");
@@ -478,6 +500,7 @@ fn bind_added_skybox_shader_look(
     mut cache: ResMut<ShaderLookCache>,
     mut materials: ResMut<Assets<ShaderMaterial>>,
     asset_server: Res<AssetServer>,
+    rasters: ShaderImageAssets,
     shaders: Option<Res<Assets<Shader>>>,
     mut shader_cache: ResMut<ShaderSourceCache>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
@@ -494,8 +517,12 @@ fn bind_added_skybox_shader_look(
         }
         return;
     }
-    let handle = match material_for(look, &mut cache, &mut materials, &asset_server) {
-        Ok(handle) => handle,
+    let handle = match material_for(look, &mut cache, &mut materials, &asset_server, &rasters) {
+        Ok(Some(handle)) => handle,
+        Ok(None) => {
+            clear_shader_render_components(&mut commands, e);
+            return;
+        }
         Err((stage, detail)) => {
             clear_shader_render_components(&mut commands, e);
             error!("shader asset admission failed: {detail}");
@@ -549,6 +576,7 @@ fn rebind_changed_shader_look(
     mut cache: ResMut<ShaderLookCache>,
     mut materials: ResMut<Assets<ShaderMaterial>>,
     asset_server: Res<AssetServer>,
+    rasters: ShaderImageAssets,
     shaders: Option<Res<Assets<Shader>>>,
     images: Option<Res<Assets<Image>>>,
     schemas: Option<Res<crate::ShaderSchemas>>,
@@ -562,6 +590,14 @@ fn rebind_changed_shader_look(
     let mut written: HashSet<AssetId<ShaderMaterial>> = HashSet::default();
 
     for (e, look, current, was_ready, skybox) in &changed {
+        if look
+            .textures
+            .values()
+            .any(|source| rasters.get(source).is_none())
+        {
+            clear_shader_render_components(&mut commands, e);
+            continue;
+        }
         if let Some((stage, detail)) =
             loaded_shader_stage_failure(look, shaders.as_deref(), &asset_server, &mut shader_cache)
         {
@@ -642,7 +678,7 @@ fn rebind_changed_shader_look(
                 };
                 let structural = existing.shader.id() != want_shader_id
                     || existing.vertex_shader.as_ref().map(Handle::id) != want_vertex_shader_id
-                    || !textures_match(&existing, look);
+                    || !textures_match(&existing, look, &rasters);
                 if structural {
                     let handles = match shader_load_handles(look, &asset_server) {
                         Ok(handles) => handles,
@@ -662,7 +698,7 @@ fn rebind_changed_shader_look(
                         }
                     };
                     let schema = existing.schema.clone();
-                    *existing = shader_material(look, &handles);
+                    *existing = shader_material(look, &handles, &rasters);
                     existing.set_schema(schema);
                     // The rebuild loaded the shader afresh; make the id cache agree
                     // with the material so the compare above stays quiet next tick.
@@ -703,8 +739,12 @@ fn rebind_changed_shader_look(
                 continue;
             }
         }
-        let handle = match material_for(look, &mut cache, &mut materials, &asset_server) {
-            Ok(handle) => handle,
+        let handle = match material_for(look, &mut cache, &mut materials, &asset_server, &rasters) {
+            Ok(Some(handle)) => handle,
+            Ok(None) => {
+                clear_shader_render_components(&mut commands, e);
+                continue;
+            }
             Err((stage, detail)) => {
                 clear_shader_render_components(&mut commands, e);
                 error!("shader asset admission failed: {detail}");
@@ -769,6 +809,7 @@ fn validate_shader_assets_on_change(
     mut cache: ResMut<ShaderLookCache>,
     mut materials: ResMut<Assets<ShaderMaterial>>,
     asset_server: Res<AssetServer>,
+    rasters: ShaderImageAssets,
     mut commands: Commands,
     diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     mut shader_cache: ResMut<ShaderSourceCache>,
@@ -897,8 +938,12 @@ fn validate_shader_assets_on_change(
         let Ok((_, look, _, _)) = looks.get(entity) else {
             continue;
         };
-        let handle = match material_for(look, &mut cache, &mut materials, &asset_server) {
-            Ok(handle) => handle,
+        let handle = match material_for(look, &mut cache, &mut materials, &asset_server, &rasters) {
+            Ok(Some(handle)) => handle,
+            Ok(None) => {
+                clear_shader_render_components(&mut commands, entity);
+                continue;
+            }
             Err((stage, detail)) => {
                 error!("shader asset admission failed: {detail}");
                 clear_shader_render_components(&mut commands, entity);
@@ -920,240 +965,6 @@ fn validate_shader_assets_on_change(
     }
 }
 
-type ShaderImageMipKey = (AssetId<Image>, Rgba8MipMode);
-
-/// Tracks the event-driven CPU preparation needed by authored shader rasters.
-///
-/// PNG/JPEG image loading supplies a single base level even when its sampler
-/// requests trilinear filtering. The renderer owns the concrete `Image`, so it
-/// is also the authoritative place to materialize the missing levels. Requests
-/// are registered only when a look changes and are deduplicated by image id;
-/// hundreds of streamed terrain tiles therefore cannot repeat the same bake.
-#[derive(Resource, Default)]
-struct ShaderImageMipState {
-    /// Image-role requests discovered from live `ShaderLook` components. Keep
-    /// these separate from `pending`: an image may be hot-reloaded after its
-    /// first chain was installed, in which case the asset event must enqueue
-    /// it again without requiring every look to change.
-    requested: HashSet<ShaderImageMipKey>,
-    pending: HashSet<ShaderImageMipKey>,
-    tasks: HashMap<ShaderImageMipKey, Task<Option<MippedShaderImage>>>,
-    /// Asset events are the image-content invalidation boundary. A completed
-    /// worker result is applied only if no newer event has arrived since its
-    /// snapshot, so a hot reload cannot publish stale pixels over the new image.
-    epochs: HashMap<AssetId<Image>, u64>,
-}
-
-struct MippedShaderImage {
-    id: AssetId<Image>,
-    mode: Rgba8MipMode,
-    epoch: u64,
-    width: u32,
-    height: u32,
-    data: Vec<u8>,
-    mip_levels: u32,
-}
-
-fn authored_shader_image_mip_mode(layer: TextureLayer) -> Option<Rgba8MipMode> {
-    match layer {
-        // These are the filterable image roles authored by the USD shader
-        // reader. Height and ShadowCache have different formats/access patterns
-        // and are intentionally not treated as RGBA8 colour images here.
-        TextureLayer::Albedo | TextureLayer::Mineral | TextureLayer::ContinuationAlbedo => {
-            Some(Rgba8MipMode::SrgbColor)
-        }
-        TextureLayer::Surface | TextureLayer::ContinuationSurface => Some(Rgba8MipMode::Linear),
-        TextureLayer::Normal => Some(Rgba8MipMode::Normal),
-        TextureLayer::Height | TextureLayer::ShadowCache | TextureLayer::SurfaceAnnotations => None,
-    }
-}
-
-fn authored_shader_image_format(mode: Rgba8MipMode) -> TextureFormat {
-    match mode {
-        Rgba8MipMode::SrgbColor => TextureFormat::Rgba8UnormSrgb,
-        Rgba8MipMode::Linear | Rgba8MipMode::Normal => TextureFormat::Rgba8Unorm,
-    }
-}
-
-fn authored_shader_image_base(image: &Image, mode: Rgba8MipMode) -> Option<(Vec<u8>, u32, u32)> {
-    let descriptor = &image.texture_descriptor;
-    if descriptor.dimension != TextureDimension::D2
-        || descriptor.size.depth_or_array_layers != 1
-        || descriptor.format != authored_shader_image_format(mode)
-    {
-        return None;
-    }
-    let (width, height) = (descriptor.size.width, descriptor.size.height);
-    let expected_len = usize::try_from(width)
-        .ok()?
-        .checked_mul(usize::try_from(height).ok()?)?
-        .checked_mul(4)?;
-    let data = image.data.as_ref()?;
-    (data.len() == expected_len).then(|| (data.clone(), width, height))
-}
-
-/// Prepare authored shader rasters after a look declares them.
-///
-/// This is event/change driven: no scene-wide per-frame scan and no duplicate
-/// work for tiles sharing a streamed asset. The byte filter runs on the async
-/// compute pool; the main thread only installs the completed chain and sampler
-/// descriptor into the existing image asset.
-fn prepare_authored_shader_image_mips(
-    changed: Query<&ShaderLook, Changed<ShaderLook>>,
-    mut image_events: Option<MessageReader<AssetEvent<Image>>>,
-    mut state: ResMut<ShaderImageMipState>,
-    images: Option<ResMut<Assets<Image>>>,
-    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
-) {
-    let (Some(image_events), Some(mut images)) = (image_events.as_mut(), images) else {
-        return;
-    };
-    let Some(default_anisotropy) = quality
-        .as_ref()
-        .and_then(|settings| settings.validated_profile().ok())
-        .map(|profile| profile.terrain_derived_texture_anisotropy.max(1))
-    else {
-        return;
-    };
-
-    for event in image_events.read() {
-        match event {
-            AssetEvent::Added { id } | AssetEvent::Modified { id } => {
-                let epoch = state.epochs.entry(*id).or_default();
-                *epoch = epoch.saturating_add(1);
-                let refreshed = state
-                    .requested
-                    .iter()
-                    .filter(|(image_id, _)| image_id == id)
-                    .copied()
-                    .collect::<Vec<_>>();
-                state.pending.extend(refreshed);
-            }
-            AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
-                state.pending.retain(|(image_id, _)| image_id != id);
-                state.tasks.retain(|(image_id, _), _| image_id != id);
-                state.epochs.remove(id);
-            }
-            AssetEvent::LoadedWithDependencies { .. } => {}
-        }
-    }
-
-    for look in &changed {
-        for (layer, image) in &look.textures {
-            let Some(mode) = authored_shader_image_mip_mode(*layer) else {
-                continue;
-            };
-            let key = (image.id(), mode);
-            state.requested.insert(key);
-            state.pending.insert(key);
-        }
-    }
-
-    let pending: Vec<_> = state.pending.iter().copied().collect();
-    for (id, mode) in pending {
-        if state.tasks.contains_key(&(id, mode)) {
-            continue;
-        }
-        let Some(image) = images.get(id) else {
-            continue;
-        };
-        // KTX2/DDS and generated terrain images may already carry their full
-        // chain. They need no CPU work, but their existing sampler remains the
-        // source of truth.
-        if image.texture_descriptor.mip_level_count > 1 {
-            state.pending.remove(&(id, mode));
-            continue;
-        }
-        // A role/format mismatch is an authored contract error, not a reason
-        // to retry every frame. The USD reader assigns these formats at load
-        // time; non-RGBA roles are handled by their dedicated bindings.
-        if image.texture_descriptor.dimension != TextureDimension::D2
-            || image.texture_descriptor.size.depth_or_array_layers != 1
-            || image.texture_descriptor.format != authored_shader_image_format(mode)
-        {
-            state.pending.remove(&(id, mode));
-            continue;
-        }
-        // An image asset can briefly exist without CPU data while a custom
-        // loader finishes publishing it. Keep the request until its Modified
-        // event makes the bytes available.
-        let Some((base, width, height)) = authored_shader_image_base(image, mode) else {
-            continue;
-        };
-        if width == 1 && height == 1 {
-            state.pending.remove(&(id, mode));
-            continue;
-        }
-        let epoch = *state.epochs.entry(id).or_default();
-        let task = AsyncComputeTaskPool::get().spawn(async move {
-            let (data, mip_levels) = rgba8_mip_chain(
-                base,
-                usize::try_from(width).ok()?,
-                usize::try_from(height).ok()?,
-                mode,
-            )?;
-            Some(MippedShaderImage {
-                id,
-                mode,
-                epoch,
-                width,
-                height,
-                data,
-                mip_levels,
-            })
-        });
-        state.pending.remove(&(id, mode));
-        state.tasks.insert((id, mode), task);
-    }
-
-    let mut finished = Vec::new();
-    for (key, task) in &mut state.tasks {
-        if let Some(result) = future::block_on(future::poll_once(task)) {
-            finished.push((*key, result));
-        }
-    }
-    for (key, _) in &finished {
-        state.tasks.remove(key);
-    }
-
-    let anisotropy = default_anisotropy;
-
-    for (_, result) in finished {
-        let Some(result) = result else { continue };
-        if state.epochs.get(&result.id).copied().unwrap_or_default() != result.epoch {
-            continue;
-        }
-        let Some(mut image) = images.get_mut(result.id) else {
-            continue;
-        };
-        if image.texture_descriptor.mip_level_count > 1
-            || image.texture_descriptor.dimension != TextureDimension::D2
-            || image.texture_descriptor.size.width != result.width
-            || image.texture_descriptor.size.height != result.height
-            || image.texture_descriptor.format != authored_shader_image_format(result.mode)
-        {
-            continue;
-        }
-        image.data = Some(result.data);
-        image.texture_descriptor.mip_level_count = result.mip_levels;
-        let mut sampler = match &image.sampler {
-            ImageSampler::Descriptor(descriptor) => descriptor.clone(),
-            ImageSampler::Default => ImageSamplerDescriptor::linear(),
-        };
-        sampler
-            .set_filter(ImageFilterMode::Linear)
-            .set_anisotropic_filter(anisotropy);
-        image.sampler = ImageSampler::Descriptor(sampler);
-    }
-}
-
-fn clear_shader_image_mips(mut state: ResMut<ShaderImageMipState>) {
-    state.requested.clear();
-    state.pending.clear();
-    state.tasks.clear();
-    state.epochs.clear();
-}
-
 /// Wire the `ShaderLook` binder into an app. Called by
 /// [`LuncoRenderPlugin`](crate::LuncoRenderPlugin).
 ///
@@ -1162,6 +973,9 @@ fn clear_shader_image_mips(mut state: ResMut<ShaderImageMipState>) {
 /// after this binder. Keeping the two separate lets this
 /// binder be unit-tested on a bare `MinimalPlugins` app, with no render pipeline.
 pub(crate) fn build(app: &mut App) {
+    if !app.is_plugin_added::<lunco_materials::LuncoImagePlugin>() {
+        app.add_plugins(lunco_materials::LuncoImagePlugin);
+    }
     // Register only absent stores: init_asset replaces Assets and its handle
     // provider, so re-registering an existing Shader store breaks live handles.
     // The binder needs both stores even without the GPU pipeline plugin.
@@ -1181,7 +995,6 @@ pub(crate) fn build(app: &mut App) {
                 .after(bevy::asset::AssetEventSystems),
         )
         .init_resource::<ShaderLookCache>()
-        .init_resource::<ShaderImageMipState>()
         .add_observer(bind_shader_look)
         .add_observer(bind_added_skybox_shader_look)
         .add_systems(
@@ -1189,18 +1002,14 @@ pub(crate) fn build(app: &mut App) {
             (
                 queue_shader_look_source_reflection,
                 reflect_shader_look_source_interfaces,
+                refresh_prepared_shader_looks.before(rebind_changed_shader_look),
                 rebind_changed_shader_look,
                 invalidate_shader_look_ready,
                 mark_shader_look_ready.after(crate::reflect_shader_schemas),
                 validate_shader_assets_on_change.after(crate::reflect_shader_schemas),
                 sweep_look_cache::<ShaderLook>,
             ),
-        )
-        .add_systems(
-            Update,
-            prepare_authored_shader_image_mips.after(rebind_changed_shader_look),
-        )
-        .add_systems(lunco_core::SceneTeardown, clear_shader_image_mips);
+        );
     // Shader parameters become connection targets in `lunco-usd-sim`'s
     // `lunco-usd-sim-shader::ports` — beside the pass that authors `ShaderLook::driven`, so a
     // shader wire lands in a headless build too. The writes arrive in
@@ -1585,7 +1394,6 @@ fn mark_shader_look_ready(
 mod tests {
     use super::*;
     use crate::ShaderSchemas;
-    use bevy::render::render_resource::Extent3d;
     use lunco_materials::ParamValue;
 
     fn app() -> App {
@@ -2004,94 +1812,6 @@ mod tests {
         assert_eq!(mats.len(), 2, "a bound texture is part of the sharing key");
     }
 
-    #[test]
-    fn authored_image_mips_are_rebuilt_after_hot_reload() {
-        let mut app = app();
-        let image = app
-            .world_mut()
-            .resource_mut::<Assets<Image>>()
-            .add(Image::new(
-                Extent3d {
-                    width: 2,
-                    height: 2,
-                    depth_or_array_layers: 1,
-                },
-                TextureDimension::D2,
-                vec![
-                    0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255,
-                ],
-                TextureFormat::Rgba8UnormSrgb,
-                bevy::asset::RenderAssetUsages::MAIN_WORLD,
-            ));
-        let entity = app
-            .world_mut()
-            .spawn(
-                ShaderLook::new("shaders/terrain_layered.wgsl")
-                    .with_texture(TextureLayer::Albedo, image.clone()),
-            )
-            .id();
-
-        for _ in 0..8 {
-            app.update();
-            if app
-                .world()
-                .resource::<Assets<Image>>()
-                .get(image.id())
-                .is_some_and(|image| image.texture_descriptor.mip_level_count == 2)
-            {
-                break;
-            }
-        }
-        assert_eq!(
-            app.world()
-                .resource::<Assets<Image>>()
-                .get(image.id())
-                .expect("authored image")
-                .texture_descriptor
-                .mip_level_count,
-            2
-        );
-
-        let reloaded_base = vec![
-            32, 32, 32, 255, 224, 224, 224, 255, 32, 32, 32, 255, 224, 224, 224, 255,
-        ];
-        {
-            let mut images = app.world_mut().resource_mut::<Assets<Image>>();
-            let mut reloaded = images
-                .get_mut(image.id())
-                .expect("authored image for hot reload");
-            reloaded.data = Some(reloaded_base);
-            reloaded.texture_descriptor.mip_level_count = 1;
-        }
-
-        for _ in 0..8 {
-            app.update();
-            if app
-                .world()
-                .resource::<Assets<Image>>()
-                .get(image.id())
-                .is_some_and(|image| image.texture_descriptor.mip_level_count == 2)
-            {
-                break;
-            }
-        }
-        let image = app
-            .world()
-            .resource::<Assets<Image>>()
-            .get(image.id())
-            .expect("reloaded authored image");
-        assert_eq!(image.texture_descriptor.mip_level_count, 2);
-        assert_eq!(image.data.as_ref().map(Vec::len), Some(20));
-        assert!(matches!(
-            image.sampler,
-            ImageSampler::Descriptor(ImageSamplerDescriptor {
-                mipmap_filter: ImageFilterMode::Linear,
-                ..
-            })
-        ));
-        assert!(app.world().entity(entity).contains::<ShaderLookBound>());
-    }
-
     /// A USD material can be projected as plain PBR before its WGSL binding is
     /// resolved. Taking the shader path must replace the concrete material too,
     /// not merely the render-free intent, or Bevy draws the mesh twice.
@@ -2154,6 +1874,59 @@ mod tests {
                 "a procedural sky must not enter the mesh material pipeline"
             );
             assert!(entity_ref.contains::<crate::procedural_sky::ProceduralSkyboxMaterial>());
+        }
+    }
+}
+
+/// Source publication changes readiness, not authored texture identity.
+/// Refresh only looks referencing an asset event; no idle scene scan occurs.
+fn refresh_prepared_shader_looks(
+    mut colors: MessageReader<AssetEvent<PreparedShaderImage<ColorMip>>>,
+    mut linear: MessageReader<AssetEvent<PreparedShaderImage<LinearMip>>>,
+    mut normals: MessageReader<AssetEvent<PreparedShaderImage<NormalMip>>>,
+    mut looks: Query<&mut ShaderLook>,
+) {
+    let mut changed = HashSet::new();
+    for event in colors.read() {
+        let id = match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::Removed { id }
+            | AssetEvent::Unused { id }
+            | AssetEvent::LoadedWithDependencies { id } => id,
+        };
+        changed.insert(id.untyped());
+    }
+    for event in linear.read() {
+        let id = match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::Removed { id }
+            | AssetEvent::Unused { id }
+            | AssetEvent::LoadedWithDependencies { id } => id,
+        };
+        changed.insert(id.untyped());
+    }
+    for event in normals.read() {
+        let id = match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::Removed { id }
+            | AssetEvent::Unused { id }
+            | AssetEvent::LoadedWithDependencies { id } => id,
+        };
+        changed.insert(id.untyped());
+    }
+    if changed.is_empty() {
+        return;
+    }
+    for mut look in &mut looks {
+        if look
+            .textures
+            .values()
+            .any(|source| changed.contains(&source.id()))
+        {
+            look.set_changed();
         }
     }
 }

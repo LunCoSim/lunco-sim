@@ -128,6 +128,15 @@ with the last one each frame silently winning:
 `TimeSystem` reads at the top of the next frame — the decision is made after every other
 system has run.
 
+`lunco-time` admits each running manual duration in full and drains at most 64
+complete fixed cycles per app update. The recorder reads the same
+`Time<Fixed>::overstep`: while a whole cycle remains, it writes zero additional
+duration and waits before requesting readback. This preserves the logical frame
+through budget and causal holds, including a 25 FPS frame at 64x. It does not
+install or restore a separate virtual-clock cap. The rendered production
+`fixed_budget_recording.rhai` gate exercises this boundary and rejects a
+readback with whole cycles pending.
+
 > [!IMPORTANT]
 > **To keep the app awake, select `MaxSpeed` through the execution policy and hold a
 > continuous `lunco_core_runtime::FramePacingDemand` request — never write

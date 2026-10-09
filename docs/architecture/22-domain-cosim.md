@@ -70,6 +70,21 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   the retained target-aligned buffer without hashing port names.
   Modelica output snapshots are copied on `ModelicaModel` changes; the last
   admitted values remain the propagation source between solver responses.
+  Modelica and scripted output copies use `ScalarPortMap::upsert_samples`.
+  The destination retains slot hints aligned to the preceding source iteration,
+  checks each live slot's layout and exact name, and resolves changed names
+  through its canonical index. Stable copies avoid name hashing and allocation;
+  source reordering, same-size replacement, clear, clone and compaction cannot
+  route a value to another name. Only sample/topology changes mark the component
+  changed; hint maintenance does not. Modelica's reflected variable map and the
+  fixed-step publication boundary remain the source contract.
+  Structural publication uses `PortTopologyState::observe_if_changed` for
+  auxiliary declarations and Modelica unit contracts. Their fingerprints are
+  derived on first observation, their own component changes, and participant
+  re-admission; ordinary sample changes reuse the recorded facts. Removal
+  observers retire each component's recorded key. Backend reads still derive
+  the full live contract before inspection or writes, independently of the
+  structural publication pass.
   Binding revisions are raised by topology, endpoint, and Modelica lifecycle
   changes; an open-but-unsettled epoch is checked for readiness without
   repeatedly requesting a full connection and causal-graph reconciliation.
@@ -107,7 +122,14 @@ and its lifecycle/structural invalidation hook, including checks for in-place
 values that change membership. Live samples are excluded from the key. The
 available ports:
 
-The registry resolves each named write from the owners' declared port lists.
+The registry resolves each named write from the owners' live declarations.
+`PortBackend::declare_ports` receives a `PortDeclarationQuery`: inspection
+collects every row, while a named query borrows one exact name and causality
+side. Indexed owners query that name directly; static owners publish borrowed
+names through the same boundary. Named validation does not materialize or copy
+the complete surface. Metadata still comes from the live owner at admission;
+a pending topology-publication pass cannot conceal changed bounds, direction,
+writability or a removed port.
 `write_port`, direction-constrained writes, and `resolve_input` share that
 winner; once selected, an owner refusal is terminal and cannot fall through to
 a shadowed port. Output-only owners do not shadow input writes. `ReleasePort`
@@ -190,6 +212,10 @@ All cosim and physics systems run in `FixedUpdate` at a shared fixed timestep
 so every engine advances with the same `dt`:
 
 ```
+First:
+  ModelicaSet::HandleResponses      — validate async results and release completed causal holds
+  ClockProjectionSet               — project remaining holds before sampling virtual time
+
 FixedUpdate:
   1. sync_modelica_outputs          — completed Modelica results → SimComponent.outputs
   2. CosimSet::Propagate            — propagate_connections: source outputs → target inputs
@@ -205,8 +231,6 @@ FixedPostUpdate:
                                        (Avian outputs — Position / LinearVelocity — read on demand
                                         via PortRegistry; no separate read_avian_outputs snapshot system)
 
-Update:
-  7. ModelicaSet::HandleResponses   — receive async results and release the coupling barrier
 ```
 
 The master loop reads outputs, propagates through connections, writes inputs,
@@ -446,6 +470,17 @@ finishes. The projector waits while prims are awaiting their stage or structural
 USD projection, then rebuilds its path/output maps and channels against the
 settled scene. Stable updates do not scan the entity population to rediscover
 lifecycle changes.
+
+A declaration on a Modelica network member may omit its target relationship.
+The projector reuses the composed membership cache keyed by stage generation
+and instance to recognize that owner while its generated port surface is pending.
+The generated member-output alias map then binds the channel to the wrapper's
+canonical output; the member never gains a second solver or sampled surface.
+A metadata Scope without its own runtime surface is not a network member and
+still requires an explicit measured target. The production
+`telemetry_member_target_negative` scene exercises that rejection; the
+`generated_member_telemetry.rhai` API check verifies wrapper ownership and live
+retention on the Apollo electrical network.
 
 The telemetry index and its emitted channels are derived scene state. Scene
 teardown clears the index, and the next initial projection is the only bootstrap

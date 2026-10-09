@@ -25,6 +25,11 @@ bevy = { workspace = true, features = ["bevy_mesh", "bevy_image", "zstd_rust"] }
 # depends on no lunco crate.
 lunco-render = { path = "../lunco-render" }
 lunco-port-core = { path = "../lunco-port-core" }
+thiserror = { workspace = true }
+wgpu-types = "29"
+
+[dev-dependencies]
+bevy = { workspace = true, features = ["png"] }
 
 [lints]
 workspace = true

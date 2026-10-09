@@ -580,13 +580,21 @@ pub fn relathe_changed(mut q: Query<(&UsdLathe, &mut NurbsSurface), Changed<UsdL
 /// query filter rather than a dirty flag. On an untouched scene this system
 /// iterates nothing.
 ///
-/// Writes THROUGH the existing `Handle<Mesh>` rather than adding a new asset and
-/// swapping `Mesh3d`: everything already pointing at that handle (the render world's
-/// prepared mesh, a collider derived from it) follows the edit, and no orphaned
-/// asset accumulates each time a parameter is nudged.
+/// Private assets are updated in place. An immutable shared asset is detached
+/// before this entity's surface edit, preserving other entities' geometry.
 pub fn regenerate_patch_meshes(
+    mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    q: Query<(&NurbsSurface, &Mesh3d, Option<&Name>), Changed<NurbsSurface>>,
+    mut q: Query<
+        (
+            Entity,
+            &NurbsSurface,
+            &mut Mesh3d,
+            Option<&Name>,
+            Has<lunco_render::SharedMeshAsset>,
+        ),
+        Changed<NurbsSurface>,
+    >,
     quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
     let profile = match quality.validated_profile() {
@@ -596,7 +604,7 @@ pub fn regenerate_patch_meshes(
             return;
         }
     };
-    for (surface, handle, name) in &q {
+    for (entity, surface, mut handle, name, shared) in &mut q {
         let Some(mesh) = surface.mesh(profile) else {
             warn!(
                 "[usd-bevy] {} NurbsSurface changed but produced no samples — mesh left \
@@ -605,6 +613,13 @@ pub fn regenerate_patch_meshes(
             );
             continue;
         };
+        if shared {
+            handle.0 = meshes.add(mesh);
+            commands
+                .entity(entity)
+                .try_remove::<lunco_render::SharedMeshAsset>();
+            continue;
+        }
         let Some(mut slot) = meshes.get_mut(&handle.0) else {
             continue;
         };
@@ -616,8 +631,15 @@ pub fn regenerate_patch_meshes(
 /// changes. Quality is an explicit user setting, so existing geometry must update
 /// immediately rather than only newly loaded patches adopting the new density.
 pub fn retessellate_patch_meshes_on_quality_change(
+    mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    q: Query<(&NurbsSurface, &Mesh3d, Option<&Name>)>,
+    mut q: Query<(
+        Entity,
+        &NurbsSurface,
+        &mut Mesh3d,
+        Option<&Name>,
+        Has<lunco_render::SharedMeshAsset>,
+    )>,
     quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
     if !quality.is_changed() {
@@ -630,7 +652,7 @@ pub fn retessellate_patch_meshes_on_quality_change(
             return;
         }
     };
-    for (surface, handle, name) in &q {
+    for (entity, surface, mut handle, name, shared) in &mut q {
         let Some(mesh) = surface.mesh(profile) else {
             warn!(
                 "[usd-bevy] {} NurbsSurface quality change produced no samples — mesh left as it was \
@@ -639,6 +661,13 @@ pub fn retessellate_patch_meshes_on_quality_change(
             );
             continue;
         };
+        if shared {
+            handle.0 = meshes.add(mesh);
+            commands
+                .entity(entity)
+                .try_remove::<lunco_render::SharedMeshAsset>();
+            continue;
+        }
         let Some(mut slot) = meshes.get_mut(&handle.0) else {
             continue;
         };

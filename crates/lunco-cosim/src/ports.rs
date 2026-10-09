@@ -2,7 +2,7 @@
 //! [`PortRegistry`].
 //!
 //! The registry itself, its discovery/access operations, and the value types
-//! ([`PortDeclaration`], [`PortBackend`], [`PortDirection`]) live in
+//! ([`PortDeclarationQuery`], [`PortBackend`], [`PortDirection`]) live in
 //! [`lunco_port_core::ports`] — the neutral substrate *below* every participant — so
 //! that wires, the API, the inspector, and every scripting runtime read/write
 //! through one surface without depending "up" into this engine. This module only
@@ -30,8 +30,8 @@ use lunco_engineering_values::{
 use std::hash::{Hash, Hasher};
 
 use lunco_port_core::ports::{
-    PortBackend, PortDeclaration, PortDirection, PortMetadata, PortRegistry, PortTopologyRevision,
-    PortTopologyState, port_entity_map_key, port_name_set_key, push_map,
+    PortBackend, PortDeclarationQuery, PortDirection, PortMetadata, PortRegistry,
+    PortTopologyRevision, PortTopologyState, declare_map, port_entity_map_key, port_name_set_key,
 };
 use lunco_port_core::{InputPorts, OutputPorts, Port, PortSurface};
 
@@ -323,7 +323,7 @@ pub(crate) fn register_avian_port_topology(app: &mut App) {
     }
 }
 
-fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortDeclaration>) {
+fn avian_list(world: &World, entity: Entity, out: &mut PortDeclarationQuery<'_>) {
     for group in AVIAN {
         if !(group.present)(world, entity) {
             continue;
@@ -332,10 +332,7 @@ fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortDeclaration>) {
             // The group owns this declared contract regardless of whether its
             // backing state currently has a sample. `PortInfo.value` carries
             // sample availability without changing port identity.
-            out.push(PortDeclaration {
-                name: p.name.to_string(),
-                direction: p.dir,
-            });
+            out.declare(p.name, p.dir);
         }
     }
 }
@@ -555,15 +552,11 @@ fn avian_read_input(world: &World, entity: Entity, name: &str) -> Option<f64> {
 /// Modelica `SimComponent` — slot-backed `inputs`/`outputs`.
 fn sim_component_topology_key(
     component: &SimComponent,
-    declared: Option<&DeclaredOutputPorts>,
-    signal_layout: Option<&lunco_modelica_runtime::ModelicaSignalLayout>,
+    declared: u64,
+    signal_contract: Option<u64>,
 ) -> u64 {
     let inputs = component.inputs.topology_key();
     let outputs = component.outputs.topology_key();
-    let declared = declared
-        .map(|ports| port_name_set_key(ports.names.iter()))
-        .unwrap_or(0);
-    let signal_contract = signal_layout.map(|layout| layout.port_contract_topology_key());
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     component.model_name.hash(&mut hasher);
     inputs.hash(&mut hasher);
@@ -585,25 +578,35 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
         world.get::<SimComponent>(entity).map_or(0, |component| {
             sim_component_topology_key(
                 component,
-                world.get::<DeclaredOutputPorts>(entity),
-                world.get::<lunco_modelica_runtime::ModelicaSignalLayout>(entity),
+                world
+                    .get::<DeclaredOutputPorts>(entity)
+                    .map(|ports| port_name_set_key(ports.names.iter()))
+                    .unwrap_or(0),
+                world
+                    .get::<lunco_modelica_runtime::ModelicaSignalLayout>(entity)
+                    .map(|layout| layout.port_contract_topology_key()),
             )
         })
     },
-    list: |w, e, out| {
+    declare_ports: |w, e, out| {
         if let Some(c) = w.get::<SimComponent>(e) {
-            push_map(out, &c.outputs, PortDirection::Out);
-            if let Some(declared) = w.get::<DeclaredOutputPorts>(e) {
-                for name in &declared.names {
-                    if !c.outputs.contains_key(name) {
-                        out.push(PortDeclaration {
-                            name: name.clone(),
-                            direction: PortDirection::Out,
-                        });
+            declare_map(out, &c.outputs, PortDirection::Out);
+            if out.accepts_direction(PortDirection::Out)
+                && let Some(declared) = w.get::<DeclaredOutputPorts>(e)
+            {
+                if let Some(name) = out.requested_name() {
+                    if declared.names.contains(name) && !c.outputs.contains_key(name) {
+                        out.declare(name, PortDirection::Out);
+                    }
+                } else {
+                    for name in &declared.names {
+                        if !c.outputs.contains_key(name) {
+                            out.declare(name, PortDirection::Out);
+                        }
                     }
                 }
             }
-            push_map(out, &c.inputs, PortDirection::In);
+            declare_map(out, &c.inputs, PortDirection::In);
         }
     },
     metadata: |world, entity, name, direction| {
@@ -675,7 +678,7 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
 const AVIAN_BACKEND: PortBackend = PortBackend {
     list_entities: avian_entities,
     topology_key: avian_topology_key,
-    list: avian_list,
+    declare_ports: avian_list,
     metadata: avian_metadata,
     read_output: avian_read_output,
     read_input: avian_read_input,
@@ -714,12 +717,9 @@ const PORT_BACKEND: PortBackend = PortBackend {
         out.extend(world.query_filtered::<Entity, With<Port>>().iter(world));
     },
     topology_key: |world, entity| u64::from(world.get::<Port>(entity).is_some()),
-    list: |w, e, out| {
+    declare_ports: |w, e, out| {
         if w.get::<Port>(e).is_some() {
-            out.push(PortDeclaration {
-                name: PORT_NAME.to_string(),
-                direction: PortDirection::InOut,
-            });
+            out.declare(PORT_NAME, PortDirection::InOut);
         }
     },
     metadata: |_world, _entity, _name, direction| {
@@ -796,16 +796,24 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
             .count() as u64;
         names ^ live.rotate_left(47)
     },
-    list: |world, entity, out| {
+    declare_ports: |world, entity, out| {
+        if !out.accepts_direction(PortDirection::Out) {
+            return;
+        }
         let Some(outputs) = world.get::<OutputPorts>(entity) else {
             return;
         };
+        if let Some(name) = out.requested_name() {
+            if let Some(port_entity) = outputs.ports.get(name)
+                && world.get::<Port>(*port_entity).is_some()
+            {
+                out.declare(name, PortDirection::Out);
+            }
+            return;
+        }
         for (name, port_entity) in &outputs.ports {
             if world.get::<Port>(*port_entity).is_some() {
-                out.push(PortDeclaration {
-                    name: name.to_string(),
-                    direction: PortDirection::Out,
-                });
+                out.declare(name, PortDirection::Out);
             }
         }
     },
@@ -876,18 +884,23 @@ const PORT_SURFACE_BACKEND: PortBackend = PortBackend {
             .map(port_surface_topology_key)
             .unwrap_or(0)
     },
-    list: |world, entity, out| {
+    declare_ports: |world, entity, out| {
         let Some(surface) = world.get::<PortSurface>(entity) else {
             return;
         };
+        if let Some(name) = out.requested_name() {
+            if let Some(authored) = surface.ports.get(name)
+                && world.get::<Port>(authored.endpoint).is_some()
+            {
+                out.declare(name, authored.direction);
+            }
+            return;
+        }
         let mut ports = surface.ports.iter().collect::<Vec<_>>();
         ports.sort_by(|left, right| left.0.cmp(right.0));
         for (name, authored) in ports {
             if world.get::<Port>(authored.endpoint).is_some() {
-                out.push(PortDeclaration {
-                    name: name.to_string(),
-                    direction: authored.direction,
-                });
+                out.declare(name, authored.direction);
             }
         }
     },
@@ -1018,7 +1031,7 @@ const PILOTED_BACKEND: PortBackend = PortBackend {
         );
     },
     topology_key: |world, entity| u64::from(world.get::<InputPorts>(entity).is_some()),
-    list: |w, e, out| {
+    declare_ports: |w, e, out| {
         // `GlobalEntityId` names every composed USD prim, not just a vehicle.
         // The `InputPorts` surface is the architecture's already-authoritative
         // command and possession boundary (see `lunco_port_core::InputPorts`).
@@ -1027,10 +1040,7 @@ const PILOTED_BACKEND: PortBackend = PortBackend {
         // Never manufacture `piloted` on meshes, joints, sensors, or arbitrary
         // Modelica children merely because they happen to have a stable id.
         if w.get::<InputPorts>(e).is_some() {
-            out.push(PortDeclaration {
-                name: "piloted".to_string(),
-                direction: PortDirection::Out,
-            });
+            out.declare("piloted", PortDirection::Out);
         }
     },
     metadata: |_world, _entity, _name, direction| {
@@ -1075,9 +1085,9 @@ pub(crate) fn check_port_owner_structure(
     components: Query<
         (
             Entity,
-            &SimComponent,
-            Option<&DeclaredOutputPorts>,
-            Option<&lunco_modelica_runtime::ModelicaSignalLayout>,
+            Ref<SimComponent>,
+            Option<Ref<DeclaredOutputPorts>>,
+            Option<Ref<lunco_modelica_runtime::ModelicaSignalLayout>>,
         ),
         Or<(
             Changed<SimComponent>,
@@ -1096,16 +1106,33 @@ pub(crate) fn check_port_owner_structure(
         }
     }
     for (entity, component, declared, signal_layout) in &components {
+        // A newly admitted participant can carry declarations edited while it
+        // had no SimComponent. Refresh those facts even if their own change
+        // tick predates this system's last run.
+        let admitted = component.is_added();
+        let declared_key = declared.as_ref().map_or(0, |ports| {
+            state
+                .observe_if_changed::<DeclaredOutputPorts>(
+                    entity,
+                    admitted || ports.is_changed(),
+                    || port_name_set_key(ports.names.iter()),
+                )
+                .0
+        });
+        let (signal_contract, signal_contract_changed) =
+            signal_layout.as_ref().map_or((None, false), |layout| {
+                let (key, changed) = state
+                    .observe_if_changed::<lunco_modelica_runtime::ModelicaSignalLayout>(
+                        entity,
+                        admitted || layout.is_changed(),
+                        || layout.port_contract_topology_key(),
+                    );
+                (Some(key), changed)
+            });
         let component_changed = state.changed::<SimComponent>(
             entity,
-            sim_component_topology_key(component, declared, signal_layout),
+            sim_component_topology_key(&component, declared_key, signal_contract),
         );
-        let signal_contract_changed = signal_layout.is_some_and(|layout| {
-            state.changed::<lunco_modelica_runtime::ModelicaSignalLayout>(
-                entity,
-                layout.port_contract_topology_key(),
-            )
-        });
         if component_changed || signal_contract_changed {
             revision.bump();
         }
@@ -1191,6 +1218,148 @@ pub fn register_builtin_port_backends(registry: &mut PortRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_structural_publication_tracks_units_declarations_and_readmission() {
+        use lunco_modelica_ast::ast_extract::ModelicaVariableMetadata;
+        use lunco_modelica_runtime::ModelicaSignalLayout;
+
+        let mut app = App::new();
+        app.init_resource::<PortTopologyState>()
+            .init_resource::<PortTopologyRevision>()
+            .add_systems(Update, check_port_owner_structure);
+        register_builtin_port_topology(&mut app);
+        let mut component = SimComponent::default();
+        component.outputs.insert("signal".into(), 1.0);
+        let mut layout = ModelicaSignalLayout::default();
+        layout.metadata.insert(
+            "signal".into(),
+            ModelicaVariableMetadata {
+                description: None,
+                unit: Some("V".into()),
+            },
+        );
+        let entity = app
+            .world_mut()
+            .spawn((
+                component.clone(),
+                layout,
+                DeclaredOutputPorts {
+                    names: ["pending".into()].into(),
+                },
+            ))
+            .id();
+        app.update();
+        let revision = |app: &App| app.world().resource::<PortTopologyRevision>().0;
+        let seeded = revision(&app);
+
+        app.world_mut()
+            .get_mut::<SimComponent>(entity)
+            .unwrap()
+            .outputs
+            .set("signal", 2.0);
+        app.update();
+        assert_eq!(revision(&app), seeded);
+        app.world_mut()
+            .get_mut::<ModelicaSignalLayout>(entity)
+            .unwrap()
+            .root_path = "presentation".into();
+        app.update();
+        assert_eq!(revision(&app), seeded);
+
+        let live_key = (SIMCOMPONENT_BACKEND.topology_key)(app.world(), entity);
+        app.world_mut()
+            .get_mut::<ModelicaSignalLayout>(entity)
+            .unwrap()
+            .metadata
+            .get_mut("signal")
+            .unwrap()
+            .unit = Some("m".into());
+        assert_ne!(
+            (SIMCOMPONENT_BACKEND.topology_key)(app.world(), entity),
+            live_key
+        );
+        app.update();
+        assert_eq!(revision(&app), seeded + 1);
+
+        app.world_mut()
+            .get_mut::<DeclaredOutputPorts>(entity)
+            .unwrap()
+            .names = ["replacement".into()].into();
+        app.update();
+        assert_eq!(revision(&app), seeded + 2);
+        app.world_mut()
+            .get_mut::<SimComponent>(entity)
+            .unwrap()
+            .outputs
+            .insert("new".into(), 3.0);
+        app.update();
+        assert_eq!(revision(&app), seeded + 3);
+
+        // Edits outside the participant scope precede its new admission tick.
+        app.world_mut().entity_mut(entity).remove::<SimComponent>();
+        app.world_mut()
+            .get_mut::<ModelicaSignalLayout>(entity)
+            .unwrap()
+            .metadata
+            .get_mut("signal")
+            .unwrap()
+            .unit = Some("A".into());
+        app.world_mut()
+            .get_mut::<DeclaredOutputPorts>(entity)
+            .unwrap()
+            .names = ["readmitted".into()].into();
+        app.update();
+        app.world_mut().entity_mut(entity).insert(component);
+        app.update();
+        let layout_key = app
+            .world()
+            .get::<ModelicaSignalLayout>(entity)
+            .unwrap()
+            .port_contract_topology_key();
+        let declared_key = port_name_set_key(
+            app.world()
+                .get::<DeclaredOutputPorts>(entity)
+                .unwrap()
+                .names
+                .iter(),
+        );
+        let cached = app
+            .world_mut()
+            .resource_mut::<PortTopologyState>()
+            .observe_if_changed::<SimComponent>(entity, false, || unreachable!())
+            .0;
+        assert_eq!(
+            cached,
+            sim_component_topology_key(
+                app.world().get::<SimComponent>(entity).unwrap(),
+                declared_key,
+                Some(layout_key)
+            )
+        );
+
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<ModelicaSignalLayout>();
+        let after_removal = revision(&app);
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(ModelicaSignalLayout::default());
+        app.update();
+        assert!(revision(&app) > after_removal);
+        let cached_layout = app
+            .world_mut()
+            .resource_mut::<PortTopologyState>()
+            .observe_if_changed::<ModelicaSignalLayout>(entity, false, || unreachable!())
+            .0;
+        assert_eq!(
+            cached_layout,
+            app.world()
+                .get::<ModelicaSignalLayout>(entity)
+                .unwrap()
+                .port_contract_topology_key()
+        );
+    }
 
     #[test]
     fn joint_port_bounds_translate_only_native_unbounded_sentinels() {

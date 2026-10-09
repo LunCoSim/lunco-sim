@@ -28,11 +28,61 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   settings, physics substeps, shadow settings, and terrain assets. A Builder-
   only cost usually means an editor observer, rebuild, projection, or UI path,
   not that physics needs a different global timestep.
+- For a settled DEM quality window, require `TerrainLodStatus.stream.wanted ==
+  resident`, `stream.pending == 0`, `derived.active == false`,
+  `derived.pending == 0`, and `derived.ready == derived.total`. Record those
+  owner facts before and throughout the window alongside camera and quality
+  inputs. Simulation readiness alone does not certify optional visual-map
+  preparation. Keep this measurement gate out of simulation admission.
+  Audit a surface camera with `world_pos` and `world_rotation` in the active
+  simulation frame; `visual_foci` reports composed root coordinates, which move
+  with celestial ancestors even when the camera is stationary over the terrain.
 - Attribute CPU, GPU, physics, terrain, and UI separately. Never disable
   shadows, lower authored terrain quality, change BigSpace, or change the
   standard substep count to make a graph look better.
+  In a diagnostics-enabled render host, `lunco-render-bevy` adds
+  `lunco_shadow_shared_early`/`late` and `lunco_shadow_camera_early`/`late`
+  timestamps around the native shadow passes. Shared events correspond to
+  individual point/spot views; camera events include that camera's directional
+  cascades. Check all four names and their event counts before attributing total
+  shadow cost. Late spans can contain only timestamp overhead. Retain native
+  dependency ordering, native-parameter admission before begin and render-context
+  buffer order when changing this adapter. Reapply PBR's system-local early/late
+  ordering rules after removing the original system; retaining its implicit
+  type set alone preserves only dependencies targeting that set. Check the
+  actual shadow image before admitting a capture as performance evidence.
+  Unsupported timestamp features or
+  exhausted per-frame queries leave incomplete GPU evidence, not zero cost.
 
 ## Architecture checks
+
+For authored image preparation, trace `lunco-materials` typed
+`PreparedShaderImage` loading: native decoding and owned RGBA8 filtering precede
+source/child publication. CPU filtering awaits the async compute pool with an
+owned image, without blocking an I/O worker or borrowing ECS. The renderer resolves `ShaderTexture` and reacts to
+source asset events; it must not snapshot resident pixels. The prepared loaders
+register no extensions, preserving native image/glTF settings and decoding.
+Prepared children use the native render-only extraction contract: pixels move
+into GPU preparation while the main asset retains metadata. Audit CPU readers
+before choosing that usage; sampler/descriptor edits must come through source
+reload with fresh data. Verify initial load and reload publish complete chains, independent color/scalar/
+normal identities, native-image forwarding and invalid-pixel rejection at the
+asset seam. `load_raster` accepts physical paths; verify labeled requests reject
+before issuing a prepared-root load and importer-owned native image handles
+still load, bind and reload. Preserve exact RGBA8 transfer, sampler quality and role identity.
+Worker-time gains need separate loading/UI/FPS evidence before an app-level claim.
+
+For repeated analytic USD primitives, inspect reflected `Mesh3d` identities
+before inferring duplicate preparation or upload cost. `PrimitiveMeshAssets` in
+`lunco-usd-bevy-mesh` owns shared preparation and weak native mesh lifetime;
+source admission remains in `lunco-usd-bevy`. Preserve the
+[immutable mesh contract](../../docs/architecture/render-decoupling.md#immutable-primitive-mesh-assets),
+quality replacement and entity-specific edit isolation. Run the authored
+`primitive_mesh_sharing.rhai` sandbox gate for equal and unlike dimensions.
+Fewer asset IDs alone do not prove fewer GPU draws or faster frames. The retained
+`engine.frame_time` series samples raw app-frame values at the fixed 60 Hz
+ceiling and may repeat values; collect it before its 240-sample ring truncates
+the measurement window. Report it separately from once-per-rendered-frame data.
 
 Search the owning systems for unconditional writes, full-set topology scans,
 repeated observer registration, per-frame allocations, polling, and work that
@@ -40,6 +90,38 @@ should be gated by a revision/change event. Structural edits should invalidate
 structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
+For frame-contract gate costs, distinguish the full connectivity validator from
+its admission/fixed run conditions. The bridge observes native physical and
+hierarchy lifecycle events through one change-ticked resource; each consumer
+retains its own observation boundary. Preserve insertion, reparenting, removal,
+despawn and active-frame switch/removal detection without waking on ordinary
+pose values. Validate a disconnected body through the public owner diagnostic
+and stopped solver ticks, then verify a replacement scene resumes physics.
+For link-sweep costs, attribute `celestial_ephemeris_position` separately from
+pair geometry and verdict hooks. The analytic provider's exact-epoch cache also
+shares native EMB/Earth VSOP operands across dependent bodies. Preserve native
+f64 values and formula order; a new epoch bit pattern invalidates final and
+intermediate samples together. Compare public `BodyPosition` results against the
+prior exact artifact at adjacent and revisited epochs before claiming a gain.
+For an exclusive system, check repeated `World::query` construction separately
+from iteration. Retain Bevy's native `QueryState` in the owning system when
+the query shape is stable; read current membership each pass and collect
+identities before structural mutation. Preserve that system's serial schedule
+position and lifecycle ordering. A settled-frame saving also needs live
+add/remove or replacement evidence, since queries must admit newly matched
+archetypes after startup.
+The neutral scenario driver shares its native model query across preparation,
+startup, fixed and visualization passes; preserve fresh model/scope/authority
+reads and stable actor sorting when changing that owner.
+For telemetry retention, separate due recording batches from cheap between-batch
+calls. `SignalRegistry::record_scalar_at_rate` admits and appends through one live
+history lookup; preserve backwards-time segments, retention, archived-source
+reactivation and catalog notifications. A registry benchmark isolates that owner,
+but production retention spans and raw physics/frame tails need separate evidence.
+Modelica's channel-limit check reads the live scalar count after append and
+only hashes history identity for admission when the catalog is full. Preserve
+existing-channel recording above a lowered limit and rejection after history
+removal; a cached producer identity alone does not prove that history exists.
 For a system that queues many compatible ECS component changes, inspect its
 `system_commands` flush separately from the system body. Collect changed values
 and use the owning crate's existing batch command path where it preserves the
@@ -69,7 +151,33 @@ Inspect scenario preparation separately from lifecycle execution. Unchanged
 actors borrow their canonical source; only admitted compile/retry work copies
 worker inputs. Do not defer initialization or change actor commit order to
 reduce this preparation cost.
-For fixed-step port costs, `write_resolved` uses canonical input-write
+For Modelica response retention, reuse existing observable-variable keys and
+transfer owned input/output buffers after transaction validation. The accepted
+step and UI stream are separate consumers, so retain one output snapshot for
+the accepted record. Preserve detected-symbol/output precedence and the UI
+stream's output-then-symbol order. Measure this response path separately from
+fixed-step output publication; fewer copies alone do not prove throughput gain.
+Modelica and scripted snapshot publication use `ScalarPortMap::upsert_samples`.
+The destination retains slot hints, but validates each live layout and exact
+name on every copy. Preserve reordering, same-size source replacement, target
+edits, clone/clear/compaction retirement and native-bit no-op detection when
+changing that mechanism. Do not infer unchanged source topology from map length
+or cached iteration order. Keep Modelica's reflected variable map and the
+fixed-step publication boundary unchanged, and measure the actual copy owner.
+For structural publication, use the existing `PortTopologyState` owner to
+observe expensive auxiliary fingerprints by their own component change ticks.
+`observe_if_changed` computes a cold key and recomputes changed owners; sample
+updates reuse the recorded key. A participant's new admission must refresh
+auxiliary facts that could have changed while it was absent. Verify metadata
+edits, same-size declaration replacement, removal and re-admission. Keep direct
+backend inspection and write validation on the live contract.
+For fixed-step port costs, backend `declare_ports` uses `PortDeclarationQuery`
+for both full inspection and exact-name, direction-constrained discovery.
+Map-backed owners query the requested name directly; named queries retain only
+the first matching direction without constructing owned rows. Preserve the
+same declaration order and live metadata checks; topology publication alone
+cannot guard an owner edit before its scheduled publication pass.
+`write_resolved` uses canonical input-write
 preparation once, compares the live owner with its locator, then commits within
 the same exclusive World boundary without a single-element batch allocation.
 Preserve live precedence, metadata, topology revision, slot, value checks, and
@@ -523,6 +631,10 @@ prim progress does not enqueue a deferred ECS marker command for every prim;
 clear the set with the stale outputs on invalidation. This still skips ordinary
 non-declaration prims on later projector passes without imposing marker insert
 and removal flushes on the app schedule.
+Reuse composed network-membership facts when admitting a member's own telemetry
+declaration. Its generated wrapper owns the sampled alias; a metadata Scope still
+needs a measured target. Use `ListTelemetryChannels` with an exact `name` when
+checking one retained channel, so its metadata read stays bounded.
 
 When a USD reader already exposes `has_authored_attribute`, use it to test one
 known property instead of enumerating every attribute name. If one enumeration
@@ -630,12 +742,25 @@ that was not available.
 For fixed-step versus UI diagnosis, query `SimulationTimingProfile` during the
 settled owned run. It summarizes the latest 240 fixed ticks and 240 app-update
 fixed-loop bursts: p50/p95/p99/max service time, per-tick realtime service-budget
-exceedances, fixed steps per app update, fractional overstep, and simulation-time
-demand clipped by `Time<Virtual>::max_delta`. Pair this with
+exceedances, fixed steps per app update, and retained pending simulation duration
+(`fixed_loop.latest_pending_simulation_secs`, whole ticks plus fractional
+overstep). The owner drains at most 64 complete cycles per update while admitting
+the full running delta. Its separate `Time<Virtual>::max_delta` diagnostic
+detects unexpected clipping and should remain zero. Pair this with
 `QueryTelemetryHistory` for `engine.frame_time`, which covers the full app frame.
+Use `CosimStatus` step diagnostics to separate solver service from end-to-end
+response latency. The execution host admits completions in `First`, after
+message rotation and before `ClockProjectionSet`; compile requests remain in
+the `Update` lifecycle cycle. Preserve session/source/communication-point
+validation and the all-causal-participant hold when changing this boundary.
 The profile is read on demand and is not a replay or UI-isolation verdict; a
 nonzero clipped-time total means wall-clock demand was already excluded by the
-current policy, not that recoverable ticks remain queued.
+clock admission, distinct from the recoverable pending duration.
+When changing this boundary, exercise the rendered production
+`fixed_budget_recording.rhai` gate with a fresh writable `output_dir`; it runs
+25 FPS recording at 64x to require several budgeted updates per logical frame.
+Require three saved frames, a witnessed 64-cycle burst and pending duration,
+zero clipped demand, and no readback while whole cycles remain queued.
 
 For CPU outliers, report p50/p95/p99/max for the app-thread frame and the
 authoritative fixed-tick transaction, plus fixed steps per app update and
@@ -663,6 +788,24 @@ Twin-open and readiness milestones: one startup outlier can stall UI even when
 the same system is nearly free on settled frames. If the outer system is hot,
 attribute time to its internal owner operations before choosing an async
 boundary or cache.
+
+For startup `drive_engine_sync` outliers, compare
+`modelica_engine_completion_snapshot` (engine lock and parsed-tree snapshot)
+with `modelica_engine_completion_install` (generation validation and document
+syntax/index installation). The latter identifies the document and generation.
+For physics telemetry, `physics_telemetry_source_retention` separates registry
+retention from kinematics/contact collection and marks metadata discovery with
+`metadata_dirty`. Compare first discovery with settled sampling before changing
+the owner or its cadence.
+`physics_telemetry_channel_metadata` covers first or changed descriptions;
+`signal_scalar_channel_create` covers initial history/map publication, and
+`signal_scalar_history_tail_growth` covers tail allocations. The signal registry
+owns metadata values; the physics producer retains only a publication flag.
+The tail span selects a full tail before bounded eviction and append, so a
+capped non-allocating append can also appear. It is not an allocation counter.
+Enable these diagnostic spans with
+`RUST_LOG=info,lunco_modelica_core=debug,lunco_usd_sim_telemetry=debug,lunco_signal=debug`; they are
+disabled by the ordinary info-level filter.
 
 When `system_commands` dominates after a producer, inspect the number and shape
 of its deferred writes. For a large set of entities receiving the same bundle,

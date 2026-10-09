@@ -124,22 +124,22 @@ pub struct TerrainAuthoredMaps {
     /// `inputs:albedo_map` — the site's authored material albedo. For an
     /// illumination-bearing grayscale orthophoto, the `kind = "albedo"`
     /// asset pipeline must produce this stable map before it is bound here.
-    pub albedo: Option<Handle<Image>>,
+    pub albedo: Option<lunco_materials::ShaderTexture>,
     /// `inputs:mineral_map` — a classification/analysis drape, composited
     /// UNLIT so it stays readable in shadow (doc 18 §4).
-    pub mineral: Option<Handle<Image>>,
+    pub mineral: Option<lunco_materials::ShaderTexture>,
     /// `inputs:weight_albedo`; 0 = pure procedural.
     pub weight_albedo: f32,
     /// `inputs:weight_mineral`; 0 = no drape.
     pub weight_mineral: f32,
     /// `inputs:surface_map` — packed roughness/AO/hazard data.
-    pub surface: Option<Handle<Image>>,
+    pub surface: Option<lunco_materials::ShaderTexture>,
     /// `inputs:weight_rough`; controls the authored surface roughness channel.
     pub weight_rough: f32,
     /// `inputs:weight_ao`; controls the authored surface AO channel.
     pub weight_ao: f32,
     /// `inputs:normal_map` — a DEM-local ENU normal layer.
-    pub normal: Option<Handle<Image>>,
+    pub normal: Option<lunco_materials::ShaderTexture>,
     /// `inputs:weight_normal`; 0 = no authored normal contribution.
     pub weight_normal: f32,
 }
@@ -174,11 +174,18 @@ impl TerrainAuthoredMaps {
         };
         let derived_surface = engine_layer_on("derived_surface_on")
             || derived.is_some_and(|maps| {
-                look.textures.get(&TextureLayer::Surface) == Some(&maps.surface)
+                look.textures
+                    .get(&TextureLayer::Surface)
+                    .and_then(lunco_materials::ShaderTexture::image)
+                    == Some(&maps.surface)
             });
         let derived_normal = engine_layer_on("derived_normal_on")
-            || derived
-                .is_some_and(|maps| look.textures.get(&TextureLayer::Normal) == Some(&maps.normal));
+            || derived.is_some_and(|maps| {
+                look.textures
+                    .get(&TextureLayer::Normal)
+                    .and_then(lunco_materials::ShaderTexture::image)
+                    == Some(&maps.normal)
+            });
         let surface = (!derived_surface)
             .then(|| look.textures.get(&TextureLayer::Surface).cloned())
             .flatten();

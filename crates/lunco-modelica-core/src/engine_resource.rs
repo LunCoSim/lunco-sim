@@ -500,6 +500,7 @@ pub fn drive_engine_sync(
     let completion_budget = web_time::Duration::from_millis(pacing.completion_budget_ms);
     let completion_started = web_time::Instant::now();
     let completed_results: Vec<_> = {
+        let _span = bevy::log::debug_span!("modelica_engine_completion_snapshot").entered();
         let Some(mut engine) = handle.try_lock() else {
             return;
         };
@@ -522,6 +523,12 @@ pub fn drive_engine_sync(
         results
     };
     for (doc_id, parse_gen, parsed_ast, parse_diags) in completed_results {
+        let _span = bevy::log::debug_span!(
+            "modelica_engine_completion_install",
+            document = doc_id.raw(),
+            generation = parse_gen
+        )
+        .entered();
         // Snapshot current doc gen + URI under a brief engine lock —
         // we'll backfill if the doc still matches the gen this parse
         // ran against.

@@ -635,7 +635,8 @@ impl PhysicsSignalName {
 
 struct CachedPhysicsSignal {
     signal: SignalRef,
-    metadata: Option<SignalMeta>,
+    /// Whether this source published its static metadata to the signal registry.
+    metadata_published: bool,
     global_owner: Option<GlobalEntityId>,
 }
 
@@ -760,6 +761,13 @@ fn retain_samples(
     metadata: &mut HashMap<(Entity, PhysicsSignalName), CachedPhysicsSignal>,
     metadata_dirty: bool,
 ) -> bool {
+    let _span = bevy::log::debug_span!(
+        "physics_telemetry_source_retention",
+        metadata_dirty,
+        entity = entity.to_bits(),
+        channels = *channel_count
+    )
+    .entered();
     let mut retained = false;
     for sample in samples {
         if !sample.value.is_finite() {
@@ -784,7 +792,7 @@ fn retain_samples(
                 (
                     entry.insert(CachedPhysicsSignal {
                         signal,
-                        metadata: None,
+                        metadata_published: false,
                         global_owner: None,
                     }),
                     known,
@@ -792,24 +800,29 @@ fn retain_samples(
             }
         };
         let signal = &cached.signal;
-        if let Some(owner) = global_owner {
-            if cached.global_owner != Some(owner) {
-                signals.associate_global_owner(signal, owner);
-                cached.global_owner = Some(owner);
+        {
+            let _span = (metadata_dirty || !cached.metadata_published).then(|| {
+                bevy::log::debug_span!("physics_telemetry_channel_metadata", known).entered()
+            });
+            if let Some(owner) = global_owner {
+                if cached.global_owner != Some(owner) {
+                    signals.associate_global_owner(signal, owner);
+                    cached.global_owner = Some(owner);
+                }
             }
-        }
-        if metadata_dirty || cached.metadata.is_none() {
-            let signal_meta = SignalMeta {
-                description: Some(sample.description.to_string()),
-                unit: Some(sample.unit.to_string()),
-                provenance: Some("avian".to_string()),
-                group_path: Some(group_path.to_string()),
-                presentation: sample.presentation.to_signal_presentation(),
-                exposure: Default::default(),
-                ..Default::default()
-            };
-            signals.update_meta(signal.clone(), signal_meta.clone());
-            cached.metadata = Some(signal_meta);
+            if metadata_dirty || !cached.metadata_published {
+                let signal_meta = SignalMeta {
+                    description: Some(sample.description.to_string()),
+                    unit: Some(sample.unit.to_string()),
+                    provenance: Some("avian".to_string()),
+                    group_path: Some(group_path.to_string()),
+                    presentation: sample.presentation.to_signal_presentation(),
+                    exposure: Default::default(),
+                    ..Default::default()
+                };
+                signals.update_meta(signal.clone(), signal_meta);
+                cached.metadata_published = true;
+            }
         }
         if signals.record_scalar_at_rate(
             signal,

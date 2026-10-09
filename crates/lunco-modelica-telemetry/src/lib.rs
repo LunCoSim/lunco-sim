@@ -22,7 +22,7 @@ use lunco_modelica_document::ModelicaDocument;
 use lunco_modelica_index::index::ComponentNameLookup;
 #[cfg(test)]
 use lunco_modelica_runtime::ModelicaSignalProvenance;
-use lunco_modelica_runtime::{ModelicaModel, ModelicaSet, ModelicaSignalLayout};
+use lunco_modelica_runtime::{ModelicaModel, ModelicaSignalLayout};
 
 /// Plugin that retains landed Modelica state in the shared telemetry registry.
 ///
@@ -36,7 +36,7 @@ impl Plugin for ModelicaTelemetryPlugin {
         app.init_resource::<RuntimeTelemetrySessions>().add_systems(
             Update,
             retain_modelica_runtime_state
-                .after(ModelicaSet::HandleResponses)
+                .after(lunco_core::RuntimeCycleSet::Lifecycle)
                 .run_if(modelica_telemetry_inputs_changed),
         );
     }
@@ -88,7 +88,8 @@ struct RuntimeSignalCache {
 
 /// Retain the current variables of every live Modelica solver.
 ///
-/// The system runs after worker responses in `Update`, where
+/// The system runs in `Update`, after worker admission in `First` and the
+/// lifecycle cycle, where
 /// [`ModelicaModel::current_time`] and [`ModelicaModel::variables`] describe the
 /// same landed solver result.  Sampling is paced by model time rather than by
 /// render frames, so a fast UI cannot inflate the recorded rate and a headless
@@ -177,15 +178,13 @@ pub fn retain_modelica_runtime_state(
                 continue;
             }
 
-            let (cached, known) = match session.signals.get_mut(name) {
-                Some(cached) => {
-                    let known = signals.scalar_history(&cached.signal).is_some();
-                    (cached, known)
-                }
+            let cached = match session.signals.get_mut(name) {
+                Some(cached) => cached,
                 None => {
                     let signal = SignalRef::new(entity, name.as_str());
-                    let known = signals.scalar_history(&signal).is_some();
-                    if !known && channel_count >= settings.max_channels {
+                    if channel_count >= settings.max_channels
+                        && signals.scalar_history(&signal).is_none()
+                    {
                         warn_once!(
                             "modelica telemetry: max_channels ({}) reached; additional runtime variables are not retained",
                             settings.max_channels
@@ -200,17 +199,17 @@ pub fn retain_modelica_runtime_state(
                             metadata: None,
                         },
                     );
-                    (
-                        session
-                            .signals
-                            .get_mut(name)
-                            .expect("runtime signal identity was just retained"),
-                        known,
-                    )
+                    session
+                        .signals
+                        .get_mut(name)
+                        .expect("runtime signal identity was just retained")
                 }
             };
             let signal = &cached.signal;
-            if !known && channel_count >= settings.max_channels {
+            // Below the catalog limit every channel can record. Only a full
+            // catalog needs to distinguish existing histories from admissions;
+            // read its live count after append instead of hashing every path.
+            if channel_count >= settings.max_channels && signals.scalar_history(signal).is_none() {
                 warn_once!(
                     "modelica telemetry: max_channels ({}) reached; additional runtime variables are not retained",
                     settings.max_channels
@@ -253,9 +252,7 @@ pub fn retain_modelica_runtime_state(
             if retained {
                 cached.retained = true;
                 retained_any = true;
-                if !known {
-                    channel_count += 1;
-                }
+                channel_count = signals.scalar_count();
             }
         }
 
@@ -591,5 +588,66 @@ mod tests {
         assert_eq!(history.len(), 1);
         let sample = history.back().expect("new session sample");
         assert_eq!((sample.time, sample.value), (0.0, 8.0));
+    }
+
+    #[test]
+    fn channel_limit_uses_live_registry_admission_after_removal() {
+        let mut model = ModelicaModel::default();
+        model.variables.insert("a".into(), 1.0);
+        model.variables.insert("b".into(), 2.0);
+        let (mut app, entity) = app_with_model(model);
+        app.world_mut()
+            .resource_mut::<TelemetrySettings>()
+            .max_channels = 1;
+        app.update();
+        let signal = {
+            let registry = app.world().resource::<SignalRegistry>();
+            assert_eq!(registry.scalar_count(), 1);
+            registry.iter_scalar().next().unwrap().0.clone()
+        };
+
+        // Lowering the limit stops admissions, not the existing recorder.
+        app.world_mut()
+            .resource_mut::<TelemetrySettings>()
+            .max_channels = 0;
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 0.2;
+        app.update();
+        assert_eq!(app.world().resource::<SignalRegistry>().scalar_count(), 1);
+        assert_eq!(
+            app.world()
+                .resource::<SignalRegistry>()
+                .scalar_history(&signal)
+                .unwrap()
+                .len(),
+            2
+        );
+
+        // A cached producer identity must not bypass a removed history's cap.
+        app.world_mut()
+            .resource_mut::<SignalRegistry>()
+            .remove_signal(&signal);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 0.4;
+        app.update();
+        assert_eq!(app.world().resource::<SignalRegistry>().scalar_count(), 0);
+
+        app.world_mut()
+            .resource_mut::<TelemetrySettings>()
+            .max_channels = 1;
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 0.61;
+        app.update();
+        let registry = app.world().resource::<SignalRegistry>();
+        assert_eq!(registry.scalar_count(), 1);
+        let history = registry.iter_scalar().next().unwrap().1;
+        assert_eq!(history.len(), 1);
+        assert_eq!(history.back().unwrap().time, 0.61);
     }
 }

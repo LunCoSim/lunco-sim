@@ -38,7 +38,7 @@ switch to it silently when a visual check is requested.
 | `read_port` `{api_id, port}` | a single named port value. |
 | `watch_ports` `{api_id, …}` | a **time-series** of ports (use when you need change over time, not a single sample). |
 | `snapshot_variables` (`SnapshotVariables`) | current Modelica variable values (the solver's state). |
-| `ListTelemetryChannels` / `QueryTelemetryHistory` | retained scalar catalog and history. Keep the returned channel key; an archived channel remains queryable under its captured `api/<GlobalEntityId>:<name>` key after its source disappears. |
+| `ListTelemetryChannels` / `QueryTelemetryHistory` | retained scalar catalog and history. Use `{name: "exact.channel"}` for a bounded catalog subset across owners, or omit it for the full dictionary. Keep the returned channel key; an archived channel remains queryable under its captured `api/<GlobalEntityId>:<name>` key after its source disappears. |
 | `cosim_status` | every USD-driven cosim entity end-to-end: `{name, y, vy, netForce, force_y_input, buoyancy, modelica_*}` — verify a **Modelica → physics** chain without logs. |
 | `rover_status` | rover-specific convenience readout. |
 | `capture_screenshot` (`CaptureScreenshot`) | raw PNG — save `-o /tmp/x.png`, then Read it. Confirms what numbers can't (did it tip over?). |
@@ -127,9 +127,10 @@ readiness signal. Streamed Lit terrain also waits for its USD material source
 projection and any required off-thread derived surface/normal product before
 exposing the initial tile set. During startup, a status entry may intentionally
 remain live at `resident == wanted` while `pending > 0`: that is render-material
-publication, not a completed tile bar. Observe the live `terrain-derived` status
-entry and the typed query rather than treating a historical terrain event as
-proof that materials are settled. Static USD DEM terrain keeps its `UsdShade`
+publication, not a completed tile bar. The query's `derived` object reads the
+terrain owner's visual-map lifecycle: full visual preparation requires
+`active == false`, `pending == 0`, and `ready == total`. This remains independent
+of simulation readiness. Static USD DEM terrain keeps its `UsdShade`
 appearance intent on the terrain owner while the generated mesh is assembled.
 
 For an interactive USD edit, query `InspectUsdViewport` before describing or

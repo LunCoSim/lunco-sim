@@ -7635,6 +7635,7 @@ dependencies = [
  "lunco-cosim-core",
  "lunco-engineering-values",
  "lunco-hooks",
+ "lunco-modelica-ast",
  "lunco-modelica-runtime",
  "lunco-physics",
  "lunco-port-core",
@@ -8405,6 +8406,8 @@ dependencies = [
  "bevy",
  "lunco-port-core",
  "lunco-render",
+ "thiserror 2.0.18",
+ "wgpu-types",
 ]
 
 [[package]]

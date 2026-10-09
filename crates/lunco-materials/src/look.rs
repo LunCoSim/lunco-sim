@@ -52,7 +52,7 @@
 //!
 //! # Why this is render-free
 //!
-//! `Handle<Image>` is `bevy_image`, and `ParamValue` is plain data — neither
+//! `ShaderTexture` holds native image or prepared-source handles, and `ParamValue` is plain data — neither
 //! touches `bevy_pbr`. Only the *binding* of this intent to a real
 //! `ShaderMaterial` (an `AsBindGroup`, hence wgpu) does, and that lives in
 //! `lunco-render-bevy`. A headless server therefore still holds the full,
@@ -159,7 +159,7 @@ pub struct ShaderLook {
     port_topology_key: u64,
     live_value_count: usize,
     /// Named texture layers. Absent = the shader's declared absence behavior.
-    pub textures: BTreeMap<TextureLayer, Handle<Image>>,
+    pub textures: BTreeMap<TextureLayer, crate::ShaderTexture>,
     /// Opt out of material sharing — this look gets a **private** material that the
     /// binder mutates in place.
     ///
@@ -436,9 +436,13 @@ impl ShaderLook {
         self
     }
 
-    /// Bind a texture layer.
-    pub fn with_texture(mut self, layer: TextureLayer, image: Handle<Image>) -> Self {
-        self.textures.insert(layer, image);
+    /// Bind a native image or typed prepared raster to a texture layer.
+    pub fn with_texture(
+        mut self,
+        layer: TextureLayer,
+        image: impl Into<crate::ShaderTexture>,
+    ) -> Self {
+        self.textures.insert(layer, image.into());
         self
     }
 

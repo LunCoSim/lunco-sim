@@ -31,6 +31,9 @@ use lunco_celestial::ephemeris::{EphemerisProvider, EphemerisResource};
 struct EpochPositionCache {
     epoch_bits: Option<u64>,
     positions: HashMap<i32, Option<EclipticAu>>,
+    /// Native heliocentric ICRF samples shared by the Earth/EMB/Moon formulas.
+    /// Keep the library's f64 operands so reuse never changes conversion order.
+    heliocentric_icrf: HashMap<i32, Option<Vector3>>,
 }
 
 impl EpochPositionCache {
@@ -38,19 +41,33 @@ impl EpochPositionCache {
         &mut self,
         body_id: i32,
         epoch_jd: f64,
-        evaluate: impl FnOnce() -> Option<EclipticAu>,
+        evaluate: impl FnOnce(&mut Self) -> Option<EclipticAu>,
     ) -> Option<EclipticAu> {
         let epoch_bits = epoch_jd.to_bits();
         if self.epoch_bits != Some(epoch_bits) {
             self.epoch_bits = Some(epoch_bits);
             self.positions.clear();
+            self.heliocentric_icrf.clear();
         }
         if let Some(position) = self.positions.get(&body_id) {
             return *position;
         }
-        let position = evaluate();
+        let position = evaluate(self);
         self.positions.insert(body_id, position);
         position
+    }
+
+    /// Reuse a native analytical operand only within the current exact epoch.
+    /// Missing evaluations stay missing until the epoch changes.
+    fn heliocentric_or_evaluate(
+        &mut self,
+        body_id: i32,
+        evaluate: impl FnOnce() -> Option<Vector3>,
+    ) -> Option<Vector3> {
+        *self
+            .heliocentric_icrf
+            .entry(body_id)
+            .or_insert_with(evaluate)
     }
 }
 
@@ -106,28 +123,25 @@ mod position_cache_tests {
         let epoch = 2_451_545.0;
         let expected = Some(EclipticAu::new(DVec3::new(1.0, 2.0, 3.0)));
 
-        let first = cache.get_or_evaluate(MOON, epoch, || {
+        let first = cache.get_or_evaluate(MOON, epoch, |_| {
             evaluations += 1;
             expected
         });
-        let repeated = cache.get_or_evaluate(MOON, epoch, || {
+        let repeated = cache.get_or_evaluate(MOON, epoch, |_| {
             evaluations += 1;
             expected
         });
 
         assert_eq!(first.map(EclipticAu::raw), expected.map(EclipticAu::raw));
-        assert_eq!(
-            repeated.map(EclipticAu::raw),
-            expected.map(EclipticAu::raw)
-        );
+        assert_eq!(repeated.map(EclipticAu::raw), expected.map(EclipticAu::raw));
         assert_eq!(evaluations, 1, "same-epoch Moon work must be reused");
 
         let next_epoch = epoch + 1.0;
-        let next = cache.get_or_evaluate(MOON, next_epoch, || {
+        let next = cache.get_or_evaluate(MOON, next_epoch, |_| {
             evaluations += 1;
             None
         });
-        let repeated_missing = cache.get_or_evaluate(MOON, next_epoch, || {
+        let repeated_missing = cache.get_or_evaluate(MOON, next_epoch, |_| {
             evaluations += 1;
             expected
         });
@@ -135,6 +149,67 @@ mod position_cache_tests {
         assert!(next.is_none());
         assert!(repeated_missing.is_none());
         assert_eq!(evaluations, 2, "a new epoch recomputes, including None");
+    }
+
+    #[test]
+    fn native_samples_are_shared_across_bodies_only_at_the_exact_epoch() {
+        let mut cache = EpochPositionCache::default();
+        let evaluations = std::cell::Cell::new(0);
+        let epoch = 2_461_395.5_f64;
+        let native = Vector3::new(f64::from_bits(1), -0.0, 1.2345678901234567);
+        let read = |cache: &mut EpochPositionCache| {
+            let p = cache.heliocentric_or_evaluate(EARTH_MOON_BARYCENTER, || {
+                evaluations.set(evaluations.get() + 1);
+                Some(native)
+            })?;
+            Some(EclipticAu::new(DVec3::new(p.x, p.y, p.z)))
+        };
+        let first = cache.get_or_evaluate(EARTH, epoch, read).unwrap().raw();
+        let second = cache.get_or_evaluate(MOON, epoch, read).unwrap().raw();
+        assert_eq!(evaluations.get(), 1);
+        for (actual, expected) in first
+            .to_array()
+            .into_iter()
+            .zip([native.x, native.y, native.z])
+        {
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+        assert_eq!(
+            first.to_array().map(f64::to_bits),
+            second.to_array().map(f64::to_bits)
+        );
+
+        let adjacent = f64::from_bits(epoch.to_bits() + 1);
+        cache.get_or_evaluate(EARTH, adjacent, read).unwrap();
+        assert_eq!(
+            evaluations.get(),
+            2,
+            "one epoch ULP invalidates native operands"
+        );
+        let missing = |cache: &mut EpochPositionCache| {
+            cache.heliocentric_or_evaluate(EARTH, || {
+                evaluations.set(evaluations.get() + 1);
+                None
+            })?;
+            Some(EclipticAu::ZERO)
+        };
+        assert!(cache.get_or_evaluate(MOON, adjacent, missing).is_none());
+        assert!(
+            cache
+                .get_or_evaluate(EARTH_MOON_BARYCENTER, adjacent, missing)
+                .is_none()
+        );
+        assert_eq!(
+            evaluations.get(),
+            3,
+            "missing native operands are not retried"
+        );
+        cache.get_or_evaluate(EARTH, epoch, read).unwrap();
+        assert_eq!(
+            evaluations.get(),
+            4,
+            "returning to an older epoch also recomputes"
+        );
     }
 }
 
@@ -197,15 +272,12 @@ impl EphemerisProvider for CelestialEphemerisProvider {
         if body_id == SUN {
             return Some(EclipticAu::ZERO);
         }
-        if !matches!(body_id, EARTH_MOON_BARYCENTER | EARTH | MOON) {
-            return self.evaluate_position(body_id, epoch_jd);
-        }
         let mut cache = self
             .position_cache
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.get_or_evaluate(body_id, epoch_jd, || {
-            self.evaluate_position(body_id, epoch_jd)
+        cache.get_or_evaluate(body_id, epoch_jd, |cache| {
+            self.evaluate_position(body_id, epoch_jd, cache)
         })
     }
 
@@ -215,21 +287,31 @@ impl EphemerisProvider for CelestialEphemerisProvider {
 }
 
 impl CelestialEphemerisProvider {
-    fn evaluate_position(&self, body_id: i32, epoch_jd: f64) -> Option<EclipticAu> {
+    fn evaluate_position(
+        &self,
+        body_id: i32,
+        epoch_jd: f64,
+        cache: &mut EpochPositionCache,
+    ) -> Option<EclipticAu> {
         let _span = bevy::log::info_span!("celestial_ephemeris_position", body_id).entered();
         let julian = JulianDate::new(epoch_jd, 0.0);
         let tdb = TDB::from_julian_date(julian);
 
         match body_id {
             EARTH_MOON_BARYCENTER => {
-                let p = self.emb_heliocentric(&tdb)?;
+                let p = cache.heliocentric_or_evaluate(EARTH_MOON_BARYCENTER, || {
+                    self.emb_heliocentric(&tdb)
+                })?;
                 Some(equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
                     p.x, p.y, p.z,
                 ))))
             }
             EARTH => {
-                let p_emb = self.emb_heliocentric(&tdb)?;
-                let p_earth = self.earth_heliocentric(&tdb)?;
+                let p_emb = cache.heliocentric_or_evaluate(EARTH_MOON_BARYCENTER, || {
+                    self.emb_heliocentric(&tdb)
+                })?;
+                let p_earth =
+                    cache.heliocentric_or_evaluate(EARTH, || self.earth_heliocentric(&tdb))?;
                 Some(equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
                     p_earth.x - p_emb.x,
                     p_earth.y - p_emb.y,
@@ -245,8 +327,11 @@ impl CelestialEphemerisProvider {
                     p_m_geo_arr[2] / AU_KM,
                 )));
 
-                let p_emb = self.emb_heliocentric(&tdb)?;
-                let p_earth = self.earth_heliocentric(&tdb)?;
+                let p_emb = cache.heliocentric_or_evaluate(EARTH_MOON_BARYCENTER, || {
+                    self.emb_heliocentric(&tdb)
+                })?;
+                let p_earth =
+                    cache.heliocentric_or_evaluate(EARTH, || self.earth_heliocentric(&tdb))?;
                 let p_earth_rel_emb = equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
                     p_earth.x - p_emb.x,
                     p_earth.y - p_emb.y,

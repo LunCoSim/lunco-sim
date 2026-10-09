@@ -103,6 +103,38 @@ runtime also receives a terminal `RuntimeFaults` record and a
 `render-light-transform-safety` diagnostic. This keeps malformed simulation
 state visible while preventing a renderer system from panicking on it.
 
+### Immutable primitive mesh assets
+
+`lunco-usd-bevy-mesh::PrimitiveMeshAssets` owns content-keyed CPU preparation
+and native mesh identity for analytic USD primitives. Its key retains canonical
+f64 dimension bits, shape/axis and the five primitive tessellation counts.
+Equal requests share one worker task. `lunco-usd-bevy` retains each prim's
+stage, path, canonical generation and full-profile admission fences before
+polling or attaching a result. Worker completion does not choose authoritative
+simulation order, physics geometry or scene readiness.
+
+The owner holds weak native handles and weak reader interests. Cancelling one
+prim does not cancel another reader; reader/asset retirement prunes abandoned
+entries through removal events. Missing native assets reject consumption.
+Quality edits resolve one replacement asset per content key at the existing
+quality-edit boundary, leaving previous keyed geometry immutable. Authored
+meshes, NURBS, transient curves and physics retain their distinct owners.
+The terrain/globe caches have different content/lifetime contracts, and the
+renderer material cache owns backend material assets; none owns analytic
+primitive preparation or weak mesh lifetime.
+
+`lunco-render::SharedMeshAsset` marks an entity using immutable shared geometry.
+Entity-specific writers must attach a private mesh and remove the marker before
+editing it. Horizon UV installation and NURBS conversion obey this contract.
+Point instances record their last inherited asset ID, follow prototype handle
+replacement while still inheriting it, and preserve instance appearance and
+private mesh edits. Synthetic point-instance children have no public entity
+identity; their handle binding is verified as a low-level component seam.
+The authored `primitive_mesh_sharing.rhai` gate checks actual reflected native
+mesh identity in the production sandbox, including unlike-dimension isolation.
+Sharing admits native renderer batching; performance improvement still requires
+a matched measurement rather than an asset-count inference.
+
 ### Auxiliary shadow-view schedule admission
 
 Bevy's camera driver also runs `Core3d` for point- and spot-light shadow roots.
@@ -118,6 +150,34 @@ shadow views as output cameras or disabling shadows. Bevy still prepares
 per-view GPU preprocess bind groups and submits its pending command buffers in
 the normal frame-level queue call; only a before/after trace can establish
 whether skipping these stages reduces that batch's buffer count or CPU time.
+
+### Shadow GPU diagnostics
+
+When Bevy's `RenderDiagnosticsPlugin` is enabled, `LuncoRenderPlugin::finish`
+composes each native shared and per-camera early/late shadow system between
+timestamp systems with Bevy's system pipe. The native delegate retains its
+implicit dependency set and runs exactly once.
+
+PBR's system-local before/after rules are reapplied to each pipe: early shadows
+follow early indirect preparation and precede depth downsampling and late
+shadows; late shadows follow late indirect preparation and precede main indirect
+preparation and the main pass. Removal preserves dependencies targeting the
+native implicit set, but deletes rules attached to the removed system itself.
+The schedule seam test covers both forms of dependency. The begin system
+validates all of the delegate's parameters, including its `ViewQuery`, before
+opening a span;
+an unrelated root therefore skips before any timestamp. The pipe's read-only
+World access keeps those facts stable through the native call. Both timestamps
+run on the same CPU thread through Bevy's existing recorder.
+
+The pipe queues its three render contexts in begin/native/end order, preserving
+GPU submission order. No dependency source, shadow draw,
+cascade, map resolution or simulation schedule changes. Ordinary builds without
+render diagnostics retain the native systems. The four `lunco_shadow_*` spans
+cover shared point/spot maps and camera-owned directional cascades separately.
+Late spans can contain only timestamp overhead when occlusion culling has no
+late work. Timestamp support and Bevy's per-frame query budget limit GPU
+coverage; CPU-only or missing GPU spans do not establish zero GPU cost.
 
 ### Local-light shadow relevance
 
@@ -278,7 +338,7 @@ worked example: `PbrLook` carries `ior` (as does `UsdPreviewSurface`), while Bev
 and known nowhere else. A second backend would remap from the same `ior`. Carrying both
 would let a look reflect like diamond and refract like glass, and would need to persist a
 `reflectance` that USD has no attribute for.
-| **`ShaderLook`** | `lunco-materials` | `MeshMaterial3d<ShaderMaterial>` | a custom `.wgsl` with an **open, user-defined parameter set**; live inputs use predeclared `lunco-port-core` slots — see [shader-layers-and-params.md](shader-layers-and-params.md) |
+| **`ShaderLook`** | `lunco-materials` | `MeshMaterial3d<ShaderMaterial>` | a custom `.wgsl` with an **open, user-defined parameter set** and typed `ShaderTexture` native/prepared sources; live inputs use predeclared `lunco-port-core` slots — see [shader-layers-and-params.md](shader-layers-and-params.md) |
 | **`SceneCamera`** | `lunco-render` | `Camera3d` + tonemapping + MSAA + bloom + Bevy `ClusterConfig` | because `Camera3d` was being used as the *query filter* for "which camera is the scene one?", which made domain crates link a GPU stack **merely to ask a question**; the render binder uses Bevy's single-cluster topology when no clusterable object exists and follows light lifecycle events |
 | **`WorldLabel`** | `lunco-render` | `Text2d` + font + colour | a spacecraft's *name* is simulation data; the glyphs are not |
 

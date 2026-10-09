@@ -191,6 +191,14 @@ publishes an owning `usd-avian/physics-frame` diagnostic and raises the shared
 binding. The Avian `StepSimulation` set and bridge sync passes are directly
 gated on the same contract, so no solver tick or force accumulation occurs
 while the diagnostic is present.
+`lunco-usd-avian-core` invalidates its shared frame-contract result through
+native component lifecycle observers for physical membership, Grid/CellCoord
+presence and immutable ChildOf insertion/removal. Admission and fixed-frame
+consumers independently observe the same resource change ticks; neither clears
+the other's notification. Ordinary Transform and CellCoord value updates do
+not invalidate connectivity. Active-frame changes, including removal, also
+invalidate the result. The complete validation remains at its existing
+admission and fixed-frame boundaries, with the same diagnostic and solver hold.
 When the selected site Grid itself is atomically reparented during scene
 mounting, bodies below it are reseeded from their new site-local hierarchy;
 only their velocity vectors are rotated into the new axes. A normal active-frame

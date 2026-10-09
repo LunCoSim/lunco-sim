@@ -616,6 +616,8 @@ pub struct SimSampleStream {
 /// System sets for asynchronous worker lifecycle and fixed-step exchange.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModelicaSet {
+    /// Admit worker completions in `First`, before the virtual clock samples
+    /// the causal barrier for this application update.
     HandleResponses,
     /// Admit compile intent independently of the fixed simulation clock.
     AdmitCompileRequests,

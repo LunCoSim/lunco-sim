@@ -9,7 +9,7 @@
 //! Changes to this exchange do not need to rebuild those owners.
 
 use bevy::prelude::*;
-use lunco_cosim_core::{ScalarPortMap, SimComponent, SimStatus, UsdSourcedCosim};
+use lunco_cosim_core::{SimComponent, SimStatus, UsdSourcedCosim};
 use lunco_modelica_runtime::ModelicaModel;
 use lunco_scripting::doc::ScriptedModel;
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -66,18 +66,6 @@ fn upsert_ports<'a>(
     changed
 }
 
-#[inline]
-fn upsert_scalar_ports<'a>(
-    dst: &mut ScalarPortMap,
-    src: impl Iterator<Item = (&'a String, &'a f64)>,
-) -> bool {
-    let mut changed = false;
-    for (name, value) in src {
-        changed |= dst.set(name, *value);
-    }
-    changed
-}
-
 /// Publish changed Modelica snapshots to `SimComponent.outputs` before
 /// propagation. New shared surfaces receive their initial snapshot, and stable
 /// outputs remain available to every physics step.
@@ -97,7 +85,12 @@ pub fn sync_modelica_outputs(
     for (model, mut comp) in &mut q {
         let changed = {
             let comp = comp.bypass_change_detection();
-            let mut changed = upsert_scalar_ports(&mut comp.outputs, model.variables.iter());
+            let mut changed = comp.outputs.upsert_samples(
+                model
+                    .variables
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value)),
+            );
             for (k, v) in &model.inputs {
                 if !comp.inputs.contains_key(k) {
                     comp.inputs.insert(k.clone(), *v);
@@ -182,9 +175,11 @@ pub fn sync_script_outputs(
     mut q: Query<(&ScriptedModel, &mut SimComponent), With<UsdSourcedCosim>>,
 ) {
     for (model, mut comp) in &mut q {
-        let changed = upsert_scalar_ports(
-            &mut comp.bypass_change_detection().outputs,
-            model.outputs.iter(),
+        let changed = comp.bypass_change_detection().outputs.upsert_samples(
+            model
+                .outputs
+                .iter()
+                .map(|(name, value)| (name.as_str(), value)),
         );
         if changed {
             comp.set_changed();

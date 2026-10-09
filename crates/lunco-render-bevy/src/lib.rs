@@ -117,6 +117,9 @@ pub struct LuncoRenderPlugin;
 
 impl Plugin for LuncoRenderPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_materials::LuncoImagePlugin>() {
+            app.add_plugins(lunco_materials::LuncoImagePlugin);
+        }
         app.init_resource::<RenderProfile>()
             .init_resource::<lunco_render::CommunicationLineSettings>()
             .init_resource::<lunco_render::SceneBloomOverride>()
@@ -198,6 +201,10 @@ impl Plugin for LuncoRenderPlugin {
         // Connectivity beams: runtime-spawned mesh, authored look, local Transform (no
         // gizmo, no GlobalTransform, no jitter). This is the only connectivity visual.
         link_beams::build(app);
+    }
+
+    fn finish(&self, app: &mut App) {
+        shadow_view_schedule::install_diagnostics(app);
     }
 }
 

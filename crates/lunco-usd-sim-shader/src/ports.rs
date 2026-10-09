@@ -89,8 +89,7 @@ use lunco_materials::dyn_params::ParamValue;
 use lunco_materials::look::ShaderLook;
 use lunco_materials::naming::to_snake_case;
 use lunco_port_core::ports::{
-    PortBackend, PortDeclaration, PortDirection, PortMetadata, PortRegistry, PortTopologyRevision,
-    PortTopologyState,
+    PortBackend, PortDirection, PortMetadata, PortRegistry, PortTopologyRevision, PortTopologyState,
 };
 
 fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
@@ -183,24 +182,26 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
         };
         shader_topology_key(look)
     },
-    list: |world, entity, out| {
+    declare_ports: |world, entity, out| {
+        if !out.accepts_direction(PortDirection::In) {
+            return;
+        }
         let Some(look) = world.get::<ShaderLook>(entity) else {
             return;
         };
+        if let Some(name) = out.requested_name() {
+            if look.driven().contains(name) || look.values().contains_key(name) {
+                out.declare(name, PortDirection::In);
+            }
+            return;
+        }
         // The prim's DRIVEN parameters plus whatever it authored a value for — the
         // same set the resolved slot writer accepts, so listing and writing cannot disagree.
         //
-        // It used to list every field the bound material's WGSL declares. That was a
-        // strictly larger set (a shared shader's full surface, most of it irrelevant
-        // to this prim) and it required the reflected schema, i.e. a GPU build. The
-        // parameters a prim actually HAS are the ones it drives or authors.
         let mut names: std::collections::BTreeSet<&String> = look.driven().iter().collect();
         names.extend(look.values().keys());
         for name in names {
-            out.push(PortDeclaration {
-                name: name.clone(),
-                direction: PortDirection::In,
-            });
+            out.declare(name, PortDirection::In);
         }
     },
     metadata: |world, entity, name, direction| {

@@ -185,37 +185,47 @@ fn physics_subject(entity: Entity, name: Option<&Name>, prim_path: Option<&UsdPr
         .unwrap_or_else(|| format!("entity:{entity:?}"))
 }
 
-/// Return whether a topology or frame-boundary input changed since the last
-/// validation. Pose values do not belong here: moving a body is ordinary
-/// physics state and cannot invalidate its hierarchy connection to the active
-/// frame. The full walk remains authoritative, but it only runs when an input
-/// that can change that answer was actually admitted.
+/// Native change ticks let admission and fixed-frame consumers independently
+/// observe structural edits without scanning every entity's component ticks.
+#[derive(Resource, Default)]
+struct PhysicsFrameContractInputs;
+
+fn invalidate_physics_frame_contract<E: Event, B: Bundle>(
+    _: On<E, B>,
+    mut inputs: ResMut<PhysicsFrameContractInputs>,
+) {
+    inputs.set_changed();
+}
+
+fn install_physics_frame_contract_tracking(app: &mut App) {
+    app.init_resource::<PhysicsFrameContractInputs>()
+        .add_observer(
+            invalidate_physics_frame_contract::<Add, (RigidBody, Collider, CellCoord, Grid)>,
+        )
+        .add_observer(
+            invalidate_physics_frame_contract::<
+                Remove,
+                (RigidBody, Collider, CellCoord, Grid, ChildOf),
+            >,
+        )
+        // Relationships are immutable components: reparenting commits through
+        // insertion, so this observes both new and replaced hierarchy edges.
+        .add_observer(invalidate_physics_frame_contract::<Insert, ChildOf>);
+}
+
+/// Pose values do not invalidate hierarchy connectivity. Structural lifecycle
+/// events and an active-frame change retain the full authoritative walk at the
+/// existing admission and fixed-frame boundaries.
 fn physics_frame_contract_inputs_changed(
     active: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
-    q_changed: Query<
-        (),
-        Or<(
-            Added<RigidBody>,
-            Added<Collider>,
-            Added<ChildOf>,
-            Added<CellCoord>,
-            Added<Grid>,
-            Changed<ChildOf>,
-        )>,
-    >,
-    mut removed_bodies: RemovedComponents<RigidBody>,
-    mut removed_colliders: RemovedComponents<Collider>,
-    mut removed_children: RemovedComponents<ChildOf>,
-    mut removed_cells: RemovedComponents<CellCoord>,
-    mut removed_grids: RemovedComponents<Grid>,
+    inputs: Res<PhysicsFrameContractInputs>,
+    mut previous_frame: Local<Option<Entity>>,
 ) -> bool {
-    active.is_some_and(|active| active.is_changed())
-        || !q_changed.is_empty()
-        || removed_bodies.read().next().is_some()
-        || removed_colliders.read().next().is_some()
-        || removed_children.read().next().is_some()
-        || removed_cells.read().next().is_some()
-        || removed_grids.read().next().is_some()
+    let frame = active.as_deref().map(|active| active.0);
+    let frame_changed =
+        *previous_frame != frame || active.is_some_and(|active| active.is_changed());
+    *previous_frame = frame;
+    frame_changed || inputs.is_changed()
 }
 
 /// Validate the frame before Avian's nested schedule reads it. The bridge must
@@ -338,6 +348,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         app.init_resource::<lunco_core::RuntimeDiagnostics>();
         app.init_resource::<lunco_physics::PhysicsHolds>();
         app.init_resource::<PhysicsFrameContractStatus>();
+        install_physics_frame_contract_tracking(app);
         app.add_systems(
             PreUpdate,
             validate_physics_frame_contract
@@ -1865,6 +1876,99 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::system::SystemState;
     use lunco_spatial::coords::world_pose;
+
+    #[test]
+    fn frame_contract_lifecycle_ticks_reach_each_consumer_without_pose_invalidation() {
+        use bevy::ecs::schedule::ScheduleLabel;
+        #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
+        enum Probe {
+            Admission,
+            Fixed,
+        }
+        #[derive(Resource, Default)]
+        struct Wakes([usize; 2]);
+        fn admission(mut wakes: ResMut<Wakes>) {
+            wakes.0[0] += 1;
+        }
+        fn fixed(mut wakes: ResMut<Wakes>) {
+            wakes.0[1] += 1;
+        }
+        fn observe(app: &mut App, expected: usize) {
+            app.world_mut().run_schedule(Probe::Admission);
+            app.world_mut().run_schedule(Probe::Fixed);
+            assert_eq!(app.world().resource::<Wakes>().0, [expected; 2]);
+        }
+        fn immutable<T: Component<Mutability = bevy::ecs::component::Immutable>>() {}
+        immutable::<ChildOf>();
+        let mut app = App::new();
+        install_physics_frame_contract_tracking(&mut app);
+        app.init_resource::<Wakes>()
+            .init_schedule(Probe::Admission)
+            .init_schedule(Probe::Fixed)
+            .add_systems(
+                Probe::Admission,
+                admission.run_if(physics_frame_contract_inputs_changed),
+            )
+            .add_systems(
+                Probe::Fixed,
+                fixed.run_if(physics_frame_contract_inputs_changed),
+            );
+        observe(&mut app, 1);
+        observe(&mut app, 1);
+        let first = app.world_mut().spawn_empty().id();
+        let second = app.world_mut().spawn_empty().id();
+        let body = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Collider::sphere(1.0),
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(first),
+            ))
+            .id();
+        observe(&mut app, 2);
+        app.world_mut()
+            .get_mut::<Transform>(body)
+            .unwrap()
+            .translation
+            .x = 1.0;
+        app.world_mut().get_mut::<CellCoord>(body).unwrap().x = 1;
+        observe(&mut app, 2);
+        app.world_mut().entity_mut(body).insert(ChildOf(second));
+        observe(&mut app, 3);
+        app.world_mut().entity_mut(body).remove::<ChildOf>();
+        observe(&mut app, 4);
+        app.world_mut().entity_mut(body).remove::<RigidBody>();
+        observe(&mut app, 5);
+        app.world_mut().entity_mut(body).remove::<Collider>();
+        observe(&mut app, 6);
+        app.world_mut().entity_mut(body).remove::<CellCoord>();
+        observe(&mut app, 7);
+        app.world_mut().entity_mut(first).insert(Grid::default());
+        observe(&mut app, 8);
+        app.world_mut().entity_mut(first).remove::<Grid>();
+        observe(&mut app, 9);
+        app.world_mut()
+            .insert_resource(lunco_spatial::ActivePhysicsFrame(first));
+        observe(&mut app, 10);
+        app.world_mut()
+            .insert_resource(lunco_spatial::ActivePhysicsFrame(second));
+        observe(&mut app, 11);
+        app.world_mut()
+            .remove_resource::<lunco_spatial::ActivePhysicsFrame>();
+        observe(&mut app, 12);
+        app.world_mut().entity_mut(body).insert(CellCoord::ZERO);
+        // A second mutation between the consumers must remain visible to the
+        // fixed consumer even after admission has observed the earlier edit.
+        app.world_mut().run_schedule(Probe::Admission);
+        app.world_mut().entity_mut(body).insert(RigidBody::Dynamic);
+        app.world_mut().run_schedule(Probe::Fixed);
+        assert_eq!(app.world().resource::<Wakes>().0, [13; 2]);
+        app.world_mut().run_schedule(Probe::Admission);
+        app.world_mut().run_schedule(Probe::Fixed);
+        assert_eq!(app.world().resource::<Wakes>().0, [14, 13]);
+    }
 
     #[test]
     fn reversed_bvh_discovery_has_the_same_native_contact_trajectory() {

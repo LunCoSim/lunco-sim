@@ -510,10 +510,10 @@ fn on_run_scenario_asset(
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let cmd = trigger.event();
-    let path = lunco_assets_core::engine_asset_uri(&cmd.source_asset);
-    if path.is_empty() {
+    if cmd.source_asset.trim().is_empty() {
         return Err("RunScenarioAsset: source_asset must not be empty".to_string());
     }
+    let path = lunco_assets_core::engine_asset_uri(&cmd.source_asset);
     let path = lunco_assets_core::asset_path::load_asset_path(&path, None, None, None)
         .map_err(|error| format!("RunScenarioAsset: {error}"))?;
     let owner_twin = resolve_scenario_twin_owner(
@@ -846,11 +846,11 @@ pub struct PendingScenarioAsset {
 /// asset request is admitted. Waiting for the new import graph to finish would
 /// let the previous tutorial restart on a newly composed scene.
 #[cfg(feature = "rhai")]
-pub fn retire_replaced_scenario_assets(world: &mut World) {
-    let targets: Vec<_> = {
-        let mut query = world.query_filtered::<Entity, With<PendingScenarioAsset>>();
-        query.iter(world).collect()
-    };
+pub fn retire_replaced_scenario_assets(
+    world: &mut World,
+    mut pending: Local<QueryState<Entity, With<PendingScenarioAsset>>>,
+) {
+    let targets: Vec<_> = pending.iter(world).collect();
     for entity in targets {
         let attached_scenario = world.get::<ScriptedModel>(entity).is_some()
             || world.get::<ScenarioAssetHandle>(entity).is_some()

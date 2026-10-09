@@ -1484,13 +1484,10 @@ mod tests {
     fn list_test_output(
         world: &World,
         entity: Entity,
-        out: &mut Vec<lunco_port_core::ports::PortDeclaration>,
+        out: &mut lunco_port_core::ports::PortDeclarationQuery<'_>,
     ) {
         if world.get::<TestOutput>(entity).is_some() {
-            out.push(lunco_port_core::ports::PortDeclaration {
-                name: "value".to_string(),
-                direction: PortDirection::Out,
-            });
+            out.declare("value", PortDirection::Out);
         }
     }
 
@@ -1520,7 +1517,7 @@ mod tests {
         lunco_port_core::ports::PortBackend {
             list_entities: |_world, _out| {},
             topology_key: |_world, _entity| 0,
-            list: list_test_output,
+            declare_ports: list_test_output,
             metadata: test_output_metadata,
             read_output: read_test_output,
             read_input: |_, _, _| None,
@@ -1534,13 +1531,10 @@ mod tests {
     fn list_test_declared_output(
         world: &World,
         entity: Entity,
-        out: &mut Vec<lunco_port_core::ports::PortDeclaration>,
+        out: &mut lunco_port_core::ports::PortDeclarationQuery<'_>,
     ) {
         if world.get::<TestDeclaredOutput>(entity).is_some() {
-            out.push(lunco_port_core::ports::PortDeclaration {
-                name: "value".to_string(),
-                direction: PortDirection::Out,
-            });
+            out.declare("value", PortDirection::Out);
         }
     }
 
@@ -1554,7 +1548,7 @@ mod tests {
         lunco_port_core::ports::PortBackend {
             list_entities: |_world, _out| {},
             topology_key: |_world, _entity| 0,
-            list: list_test_declared_output,
+            declare_ports: list_test_declared_output,
             metadata: test_output_metadata,
             read_output: read_test_declared_output,
             read_input: |_, _, _| None,

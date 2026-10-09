@@ -702,6 +702,7 @@ fn project_usd_telemetry(
     )>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
+    mut membership: ModelicaNetworkMembershipInputs,
     mut index: ResMut<UsdTelemetryProjectionIndex>,
     diagnostics: Option<ResMut<RuntimeDiagnostics>>,
 ) {
@@ -769,7 +770,7 @@ fn project_usd_telemetry(
             continue;
         };
         let id = prim_path.stage_handle.id();
-        let (reader, _generation) =
+        let (reader, generation) =
             canonical.reader_for_entity(id, stage_asset, instance_projection);
         let Ok(path) = SdfPath::new(&prim_path.path) else {
             index.diagnostics.insert(
@@ -815,12 +816,28 @@ fn project_usd_telemetry(
                     let direct_surface = target_surface_query
                         .get(entity)
                         .is_ok_and(|(sim, ready, pending)| !pending && (sim || ready));
-                    if direct_surface {
-                        // The declaration prim is its own target only when it
-                        // has published a runtime surface. A declaration
-                        // Scope without a surface must name the measured prim
-                        // explicitly; otherwise it would silently bind to the
-                        // metadata Scope instead of the physical signal owner.
+                    let network_member = !direct_surface && {
+                        let instance = lunco_usd_bevy_scene::instance_key_from_projection(
+                            entity,
+                            &membership.provenance,
+                            &membership.global_ids,
+                            &membership.instance_roots,
+                            instance_projection,
+                        );
+                        membership
+                            .cache
+                            .get_or_insert_with(id, generation, instance, || {
+                                lunco_usd_bevy_core::program::modelica_network_member_paths(&reader)
+                            })
+                            .contains(&prim_path.path)
+                    };
+                    if direct_surface || network_member {
+                        // A network member's sampled port is published by its
+                        // generated wrapper. The shared composed membership
+                        // fact admits its declaration while that surface is
+                        // pending; the exact alias lookup below owns binding.
+                        // A metadata Scope has neither owner and still needs
+                        // an explicit measured target.
                         prim_path.path.clone()
                     } else {
                         index.diagnostics.insert(
@@ -2276,7 +2293,7 @@ fn tag_cosim_opaque(
 
 /// Per-tick ordering inside `FixedUpdate` matches the cosim master
 /// algorithm:
-///   `ModelicaSet::HandleResponses (Update) → sync_*_outputs →
+///   `ModelicaSet::HandleResponses (First) → sync_*_outputs →
 ///    PropagateCosimSet::Propagate → ApplyForcesCosimSet::ApplyForces →
 ///    sync_*_inputs → ModelicaSet::SpawnRequests`.
 impl Plugin for UsdSimCosimPlugin {

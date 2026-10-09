@@ -107,7 +107,18 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
         "ListTelemetryChannels"
     }
 
-    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let name = params
+            .get("name")
+            .map(|_| {
+                api_param_str(params, "name").ok_or_else(|| {
+                    ApiQueryError::new(
+                        ApiErrorCode::DeserializationError,
+                        "ListTelemetryChannels: name must be a string",
+                    )
+                })
+            })
+            .transpose()?;
         let signals = world.resource::<SignalRegistry>();
         let delivery = world.resource::<super::SampleDeliveryQueue>();
         let delivery_budget = world
@@ -118,6 +129,7 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
 
         let mut channels: Vec<ApiValue> = signals
             .iter_scalar()
+            .filter(|(signal, _)| name.is_none_or(|name| signal.path == name))
             .map(|(sig, history)| {
                 let owner = channel_owner(world, signals, sig);
                 let meta = signals.meta(sig);
@@ -525,8 +537,8 @@ impl ApiQueryProvider for SimulationTimingProfileProvider {
                 "max_delta_limited_simulation_secs_total": profile
                     .total_max_delta_limited_simulation_secs()
                     .map_or(ApiValue::Unit, ApiValue::Float),
-                "latest_fractional_overstep_secs": latest_loop.map_or(ApiValue::Unit, |sample| {
-                    ApiValue::Float(sample.fractional_overstep_secs)
+                "latest_pending_simulation_secs": latest_loop.map_or(ApiValue::Unit, |sample| {
+                    ApiValue::Float(sample.pending_simulation_secs)
                 }),
             },
         })))

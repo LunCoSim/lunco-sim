@@ -1232,12 +1232,17 @@ pub(crate) fn publish_surface_annotations(
             continue;
         }
         let image = state.published.get(&terrain).and_then(|p| p.image.as_ref());
-        if look.textures.get(&TextureLayer::SurfaceAnnotations) == image {
+        if look
+            .textures
+            .get(&TextureLayer::SurfaceAnnotations)
+            .and_then(lunco_materials::ShaderTexture::image)
+            == image
+        {
             continue;
         }
         if let Some(image) = image {
             look.textures
-                .insert(TextureLayer::SurfaceAnnotations, image.clone());
+                .insert(TextureLayer::SurfaceAnnotations, image.clone().into());
         } else {
             look.textures.remove(&TextureLayer::SurfaceAnnotations);
         }

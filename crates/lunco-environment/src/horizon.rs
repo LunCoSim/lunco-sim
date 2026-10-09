@@ -551,7 +551,12 @@ pub fn start_horizon_bakes(
     #[cfg(target_arch = "wasm32")] mut meshes: ResMut<Assets<Mesh>>,
     #[cfg(target_arch = "wasm32")] mut images: ResMut<Assets<Image>>,
     q: Query<
-        (Entity, &HorizonShadowTerrain, &Mesh3d),
+        (
+            Entity,
+            &HorizonShadowTerrain,
+            &Mesh3d,
+            Has<lunco_render::SharedMeshAsset>,
+        ),
         // `Without<RenderLayers>` mirrors `pick_sun`: terrain spawned under the
         // RTT preview `scene_root` carries a RenderLayers and must NOT bake into
         // the main scene (ARC-1 — cross-scene contamination + wasted bake).
@@ -562,7 +567,9 @@ pub fn start_horizon_bakes(
         ),
     >,
 ) {
-    for (entity, cfg, mesh3d) in &q {
+    for (entity, cfg, mesh3d, shared) in &q {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = shared;
         if cfg.resolution < 2 {
             warn!(
                 "[horizon] terrain {entity:?} has invalid resolution {}; removing horizon-shadow opt-in",
@@ -618,6 +625,7 @@ pub fn start_horizon_bakes(
                 &mut images,
                 entity,
                 mesh3d,
+                shared,
                 result.field,
                 result.millis,
             );
@@ -721,10 +729,15 @@ pub fn finish_horizon_bakes(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
-    mut q: Query<(Entity, &mut HorizonBakeTask, &Mesh3d)>,
+    mut q: Query<(
+        Entity,
+        &mut HorizonBakeTask,
+        &Mesh3d,
+        Has<lunco_render::SharedMeshAsset>,
+    )>,
 ) {
     use bevy::tasks::futures_lite::future;
-    for (entity, mut task, mesh3d) in &mut q {
+    for (entity, mut task, mesh3d, shared) in &mut q {
         let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
         };
@@ -734,6 +747,7 @@ pub fn finish_horizon_bakes(
             &mut images,
             entity,
             mesh3d,
+            shared,
             result.field,
             result.millis,
         );
@@ -752,10 +766,32 @@ fn install_horizon_map(
     images: &mut Assets<Image>,
     entity: Entity,
     mesh3d: &Mesh3d,
+    shared: bool,
     field: HeightField,
     millis: u128,
 ) {
-    if let Some(mut mesh) = meshes.get_mut(&mesh3d.0) {
+    let private;
+    let target = if shared {
+        let Some(mesh) = meshes.get(&mesh3d.0).cloned() else {
+            warn!(
+                "[horizon] shared mesh for {entity:?} disappeared before UV installation; retiring its bake"
+            );
+            commands
+                .entity(entity)
+                .try_remove::<HorizonBakeTask>()
+                .try_remove::<HorizonShadowTerrain>();
+            return;
+        };
+        private = meshes.add(mesh);
+        commands
+            .entity(entity)
+            .try_insert(Mesh3d(private.clone()))
+            .try_remove::<lunco_render::SharedMeshAsset>();
+        &private
+    } else {
+        &mesh3d.0
+    };
+    if let Some(mut mesh) = meshes.get_mut(target) {
         if let Some(VertexAttributeValues::Float32x3(pos)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
         {
@@ -1209,10 +1245,10 @@ mod tests {
         mut meshes: ResMut<Assets<Mesh>>,
         mut images: ResMut<Assets<Image>>,
         target: Res<HorizonInstallTarget>,
-        mesh_query: Query<&Mesh3d>,
+        mesh_query: Query<(&Mesh3d, Has<lunco_render::SharedMeshAsset>)>,
     ) {
         let entity = target.0;
-        let mesh = mesh_query
+        let (mesh, shared) = mesh_query
             .get(entity)
             .expect("the horizon fixture must keep its mesh");
         install_horizon_map(
@@ -1221,6 +1257,7 @@ mod tests {
             &mut images,
             entity,
             mesh,
+            shared,
             make_field(2, Vec2::ZERO, Vec2::ONE, vec![0.0; 4]),
             0,
         );
@@ -1254,39 +1291,77 @@ mod tests {
     }
 
     #[test]
-    fn horizon_install_restores_native_terrain_shadow_reception() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(bevy::asset::AssetPlugin::default())
-            .init_asset::<Image>()
-            .init_asset::<Mesh>();
+    fn horizon_install_preserves_shared_meshes_and_native_shadow_reception() {
+        for shared in [false, true] {
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins)
+                .add_plugins(bevy::asset::AssetPlugin::default())
+                .init_asset::<Image>()
+                .init_asset::<Mesh>();
 
-        let mesh = Mesh::new(
-            bevy::mesh::PrimitiveTopology::TriangleList,
-            RenderAssetUsages::default(),
-        )
-        .with_inserted_attribute(
-            Mesh::ATTRIBUTE_POSITION,
-            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
-        )
-        .with_inserted_indices(Indices::U32(vec![0, 1, 2]));
-        let mesh_handle = app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh);
-        let entity = app
-            .world_mut()
-            .spawn((Mesh3d(mesh_handle), bevy::light::NotShadowReceiver))
-            .id();
-        app.insert_resource(HorizonInstallTarget(entity));
-        app.add_systems(Update, install_horizon_fixture);
+            let mesh = Mesh::new(
+                bevy::mesh::PrimitiveTopology::TriangleList,
+                RenderAssetUsages::default(),
+            )
+            .with_inserted_attribute(
+                Mesh::ATTRIBUTE_POSITION,
+                vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            )
+            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[9.0, 9.0]; 3])
+            .with_inserted_indices(Indices::U32(vec![0, 1, 2]));
+            let mesh_handle = app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh);
+            let entity = app
+                .world_mut()
+                .spawn((Mesh3d(mesh_handle.clone()), bevy::light::NotShadowReceiver))
+                .id();
+            if shared {
+                app.world_mut()
+                    .entity_mut(entity)
+                    .insert(lunco_render::SharedMeshAsset);
+            }
+            app.insert_resource(HorizonInstallTarget(entity));
+            app.add_systems(Update, install_horizon_fixture);
 
-        app.update();
+            app.update();
 
-        assert!(app.world().entity(entity).contains::<HorizonMap>());
-        assert!(
-            !app.world()
-                .entity(entity)
-                .contains::<bevy::light::NotShadowReceiver>(),
-            "static horizon terrain must receive native CSM and dynamic-object shadows"
-        );
+            assert!(app.world().entity(entity).contains::<HorizonMap>());
+            assert!(
+                !app.world()
+                    .entity(entity)
+                    .contains::<bevy::light::NotShadowReceiver>(),
+                "static horizon terrain must receive native CSM and dynamic-object shadows"
+            );
+            let installed = &app.world().entity(entity).get::<Mesh3d>().unwrap().0;
+            let meshes = app.world().resource::<Assets<Mesh>>();
+            assert_eq!(
+                meshes
+                    .get(installed)
+                    .unwrap()
+                    .attribute(Mesh::ATTRIBUTE_UV_0),
+                Some(&VertexAttributeValues::Float32x2(vec![
+                    [0.0, 0.0],
+                    [1.0, 0.0],
+                    [0.0, 1.0]
+                ]))
+            );
+            if shared {
+                assert_ne!(installed.id(), mesh_handle.id());
+                assert!(
+                    !app.world()
+                        .entity(entity)
+                        .contains::<lunco_render::SharedMeshAsset>()
+                );
+                assert_eq!(
+                    meshes
+                        .get(&mesh_handle)
+                        .unwrap()
+                        .attribute(Mesh::ATTRIBUTE_UV_0),
+                    Some(&VertexAttributeValues::Float32x2(vec![[9.0, 9.0]; 3]))
+                );
+            } else {
+                assert_eq!(installed.id(), mesh_handle.id());
+            }
+        }
     }
 
     /// Zenith sun (straight up): every texel is fully lit — the march

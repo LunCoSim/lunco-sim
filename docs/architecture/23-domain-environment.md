@@ -152,6 +152,15 @@ scene gets finite body positions from the ephemeris driven by the one
 from one authored `DistantLight`. Neither choice adds another coordinate or
 time-conversion path.
 
+`lunco-celestial-ephemeris` owns exact-epoch analytical reuse. Its provider cache
+retains both final ecliptic body results and the native heliocentric ICRF f64
+operands used by the EMB, Earth and Moon formulas. Each native VSOP sample is
+evaluated once at a given Julian-Date bit pattern, including a missing result.
+A different epoch clears both sets. Reuse preserves the existing subtraction,
+rotation and parent-composition order; it does not quantize time or approximate
+positions. The cache belongs to the provider instance and uses its existing
+serialized access boundary.
+
 Direction target ids must be unique and valid, every composed consumer triplet
 must be complete and `double`, and its three axes must come from one
 probe/source or relay through one assembly input. A spawnable component may

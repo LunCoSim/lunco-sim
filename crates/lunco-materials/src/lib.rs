@@ -30,6 +30,8 @@ pub mod catalog;
 pub mod dyn_params;
 pub mod engine_params;
 pub mod float_texture;
+/// Native asset-worker shader raster preparation and typed texture sources.
+pub mod image_loader;
 pub mod image_mips;
 pub mod look;
 pub mod naming;
@@ -41,6 +43,9 @@ pub use catalog::{
 };
 pub use dyn_params::{ParamField, ParamSchema, ParamType, ParamValue, UiKind};
 pub use engine_params::{AttrRead, EngineParam, EngineParams, EngineSource, engine_params};
+pub use image_loader::{
+    ColorMip, LinearMip, LuncoImagePlugin, NormalMip, PreparedShaderImage, ShaderTexture,
+};
 pub use image_mips::{Rgba8MipMode, rgba8_mip_chain};
 pub use look::{
     ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady, ShaderLookSourceInterface,

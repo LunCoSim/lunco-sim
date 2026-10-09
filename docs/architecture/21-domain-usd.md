@@ -64,7 +64,9 @@ owns the independent runtime-overlay persistence boundary; `lunco-usd-bevy-runti
 the complete application plugin composition;
 `lunco-usd-bevy-lathe` owns the independent parametric NURBS/lathe mesh
 projection; `lunco-usd-bevy-mesh` owns built-in, native-mesh, curve, and
-NurbsPatch visual mesh projection plus quality invalidation;
+NurbsPatch visual mesh projection plus quality invalidation, including shared
+analytic primitive preparation and weak native mesh identity described in
+[render decoupling](render-decoupling.md#immutable-primitive-mesh-assets);
 `lunco-usd-bevy-light` owns UsdLux light and dome projection, including live
 refresh from info paths in the generic stage-change batch;
 `lunco-usd-bevy-animation` owns the render-free time-sample projection;

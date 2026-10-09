@@ -611,17 +611,18 @@ mod tests {
     use bevy::prelude::*;
     use lunco_modelica_runtime::ModelicaModel;
     use lunco_port_core::ports::{
-        PortBackend, PortDeclaration, PortDirection, PortMetadata, PortRegistry,
+        PortBackend, PortDeclarationQuery, PortDirection, PortMetadata, PortRegistry,
         PortTopologyRevision,
     };
 
     #[test]
     fn non_writable_declared_port_rejects_without_mutating_model_snapshot() {
-        fn list_declared_input(_world: &World, _entity: Entity, out: &mut Vec<PortDeclaration>) {
-            out.push(PortDeclaration {
-                name: "throttle".to_owned(),
-                direction: PortDirection::In,
-            });
+        fn list_declared_input(
+            _world: &World,
+            _entity: Entity,
+            out: &mut PortDeclarationQuery<'_>,
+        ) {
+            out.declare("throttle", PortDirection::In);
         }
 
         let mut world = World::new();
@@ -637,7 +638,7 @@ mod tests {
         ports.register(PortBackend {
             list_entities: |_world, _out| {},
             topology_key: |_world, _entity| 1,
-            list: list_declared_input,
+            declare_ports: list_declared_input,
             metadata: |_world, _entity, _name, direction| {
                 PortMetadata::scalar(
                     direction,

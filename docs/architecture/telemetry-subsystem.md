@@ -33,14 +33,17 @@ The `SimulationTimingProfile` query is an on-demand, bounded runtime diagnostic
 alongside the channel catalog and history API. `lunco-time` records the complete
 synchronous `FixedMain` tick and fixed-loop service at monotonic clock boundaries
 into preallocated 240-sample rings; it exposes tick service and rate-derived
-service-budget percentiles, fixed steps per app update, fractional overstep, and
-simulation-time demand clipped by the virtual-clock delta cap. The query computes
+service-budget percentiles, fixed steps per app update, and retained pending
+simulation duration (`fixed_loop.latest_pending_simulation_secs`, including
+whole ticks and fractional overstep). The separate max-delta fields detect
+simulation-time demand clipped if a consumer changes virtual-clock admission;
+the time owner admits the complete running delta. The query computes
 percentiles only when a client asks, emits no per-tick events, and does not feed
 these wall-clock observations back into causal state. Use it with the
 `engine.frame_time` channel: the profile explains fixed-loop service, while frame
 history includes the rest of the app update. Clipped simulation-time demand is
-wall time already excluded by the current clock policy, not a queue of ticks
-that can be recovered.
+wall time already excluded, distinct from the pending duration that the fixed
+owner retains and drains after admission or budget holds.
 
 ### Identity, ownership, and labels
 
@@ -82,6 +85,16 @@ Modelica runtime telemetry caches each session's `SignalRef` by solver variable 
 `record_scalar_at_rate` path borrows that identity for existing channels, so steady samples do
 not rebuild or clone an owned signal path. The registry clones the key only when it first
 creates the channel; a new solver session clears the prior histories and cached identities.
+Rate admission, backwards-time clearing and append share one mutable history lookup.
+Rejected samples leave history capacity, publisher activity and catalog revision unchanged;
+accepted samples apply retention and reactivate archived publishers at that same boundary.
+
+Modelica channel admission uses the registry's live scalar count. Below the
+configured limit, append can admit either a new or an existing history; the
+producer reads the resulting count after an accepted sample. At the limit,
+it checks live history existence so existing channels continue recording while
+new channels are rejected. Cached producer identities do not authorize a new
+history after removal, and lowering the limit does not evict existing history.
 
 The telemetry browser owns a persistent presentation index. `SignalRegistryPlugin` publishes
 coalesced `SignalDescriptorsChanged` notifications for channel admission, metadata changes,
@@ -416,6 +429,9 @@ The physics producer uses one cached `HashMap::entry` lookup per signal sample, 
 same entry for both cache lookup and mutation.
 It also caches each signal's last associated global owner and updates the registry only when
 that owner identity changes.
+The producer retains a metadata-publication flag, not a second `SignalMeta`.
+First discovery and USD owner-path changes construct the metadata and move it
+into the shared registry; the registry owns its descriptions and presentation.
 
 Its transient per-entity cursors follow the same lifecycle boundary: `RemovedComponents` retires
 state when the last physical source leaves an entity, while the shared registry deliberately keeps
@@ -479,6 +495,13 @@ they are transport-agnostic and already reachable over the API and MCP. **An Ope
 adapter (or a YAMCS bridge) is a thin integration layer over these, not a rewrite**; HTTP/WebSocket streaming
 can be layered on later without touching this layer.
 
+`ListTelemetryChannels` accepts an optional exact `name` string. It returns
+all owners with that name, keeping their distinct channel keys and metadata;
+omitting it returns the complete catalog. An unknown name returns an empty
+subset, and a non-string name is a terminal query error. Filtering happens
+before metadata materialization, so a one-channel read does not allocate or
+transport the full retained catalog. The returned `count` describes the subset.
+
 `ListTelemetryChannels` also returns a `delivery` object with `pending_samples`,
 `queue_capacity`, and cumulative `dropped_samples`. This makes overload visible
 to a ground client; missing telemetry samples never hold the simulation clock.
@@ -521,6 +544,13 @@ all previously derived channels and declaration markers before rebuilding the
 index. A target that has no projected runtime entity is likewise terminal and
 remains visible in the diagnostics/lint surface; it is never retried as a
 silent first-pass candidate.
+
+A declaration authored on a Modelica network member can self-target through
+its generated wrapper. Composed network membership admits the declaration
+while the wrapper is pending; its exact member-output alias then selects the
+wrapper's canonical sampled port. A metadata Scope without a port owner still
+requires an explicit target. See the
+[USD telemetry projection lifecycle](22-domain-cosim.md#usd-telemetry-projection-lifecycle).
 
 `ChannelSource::Diagnostic` is deliberately **not** USD-authorable: a diagnostic is
 engine-global, not a property of a prim. `lunco-telemetry` publishes those itself

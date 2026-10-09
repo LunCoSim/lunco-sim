@@ -144,13 +144,15 @@ impl Plugin for ModelicaExecutionPlugin {
         app.add_plugins(lunco_modelica_runner::ModelicaRunnerPlugin);
 
         app.configure_sets(
-            Update,
-            (
-                ModelicaSet::HandleResponses,
-                ModelicaSet::AdmitCompileRequests,
-            )
-                .chain()
+            First,
+            ModelicaSet::HandleResponses
+                .after(bevy::ecs::message::MessageUpdateSystems)
+                .before(lunco_time::ClockProjectionSet)
                 .in_set(lunco_core::RuntimeCycleSet::Lifecycle),
+        );
+        app.configure_sets(
+            Update,
+            ModelicaSet::AdmitCompileRequests.in_set(lunco_core::RuntimeCycleSet::Lifecycle),
         );
         app.init_resource::<lunco_core_runtime::SimulationProgress>()
             .add_systems(
@@ -166,7 +168,7 @@ impl Plugin for ModelicaExecutionPlugin {
             .add_observer(lunco_modelica_worker::worker::retire_closed_twin_models)
             .add_observer(lunco_modelica_worker::worker::retire_replication_models)
             .add_systems(
-                Update,
+                First,
                 lunco_modelica_worker::worker::handle_modelica_responses
                     .in_set(ModelicaSet::HandleResponses),
             )
@@ -202,6 +204,83 @@ impl Plugin for ModelicaExecutionPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Resource, Default)]
+    struct ClockProjectionObservations(Vec<bool>);
+
+    fn observe_clock_projection(
+        barrier: Res<lunco_core_runtime::SimulationBarrier>,
+        mut observations: ResMut<ClockProjectionObservations>,
+    ) {
+        observations.0.push(barrier.held);
+    }
+
+    #[test]
+    fn worker_completion_precedes_clock_projection_and_rejects_stale_sessions() {
+        let mut app = App::new();
+        app.add_plugins(ModelicaExecutionPlugin)
+            .init_resource::<lunco_core_runtime::SimulationBarrier>()
+            .init_resource::<ClockProjectionObservations>()
+            .add_systems(
+                First,
+                observe_clock_projection.in_set(lunco_time::ClockProjectionSet),
+            );
+        let (results, rx) = unbounded();
+        let (tx, _commands) = unbounded();
+        app.insert_resource(ModelicaChannels { tx, rx });
+        let entity = app
+            .world_mut()
+            .spawn(ModelicaModel {
+                session_id: 1,
+                paused: false,
+                is_compiled: true,
+                is_stepping: true,
+                in_flight_step: Some(lunco_modelica_runtime::InFlightModelicaStep {
+                    step_id: 1,
+                    start_time: 0.0,
+                    stop_time: 0.05,
+                    sampled_inputs: Vec::new(),
+                    submitted_at: web_time::Instant::now(),
+                }),
+                ..Default::default()
+            })
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationBarrier>()
+            .held = true;
+
+        app.world_mut().run_schedule(First);
+        results
+            .send(lunco_modelica_runtime::ModelicaResult {
+                entity,
+                session_id: 0,
+                step_id: Some(1),
+                new_time: 0.05,
+                ..Default::default()
+            })
+            .unwrap();
+        app.world_mut().run_schedule(First);
+        results
+            .send(lunco_modelica_runtime::ModelicaResult {
+                entity,
+                session_id: 1,
+                step_id: Some(1),
+                new_time: 0.05,
+                ..Default::default()
+            })
+            .unwrap();
+        app.world_mut().run_schedule(First);
+
+        assert_eq!(
+            app.world().resource::<ClockProjectionObservations>().0,
+            [true, true, false],
+            "clock projection sees the validated completion in the same update"
+        );
+        let model = app.world().get::<ModelicaModel>(entity).unwrap();
+        assert_eq!(model.current_time, 0.05);
+        assert!(!model.is_stepping);
+        assert_eq!(model.last_accepted_step.as_ref().unwrap().step_id, 1);
+    }
 
     #[test]
     fn execution_plugin_is_distinct_from_compiler_plugin() {

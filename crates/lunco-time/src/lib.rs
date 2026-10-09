@@ -86,8 +86,9 @@ pub struct FixedLoopTimingSample {
     pub fixed_steps: u64,
     /// Simulation-time demand omitted by `Time<Virtual>::max_delta` this update.
     pub max_delta_limited_simulation_secs: Option<f64>,
-    /// Fractional fixed overstep remaining after this update's loop.
-    pub fractional_overstep_secs: f64,
+    /// Admitted simulation duration still queued in the fixed accumulator,
+    /// including whole ticks held by admission or the per-update work budget.
+    pub pending_simulation_secs: f64,
 }
 
 /// Bounded wall-clock observations for fixed simulation service.
@@ -438,29 +439,9 @@ pub fn realtime_rate_label(rate: f64) -> String {
     format!("{rate}x")
 }
 
-/// Maximum number of fixed simulation steps a rendered frame may drain while
-/// running a realtime transport rate. This is a catch-up guard, not a rate cap:
-/// frames that arrive on time still receive their complete requested rate.
+/// Maximum number of complete causal fixed cycles one app update may drain.
+/// Remaining admitted duration stays queued in `Time<Fixed>::overstep`.
 pub const MAX_FIXED_STEPS_PER_FRAME: u32 = 64;
-
-/// Raw wall-clock delta cap used by the fixed-step budget.
-pub const BASE_VIRTUAL_MAX_DELTA: Duration = Duration::from_millis(33);
-
-/// Return the raw frame delta that keeps a realtime transport inside the fixed
-/// step budget. Bevy applies `Time<Virtual>::max_delta` before its relative
-/// speed, so the cap must be divided by the requested rate.
-pub fn fixed_step_raw_delta_limit(rate: f64, fixed_timestep: Duration) -> Duration {
-    let rate = if rate.is_finite() {
-        rate.clamp(0.0, MAX_REALTIME_RATE)
-    } else {
-        0.0
-    };
-    if rate == 0.0 {
-        return BASE_VIRTUAL_MAX_DELTA;
-    }
-    let budget = fixed_timestep.mul_f64(MAX_FIXED_STEPS_PER_FRAME as f64 / rate);
-    budget.min(BASE_VIRTUAL_MAX_DELTA)
-}
 
 /// Run condition for systems that mutate the causal simulation. The virtual
 /// clock is mandatory in a composed host; an absent clock fails closed instead
@@ -549,14 +530,18 @@ fn fixed_simulation_is_admitted(world: &World) -> bool {
 /// each fixed cycle transfers one timestep from `overstep` to `elapsed`. A
 /// solver or scene admission barrier can arise inside a burst, so the remaining
 /// admitted time stays in the shared accumulator until its owner releases the
-/// hold.
+/// hold. The per-update work budget also retains time rather than clipping the
+/// input delta or discarding pending fixed cycles.
 fn run_admitted_fixed_main_schedule(world: &mut World) {
     let virtual_delta = world.resource::<Time<Virtual>>().delta();
     world
         .resource_mut::<Time<Fixed>>()
         .accumulate_overstep(virtual_delta);
 
-    while fixed_simulation_is_admitted(world) {
+    for _ in 0..MAX_FIXED_STEPS_PER_FRAME {
+        if !fixed_simulation_is_admitted(world) {
+            break;
+        }
         let Some(timestep) = world
             .get_resource::<Time<Fixed>>()
             .map(Time::<Fixed>::timestep)
@@ -608,27 +593,8 @@ fn finish_fixed_loop_timing(
         service_secs,
         fixed_steps: tick.0.wrapping_sub(start.loop_started),
         max_delta_limited_simulation_secs,
-        fractional_overstep_secs: fixed_time.overstep().as_secs_f64(),
+        pending_simulation_secs: fixed_time.overstep().as_secs_f64(),
     });
-}
-
-/// Keep Bevy's fixed-loop catch-up bounded for the current transport rate.
-///
-/// This is the only fixed-step budget projection. The transport still controls
-/// the simulation rate through `Time<Virtual>::relative_speed`; this system only
-/// limits how much raw wall time a hitch may turn into one catch-up burst.
-fn apply_fixed_step_budget(
-    transport: Res<TimeTransport>,
-    fixed: Option<Res<Time<Fixed>>>,
-    virtual_time: Option<ResMut<Time<Virtual>>>,
-) {
-    let (Some(fixed), Some(mut virtual_time)) = (fixed, virtual_time) else {
-        return;
-    };
-    let limit = fixed_step_raw_delta_limit(transport.rate, fixed.timestep());
-    if virtual_time.max_delta() != limit {
-        virtual_time.set_max_delta(limit);
-    }
 }
 
 /// J2000.0 epoch as a Julian Date (TDB). Default mission epoch.
@@ -998,16 +964,6 @@ pub fn project_transport_state(
     }
 }
 
-/// Discard the unconsumed fixed-clock fraction after a causal barrier is raised.
-/// A held simulation must resume from a whole admitted tick, not from residual
-/// overstep accumulated earlier in the same render update.
-pub fn discard_fixed_overstep(fixed: &mut Time<Fixed>) {
-    let overstep = fixed.overstep();
-    if !overstep.is_zero() {
-        fixed.discard_overstep(overstep);
-    }
-}
-
 /// Installs the mission-time spine: resources, the `PreUpdate` derivation step,
 /// and presentation interpolation. Scene epoch selection belongs to the
 /// required `scene.time.select` Rhai policy; the settled USD owner submits its
@@ -1031,8 +987,8 @@ impl Plugin for TimePlugin {
         // `SimTick` lives in `lunco-core`; `init_resource` is idempotent, so this
         // is harmless where another plugin also inserts it and makes the spine
         // self-sufficient where it doesn't.
-        // Own the virtual-clock baseline here as well. Applications must not
-        // install a second max-delta/rate policy beside the time spine.
+        // Own admission here as well. The fixed runner bounds work while
+        // retaining pending time; consumers must not clip the virtual input.
         app.init_resource::<Time<Virtual>>()
             .init_resource::<Time<Fixed>>();
         // First runs before scene-transition observers and PreUpdate admission.
@@ -1040,9 +996,11 @@ impl Plugin for TimePlugin {
         // startup hold cannot arrive after Bevy has already produced a fixed
         // delta. The time spine opens it only after the startup state is known.
         app.world_mut().resource_mut::<Time<Virtual>>().pause();
+        // Admit the complete running delta. The fixed runner, not Bevy's
+        // input clamp, owns the bounded amount of work performed this update.
         app.world_mut()
             .resource_mut::<Time<Virtual>>()
-            .set_max_delta(BASE_VIRTUAL_MAX_DELTA);
+            .set_max_delta(Duration::MAX);
 
         app.init_resource::<SimTick>()
             .init_resource::<SimulationTimingProfile>()
@@ -1082,15 +1040,7 @@ impl Plugin for TimePlugin {
             )
             .add_systems(FixedFirst, begin_fixed_tick_timing)
             .add_systems(FixedLast, finish_fixed_tick_timing)
-            .add_systems(
-                First,
-                (
-                    project_time_transport.in_set(ClockProjectionSet),
-                    apply_fixed_step_budget
-                        .after(ClockProjectionSet)
-                        .before(TimeSystems),
-                ),
-            );
+            .add_systems(First, project_time_transport.in_set(ClockProjectionSet));
 
         app.remove_systems_in_set(
             RunFixedMainLoop,
@@ -1315,25 +1265,71 @@ mod tests {
         );
     }
 
-    /// The ceiling exists because `max_delta`-clamped frames × `relative_speed`
-    /// is the fixed-step burst size (see [`MAX_REALTIME_RATE`]). Lock it low
-    /// enough that one hitched 33 ms frame cannot demand a runaway step count.
     #[test]
-    fn realtime_ceiling_bounds_the_fixed_step_burst() {
-        let fixed = Duration::from_secs_f64(1.0 / 60.0);
-        let raw_limit = fixed_step_raw_delta_limit(MAX_REALTIME_RATE, fixed);
-        let steps_per_hitched_frame =
-            raw_limit.as_secs_f64() * MAX_REALTIME_RATE / fixed.as_secs_f64();
-        assert!(
-            steps_per_hitched_frame <= MAX_FIXED_STEPS_PER_FRAME as f64 + 1e-9,
-            "MAX_REALTIME_RATE={MAX_REALTIME_RATE} lets one capped frame demand \
-             {steps_per_hitched_frame:.0} fixed steps — above the central fixed-step budget"
-        );
-        assert_eq!(advance_clock(MAX_REALTIME_RATE, false), MAX_REALTIME_RATE);
-        assert_eq!(
-            advance_clock(MAX_REALTIME_RATE + 1.0, false),
-            MAX_REALTIME_RATE
-        );
+    fn realtime_fixed_loop_conserves_hitches_and_bounds_bursts() {
+        for rate in [MIN_REALTIME_RATE, 1.0, MAX_REALTIME_RATE] {
+            let mut app = App::new();
+            app.add_plugins((bevy::time::TimePlugin, TimePlugin))
+                .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                    Duration::ZERO,
+                ))
+                .insert_resource(TimeTransport {
+                    mode: TransportMode::Playing,
+                    rate,
+                })
+                .init_resource::<FixedRunCount>()
+                .add_systems(FixedUpdate, (count_fixed_runs, count_fixed_ticks));
+            let timestep = Duration::from_millis(10);
+            app.world_mut()
+                .resource_mut::<Time<Fixed>>()
+                .set_timestep(timestep);
+            app.update();
+
+            let raw_delta = Duration::from_millis(100);
+            let admitted = raw_delta.mul_f64(rate);
+            app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(raw_delta));
+            app.update();
+            let fixed = app.world().resource::<Time<Fixed>>();
+            assert_eq!(
+                fixed.elapsed() + fixed.overstep(),
+                admitted,
+                "{rate}x must retain all admitted time from a hitched frame"
+            );
+            let expected_ticks = (admitted.as_nanos() / timestep.as_nanos()) as u32;
+            assert_eq!(
+                app.world().resource::<FixedRunCount>().0,
+                expected_ticks.min(MAX_FIXED_STEPS_PER_FRAME)
+            );
+
+            app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                Duration::ZERO,
+            ));
+            app.world_mut().resource_mut::<TimeTransport>().mode = TransportMode::Paused;
+            let completed = app.world().resource::<FixedRunCount>().0;
+            app.update();
+            assert_eq!(
+                app.world().resource::<FixedRunCount>().0,
+                completed,
+                "pause must not consume pending fixed cycles"
+            );
+            let fixed = app.world().resource::<Time<Fixed>>();
+            assert_eq!(fixed.elapsed() + fixed.overstep(), admitted);
+
+            app.world_mut().resource_mut::<TimeTransport>().mode = TransportMode::Playing;
+            while app.world().resource::<Time<Fixed>>().overstep() >= timestep {
+                let before = app.world().resource::<FixedRunCount>().0;
+                app.update();
+                let after = app.world().resource::<FixedRunCount>().0;
+                assert!(after > before && after - before <= MAX_FIXED_STEPS_PER_FRAME);
+                let fixed = app.world().resource::<Time<Fixed>>();
+                assert_eq!(fixed.elapsed() + fixed.overstep(), admitted);
+            }
+            assert_eq!(app.world().resource::<FixedRunCount>().0, expected_ticks);
+            assert_eq!(
+                app.world().resource::<Time<Fixed>>().overstep(),
+                Duration::ZERO
+            );
+        }
     }
 
     #[derive(Resource, Default)]

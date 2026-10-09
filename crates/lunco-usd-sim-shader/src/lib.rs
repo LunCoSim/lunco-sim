@@ -68,6 +68,10 @@ pub struct UsdShaderPlugin;
 
 impl Plugin for UsdShaderPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_materials::LuncoImagePlugin>() {
+            app.add_plugins(lunco_materials::LuncoImagePlugin);
+        }
+        app.init_resource::<lunco_render::RenderingQualitySettings>();
         app.configure_sets(
             Update,
             UsdSimSet::ProjectionPrepare.before(UsdSimSet::Projection),
@@ -118,6 +122,7 @@ pub fn apply_usd_shader_materials(
     // native sources before the shared typed asset-server boundary.
     asset_server: Res<AssetServer>,
     twin_roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
     diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let mut evaluated = false;
@@ -144,6 +149,7 @@ pub fn apply_usd_shader_materials(
             visual_target.map(|target| target.0),
             procedural_skybox,
             twin_roots.as_deref(),
+            &quality,
         ) {
             findings.push(finding);
         }
@@ -170,6 +176,7 @@ fn apply_usd_shader_material_read(
     visual_target: Option<Entity>,
     procedural_skybox: bool,
     twin_roots: Option<&lunco_assets_core::TwinRoots>,
+    quality: &lunco_render::RenderingQualitySettings,
 ) -> Option<lunco_core::RuntimeDiagnostic> {
     // From here on the prim is evaluated regardless of outcome.
     commands.entity(entity).try_insert(UsdShaderResolved);
@@ -248,7 +255,7 @@ fn apply_usd_shader_material_read(
     }
     // Each texture inherits the contributing USD layer's canonical identifier.
     // Stage preparation admits native addresses before this projection runs.
-    let mut textures: BTreeMap<TextureLayer, Handle<Image>> = BTreeMap::new();
+    let mut textures: BTreeMap<TextureLayer, lunco_materials::ShaderTexture> = BTreeMap::new();
     let mut texture_error = None;
     let inputs = match read_shader_texture_inputs(reader, &shader_prim) {
         Ok(inputs) => inputs,
@@ -277,16 +284,26 @@ fn apply_usd_shader_material_read(
                 break;
             }
         };
-        let is_srgb = texture_layer_is_srgb(layer);
-        textures.insert(
+        let profile = match quality.validated_profile() {
+            Ok(profile) => profile,
+            Err(error) => {
+                texture_error = Some(error.to_string());
+                break;
+            }
+        };
+        let texture = match lunco_materials::ShaderTexture::load_raster(
+            asset_server,
+            path,
             layer,
-            asset_server
-                .load_builder()
-                .with_settings(move |settings: &mut bevy::image::ImageLoaderSettings| {
-                    settings.is_srgb = is_srgb;
-                })
-                .load::<Image>(path),
-        );
+            profile.terrain_derived_texture_anisotropy,
+        ) {
+            Ok(texture) => texture,
+            Err(error) => {
+                texture_error = Some(error.to_string());
+                break;
+            }
+        };
+        textures.insert(layer, texture);
     }
     if let Some(detail) = texture_error {
         return Some(reject_shader_material(
@@ -621,19 +638,6 @@ fn texture_layer_for_input(snake: &str) -> Option<TextureLayer> {
     }
 }
 
-/// Color-space defaults for the fixed shader texture roles.
-///
-/// This is a role contract, not a filename or extension heuristic: a PNG can
-/// carry a normal or packed scalar map just as readily as it can carry albedo.
-/// The shader receives linear samples for every role; only the two color layers
-/// need the image loader's sRGB-to-linear decode.
-fn texture_layer_is_srgb(layer: TextureLayer) -> bool {
-    matches!(
-        layer,
-        TextureLayer::Albedo | TextureLayer::Mineral | TextureLayer::ContinuationAlbedo
-    )
-}
-
 /// Reads the `asset`-typed `inputs:*` of a `Shader` prim: `(slot, canonical
 /// identifier)` pairs. CONNECTED inputs are skipped for the same reason as in
 /// [`read_shader_inputs`] — a connected port is fed by a producer node
@@ -768,14 +772,5 @@ def Xform "World"
             !driven_shader_inputs(&view, &driven, &shader).is_empty(),
             "load_frac IS declared by the shader, so this prim needs a private material"
         );
-    }
-
-    #[test]
-    fn shader_texture_roles_preserve_data_map_values() {
-        assert!(texture_layer_is_srgb(TextureLayer::Albedo));
-        assert!(texture_layer_is_srgb(TextureLayer::Mineral));
-        assert!(!texture_layer_is_srgb(TextureLayer::Surface));
-        assert!(!texture_layer_is_srgb(TextureLayer::Normal));
-        assert!(!texture_layer_is_srgb(TextureLayer::ShadowCache));
     }
 }

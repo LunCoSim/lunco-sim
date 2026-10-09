@@ -21,6 +21,10 @@ completed physics ticks per rendered frame.
 
 `ClockProjectionSet` projects `TimeTransport` and causal holds onto Bevy's
 virtual clock in `First`, before `TimeSystems` samples the next delta.
+The Modelica execution host drains and validates completed worker transactions
+before this projection, after message rotation. An outstanding causal
+participant still holds the clock; completed work can resume admission during
+the same update without waiting for a later lifecycle cycle.
 `SimulationAdmissionSet` is the `PreUpdate` boundary after lifecycle and
 readiness owners publish their current holds. The fixed runner checks admission
 before each complete `FixedMain` cycle; if a hold appears during a cycle, that
@@ -29,6 +33,13 @@ until admission resumes. Completed fixed elapsed time plus pending overstep
 equals the duration admitted to the fixed clock: each completed cycle moves one
 fixed timestep from overstep into elapsed time. A hold retains the pending
 balance without changing either clock value.
+The runner drains at most `MAX_FIXED_STEPS_PER_FRAME` (64) complete cycles per
+app update at every transport rate. Bevy's virtual delta is admitted without
+wall-time clipping (`max_delta = Duration::MAX`); budget exhaustion retains
+the whole remaining duration in the same fixed accumulator. There is no second
+debt clock, timestep change, or skipped tick. Pause and causal holds stop new
+admission and preserve the already admitted balance. Manual scene-test and
+recording drivers select input durations without installing a separate cap.
 After the runner, `WorldTime` is published from the latest completed
 `SimTick`. Its mission seconds, elapsed seconds, and epoch are derived from
 `MissionClock`; no consumer accumulates its own calendar time.

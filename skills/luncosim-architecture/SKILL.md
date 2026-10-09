@@ -256,6 +256,10 @@ not hold world time. Their first normal co-simulation step uses the per-step
 barrier after activation. The root USD loader composes the available dependency
 closure before publishing the stage asset, and scene admission ends after
 structural projection. CPU mesh construction stays on the presentation path.
+Analytic primitive requests share content-only preparation through
+`lunco-usd-bevy-mesh::PrimitiveMeshAssets`, with per-prim admission and weak
+native lifetimes; see the
+[immutable mesh contract](../../docs/architecture/render-decoupling.md#immutable-primitive-mesh-assets).
 Keep owner-specific clock gates separate; production acceptance must still
 prove that the first authoritative fixed tick observes each dependency declared
 by the scene and scenario, independent of worker completion order.
@@ -567,7 +571,20 @@ scenario and hook execution in their owning clocks; do not parallelize callbacks
 that still use live-world access.
 
 Publish each fact through its one domain boundary before adding a consumer:
-scalar co-simulation endpoints use `PortRegistry`; presentation-ready values
+scalar co-simulation endpoints use `PortRegistry`. Backend `declare_ports`
+publishes borrowed names through `PortDeclarationQuery`; full inspection and
+exact-name discovery consume the same owner declarations. Live writes still
+validate current metadata, precedence, revision and slot before committing,
+even before structural publication catches an owner edit. Snapshot copying uses
+`ScalarPortMap::upsert_samples`, whose destination hints validate every live name
+and layout; map cardinality and source iteration order are not identity. Keep
+the source representation, native-bit values and publication clock intact.
+Observe expensive declaration and unit fingerprints through
+`PortTopologyState::observe_if_changed`, using the actual source component's
+change tick. Refresh auxiliary facts when their participant is newly admitted,
+and retire keys through the owning removal observer. A publication cache never
+replaces a direct backend's live contract read or write validation.
+Presentation-ready values
 use `EngineExposures`; lifecycle occurrences use typed events or revisioned
 resources. Status bars, authored HUDs, telemetry adapters, API readers, and
 recorders consume those publications. They must not independently scan engine
@@ -612,13 +629,19 @@ shared `terrain_surface_occlusion` helper into Bevy's
 `PbrInput.diffuse_occlusion`, never into base albedo. AO is indirect-light
 visibility; multiplying it into albedo creates broad false colour patches and
 darkens direct sunlight.
-The render-side `ShaderLook` binder owns event-driven preparation of filterable
-authored RGBA8 maps: it deduplicates off-thread mip generation by image asset
-version,
-filters colour in linear light, averages scalar maps linearly, renormalizes
-normal vectors, and then enables trilinear/anisotropic sampling. Do not skip a
-zero-weight map at load time: authored weights are live inputs, while mip
-preparation is the separate renderer-owned image lifecycle.
+`lunco-materials` owns typed `PreparedShaderImage` asset loading for filterable
+authored rasters. Native decoding supplies an owned image; async-compute mip
+preparation filters colour in linear light, averages scalar maps linearly and
+renormalizes normal vectors before source/child publication. `ShaderTexture`
+retains the role-specific source identity and reload dependency; the renderer
+resolves its complete native child without copying resident pixels. Prepared
+children use native render-only extraction to move pixels into GPU preparation
+while retaining main-world metadata. CPU consumers or sampler changes need a
+fresh source load. Generated complete images retain their generating owner's
+native image contract. `load_raster` admits physical sources and rejects container
+labels before requesting an asset; importer-owned labeled images bind through
+the native image variant. Do not skip a zero-weight map at load time: authored
+weights are live inputs, independent of image preparation.
 
 Project-owned persistence policy belongs to the active Twin manifest's generic
 settings boundary. A domain may define one namespaced scalar key and expose it
@@ -985,8 +1008,10 @@ fences as authored models. USD projection must not send a direct worker compile.
 
 Scene lifecycle projection, stable entity identity assignment, and API/path
 index publication run in that order in `PreUpdate`, before
-`SimulationAdmissionSet`. `ClockProjectionSet` gates the following virtual
-delta sample, and the fixed runner checks admission before each full tick. Do
+`SimulationAdmissionSet`. Modelica completions are admitted in `First`, after
+message rotation and before `ClockProjectionSet` gates the following virtual
+delta sample. Compile intent remains in the `Update` lifecycle cycle, and the
+fixed runner checks admission before each full tick. Do
 not add a separate startup identity pass or readiness
 poll; a projected reference must resolve by path on the first resumed tick.
 

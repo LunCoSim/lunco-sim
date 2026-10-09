@@ -1,0 +1,25 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World"
+{
+    def Scope "UnboundTelemetry" (
+        prepend apiSchemas = "LunCoTelemetryAPI"
+    )
+    {
+        bool lunco:telemetry = true
+        token lunco:telemetry:port = "missing"
+        token lunco:telemetry:name = "unbound_probe"
+    }
+    def Scope "Test" (
+        prepend apiSchemas = "LunCoProgramAPI"
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/generated_member_telemetry.rhai@
+    }
+}

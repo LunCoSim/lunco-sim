@@ -62,11 +62,9 @@ use bevy::light::{PointLight, SpotLight};
 use bevy::prelude::*;
 use lunco_core::GlobalEntityId;
 use lunco_engineering_values::{Dimension, Unit, UnitReference, UnitScaleExactness};
-use lunco_port_core::ports::{
-    PortBackend, PortDeclaration, PortDirection, PortMetadata, PortRegistry,
-};
+use lunco_port_core::ports::{PortBackend, PortDirection, PortMetadata, PortRegistry};
 
-/// The light ports, in `list` order.
+/// The light ports, in declaration order.
 const LIGHT_PORTS: [&str; 5] = [
     "light_intensity",
     "light_radius",
@@ -75,7 +73,7 @@ const LIGHT_PORTS: [&str; 5] = [
     "light_color_b",
 ];
 
-/// The transform ports, in `list` order.
+/// The transform ports, in declaration order.
 const TRANSFORM_PORTS: [&str; 6] = [
     "translation_x",
     "translation_y",
@@ -409,25 +407,19 @@ pub(crate) const SCENE_PROPERTY_BACKEND: PortBackend = PortBackend {
             0
         })
     },
-    list: |world, entity, out| {
+    declare_ports: |world, entity, out| {
         // Listing exactly what the entity HAS is what keeps `ListPorts` and
         // the resolved slot writer telling the same story: every name reported here is one a
         // write would be accepted for, and no name is hidden because it currently
         // happens to hold a default.
         if world.get::<PointLight>(entity).is_some() || world.get::<SpotLight>(entity).is_some() {
             for name in LIGHT_PORTS {
-                out.push(PortDeclaration {
-                    name: name.to_string(),
-                    direction: PortDirection::In,
-                });
+                out.declare(name, PortDirection::In);
             }
         }
         if world.get::<Transform>(entity).is_some() {
             for name in TRANSFORM_PORTS {
-                out.push(PortDeclaration {
-                    name: name.to_string(),
-                    direction: PortDirection::In,
-                });
+                out.declare(name, PortDirection::In);
             }
         }
     },
@@ -685,7 +677,7 @@ mod tests {
         );
     }
 
-    /// `list` reports exactly what the entity has, so `ListPorts` and slot writes
+    /// `declare_ports` reports exactly what the entity has, so `ListPorts` and slot writes
     /// cannot disagree about which names exist.
     #[test]
     fn list_reports_only_the_components_present() {

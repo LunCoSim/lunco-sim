@@ -114,6 +114,11 @@ fn tag_existing_world_reference_frame(
 
 impl Plugin for CelestialPlugin {
     fn build(&self, app: &mut App) {
+        if app.world().contains_resource::<AssetServer>()
+            && !app.is_plugin_added::<lunco_materials::LuncoImagePlugin>()
+        {
+            app.add_plugins(lunco_materials::LuncoImagePlugin);
+        }
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
             app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }

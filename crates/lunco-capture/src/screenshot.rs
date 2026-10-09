@@ -818,10 +818,6 @@ pub struct OfflineRecordingState {
     /// Primary window present mode as it was before recording uncapped it,
     /// restored on stop.
     pub prev_present_mode: Option<bevy::window::PresentMode>,
-    /// Virtual-time clamp as it was before recording. Normal interactive runs
-    /// use a small catch-up cap; a declared 25 FPS take needs its full 40 ms
-    /// frame delta or the film silently runs short.
-    pub prev_virtual_max_delta: Option<std::time::Duration>,
     /// Host execution policy as it was before this deterministic take.
     pub prev_execution_mode: Option<lunco_core_runtime::SimulationExecutionMode>,
     /// Encode straight to a video file via a spawned `ffmpeg` instead of a PNG
@@ -1178,7 +1174,6 @@ fn activate_recording(
     // that state first; subsequent deliveries set this latch and advance virtual
     // time by exactly one frame before requesting the next capture.
     state.frame_just_captured = false;
-    state.prev_virtual_max_delta = None;
     // A camera can be structurally ready before its first offscreen render has
     // completed pipeline compilation. Hold virtual time and frame numbering for
     // one render-second so frame 0 cannot become a clear-color race on a cold GPU.
@@ -1272,7 +1267,6 @@ fn teardown_recording(
     execution_mode: &mut lunco_core_runtime::SimulationExecutionMode,
     pacing_demand: &mut lunco_core_runtime::FramePacingDemand,
     windows: &mut Query<&mut Window, With<bevy::window::PrimaryWindow>>,
-    virtual_time: &mut bevy::time::Time<bevy::time::Virtual>,
     video_sink: &mut OfflineVideoSink,
     commands: &mut Commands,
 ) {
@@ -1291,9 +1285,6 @@ fn teardown_recording(
     if let (Ok(mut window), Some(prev)) = (windows.single_mut(), state.prev_present_mode.take()) {
         window.present_mode = prev;
     }
-    if let Some(prev) = state.prev_virtual_max_delta.take() {
-        virtual_time.set_max_delta(prev);
-    }
     if let Some(prev) = state.prev_execution_mode.take() {
         *execution_mode = prev;
     }
@@ -1308,7 +1299,6 @@ fn on_stop_offline_recording(
     mut execution_mode: ResMut<lunco_core_runtime::SimulationExecutionMode>,
     mut pacing_demand: ResMut<lunco_core_runtime::FramePacingDemand>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
-    mut virtual_time: ResMut<bevy::time::Time<bevy::time::Virtual>>,
     mut video_sink: ResMut<OfflineVideoSink>,
     mut commands: Commands,
 ) {
@@ -1323,7 +1313,6 @@ fn on_stop_offline_recording(
             &mut execution_mode,
             &mut pacing_demand,
             &mut windows,
-            &mut virtual_time,
             &mut video_sink,
             &mut commands,
         );
@@ -1621,7 +1610,7 @@ fn drive_offline_clock(
     // Visual refinement is independent work. Keep the logical frame fixed while
     // its active readiness projection is present on the shared status bus.
     status_bus: Option<Res<lunco_status_core::status_bus::StatusBus>>,
-    mut virtual_time: ResMut<bevy::time::Time<bevy::time::Virtual>>,
+    fixed_time: Res<Time<bevy::time::Fixed>>,
     mut commands: Commands,
 ) {
     // PHASE 0 — armed, waiting for the scene. A CLI request can arrive before
@@ -1684,15 +1673,6 @@ fn drive_offline_clock(
     }
 
     let frame_dur = std::time::Duration::from_secs_f64(1.0 / state.fps as f64);
-    if state.prev_virtual_max_delta.is_none() {
-        state.prev_virtual_max_delta = Some(virtual_time.max_delta());
-    }
-    // The simulator's normal 33 ms cap prevents interactive catch-up storms.
-    // It must not clip the recorder's explicit frame duration: at 25 FPS that
-    // would turn a nominal 40 s take into roughly 32 s of simulation.
-    if virtual_time.max_delta() < frame_dur {
-        virtual_time.set_max_delta(frame_dur);
-    }
 
     if state.is_waiting_for_frame {
         // Capture in flight — hold the clock so the pending frame stays the one
@@ -1714,6 +1694,15 @@ fn drive_offline_clock(
         state.frame_just_captured = false;
         commands.insert_resource(TimeUpdateStrategy::ManualDuration(frame_dur));
     } else {
+        // Drain every whole fixed cycle admitted for this logical frame before
+        // capture. Budget or causal holds keep that duration in the time owner's
+        // accumulator; no further frame duration is admitted while it drains.
+        if fixed_time.overstep() >= fixed_time.timestep() {
+            commands.insert_resource(TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::ZERO,
+            ));
+            return;
+        }
         // Time advanced this frame. If its camera move selected new terrain,
         // hold that logical frame while bounded background work completes; do
         // not advance physics or capture an intermediate LOD cover.
@@ -1752,7 +1741,6 @@ fn deliver_offline_frame(
     mut execution_mode: ResMut<lunco_core_runtime::SimulationExecutionMode>,
     mut pacing_demand: ResMut<lunco_core_runtime::FramePacingDemand>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
-    mut virtual_time: ResMut<bevy::time::Time<bevy::time::Virtual>>,
     mut video_sink: ResMut<OfflineVideoSink>,
     video_settings: Res<OfflineVideoSettings>,
     mut commands: Commands,
@@ -1815,7 +1803,6 @@ fn deliver_offline_frame(
                         &mut execution_mode,
                         &mut pacing_demand,
                         &mut windows,
-                        &mut virtual_time,
                         &mut video_sink,
                         &mut commands,
                     );
@@ -1835,7 +1822,6 @@ fn deliver_offline_frame(
                 &mut execution_mode,
                 &mut pacing_demand,
                 &mut windows,
-                &mut virtual_time,
                 &mut video_sink,
                 &mut commands,
             );
@@ -1851,7 +1837,6 @@ fn deliver_offline_frame(
                 &mut execution_mode,
                 &mut pacing_demand,
                 &mut windows,
-                &mut virtual_time,
                 &mut video_sink,
                 &mut commands,
             );
@@ -1874,7 +1859,6 @@ fn deliver_offline_frame(
                 &mut execution_mode,
                 &mut pacing_demand,
                 &mut windows,
-                &mut virtual_time,
                 &mut video_sink,
                 &mut commands,
             );
@@ -1900,7 +1884,6 @@ fn deliver_offline_frame(
                 &mut execution_mode,
                 &mut pacing_demand,
                 &mut windows,
-                &mut virtual_time,
                 &mut video_sink,
                 &mut commands,
             );

@@ -318,6 +318,14 @@ mod compile_admission_tests {
             .unwrap()
             .is_compiled = true;
         app.world_mut().run_schedule(PreUpdate);
+        assert!(app.world().resource::<SimulationProgress>().is_held());
+
+        app.world_mut()
+            .get_mut::<ModelicaModel>(active)
+            .unwrap()
+            .variables
+            .insert("x".to_owned(), 1.0);
+        app.world_mut().run_schedule(PreUpdate);
         assert!(!app.world().resource::<SimulationProgress>().is_held());
     }
 }
@@ -1042,17 +1050,20 @@ pub fn handle_modelica_responses(
                         result.worker_backlog_count,
                     );
                 }
+                let in_flight = model
+                    .in_flight_step
+                    .take()
+                    .expect("the validated step transaction remains live through admission");
                 if result.error.is_none() {
                     model.last_accepted_step = Some(lunco_modelica_runtime::ModelicaStepSample {
                         session_id: model.session_id,
                         step_id: in_flight.step_id,
                         input_time_s: in_flight.start_time,
                         output_time_s: result.new_time,
-                        inputs: in_flight.sampled_inputs.clone(),
+                        inputs: in_flight.sampled_inputs,
                         outputs: result.outputs.clone(),
                     });
                 }
-                model.in_flight_step = None;
             } else {
                 // A lifecycle transition supersedes any older transaction only
                 // after its session has advanced. It starts a fresh sequence.
@@ -1339,7 +1350,11 @@ pub fn handle_modelica_responses(
             // Update observable variables from detected symbols and step outputs
             for (name, val) in result.detected_symbols.iter().chain(result.outputs.iter()) {
                 if !model.inputs.contains_key(name) && !model.parameters.contains_key(name) {
-                    model.variables.insert(name.clone(), *val);
+                    if let Some(current) = model.variables.get_mut(name) {
+                        *current = *val;
+                    } else {
+                        model.variables.insert(name.clone(), *val);
+                    }
                 }
             }
 
@@ -1377,12 +1392,8 @@ pub fn handle_modelica_responses(
             // reset the default graph). Bounded at the producer so a headless
             // build (no drainer) can't grow the queue without limit.
             if sample_stream.batches.len() < 16_384 {
-                let samples: Vec<(String, f64)> = result
-                    .outputs
-                    .iter()
-                    .chain(result.detected_symbols.iter())
-                    .map(|(n, v)| (n.clone(), *v))
-                    .collect();
+                let mut samples = result.outputs;
+                samples.extend(result.detected_symbols);
                 sample_stream.batches.push(SimSampleBatch {
                     entity: result.entity,
                     document: model.document,
@@ -1459,9 +1470,9 @@ pub fn handle_modelica_responses(
     }
 
     // A result landing is the only release edge for the coupling barrier. The
-    // next FixedUpdate may dispatch the following step, but PreUpdate has
-    // already observed this release, so the current physics step consumes only
-    // the fresh output that just arrived.
+    // First admits this completion before clock projection. The fixed loop
+    // may then consume the fresh output and dispatch the next communication
+    // point; an outstanding causal participant still holds the whole loop.
     if let Some(mut coupling) = coupling {
         coupling.held = q_models.iter().any(|(entity, model, _, _)| {
             let shared_clock_participant = participants
@@ -1526,7 +1537,7 @@ mod compile_fault_tests {
                 .init_resource::<lunco_core::RuntimeFaults>()
                 .init_resource::<lunco_doc_bevy::DocumentDiagnostics>()
                 .init_resource::<lunco_core_runtime::SimulationBarrier>()
-                .add_systems(Update, handle_modelica_responses);
+                .add_systems(First, handle_modelica_responses);
             let (tx_result, rx_result) = crossbeam_channel::unbounded();
             let (tx_command, _rx_command) = crossbeam_channel::unbounded();
             app.insert_resource(ModelicaChannels {
@@ -1563,7 +1574,7 @@ mod compile_fault_tests {
                     .unwrap();
             }
             drop(tx_result);
-            app.world_mut().run_schedule(Update);
+            app.world_mut().run_schedule(First);
             let failure = app
                 .world()
                 .resource::<lunco_modelica_runtime::ModelicaWorkerFailure>()
@@ -1586,12 +1597,13 @@ mod compile_fault_tests {
             );
             assert!(model.live_solver_snapshot.is_none());
             assert_eq!(model.last_error.as_deref(), Some(failure.as_str()));
+            assert_eq!(app.world().resource::<Messages<ModelicaNotice>>().len(), 1);
             // Scene fault reset cannot re-admit a dead application transport,
             // and a buffered success cannot resurrect its participant.
             app.world_mut()
                 .resource_mut::<lunco_core::RuntimeFaults>()
                 .clear();
-            app.world_mut().run_schedule(Update);
+            app.world_mut().run_schedule(First);
             assert!(
                 !app.world()
                     .get::<ModelicaModel>(entity)
@@ -1605,7 +1617,6 @@ mod compile_fault_tests {
                     .as_deref(),
                 Some(failure.as_str())
             );
-            assert_eq!(app.world().resource::<Messages<ModelicaNotice>>().len(), 1);
             let source = lunco_workspace::PinnedDocumentRuntimeOwner {
                 document,
                 runtime: lunco_workspace::DocumentRuntimeOwner::Application,
@@ -1638,11 +1649,125 @@ mod compile_fault_tests {
     }
 
     #[test]
+    fn accepted_step_reuses_variable_keys_and_transfers_sample_buffers() {
+        let mut app = App::new();
+        app.add_message::<ModelicaNotice>()
+            .init_resource::<SimSampleStream>()
+            .add_systems(First, handle_modelica_responses);
+        let (results, received) = crossbeam_channel::unbounded();
+        let (commands, _requests) = crossbeam_channel::unbounded();
+        app.insert_resource(ModelicaChannels {
+            tx: commands,
+            rx: received,
+        });
+        let inputs = vec![("command".to_owned(), 0.12345678901234567)];
+        let input_key = inputs[0].0.as_ptr();
+        let entity = app
+            .world_mut()
+            .spawn(ModelicaModel {
+                session_id: 1,
+                is_compiled: true,
+                is_stepping: true,
+                inputs: [("command".to_owned(), 0.25)].into(),
+                parameters: [("gain".to_owned(), 2.0)].into(),
+                variables: [("x".to_owned(), 0.0)].into(),
+                in_flight_step: Some(lunco_modelica_runtime::InFlightModelicaStep {
+                    step_id: 1,
+                    start_time: 0.0,
+                    stop_time: 0.05,
+                    sampled_inputs: inputs,
+                    submitted_at: web_time::Instant::now(),
+                }),
+                ..Default::default()
+            })
+            .id();
+        let variable_key = app
+            .world()
+            .get::<ModelicaModel>(entity)
+            .unwrap()
+            .variables
+            .get_key_value("x")
+            .unwrap()
+            .0
+            .as_ptr();
+        let outputs = vec![
+            ("x".to_owned(), -0.0),
+            ("new".to_owned(), 1.2345678901234567),
+            ("command".to_owned(), 0.25),
+            ("gain".to_owned(), 2.0),
+        ];
+        let output_key = outputs[0].0.as_ptr();
+        let expected = outputs.clone();
+        results
+            .send(ModelicaResult {
+                entity,
+                session_id: 0,
+                step_id: Some(1),
+                new_time: 0.05,
+                outputs: vec![("x".to_owned(), 99.0)],
+                ..Default::default()
+            })
+            .unwrap();
+        app.world_mut().run_schedule(First);
+        assert!(app.world().resource::<SimSampleStream>().batches.is_empty());
+        assert_eq!(
+            app.world().get::<ModelicaModel>(entity).unwrap().variables["x"],
+            0.0
+        );
+        results
+            .send(ModelicaResult {
+                entity,
+                session_id: 1,
+                step_id: Some(1),
+                new_time: 0.05,
+                outputs,
+                detected_symbols: vec![("x".to_owned(), 8.0)],
+                ..Default::default()
+            })
+            .unwrap();
+        app.world_mut().run_schedule(First);
+        let model = app.world().get::<ModelicaModel>(entity).unwrap();
+        assert_eq!(
+            model.variables.get_key_value("x").unwrap().0.as_ptr(),
+            variable_key
+        );
+        assert_eq!(model.variables["x"].to_bits(), (-0.0_f64).to_bits());
+        assert_eq!(
+            model.variables["new"].to_bits(),
+            1.2345678901234567_f64.to_bits()
+        );
+        assert!(!model.variables.contains_key("command"));
+        assert!(!model.variables.contains_key("gain"));
+        let accepted = model.last_accepted_step.as_ref().unwrap();
+        assert_eq!(accepted.inputs[0].0.as_ptr(), input_key);
+        assert_eq!(accepted.outputs, expected);
+        assert!(model.in_flight_step.is_none());
+        let samples = &app.world().resource::<SimSampleStream>().batches[0].samples;
+        assert_eq!(samples[0].0.as_ptr(), output_key);
+        assert_eq!(&samples[..4], expected);
+        assert_eq!(samples[4], ("x".to_owned(), 8.0));
+        results
+            .send(ModelicaResult {
+                entity,
+                session_id: 1,
+                is_reset: true,
+                outputs: vec![("x".to_owned(), 3.0)],
+                ..Default::default()
+            })
+            .unwrap();
+        app.world_mut().run_schedule(First);
+        let model = app.world().get::<ModelicaModel>(entity).unwrap();
+        assert_eq!(model.variables.len(), 1);
+        assert_eq!(model.variables["x"], 3.0);
+        assert!(model.last_accepted_step.is_none());
+    }
+
+    #[test]
     fn accepted_worker_solver_plan_is_retained_and_failed_lifecycle_clears_it() {
         let mut app = App::new();
         app.add_message::<ModelicaNotice>()
             .init_resource::<SimSampleStream>()
-            .add_systems(Update, handle_modelica_responses);
+            .add_systems(First, handle_modelica_responses);
 
         let (tx_result, rx_result) = crossbeam_channel::unbounded();
         let (tx_command, _rx_command) = crossbeam_channel::unbounded();
@@ -1670,7 +1795,7 @@ mod compile_fault_tests {
                 ..Default::default()
             })
             .unwrap();
-        app.world_mut().run_schedule(Update);
+        app.world_mut().run_schedule(First);
         assert_eq!(
             app.world()
                 .get::<ModelicaModel>(entity)
@@ -1688,7 +1813,7 @@ mod compile_fault_tests {
                 ..Default::default()
             })
             .unwrap();
-        app.world_mut().run_schedule(Update);
+        app.world_mut().run_schedule(First);
         assert_eq!(
             app.world()
                 .get::<ModelicaModel>(entity)
@@ -1706,7 +1831,7 @@ mod compile_fault_tests {
             .init_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
             .init_resource::<lunco_core_runtime::SimulationBarrier>()
             .init_resource::<lunco_core::RuntimeFaults>()
-            .add_systems(Update, handle_modelica_responses);
+            .add_systems(First, handle_modelica_responses);
 
         let (tx_result, rx_result) = crossbeam_channel::unbounded();
         let (tx_command, _rx_command) = crossbeam_channel::unbounded();
@@ -1742,7 +1867,7 @@ mod compile_fault_tests {
             })
             .unwrap();
 
-        app.world_mut().run_schedule(Update);
+        app.world_mut().run_schedule(First);
 
         let fault = app
             .world()
@@ -1834,16 +1959,13 @@ mod compile_fault_tests {
             })
             .unwrap();
 
+        app.add_systems(First, handle_modelica_responses);
         app.add_systems(
             Update,
-            (
-                handle_modelica_responses,
-                request_modelica_compiles,
-                capture_compile_requests,
-            )
-                .chain(),
+            (request_modelica_compiles, capture_compile_requests).chain(),
         );
         app.add_systems(PreUpdate, reconcile_modelica_preparation_progress);
+        app.world_mut().run_schedule(First);
         app.world_mut().run_schedule(Update);
         app.world_mut().run_schedule(PreUpdate);
 
@@ -1962,7 +2084,7 @@ mod document_runtime_owner_tests {
             .init_resource::<SimSampleStream>()
             .add_observer(on_remove_modelica)
             .add_observer(retire_closed_twin_models)
-            .add_systems(Update, handle_modelica_responses);
+            .add_systems(First, handle_modelica_responses);
         let (tx, rx) = crossbeam_channel::unbounded();
         let (results, result_rx) = crossbeam_channel::unbounded();
         app.insert_resource(ModelicaChannels { tx, rx: result_rx });

@@ -194,18 +194,6 @@ fn main() {
     #[cfg(feature = "api")]
     app.add_plugins(lunco_api_transport::LunCoApiPlugin::default());
 
-    // Cap FixedUpdate catchup after a slow frame. Bevy default: a 250ms
-    // hitch breeds ~15 fixed ticks next frame, which makes that frame slow
-    // too — a self-feeding cascade (the 5 Hz spike train). Capping
-    // `Time<Virtual>` to 33ms ≈ 2 fixed ticks drops residual real time
-    // instead of compounding it. `Time<Fixed>` reads its delta from
-    // Virtual, so this transitively caps the catchup loop.
-    {
-        let mut virtual_time = Time::<Virtual>::default();
-        virtual_time.set_max_delta(std::time::Duration::from_millis(33));
-        app.insert_resource(virtual_time);
-    }
-
     // wasm-only boot wiring: request the explicitly selected external model, and hide
     // the HTML loader once the first egui frame has painted. The whole
     // web-workbench wiring depends on the `ui` feature (it touches

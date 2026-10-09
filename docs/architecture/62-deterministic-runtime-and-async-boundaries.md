@@ -185,7 +185,10 @@ The pre-simulation `PreUpdate` order is `Lifecycle` → `IdentityAdmission` →
 `EntityIndex` → `SimulationAdmissionSet`. Lifecycle projection creates the ECS
 entities; the identity owner assigns their stable IDs; then the API registry
 publishes path lookups for those identities. `ClockProjectionSet` runs in
-`First`, before `TimeSystems` samples the next virtual delta. The fixed runner
+`First`, before `TimeSystems` samples the next virtual delta. Modelica completion
+admission runs after message rotation and before `ClockProjectionSet`, using the
+existing session, source, step, and communication-endpoint fences. Only a fully
+released causal barrier allows the fixed runner to resume. The fixed runner
 then checks current transport, scene-time, progress, and coupling admission
 before every complete `FixedMain` cycle. A barrier raised by one cycle stops
 the next cycle and keeps remaining `Time<Fixed>::overstep` queued until the
@@ -231,27 +234,27 @@ or capacity retry is admitted; unchanged actors do not copy their source per
 frame. Worker ordering and the lifecycle commit boundary remain unchanged.
 
 Fixed-step time is not a wall-clock service guarantee. In the production GUI,
-Bevy drains `FixedMain` synchronously before `Update`; LunCoSim's rate-scaled
-delta guard permits up to 64 fixed steps in one app update at the highest
-transport rate. Every step still receives the same `Time<Fixed>` delta. Typed
-scene-tool and menu hooks run in a separate bounded UI queue after picking in
+the time owner drains `FixedMain` synchronously before `Update`, up to 64
+complete fixed cycles per app update at every transport rate. The virtual
+clock admits the complete running delta; budget exhaustion leaves pending
+duration in `Time<Fixed>::overstep`. Every step still receives the same
+`Time<Fixed>` delta. Typed scene-tool and menu hooks run in a separate bounded UI queue after picking in
 `PreUpdate`, before that fixed loop, so they do not wait behind general REPL
 requests or the current frame's fixed-step work. The UI and simulation still
 share the GUI thread: a long tick or catch-up burst delays the next native input
-poll and the next visible frame. The raw-delta cap means simulation time can
-also fall behind wall time under sustained overload. Reducing the step cap by
-discarding accumulated time would hide that lag by dropping authoritative
-ticks, not fix it. `SimulationTimingProfile` is the shared,
+poll and the next visible frame. Under sustained overload, retained simulation
+demand can grow faster than the owner drains it. Discarding that balance would
+drop authoritative ticks. `SimulationTimingProfile` is the shared,
 bounded observation path until ownership is split: it reports the most recent
 240 completed `FixedMain` tick service times and rate-derived service budgets,
 plus per-app-update fixed-loop duration, completed-step count, remaining
-fractional overstep, and simulation-time demand omitted by the `Time<Virtual>`
-delta cap.
+pending simulation duration (whole ticks and fractional overstep), and
+simulation-time demand omitted if a consumer alters `Time<Virtual>::max_delta`.
 The profile is read through telemetry's query registry, does not emit per-tick
 events, and never feeds simulation decisions. Its capped-time total describes
-wall-time demand already clipped by the current Bevy admission policy; it is
-not a recoverable simulation backlog. The profile still does not move fixed
-work off the GUI thread or guarantee real-time cadence.
+wall-time demand already clipped, distinct from the recoverable pending duration.
+The time owner's configured admission produces zero clipped demand. The profile
+still does not move fixed work off the GUI thread or guarantee real-time cadence.
 
 Hard UI responsiveness and wall-clock physics cadence require one dedicated
 simulation owner that runs the **whole causal tick** in its own `App`/`World`:
@@ -1411,13 +1414,13 @@ The whole-simulation guarantee remains open because:
     together at the diagnostics boundary, so optimization cannot target an
     owner using comparable cycle evidence.
 12. Bevy's fixed loop executes synchronously on the GUI app thread before
-    `Update`. The transport policy allows a 64-step catch-up burst at its
-    highest rate; a fixed delta preserves numerical step size but does not
+    `Update`. The owner drains at most 64 complete cycles per update and retains
+    remaining admitted time; a fixed delta preserves numerical step size but does not
     promise 60 wall-clock physics ticks per second or responsive UI during a
     long tick/burst. `SimulationTimingProfile` now reports bounded tick and
-    fixed-loop service/budget samples plus simulation-time demand already
-    clipped by the virtual-clock delta cap. It cannot report wall-paced
-    deadline misses or recoverable backlog, and does not move fixed work off
+    fixed-loop service/budget samples and recoverable pending simulation duration.
+    The separate max-delta diagnostic detects unexpected virtual-clock clipping.
+    It cannot report wall-paced deadline misses and does not move fixed work off
     the GUI thread.
 13. World-bound REPL requests use a bounded 64-entry FIFO, reject excess
     commands visibly, drain one request per `Update`, and cap each live-world
@@ -1500,9 +1503,9 @@ These findings and their owner-specific file evidence are maintained in
    the current same-world path until every authoritative consumer crosses this
    boundary; do not run only the solver concurrently. The current
    `SimulationTimingProfile` provides a bounded same-world measurement of tick
-   service, rate-derived service budgets, fixed steps per app update, and
-   simulation time clipped by the raw-delta cap. A clipped-time measurement is
-   not a backlog or a substitute for the command/snapshot ownership boundary.
+   service, rate-derived service budgets, fixed steps per app update, and retained
+   pending simulation duration. Its separate clipped-time diagnostic is not
+   recoverable backlog or a substitute for the command/snapshot ownership boundary.
 9. **Replay evidence.** Record admitted inputs and deterministic result keys;
    add a production scene suite spanning USD projection, Modelica coupling,
    Rhai events, SysML revisioned verification, and Avian state. Compare state at

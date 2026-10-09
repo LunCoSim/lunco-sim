@@ -47,6 +47,11 @@ view restoration can replace an early camera command.
    and `primvars:doNotCastShadows` before changing material brightness. A
    renderer fallback that silently removes shadows is a failure to surface,
    not a quality setting to hide.
+   For measured shadow cost, use the diagnostics-enabled render owner's four
+   `lunco_shadow_*` GPU spans described in `performance-profiling`. Shared spans
+   cover point/spot views; camera spans cover directional cascades. Confirm
+   timestamp coverage and keep profiler attribution separate from unprofiled
+   visual acceptance before changing shadow preparation or rendering.
    A committed heightfield cache disables streamed terrain CSM casting. The
    render-input owner sets those tiles' `csm_far` to zero so cached visibility
    covers every distance. Static terrain retains its native CSM range; object
@@ -90,6 +95,13 @@ Standard `UsdPreviewSurface` input edits travel through
 `UsdSceneChangeBatch`; the visual owner refreshes the bound `PbrLook` in place
 and the renderer rebinds its material. If the authored value changes but the
 surface stays stale, inspect that owner path before adding a scene rebuild.
+
+Analytic primitives may carry `SharedMeshAsset` and share immutable mesh handles.
+An entity-specific UV or geometry edit must detach before writing; quality
+retessellation replaces keyed assets and point instances follow inherited handle
+changes. Verify both the edited entity and an unchanged peer. Use the
+[mesh ownership contract](../../docs/architecture/render-decoupling.md#immutable-primitive-mesh-assets)
+when diagnosing cross-entity geometry changes or stale instance meshes.
 
 For celestial globes, verify the installed Earth/Moon imagery dataset, composed
 USD body look, and generated shell's shadow intent. Globe tiles and their
@@ -157,6 +169,12 @@ timing may affect visual arrival, never the simulation oracle.
 
 ## High-profile near detail
 
+For a fully prepared DEM screenshot or performance window, read
+`TerrainLodStatus.derived` alongside `stream`: require `active == false`,
+`pending == 0`, and `ready == total`, as well as a resident selected cover with
+no pending stream work. Derived-map preparation is separate from simulation
+readiness; a usable viewport alone does not prove that preparation has finished.
+
 Query `TerrainLodStatus` and inspect `max_depth`, `tile_budget`, and
 `budget_refused` before changing the High LOD. A resident count close to the
 budget does not by itself prove that detail was refused. High currently uses
@@ -181,7 +199,16 @@ and physics settings while tuning render LOD through its quality profile. If an
 asset is missing, report the owning cache or manifest error visibly instead of
 adding a procedural fallback.
 
-For CPU-built RGBA8 mip chains, preserve the role-aware filtering above while
+Authored RGBA8 shader rasters use `lunco-materials::ShaderTexture` typed prepared
+sources. Retain their source handles for native reloads; the worker publishes a
+complete native child before the renderer binds it. Its render-only usage moves
+pixels through native GPU extraction while retaining main-world metadata; reload
+the source to publish new texels or sampler settings. Generated derived maps use
+complete native images directly. `load_raster` admits physical sources and rejects
+container labels; bind imported labeled images through their owner's native
+handle. Preserve native image/glTF loader settings and
+validated request-time anisotropy. For CPU-built RGBA8 mip chains, preserve the
+role-aware filtering above while
 using the GPU texture extent rule `max(1, floor(size / 2))` independently on
 each axis. Never use ceil-halving or silently clamp an oversized mip count:
 the level data would no longer match the texture's legal subresources.
