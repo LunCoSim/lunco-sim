@@ -1,5 +1,26 @@
 # High-quality realtime performance handover
 
+## Prepared-solve miss observability — 2026-10-09
+
+After local-main integration at `c7825ec12`, the loading audit compares the ten
+frame-contract replay logs with the cold rendered run. Replay admits 20 distinct
+source identities; together with eight different sandbox identities the set is
+28, below the disk cache's 32-record limit. The replay workload alone therefore
+does not establish eviction. Historical full keys and unrelated admissions are
+missing, so the expensive rover miss remains unexplained. Read-only evidence:
+`target/image-loader-perf/prepared-solve-cache-workload-audit-20261009.json`.
+
+The existing native preparation span now records its captured source key,
+library revision, solver ID, exact parameter-override bit patterns, cache version
+and disk eligibility. This adds event-level observability at the worker owner;
+it changes no solve key, lowering, solver state, scheduling or cache retention.
+Future loading captures can distinguish source equality from full-key equality
+before changing cache semantics. Product loading and FPS acceptance remain open.
+`cargo check -p lunco-modelica-worker -j 4` passes without warnings in 36.83 s;
+one formatter pass is restricted to the changed span. The skill catalog and
+diff checks pass. This follow-up is compile-validated; the preserved normal
+production executable predates these additional diagnostic fields.
+
 ## Local-main integration validation — 2026-10-09
 
 The optimization tree includes main `43f130184` without dropping its incremental

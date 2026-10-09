@@ -436,6 +436,12 @@ impl SolvePreparationPool {
                 preparation_id = id,
                 model = %model_name,
                 queue_wait_us = queued_at.elapsed().as_micros() as u64,
+                source_key = %format_args!("{:016x}", cache_key.source_key),
+                library_revision = %format_args!("{:016x}", cache_key.library_revision),
+                solver_id = %cache_key.solver_id,
+                parameter_overrides = ?cache_key.parameter_overrides,
+                cache_version = PREPARED_SOLVE_CACHE_VERSION,
+                disk_enabled = disk_cache,
             )
             .entered();
             let cache_started = web_time::Instant::now();

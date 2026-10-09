@@ -229,9 +229,13 @@ the actual participating closure.
 
 Native INFO preparation logs distinguish `cache=memory-hit`, `cache=disk-hit`,
 and `cache=miss` at their actual lookup owners. Disk preparation reports lookup,
-lowering, and total preparation duration plus source key and success. Stepper
-construction consumes already admitted solve IR and does not claim that a newly
-lowered model was a cache hit. These timings describe preparation, not settled
+lowering, and total preparation duration plus source key and success.
+The native `modelica_solve_preparation_job` span records the admitted source key,
+library revision, solver ID, exact parameter-override bit patterns, cache
+version and disk eligibility from the worker's captured key and preparation configuration.
+Compare these fields before attributing a miss to retention or repeated work.
+Stepper construction consumes already admitted solve IR and does not claim that
+a newly lowered model was a cache hit. These timings describe preparation, not settled
 solver stepping or uncontended frame performance.
 Cold misses still run the admitted DAE lowering algorithm. Generated-network
 source isolation already excludes editor siblings before compilation; closure
