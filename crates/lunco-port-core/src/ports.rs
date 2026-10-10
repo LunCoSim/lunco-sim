@@ -39,6 +39,7 @@
 
 use bevy::prelude::*;
 use std::any::TypeId;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -800,22 +801,23 @@ pub struct PortMetadata {
     /// Inclusive upper validation bound, if one exists.
     pub max: Option<f64>,
     /// The subsystem that owns the value.
-    pub source: String,
+    pub source: Cow<'static, str>,
     /// The authority currently responsible for changing the value.
-    pub authority: String,
+    pub authority: Cow<'static, str>,
     /// Whether the port owner accepts manual writes through `SetPorts`.
     pub writable: bool,
 }
 
 impl PortMetadata {
-    /// Build metadata for the scalar port contract.
+    /// Build metadata for the scalar port contract. Static owner labels are
+    /// borrowed during live validation; dynamic labels retain owned storage.
     pub fn scalar(
         direction: PortDirection,
         unit: Option<UnitReference>,
         min: Option<f64>,
         max: Option<f64>,
-        source: impl Into<String>,
-        authority: impl Into<String>,
+        source: impl Into<Cow<'static, str>>,
+        authority: impl Into<Cow<'static, str>>,
         writable: bool,
         frame: Option<CoordinateFrameId>,
     ) -> Self {
@@ -1972,7 +1974,7 @@ impl PortRegistry {
             .validate_contract()
             .map_err(|error| PortWriteError {
                 port: name.to_string(),
-                owner: Some(metadata.source.clone()),
+                owner: Some(metadata.source.to_string()),
                 kind: PortWriteErrorKind::InvalidMetadata {
                     reason: error.to_string(),
                 },
@@ -1980,7 +1982,7 @@ impl PortRegistry {
         if !metadata.writable {
             return Err(PortWriteError {
                 port: name.to_string(),
-                owner: Some(metadata.source),
+                owner: Some(metadata.source.into_owned()),
                 kind: PortWriteErrorKind::NotWritable,
             });
         }
@@ -1988,7 +1990,7 @@ impl PortRegistry {
             .validate_value(value)
             .map_err(|reason| PortWriteError {
                 port: name.to_string(),
-                owner: Some(metadata.source.clone()),
+                owner: Some(metadata.source.to_string()),
                 kind: PortWriteErrorKind::InvalidValue {
                     value,
                     unit: metadata.unit.as_ref().map(|unit| unit.id().to_owned()),
@@ -2004,7 +2006,7 @@ impl PortRegistry {
             .filter(|_| backend.write_slot.is_some())
             .ok_or_else(|| PortWriteError {
                 port: name.to_string(),
-                owner: Some(metadata.source.clone()),
+                owner: Some(metadata.source.to_string()),
                 kind: PortWriteErrorKind::UnsupportedWritePath,
             })?;
         let revision = world
@@ -2012,7 +2014,7 @@ impl PortRegistry {
             .map(|revision| revision.0)
             .ok_or_else(|| PortWriteError {
                 port: name.to_string(),
-                owner: Some(metadata.source.clone()),
+                owner: Some(metadata.source.to_string()),
                 kind: PortWriteErrorKind::TopologyRevisionUnavailable,
             })?;
         Ok(PreparedPortWrite {
@@ -2043,7 +2045,7 @@ impl PortRegistry {
             if !unique.insert((write.entity, Arc::clone(&write.name))) {
                 return Err(PortWriteError {
                     port: write.name.to_string(),
-                    owner: Some(write.metadata.source.clone()),
+                    owner: Some(write.metadata.source.to_string()),
                     kind: PortWriteErrorKind::DuplicateWrite,
                 });
             }
@@ -2063,13 +2065,13 @@ impl PortRegistry {
     ) -> Result<fn(&mut World, Entity, u64, f64), PortWriteError> {
         let stale = || PortWriteError {
             port: prepared.name.to_string(),
-            owner: Some(prepared.metadata.source.clone()),
+            owner: Some(prepared.metadata.source.to_string()),
             kind: PortWriteErrorKind::StaleResolution,
         };
         let Some(revision) = world.get_resource::<PortTopologyRevision>() else {
             return Err(PortWriteError {
                 port: prepared.name.to_string(),
-                owner: Some(prepared.metadata.source.clone()),
+                owner: Some(prepared.metadata.source.to_string()),
                 kind: PortWriteErrorKind::TopologyRevisionUnavailable,
             });
         };
@@ -2099,7 +2101,7 @@ impl PortRegistry {
             .validate_contract()
             .map_err(|error| PortWriteError {
                 port: prepared.name.to_string(),
-                owner: Some(metadata.source.clone()),
+                owner: Some(metadata.source.to_string()),
                 kind: PortWriteErrorKind::InvalidMetadata {
                     reason: error.to_string(),
                 },
@@ -2107,7 +2109,7 @@ impl PortRegistry {
         if !metadata.writable {
             return Err(PortWriteError {
                 port: prepared.name.to_string(),
-                owner: Some(metadata.source),
+                owner: Some(metadata.source.into_owned()),
                 kind: PortWriteErrorKind::NotWritable,
             });
         }
@@ -2115,7 +2117,7 @@ impl PortRegistry {
             .validate_value(prepared.value)
             .map_err(|reason| PortWriteError {
                 port: prepared.name.to_string(),
-                owner: Some(metadata.source.clone()),
+                owner: Some(metadata.source.to_string()),
                 kind: PortWriteErrorKind::InvalidValue {
                     value: prepared.value,
                     unit: metadata.unit.as_ref().map(|unit| unit.id().to_owned()),
@@ -2133,7 +2135,7 @@ impl PortRegistry {
         }
         backend.write_slot.ok_or_else(|| PortWriteError {
             port: prepared.name.to_string(),
-            owner: Some(prepared.metadata.source.clone()),
+            owner: Some(prepared.metadata.source.to_string()),
             kind: PortWriteErrorKind::UnsupportedWritePath,
         })
     }
@@ -2229,7 +2231,7 @@ impl PortRegistry {
         let Some(revision) = world.get_resource::<PortTopologyRevision>() else {
             return Err(PortWriteError {
                 port: r.name.to_string(),
-                owner: Some(r.metadata.source.clone()),
+                owner: Some(r.metadata.source.to_string()),
                 kind: PortWriteErrorKind::TopologyRevisionUnavailable,
             });
         };
@@ -2249,7 +2251,7 @@ impl PortRegistry {
         {
             return Err(PortWriteError {
                 port: r.name.to_string(),
-                owner: Some(r.metadata.source.clone()),
+                owner: Some(r.metadata.source.to_string()),
                 kind: PortWriteErrorKind::StaleResolution,
             });
         }
@@ -2260,7 +2262,7 @@ impl PortRegistry {
             .write_slot
             .ok_or_else(|| PortWriteError {
                 port: prepared.name.to_string(),
-                owner: Some(prepared.metadata.source.clone()),
+                owner: Some(prepared.metadata.source.to_string()),
                 kind: PortWriteErrorKind::UnsupportedWritePath,
             })?;
         commit(world, entity, prepared.slot, prepared.value);
@@ -2913,6 +2915,26 @@ mod tests {
             }]),
         };
         let locator = registry.resolve_input(&world, entity, "signal").unwrap();
+        assert!(matches!(
+            &locator.metadata.source,
+            std::borrow::Cow::Borrowed("probe")
+        ));
+        assert!(matches!(
+            &locator.metadata.clone().authority,
+            std::borrow::Cow::Borrowed("probe")
+        ));
+        let owned_metadata = PortMetadata::scalar(
+            PortDirection::In,
+            None,
+            Some(0.0),
+            Some(1.0),
+            "probe".to_owned(),
+            "probe".to_owned(),
+            true,
+            None,
+        );
+        assert!(matches!(&owned_metadata.source, std::borrow::Cow::Owned(_)));
+        assert_eq!(locator.metadata, owned_metadata);
         let prepared = registry
             .prepare_input_write(&world, entity, Arc::clone(&locator.name), 0.5)
             .unwrap();

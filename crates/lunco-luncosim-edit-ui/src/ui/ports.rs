@@ -697,8 +697,8 @@ impl PortPanel {
         });
 
         ui.vertical(|ui| {
-            ui.label(&info.metadata.source);
-            ui.small(&info.metadata.authority);
+            ui.label(info.metadata.source.as_ref());
+            ui.small(info.metadata.authority.as_ref());
         });
 
         if !info.metadata.writable {

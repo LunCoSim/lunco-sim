@@ -209,6 +209,11 @@ edits, clone/clear/compaction retirement and native-bit no-op detection when
 changing that mechanism. Do not infer unchanged source topology from map length
 or cached iteration order. Keep Modelica's reflected variable map and the
 fixed-step publication boundary unchanged, and measure the actual copy owner.
+For port-write metadata, preserve the live validation boundary. `PortMetadata`
+borrows static source/authority text through native `Cow` and owns dynamic text;
+check both representations and content equality, then verify public metadata
+and collision diagnostics. Borrowing labels must not bypass owner precedence,
+stale-handle rejection, writability, bounds or atomic batch admission.
 For structural publication, use the existing `PortTopologyState` owner to
 observe expensive auxiliary fingerprints by their own component change ticks.
 `observe_if_changed` computes a cold key and recomputes changed owners; sample

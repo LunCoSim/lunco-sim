@@ -347,8 +347,8 @@ pub fn port_metadata_to_api_value(metadata: &lunco_port_core::ports::PortMetadat
             coordinate_frame_to_api_value(metadata.frame.as_ref()),
         ),
         ("range", range),
-        ("source", ApiValue::str(metadata.source.clone())),
-        ("authority", ApiValue::str(metadata.authority.clone())),
+        ("source", ApiValue::str(metadata.source.as_ref())),
+        ("authority", ApiValue::str(metadata.authority.as_ref())),
         ("writable", ApiValue::Bool(metadata.writable)),
     ])
 }

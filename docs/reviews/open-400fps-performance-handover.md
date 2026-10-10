@@ -1,5 +1,73 @@
 # High-quality realtime performance handover
 
+## Borrowed port metadata labels — 2026-10-11
+
+Live port-write validation constructs owner metadata on every propagated
+target. `lunco-port-core::PortMetadata` stores static source/authority labels as
+borrowed native `Cow<'static, str>` and retains owned storage for dynamic text.
+Static labels therefore require no heap allocation during construction or
+metadata cloning. Metadata remains live: owner precedence, declared direction,
+slot identity, topology revision, permissions, units, native f64 bounds and
+value validation still run through the same registry operations. This changes
+text storage, not policy; no hook, intern pool, validation cache, new dependency
+or alternate reader path is needed. API and lint-hook projections own their
+output strings; the Ports panel borrows them for painting. Failure diagnostics
+retain owned strings. Metadata equality and ordering remain content-based.
+
+All 23 focused port-core mechanism tests pass. The existing resolved-input
+test also verifies borrowed static labels, a borrowed clone, owned dynamic text
+and equality across both representations. Its invalid-value, read-only,
+stale-slot/revision, owner retirement and atomic-batch rejection checks pass.
+The production normal build passes with the existing unused cache `clear`
+warning. Owned normal PID 311931 passes seven authored sandbox checks before
+and after scene replacement. `ReadPorts` returns the expected source/authority
+strings, direction and writability for the oscillator output and both root
+throttle owners. High-quality View/Build/View windows advance physics with
+50 bodies/33 colliders/20 joints; camera stays fixed within the run, readiness
+is complete, retained error diagnostics are empty and invalid assemblies remain
+paused. Screenshot inspection confirms the Builder layout and scene behind the
+optional visual-resource consent popup. Normal frame p50 is
+18.423249/22.649424/17.840570 ms under main PID 84260 and USD Cargo PID 311350;
+these are contended samples, not an overall FPS comparison.
+
+The authored `port_owner_collision` gate passes all 11 checks on PID 317251,
+including the negative duplicate-owner lint and exact owner/provenance text.
+Replay PID 319216 passes 24 exact checks over 780 ticks/13 simulated seconds
+against the unchanged 56-row reference, four rovers and one compute thread.
+These apps exit zero and close API 4202. This is not the ten-profile replay
+matrix. Normal artifact SHA-256:
+`74cde36df2ba964fb987c0c1553a6bee1687b1d849a3e3633de022999a8d923e`.
+
+Tracy candidate PID 336932 and unchanged control PID 339168 use the same
+sandbox and High/no-vsync/no-throttle configuration. Both pass settled readiness,
+diagnostics, advancing physics and replacement checks, and hold their own camera
+fixed. The sampled public port metadata matches exactly across artifacts.
+In settled View/Build/View windows (+1.5 to +7.5 s after activation), propagation
+p50 is 0.305416/0.369381/0.361135 ms before and
+0.296825/0.311587/0.276527 ms after. Mean is
+0.321273/0.386503/0.379578 ms before and 0.312087/0.321289/0.294906 ms after;
+sample counts are 360/359/353 and 362/358/360. This is a wall-clock owner
+comparison, not clean overall FPS acceptance. Both runs overlap main PID 84260;
+candidate launch also records USD Cargo PID 325294, which is gone at a later
+in-window process check. Recorded camera poses match exactly across runs. The
+allocation reduction is independently established by native borrowed-label
+storage; the samples do not isolate every timing influence. App and collector
+exits are zero, and API 4202/profiler 8086 close after each run.
+Tracy candidate SHA-256:
+`37704d35abf4af51934e6b9120e1cb34eda625893d8d7a2fedfc50dff0e8a80c`.
+Control SHA-256:
+`398640eb44f5d8aa11a69376caa80ff4fe3a039819218ecab9751ca577b893bb`.
+Overall loading, visual FPS, physics FPS and the existing detach/fall failure
+remain open.
+
+Evidence is under `target/entity-tree-perf/`, prefix `port-metadata-`.
+Scoped cleanup removes affected package outputs after preserving the verified
+normal archive. Earlier six-worker and port-snapshot normal binary archives
+are retired; their logs, receipts and captures remain. Source, sibling worktrees,
+shared caches and other sessions remain untouched.
+After the paired captures, the previously tested normal artifact is restored
+and hash-verified; both current binary archives remain available.
+
 ## Endpoint lifecycle query reuse — 2026-10-11
 
 `lunco-cosim::sync_model_endpoint_lifecycle` retains Bevy's native exclusive

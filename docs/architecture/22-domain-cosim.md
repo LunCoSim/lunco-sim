@@ -49,7 +49,12 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   participant reads/writes through; the cosim engine registers the built-in backends.
   `entity_port_infos` adds the same live values with owner-supplied type, unit,
   bounds, source, authority, and writability for `ReadPorts` and the native
-  Ports panel. Native joint lower `-infinity` and upper `+infinity` limits map
+  Ports panel. `PortMetadata` stores source and authority as `Cow<'static, str>`:
+  static backend labels are borrowed and dynamic labels remain owned. Live write
+  validation still derives and checks current metadata; borrowing text does not
+  cache permissions, bounds, owner identity or topology. API and lint-hook value
+  projection own their output strings, while the Ports panel borrows labels.
+  Native joint lower `-infinity` and upper `+infinity` limits map
   to absent port bounds, preserving unbounded travel. Other nonfinite bounds
   remain invalid metadata and reject writes. Map-backed `SimComponent` values
   use `ScalarPortMap`, which
