@@ -246,13 +246,12 @@ impl std::fmt::Display for PreparedSolveCacheReadError {
 }
 
 /// A prepared solve model is reusable for the exact structural source key,
-/// admitted library revision, solver, and parameter override vector that
-/// produced it. This is the same identity used by the persistent cache, so
-/// equivalent generated networks share pure solve IR within one session too.
+/// solver, and parameter override vector that produced it. This is the same
+/// identity used by the persistent cache, so equivalent generated networks
+/// share pure solve IR within one session too.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(super) struct PreparedSolveKey {
     pub(super) source_key: u64,
-    pub(super) library_revision: u64,
     pub(super) solver_id: String,
     pub(super) parameter_overrides: Vec<(String, u64)>,
 }
@@ -262,7 +261,6 @@ pub(super) struct PreparedSolveKey {
 struct PreparedSolveDiskRecord<M, S, P> {
     version: u32,
     source_key: u64,
-    library_revision: u64,
     solver_id: S,
     parameter_overrides: P,
     model: M,
@@ -297,13 +295,11 @@ impl PreparedSolveCache {
 
     pub(super) fn key(
         source_key: u64,
-        library_revision: u64,
         spec: &solver::SolverSpec,
         parameter_overrides: &[(String, f64)],
     ) -> PreparedSolveKey {
         PreparedSolveKey {
             source_key,
-            library_revision,
             solver_id: spec.id.to_string(),
             parameter_overrides: parameter_overrides
                 .iter()
@@ -323,7 +319,6 @@ impl PreparedSolveCache {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         PREPARED_SOLVE_CACHE_VERSION.hash(&mut hasher);
         key.source_key.hash(&mut hasher);
-        key.library_revision.hash(&mut hasher);
         key.solver_id.hash(&mut hasher);
         key.parameter_overrides.hash(&mut hasher);
         let hash = hasher.finish();
@@ -333,7 +328,7 @@ impl PreparedSolveCache {
     #[cfg(not(target_arch = "wasm32"))]
     fn disk_path(key: &PreparedSolveKey) -> std::path::PathBuf {
         modelica_dir()
-            .join("prepared-solve-v5")
+            .join(format!("prepared-solve-v{PREPARED_SOLVE_CACHE_VERSION}"))
             .join(Self::disk_filename(key))
     }
 
@@ -394,7 +389,6 @@ impl PreparedSolveCache {
         }
         if record.version != PREPARED_SOLVE_CACHE_VERSION
             || record.source_key != key.source_key
-            || record.library_revision != key.library_revision
             || record.solver_id != key.solver_id
             || record.parameter_overrides != key.parameter_overrides
         {
@@ -433,7 +427,6 @@ impl PreparedSolveCache {
         let record = PreparedSolveDiskRecord {
             version: PREPARED_SOLVE_CACHE_VERSION,
             source_key: key.source_key,
-            library_revision: key.library_revision,
             solver_id: key.solver_id.as_str(),
             parameter_overrides: key.parameter_overrides.as_slice(),
             model,
@@ -564,7 +557,6 @@ mod tests {
     fn key() -> PreparedSolveKey {
         PreparedSolveKey {
             source_key: 11,
-            library_revision: 22,
             solver_id: "generic-solver".into(),
             parameter_overrides: vec![("gain".into(), 3.5_f64.to_bits())],
         }
@@ -576,7 +568,6 @@ mod tests {
         PreparedSolveDiskRecord {
             version: PREPARED_SOLVE_CACHE_VERSION,
             source_key: key.source_key,
-            library_revision: key.library_revision,
             solver_id: key.solver_id.clone(),
             parameter_overrides: key.parameter_overrides.clone(),
             model: rumoca_ir_solve::SolveModel {
@@ -774,10 +765,10 @@ mod tests {
                 let directory = &directory;
                 scope.spawn(move || {
                     let storage = FileStorage::new();
-                    for revision in 0..8 {
+                    for parameter in 0..8 {
                         let mut key = key();
                         key.source_key = source;
-                        key.library_revision = revision;
+                        key.parameter_overrides[0].1 = f64::from(parameter).to_bits();
                         let model = record(&key).model;
                         let path = directory.join(PreparedSolveCache::disk_filename(&key));
                         PreparedSolveCache::save_disk_at(
@@ -812,10 +803,10 @@ mod tests {
         for (path, _) in owned {
             let mut matching_keys = 0;
             for source in 0..8 {
-                for revision in 0..8 {
+                for parameter in 0..8 {
                     let mut key = key();
                     key.source_key = source;
-                    key.library_revision = revision;
+                    key.parameter_overrides[0].1 = f64::from(parameter).to_bits();
                     if path.file_name().unwrap()
                         == std::ffi::OsStr::new(&PreparedSolveCache::disk_filename(&key))
                     {
@@ -1038,14 +1029,13 @@ mod tests {
     #[test]
     fn prepared_solve_disk_cache_rejects_every_identity_mismatch() {
         let key = key();
-        for field in 0..5 {
+        for field in 0..4 {
             let mut record = record(&key);
             match field {
                 0 => record.version += 1,
                 1 => record.source_key += 1,
-                2 => record.library_revision += 1,
-                3 => record.solver_id.push('x'),
-                4 => record.parameter_overrides[0].1 = 7.0_f64.to_bits(),
+                2 => record.solver_id.push('x'),
+                3 => record.parameter_overrides[0].1 = 7.0_f64.to_bits(),
                 _ => unreachable!(),
             }
             let (storage, handle) = stored(&compress(&encode(&record)));
@@ -1185,7 +1175,6 @@ mod reuse_tests {
         let mut cache = PreparedSolveCache::new(NonZeroUsize::new(2).unwrap());
         let key = PreparedSolveKey {
             source_key: 1,
-            library_revision: 2,
             solver_id: "generic-solver".into(),
             parameter_overrides: vec![("gain".into(), 3.0_f64.to_bits())],
         };
@@ -1196,14 +1185,14 @@ mod reuse_tests {
         parameter_key.parameter_overrides[0].1 = 4.0_f64.to_bits();
         assert!(!cache.contains_key(&parameter_key));
         cache.insert(parameter_key.clone(), Arc::clone(&graph));
-        let mut library_key = key.clone();
-        library_key.library_revision += 1;
-        cache.insert(library_key.clone(), Arc::clone(&graph));
+        let mut solver_key = key.clone();
+        solver_key.solver_id.push('x');
+        cache.insert(solver_key.clone(), Arc::clone(&graph));
         assert!(!cache.contains_key(&key));
         assert!(cache.contains_key(&parameter_key));
-        assert!(cache.contains_key(&library_key));
+        assert!(cache.contains_key(&solver_key));
         cache.clear();
-        assert!(!cache.contains_key(&library_key));
+        assert!(!cache.contains_key(&solver_key));
         assert_eq!(Arc::strong_count(&graph), 1);
     }
 

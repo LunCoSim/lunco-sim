@@ -29,7 +29,7 @@ use lunco_modelica_solver::simulation_session::LiveStepper;
 use lunco_signal::{SimSnapshot, SimStream};
 
 #[cfg(not(target_arch = "wasm32"))]
-const PREPARED_SOLVE_CACHE_VERSION: u32 = 7;
+const PREPARED_SOLVE_CACHE_VERSION: u32 = 8;
 
 mod cache;
 #[cfg(not(target_arch = "wasm32"))]
@@ -175,14 +175,14 @@ struct LiveBuildPlan {
     options: rumoca_sim::SimOptions,
     key: PreparedSolveKey,
     #[cfg(not(target_arch = "wasm32"))]
-    persistent_library_revision: Option<u64>,
+    admitted_library_revision: Option<u64>,
 }
 
 fn live_build_plan(
     profile: solver::RuntimeProfile,
     parameter_overrides: &[(String, f64)],
     source_key: u64,
-    library_revision: Option<u64>,
+    _admitted_library_revision: Option<u64>,
 ) -> Result<LiveBuildPlan, rumoca_sim::SimulationDiagnosticError> {
     let parameter_overrides = canonical_parameter_overrides(parameter_overrides);
     let (spec, parameters, mut options) = live_stepper_options(profile).map_err(|e| {
@@ -212,20 +212,14 @@ fn live_build_plan(
         },
         parameter_overrides: parameter_overrides.clone(),
     };
-    let library_revision_value = library_revision.unwrap_or_default();
-    let key = PreparedSolveCache::key(
-        source_key,
-        library_revision_value,
-        &spec,
-        &parameter_overrides,
-    );
+    let key = PreparedSolveCache::key(source_key, &spec, &parameter_overrides);
     Ok(LiveBuildPlan {
         spec,
         snapshot,
         options,
         key,
         #[cfg(not(target_arch = "wasm32"))]
-        persistent_library_revision: library_revision,
+        admitted_library_revision: _admitted_library_revision,
     })
 }
 
@@ -422,7 +416,8 @@ impl SolvePreparationPool {
         let entity = work.entity;
         let session_id = work.session_id;
         let runtime_tx = runtime_tx.clone();
-        let disk_cache = work.plan.persistent_library_revision.is_some();
+        let admitted_library_revision = work.plan.admitted_library_revision;
+        let disk_cache = admitted_library_revision.is_some();
         let tx = self.tx.clone();
         let disk_limits = self.disk_limits;
         let cache_key = work.plan.key.clone();
@@ -437,7 +432,7 @@ impl SolvePreparationPool {
                 model = %model_name,
                 queue_wait_us = queued_at.elapsed().as_micros() as u64,
                 source_key = %format_args!("{:016x}", cache_key.source_key),
-                library_revision = %format_args!("{:016x}", cache_key.library_revision),
+                admitted_library_revision = ?admitted_library_revision,
                 solver_id = %cache_key.solver_id,
                 parameter_overrides = ?cache_key.parameter_overrides,
                 cache_version = PREPARED_SOLVE_CACHE_VERSION,
@@ -1198,7 +1193,6 @@ fn commit_ready_compiler_completions(
                     commit.inserted_file_count > 0 || commit.library_revision != *library_revision;
                 if library_changed {
                     *library_gen = library_gen.wrapping_add(1);
-                    prepared_solve_cache.clear();
                 }
                 *library_revision = commit.library_revision;
                 log::info!(
@@ -1250,7 +1244,6 @@ fn commit_ready_compiler_completions(
                 let library_changed = removed || updated_revision != *library_revision;
                 if library_changed {
                     *library_gen = library_gen.wrapping_add(1);
-                    prepared_solve_cache.clear();
                 }
                 *library_revision = updated_revision;
                 log::info!(
@@ -3924,7 +3917,6 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             if report.diagnostics.is_empty() && report.inserted_file_count > 0 {
                 w.library_gen += 1;
                 w.compiled_artifacts.clear();
-                w.prepared_solve_cache.clear();
             }
             log::info!(
                 "[modelica-worker] LoadSourceRoot `{}`: {} parsed / {} \
@@ -3968,7 +3960,6 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                 if removed {
                     w.library_gen = w.library_gen.wrapping_add(1);
                     w.compiled_artifacts.clear();
-                    w.prepared_solve_cache.clear();
                 }
                 log::info!(
                     "[modelica-worker] unloaded Modelica source root `{id}` (removed={removed})"
@@ -4622,6 +4613,85 @@ mod artifact_cache_tests {
             &first.compiled.dae,
             &reused.compiled.dae
         ));
+    }
+
+    #[test]
+    fn prepared_solve_identity_tracks_participating_library_bytes() {
+        let parts = "package Parts model Element parameter Real gain=2; Real x(start=1,fixed=true); equation der(x)=-gain*x; end Element; end Parts;";
+        let source = "model Probe Parts.Element part; end Probe;";
+        let unit = assemble_compile_unit(source, Vec::new());
+        let mut compiler = ModelicaCompiler::new();
+        assert!(
+            compiler
+                .load_source_root_in_memory(
+                    "parts",
+                    "parts",
+                    vec![("Parts.mo".into(), parts.into())]
+                )
+                .diagnostics
+                .is_empty()
+        );
+        let prepare = |compiler: &mut ModelicaCompiler| {
+            let compiled = compiler.compile_str("Probe", source, "Probe.mo").unwrap();
+            let source_key =
+                prepared_source_key(compiler, &compiled, "Probe", "Probe.mo", &unit).unwrap();
+            let revision = compiler.library_revision();
+            let plan = live_build_plan(
+                solver::RuntimeProfile {
+                    live: true,
+                    predicted: false,
+                },
+                &[],
+                source_key,
+                Some(revision),
+            )
+            .unwrap();
+            let model = lunco_modelica_solver::simulation_session::lower_for_live(
+                &compiled.dae,
+                &plan.options,
+            )
+            .unwrap();
+            compiler.clear_user_documents();
+            (plan.key, revision, model)
+        };
+        let (first_key, first_revision, first_model) = prepare(&mut compiler);
+        assert!(
+            compiler
+                .load_source_root_in_memory(
+                    "unused",
+                    "unused",
+                    vec![(
+                        "Unused.mo".into(),
+                        "package Unused model Other Real y; equation y=1; end Other; end Unused;"
+                            .into()
+                    )]
+                )
+                .diagnostics
+                .is_empty()
+        );
+        let (unrelated_key, unrelated_revision, unrelated_model) = prepare(&mut compiler);
+        assert_ne!(first_revision, unrelated_revision);
+        assert_eq!(first_key.source_key, unrelated_key.source_key);
+        assert_eq!(first_model.initial_y, unrelated_model.initial_y);
+        assert_eq!(first_model.parameters, unrelated_model.parameters);
+        assert_eq!(
+            first_key, unrelated_key,
+            "unrelated admitted roots do not change a prepared solve's participating input closure"
+        );
+        assert!(
+            compiler
+                .load_source_root_in_memory(
+                    "parts",
+                    "parts",
+                    vec![("Parts.mo".into(), parts.replace("gain=2", "gain=3"))]
+                )
+                .diagnostics
+                .is_empty()
+        );
+        let (changed_key, _, changed_model) = prepare(&mut compiler);
+        assert_ne!(first_key.source_key, changed_key.source_key);
+        assert_ne!(first_key, changed_key);
+        assert_ne!(first_model.parameters, changed_model.parameters);
     }
 
     #[test]

@@ -323,8 +323,10 @@ persistent-cache rejection warnings and the native preparation owner logs.
 `cache=memory-hit`, `cache=disk-hit`, and `cache=miss` identify the actual lookup;
 compare lookup, lowering, and total preparation durations for the same admitted
 solve key. The native `modelica_solve_preparation_job` span records source key,
-library revision, solver ID, exact override bit patterns, cache version and disk
-eligibility from the captured key. Source equality alone does not prove key
+solver ID, exact override bit patterns, cache version and disk eligibility from
+the captured plan. `admitted_library_revision` records compiler context; reuse
+follows the successfully compiled participating closure, resolved solver and
+exact overrides. Source equality alone does not prove key
 equality or eviction. Compare the distinct admitted working set with the actual
 retention limit before blaming cache capacity. Stepper construction timing alone
 does not establish persistent reuse.

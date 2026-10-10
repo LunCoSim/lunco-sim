@@ -226,13 +226,19 @@ prepared solve IR. The captured key travels with the immutable DAE through
 shared-artifact reuse and participant resets. Precompile DAE admission retains
 the conservative full submitted input-set hash until strict resolution supplies
 the actual participating closure.
+Prepared-solve identity adds the resolved solver and exact parameter-override
+bits to that closure key. Admitted-root changes still advance the compiler's
+generation and invalidate compiled artifacts; bounded prepared graphs remain
+available for a fresh compilation that produces the same participating closure.
+A participating source edit produces a different closure key before lookup.
 
 Native INFO preparation logs distinguish `cache=memory-hit`, `cache=disk-hit`,
 and `cache=miss` at their actual lookup owners. Disk preparation reports lookup,
 lowering, and total preparation duration plus source key and success.
 The native `modelica_solve_preparation_job` span records the admitted source key,
-library revision, solver ID, exact parameter-override bit patterns, cache
-version and disk eligibility from the worker's captured key and preparation configuration.
+solver ID, exact parameter-override bit patterns, cache version and disk
+eligibility. `admitted_library_revision` records compiler admission context
+separately from the solve key.
 Compare these fields before attributing a miss to retention or repeated work.
 Stepper construction consumes already admitted solve IR and does not claim that
 a newly lowered model was a cache hit. These timings describe preparation, not settled
@@ -582,8 +588,8 @@ defaults retain at most 64 compiled artifacts and 64 prepared solve models per
 worker. Insert the resource before `ModelicaExecutionPlugin` to change its
 immutable snapshot. `worker/cache.rs` owns one bounded FIFO mechanism for both
 caches: distinct insertions evict the oldest admitted key, while hits and
-same-key replacement preserve order. Source/library/solver/parameter identity
-is unchanged. Prepared solve results are shared through `Arc`, including native
+same-key replacement preserve order. Compiled-closure/solver/parameter identity
+controls prepared-model reuse. Prepared solve results are shared through `Arc`, including native
 preparation followers; lookup and retention do not deep-copy the model.
 
 The native worker validates capacities before starting its compiler actor or
@@ -619,7 +625,7 @@ immutable snapshot.
 
 The preparation pool reads through `FileStorage::read_bounded`, streams zstd
 with both decoded-byte and window limits, and requires bounded codec decoding,
-full record consumption, and the exact admitted source/library/solver/parameter
+full record consumption, and the exact admitted source/solver/parameter
 key. A missing optional file is a cache miss. An unreadable, oversized,
 malformed, truncated, or mismatched record warns with its rejection cause and
 recomputes from the admitted DAE; it does not prevent authored model loading.
@@ -638,7 +644,7 @@ handles use standard-library exclusive locking on Unix and Windows; dropping
 the guard releases the lock. The lock file is never removed or replaced.
 Heavy encoding happens before acquisition. Retention streams regular-file
 metadata, excluding symlinks and directories, and only owns exact lowercase
-`<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v5`.
+`<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v8`.
 It preserves the N−1 most recently published or used other records within the
 compressed byte budget (file modification time, filename as the tie-break, so
 enumeration order never decides); a verified disk hit records its use through

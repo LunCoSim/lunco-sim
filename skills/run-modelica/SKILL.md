@@ -170,10 +170,9 @@ closure. Changed or conflicting source text is rejected; update and readmit
 the source root before compiling it. This prevents a second URI from duplicating
 the same root definition while preserving the root's authority.
 The policy list does not replace composed USD facts for member-class
-discovery. The worker's prepared-solve cache keys library state from the
-revisions that `ModelicaCompiler` records while admitting source roots. Its
-source key is captured from the successful strict compiler's participating-source
-closure before clearing user overlays. Generated class/network-title identity is
+discovery. The worker's prepared-solve cache includes contributing library
+content in the source key captured from the successful strict compiler's
+participating-source closure before clearing user overlays. Generated class/network-title identity is
 normalized; equations, parameters, initial values, participating siblings, and
 contributing library bytes remain structural. Unrelated sibling edits and runtime
 document IDs do not invalidate prepared solve IR. The captured key remains with
@@ -252,9 +251,11 @@ bounded preparation pool because the DAE input and solve options are immutable.
 The worker alone commits the resulting solve model and constructs the live
 stepper; `Step`, `Reset`, parameter updates, and source-root changes remain
 ordered behind that commit. Persistent solve-IR entries are keyed by structural
-source identity, the content-sensitive admitted-library revision, solver, and
-parameter overrides. A source-root change clears worker-local prepared models
-while retaining disk entries for future matching revisions. Readiness is still
+participating-source closure identity, solver, and exact parameter-override bits.
+Source-root changes invalidate compilation; bounded prepared models remain
+reusable when fresh strict resolution yields the same participating closure.
+A contributing-library edit changes that closure key. Native disk records use
+the current `prepared-solve-v8` namespace. Readiness is still
 the completion barrier, so
 physics must not be started before `/api/ready` reports `ready=true`,
 `world_hold=false`, and `pending_count=0`.

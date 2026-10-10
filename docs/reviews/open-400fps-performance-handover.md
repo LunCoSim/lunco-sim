@@ -1,25 +1,51 @@
 # High-quality realtime performance handover
 
-## Prepared-solve miss observability — 2026-10-09
+## Participating-closure prepared-solve reuse — 2026-10-10
 
-After local-main integration at `c7825ec12`, the loading audit compares the ten
-frame-contract replay logs with the cold rendered run. Replay admits 20 distinct
-source identities; together with eight different sandbox identities the set is
-28, below the disk cache's 32-record limit. The replay workload alone therefore
-does not establish eviction. Historical full keys and unrelated admissions are
-missing, so the expensive rover miss remains unexplained. Read-only evidence:
-`target/image-loader-perf/prepared-solve-cache-workload-audit-20261009.json`.
+`lunco-modelica-worker` keys prepared solve IR by the strict compiler's
+participating-source content identity, resolved solver and exact override bits.
+Source-root admission still invalidates compiled artifacts and preserves all
+ordered completion fences. Bounded prepared graphs remain reusable after a
+fresh strict compilation yields the same closure. Native storage owns only the
+current `prepared-solve-v8` namespace. Compiler admission revision remains
+diagnostic context, outside prepared-model identity. This is generic immutable
+cache ownership, with no policy hook or external-library change.
 
-The existing native preparation span now records its captured source key,
-library revision, solver ID, exact parameter-override bit patterns, cache version
-and disk eligibility. This adds event-level observability at the worker owner;
-it changes no solve key, lowering, solver state, scheduling or cache retention.
-Future loading captures can distinguish source equality from full-key equality
-before changing cache semantics. Product loading and FPS acceptance remain open.
-`cargo check -p lunco-modelica-worker -j 4` passes without warnings in 36.83 s;
-one formatter pass is restricted to the changed span. The skill catalog and
-diff checks pass. This follow-up is compile-validated; the preserved normal
-production executable predates these additional diagnostic fields.
+The inline-source regression fails before the change and passes afterwards:
+admitting an unrelated library changes compiler revision but preserves exact
+initial values, parameters and solve identity; editing the participating
+library changes both identity and parameter values. All 64 worker tests pass,
+including malformed-record rejection, identity validation, bounded retention
+and ordered scheduling. The production native build and browser worker compile
+check pass. The browser check reports the existing unused
+`BackendCompileResult.unit` field; browser runtime acceptance is not claimed.
+
+Two owned High-quality sandbox sessions use isolated cold caches and the same
+authored scene, then replace it once. Baseline PID 2266553/API 4200 performs two
+redundant replacement lowerings; changed PID 2280283/API 4200 performs none and
+all nine replacement preparation observations are memory hits. Distinct disk
+records fall from ten to eight. Byte-sliced log comparison verifies matching
+model/source identities and the same initial solver and override vectors.
+Initial readiness is 11.165/11.471 s and replacement readiness 1.034/0.962 s;
+these single observations do not establish a causal loading-time or FPS gain.
+Cold rover lowering and preparation queue waits remain open.
+
+The exact changed production artifact
+`c64c3acf84ff5b811a6c327260fd383ae2205eb269b29086b00a0339a7960efa`
+passes ten production Rhai replay profiles with 360 authored checks, including
+deliberate mismatch rejection, against the unchanged reference. Four-, eight-
+and twenty-rover serial/default profiles plus two jitter levels and two seeds
+use owned API 4201. Every successful session exits zero and closes its port.
+Both native artifacts have hash-verified gzip archives. Evidence lives under
+`target/image-loader-perf/` with prefix `prepared-solve-key-`; comparison and
+full replay receipts are `prepared-solve-key-comparison-20261010.json` and
+`prepared-solve-key-current-replay-20261010.json`.
+
+An early readiness probe and a disk-full replay/check attempt have no acceptance
+verdict. The successful retry supersedes them. Recovery removes only unused
+outputs from this checkout's affected packages and the completed browser-check
+profile; source, sibling worktrees, evidence and shared caches remain intact.
+Visual-FPS and physics-FPS acceptance remain open.
 
 ## Local-main integration validation — 2026-10-09
 
@@ -56,28 +82,6 @@ Disk recovery cleans only this checkout's `bevy_render`, `faer` and
 `frame-contract-cpu-20261009.csv.gz`, `native-vsop-cpu-20261009.csv.gz` and
 `architecture-next-cpu-20261009.csv.gz`. Source, sibling worktrees and shared
 Cargo/sccache caches are preserved. Use `gzip -dc` to read those evidence files.
-
-## Prepared-solve cache identity audit — 2026-10-09
-
-A read-only native zstd/bincode header audit finds 32 retained records for 30
-source identities. Two source/solver/override combinations each occupy two
-entries solely because the global admitted-library revision differs. The
-Oscillator SolveModel payloads are byte-identical. Balloon differs in a serialized
-debug-expression string containing compiler DefId 108 versus 1508; this audit
-does not establish semantic interchangeability for every model. Both sources
-use `rk45` with no overrides. Evidence:
-`target/image-loader-perf/prepared-solve-cache-header-audit-20261009.json` and
-`target/image-loader-perf/prepared-solve-cache-payload-audit-20261009.json`.
-
-The compiler's strict participating-source content identity already excludes
-unrelated roots, whereas the worker's prepared-solve key also includes the
-complete admitted-library revision. This demonstrates duplicate retention
-pressure and identifies the owner boundary to investigate. It does not yet
-explain the earlier multi-second rover miss: its current source/solver/override
-combination has one retained entry and hits in the integrated runs. No cache
-key or solver semantics are changed from this evidence alone. A scoped revision
-change and exact-state replay must establish safe reuse before removing any
-identity field. Loading, visual-FPS and physics-FPS acceptance remain open.
 
 ## Physics-frame lifecycle invalidation — 2026-10-09
 
@@ -133,8 +137,8 @@ only layout and trailing-comma changes.
 The normal loading log records rover Modelica lowering misses of 4.8–7.3 s,
 including a thermal child queued for 6.47 s. Headless probes hit the prepared
 cache for a source identity that the rendered run misses. Source identity alone
-does not establish the complete cache key: library revision, solver, parameter
-overrides and cache location still need comparison. Loading, visual-FPS and
+does not establish the complete cache key: solver, parameter overrides and cache
+location still need comparison. Loading, visual-FPS and
 physics-FPS acceptance remain open.
 
 ## Exact-epoch native ephemeris operand reuse — 2026-10-09
