@@ -204,7 +204,9 @@ stream's output-then-symbol order. Measure this response path separately from
 fixed-step output publication; fewer copies alone do not prove throughput gain.
 Modelica and scripted snapshot publication use `ScalarPortMap::upsert_samples`.
 The destination retains slot hints, but validates each live layout and exact
-name on every copy. Preserve reordering, same-size source replacement, target
+name on every copy. Name validation and the bit-exact update share one mutable
+slot borrow; measure that copy separately from solver response admission.
+Preserve reordering, same-size source replacement, target
 edits, clone/clear/compaction retirement and native-bit no-op detection when
 changing that mechanism. Do not infer unchanged source topology from map length
 or cached iteration order. Keep Modelica's reflected variable map and the

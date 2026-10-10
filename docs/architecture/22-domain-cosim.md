@@ -78,7 +78,9 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   Modelica and scripted output copies use `ScalarPortMap::upsert_samples`.
   The destination retains slot hints aligned to the preceding source iteration,
   checks each live slot's layout and exact name, and resolves changed names
-  through its canonical index. Stable copies avoid name hashing and allocation;
+  through its canonical index. The checked mutable slot borrow supplies both
+  name validation and the value update without resolving the handle again.
+  Stable copies avoid name hashing and allocation;
   source reordering, same-size replacement, clear, clone and compaction cannot
   route a value to another name. Only sample/topology changes mark the component
   changed; hint maintenance does not. Modelica's reflected variable map and the

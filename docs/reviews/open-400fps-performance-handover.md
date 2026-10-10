@@ -1,5 +1,60 @@
 # High-quality realtime performance handover
 
+## Single-borrow snapshot slot updates — 2026-10-11
+
+`lunco-port-core::ScalarPortMap::upsert_samples` validates the retained slot's
+layout and exact name through one mutable borrow, then compares and updates the
+native f64 bits through that same borrow. It does not resolve the checked handle
+a second time. The existing generic slot owner supplies that borrow; no snapshot
+revision, parallel output store, API, dependency or policy hook is introduced.
+Modelica's reflected variable map, status/input projection and fixed-step copy
+boundary remain unchanged. Source reordering and destination retirement still
+resolve names through the canonical index. All 23 native port-core checks pass,
+including the existing sample-copy name/layout/precision cases.
+
+Owned Tracy candidate PID 361791 and unchanged control PID 362909 pass sandbox
+readiness, diagnostics, advancing physics and full scene replacement. Both use
+High quality, no vsync/throttle, the same fixed cadence and 50 bodies/33
+colliders/20 joints. Each camera remains fixed within its run. Across artifacts,
+position and scale match; rotation differs by at most 1.4901161193847656e-8.
+Main simulator PID 84260 overlaps both runs. Candidate Builder screenshot
+inspection confirms the rendered sandbox behind the optional visual-resource
+consent popup. These are contention-affected owner diagnostics, not clean FPS
+acceptance or a loading-time gain.
+
+Settled View/Build/View (+1.5 to +7.5 s after activation) output-copy mean is
+0.314410/0.312596/0.274217 ms before and 0.278842/0.302328/0.270872 ms after.
+P50 is 0.301369/0.306314/0.236662 ms before and
+0.260478/0.299701/0.244247 ms after; the last median increases slightly.
+Samples are 360/360/361 before and 360/360/359 after. This single pair does not
+establish a statistical throughput improvement. App and collector exits are
+zero and owned API 4202/profiler 8086 close after both runs.
+Candidate Tracy SHA-256:
+`8ca6e71c49b67f8548dc524cd4931615905e3e9a6acbd68d4c1ade825c79bff3`.
+Control SHA-256:
+`37704d35abf4af51934e6b9120e1cb34eda625893d8d7a2fedfc50dff0e8a80c`.
+Evidence lives under `target/entity-tree-perf/`, prefix `sample-borrow-`.
+
+Normal build and runtime pass with the existing unused preparation-cache `clear`
+warning. Owned PID 380129 passes all seven authored sandbox checks before and
+after scene replacement. The three invalid assemblies remain paused; readiness,
+error diagnostics and advancing physics checks pass. Replacement Builder
+screenshot inspection confirms the scene behind the optional visual-resource
+popup. Raw normal frame p50 is 16.389593/16.953769/15.715703 ms under main
+PID 84260; no normal-artifact A/B or uncontended acceptance is established.
+Replay PID 380983 passes 24 checks over 780 ticks/13 simulated seconds, four
+rovers and one compute thread, against the unchanged 56-row reference
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`.
+Both exit zero and close API 4202. This is not the full ten-profile matrix.
+Normal SHA-256:
+`149fd9e7b4c83c5c51c9404e1b20572c55109808014783468b3ac2163fc36b1c`.
+Overall loading, visual FPS, physics FPS and the existing detach/fall failure
+remain open. The 43-skill catalogue check passes. Scoped cleanup preserves
+verified normal/Tracy archives and restores the normal binary; source, shared
+caches, sibling worktrees and the other session remain untouched.
+Trello tracking remains unavailable because no official Trello MCP tools are
+exposed in this session.
+
 ## Borrowed port metadata labels — 2026-10-11
 
 Live port-write validation constructs owner metadata on every propagated

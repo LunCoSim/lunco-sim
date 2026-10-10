@@ -259,12 +259,18 @@ impl<T: Copy> PortMap<T> {
     /// Mutably access a live value by a previously resolved slot.
     #[inline]
     pub fn get_slot_mut(&mut self, handle: u64) -> Option<&mut T> {
+        self.get_slot_entry_mut(handle).map(|(_, value)| value)
+    }
+
+    /// Borrow a live slot's name and value together for checked sample copies.
+    #[inline]
+    fn get_slot_entry_mut(&mut self, handle: u64) -> Option<(&str, &mut T)> {
         let (layout_id, index) = decode_port_slot(handle)?;
         if layout_id != self.layout_id {
             return None;
         }
         let slot = self.slots.get_mut(index)?;
-        slot.value.as_mut()
+        Some((slot.name.as_deref()?, slot.value.as_mut()?))
     }
 
     /// Remove a declared name and retire its slot without reusing its index.
@@ -532,16 +538,18 @@ impl ScalarPortMap {
         let mut count = 0;
         for (index, (name, value)) in samples.enumerate() {
             count = index + 1;
-            let retained = self.sample_slots.get(index).copied().filter(|slot| {
+            let retained = self.sample_slots.get(index).copied().and_then(|slot| {
                 self.map
-                    .get_slot_entry(*slot)
-                    .is_some_and(|(current_name, _)| current_name == name)
+                    .get_slot_entry_mut(slot)
+                    .filter(|(current_name, _)| *current_name == name)
+                    .map(|(_, current)| current)
             });
             match retained {
-                Some(slot) => {
-                    changed |= self
-                        .set_slot_existing(slot, *value)
-                        .expect("a checked sample slot stays live during its exclusive copy");
+                Some(current) => {
+                    if current.to_bits() != value.to_bits() {
+                        *current = *value;
+                        changed = true;
+                    }
                 }
                 None => {
                     changed |= self.set(name, *value);

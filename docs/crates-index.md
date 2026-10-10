@@ -523,7 +523,7 @@ fixed-step schedule anchors. The generic control relationship is owned by `lunco
 co-simulation consumers can use it without making the control contract part of
 the co-simulation package. Its `SimComponent` input/output maps use the shared
 `lunco-port-core::ScalarPortMap` contract. Its borrowed `upsert_samples` operation
-reuses destination slots only after live name/layout checks for Modelica and
+reuses one checked mutable destination-slot borrow for Modelica and
 scripted snapshots; the source maps and publication schedule remain unchanged.
 
 **`lunco-experiments`**
