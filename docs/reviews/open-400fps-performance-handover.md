@@ -1,5 +1,70 @@
 # High-quality realtime performance handover
 
+## Native shared-shadow schedule — 2026-10-11
+
+`lunco-render-bevy` routes native Core3d point/spot roots to SharedShadowView
+after native light preparation. It composes native GPU preparation and shared
+shadow delegates, retaining plugin/device admission, global indirect-prepass
+filters and final deferred-buffer order. Cameras, directional cascades and
+custom labels retain their selected schedules. This render mechanism changes
+neither simulation admission nor authoritative state and needs no policy hook.
+External dependencies are unchanged. The focused routing check failed against
+the original implementation; all three shadow-schedule mechanism checks now
+pass, including implicit/system-owned edges and both deferred-flush modes:
+`cargo test -p lunco-render-bevy --lib shadow_view_schedule -j 4` (3 passed,
+82 filtered). Normal and Tracy production builds pass with only the existing
+unused preparation-cache `clear` warning.
+
+Normal candidate PID 512368 and unchanged control PID 519055 each pass seven
+authored sandbox checks before and after replacement, readiness, diagnostics,
+advancing physics and the three invalid-assembly pause checks. Both use High
+quality, no vsync/throttle, the fixed cadence and 50 bodies/33 colliders/20
+joints. Camera poses match exactly across the normal runs and remain fixed
+within each run. Candidate screenshots after
+the optional popup dismissal show visible sandbox shadows. Raw normal frame
+medians are 16.800920/20.772068/23.357918 ms after and
+23.278790/16.900887/16.929340 ms before. The pair does not establish an overall
+frame-rate improvement. Warm readiness is 3.198/4.286 s after/before, not a
+cold-loading comparison. Main PID 84260 overlaps both runs. Control launch also
+records USD Cargo PID 512483; its exact overlap with each window is unknown.
+
+Candidate replay PID 516041 passes 24 exact checks over 780 ticks/13 simulated
+seconds, four rovers and one compute thread against the unchanged 56-row
+reference `ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`.
+All three normal sessions exit zero and release API 4202. This does not replace
+the full ten-profile determinism matrix. Normal SHA-256:
+`84e30e021432516130b69b265beb7acafb479c3d466386abdd756124ecea683c`.
+
+The readable Tracy candidate PID 523239 retains readiness, diagnostics,
+advancing physics, replacement and visible-shadow checks. Its 318,460,155-byte
+capture matches the collector report and passes native message, CPU and GPU
+exports. Baseline PID 361791 uses the earlier validated capture. Each of 462
+baseline and 488 candidate complete frame intervals contains 12 shared early,
+12 shared late and one camera late pass between successive camera early
+markers. Partial boundary frames are excluded from this inventory.
+Shared early GPU means remain about 0.543–0.544 ms per root across both captures;
+camera early means remain about 2.05–2.23 ms. Late spans retain their existing
+small or empty work. No shadow pass was removed.
+
+Candidate shared CPU schedule means are 0.471883/0.531086/0.480993 ms; camera
+Core3d means are 2.723121/3.126953/2.781963 ms. Weighting the disjoint root
+schedules by the verified 12-shared-plus-one-camera inventory gives
+8.385723/9.499991/8.553877 ms per frame, versus baseline
+11.101183/11.721830/11.351421 ms. This is a 19–25% root-schedule reduction in
+Tracy diagnostics, not a normal-artifact FPS claim. Main PID 84260 overlaps
+both captures. Candidate launch also records USD PID 520184; its exact overlap
+with each window is unknown. Profiler overhead and contention limit attribution.
+Both apps/collectors exit zero and API 4202/profiler 8086 are released.
+Tracy candidate SHA-256:
+`317b78bbcaf26016ffe1d49659a962d59254c7f90ff5ee572e308ab8b5721ce5`.
+
+Evidence lives under `target/entity-tree-perf/`, prefix `shared-shadow-`.
+Current normal/Tracy archives replace the prior sample-borrow binary archives;
+validated baseline and candidate raw captures, receipts and replay reference
+remain. The normal candidate is restored after profiling. Overall loading,
+visual FPS, physics throughput, clean acceptance and the existing detach/fall
+failure remain open. Official Trello tools remain unavailable in this session.
+
 ## Auxiliary shadow-root scheduling investigation — 2026-10-11
 
 The readable `sample-borrow-after-tracy-20261011.tracy` capture identifies 13
@@ -21,7 +86,8 @@ buffer-order test, but its normal View/Build/View frame medians were
 16.752612/20.972754/17.053684 ms, with a noisy Builder window; the earlier
 unchanged run measured 16.389593/16.953769/15.715703 ms. This does not establish
 a repeatable overall improvement. The executor trial was removed completely.
-No renderer, physics, solver, dependency or simulation-order change remains.
+No global executor, physics, solver, dependency or simulation-order change
+remains from that trial.
 
 Normal unchanged PID 385457 and trial PID 467314 each passed seven authored
 sandbox checks before and after replacement, readiness and error checks,
@@ -52,13 +118,9 @@ is live. The validated normal binary is restored from its verified archive,
 SHA-256 `149fd9e7b4c83c5c51c9404e1b20572c55109808014783468b3ac2163fc36b1c`.
 Its existing 24-check exact replay remains valid.
 
-Next, trace the native point/spot `RootNonCameraView` routing and GPU-preparation
-dependencies to determine whether the application render adapter can provide
-a compact shared-shadow schedule. It must retain early/late shadow passes,
-native deferred-buffer order, GPU/direct-render admission and directional
-camera shadows. Require pass-inventory evidence, visible shadows and a normal
-artifact comparison before accepting that change. Overall loading, visual
-FPS, physics throughput and clean acceptance remain open.
+The native routing and GPU-preparation contract identified here is implemented
+and verified in the shared-shadow schedule above. Overall loading, visual FPS,
+physics throughput and clean acceptance remain open.
 
 ## Single-borrow snapshot slot updates — 2026-10-11
 
@@ -4105,55 +4167,11 @@ not this point-light filter, the next measured target.
   preview camera are inactive. The main opaque pass also ran once per Tracy
   frame. Rendering several full output cameras is therefore not the root cause.
 - Preserve the persisted overlay and all six headlight shadows while testing
-  camera-only stage admission on auxiliary roots. Measure the 48-buffer submit
+  the shared-shadow schedule on auxiliary roots. Measure the 48-buffer submit
   boundary and shadow-pass cost before considering any further render-path
   change; the existing GPU timestamp table does not cover shadow passes.
   Do not infer the full GPU/CPU split from that incomplete table. The 150 FPS
   target remains open.
-
-### 2026-09-25 — auxiliary shadow-view stage admission
-
-Bevy's camera driver runs `Core3d` for point/spot shadow roots as well as output
-cameras. `lunco-render-bevy` now gates `Prepass`, `MainPass`, `EarlyPostProcess`,
-and `PostProcess` stage sets off for `LightEntity` roots. Source inspection of
-Bevy 0.19.1 confirms its early/late shared and per-view shadow passes are
-separate systems outside those stage sets, so the depth-map path remains active.
-The shared `prepare_preprocess_bind_groups` pass remains active too: it builds
-view-specific bindings for each phase's work-item buffers and is needed by GPU
-preprocessing/culling for shadow draws. The measured pre-change cost was about
-0.514 ms/frame; this app-level gate does not bypass or cache it.
-
-The same pre-change Tracy capture recorded one `wgpu::Queue::submit` call per
-frame, with 48 pending command buffers, at 1.277 ms mean (about 1.936 ms p95).
-The new gate may prevent camera-only systems on shadow roots from contributing
-buffers, but it cannot remove the shared queue call. Post-change capture
-`scripts/perf/captures/sss-shadow-schedule-after-20260925.tracy` contains 45.31 s,
-861 profiler frames, and 5.32 million zones. The bundled CSV exporter did not
-finish its first filter after 15 minutes and was stopped; the capture is
-preserved, but no post-change submission count/time or schedule delta is
-claimed.
-
-The production UI binary built with the change, and the focused
-`camera_stages_are_skipped_only_for_light_shadow_roots` test passed. A headful
-High-quality Apollo run reached `/api/ready` with no pending work, and its
-2560×1568 API screenshot showed the scene rendering. Under the two pre-existing
-simulator sessions on ports 43117 and 43126, its diagnostics averaged about
-89.9 FPS / 12.37 ms per frame and 1.05 ms per Avian step. Those sessions were
-left untouched; this is contention-affected and not an acceptance comparison.
-The separate unprofiled run and Tracy run both exited through typed API `Exit`,
-and owned ports 43602, 43603, and 8091 were verified free. Clean post-change FPS,
-buffer-count reduction, shadow pass inventory from the new capture, and the 150
-FPS target remain unverified.
-
-A later owned non-Tracy Apollo diagnostic run on API port 43604 reached
-`/api/ready` with zero pending work and exited through typed `Exit`. It ran
-while the existing sessions on 43117 and 43126 were still active; immediately
-before launch, host load averages were 10.36/11.87/8.84 and NVIDIA GPU
-utilization was 78%. Its rolling diagnostics reported 63.2 FPS / 18.67 ms,
-with individual samples as low as 32.9 FPS / 30.40 ms; Avian averaged 1.13 ms
-per step. This is severe contention evidence only, not a post-change acceptance
-comparison or a clean estimate of the gate's effect. Port 43604 was released;
-the other sessions were untouched.
 
 ### 2026-09-25 — Bevy render-queue submission boundary
 
@@ -4167,9 +4185,8 @@ neither subsystem has pending work, those helpers append no commands, but the
 empty encoder is still submitted. That second call is outside the measured
 `queue_submit` span, so its cost is currently unknown.
 
-The local shadow-root stage gate reduces camera-only Core3d work before the
-batched graph submit. Safely removing the unconditional screenshot/readback
-submission is a Bevy render-system ownership change: replacing Bevy's wrapper
+Safely removing the unconditional screenshot/readback submission is a Bevy
+render-system ownership change: replacing Bevy's wrapper
 from the application would also take ownership of frame presentation,
 screenshot capture, and GPU readback ordering. Do not fork or duplicate that
 wrapper in LunCoSim. A focused upstream change should submit the secondary

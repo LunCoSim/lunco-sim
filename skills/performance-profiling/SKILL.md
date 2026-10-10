@@ -571,11 +571,13 @@ retirement must retain a light already re-extracted in that boundary. Verify
 one/many parked-preview counts and text-to-Visual reactivation separately from
 authored shadow intent or a camera's `is_active` flag.
 
-Bevy's camera driver also executes `Core3d` for point/spot shadow roots. Admit
-camera-only Core3d stage sets only for camera roots; keep the shared shadow
-passes and the GPU preprocessing needed by the depth maps active on light
-roots. Verify the same retained shadow pass inventory before and after so this
-scheduling optimization cannot silently remove shadows.
+The render adapter routes native point/spot roots selecting Core3d to
+SharedShadowView after native light preparation. Check the compact schedule's
+native GPU-plugin/device admission, global indirect-prepass filters and final
+buffer flush order. Keep custom roots, cameras and directional cascades on
+their selected schedules. Verify the same early/late shared and camera shadow
+pass inventory before and after, plus visible shadow maps and normal frame
+timings. Fewer schedule systems alone does not establish faster frames.
 
 Treat Bevy `Changed<T>`/`Added<T>` filters as population filters, not free
 events: a no-match query can still inspect candidate entities, and separate

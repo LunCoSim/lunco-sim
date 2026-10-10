@@ -204,7 +204,7 @@ impl Plugin for LuncoRenderPlugin {
     }
 
     fn finish(&self, app: &mut App) {
-        shadow_view_schedule::install_diagnostics(app);
+        shadow_view_schedule::finish(app);
     }
 }
 
