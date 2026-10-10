@@ -27,6 +27,7 @@ pub(crate) struct DatasetProvisioningState {
     active: Option<DatasetScope>,
     dismissed: HashSet<String>,
     last_hook_generation: u64,
+    last_interactive: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -438,21 +439,24 @@ pub(crate) fn publish_dataset_provisioning_surface(
     mut exposures: ResMut<EngineExposures>,
 ) {
     let hook_generation = lunco_hooks::generation();
+    let interactive = !windows.is_empty();
     let dirty = registry.is_changed()
         || workspace.as_ref().is_some_and(|value| value.is_changed())
         || state.is_changed()
-        || state.last_hook_generation != hook_generation;
+        || state.last_hook_generation != hook_generation
+        || state.last_interactive != Some(interactive);
     if !dirty {
         return;
     }
     advance_active(&mut state, &registry);
     let view = state.active.as_ref().and_then(|scope| {
-        invoke_policy(&registry, scope, workspace.as_deref(), !windows.is_empty())
+        invoke_policy(&registry, scope, workspace.as_deref(), interactive)
             .map_err(|error| warn!("[datasets] {error}"))
             .ok()
     });
     publish_view(view.as_ref(), &mut exposures);
     state.last_hook_generation = hook_generation;
+    state.last_interactive = Some(interactive);
 }
 
 #[derive(Event, Clone, Debug)]
@@ -652,6 +656,87 @@ pub(crate) fn install(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dataset_projection_input_ticks_and_new_facts() {
+        let mut app = App::new();
+        app.init_resource::<DatasetRegistry>()
+            .init_resource::<DatasetProvisioningState>()
+            .init_resource::<EngineExposures>()
+            .add_systems(Update, publish_dataset_provisioning_surface);
+        app.update();
+        let state_tick = app
+            .world()
+            .get_resource_ref::<DatasetProvisioningState>()
+            .unwrap()
+            .last_changed();
+        let output_tick = app
+            .world()
+            .get_resource_ref::<EngineExposures>()
+            .unwrap()
+            .last_changed();
+        app.update();
+        assert_eq!(
+            app.world()
+                .get_resource_ref::<DatasetProvisioningState>()
+                .unwrap()
+                .last_changed(),
+            state_tick,
+            "quiet updates preserve publication input ticks"
+        );
+        assert_eq!(
+            app.world()
+                .get_resource_ref::<EngineExposures>()
+                .unwrap()
+                .last_changed(),
+            output_tick,
+            "quiet updates must not republish the surface"
+        );
+
+        app.world_mut()
+            .resource_mut::<DatasetRegistry>()
+            .set_changed();
+        app.update();
+        let refreshed = app
+            .world()
+            .get_resource_ref::<EngineExposures>()
+            .unwrap()
+            .last_changed();
+        assert_ne!(
+            refreshed, output_tick,
+            "registry changes refresh presentation"
+        );
+        app.update();
+        assert_eq!(
+            app.world()
+                .get_resource_ref::<EngineExposures>()
+                .unwrap()
+                .last_changed(),
+            refreshed
+        );
+
+        let window = app.world_mut().spawn(Window::default()).id();
+        app.update();
+        let interactive_tick = app
+            .world()
+            .get_resource_ref::<EngineExposures>()
+            .unwrap()
+            .last_changed();
+        assert_ne!(
+            interactive_tick, refreshed,
+            "interactive availability is a policy input"
+        );
+        app.world_mut().despawn(window);
+        app.update();
+        assert_ne!(
+            app.world()
+                .get_resource_ref::<EngineExposures>()
+                .unwrap()
+                .last_changed(),
+            interactive_tick,
+            "losing the final window refreshes presentation"
+        );
+    }
 
     #[test]
     fn missing_states_are_the_only_requestable_states() {

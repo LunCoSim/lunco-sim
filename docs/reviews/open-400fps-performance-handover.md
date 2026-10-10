@@ -1,5 +1,46 @@
 # High-quality realtime performance handover
 
+## Dataset catalog notification discipline — 2026-10-10
+
+Dataset failure-outbox drains in `lunco-assets-datasets` and `lunco-assets`
+preserve catalog resource change ticks. They still emit the same typed failure
+events in the same order; actual registry mutations retain their notifications.
+This removes false per-frame invalidation of the Rhai-owned consent projection.
+The UI bridge also tracks interactive-window availability explicitly, so adding
+or removing the last window refreshes policy facts without incidental registry
+writes. Policy selection, authored rows/actions, async admission, solver and
+physics mechanisms, precision and external dependencies remain unchanged.
+
+Two focused native resource/lifecycle tests pass: quiet publication and registry
+refresh, window insertion/removal, quiet diagnostic draining and exactly-once
+failure delivery. The isolated UI test fails before the window-input fix and
+passes afterwards. Native normal/Tracy builds pass; both report the existing
+unused `PreparedSolveCache::clear` warning. The skill catalogue passes (43).
+
+Tracy PID 2703340/API 4202 and collector 2703339 pass 30 authored checks:
+sandbox smoke (7), telemetry history (17), and consent surface (6). The consent
+gate verifies rows/actions, unrelated-scope dismissal, active dismissal and
+retired-property clearing. Scene replacement clears readiness/diagnostics;
+both processes exit zero and the port closes. Settled publisher p50 falls from
+0.272814/0.266708/0.280068 ms to 0.004909/0.005871/0.004048 ms in View/Build/View,
+using +1.5 to +7.5 s after each activation. This is owner attribution, not a
+causal overall-FPS claim across different hardware clocks/workloads.
+
+Normal PID 2710646/API 4202 passes another 30 authored checks and replacement,
+exits zero and closes its port. No concurrent app/Cargo process is recorded at
+launch. High quality, equal camera poses, 50 bodies/33 colliders/20 joints and
+advancing physics are retained. Sampled frame p50 is 10.841/10.794/10.921 ms;
+physics-ring p50 is 1.117/1.063/1.137 ms, and readiness first clears at 2.758 s.
+These after-only observations do not establish loading or physics-FPS gains.
+Screenshots show the optional consent prompt before dismissal and an unobstructed
+populated Builder after replacement. No download is requested. No new exact-state
+replay claim is made for this notification/presentation checkpoint.
+
+Evidence and hash-verified archives are under `target/entity-tree-perf/`, prefix
+`dataset-`, including `dataset-tracy-comparison-20261010.json`. Normal SHA-256:
+`3fdfbf0c94adec0c3f600edf0b233e14400f2af00cdfbce9cc426057d3a5acf0`;
+Tracy: `b83b25682bf08a60b1438342f601f915335edba169950f84778e722ea45ccb8c`.
+
 ## Native hierarchy insertion delivery — 2026-10-10
 
 The derived entity-tree gate receives immutable `ChildOf` insertions through

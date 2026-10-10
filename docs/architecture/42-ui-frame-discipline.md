@@ -289,6 +289,14 @@ package — none of these belong on the UI thread every frame. Patterns:
   returns a `Task<T>`; `future::poll_once(&mut task)` in an Update
   system yields the result when ready without blocking. Reference:
   the Package Browser's `handle_package_loading_tasks`.
+- **Dataset consent**: `lunco-luncosim-ui` republishes the Rhai-owned consent
+  model only when registry/workspace/input state, installed policy generation,
+  or interactive-window availability changes. `EngineExposures` publishes the
+  derived notification. Dataset diagnostic-outbox drains preserve registry
+  catalog change ticks while delivering every failure event.
+  Actual dataset state changes retain their ordinary notifications. Validate
+  quiet resource ticks, window transitions, failure delivery and authored
+  `dataset_provisioning_surface.rhai` dismissal/retired-property checks.
 - **Derived entity tree**: the UI thread snapshots the typed ECS facts needed
   for names, hierarchy, visibility, and camera labels once per invalidation;
   hierarchy construction and sorting run on one bounded worker task. Repeated

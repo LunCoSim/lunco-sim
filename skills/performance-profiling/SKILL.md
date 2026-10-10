@@ -90,6 +90,14 @@ should be gated by a revision/change event. Structural edits should invalidate
 structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
+For dataset consent, check `publish_dataset_provisioning_surface` separately
+from its Rhai policy. Diagnostic-outbox drains must not mark registry catalog
+facts changed. Bevy excludes a system's own writes from its next change check;
+trace other writers before attributing repeated work to a publication cursor.
+Preserve real registry/workspace/command edits, policy replacement and interactive-window
+transitions. Run the windowed `dataset_provisioning_surface.rhai` gate with a
+declared missing scope; confirm unrelated dismissal preserves the view and
+active dismissal clears retired properties without requesting a download.
 For the derived scene entity tree, immutable parent insertions use native
 lifecycle messages coalesced by entity at the Update gate. Compare current
 edge values with the cached ancestry; identical replacements must not rebuild.

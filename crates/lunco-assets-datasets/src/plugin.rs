@@ -57,8 +57,75 @@ impl PendingTwinManifestScans {
 }
 
 fn drain_registry_failures(mut registry: ResMut<DatasetRegistry>, mut commands: Commands) {
-    for detail in registry.take_pending_failures() {
+    // Draining the diagnostic outbox does not change dataset catalog facts.
+    for detail in registry.bypass_change_detection().take_pending_failures() {
         commands.trigger(dataset_failed(detail));
+    }
+}
+
+#[cfg(test)]
+mod failure_drain_tests {
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct DeliveredFailures(Vec<String>);
+
+    #[test]
+    fn dataset_projection_input_ticks_and_failure_delivery() {
+        let mut app = App::new();
+        app.init_resource::<DatasetRegistry>()
+            .init_resource::<DeliveredFailures>()
+            .add_observer(
+                |event: On<lunco_telemetry_core::TelemetryEvent>,
+                 mut delivered: ResMut<DeliveredFailures>| {
+                    assert_eq!(event.name, crate::DATASET_FAILED);
+                    let lunco_telemetry_core::TelemetryValue::String(detail) = &event.data else {
+                        panic!("dataset failure must retain its detail");
+                    };
+                    delivered.0.push(detail.clone());
+                },
+            )
+            .add_systems(Update, drain_registry_failures);
+        app.update();
+        let initial_tick = app
+            .world()
+            .get_resource_ref::<DatasetRegistry>()
+            .unwrap()
+            .last_changed();
+        app.update();
+        assert_eq!(
+            app.world()
+                .get_resource_ref::<DatasetRegistry>()
+                .unwrap()
+                .last_changed(),
+            initial_tick
+        );
+        app.world_mut()
+            .resource_mut::<DatasetRegistry>()
+            .record_failure("invalid declaration");
+        let failure_tick = app
+            .world()
+            .get_resource_ref::<DatasetRegistry>()
+            .unwrap()
+            .last_changed();
+        app.update();
+        assert_eq!(
+            app.world().resource::<DeliveredFailures>().0,
+            ["invalid declaration"]
+        );
+        assert_eq!(
+            app.world()
+                .get_resource_ref::<DatasetRegistry>()
+                .unwrap()
+                .last_changed(),
+            failure_tick
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<DeliveredFailures>().0.len(),
+            1,
+            "the diagnostic is delivered once"
+        );
     }
 }
 
