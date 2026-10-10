@@ -1,5 +1,73 @@
 # High-quality realtime performance handover
 
+## Derived joint-island mass cache — 2026-10-11
+
+`lunco-physics::assembly::DynamicJointIslandMassPlugin` retains structural
+invalidation for the existing derived mass resource. Native lifecycle observers
+cover body modes, effective masses, joint links and admission/disabled markers,
+including edits while simulation refresh is paused. Native change detection
+covers mutable effective masses and link endpoints. Normal and rollback
+co-simulation refresh at their existing exchange boundaries. Quiet ticks retain
+the result instead of allocating body sets and rebuilding adjacency and island
+totals. Aggregation, sorted member order, native `f64` sums and invalid-member
+semantics are unchanged. This is a generic physics resource mechanism with no
+changeable policy or hook; no external dependency or solver settings change.
+
+Eight focused native assembly tests pass. The quiet-cache test then passes
+again after adding normal/rollback schedule coverage; the other unchanged
+results are reused. Coverage includes paused lifecycle edits beyond event
+retention, body/mass removal, despawn, mutable link endpoints and admission
+markers. Normal and Tracy production builds pass with the existing native
+unused `PreparedSolveCache::clear` warning. The skill catalogue passes (43).
+
+Normal PID 69808/API 4202 passes 7 authored sandbox smoke checks and 22
+mass-scenario checks, including helper assertions. The new
+`joint_island_mass.rhai` uses the admitted physical rover's real ports to
+verify rejected negative mass, accepted mass updates, shared island totals
+and separation after joint retirement. Scene replacement returns ready.
+High quality, exact camera pose within the run, 50 bodies/33 colliders/20 joints,
+and advancing physics remain during the measurement windows. Readiness is
+2.545029 s; frame p50 is 12.553096/12.670936/12.779348 ms for View/Build/View.
+Another simulator from `main` is active, and the visual-resource consent popup
+remains open. These samples do not establish a product FPS or loading gain.
+The app exits zero and closes its API port.
+
+Tracy PID 85803 and collector PID 85802 also exit zero after scene replacement;
+API 4202 and profiler 8086 close. Another simulator is active here too. At
++1.5 to +7.5 s after View/Build/View activation, the retained baseline owner
+p50 is 0.036578/0.037049/0.037144 ms; changed p50 is
+0.014226/0.013865/0.012328 ms. The new rebuild span has zero calls in those
+settled windows and six across the entire admission/replacement capture.
+The baseline predates that span. Different concurrent workloads and GPU clocks
+limit the timing comparison; avoiding steady rebuilds is directly observed.
+
+Unchanged normal PID 32677 and changed normal PID 73108 each pass 24 authored
+checks over 780 ticks/13 simulation seconds against the same fresh 56-row
+exact-state reference. Both exit zero and close API 4202. This covers four
+rovers and one compute thread, not the ten-profile matrix. Reference SHA-256:
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`.
+
+The worktree fast-forwards to newer local `main` commit `8be2f97d4`, preserving
+its Modelica editor and controller changes without conflicts. A new integrated
+normal build passes, and PID 92500 repeats the 24-check/780-tick exact replay
+against the same reference, exits zero and closes API 4202. The integrated
+normal executable remains at `target/debug/luncosim`, SHA-256:
+`2206482aa463d4267448c96341fda209d6145dfbca671e24fcb1c1f8092e0d31`.
+
+The original `joint.rhai` detach-and-fall fixture fails two of eight checks on
+the unchanged artifact (PID 68176); the linked body remains suspended while
+the independent body falls. That failure predates this cache change. Its
+tracked scenario is unchanged, and the passing mass gate does not claim that
+falling-body contract is repaired. Overall loading, visual FPS, physics FPS
+and intermittent submission stalls remain open.
+
+Receipts, native checks, traces, owner comparison, screenshots and archived
+artifacts are under `target/entity-tree-perf/`, prefix `island-mass-`.
+Measured normal SHA-256:
+`18979de5b9b4dda37217d58e84a6e8955f8bc056705e68576397910776c4945e`.
+Measured Tracy SHA-256:
+`83af8a618df67ffa1c9ff015a7924722cf882834841923700137e7d0bd585159`.
+
 ## Long-frame attribution follow-up — 2026-10-10
 
 Retained port-snapshot traces localize two stalls to native

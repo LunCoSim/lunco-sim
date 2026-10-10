@@ -216,10 +216,10 @@ impl Plugin for CoSimPlugin {
         // registers them here; wires, the API, the inspector, and scripts all
         // read/write through this one registry. Registration order = resolution
         // precedence (Modelica, avian, then single-value hardware ports).
+        app.add_plugins(lunco_physics::assembly::DynamicJointIslandMassPlugin);
         app.init_resource::<lunco_port_core::ports::PortRegistry>()
             .init_resource::<lunco_port_core::ports::PortTopologyRevision>()
             .init_resource::<lunco_port_core::ports::PortTopologyState>()
-            .init_resource::<lunco_physics::DynamicJointIslandMasses>()
             .init_resource::<BindingRevision>();
         // Machine-readable dangling-wire report, refreshed each propagation tick
         // and surfaced via the API's `GET /api/diagnostics` (`GetBrokenConnections`).

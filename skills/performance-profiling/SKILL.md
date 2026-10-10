@@ -154,6 +154,15 @@ faults, promotion order and joint holds inside admission. Verify paused poses
 and warnings through `sandbox_ramp_placement.rhai`, plus exact-state replay
 against the unchanged binary. A stale tracked Modelica reference is not passing
 replay evidence; capture a separate baseline and preserve the tracked reference.
+For articulated mass facts, separate `refresh_dynamic_joint_island_masses`
+from its `dynamic_joint_island_mass_rebuild` span. The physics owner retains
+lifecycle invalidation through pauses; native change detection handles mutable
+effective masses and joint endpoints. Normal and rollback exchange read the
+same derived resource at their existing boundaries. Verify live mass edits,
+rejected negative writes and island splitting through `joint_island_mass.rhai`,
+plus exact replay against the unchanged artifact. Quiet steps must not rebuild
+islands; marker removal, body removal and paused lifecycle edits must still
+invalidate them. Preserve native sums and the full-island invalid-mass result.
 For a system that queues many compatible ECS component changes, inspect its
 `system_commands` flush separately from the system body. Collect changed values
 and use the owning crate's existing batch command path where it preserves the

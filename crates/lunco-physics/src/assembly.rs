@@ -34,15 +34,62 @@ impl DynamicJointIslandMass {
 }
 
 /// Current mass sample for each dynamic body in the scene.
-#[derive(Resource, Debug, Default)]
+#[derive(Resource, Debug)]
 pub struct DynamicJointIslandMasses {
     entries: HashMap<Entity, DynamicJointIslandMass>,
+    topology_dirty: bool,
+}
+
+impl Default for DynamicJointIslandMasses {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            topology_dirty: true,
+        }
+    }
 }
 
 impl DynamicJointIslandMasses {
     /// Read the current island mass for a body.
     pub fn get(&self, body: Entity) -> Option<DynamicJointIslandMass> {
         self.entries.get(&body).copied()
+    }
+}
+
+/// Retain structural invalidation until the next scheduled mass refresh.
+///
+/// Lifecycle observers survive a paused simulation and share invalidation
+/// across normal and rollback schedules. Mutable mass and link edits are
+/// checked at the refresh boundary through native component change detection.
+pub struct DynamicJointIslandMassPlugin;
+
+impl Plugin for DynamicJointIslandMassPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<DynamicJointIslandMasses>();
+        macro_rules! track {
+            ($component:ty) => {
+                app.add_observer(
+                    |_: On<Insert, $component>, mut cache: ResMut<DynamicJointIslandMasses>| {
+                        if !cache.topology_dirty {
+                            cache.topology_dirty = true;
+                        }
+                    },
+                )
+                .add_observer(
+                    |_: On<Remove, $component>, mut cache: ResMut<DynamicJointIslandMasses>| {
+                        if !cache.topology_dirty {
+                            cache.topology_dirty = true;
+                        }
+                    },
+                );
+            };
+        }
+        track!(RigidBody);
+        track!(ComputedMass);
+        track!(PhysicsJointLink);
+        track!(JointDisabled);
+        track!(PhysicsJointPending);
+        track!(PhysicsJointTopologyPending);
     }
 }
 
@@ -139,6 +186,8 @@ pub fn dynamic_joint_islands(
 /// Only fully admitted, enabled physics joints are considered active topology.
 /// `ComputedMass` is the effective value the solver uses. An island is invalid
 /// until every dynamic member has that solver-owned mass sample.
+/// Install [`DynamicJointIslandMassPlugin`] to retain lifecycle invalidation;
+/// refresh stays at the consumer's existing normal/rollback exchange boundary.
 pub fn refresh_dynamic_joint_island_masses(
     bodies: Query<(Entity, &RigidBody, Option<&ComputedMass>)>,
     links: Query<
@@ -149,8 +198,14 @@ pub fn refresh_dynamic_joint_island_masses(
             Without<PhysicsJointTopologyPending>,
         ),
     >,
+    changed_bodies: Query<(), (With<RigidBody>, Changed<ComputedMass>)>,
+    changed_links: Query<(), Changed<PhysicsJointLink>>,
     mut cache: ResMut<DynamicJointIslandMasses>,
 ) {
+    if !cache.topology_dirty && changed_bodies.is_empty() && changed_links.is_empty() {
+        return;
+    }
+    let _span = bevy::log::info_span!("dynamic_joint_island_mass_rebuild").entered();
     let dynamic_bodies = bodies
         .iter()
         .filter(|(_, mode, _)| **mode == RigidBody::Dynamic)
@@ -168,6 +223,7 @@ pub fn refresh_dynamic_joint_island_masses(
         .map(|link| (link.body0, link.body1))
         .collect::<Vec<_>>();
     cache.entries = aggregate_dynamic_joint_island_masses(dynamic_bodies, active_links);
+    cache.topology_dirty = false;
 }
 
 #[cfg(test)]
@@ -245,7 +301,7 @@ mod tests {
     #[test]
     fn refresh_uses_effective_dynamic_mass_and_excludes_disabled_or_pending_joints() {
         let mut app = App::new();
-        app.init_resource::<DynamicJointIslandMasses>()
+        app.add_plugins(DynamicJointIslandMassPlugin)
             .add_systems(Update, refresh_dynamic_joint_island_masses);
 
         let lander = app
@@ -295,7 +351,7 @@ mod tests {
     #[test]
     fn refresh_invalidates_the_full_island_if_one_solver_mass_is_missing() {
         let mut app = App::new();
-        app.init_resource::<DynamicJointIslandMasses>()
+        app.add_plugins(DynamicJointIslandMassPlugin)
             .add_systems(Update, refresh_dynamic_joint_island_masses);
         let root = app
             .world_mut()
@@ -312,5 +368,268 @@ mod tests {
         let cache = app.world().resource::<DynamicJointIslandMasses>();
         assert_eq!(cache.get(root).unwrap().mass_kg, None);
         assert_eq!(cache.get(missing_mass).unwrap().body_count, 2);
+    }
+
+    #[test]
+    fn quiet_refresh_retains_the_resource_until_a_mutable_input_changes() {
+        let mut app = App::new();
+        app.add_plugins(DynamicJointIslandMassPlugin)
+            .add_systems(Update, refresh_dynamic_joint_island_masses)
+            .add_systems(
+                lunco_core_runtime::RollbackReplay,
+                refresh_dynamic_joint_island_masses,
+            );
+        let body = app
+            .world_mut()
+            .spawn((RigidBody::Dynamic, ComputedMass::new(3.0)))
+            .id();
+        app.update();
+        app.world_mut()
+            .run_schedule(lunco_core_runtime::RollbackReplay);
+        let settled = app
+            .world()
+            .resource_ref::<DynamicJointIslandMasses>()
+            .last_changed();
+        app.update();
+        app.world_mut()
+            .run_schedule(lunco_core_runtime::RollbackReplay);
+        assert_eq!(
+            app.world()
+                .resource_ref::<DynamicJointIslandMasses>()
+                .last_changed(),
+            settled
+        );
+        app.world_mut()
+            .get_mut::<ComputedMass>(body)
+            .unwrap()
+            .set(7.0);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<DynamicJointIslandMasses>()
+                .get(body)
+                .unwrap()
+                .mass_kg,
+            Some(7.0)
+        );
+        app.world_mut()
+            .entity_mut(body)
+            .insert(RigidBody::Kinematic);
+        app.update();
+        assert_eq!(
+            app.world().resource::<DynamicJointIslandMasses>().get(body),
+            None
+        );
+    }
+
+    #[derive(Resource)]
+    struct RefreshEnabled(bool);
+
+    #[test]
+    fn lifecycle_invalidation_survives_paused_refresh_and_retires_despawned_inputs() {
+        let mut app = App::new();
+        app.add_plugins(DynamicJointIslandMassPlugin)
+            .insert_resource(RefreshEnabled(true))
+            .add_systems(
+                Update,
+                refresh_dynamic_joint_island_masses
+                    .run_if(|enabled: Res<RefreshEnabled>| enabled.0),
+            );
+        let root = app
+            .world_mut()
+            .spawn((RigidBody::Dynamic, ComputedMass::new(3.0)))
+            .id();
+        let part = app
+            .world_mut()
+            .spawn((RigidBody::Dynamic, ComputedMass::new(7.0)))
+            .id();
+        let joint = app
+            .world_mut()
+            .spawn(PhysicsJointLink {
+                body0: root,
+                body1: part,
+            })
+            .id();
+        app.update();
+        app.world_mut().resource_mut::<RefreshEnabled>().0 = false;
+        app.world_mut().entity_mut(joint).insert(JointDisabled);
+        for _ in 0..5 {
+            app.update();
+        }
+        assert!(
+            app.world()
+                .resource::<DynamicJointIslandMasses>()
+                .topology_dirty
+        );
+        app.world_mut().resource_mut::<RefreshEnabled>().0 = true;
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<DynamicJointIslandMasses>()
+                .get(root)
+                .unwrap()
+                .mass_kg,
+            Some(3.0)
+        );
+        app.world_mut().entity_mut(joint).remove::<JointDisabled>();
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<DynamicJointIslandMasses>()
+                .get(root)
+                .unwrap()
+                .mass_kg,
+            Some(10.0)
+        );
+        app.world_mut().resource_mut::<RefreshEnabled>().0 = false;
+        app.world_mut().entity_mut(part).remove::<ComputedMass>();
+        for _ in 0..5 {
+            app.update();
+        }
+        app.world_mut().resource_mut::<RefreshEnabled>().0 = true;
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<DynamicJointIslandMasses>()
+                .get(root)
+                .unwrap()
+                .mass_kg,
+            None
+        );
+        app.world_mut()
+            .entity_mut(part)
+            .insert(ComputedMass::new(11.0));
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<DynamicJointIslandMasses>()
+                .get(root)
+                .unwrap()
+                .mass_kg,
+            Some(14.0)
+        );
+        app.world_mut().resource_mut::<RefreshEnabled>().0 = false;
+        app.world_mut().despawn(joint);
+        app.world_mut().despawn(part);
+        for _ in 0..5 {
+            app.update();
+        }
+        app.world_mut().resource_mut::<RefreshEnabled>().0 = true;
+        app.update();
+        let cache = app.world().resource::<DynamicJointIslandMasses>();
+        assert_eq!(cache.get(part), None);
+        assert_eq!(cache.get(root).unwrap().mass_kg, Some(3.0));
+        app.world_mut().entity_mut(root).remove::<RigidBody>();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<DynamicJointIslandMasses>()
+                .entries
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn admission_markers_and_mutable_joint_endpoints_invalidate_the_shared_cache() {
+        let mut app = App::new();
+        app.add_plugins(DynamicJointIslandMassPlugin)
+            .add_systems(Update, refresh_dynamic_joint_island_masses);
+        let a = app
+            .world_mut()
+            .spawn((RigidBody::Dynamic, ComputedMass::new(2.0)))
+            .id();
+        let b = app
+            .world_mut()
+            .spawn((RigidBody::Dynamic, ComputedMass::new(5.0)))
+            .id();
+        let c = app
+            .world_mut()
+            .spawn((RigidBody::Dynamic, ComputedMass::new(11.0)))
+            .id();
+        let joint = app
+            .world_mut()
+            .spawn((
+                PhysicsJointLink { body0: a, body1: b },
+                PhysicsJointPending,
+                PhysicsJointTopologyPending,
+            ))
+            .id();
+        app.update();
+        app.world_mut()
+            .entity_mut(joint)
+            .remove::<PhysicsJointPending>();
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<DynamicJointIslandMasses>()
+                .get(a)
+                .unwrap()
+                .mass_kg,
+            Some(2.0)
+        );
+        app.world_mut()
+            .entity_mut(joint)
+            .remove::<PhysicsJointTopologyPending>();
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<DynamicJointIslandMasses>()
+                .get(a)
+                .unwrap()
+                .mass_kg,
+            Some(7.0)
+        );
+        app.world_mut()
+            .get_mut::<PhysicsJointLink>(joint)
+            .unwrap()
+            .body1 = c;
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<DynamicJointIslandMasses>()
+                .get(a)
+                .unwrap()
+                .mass_kg,
+            Some(13.0)
+        );
+        app.world_mut()
+            .entity_mut(joint)
+            .insert(PhysicsJointPending);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<DynamicJointIslandMasses>()
+                .get(a)
+                .unwrap()
+                .mass_kg,
+            Some(2.0)
+        );
+        app.world_mut()
+            .entity_mut(joint)
+            .remove::<PhysicsJointPending>();
+        app.world_mut()
+            .entity_mut(joint)
+            .insert(PhysicsJointTopologyPending);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<DynamicJointIslandMasses>()
+                .get(a)
+                .unwrap()
+                .mass_kg,
+            Some(2.0)
+        );
+        app.world_mut()
+            .entity_mut(joint)
+            .remove::<PhysicsJointTopologyPending>();
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<DynamicJointIslandMasses>()
+                .get(a)
+                .unwrap()
+                .mass_kg,
+            Some(13.0)
+        );
     }
 }

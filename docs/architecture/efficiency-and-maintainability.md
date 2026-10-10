@@ -327,6 +327,15 @@ plane uses process-local slots.
   retires these copy hints; changed source order and destination structure
   resolve at the existing map owner. The copy reports native-bit value or
   topology changes independently of its hint bookkeeping.
+- `lunco-physics::assembly::DynamicJointIslandMassPlugin` owns persistent
+  lifecycle invalidation of the derived island-mass resource. Body modes,
+  effective masses, joint links and enabled/admission markers invalidate it
+  on insert/remove, including during a simulation pause. Refresh checks native
+  mutable mass/link changes and recomputes only at the existing normal or
+  rollback co-simulation exchange boundary. Quiet steps retain the resource
+  without allocating body sets or rebuilding adjacency and island totals.
+  The aggregation's sorted member order, native `f64` sums and missing/invalid
+  member semantics remain authoritative; poses are not mass/topology inputs.
 - Structural publication observes each owning component's change tick.
   `PortTopologyState::observe_if_changed` derives auxiliary declaration and
   unit-contract fingerprints on initial observation or source changes, then
