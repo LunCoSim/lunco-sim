@@ -719,6 +719,16 @@ staged operations. This lookahead keeps the serialized Rumoca owner preparing
 later independent programs while the pool lowers existing DAEs, while keeping
 retained compilation state bounded. Solve results still commit in submission
 order.
+
+The native execution host captures `lunco_modelica_worker::worker::SolvePreparationLimits`
+before launching its worker. The default budget is at most six preparation
+threads, reserving two reported CPU threads for the app and host; a small host
+retains at least one preparation worker. A zero maximum or unavailable host
+capacity produces a structured worker failure before preparation admission.
+The budget applies to immutable preparation, not live steppers, solver ticks,
+or commit order. Hosts configure the typed resource before installing
+`ModelicaExecutionPlugin`; changing it after launch does not resize the pool.
+
 Parameter updates, resets, and cache-invalidating Step auto-init are
 continuations on that same FIFO. The command owner keeps servicing other
 entities while Rumoca compiles and the bounded pool lowers immutable DAE data;

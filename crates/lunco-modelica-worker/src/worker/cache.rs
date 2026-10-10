@@ -1,8 +1,8 @@
 //! In-memory and persistent prepared-solve cache for the Modelica worker.
 //!
-//! Library admission clears worker-local solve models. Persistent entries stay
-//! usable because their keys include the deterministic admitted-library
-//! revision, solver identity, structural source identity, and parameter values.
+//! Prepared graphs use participating-source content identity, solver identity,
+//! and exact parameter bits. Compiler admission revisions fence compiled
+//! artifacts independently of immutable prepared-graph reuse.
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::PREPARED_SOLVE_CACHE_VERSION;
@@ -76,7 +76,7 @@ impl<K: Clone + Eq + Hash, V> BoundedReuseCache<K, V> {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(bevy::prelude::Resource, Clone, Copy, Debug)]
 pub struct PreparedSolveDiskLimits {
-    /// Maximum regular v5 cache records retained after a successful publication.
+    /// Maximum current-version cache records retained after a successful publication.
     pub retained_entries: usize,
     pub compressed_bytes: usize,
     pub decoded_bytes: usize,
@@ -850,6 +850,7 @@ mod tests {
             result_tx,
             invalid,
             lunco_modelica_runtime::ModelicaCacheLimits::default(),
+            super::super::SolvePreparationLimits::default(),
         );
         assert!(
             result_rx
@@ -1088,6 +1089,7 @@ mod tests {
             result_tx,
             invalid,
             lunco_modelica_runtime::ModelicaCacheLimits::default(),
+            super::super::SolvePreparationLimits::default(),
         );
         let result = result_rx.try_recv().unwrap();
         assert!(
@@ -1228,6 +1230,7 @@ mod reuse_tests {
                 compiled_artifact_entries: 0,
                 ..Default::default()
             },
+            super::super::SolvePreparationLimits::default(),
         );
         let result = result_rx.try_recv().unwrap();
         assert!(

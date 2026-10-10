@@ -1,5 +1,75 @@
 # High-quality realtime performance handover
 
+## Native preparation CPU budget — 2026-10-11
+
+The native execution host captures the physics-independent
+`lunco_modelica_worker::worker::SolvePreparationLimits` before launch. The
+default maximum is six immutable-preparation workers with two reported CPU
+threads reserved. Smaller hosts retain at least one worker; zero maximum
+capacity and unavailable host capacity fail through structured worker errors.
+The existing compiler/root/lowering admission bound remains worker count plus
+two staged operations. Source-root FIFO, full-key in-flight coalescing, result
+commit order, session/library fences, live stepper thread, native values,
+equations and solver settings remain unchanged. This configures bounded engine
+capacity; no scenario policy hook or external-library change is needed.
+
+A fresh cold-cache probe on unchanged PID 112324 takes 19.425354 s to become
+ready. Five distinct rover lowerings dominate; the final job waits 9.416603 s
+behind four preparation workers. Cargo and another simulator overlap this
+probe, so it is attribution evidence rather than a comparison. Equivalent
+requests already share in-flight preparation; adding another deduplication
+mechanism would duplicate the owner.
+
+The paired uninstrumented runs use fresh isolated caches, the same authored
+sandbox and High/no-vsync/no-throttle configuration. Both record the same
+competing `main` simulator PID 84260 and no Cargo at launch. Four-worker
+control PID 156284 becomes ready in 15.732962 s; six-worker PID 155527 in
+14.543849 s. Maximum preparation queue wait falls from 7.817445 s to 72 us.
+Each performs eight lowerings with matching source/solver/override/version
+identities, then all nine replacement participants are memory hits.
+Replacement readiness is 1.391696/1.379831 s. Both have complete readiness,
+zero retained error diagnostics and 50 bodies/33 colliders/20 joints. Apps
+exit zero and close API 4202. Screenshots retain scene geometry and shadows;
+the optional visual-resource consent popup stays open.
+
+Readiness sampling also reads real engine-health revisions and process memory.
+Distinct sampled frame p50 is 18.388176/16.383409 ms, maxima
+30.105517/37.843247 ms, and two-command API p50 is 29.062139/26.222731 ms.
+Peak process RSS is 1,771,164/1,868,972 KiB, about 95.5 MiB higher with six
+workers. This establishes ongoing UI/API response during preparation, without
+an overall FPS-gain or statistical loading-gain claim from one contended pair.
+The long queue wait is removed in the observed six-worker run; cold lowering
+itself remains expensive.
+
+Six-worker PID 159078 passes 24 authored exact-state checks over 780 ticks/
+13 simulated seconds against the preceding unchanged 56-row reference.
+It exits zero and closes API 4202. This is four rovers with one compute thread,
+not the ten-profile determinism matrix. Artifact SHA-256:
+`8aa01d5c1fbf3d73c172b9dd4e73fd8de31f1d2d58fcb2dceefc53c2bca83dbf`.
+The four-worker control uses the preceding integrated normal artifact
+`2206482aa463d4267448c96341fda209d6145dfbca671e24fcb1c1f8092e0d31`.
+
+The production build passes with the existing unused cache `clear` warning.
+Six focused native preparation tests pass, including the real pool admission
+bound, small-host reservation, zero-capacity worker failure, compile/rebuild/
+source-root fences and causal participant holds. The initial Cargo attempt
+successfully links that worker test binary but fails on the application's
+empty test harness when the disk fills; its exit 101 is not passing evidence.
+After recovery, the verified worker binary runs the `preparation` filter
+directly and exits zero. No test result is inferred from the failed harness.
+
+Logs, sampled receipts, full-key comparison, screenshots and both binary
+archives are under `target/entity-tree-perf/`, prefixes `cold-preparation-`
+and `preparation-budget-`. The initial retained warm Tracy attribution has
+several overlapping 54–68 ms wall-clock zones beginning together; these do not
+prove independent CPU hotspots. Analysis recovers disk space by deleting only
+superseded task-owned binary archives and one empty failed output, preserving
+captures, source, shared caches and other sessions. Superseded admission,
+dataset and pre-integration island-mass binary archives are retired; current
+four/six-worker archives remain. Two orphaned linker temporaries are also
+removed after verifying no live build from this checkout. Overall loading, visual FPS,
+physics FPS, submission tails and the existing detach/fall failure remain open.
+
 ## Derived joint-island mass cache — 2026-10-11
 
 `lunco-physics::assembly::DynamicJointIslandMassPlugin` retains structural

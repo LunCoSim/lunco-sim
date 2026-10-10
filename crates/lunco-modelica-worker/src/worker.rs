@@ -272,6 +272,39 @@ fn build_stepper(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// Native preparation capacity captured before the Modelica worker starts.
+/// Insert before `ModelicaExecutionPlugin` to set the bounded CPU budget.
+#[derive(bevy::prelude::Resource, Clone, Copy, Debug)]
+pub struct SolvePreparationLimits {
+    pub max_worker_threads: usize,
+    pub reserved_cpu_threads: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for SolvePreparationLimits {
+    fn default() -> Self {
+        Self {
+            max_worker_threads: 6,
+            reserved_cpu_threads: 2,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl SolvePreparationLimits {
+    fn worker_threads(&self, available: std::num::NonZeroUsize) -> Result<usize, String> {
+        if self.max_worker_threads == 0 {
+            return Err("Modelica solve-preparation worker capacity must be positive".to_owned());
+        }
+        Ok(available
+            .get()
+            .saturating_sub(self.reserved_cpu_threads)
+            .max(1)
+            .min(self.max_worker_threads))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 /// Owns bounded off-thread preparation for immutable solve models and source roots.
 /// Disk-cache access and DAE lowering stay here; the Modelica command owner only
 /// commits a completed model and creates the thread-affine live stepper.
@@ -354,15 +387,18 @@ fn prepare_source_root_payload(id: String, payload: LoadSourceRootPayload) -> Pr
 
 #[cfg(not(target_arch = "wasm32"))]
 impl SolvePreparationPool {
-    fn new(disk_limits: PreparedSolveDiskLimits) -> Result<Self, String> {
+    fn new(
+        disk_limits: PreparedSolveDiskLimits,
+        limits: SolvePreparationLimits,
+    ) -> Result<Self, String> {
         disk_limits.validate()?;
-        // Solve lowering is memory-heavy and each request walks a complete
-        // structural graph. A small dedicated pool avoids turning parallel
-        // startup into memory-bandwidth contention while reserving two logical
-        // CPUs for Bevy and the OS.
-        let threads = std::thread::available_parallelism()
-            .map(|count| count.get().saturating_sub(2).clamp(1, 4))
-            .unwrap_or(1);
+        // Immutable lowering uses a bounded CPU budget independent of live
+        // solver execution. At least one preparation worker remains available
+        // when the reserved CPU budget covers a small host's capacity.
+        let available = std::thread::available_parallelism().map_err(|error| {
+            format!("cannot determine Modelica preparation CPU capacity: {error}")
+        })?;
+        let threads = limits.worker_threads(available)?;
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .stack_size(16 * 1024 * 1024)
@@ -2345,6 +2381,7 @@ pub fn modelica_worker(
     tx: Sender<ModelicaResult>,
     disk_limits: PreparedSolveDiskLimits,
     cache_limits: ModelicaCacheLimits,
+    preparation_limits: SolvePreparationLimits,
 ) {
     let (compiled_capacity, prepared_capacity) = match cache_limits.validate() {
         Ok(capacities) => capacities,
@@ -2376,7 +2413,7 @@ pub fn modelica_worker(
     let mut prepared_solve_cache = PreparedSolveCache::new(prepared_capacity);
     // Immutable DAE lowering is dispatched to this bounded pool; the native
     // Rumoca session itself is owned by a separate single-thread actor.
-    let mut solve_preparation_pool = match SolvePreparationPool::new(disk_limits) {
+    let mut solve_preparation_pool = match SolvePreparationPool::new(disk_limits, preparation_limits) {
         Ok(pool) => pool,
         Err(error) => {
             let _ = tx.send(ModelicaResult::worker_failure(error));
@@ -3972,6 +4009,51 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                 ..Default::default()
             });
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod preparation_budget_tests {
+    use super::*;
+
+    #[test]
+    fn preparation_budget_admission_bounds_workers_and_rejects_zero_capacity() {
+        let available = |count| std::num::NonZeroUsize::new(count).unwrap();
+        let limits = SolvePreparationLimits::default();
+        assert_eq!(limits.worker_threads(available(32)).unwrap(), 6);
+        assert_eq!(limits.worker_threads(available(4)).unwrap(), 2);
+        assert_eq!(limits.worker_threads(available(1)).unwrap(), 1);
+        let custom = SolvePreparationLimits {
+            max_worker_threads: 3,
+            reserved_cpu_threads: 0,
+        };
+        let pool = SolvePreparationPool::new(PreparedSolveDiskLimits::default(), custom).unwrap();
+        let count = pool.pool.current_num_threads();
+        assert!((1..=3).contains(&count));
+        assert!(pool.can_admit(count + 1));
+        assert!(!pool.can_admit(count + 2));
+
+        let (_command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (result_tx, result_rx) = crossbeam_channel::unbounded();
+        modelica_worker(
+            command_rx,
+            result_tx,
+            PreparedSolveDiskLimits::default(),
+            ModelicaCacheLimits::default(),
+            SolvePreparationLimits {
+                max_worker_threads: 0,
+                ..Default::default()
+            },
+        );
+        let result = result_rx.try_recv().unwrap();
+        assert!(
+            result
+                .worker_failure
+                .as_deref()
+                .unwrap()
+                .contains("worker capacity must be positive")
+        );
+        assert!(result_rx.try_recv().is_err());
     }
 }
 

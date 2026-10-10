@@ -50,6 +50,10 @@ impl Plugin for ModelicaExecutionPlugin {
             let disk_limits = *app
                 .world()
                 .resource::<lunco_modelica_worker::worker::PreparedSolveDiskLimits>();
+            app.init_resource::<lunco_modelica_worker::worker::SolvePreparationLimits>();
+            let preparation_limits =
+                *app.world()
+                    .resource::<lunco_modelica_worker::worker::SolvePreparationLimits>();
             let failure_sender = tx_res.clone();
             let spawn = thread::Builder::new()
                 .name("modelica-worker".into())
@@ -62,6 +66,7 @@ impl Plugin for ModelicaExecutionPlugin {
                                 tx_res,
                                 disk_limits,
                                 cache_limits,
+                                preparation_limits,
                             )
                         }))
                     {

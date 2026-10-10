@@ -352,6 +352,14 @@ stable commit queue. Keep the combined compiler/root/lowering admission bounded
 to the solve-pool worker count plus two staged operations, so the serialized
 Rumoca owner can compile later programs while solve workers are busy without
 building an unbounded DAE backlog.
+Measure preparation queue waits separately from lowering. The native host
+captures the typed `SolvePreparationLimits` resource before worker launch;
+its default maximum is six workers with two reported CPU threads reserved,
+and small hosts retain at least one worker. Preserve ordered result commits
+when changing that budget. Compare fresh isolated cold caches and the same
+exact scene/solver/override identities; retain sampled UI/API latency and peak
+process memory alongside readiness. A cache-hit replacement does not measure
+cold lowering, and concurrent Cargo or simulator work limits timing claims.
 
 For wrench-allocation cost, inspect the generated actuator count and sweep
 count separately from retained algebraic variables. The maintained allocator

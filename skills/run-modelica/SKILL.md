@@ -213,6 +213,14 @@ solve-cache reads and writes run with DAE lowering in the preparation pool; the
 native owner thread does not perform cache I/O or fall back to synchronous
 lowering. Wasm keeps compilation inside its Modelica Web Worker.
 
+Native preparation uses the startup-captured
+`lunco_modelica_worker::worker::SolvePreparationLimits` resource: a maximum
+of six workers and two reserved CPU threads by default, bounded by reported
+host capacity with at least one worker on small hosts. Insert it before
+`ModelicaExecutionPlugin` to configure capacity. Invalid zero capacity fails
+visibly through the worker diagnostic; changing the resource after launch
+does not resize the pool or change live solver execution.
+
 Shared immutable RAM caches use the captured
 `lunco_modelica_runtime::ModelicaCacheLimits` resource: positive compiled and
 prepared entry capacities, each defaulting to 64 per worker. Follow the
