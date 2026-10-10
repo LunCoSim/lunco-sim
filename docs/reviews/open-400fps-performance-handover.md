@@ -1,5 +1,62 @@
 # High-quality realtime performance handover
 
+## Eligible dynamic-body admission gate — 2026-10-10
+
+`lunco-usd-sim` shares one native archetype filter between dynamic admission and
+its schedule gate. Initialization-pending, invalid or paused bodies retain
+`ShouldBeDynamic` but do not trigger a full stable-identity scan when no body
+can be promoted. The admission body retains stable stage/instance/path
+validation, duplicate-identity faults, preview checks, ordered promotion,
+authored velocity seeding and joint holds. No solver, precision, external
+dependency or physics cadence changes are made.
+
+The unchanged normal binary identifies three paused sandbox assemblies:
+RedBalloon and both Skid_Raycast rovers, each with its existing initialization
+warning. Six native admission tests pass on the integrated tree, including
+membership transitions, duplicate-source/body faults and joint admission holds.
+Native normal/Tracy builds pass with the existing unused
+`PreparedSolveCache::clear` warning; the skill catalogue passes (43).
+
+Pre-integration Tracy PID 2811022/API 4202 and its collector exit zero and
+close their ports. Thirty authored checks pass, paused assembly flags remain
+visible, and scene replacement succeeds. At +1.5 to +7.5 s after View/Build/View
+activation, admission body calls fall from 356/295/380 (p50
+0.087398/0.098725/0.085690 ms) to zero. Admission still runs 26 times over
+loading and replacement. This removes an idle scan; it is not a causal overall
+FPS or loading claim across different clocks and workloads.
+
+The tracked replay reference rejects the unchanged baseline because it expects
+434 Modelica variables while the current model has 438. The tracked reference
+and scenario remain unchanged. A separate reference captures 56 current
+physics, Modelica and articulated rows from the unchanged normal artifact;
+its uninstrumented baseline replay passes 24 checks at 780 ticks, including
+deliberate mismatch rejection. Reference SHA-256:
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`.
+Evidence is under `target/entity-tree-perf/`, prefix `admission-`.
+
+After fast-forwarding to main `97d8e2bb7`, normal PID 2819892/API 4202 passes
+another 30 authored checks, retains the paused assembly flags, replaces the
+scene, exits zero and closes its port. High quality, equal camera poses,
+50 bodies/33 colliders/20 joints and advancing physics remain. Sampled frame
+p50 is 10.810/11.197/10.958 ms; physics-ring p50 is 1.000/1.176/1.241 ms,
+with 487/486/484 ticks advanced per eight-second window. Readiness clears at
+2.917 s; no concurrent app/Cargo process is recorded at launch. These after-only
+observations do not establish overall loading or FPS gains. PID 2820635 passes
+the same 24-check exact replay against the fresh baseline reference and exits
+zero with its port closed. This covers four rovers, one compute thread and
+780 ticks, not the ten-profile determinism matrix.
+The existing ramp-placement scene passes nine authored checks in PID 2820922
+through 1800 ticks: both invalid rovers remain paused at their authored poses
+with warnings, while the admitted rover climbs the inclined support. That
+process also exits zero and closes API 4202.
+
+Normal artifact SHA-256:
+`cfd6b348ec442b8769c5aeeda9a05eae3d86bfc7a975222835ea5e7d34004944`;
+pre-integration Tracy:
+`bffc83cab97e92a10017c06b506e6346759fc95c088063daa370a127fdabd973`.
+The retained GPU export identifies shared and camera shadow spans as the next
+render attribution target; overlapping span totals are not GPU frame time.
+
 ## Dataset catalog notification discipline — 2026-10-10
 
 Dataset failure-outbox drains in `lunco-assets-datasets` and `lunco-assets`
@@ -88,14 +145,18 @@ timeout. Collector 2448226 saves the capture and exits zero; this supplies
 timing evidence, not successful shutdown acceptance. An earlier helper uses
 an unavailable perspective command and supplies no measurement window.
 The corrected driver uses `ActivatePerspective` and disconnects its collector
-before app shutdown. Hash-verified gzip archives retain both Tracy artifacts
-and the tested normal executable under `target/entity-tree-perf/`.
+before app shutdown. Artifact hashes and timing receipts are recorded under
+`target/entity-tree-perf/`.
 
 Evidence availability on 2026-10-10: this checkout's `target/` directory was
 removed outside this task's commands during the follow-up. Earlier
 `target/image-loader-perf/` and `target/perf/` artifacts referenced below are
 therefore unavailable locally. Their descriptions record historical results;
-new entity-tree evidence is retained under `target/entity-tree-perf/`.
+new entity-tree timing receipts and accepted traces are retained under
+`target/entity-tree-perf/`. Later task-owned space recovery removes superseded
+entity-tree binary archives and rejected/failed diagnostic captures. Current
+dataset and admission binary archives remain available. The all-owner CPU
+export is compressed; its source trace and settled summary remain available.
 
 ## Participating-closure prepared-solve reuse — 2026-10-10
 

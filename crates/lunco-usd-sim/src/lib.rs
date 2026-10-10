@@ -1168,7 +1168,7 @@ impl Plugin for UsdSimPlugin {
             activate_dynamic_bodies
                 .in_set(UsdSimSet::ActivateDynamicBodies)
                 .before(lunco_physics::apply_physics_holds)
-                .run_if(any_with_component::<ShouldBeDynamic>),
+                .run_if(any_match_filter::<DynamicBodyAdmissionFilter>),
         );
         // Bodies and constraints can become admissible on different updates
         // after asynchronous scene projection. Do not let early bodies enter
@@ -4900,6 +4900,17 @@ fn resolve_differential_coupling(
     }
 }
 
+// Share the admission query's archetype eligibility with its schedule gate.
+// Paused or invalid assemblies retain their intent marker for owner diagnostics.
+type DynamicBodyAdmissionFilter = (
+    With<ShouldBeDynamic>,
+    With<RigidBody>,
+    With<UsdPrimPath>,
+    Without<lunco_physics::PhysicsInitializationPending>,
+    Without<lunco_physics::PhysicsInitializationInvalid>,
+    Without<lunco_physics::PhysicsObjectPaused>,
+);
+
 fn activate_dynamic_bodies(
     mut commands: Commands,
     admission: DynamicBodyAdmissionParams,
@@ -4916,12 +4927,7 @@ fn activate_dynamic_bodies(
             Has<lunco_core::PhysicsStateReady>,
             Has<lunco_core::PhysicsStatePending>,
         ),
-        (
-            With<ShouldBeDynamic>,
-            Without<lunco_physics::PhysicsInitializationPending>,
-            Without<lunco_physics::PhysicsInitializationInvalid>,
-            Without<lunco_physics::PhysicsObjectPaused>,
-        ),
+        DynamicBodyAdmissionFilter,
     >,
     all_prims: Query<(
         Entity,
@@ -5544,7 +5550,10 @@ mod dynamic_activation_tests {
             .init_resource::<lunco_physics::PhysicsHolds>()
             .init_resource::<lunco_cosim_core::BindingEpochDirty>()
             .init_resource::<lunco_core::RuntimeFaults>()
-            .add_systems(Update, activate_dynamic_bodies);
+            .add_systems(
+                Update,
+                activate_dynamic_bodies.run_if(any_match_filter::<DynamicBodyAdmissionFilter>),
+            );
         let stage = app.world_mut().resource_mut::<Assets<UsdStageAsset>>().add(
             UsdStageAsset::from_recipe(StageRecipe::from_source(
                 "activation-test.usda",
@@ -5553,6 +5562,64 @@ mod dynamic_activation_tests {
             .expect("activation stage asset"),
         );
         (app, stage)
+    }
+
+    #[test]
+    fn admission_gate_tracks_eligible_archetype_membership() {
+        #[derive(Resource, Default)]
+        struct Runs(usize);
+
+        fn blocks_until_removed<T: Component>(
+            app: &mut App,
+            entity: Entity,
+            marker: T,
+            runs: usize,
+        ) {
+            app.world_mut().entity_mut(entity).insert(marker);
+            app.update();
+            assert_eq!(app.world().resource::<Runs>().0, runs);
+            app.world_mut().entity_mut(entity).remove::<T>();
+            app.update();
+            assert_eq!(app.world().resource::<Runs>().0, runs + 1);
+        }
+
+        let mut app = App::new();
+        app.init_resource::<Runs>().add_systems(
+            Update,
+            (|mut runs: ResMut<Runs>| runs.0 += 1)
+                .run_if(any_match_filter::<DynamicBodyAdmissionFilter>),
+        );
+        let entity = app.world_mut().spawn(ShouldBeDynamic).id();
+        app.update();
+        assert_eq!(app.world().resource::<Runs>().0, 0);
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(RigidBody::Kinematic);
+        app.update();
+        assert_eq!(app.world().resource::<Runs>().0, 0);
+        app.world_mut().entity_mut(entity).insert(UsdPrimPath {
+            stage_handle: Handle::default(),
+            path: "/Body".into(),
+        });
+        app.update();
+        assert_eq!(app.world().resource::<Runs>().0, 1);
+
+        blocks_until_removed(
+            &mut app,
+            entity,
+            lunco_physics::PhysicsInitializationPending,
+            1,
+        );
+        blocks_until_removed(
+            &mut app,
+            entity,
+            lunco_physics::PhysicsInitializationInvalid,
+            2,
+        );
+        blocks_until_removed(&mut app, entity, lunco_physics::PhysicsObjectPaused, 3);
+        app.world_mut().despawn(entity);
+        app.update();
+        assert_eq!(app.world().resource::<Runs>().0, 4);
     }
 
     #[test]

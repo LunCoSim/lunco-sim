@@ -136,6 +136,14 @@ Modelica's channel-limit check reads the live scalar count after append and
 only hashes history identity for admission when the catalog is full. Preserve
 existing-channel recording above a lowered limit and rejection after history
 removal; a cached producer identity alone does not prove that history exists.
+For dynamic-body admission, compare `activate_dynamic_bodies` with its native
+eligibility gate. Paused or invalid assemblies retain `ShouldBeDynamic` for
+diagnostics but must not wake admission when its query has no eligible bodies.
+Share the exact archetype filter; retain preview-ancestry checks, stable identity
+faults, promotion order and joint holds inside admission. Verify paused poses
+and warnings through `sandbox_ramp_placement.rhai`, plus exact-state replay
+against the unchanged binary. A stale tracked Modelica reference is not passing
+replay evidence; capture a separate baseline and preserve the tracked reference.
 For a system that queues many compatible ECS component changes, inspect its
 `system_commands` flush separately from the system body. Collect changed values
 and use the owning crate's existing batch command path where it preserves the

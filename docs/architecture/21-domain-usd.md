@@ -114,6 +114,14 @@ deterministic projection order.
 separately bounded (32 and 128 per Update by default); zero limits raise a
 runtime fault before consuming queued work. Neither limit changes physics
 substeps or tick admission.
+Dynamic-body admission uses one archetype eligibility filter for its query and
+schedule gate: a body needs `ShouldBeDynamic`, `RigidBody`, and `UsdPrimPath`,
+without initialization-pending, initialization-invalid, or object-paused markers.
+Blocked assemblies retain their markers and initialization diagnostics. Native
+membership changes reopen the gate; eligible admission still validates stable
+identities against admitted bodies, orders promotion by logical USD identity,
+and holds solver integration until authored constraints are ready. Preview
+ancestry is checked inside admission and does not bypass these validations.
 The shared `PhysicalWheel` component is registered for normal typed reflection
 by the vehicle plugin, so authored vessel inspection reads the same runtime
 radius contract used by render/editor consumers rather than a parallel query.
