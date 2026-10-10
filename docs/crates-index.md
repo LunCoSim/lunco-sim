@@ -341,6 +341,9 @@ Owns the shared scalar port substrate (`Port`, endpoint/control-surface componen
 first admission or changes. The cosimulation structural checker consumes it for
 declarations and Modelica unit contracts, refreshing both on participant
 re-admission; direct backend contract reads remain live.
+Live ownership selection retains the winning backend's optional slot within
+the same immutable World borrow, avoiding repeated resolution during handle
+creation and write admission while preserving live precedence and metadata.
 
 **`lunco-spatial`**
 Owns the BigSpace-specific boundary: arbitrary-grid f64 pose composition/conversion, the persistent world shell, atomic grid migration, `ActivePhysicsFrame`, spatial markers, hierarchy invariants, and the vehicle-neutral navigation law. The canonical `WorldGrid` carries deterministic content provenance so session records can identify the active coordinate frame. It depends on `lunco-core` for shared identity and runtime-diagnostic contracts; the dependency direction is one-way, so changing spatial code does not rebuild core.

@@ -1391,6 +1391,12 @@ impl PreparedPortWrite {
     }
 }
 
+/// Live precedence winner and the slot already found while selecting it.
+struct PortOwner {
+    backend: usize,
+    slot: Option<u64>,
+}
+
 /// The single registry of port-bearing backends — **the** read/write/list surface
 /// for every exposed simulation value, whichever backend owns it.
 ///
@@ -1793,8 +1799,8 @@ impl PortRegistry {
     /// from its *source*. Searches the precedence-winning declared output owner
     /// only, even when that owner has not produced a sample yet.
     pub fn read_output_port(&self, world: &World, entity: Entity, name: &str) -> Option<f64> {
-        let owner = self.port_owner_index(world, entity, name, ResolvedPortSide::Output)?;
-        (self.backends[owner].read_output)(world, entity, name)
+        let owner = self.port_owner(world, entity, name, ResolvedPortSide::Output)?;
+        (self.backends[owner.backend].read_output)(world, entity, name)
     }
 
     /// Read the current value of port `name`, preferring an **output**, then
@@ -1802,8 +1808,8 @@ impl PortRegistry {
     /// declared but unsampled output remains unsampled instead of exposing a
     /// lower-precedence or opposite-direction value.
     pub fn read_port(&self, world: &World, entity: Entity, name: &str) -> Option<f64> {
-        if let Some(owner) = self.port_owner_index(world, entity, name, ResolvedPortSide::Output) {
-            return (self.backends[owner].read_output)(world, entity, name);
+        if let Some(owner) = self.port_owner(world, entity, name, ResolvedPortSide::Output) {
+            return (self.backends[owner.backend].read_output)(world, entity, name);
         }
         self.read_input_port(world, entity, name)
     }
@@ -1812,22 +1818,22 @@ impl PortRegistry {
     /// outputs. Use where the input specifically is wanted (e.g. a joint's
     /// commanded motor setpoint vs its measured angle, both named `angle`).
     pub fn read_input_port(&self, world: &World, entity: Entity, name: &str) -> Option<f64> {
-        let owner = self.port_owner_index(world, entity, name, ResolvedPortSide::Input)?;
-        (self.backends[owner].read_input)(world, entity, name)
+        let owner = self.port_owner(world, entity, name, ResolvedPortSide::Input)?;
+        (self.backends[owner.backend].read_input)(world, entity, name)
     }
 
     /// Read the input value from its precedence-winning owner without falling
     /// through to another backend when that owner's current sample is absent.
     pub fn read_owned_input_port(&self, world: &World, entity: Entity, name: &str) -> Option<f64> {
-        let owner = self.port_owner_index(world, entity, name, ResolvedPortSide::Input)?;
-        (self.backends[owner].read_input)(world, entity, name)
+        let owner = self.port_owner(world, entity, name, ResolvedPortSide::Input)?;
+        (self.backends[owner.backend].read_input)(world, entity, name)
     }
 
     /// Read the output value from its precedence-winning owner without falling
     /// through to another backend when that owner's current sample is absent.
     pub fn read_owned_output_port(&self, world: &World, entity: Entity, name: &str) -> Option<f64> {
-        let owner = self.port_owner_index(world, entity, name, ResolvedPortSide::Output)?;
-        (self.backends[owner].read_output)(world, entity, name)
+        let owner = self.port_owner(world, entity, name, ResolvedPortSide::Output)?;
+        (self.backends[owner.backend].read_output)(world, entity, name)
     }
 
     /// Read a port through the backend that produced its inspection row.
@@ -1865,14 +1871,14 @@ impl PortRegistry {
     /// from their component contract; the ordinary list surface covers
     /// map-backed and authored-output participants.
     pub fn has_output_port(&self, world: &World, entity: Entity, name: &str) -> bool {
-        self.port_owner_index(world, entity, name, ResolvedPortSide::Output)
+        self.port_owner(world, entity, name, ResolvedPortSide::Output)
             .is_some()
     }
 
     /// Whether an input port is declared by an owning backend, independently of
     /// its current value.
     pub fn has_input_port(&self, world: &World, entity: Entity, name: &str) -> bool {
-        self.port_owner_index(world, entity, name, ResolvedPortSide::Input)
+        self.port_owner(world, entity, name, ResolvedPortSide::Input)
             .is_some()
     }
 
@@ -1910,30 +1916,39 @@ impl PortRegistry {
         name: &str,
         side: ResolvedPortSide,
     ) -> Option<PortMetadata> {
-        let backend_index = self.port_owner_index(world, entity, name, side)?;
-        self.port_metadata_for_backend(world, entity, backend_index, name, side)
+        let owner = self.port_owner(world, entity, name, side)?;
+        self.port_metadata_for_backend(world, entity, owner.backend, name, side)
             .map(|(_, metadata)| metadata)
     }
 
-    fn port_owner_index(
+    fn port_owner(
         &self,
         world: &World,
         entity: Entity,
         name: &str,
         side: ResolvedPortSide,
-    ) -> Option<usize> {
-        self.backends.iter().position(|backend| {
+    ) -> Option<PortOwner> {
+        for (index, backend) in self.backends.iter().enumerate() {
             let resolver = match side {
                 ResolvedPortSide::Input => backend.resolve_input,
                 ResolvedPortSide::Output => backend.resolve_output,
             };
-            if resolver.is_some_and(|resolve| resolve(world, entity, name).is_some()) {
-                return true;
+            if let Some(slot) = resolver.and_then(|resolve| resolve(world, entity, name)) {
+                return Some(PortOwner {
+                    backend: index,
+                    slot: Some(slot),
+                });
             }
             let mut query = PortDeclarationQuery::named(name, side);
             (backend.declare_ports)(world, entity, &mut query);
-            query.direction().is_some()
-        })
+            if query.direction().is_some() {
+                return Some(PortOwner {
+                    backend: index,
+                    slot: None,
+                });
+            }
+        }
+        None
     }
 
     /// Validate and write one **input** through its precedence-winning owner.
@@ -1963,8 +1978,7 @@ impl PortRegistry {
         value: f64,
     ) -> Result<PreparedPortWrite, PortWriteError> {
         let name = name.into();
-        let Some(owner) = self.port_owner_index(world, entity, &name, ResolvedPortSide::Input)
-        else {
+        let Some(owner) = self.port_owner(world, entity, &name, ResolvedPortSide::Input) else {
             return Err(PortWriteError {
                 port: name.to_string(),
                 owner: None,
@@ -1972,7 +1986,7 @@ impl PortRegistry {
             });
         };
         let (direction, metadata) = self
-            .port_metadata_for_backend(world, entity, owner, &name, ResolvedPortSide::Input)
+            .port_metadata_for_backend(world, entity, owner.backend, &name, ResolvedPortSide::Input)
             .ok_or_else(|| PortWriteError {
                 port: name.to_string(),
                 owner: None,
@@ -2007,10 +2021,9 @@ impl PortRegistry {
                     reason,
                 },
             })?;
-        let backend = &self.backends[owner];
-        let slot = backend
-            .resolve_input
-            .and_then(|resolve| resolve(world, entity, &name))
+        let backend = &self.backends[owner.backend];
+        let slot = owner
+            .slot
             .filter(|_| backend.write_slot.is_some())
             .ok_or_else(|| PortWriteError {
                 port: name.to_string(),
@@ -2026,7 +2039,7 @@ impl PortRegistry {
                 kind: PortWriteErrorKind::TopologyRevisionUnavailable,
             })?;
         Ok(PreparedPortWrite {
-            backend: owner,
+            backend: owner.backend,
             entity,
             name,
             direction,
@@ -2083,14 +2096,18 @@ impl PortRegistry {
                 kind: PortWriteErrorKind::TopologyRevisionUnavailable,
             });
         };
-        if revision.0 != prepared.revision
-            || self.port_owner_index(
-                world,
-                prepared.entity,
-                &prepared.name,
-                ResolvedPortSide::Input,
-            ) != Some(prepared.backend)
-        {
+        if revision.0 != prepared.revision {
+            return Err(stale());
+        }
+        let Some(owner) = self.port_owner(
+            world,
+            prepared.entity,
+            &prepared.name,
+            ResolvedPortSide::Input,
+        ) else {
+            return Err(stale());
+        };
+        if owner.backend != prepared.backend {
             return Err(stale());
         }
         let Some((direction, metadata)) = self.port_metadata_for_backend(
@@ -2135,10 +2152,7 @@ impl PortRegistry {
                 },
             })?;
         let backend = self.backends.get(prepared.backend).ok_or_else(stale)?;
-        let slot = backend
-            .resolve_input
-            .and_then(|resolve| resolve(world, prepared.entity, &prepared.name));
-        if slot != Some(prepared.slot) {
+        if owner.slot != Some(prepared.slot) {
             return Err(stale());
         }
         backend.write_slot.ok_or_else(|| PortWriteError {
@@ -2166,10 +2180,16 @@ impl PortRegistry {
         entity: Entity,
         name: &str,
     ) -> Option<ResolvedPort> {
-        let owner = self.port_owner_index(world, entity, name, ResolvedPortSide::Output)?;
-        let resolve = self.backends[owner].resolve_output?;
-        let slot = resolve(world, entity, name)?;
-        self.resolved_port(world, entity, owner, name, slot, ResolvedPortSide::Output)
+        let owner = self.port_owner(world, entity, name, ResolvedPortSide::Output)?;
+        let slot = owner.slot?;
+        self.resolved_port(
+            world,
+            entity,
+            owner.backend,
+            name,
+            slot,
+            ResolvedPortSide::Output,
+        )
     }
 
     /// Resolve the precedence-winning declared input endpoint to a
@@ -2182,10 +2202,16 @@ impl PortRegistry {
     /// which addresses that same owner and never falls through to a shadowed
     /// input.
     pub fn resolve_input(&self, world: &World, entity: Entity, name: &str) -> Option<ResolvedPort> {
-        let owner = self.port_owner_index(world, entity, name, ResolvedPortSide::Input)?;
-        let resolve = self.backends[owner].resolve_input?;
-        let slot = resolve(world, entity, name)?;
-        self.resolved_port(world, entity, owner, name, slot, ResolvedPortSide::Input)
+        let owner = self.port_owner(world, entity, name, ResolvedPortSide::Input)?;
+        let slot = owner.slot?;
+        self.resolved_port(
+            world,
+            entity,
+            owner.backend,
+            name,
+            slot,
+            ResolvedPortSide::Input,
+        )
     }
 
     /// Resolve a readable **input-side** source to a slot. This is distinct
@@ -2199,12 +2225,19 @@ impl PortRegistry {
         entity: Entity,
         name: &str,
     ) -> Option<ResolvedPort> {
-        let owner = self.port_owner_index(world, entity, name, ResolvedPortSide::Input)?;
-        let backend = &self.backends[owner];
+        let owner = self.port_owner(world, entity, name, ResolvedPortSide::Input)?;
+        let backend = &self.backends[owner.backend];
         (backend.read_input)(world, entity, name)?;
         backend.read_input_slot?;
-        let slot = (backend.resolve_input?)(world, entity, name)?;
-        self.resolved_port(world, entity, owner, name, slot, ResolvedPortSide::Input)
+        let slot = owner.slot?;
+        self.resolved_port(
+            world,
+            entity,
+            owner.backend,
+            name,
+            slot,
+            ResolvedPortSide::Input,
+        )
     }
 
     /// Read the value at a resolved port. `None` if the slot no longer backs a
@@ -2875,8 +2908,12 @@ mod tests {
         }
         #[derive(Resource, Default)]
         struct MetadataReads(AtomicUsize);
+
+        #[derive(Resource, Default)]
+        struct SlotResolutions(AtomicUsize);
         let mut world = test_world();
         world.init_resource::<MetadataReads>();
+        world.init_resource::<SlotResolutions>();
         let entity = world
             .spawn(Input {
                 value: 0.0,
@@ -2912,6 +2949,10 @@ mod tests {
                 read_input: no_read,
                 resolve_output: None,
                 resolve_input: Some(|world, entity, name| {
+                    world
+                        .resource::<SlotResolutions>()
+                        .0
+                        .fetch_add(1, Ordering::Relaxed);
                     (name == "signal" && world.get::<Input>(entity).is_some()).then_some(7)
                 }),
                 read_slot: None,
@@ -2923,6 +2964,17 @@ mod tests {
             }]),
         };
         let locator = registry.resolve_input(&world, entity, "signal").unwrap();
+        assert_eq!(
+            world
+                .resource::<SlotResolutions>()
+                .0
+                .load(Ordering::Relaxed),
+            1
+        );
+        world
+            .resource::<SlotResolutions>()
+            .0
+            .store(0, Ordering::Relaxed);
         assert!(matches!(
             &locator.metadata.source,
             std::borrow::Cow::Borrowed("probe")
@@ -2947,6 +2999,17 @@ mod tests {
             .prepare_input_write(&world, entity, Arc::clone(&locator.name), 0.5)
             .unwrap();
         assert!(Arc::ptr_eq(&locator.name, &prepared.name));
+        assert_eq!(
+            world
+                .resource::<SlotResolutions>()
+                .0
+                .load(Ordering::Relaxed),
+            1
+        );
+        world
+            .resource::<SlotResolutions>()
+            .0
+            .store(0, Ordering::Relaxed);
         world
             .resource::<MetadataReads>()
             .0
@@ -2956,6 +3019,13 @@ mod tests {
             .unwrap();
         assert_eq!(
             world.resource::<MetadataReads>().0.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            world
+                .resource::<SlotResolutions>()
+                .0
+                .load(Ordering::Relaxed),
             1
         );
         for value in [f64::NAN, f64::INFINITY, -0.1, 1.1] {

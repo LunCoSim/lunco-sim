@@ -247,6 +247,11 @@ isolation and shared name identity when changing those allocation boundaries.
 Preserve live precedence, metadata, topology revision, slot, value checks, and
 rejection ordering. Separately prepared batches still revalidate every write
 before committing any of them.
+Ownership selection retains the winning backend's optional slot for the same
+World borrow. Handle creation, preparation and batch preflight consume that
+result without repeating the winner's resolver. Verify one resolver call per
+admission, declared owners without a slot, readable input-side sources, stale
+layouts and metadata edits; do not substitute a persistent ownership cache.
 The shell's steady `WorkbenchSnapshot` check compares borrowed dock and
 perspective iterators before materializing owned vectors; preserve that
 allocation-free stable path when changing layout publication.

@@ -1,5 +1,65 @@
 # High-quality realtime performance handover
 
+## Retain live owner resolution — 2026-10-11
+
+`lunco-port-core` retains the winning backend's optional slot during live
+ownership selection. Handle creation, input-write preparation and batch
+preflight consume that result within the same immutable World borrow. This
+removes a second call to the winning resolver without a persistent owner
+cache. Declared owners without slots still block lower-precedence owners;
+metadata, revision, slot identity, rejection ordering and atomic batch
+admission remain live. The mechanism serves all registry consumers and adds
+no changeable policy or hook. External libraries, numeric precision and
+simulation ordering are unchanged.
+
+The existing low-level admission check now counts resolver calls. It fails
+against the original implementation (two calls instead of one); all 23
+`cargo test -p lunco-port-core --lib -j 4` checks pass after the change,
+including stale handles, metadata edits, declared unsampled owners, readable
+input-side sources and atomic rejection. This proves reduced duplicate work,
+not a throughput gain.
+
+Normal candidate PID 559364 passes seven authored sandbox checks before and
+after replacement, readiness, diagnostics, advancing physics and three
+invalid-assembly pause checks. High quality, no vsync/throttle, 50 bodies,
+33 colliders and 20 joints remain unchanged. Camera poses remain fixed within
+the run. The post-dismissal screenshot shows shadows.
+Warm readiness is 2.757 s; raw View/Build/View frame medians are
+17.609321/17.761304/17.496740 ms. Main PID 84260 overlaps this run; these
+numbers do not establish a normal-artifact performance improvement.
+Production negative-fixture PID 559977 passes all 11 authored
+`PORT_OWNER_COLLISION` checks using
+`luncosim test --scene assets/scenes/tests/port_owner_collision.usda --threads 1 --api 4202`.
+Both sessions exit zero and release API 4202. Normal SHA-256:
+`e9b4ad6a1b42d7c08163f554cc3d6228c9cbaf12b15a67e9e080bed307aa0962`.
+Replay PID 560316 passes 24 exact checks over 780 ticks/13 simulated seconds,
+four rovers and one compute thread against the unchanged 56-row reference
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`.
+It exits zero and releases API 4202. The full ten-profile determinism matrix
+remains open.
+
+Candidate Tracy PID 548237 passes readiness, diagnostics, advancing physics,
+three invalid-assembly pause checks and scene replacement. The High-quality
+shadow screenshot remains visible. Its 318,562,050-byte capture matches the
+collector report and passes native message and connection-owner CPU exports.
+Across settled View/Build/View windows, `propagate_connections` mean costs
+are 0.307731/0.320466/0.315869 ms versus the retained shared-shadow baseline's
+0.291683/0.330188/0.300956 ms. Each window contains 360–362 fixed-step calls.
+This mixed pair establishes no measured owner speedup. Main PID 84260 overlaps
+both; candidate launch also records USD PID 546786, while the baseline records
+USD PID 520184. Their exact overlap with each window is unknown. Profiler
+overhead and contention prevent a product-performance claim. The app and
+collector 548236 exit zero and release API 4202/profiler 8086.
+Tracy SHA-256:
+`9c904b1d8b48c546c76efe6bc9962a5a8d032771862434e4c95514588f4ab3ff`.
+Evidence lives under `target/entity-tree-perf/`, prefix `owner-slot-`.
+Normal and Tracy archives are verified against their uncompressed SHA-256.
+They replace the shared-shadow binary archives; validated raw captures,
+receipts, logs and the replay reference remain. The normal candidate remains
+installed at `target/debug/luncosim`. Overall loading, visual FPS, physics
+throughput, clean acceptance and the existing detach/fall failure remain open.
+Official Trello tools remain unavailable in this session.
+
 ## Native shared-shadow schedule — 2026-10-11
 
 `lunco-render-bevy` routes native Core3d point/spot roots to SharedShadowView
@@ -59,9 +119,9 @@ Tracy candidate SHA-256:
 `317b78bbcaf26016ffe1d49659a962d59254c7f90ff5ee572e308ab8b5721ce5`.
 
 Evidence lives under `target/entity-tree-perf/`, prefix `shared-shadow-`.
-Current normal/Tracy archives replace the prior sample-borrow binary archives;
+The owner-slot checkpoint replaces these normal/Tracy binary archives;
 validated baseline and candidate raw captures, receipts and replay reference
-remain. The normal candidate is restored after profiling. Overall loading,
+remain. Overall loading,
 visual FPS, physics throughput, clean acceptance and the existing detach/fall
 failure remain open. Official Trello tools remain unavailable in this session.
 
