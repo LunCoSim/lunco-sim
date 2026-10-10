@@ -134,6 +134,10 @@ identities before structural mutation. Preserve that system's serial schedule
 position and lifecycle ordering. A settled-frame saving also needs live
 add/remove or replacement evidence, since queries must admit newly matched
 archetypes after startup.
+The co-simulation endpoint lifecycle publisher uses this native exclusive query
+parameter. Validate its same-frame ready transition and run sandbox binding
+acceptance again after scene replacement; keep immediate endpoint insertion and
+the `PostUpdate` binding boundary intact.
 The neutral scenario driver shares its native model query across preparation,
 startup, fixed and visualization passes; preserve fresh model/scope/authority
 reads and stable actor sorting when changing that owner.

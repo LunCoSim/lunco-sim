@@ -1,5 +1,67 @@
 # High-quality realtime performance handover
 
+## Endpoint lifecycle query reuse — 2026-10-11
+
+`lunco-cosim::sync_model_endpoint_lifecycle` retains Bevy's native exclusive
+`QueryState` for changed `SimComponent` owners instead of constructing the
+query on every admitted frame. `iter(world)` refreshes current archetype
+membership and uses the same exclusive-system change ticks. Status mapping,
+immediate component insertion, binding revision
+requests, the existing change condition and `PostUpdate` binding position
+remain unchanged. This is generic engine query reuse; no authored policy hook,
+new cache owner, API, dependency edit or numerical change is needed. Native
+query traversal order is not an API contract; endpoint mirrors have no
+component lifecycle observers, and the complete batch lands before its binding
+consumer. Authoritative port propagation and solver scheduling are unchanged.
+
+The existing native same-update ready-transition test passes. Owned normal
+PID 275274 passes the production sandbox's seven authored checks both before
+and after full scene replacement, including the real Modelica/Python/Avian
+bindings. View/Build/View windows preserve the same camera within the run and
+advance physics with 50 bodies/33 colliders/20 joints. Readiness remains complete
+with zero retained error diagnostics; invalid assemblies remain paused.
+Replacement screenshot inspection confirms the Builder layout and rendered
+scene, with the optional visual-resource consent popup still open. The app
+exits zero and closes API 4202.
+
+Normal frame p50 is 17.579829/19.824557/15.803465 ms. Main simulator PID 84260
+and USD-checkout Cargo PID 273782 overlap the run; these are contended samples,
+not clean acceptance or an overall FPS gain. Replay PID 277471 passes 24 exact
+checks over 780 ticks/13 simulated seconds, four rovers and one compute thread,
+against the unchanged 56-row reference. It exits zero and closes API 4202.
+This does not cover the ten-profile replay matrix. Normal artifact SHA-256:
+`036bb8f14bf5afd978206ebb2cdadda5c53e6b8a21dde064519f00d27f0d46ac`.
+
+Tracy PID 290473 and collector PID 290472 use the owned API 4202 and profiler
+8086, with both listener and connection verified against the app. Compare the
+retained island-mass capture's settled View/Build/View windows (+1.5 to +7.5 s
+after activation) with this capture. Lifecycle-system p50 falls from
+0.133488/0.134570/0.140081 ms to 0.010750/0.014527/0.016611 ms; sample counts
+are 159/150/189 before and 130/101/68 after. Mean is
+0.153111/0.159458/0.146035 ms before and 0.011855/0.014370/0.017474 ms after.
+These are wall-clock owner diagnostics, not a controlled overall FPS A/B:
+the new capture overlaps main PID 84260 and USD Cargo PID 283455, whereas the
+retained capture records only that main simulator. Native preparation capacity
+also differs between artifacts, and camera rotation differs slightly across
+runs. Each run holds its own camera fixed. Both captures preserve High quality,
+the sandbox graph and advancing physics. App and collector exit zero; both
+owned ports close. Tracy artifact SHA-256:
+`398640eb44f5d8aa11a69376caa80ff4fe3a039819218ecab9751ca577b893bb`.
+Retained comparison artifact SHA-256:
+`83af8a618df67ffa1c9ff015a7924722cf882834841923700137e7d0bd585159`.
+Overall loading, visual FPS, physics FPS and the existing detach/fall failure
+remain open.
+
+Evidence is under `target/entity-tree-perf/`, prefix `endpoint-query-`.
+Disk recovery retires three superseded task binary archives (both port-snapshot
+Tracy binaries and the four-worker loading control), preserving their captures,
+logs and receipts. Scoped `cargo clean -p lunco-cosim` removes 381.2 MiB of this
+checkout's generated package outputs after the passing native test and normal
+runtime gates. After capture, scoped `cargo clean -p lunco-luncosim` removes
+3.3 GiB of generated application outputs; both current binary archives are
+verified first, and the exact previously tested normal artifact is restored
+and hash-verified. Source, shared caches and other sessions remain untouched.
+
 ## Native preparation CPU budget — 2026-10-11
 
 The native execution host captures the physics-independent

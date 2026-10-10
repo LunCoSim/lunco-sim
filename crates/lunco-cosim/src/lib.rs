@@ -124,9 +124,11 @@ fn mark_joint_torque_port(
 /// transaction. This is exclusive so a terminal compiler result is visible in
 /// the same frame; binding itself runs in `PostUpdate`, after every USD, asset,
 /// and generated-domain projection path has had a chance to publish its ports.
-fn sync_model_endpoint_lifecycle(world: &mut World) {
-    let transitions: Vec<(Entity, EndpointLifecycle)> = world
-        .query_filtered::<(Entity, &SimComponent), Changed<SimComponent>>()
+fn sync_model_endpoint_lifecycle(
+    world: &mut World,
+    models: &mut QueryState<(Entity, &'static SimComponent), Changed<SimComponent>>,
+) {
+    let transitions: Vec<(Entity, EndpointLifecycle)> = models
         .iter(world)
         .map(|(entity, component)| {
             let state = match &component.status {

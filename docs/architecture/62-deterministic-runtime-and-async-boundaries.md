@@ -189,6 +189,13 @@ existing `PhysicsJointDetachRequested` component condition, so idle updates
 also skip the exclusive graph transaction and its world query while detach
 still completes before joint admission.
 
+Co-simulation endpoint lifecycle publication retains Bevy's native exclusive
+`QueryState` for changed `SimComponent` owners. Each pass updates archetype
+membership and reads live status with the same system change ticks, collects
+transitions before structural mutation, then publishes them immediately in
+`Update` before the `PostUpdate` binding transaction. The query cache does not
+retain endpoint values or change binding revision admission.
+
 The pre-simulation `PreUpdate` order is `Lifecycle` → `IdentityAdmission` →
 `EntityIndex` → `SimulationAdmissionSet`. Lifecycle projection creates the ECS
 entities; the identity owner assigns their stable IDs; then the API registry
