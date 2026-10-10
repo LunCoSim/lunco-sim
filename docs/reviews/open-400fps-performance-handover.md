@@ -1,5 +1,65 @@
 # High-quality realtime performance handover
 
+## Auxiliary shadow-root scheduling investigation — 2026-10-11
+
+The readable `sample-borrow-after-tracy-20261011.tracy` capture identifies 13
+Core3d roots per rendered frame: one camera and 12 local light-shadow roots.
+Across three settled windows, Core3d appears 6,045 times for 465 rendered
+frames. The camera pipeline averages about 2.82 ms; individual auxiliary roots
+average about 0.62–0.72 ms. RenderGraph averages 17.72 ms and camera_driver
+12.28 ms. These are inclusive, overlapping Tracy spans under concurrent main
+PID 84260; they must not be summed or treated as clean frame acceptance.
+The complete CPU-owner extraction is
+`target/entity-tree-perf/sample-borrow-all-cpu-owners-20261011.json`.
+
+The fixed-loop owner returns when its Modelica admission barrier is closed;
+it does not block waiting for a worker. Native Avian physics and substep
+schedules already use the single-thread executor. A global single-thread
+Core3d executor trial passed the native shadow instrumentation dependency and
+buffer-order test, but its normal View/Build/View frame medians were
+16.595808/17.452488/16.461627 ms. The fresh unchanged run measured
+16.752612/20.972754/17.053684 ms, with a noisy Builder window; the earlier
+unchanged run measured 16.389593/16.953769/15.715703 ms. This does not establish
+a repeatable overall improvement. The executor trial was removed completely.
+No renderer, physics, solver, dependency or simulation-order change remains.
+
+Normal unchanged PID 385457 and trial PID 467314 each passed seven authored
+sandbox checks before and after replacement, readiness and error checks,
+advancing physics and the three invalid-assembly pause checks. Both retained
+High quality, the fixed cadence and 50 bodies/33 colliders/20 joints. Main
+PID 84260 overlapped all sampling windows. Trial screenshot inspection after
+dismissing the optional dataset popup confirms the rendered sandbox and
+shadows; it does not establish pixel equality. Both exited zero and released
+API 4202. No trial replay was needed after restoring the unchanged source.
+
+The trial Tracy file is unusable: the collector reported 238.32 MiB, while
+the saved file contained only 16,420,864 bytes and native CSV export failed.
+The unchanged control file matched its reported compressed size at 305,663,087
+bytes, but native export stalled with idle decompression workers and a busy
+reader. The exact owned exporter was inspected and terminated. Neither file
+supports a zone comparison, despite zero collector exits. Both profiled apps
+passed readiness, diagnostics, physics and replacement checks, exited zero
+and released API 4202 and profiler 8086. Logs and receipts remain under
+`target/entity-tree-perf/`, prefix `view-executor-`.
+
+Only task-owned older binary archives and raw captures were retired; their
+logs, receipts and extracted measurements remain. The validated current
+normal/Tracy archives and readable current capture remain. Live owned runtime
+runs temporarily reduced free disk space by about 1.3 GiB; the allocation
+owner has not been identified. Capture integrity now requires both a size
+check and a successful native export, with disk space checked while the app
+is live. The validated normal binary is restored from its verified archive,
+SHA-256 `149fd9e7b4c83c5c51c9404e1b20572c55109808014783468b3ac2163fc36b1c`.
+Its existing 24-check exact replay remains valid.
+
+Next, trace the native point/spot `RootNonCameraView` routing and GPU-preparation
+dependencies to determine whether the application render adapter can provide
+a compact shared-shadow schedule. It must retain early/late shadow passes,
+native deferred-buffer order, GPU/direct-render admission and directional
+camera shadows. Require pass-inventory evidence, visible shadows and a normal
+artifact comparison before accepting that change. Overall loading, visual
+FPS, physics throughput and clean acceptance remain open.
+
 ## Single-borrow snapshot slot updates — 2026-10-11
 
 `lunco-port-core::ScalarPortMap::upsert_samples` validates the retained slot's

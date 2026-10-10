@@ -24,6 +24,15 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   `ss -ltnp`/`ss -tnp`. A concurrent Tracy client can occupy 8086 and move the
   owned app to the next port; pass that port with `tracy-capture -p`. A capture
   from another process is not evidence for the task scene.
+  A zero collector exit does not prove capture integrity. Compare the saved
+  file size with the collector's reported compressed size and require a
+  successful native CSV export before using its zones. A size mismatch,
+  parser failure or stalled export leaves that capture unusable. Inspect the
+  exact owned exporter process before terminating an unsuccessful read; do not
+  restart a still-running export solely because an observation timed out.
+  Check disk space while the owned app is live as well as after it exits.
+  Native capture writing can overlap runtime allocations, and the collector
+  can report success despite a truncated file.
 - Compare Builder and View with the same scene, camera, rendering-quality
   settings, physics substeps, shadow settings, and terrain assets. A Builder-
   only cost usually means an editor observer, rebuild, projection, or UI path,
