@@ -1863,7 +1863,7 @@ fn validate_port_input_writes(
     let global_id = world.get::<GlobalEntityId>(target).copied();
     let mut prepared = Vec::with_capacity(writes.len());
     for (port, value) in writes {
-        match registry.prepare_input_write(world, target, port, *value) {
+        match registry.prepare_input_write(world, target, port.as_str(), *value) {
             Ok(write) => prepared.push(write),
             Err(error) => {
                 if matches!(

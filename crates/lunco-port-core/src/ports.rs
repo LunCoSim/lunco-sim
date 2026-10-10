@@ -1386,11 +1386,12 @@ impl PreparedPortWrite {
 ///
 /// Backends are registered (in dependency-correct order) by their owning crate's
 /// plugin; the registry folds their discovery and access operations. Registration order is
-/// resolution precedence (first match wins). `Clone` is cheap (a `Vec` of `Copy`
-/// `fn` pointers) so a `&mut World` caller clones it out before writing.
+/// resolution precedence (first match wins). Clones share an immutable backend
+/// table, so a `&mut World` caller can retain a snapshot without allocating.
+/// Registration detaches a shared table and preserves each snapshot's order.
 #[derive(Resource, Clone)]
 pub struct PortRegistry {
-    backends: Vec<PortBackend>,
+    backends: Arc<Vec<PortBackend>>,
 }
 
 impl Default for PortRegistry {
@@ -1400,7 +1401,7 @@ impl Default for PortRegistry {
         // a UI plugin, so physical, scripted and future participants share one
         // command/value spelling.
         Self {
-            backends: vec![INPUT_PORTS_BACKEND],
+            backends: Arc::new(vec![INPUT_PORTS_BACKEND]),
         }
     }
 }
@@ -1504,7 +1505,7 @@ impl PortRegistry {
     /// must claim a name only when it genuinely owns it. One that would otherwise
     /// have to guess needs an authoritative set to answer from instead.
     pub fn register(&mut self, backend: PortBackend) {
-        self.backends.push(backend);
+        Arc::make_mut(&mut self.backends).push(backend);
     }
 
     /// Enumerate every entity owned by at least one registered port backend.
@@ -1942,33 +1943,35 @@ impl PortRegistry {
 
     /// Validate a write without changing simulation state. Callers that need
     /// an all-or-none multi-port operation prepare every write before applying
-    /// any of them.
+    /// any of them. Compiled callers pass their shared name identity so admission
+    /// does not allocate another name on every exchange.
     pub fn prepare_input_write(
         &self,
         world: &World,
         entity: Entity,
-        name: &str,
+        name: impl Into<Arc<str>>,
         value: f64,
     ) -> Result<PreparedPortWrite, PortWriteError> {
-        let Some(owner) = self.port_owner_index(world, entity, name, ResolvedPortSide::Input)
+        let name = name.into();
+        let Some(owner) = self.port_owner_index(world, entity, &name, ResolvedPortSide::Input)
         else {
             return Err(PortWriteError {
-                port: name.to_owned(),
+                port: name.to_string(),
                 owner: None,
                 kind: PortWriteErrorKind::UnknownInput,
             });
         };
         let (direction, metadata) = self
-            .port_metadata_for_backend(world, entity, owner, name, ResolvedPortSide::Input)
+            .port_metadata_for_backend(world, entity, owner, &name, ResolvedPortSide::Input)
             .ok_or_else(|| PortWriteError {
-                port: name.to_owned(),
+                port: name.to_string(),
                 owner: None,
                 kind: PortWriteErrorKind::MetadataUnavailable,
             })?;
         metadata
             .validate_contract()
             .map_err(|error| PortWriteError {
-                port: name.to_owned(),
+                port: name.to_string(),
                 owner: Some(metadata.source.clone()),
                 kind: PortWriteErrorKind::InvalidMetadata {
                     reason: error.to_string(),
@@ -1976,7 +1979,7 @@ impl PortRegistry {
             })?;
         if !metadata.writable {
             return Err(PortWriteError {
-                port: name.to_owned(),
+                port: name.to_string(),
                 owner: Some(metadata.source),
                 kind: PortWriteErrorKind::NotWritable,
             });
@@ -1984,7 +1987,7 @@ impl PortRegistry {
         metadata
             .validate_value(value)
             .map_err(|reason| PortWriteError {
-                port: name.to_owned(),
+                port: name.to_string(),
                 owner: Some(metadata.source.clone()),
                 kind: PortWriteErrorKind::InvalidValue {
                     value,
@@ -1997,10 +2000,10 @@ impl PortRegistry {
         let backend = &self.backends[owner];
         let slot = backend
             .resolve_input
-            .and_then(|resolve| resolve(world, entity, name))
+            .and_then(|resolve| resolve(world, entity, &name))
             .filter(|_| backend.write_slot.is_some())
             .ok_or_else(|| PortWriteError {
-                port: name.to_owned(),
+                port: name.to_string(),
                 owner: Some(metadata.source.clone()),
                 kind: PortWriteErrorKind::UnsupportedWritePath,
             })?;
@@ -2008,14 +2011,14 @@ impl PortRegistry {
             .get_resource::<PortTopologyRevision>()
             .map(|revision| revision.0)
             .ok_or_else(|| PortWriteError {
-                port: name.to_owned(),
+                port: name.to_string(),
                 owner: Some(metadata.source.clone()),
                 kind: PortWriteErrorKind::TopologyRevisionUnavailable,
             })?;
         Ok(PreparedPortWrite {
             backend: owner,
             entity,
-            name: Arc::from(name),
+            name,
             direction,
             metadata,
             revision,
@@ -2237,7 +2240,7 @@ impl PortRegistry {
                 kind: PortWriteErrorKind::StaleResolution,
             });
         }
-        let prepared = self.prepare_input_write(world, entity, &r.name, value)?;
+        let prepared = self.prepare_input_write(world, entity, Arc::clone(&r.name), value)?;
         if prepared.backend != r.backend
             || prepared.slot != r.slot
             || prepared.revision != r.revision
@@ -2285,6 +2288,8 @@ impl PortRegistry {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::{
         PortBackend, PortCollisionDirection, PortDeclarationQuery, PortDirection, PortMetadata,
         PortNameSetKey, PortRegistry, PortTopologyRevision, PortValueType, ScalarPortMap,
@@ -2678,6 +2683,31 @@ mod tests {
     };
 
     #[test]
+    fn registry_snapshots_share_storage_and_isolate_registration_precedence() {
+        let mut world = test_world();
+        let entity = world.spawn_empty().id();
+        let mut registry = PortRegistry::default();
+        registry.register(OWNER_B_INPUT);
+        let snapshot = registry.clone();
+        assert!(Arc::ptr_eq(&registry.backends, &snapshot.backends));
+        let original = snapshot.resolve_input(&world, entity, "release").unwrap();
+
+        registry.register(OWNER_A_INPUT);
+        assert!(!Arc::ptr_eq(&registry.backends, &snapshot.backends));
+        assert_eq!(snapshot.entity_port_owners(&world, entity).len(), 1);
+        assert_eq!(registry.entity_port_owners(&world, entity).len(), 2);
+        let current = registry.resolve_input(&world, entity, "release").unwrap();
+        assert_eq!(current.metadata, original.metadata);
+        assert_eq!(current.backend, original.backend);
+        snapshot
+            .write_resolved(&mut world, entity, &original, 0.5)
+            .unwrap();
+        registry
+            .write_resolved(&mut world, entity, &original, 0.5)
+            .unwrap();
+    }
+
+    #[test]
     fn declared_input_owner_is_never_shadowed_by_a_lower_precedence_slot() {
         #[derive(Component)]
         struct StatePort(f64);
@@ -2844,7 +2874,7 @@ mod tests {
             })
             .id();
         let registry = PortRegistry {
-            backends: vec![PortBackend {
+            backends: Arc::new(vec![PortBackend {
                 list_entities: |_, _| {},
                 topology_key: |_, _| 0,
                 declare_ports: |world, entity, ports| {
@@ -2880,9 +2910,13 @@ mod tests {
                     assert_eq!(slot, 7);
                     world.get_mut::<Input>(entity).unwrap().value = value;
                 }),
-            }],
+            }]),
         };
         let locator = registry.resolve_input(&world, entity, "signal").unwrap();
+        let prepared = registry
+            .prepare_input_write(&world, entity, Arc::clone(&locator.name), 0.5)
+            .unwrap();
+        assert!(Arc::ptr_eq(&locator.name, &prepared.name));
         world
             .resource::<MetadataReads>()
             .0

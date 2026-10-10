@@ -1,5 +1,57 @@
 # High-quality realtime performance handover
 
+## Shared port-admission allocations — 2026-10-10
+
+`lunco-port-core` registry clones share an immutable backend table; registration
+uses copy-on-write to preserve each snapshot's precedence. Canonical input-write
+preparation accepts an `Arc<str>` identity, and resolved writes retain their
+locator's name allocation. This removes a backend-table allocation per registry
+clone and a name allocation per admitted resolved write. Live owner discovery,
+metadata, writable/range checks, revision and slot validation, rejection order
+and batch admission remain unchanged. Metadata can still allocate. This is
+generic memory ownership, without a changeable policy decision or new hook.
+Summation order, f64 values, solver, substeps and external dependencies are unchanged.
+
+Twenty-one focused native port tests pass, including snapshot sharing and
+registration isolation, shared name identity, invalid values, read-only owners,
+stale revisions, retired slots and all-or-none batch rejection. Native normal
+and Tracy builds pass with the existing unused `PreparedSolveCache::clear`
+warning. The skill catalogue passes (43).
+
+Tracy baseline PID 2859442 and changed PID 2883696/API 4202 each pass 30 authored
+smoke/history/consent checks and scene replacement. Both apps and collectors exit
+zero and close their ports. Settled propagation p50 over +1.5 to +7.5 s after
+View/Build/View activation is 0.263747/0.279526/0.255201 ms before and
+0.254894/0.252069/0.233334 ms after. The first View mean rises slightly while
+the other two means fall; different clocks and workload prevent a causal
+product-performance claim.
+
+Normal baseline PID 2870871 and changed PID 2885256 each pass another 30 authored
+checks and replacement, exit zero and close API 4202. High quality, the same
+authored camera, 50 bodies/33 colliders/20 joints and advancing physics remain.
+Camera poses stay exact within each run; cross-run render-coordinate differences
+are below five micrometres and 1e-7 per quaternion component. Changed
+normal PID 2886447 passes the 24-check exact replay against the retained fresh
+56-row baseline reference at 780 ticks, including deliberate mismatch rejection.
+This covers four rovers and one compute thread, not the ten-profile matrix.
+PID 2886492 passes all 11 authored port-owner collision checks, including the
+expected negative loaded-stage lint verdict and visible winning-owner precedence.
+Both test processes exit zero and close API 4202.
+
+Overall FPS remains unresolved: the first changed normal run has half-second
+frame spikes, and a separate unchanged control reproduces spikes up to 660 ms.
+The follow-up changed control overlaps Cargo PID 2895400 in the `usd` worktree;
+that build is left untouched. Both controls exit zero and close their port.
+These runs do not establish loading, frame-time or physics-performance gains.
+The initial shadow audit identifies twelve spotlight maps, zero point lights,
+and no duplicate standard/shader material bindings among 206 registered meshes.
+Authored shadows and quality remain intact; long-frame attribution remains open.
+
+Receipts, traces, comparisons and archived artifacts are under
+`target/entity-tree-perf/`, prefix `port-snapshot-`. Normal SHA-256:
+`25dbca3dee81ba798b889be9d9b0054ada36e5981c23b436253142957309b676`;
+Tracy: `bf9bca7c13f8f81bf707e6d5d46398f620abf886f8ce2f500bfb0db743696f5e`.
+
 ## Eligible dynamic-body admission gate — 2026-10-10
 
 `lunco-usd-sim` shares one native archetype filter between dynamic admission and

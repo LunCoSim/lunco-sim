@@ -305,9 +305,12 @@ plane uses process-local slots.
   `PortDeclarationQuery`; indexed owners do not enumerate their other ports. They
   use the canonical input-write preparation to verify the live precedence-winning
   owner, metadata, topology revision, slot, and proposed value once, then commit
-  directly within the same exclusive World boundary. A single resolved write does not allocate
+  directly within the same exclusive World boundary. Input-write preparation
+  accepts a shared `Arc<str>` name or a name that converts to it; resolved writes
+  retain the locator's name allocation. A single resolved write does not allocate
   a prepared batch or duplicate its validation; batch writes retain all-or-none
-  admission before any commit.
+  admission before any commit. Registry snapshots share the immutable backend
+  table; registration uses copy-on-write to preserve each snapshot's precedence.
 - Dynamic name/value surfaces use `PortMap<T>`: one shared name allocation is
   indexed by `Arc<str>` and stored beside a dense value slot. Existing-name
   sample updates do not touch topology identity. Adds/removes advance the

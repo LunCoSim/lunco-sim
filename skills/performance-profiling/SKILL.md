@@ -199,9 +199,12 @@ Map-backed owners query the requested name directly; named queries retain only
 the first matching direction without constructing owned rows. Preserve the
 same declaration order and live metadata checks; topology publication alone
 cannot guard an owner edit before its scheduled publication pass.
-`write_resolved` uses canonical input-write
-preparation once, compares the live owner with its locator, then commits within
-the same exclusive World boundary without a single-element batch allocation.
+`write_resolved` shares its locator's `Arc<str>` with canonical input-write
+preparation, compares the live owner with its locator, then commits within
+the same exclusive World boundary without a name or single-element batch allocation.
+Registry clones share the immutable backend table; registration detaches it
+without changing existing snapshots or their precedence. Verify snapshot
+isolation and shared name identity when changing those allocation boundaries.
 Preserve live precedence, metadata, topology revision, slot, value checks, and
 rejection ordering. Separately prepared batches still revalidate every write
 before committing any of them.

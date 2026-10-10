@@ -201,8 +201,8 @@ impl CompiledWiring {
         self.targets.clear();
         self.target_indices.clear();
 
-        // Registry is `Copy` fn-pointers; clone it out so resolution below borrows
-        // `world` immutably alongside the collected connections.
+        // Share the registry snapshot so resolution below borrows `world`
+        // immutably alongside the collected connections.
         let registry = world.resource::<PortRegistry>().clone();
         let mut q = world.query_filtered::<&SimConnection, With<BoundConnection>>();
         let conns: Vec<SimConnection> = q.iter(world).cloned().collect();
@@ -527,8 +527,8 @@ fn propagate_connections_with_cache(
     scratch.broken.clear();
     scratch.pending.clear();
     scratch.landed_targets.clear();
-    // Registry is a `Vec` of `Copy` backend fn-pointers; clone it out so the
-    // write phase can take `&mut World` without holding a resource borrow.
+    // Share the registry snapshot so the write phase can take `&mut World`
+    // without holding a resource borrow or copying the backend table.
     let registry = world.resource::<PortRegistry>().clone();
 
     // Phase 1: recompile the fabric iff the connection set or port surface changed. The compiled
