@@ -53,6 +53,16 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   actual shadow image before admitting a capture as performance evidence.
   Unsupported timestamp features or
   exhausted per-frame queries leave incomplete GPU evidence, not zero cost.
+- For intermittent long frames, export individual CPU zones and correlate them
+  with perspective/window markers. Exclude screenshot delivery, authored test
+  verdicts and perspective transitions from settled statistics. Inclusive
+  render/extraction schedules can contain a native `queue_submit` wait; report
+  the submission boundary separately from owner computation. A long submission
+  span alone does not establish its driver, GPU or scheduling cause. Retain
+  periodic GPU clocks/utilization, CPU pressure and concurrent process evidence,
+  then run the same exact uninstrumented artifact separately. Failure to reproduce
+  an earlier tail in a later run does not prove a fix. Record visible popup/UI
+  state alongside camera and graphics settings.
 
 ## Architecture checks
 

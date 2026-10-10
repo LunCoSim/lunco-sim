@@ -1,5 +1,49 @@
 # High-quality realtime performance handover
 
+## Long-frame attribution follow-up — 2026-10-10
+
+Retained port-snapshot traces localize two stalls to native
+`queue_submit{count=130}`: 187.676 ms during settled Builder in the baseline
+and 132.181 ms beginning 92 ms after Builder activation in the changed capture.
+The latter is transition cost and is excluded from settled comparisons.
+The surrounding render/extraction schedules include that wait; their inclusive
+times do not identify additional work. This identifies the submission boundary,
+without establishing why the driver blocked or explaining the earlier
+uninstrumented half-second tails. Screenshot delivery and authored test
+`on_tick` spans are separate measurement work and are excluded.
+
+A longer diagnostic uses the same archived artifacts, High quality and
+View/Build/View, with three twenty-second sample windows. Tracy PID 3087469
+and normal PID 3089658 each retain the same camera within the run,
+50 bodies/33 colliders/20 joints, readiness and advancing physics. Neither
+records another simulator or Cargo at launch. Browser/desktop processes remain
+active; half-second GPU/process/CPU-pressure samples are retained. The visual
+resource consent popup remains open, so these are observations of that UI state.
+Screenshots show the rendered scene and shadows. Both apps exit zero, the
+Tracy collector exits zero, and API 4202/profiler 8086 close. The exact normal
+artifact is restored afterward; no runtime source or authored assets change.
+
+Normal sampled frame p50 is 10.384831/10.554227/10.478185 ms, with
+p99 15.817540/16.109174/15.140808 ms and maxima
+49.885877/24.422784/16.415535 ms. Readiness clears at 2.528400 s.
+These after-only samples establish neither a performance gain nor a fix for
+the intermittent large stalls. No behavior gates or replay are repeated for
+this diagnostic-only follow-up; the preceding checkpoint retains that evidence.
+
+At +1.5 to +20.5 s after each perspective activation, Tracy shared early shadow
+p50 is 0.528128/0.525824/0.525056 ms per spotlight view; camera early shadow
+p50 is 1.693184/1.696256/1.696384 ms. Counts remain approximately twelve shared
+views per camera frame, with partial frames at window boundaries. Inclusive
+GPU sums are not GPU frame time. Workbench paint p50 is
+0.202057/0.849624/0.208920 ms, and propagation p50 is
+0.153446/0.154774/0.157274 ms. No application-owned CPU zone exceeds 30 ms
+inside those windows. The larger stalls do not reproduce here; stable shadow
+cost and submission-tail causes remain distinct optimization investigations.
+
+Receipts, trace, monitoring, screenshots, windowed owner summaries and the
+analysis helper are under `target/entity-tree-perf/`, prefix `long-frames-`.
+Artifact hashes match the preceding port-admission checkpoint.
+
 ## Shared port-admission allocations — 2026-10-10
 
 `lunco-port-core` registry clones share an immutable backend table; registration
