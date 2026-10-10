@@ -5036,7 +5036,7 @@ mod draw_partition_tests {
                 .get::<TerrainAuthoredMaps>(terrain)
                 .expect("initial USD look is projected")
                 .albedo,
-            Some(first)
+            Some(first.into())
         );
 
         *app.world_mut()
@@ -5050,7 +5050,7 @@ mod draw_partition_tests {
                 .get::<TerrainAuthoredMaps>(terrain)
                 .expect("reauthored USD look keeps the terrain view")
                 .albedo,
-            Some(second)
+            Some(second.into())
         );
     }
 

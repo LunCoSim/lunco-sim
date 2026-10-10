@@ -718,3 +718,27 @@ together: travel is steering-axis cross axle-axis, transformed by the physical
 mount. Collinear axes are invalid. Align front/rear station names and the
 Modelica drivetrain `forward_yaw_offset` with that travel direction; native
 navigation uses −Z at zero offset, +X uses −π/2. Verify departure physically.
+
+## Thin contacts and source-derived proxies
+
+Keep CCD enabled on bodies whose thin contact surfaces can cross terrain within
+one substep. DEM and ring colliders use the terrain owner's sampled triangle
+mesh so Avian's nonlinear CCD supports rotating and offset compound bodies.
+Changing CCD to a translation-only mode does not preserve rotational sweeps.
+
+Use `assembly_builder::collision_proxy_plan(doc, edit_target, source, proxy)`
+for a composed Cube or Cylinder sibling in the same parent frame. It copies
+source dimensions and the ordered translate/rotateXYZ/scale stack into an
+invisible `purpose=proxy` collider and authors its geometry-source relationship.
+Unsupported stacks or shapes reject the plan. Compose geometry edits first,
+then derive proxies from that settled revision. Put moving members below their
+rigid body and fixed mounting hardware below the parent body; joint-pair
+self-collision suppression must not suppress contact with a separate rover.
+
+The shared simulation installs `lunco-physics::ArticulatedCcdPlugin` with Avian's
+body-only CCD plugin disabled. CCD sweeps the solved COM trajectory and advances
+all dynamic bodies joined through active `PhysicsJointLink`s by the earliest
+contact fraction. It preserves compound/child collider frames, sensors,
+collision filtering, sweep mode, and velocity thresholds. An unsupported sweep
+faults the runtime; do not treat it as a missed contact. CCD does not add motor
+integration, joint tuning, or a render-pose correction.

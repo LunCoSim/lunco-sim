@@ -42,6 +42,7 @@
 pub mod annotations;
 pub mod band;
 pub mod collider_ring;
+mod collision;
 pub mod derived_layers;
 pub mod georef;
 pub mod oracle;

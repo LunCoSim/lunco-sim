@@ -210,7 +210,7 @@ visibility ranges provide the bounded presentation cost.
 A crater is single-valued (`y = f(x,z)`); a cave/overhang is **multi-valued** —
 two surfaces stacked in `z`. No heightfield can express it. Going fully
 volumetric (SDF/voxel everywhere) to "unify" would throw away the cheap
-heightfield, the avian heightfield collider, and per-tile determinism for the 99%
+heightfield oracle, sampled triangle colliders, and per-tile determinism for the 99%
 of terrain that genuinely *is* single-valued — the wrong trade. Instead:
 
 - the **oracle owns only the single-valued surface**;
@@ -220,9 +220,8 @@ of terrain that genuinely *is* single-valued — the wrong trade. Instead:
 - the **carve/mask channel is the single, well-defined seam** where the two meet.
 
 The one net-new mechanism a cave forces is the carve channel: the baker clips
-tris inside the mask, and — since **avian heightfield colliders cannot have
-holes** — a tile touching a mouth swaps its collider *heightfield → trimesh* for
-that patch (bounded to mouth tiles). The inserted tube brings its own collider
+tris inside the mask in both the visual mesh and the sampled collision mesh
+for that patch (bounded to mouth tiles). The inserted tube brings its own collider
 and takes over inside. Make the carve field a small composable **SDF** and "a
 cave mouth carved into a crater wall" is just a smooth-union of the two, with no
 special-casing.
@@ -588,3 +587,27 @@ re-stamp swap). Only the avian collider + Bevy mesh derive stays in
   canonical live-Stage source-of-truth model terrain projects from.
 - [`efficiency-and-maintainability.md` § Substrate C](efficiency-and-maintainability.md#substrate-c--mobility-the-structurevolatility-classifier)
   — the mobility classifier behind the rovers that drive the collider ring.
+
+## Sampled collision surface
+
+`lunco-terrain-surface::collision` cooks every static DEM and streamed collider
+ring tile through the same `terrain_collider` owner. The height oracle remains
+the source of samples, quantization, tile boundaries, and rebasing. Parry's
+`HeightField::to_trimesh` supplies its exact grid triangulation; the native
+triangle mesh merges shared vertices and fixes internal-edge normals.
+
+This collision representation supports translation and rotation sweeps for
+Avian's nonlinear CCD, including offset compound colliders. Baking remains in
+the existing worker pipeline, and completed ring batches enter in canonical
+coordinate order. Invalid samples or failed cooks raise `terrain-collision-cook`
+and hold the runtime before admitting an incomplete batch.
+
+The shared simulation's `lunco-physics::ArticulatedCcdPlugin` is the sole CCD
+pose writer. It sweeps the solver's accumulated COM translation and rotation,
+then applies each dynamic joint island's earliest contact fraction to every
+member's solved delta. This preserves articulated suspension when a pad meets
+terrain after joint solving. The operation reads all sweeps before writing any
+pose; fraction reduction uses `min`, and island membership comes from the
+existing active `PhysicsJointLink` graph. Motor integration and contact impulse
+solving remain with Avian. Unsupported shape sweeps raise
+`physics-ccd-unsupported` and hold physics.

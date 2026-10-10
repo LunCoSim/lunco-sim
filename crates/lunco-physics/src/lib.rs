@@ -44,6 +44,8 @@ use bevy::prelude::*;
 use std::time::Duration;
 
 pub mod assembly;
+pub mod ccd;
+pub use ccd::ArticulatedCcdPlugin;
 pub mod avian_backend;
 pub mod escape;
 pub mod force_ports;

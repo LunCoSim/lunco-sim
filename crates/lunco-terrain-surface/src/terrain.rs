@@ -3,7 +3,7 @@
 //! Fire the [`SpawnDemTerrain`] command (`uri` = a `lunar_terrain_exporter` site
 //! directory). The DEM bytes are read through `lunco-storage` (cross-platform),
 //! decoded and cropped **off the main thread**, then a single static entity is
-//! spawned with an avian `Collider::heightfield` (always) and a Bevy mesh (when
+//! spawned with an Avian sampled triangle collider (always) and a Bevy mesh (when
 //! render assets exist — the headless server builds colliders only, so physics
 //! stays identical server/client). Anchored into the big_space world grid at the
 //! origin cell, mirroring `lunco-obstacle-field`.
@@ -238,7 +238,7 @@ pub struct DemTerrainRequest {
     /// production visual path (default ON from the USD bridge); `false` = the
     /// single static mesh.
     pub lod_viz: bool,
-    /// Opt-in: stream a canonical-res heightfield collider ring around runtime
+    /// Opt-in: stream a canonical-res sampled terrain collider ring around runtime
     /// physical support footprints instead of one static full-DEM collider (see
     /// [`crate::collider_ring`]). When `true`
     /// the static collider is **suppressed** (the ring replaces it — overlapping
@@ -886,9 +886,9 @@ register_commands!(
 struct DemBuild {
     /// The static visual mesh — `None` in `lod_viz` mode (tiles draw instead).
     mesh: Option<MeshData>,
-    /// The static heightfield collider, **built off-thread** — `None` in
-    /// `collider_ring` mode (a streamed collider ring replaces it). Constructing the
-    /// parry heightfield for a multi-million-point DEM is expensive, so it happens in
+    /// The static sampled terrain collider, **built off-thread** — `None` in
+    /// `collider_ring` mode (a streamed collider ring replaces it). Cooking the
+    /// collision mesh for a multi-million-point DEM is expensive, so it happens in
     /// the build task; the main thread only inserts the finished component.
     collider: Option<Collider>,
     /// The composed surface oracle (raster base + analytic crater/edit modifiers),
@@ -958,10 +958,10 @@ fn build_dem_products(
             return Err("static collider requested without a materialized terrain grid".into());
         };
         let half_extent = grid.half_extent as f64;
-        Some(Collider::heightfield(
+        Some(crate::collision::terrain_collider(
             grid.to_avian_heights(),
             DVec3::new(2.0 * half_extent, 1.0, 2.0 * half_extent),
-        ))
+        )?)
     };
     let mesh = if lod_viz {
         None
@@ -2076,7 +2076,7 @@ pub(crate) struct DemRestampTask(
 );
 
 /// Debounce state for the static collider consumer of [`crate::surface_change::TerrainSurfaceChange`].
-/// Once a committed surface settles, the static heightfield collider is rebuilt
+/// Once a committed surface settles, the static sampled terrain collider is rebuilt
 /// off-thread from the current oracle. Decoupling it from the visual swap means
 /// dragging a slider doesn't wait on repeated multi-million-point collider builds.
 #[derive(Component)]
@@ -2084,7 +2084,7 @@ struct DemColliderDirty(Timer);
 
 /// In-flight off-thread static-collider rebuild (see [`DemColliderDirty`]).
 #[derive(Component)]
-struct DemColliderTask(Task<(u64, Collider)>);
+struct DemColliderTask(Task<(u64, Result<Collider, String>)>);
 
 /// Settle delay before the (heavy) static collider is rebuilt after the last visual
 /// re-stamp. Longer than the restamp debounce so a burst of edits rebuilds the
@@ -2551,7 +2551,7 @@ pub(crate) fn finish_dem_restamp(
 
 /// Debounced **static-collider rebuild**, decoupled from the visual re-stamp. A new
 /// shared surface revision resets the settle timer; once edits stop, this builds the
-/// heightfield collider OFF-THREAD from the current oracle. A stale in-flight result
+/// sampled terrain collider OFF-THREAD from the current oracle. A stale in-flight result
 /// is rejected by its oracle key before it can replace the current collider.
 fn start_dem_collider(
     time: Res<Time>,
@@ -2608,7 +2608,10 @@ fn start_dem_collider(
             let h = grid.half_extent as f64;
             (
                 surface_key,
-                Collider::heightfield(grid.to_avian_heights(), DVec3::new(2.0 * h, 1.0, 2.0 * h)),
+                crate::collision::terrain_collider(
+                    grid.to_avian_heights(),
+                    DVec3::new(2.0 * h, 1.0, 2.0 * h),
+                ),
             )
         });
         commands.entity(entity).try_insert(DemColliderTask(task));
@@ -2618,6 +2621,7 @@ fn start_dem_collider(
 /// Insert finished off-thread static colliders (see [`start_dem_collider`]).
 fn finish_dem_collider(
     mut commands: Commands,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
     mut q: Query<(
         Entity,
         &mut DemColliderTask,
@@ -2641,10 +2645,22 @@ fn finish_dem_collider(
             }
             continue;
         }
-        commands
-            .entity(entity)
-            .try_remove::<DemColliderTask>()
-            .try_insert((RigidBody::Static, collider));
+        commands.entity(entity).try_remove::<DemColliderTask>();
+        match collider {
+            Ok(collider) => {
+                commands
+                    .entity(entity)
+                    .try_insert((RigidBody::Static, collider));
+            }
+            Err(detail) => {
+                faults.raise(
+                    "terrain-collision-cook",
+                    Some(entity),
+                    "static terrain collider",
+                    detail,
+                );
+            }
+        }
     }
 }
 

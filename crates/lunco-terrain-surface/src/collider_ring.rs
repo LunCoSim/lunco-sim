@@ -1,9 +1,9 @@
 //! Per-physical-body **physics collider ring** (milestone M7, physics half).
 //!
 //! Opt-in via `collider_ring` (USD `lunco:terrain:colliderRing`). When on, the
-//! single static full-DEM heightfield collider is **suppressed** (replacing it,
-//! not augmenting — overlapping heightfields would double-up contacts) and instead
-//! a small ring of per-tile `Collider::heightfield`s is streamed around the moving
+//! single static full-DEM sampled terrain collider is **suppressed** (replacing it,
+//! not augmenting — overlapping collision surfaces would double-up contacts) and instead
+//! a small ring of per-tile sampled triangle colliders is streamed around the moving
 //! dynamic physical assemblies, each sampled from the retained DEM
 //! (`DemHeightField`).
 //!
@@ -202,8 +202,8 @@ pub struct ColliderTiles {
 /// tile's `CellCoord` at that same height (mirroring the visual CDLOD tiles).
 #[derive(Component, Default)]
 pub struct PendingColliderBakes(
-    HashMap<QuadCoord, Task<(Collider, f64)>>,
-    HashMap<QuadCoord, (Collider, f64)>,
+    HashMap<QuadCoord, Task<Result<(Collider, f64), String>>>,
+    HashMap<QuadCoord, Result<(Collider, f64), String>>,
 );
 
 /// Back-pointer from a spawned collider tile to its owning terrain. Tiles are
@@ -257,29 +257,6 @@ fn sample_heights_xz(
         cols.push(col);
     }
     cols
-}
-
-/// Build one tile's heightfield collider — `Collider::heightfield` layout
-/// (`[x][z]` columns, parry centres the field at the entity origin) but through
-/// parry directly so `FIX_INTERNAL_EDGES` is set: without it every interior
-/// triangle edge is a raw convex edge, and a loaded wheel pressing into a steep
-/// bowl wall (solver slop penetrates a few mm) catches horizontal contact
-/// normals off those edges — the classic tiled-heightfield "invisible bump/wall",
-/// load-dependent and worst on crater walls.
-fn heightfield_collider(heights: Vec<Vec<f64>>, side: f64) -> Collider {
-    use avian3d::parry::shape::{HeightFieldFlags, SharedShape};
-    use avian3d::parry::utils::Array2;
-    let rows = heights.len();
-    let cols = heights.first().map_or(0, Vec::len);
-    let data: Vec<f64> = heights.into_iter().flatten().collect();
-    debug_assert_eq!(data.len(), rows * cols);
-    let grid = Array2::new(rows, cols, data);
-    SharedShape::heightfield_with_flags(
-        grid,
-        DVec3::new(side, 1.0, side),
-        HeightFieldFlags::FIX_INTERNAL_EDGES,
-    )
-    .into()
 }
 
 /// Re-bake the resident ring when its shape is retuned.
@@ -1016,15 +993,19 @@ pub(crate) fn update_collider_ring(
     )>,
     mut ring_nodes: Local<Vec<QuadCoord>>,
     mut wanted: Local<HashSet<QuadCoord>>,
-    mut done: Local<Vec<(QuadCoord, Collider, f64)>>,
+    mut done: Local<Vec<(QuadCoord, Result<(Collider, f64), String>)>>,
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial: Query<(Option<&CellCoord>, &Transform)>,
     active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
 ) {
+    if faults.first.is_some() {
+        return;
+    }
     let pool = AsyncComputeTaskPool::get();
 
-    // Per-frame heightfield-bake budget, shared across all terrains. On WEB the
+    // Per-frame terrain-bake budget, shared across all terrains. On WEB the
     // `AsyncComputeTaskPool` has no threads: a spawned bake is a synchronous
     // future that runs to completion on the MAIN thread the instant it is polled.
     // The initial 3×3 ring per rover is ~a dozen tiles × 161² oracle samples; baking
@@ -1176,15 +1157,15 @@ pub(crate) fn update_collider_ring(
         let done = &mut *done;
         pending.0.retain(
             |coord, task| match block_on(future::poll_once(&mut *task)) {
-                Some((collider, origin_y)) => {
-                    done.push((*coord, collider, origin_y));
+                Some(result) => {
+                    done.push((*coord, result));
                     false
                 }
                 None => true,
             },
         );
-        for (coord, collider, origin_y) in done.drain(..) {
-            pending.1.insert(coord, (collider, origin_y));
+        for (coord, result) in done.drain(..) {
+            pending.1.insert(coord, result);
         }
         // Admit the completed batch in canonical coordinate order. Worker
         // completion and HashMap iteration must not choose collider entity IDs
@@ -1195,15 +1176,22 @@ pub(crate) fn update_collider_ring(
                     || pending.1.contains_key(coord)
             })
         {
-            done.extend(
-                pending
-                    .1
-                    .drain()
-                    .map(|(coord, (collider, y))| (coord, collider, y)),
-            );
-            done.sort_unstable_by_key(|(coord, _, _)| (coord.depth, coord.x, coord.z));
+            done.extend(pending.1.drain().map(|(coord, result)| (coord, result)));
+            done.sort_unstable_by_key(|(coord, _)| (coord.depth, coord.x, coord.z));
         }
-        for (coord, collider, origin_y) in done.drain(..) {
+        if let Some((coord, Err(detail))) = done.iter().find(|(_, result)| result.is_err()) {
+            faults.raise(
+                "terrain-collision-cook",
+                Some(terrain),
+                "terrain collider ring",
+                format!("tile {coord:?}: {detail}"),
+            );
+            return;
+        }
+        for (coord, result) in done.drain(..) {
+            let Ok((collider, origin_y)) = result else {
+                unreachable!("batch errors checked before admission");
+            };
             let region = qt.region(coord);
             let center = region.center;
             // Anchor the tile's CellCoord at the same `origin_y` its heightfield
@@ -1291,7 +1279,8 @@ pub(crate) fn update_collider_ring(
                 // the spawn site anchors the CellCoord at the same height.
                 let origin_y = oracle_arc.height_at(region.center[0], region.center[1]);
                 let heights = sample_heights_xz(&oracle_arc, region, res, origin_y, band);
-                (heightfield_collider(heights, side), origin_y)
+                crate::collision::terrain_collider(heights, DVec3::new(side, 1.0, side))
+                    .map(|collider| (collider, origin_y))
             });
             pending.0.insert(*coord, task);
         }
@@ -2146,7 +2135,7 @@ pub(crate) fn validate_initial_physics_poses(
         let terrain_from_physics = terrain_rotation.0.inverse();
         let terrain_up = terrain_rotation.0 * DVec3::Y;
         // Initial-state validation must query the same surface product that the
-        // streamed heightfield collider contains. The collider is intentionally
+        // streamed sampled terrain collider contains. The collider is intentionally
         // sampled through the terrain's physics band; using the raw DEM here
         // places wheel axles against a different surface and creates startup
         // spring compression.
@@ -3228,7 +3217,8 @@ mod tests {
                 origin_y,
                 native_band(region),
             );
-            let collider = heightfield_collider(heights, side);
+            let collider =
+                crate::collision::terrain_collider(heights, DVec3::new(side, 1.0, side)).unwrap();
             let collider_center = surface_y(&collider, 0.0, 0.0, origin_y);
             let collider_bowl = BASE_H - collider_center;
             let gap = collider_center - oracle_center; // >0 => collider ABOVE oracle (rover floats)
@@ -3241,7 +3231,7 @@ mod tests {
 
     /// End-to-end geometry proof for one collider-ring tile: sample an oracle with
     /// a single off-centre analytic crater over a canonical-depth region exactly
-    /// the way `update_collider_ring` does, build the same `Collider::heightfield`,
+    /// the way `update_collider_ring` does, build the same sampled triangle collider,
     /// and ray-cast it in tile-local space. Proves (a) [x][z] layout is not
     /// transposed, (b) scale = full side length, (c) heights are REBASED by the
     /// tile-centre `origin_y` — local offsets, not absolute altitudes — and recover
@@ -3314,7 +3304,8 @@ mod tests {
             heights[0][0]
         );
 
-        let collider = heightfield_collider(heights, side);
+        let collider =
+            crate::collision::terrain_collider(heights, DVec3::new(side, 1.0, side)).unwrap();
 
         // (c) …and adding `origin_y` back recovers the absolute datum exactly.
         // A flat interior probe far from the crater's reach (crater sits in the

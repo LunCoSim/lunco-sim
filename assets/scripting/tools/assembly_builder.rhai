@@ -1004,6 +1004,77 @@ fn cube_shape_plan(edit_target, parent, name, size, scale, collision_enabled) {
     #{ ok: true, kind: "cube_shape", path: shape, ops: ops }
 }
 
+/// Derive a hidden collision primitive from a composed sibling in the same frame.
+/// Geometry and ordered transforms come from the source; dynamics stay with
+/// the nearest rigid body. Reject unsupported transform stacks before editing.
+fn collision_proxy_plan(doc, edit_target, source_path, proxy_path) {
+    if edit_target == () || source_path == proxy_path || !source_path.starts_with("/")
+        || !proxy_path.starts_with("/") || parent_path(source_path) != parent_path(proxy_path) {
+        return plan_error("collision proxy requires distinct absolute sibling paths");
+    }
+    let source = composed_query(doc, #{path:source_path,children:false,
+        attrs:["radius","height","axis","size","xformOp:translate",
+            "xformOp:rotateXYZ","xformOp:scale","xformOpOrder"]});
+    if !query_ok(source) || !["Cylinder","Cube"].contains(source.type_name) {
+        return plan_error(source_path + ": collision source must be a composed Cylinder or Cube");
+    }
+    let a=source.attrs;
+    let order=if a["xformOpOrder"] == () { [] } else { a["xformOpOrder"] };
+    let expected=[];
+    for name in ["xformOp:translate","xformOp:rotateXYZ","xformOp:scale"] {
+        if order.contains(name) { expected.push(name); }
+    }
+    if order != expected {
+        return plan_error(source_path + ": collision source requires translate, rotateXYZ, scale order without reset or inverse operations");
+    }
+    let translation=if order.contains("xformOp:translate") {a["xformOp:translate"]} else {()};
+    let rotation=if order.contains("xformOp:rotateXYZ") {a["xformOp:rotateXYZ"]} else {()};
+    let scale=if order.contains("xformOp:scale") {a["xformOp:scale"]} else {()};
+    for name in order {
+        let valid=finite_vector3(a[name],source_path+" "+name);
+        if !valid.ok {return valid;}
+    }
+    let parts=proxy_path.split("/");
+    let parent=parent_path(proxy_path);
+    let name=parts[parts.len()-1];
+    let shape=if source.type_name == "Cylinder" {
+        if a.radius == () || !a.radius.is_finite() || a.height == () || !a.height.is_finite() {
+            return plan_error(source_path + ": finite cylinder dimensions are required");
+        }
+        cylinder_shape_plan_axis(edit_target,parent,name,a.radius,a.height,
+            translation,rotation,scale,a.axis,true)
+    } else {
+        if a.size == () || !a.size.is_finite() {
+            return plan_error(source_path + ": finite cube size is required");
+        }
+        cube_shape_plan(edit_target,parent,name,a.size,scale,true)
+    };
+    if !shape.ok {return shape;}
+    let existing=composed_query(doc,#{path:proxy_path,children:false});
+    if query_ok(existing) && existing.type_name != source.type_name {
+        return plan_error(proxy_path + ": proxy type differs from its geometry source");
+    }
+    let ops=[];
+    for op in shape.ops {
+        if !query_ok(existing) || !op.contains("AddPrim") {ops.push(op);}
+    }
+    if source.type_name == "Cube" && order.len()>0 {
+        let pose=place_plan(edit_target,proxy_path,translation,rotation,scale);
+        if !pose.ok {return pose;}
+        for op in pose.ops {ops.push(op);}
+    }
+    // An empty stack has standard USD identity semantics, including on updates.
+    ops.push(#{SetAttribute:#{edit_target:edit_target,path:proxy_path,
+        name:"xformOpOrder",type_name:"token[]",value:order.to_string()}});
+    for item in [#{name:"purpose",value:"proxy"},#{name:"visibility",value:"invisible"}] {
+        ops.push(#{SetAttribute:#{edit_target:edit_target,path:proxy_path,
+            name:item.name,type_name:"token",value:"\""+item.value+"\""}});
+    }
+    ops.push(#{SetRelationship:#{edit_target:edit_target,path:proxy_path,
+        name:"lunco:collider:geometrySource",targets:[source_path]}});
+    #{ok:true,path:proxy_path,source_path:source_path,ops:ops}
+}
+
 fn _mesh_tuple3(value, label) {
     if value == () || value.len() != 3 {
         throw(label + " must have three components");
