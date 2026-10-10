@@ -293,7 +293,13 @@ package — none of these belong on the UI thread every frame. Patterns:
   for names, hierarchy, visibility, and camera labels once per invalidation;
   hierarchy construction and sorting run on one bounded worker task. Repeated
   topology changes mark the resource dirty through a small invalidation system;
-  the query-heavy snapshot producer runs only when no worker is active. A
+  immutable `ChildOf` insertions arrive through native lifecycle messages,
+  coalesced by entity at the Update gate. The gate directly reads those entities'
+  current parents instead of scanning every hierarchy component's change tick.
+  Identical edge replacements remain no-ops; unnamed candidate ancestors,
+  membership changes, removals, mutable labels and scene boundaries still
+  invalidate the derived view. Active Twin closure clears queued insertions.
+  The query-heavy snapshot producer runs only when no worker is active. A
   revision fence rejects stale results, and Twin close clears the published
   view. Panels continue reading the last completed view while a current build
   is pending. Keep each snapshot fact in

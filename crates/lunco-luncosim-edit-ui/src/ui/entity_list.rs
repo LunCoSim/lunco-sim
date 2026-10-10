@@ -148,8 +148,8 @@ pub struct EntityTreeView {
     /// Full camera identities retained for row tooltips and diagnostics.
     camera_identities: HashMap<Entity, String>,
     /// Direct parent snapshot for visible named entities. The gate compares
-    /// this value rather than trusting a `Changed<ChildOf>` tick: grid and
-    /// celestial systems may re-stamp an identical parent every frame.
+    /// actual edge values: grid and celestial systems may reinsert an identical
+    /// parent every frame.
     parents: HashMap<Entity, Entity>,
     show_system: bool,
     /// Primary scene mount used for the cached tree.
@@ -187,7 +187,6 @@ pub(crate) struct EntityTreeSceneQueries<'w, 's> {
     roots: Query<'w, 's, (), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     preview_roots: Query<'w, 's, (), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     parents: Query<'w, 's, &'static ChildOf>,
-    parent_changes: Query<'w, 's, (Entity, &'static ChildOf), Changed<ChildOf>>,
     boundary_changes: Query<
         'w,
         's,
@@ -220,6 +219,22 @@ pub(crate) struct EntityTreeBuildState {
     revision: u64,
     dirty: bool,
     task: Option<Task<(u64, EntityTreeView)>>,
+}
+
+/// Native hierarchy insertions delivered to the tree's Update gate.
+#[derive(Message)]
+pub(crate) struct EntityTreeParentInserted(Entity);
+
+fn record_entity_tree_parent_insert(
+    trigger: On<Insert, ChildOf>,
+    mut insertions: MessageWriter<EntityTreeParentInserted>,
+) {
+    insertions.write(EntityTreeParentInserted(trigger.entity));
+}
+
+pub(crate) fn install_entity_tree_hierarchy_tracking(app: &mut App) {
+    app.add_message::<EntityTreeParentInserted>()
+        .add_observer(record_entity_tree_parent_insert);
 }
 
 impl EntityTreeBuildState {
@@ -665,16 +680,14 @@ fn derive_entity_tree_view(input: EntityTreeBuildInput) -> EntityTreeView {
 }
 
 /// Run condition for [`mark_entity_tree_view_dirty`]: report when the scene
-/// topology that the tree depends on changes — a **named** node's hierarchy is
-/// added or modified (`Changed` includes `Added`), the interesting marker sets
-/// gain members, or any of those components are removed (covers despawns). The
+/// topology that the tree depends on changes: candidate labels, markers,
+/// hierarchy edges, scene boundaries or removals (including despawns). The
 /// `Local` flag forces one initial build (a freshly-added system does not see
 /// pre-existing entities as `Changed`). On a quiescent scene this returns
 /// `false` and the harvest is skipped entirely.
-/// The harvest renders only named nodes. Its gate must therefore ignore changes
-/// to unnamed internal wrappers as well as system-owned entities (unless shown):
-/// terrain streaming and render extraction create both continuously, and neither
-/// can change the visible tree by itself.
+/// Parent insertions arrive through native lifecycle messages, coalesced by
+/// entity before comparing current edges. Unnamed candidate ancestors can
+/// invalidate descendants; unrelated scene hierarchies remain outside this view.
 /// Tracked automatically by `add_view_model` — see [`lunco_core_runtime::gate::tracked`].
 pub(crate) fn entity_tree_build_due(build: Res<EntityTreeBuildState>) -> bool {
     build.dirty && build.task.is_none()
@@ -692,6 +705,8 @@ pub(crate) fn scene_topology_changed(
     settings: Res<EntityListSettings>,
     view: Res<EntityTreeView>,
     scene: EntityTreeSceneQueries,
+    mut parent_insertions: MessageReader<EntityTreeParentInserted>,
+    mut inserted_parents: Local<HashSet<Entity>>,
     changed: Query<
         (
             Entity,
@@ -827,10 +842,17 @@ pub(crate) fn scene_topology_changed(
                 || value_changed((entity, name, callsign, catalog_id, path, parent))
         },
     );
-    let scene_hierarchy_changed = scene.parent_changes.iter().any(|(entity, parent)| {
+    // ChildOf is immutable: native insert events cover both initial edges and
+    // reparenting. Drain coalesced identities, then compare their current edge
+    // with the snapshot; identical parent insertions do not rebuild the tree.
+    inserted_parents.extend(parent_insertions.read().map(|insertion| insertion.0));
+    let scene_hierarchy_changed = inserted_parents.drain().any(|entity| {
         if Some(entity) == active_scene_root {
             return false;
         }
+        let Ok(parent) = scene.parents.get(entity) else {
+            return false;
+        };
         if view.candidate_hierarchy_entities.contains(&entity) {
             view.candidate_hierarchy_parents.get(&entity).copied() != Some(parent.parent())
         } else {
@@ -868,10 +890,12 @@ pub(crate) fn on_twin_closed(
     trigger: On<TwinClosed>,
     mut view: ResMut<EntityTreeView>,
     mut build: ResMut<EntityTreeBuildState>,
+    mut parent_insertions: ResMut<Messages<EntityTreeParentInserted>>,
 ) {
     if trigger.event().was_active {
         *view = EntityTreeView::default();
         build.invalidate();
+        parent_insertions.clear();
     }
 }
 
@@ -1214,6 +1238,7 @@ mod tests {
     #[test]
     fn topology_gate_tracks_only_entities_in_the_active_scene() {
         let mut app = App::new();
+        install_entity_tree_hierarchy_tracking(&mut app);
         app.init_resource::<EntityListSettings>()
             .init_resource::<EntityTreeView>()
             .init_resource::<lunco_core::SceneMountState>()
@@ -1258,6 +1283,7 @@ mod tests {
     #[test]
     fn unchanged_parent_ticks_do_not_rebuild_the_active_tree() {
         let mut app = App::new();
+        install_entity_tree_hierarchy_tracking(&mut app);
         app.init_resource::<EntityListSettings>()
             .init_resource::<EntityTreeView>()
             .init_resource::<lunco_core::SceneMountState>()
@@ -1298,6 +1324,109 @@ mod tests {
         app.update();
 
         assert_eq!(app.world().resource::<GateRuns>().0, 1);
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 1);
+
+        let additive_root = app
+            .world_mut()
+            .spawn(lunco_usd_bevy_scene::UsdSceneRoot)
+            .id();
+        app.world_mut()
+            .entity_mut(rover)
+            .insert(ChildOf(additive_root));
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 2);
+        app.world_mut()
+            .resource_mut::<EntityTreeView>()
+            .parents
+            .insert(rover, additive_root);
+        app.world_mut()
+            .resource_mut::<EntityTreeView>()
+            .candidate_hierarchy_parents
+            .insert(rover, additive_root);
+
+        app.world_mut()
+            .entity_mut(rover)
+            .insert(ChildOf(active_root));
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 3);
+        app.world_mut()
+            .resource_mut::<EntityTreeView>()
+            .parents
+            .insert(rover, active_root);
+        app.world_mut()
+            .resource_mut::<EntityTreeView>()
+            .candidate_hierarchy_parents
+            .insert(rover, active_root);
+
+        app.world_mut().entity_mut(rover).remove::<ChildOf>();
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 4);
+        app.world_mut().despawn(rover);
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 5);
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 5);
+    }
+
+    #[test]
+    fn hierarchy_insertions_track_unnamed_candidate_ancestors() {
+        let mut app = App::new();
+        install_entity_tree_hierarchy_tracking(&mut app);
+        app.init_resource::<EntityListSettings>()
+            .init_resource::<EntityTreeView>()
+            .init_resource::<lunco_core::SceneMountState>()
+            .init_resource::<GateRuns>()
+            .add_systems(Update, count_gate_run.run_if(scene_topology_changed));
+        let active_root = app
+            .world_mut()
+            .spawn(lunco_usd_bevy_scene::UsdSceneRoot)
+            .id();
+        let additive_root = app
+            .world_mut()
+            .spawn(lunco_usd_bevy_scene::UsdSceneRoot)
+            .id();
+        let wrapper = app.world_mut().spawn(ChildOf(active_root)).id();
+        let rover = app
+            .world_mut()
+            .spawn((
+                Name::new("Rover"),
+                lunco_core::SelectableRoot,
+                ChildOf(wrapper),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_core::SceneMountState>()
+            .register_root(active_root, true);
+        {
+            let mut view = app.world_mut().resource_mut::<EntityTreeView>();
+            view.active_scene_root = Some(active_root);
+            view.labels.insert(rover, "Rover".into());
+            view.base_labels.insert(rover, "Rover".into());
+            view.stable_keys.insert(rover, "Rover".into());
+            view.parents.insert(rover, wrapper);
+            view.candidate_hierarchy_entities = HashSet::from([active_root, wrapper, rover]);
+            view.candidate_hierarchy_parents =
+                HashMap::from([(wrapper, active_root), (rover, wrapper)]);
+        }
+        app.update();
+        app.world_mut()
+            .entity_mut(wrapper)
+            .insert(ChildOf(active_root));
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 1);
+
+        app.world_mut()
+            .entity_mut(wrapper)
+            .insert(ChildOf(additive_root));
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 2);
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 2);
+
+        app.world_mut().entity_mut(wrapper).remove::<ChildOf>();
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 3);
     }
 
     #[test]
@@ -1423,6 +1552,7 @@ mod tests {
     #[test]
     fn active_twin_close_clears_the_derived_scene_tree() {
         let mut app = App::new();
+        install_entity_tree_hierarchy_tracking(&mut app);
         app.init_resource::<EntityTreeView>()
             .init_resource::<EntityTreeBuildState>()
             .add_observer(on_twin_closed);
@@ -1432,6 +1562,13 @@ mod tests {
             view.active_scene_root = Some(Entity::from_raw_u32(1).unwrap());
             view.scene_error = Some("stale".into());
         }
+        let parent = app.world_mut().spawn_empty().id();
+        app.world_mut().spawn(ChildOf(parent));
+        assert!(
+            !app.world()
+                .resource::<Messages<EntityTreeParentInserted>>()
+                .is_empty()
+        );
 
         app.world_mut().trigger(TwinClosed {
             twin: lunco_workspace::TwinId::new(7),
@@ -1443,5 +1580,10 @@ mod tests {
         assert!(!view.built);
         assert_eq!(view.active_scene_root, None);
         assert_eq!(view.scene_error, None);
+        assert!(
+            app.world()
+                .resource::<Messages<EntityTreeParentInserted>>()
+                .is_empty()
+        );
     }
 }

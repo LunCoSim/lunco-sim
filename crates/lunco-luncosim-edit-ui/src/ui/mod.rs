@@ -710,6 +710,7 @@ impl Plugin for SceneEditUiPlugin {
         app.add_systems(Startup, asset_visibility::register_settings_submenu);
         app.init_resource::<entity_list::EntityTreeView>();
         app.init_resource::<entity_list::EntityTreeBuildState>();
+        entity_list::install_entity_tree_hierarchy_tracking(app);
         app.add_observer(entity_list::on_twin_closed);
         app.add_systems(
             Update,

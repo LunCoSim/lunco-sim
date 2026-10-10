@@ -1,5 +1,61 @@
 # High-quality realtime performance handover
 
+## Native hierarchy insertion delivery — 2026-10-10
+
+The derived entity-tree gate receives immutable `ChildOf` insertions through
+Bevy lifecycle messages. It coalesces entity identities and compares current
+edges with the cached ancestry instead of scanning every hierarchy component's
+change tick each frame. Mutable labels, marker membership, scene boundaries,
+removals and identical-edge suppression retain their existing readers. Active
+Twin closure clears queued insertions. This is the UI projection's generic
+invalidation mechanism; visibility policy, worker revision fences and
+authoritative simulation paths remain unchanged. No external library changes.
+
+Eight focused generic lifecycle/resource tests pass, covering active-scene and
+preview membership, unchanged edge replacement, reparenting, unnamed candidate
+ancestors, removal/despawn, stable duplicate labels and Twin-close retirement.
+The normal and Tracy production builds pass without warnings. Changed Tracy
+PID 2561815/API 4202 and collector 2561814 pass 24 authored smoke/history checks;
+both exit zero and the API port closes. Listener and connection ownership are
+verified. Normal PID 2586102/API 4202 passes another 24 authored checks and scene
+replacement, exits zero and closes its port. Screenshots show the populated
+entity tree before and after replacement. The optional visual-resource prompt
+remains visible in the compared screenshots.
+
+The trace slices span +1.5 to +7.5 s after each perspective activation, excluding
+startup, authored checks and replacement. Gate p50 is 0.132162/0.131946/0.121607
+ms before and 0.098800/0.102672/0.101644 ms after in View/Build/View. No insertion
+callback runs within those settled slices. Comparison and observer exports are
+in `target/entity-tree-perf/hierarchy-tracy-comparison-20261010.json` and
+`after-insert-cpu-20261010.csv`. These are observed owner timings; different
+hardware clocks and overlapping main-worktree activity prevent a causal
+product-FPS claim. The other session is left untouched.
+
+The normal run preserves High quality, stable camera pose and advancing
+50-body/33-collider/20-joint topology. Sampled frame p50 is
+11.116/10.888/10.883 ms and physics-ring p50 is 1.069/1.173/1.029 ms;
+readiness first clears at 3.003 s. These after-only observations do not establish
+loading or FPS improvement. No new exact-state replay claim is made for this
+UI-only checkpoint. Normal SHA-256 is
+`981ececb06c961cf96c2b4bbd104f4fa821d4aa578ca3a9b477d09862e48ab9d`;
+changed Tracy is
+`9bc06af1f7142e7409383d2e12aa25c1d0cd7a2b49d5205262ec80aa77e38c28`.
+
+Baseline Tracy PID 2448227 completes all timing windows, 24 authored checks
+and replacement, then the helper force-reaps it after a 15-second API Exit
+timeout. Collector 2448226 saves the capture and exits zero; this supplies
+timing evidence, not successful shutdown acceptance. An earlier helper uses
+an unavailable perspective command and supplies no measurement window.
+The corrected driver uses `ActivatePerspective` and disconnects its collector
+before app shutdown. Hash-verified gzip archives retain both Tracy artifacts
+and the tested normal executable under `target/entity-tree-perf/`.
+
+Evidence availability on 2026-10-10: this checkout's `target/` directory was
+removed outside this task's commands during the follow-up. Earlier
+`target/image-loader-perf/` and `target/perf/` artifacts referenced below are
+therefore unavailable locally. Their descriptions record historical results;
+new entity-tree evidence is retained under `target/entity-tree-perf/`.
+
 ## Participating-closure prepared-solve reuse — 2026-10-10
 
 `lunco-modelica-worker` keys prepared solve IR by the strict compiler's
