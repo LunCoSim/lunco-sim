@@ -514,8 +514,8 @@ const VERB_DOCS: &[(&str, &str, &str)] = &[
     ),
     (
         "twin_name",
-        "string",
-        "READ. Stable twin:// authority of the active Twin, or an empty string.",
+        "string | error",
+        "READ. Current twin:// mount authority of the active Twin, or an empty string when none is active. An active Twin without a live mount is an error.",
     ),
     (
         "asset_source_relative_uri",

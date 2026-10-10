@@ -259,7 +259,12 @@ invalidates compiled scenarios because the prelude is part of their AST.
 Keep these lifecycle stages distinct instead of adding overlapping `init` or
 `ready` aliases: dependency planning declares what must be admitted, module-body
 evaluation constructs per-instance state once those inputs are ready, and
-`on_start` runs once at the ready boundary. `on_stop` owns teardown. `on_event`
+`on_start` runs once at the ready boundary. Dependency planning must not read
+facts from its required inputs before admission. For active Twin analysis use
+`#{owner: "sysml.twin-analysis", identity: twin_name()}`. Select source-backed
+identities after readiness and commit their live access through
+`track_entity_read`/`track_entity_write` before accessing them.
+`on_stop` owns teardown. `on_event`
 is a reaction inside the scenario's eligible pass, not a request to run the
 same scenario on the event producer's clock. Today that means fixed Simulation
 delivery, or discrete delivery during paused Lifecycle passes. If Rhai later
@@ -531,6 +536,7 @@ Superseded or retired preparations cannot replace a newer report.
 | `get_setting("Res.field")` | value \| `()` | reflected **resource read** — global settings/config live in resources, not components |
 | `set_setting("Res.field", value)` | bool | host-side **tuning write** to a supported reflected resource field; not replicated or undoable; `false` on bad path/type |
 | `get_twin_setting("namespace.key")` | value \| `()` | read a scalar from the active Twin manifest's generic `[settings]` table |
+| `twin_name()` | string \| error | current `twin://` mount authority from the asset registry; empty only when no Twin is active. Reopening assigns a fresh authority; use this value for Twin source queries, never reconstruct it from the manifest name |
 | `set_twin_setting("namespace.key", value)` | bool | persist a scalar in the active Twin manifest through the generic `SetTwinSetting` command |
 | `get_exposure("namespace", "property")` | value \| `()` | read one raw engine capability value; Rhai owns selection and presentation policy |
 | `world_pos(id)` | `[x,y,z]` \| `()` | f64 active-frame position; independent of camera recentering and celestial ancestors |

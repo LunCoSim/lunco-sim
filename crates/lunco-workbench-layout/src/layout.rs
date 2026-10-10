@@ -435,11 +435,12 @@ impl WorkbenchLayout {
         }
     }
 
-    /// Close a multi-instance tab if present. Idempotent.
+    /// Retire a multi-instance tab from the live and cached perspectives.
     pub fn close_instance(&mut self, kind: PanelId, instance: u64) {
         let tab = TabId::Instance { kind, instance };
-        if let Some(pos) = self.dock.find_tab(&tab) {
-            self.dock.remove_tab(pos);
+        self.dock.retain_tabs(|candidate| *candidate != tab);
+        for slot in self.dock_cache.values_mut() {
+            slot.dock.retain_tabs(|candidate| *candidate != tab);
         }
     }
 
@@ -763,9 +764,9 @@ impl WorkbenchLayout {
     /// - **Instance** tabs are remapped: each carries the *old* session's
     ///   instance id; `id_map` translates it to the freshly-restored id.
     ///   A tab whose kind isn't registered is dropped; one whose document
-    ///   didn't restore (absent from `id_map`) is kept unless its kind is in
-    ///   `discard_unmapped_kinds`. Stable-instance tabs like the default plot
-    ///   stay open; stale document-backed tabs can be removed.
+    ///   didn't restore (absent from `id_map`) is dropped when its view owner
+    ///   requires a mapping for session-allocated ids. Stable-instance tabs,
+    ///   such as the default plot, retain their own identities.
     ///
     /// Empty leaves collapse via egui_dock's `retain_tabs`; non-finite
     /// split fractions are healed ([`sanitize_dock_fractions`]). Returns
@@ -778,7 +779,6 @@ impl WorkbenchLayout {
         &self,
         value: serde_json::Value,
         id_map: &HashMap<(&'static str, u64), u64>,
-        discard_unmapped_kinds: &std::collections::HashSet<&'static str>,
     ) -> Option<DockState<TabId>> {
         use std::collections::HashSet;
         let valid_singletons: HashSet<&'static str> = self.panels.keys().map(|p| p.0).collect();
@@ -800,7 +800,7 @@ impl WorkbenchLayout {
 
         // One pass: drop unregistered-kind tabs, remap restored instances,
         // preserve unmatched stable-instance tabs, and discard unmatched
-        // document-backed tabs when their codec requests that behavior.
+        // session-allocated tabs when their view owner requires a mapping.
         // A singleton panel is one renderer with one egui identity. A stale
         // layout may contain it in more than one leaf (older Build layouts put
         // Telemetry in both side and bottom), which makes egui render the same
@@ -818,7 +818,7 @@ impl WorkbenchLayout {
                 }
                 if let Some(&new_id) = id_map.get(&(kind.0, *instance)) {
                     *instance = new_id;
-                } else if discard_unmapped_kinds.contains(kind.0) {
+                } else if self.instance_panels[kind].requires_instance_remap() {
                     return false;
                 }
                 true
@@ -907,9 +907,8 @@ impl WorkbenchLayout {
         &mut self,
         value: serde_json::Value,
         id_map: &HashMap<(&'static str, u64), u64>,
-        discard_unmapped_kinds: &std::collections::HashSet<&'static str>,
     ) -> bool {
-        match self.reconcile_dock(value, id_map, discard_unmapped_kinds) {
+        match self.reconcile_dock(value, id_map) {
             Some(d) => {
                 self.dock = d;
                 true
@@ -998,7 +997,6 @@ impl WorkbenchLayout {
         &mut self,
         docks: &std::collections::HashMap<String, PerspectiveDockSnapshot>,
         id_map: &HashMap<(&'static str, u64), u64>,
-        discard_unmapped_kinds: &std::collections::HashSet<&'static str>,
     ) {
         let active_str = self.active_perspective().map(|p| p.as_str().to_string());
 
@@ -1007,7 +1005,7 @@ impl WorkbenchLayout {
             if let Some(snap) = docks.get(active).filter(|snap| {
                 snap.layout_revision == self.perspective_layout_revision_by_str(active)
             }) {
-                if self.set_dock_from_json(snap.dock.clone(), id_map, discard_unmapped_kinds) {
+                if self.set_dock_from_json(snap.dock.clone(), id_map) {
                     self.ensure_chrome_present();
                 }
             }
@@ -1031,7 +1029,7 @@ impl WorkbenchLayout {
             if snap.layout_revision != self.perspective_layout_revision(pid) {
                 continue;
             }
-            let Some(slot) = self.reconcile_dock_slot(snap, id_map, discard_unmapped_kinds) else {
+            let Some(slot) = self.reconcile_dock_slot(snap, id_map) else {
                 continue;
             };
             seeded.push((pid, slot));
@@ -1066,9 +1064,8 @@ impl WorkbenchLayout {
         &self,
         snap: &PerspectiveDockSnapshot,
         id_map: &HashMap<(&'static str, u64), u64>,
-        discard_unmapped_kinds: &std::collections::HashSet<&'static str>,
     ) -> Option<PerspectiveDockSlot> {
-        let dock = self.reconcile_dock(snap.dock.clone(), id_map, discard_unmapped_kinds)?;
+        let dock = self.reconcile_dock(snap.dock.clone(), id_map)?;
         Some(PerspectiveDockSlot {
             dock,
             side_browser: snap.side_browser.clone(),
@@ -1561,11 +1558,10 @@ impl WorkspaceStateLayoutProvider for WorkbenchLayoutStateProvider {
         world: &mut World,
         docks: &std::collections::HashMap<String, lunco_workbench_state::PerspectiveDockSnapshot>,
         id_map: &std::collections::HashMap<(&'static str, u64), u64>,
-        discard_unmapped_kinds: &std::collections::HashSet<&'static str>,
     ) {
         world
             .resource_mut::<WorkbenchLayout>()
-            .seed_perspective_docks(docks, id_map, discard_unmapped_kinds);
+            .seed_perspective_docks(docks, id_map);
     }
 }
 
@@ -1622,9 +1618,12 @@ mod tests {
         }
     }
 
-    struct TestInstancePanel(PanelId);
+    struct TestInstancePanel(PanelId, bool);
 
     impl InstancePanel for TestInstancePanel {
+        fn requires_instance_remap(&self) -> bool {
+            self.1
+        }
         fn kind(&self) -> PanelId {
             self.0
         }
@@ -1659,22 +1658,46 @@ mod tests {
     }
 
     #[test]
+    fn closed_instance_is_retired_from_live_and_cached_perspectives() {
+        let kind = PanelId("document_view");
+        let retired = TabId::instance(kind, 7);
+        let retained = TabId::instance(kind, 8);
+        let singleton = TabId::Singleton(PanelId("inspector"));
+        let perspective = PerspectiveId("inactive");
+        let mut layout = WorkbenchLayout::default();
+        layout.dock = DockState::new(vec![retired, retained, singleton]);
+        layout.snapshot_perspective(perspective);
+        layout.dock = DockState::new(vec![retired, retained]);
+
+        layout.close_instance(kind, 7);
+        assert!(layout.dock.find_tab(&retired).is_none());
+        assert!(layout.dock.find_tab(&retained).is_some());
+        let slot = layout.dock_cache.remove(&perspective).unwrap();
+        assert!(slot.dock.find_tab(&retired).is_none());
+        assert!(slot.dock.find_tab(&retained).is_some());
+        assert!(slot.dock.find_tab(&singleton).is_some());
+        layout.restore_perspective(slot);
+        layout.close_instance(kind, 7);
+        assert!(layout.dock.find_tab(&retired).is_none());
+        assert!(layout.dock.find_tab(&retained).is_some());
+    }
+
+    #[test]
     fn reconciliation_drops_stale_document_views_but_keeps_stable_instance_tabs() {
         let usd = PanelId("usd::preview_view");
         let graph = PanelId("modelica_graph");
         let mut layout = WorkbenchLayout::default();
-        layout.register_instance_panel(TestInstancePanel(usd));
-        layout.register_instance_panel(TestInstancePanel(graph));
+        layout.register_instance_panel(TestInstancePanel(usd, true));
+        layout.register_instance_panel(TestInstancePanel(graph, false));
         let saved = serde_json::to_value(DockState::new(vec![
             TabId::instance(usd, 17),
             TabId::instance(graph, 4),
         ]))
         .expect("dock serializes");
-        let discarded = std::collections::HashSet::from([usd.0]);
         let remapped = HashMap::from([((usd.0, 17), 8)]);
 
         let restored = layout
-            .reconcile_dock(saved, &remapped, &discarded)
+            .reconcile_dock(saved, &remapped)
             .expect("stable instance tab remains in the dock");
         let tabs: Vec<_> = restored.iter_all_tabs().map(|(_, tab)| *tab).collect();
 
@@ -1685,11 +1708,7 @@ mod tests {
 
         let stale_only = serde_json::to_value(DockState::new(vec![TabId::instance(usd, 18)]))
             .expect("stale dock serializes");
-        assert!(
-            layout
-                .reconcile_dock(stale_only, &HashMap::new(), &discarded)
-                .is_none()
-        );
+        assert!(layout.reconcile_dock(stale_only, &HashMap::new()).is_none());
     }
 
     #[test]

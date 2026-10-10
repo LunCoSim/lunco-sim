@@ -89,6 +89,10 @@ driver). The scene-only LoadScene and RestartScene checks preserve the open
 Twin and require the replacement/restarted projection before their verdicts.
 AddTwin and AddFolderToWorkspace preserve the existing documents and active
 Twin; subsequent replacement must retire all added source catalogs too.
+Each replacement also requires `TWIN_SCRIPT_SOURCE_SCOPE`: `twin_name()` must
+resolve the replacement SysML source set while the outgoing authority remains
+rejected. A scene can finish loading even when its mission script failed;
+inspect `ScriptStatus` and actual propulsion when verifying ignition.
 
 Tutorial behavior is authored in `assets/tutorials/**/*.rhai` and should be
 tested through its production scene gate in `assets/scenes/tests/` with the

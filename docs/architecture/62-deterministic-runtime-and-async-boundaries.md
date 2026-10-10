@@ -125,6 +125,14 @@ also does not register callbacks in arbitrary clocks. Work in another cycle
 belongs to that cycle's owner and uses a typed, owner-scheduled hook or a
 separate script owner with its own state and inbox.
 
+Required-input readiness is checked after `simulation_dependencies` returns.
+That hook declares exact owner keys and discovers live identities without
+reading pending owner facts. Source-selected entity access is committed with
+`track_entity_read`/`track_entity_write` during admitted initialization or
+startup before the first access. Twin SysML keys use the current mount authority
+returned by `twin_name()`.
+
+
 `RuntimeCycleSet` names ordering lanes inside Bevy schedules. It does not by
 itself isolate CPU cost or give `Visualization` an independent cadence. Terrain
 cover reselection has an explicit 30 Hz wall-clock skip boundary, and its

@@ -478,7 +478,7 @@ analyses do not hold simulation progress. Browser worker transport is explicit
 and remains unsupported by this native dispatcher. The Twin analysis producer
 registers `sysml.twin-analysis` and publishes each mounted Twin's state under
 its exact name. A scenario that needs those facts lists
-`#{ owner: "sysml.twin-analysis", identity: twin_name }` in
+`#{ owner: "sysml.twin-analysis", identity: twin_name() }` in
 `required_inputs`; only that scenario's activation hold waits for the async
 analysis. The analysis worker itself remains read-only and never acquires a
 world-time hold.

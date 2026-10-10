@@ -339,19 +339,13 @@ fn derive_title_from_doc(doc: &lunco_modelica_document::ModelicaDocument) -> Str
     doc.origin().display_name()
 }
 
-/// Retire Modelica tabs and transient selection state when their Twin closes.
-///
-/// Workspace teardown closes the Twin's documents through `CloseDocument`; this
-/// observer retires tabs and transient selection that reference them. Pending
-/// file opens are fenced by their admitted runtime owner on completion.
-fn clear_modelica_state_on_twin_closed(
+/// Retire Modelica selection state when its Twin closes.
+/// Document views retire through the `CloseDocument` owner.
+fn clear_modelica_selection_on_twin_closed(
     trigger: On<lunco_workspace::TwinClosed>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    mut tabs: Option<ResMut<crate::model_tabs::ModelTabs>>,
-    mut canvas: Option<ResMut<panels::canvas_diagram::CanvasDiagramState>>,
     mut rename: Option<ResMut<browser_section::DocRenameState>>,
     mut workbench: Option<ResMut<WorkbenchState>>,
-    mut commands: Commands,
 ) {
     let Some(workspace) = workspace else {
         return;
@@ -367,30 +361,14 @@ fn clear_modelica_state_on_twin_closed(
         .collect();
 
     if let Some(state) = rename.as_mut() {
-        if state
-            .editing
-            .as_ref()
-            .is_some_and(|(doc, _)| closed_docs.contains(doc))
+        if event.was_active
+            || state
+                .editing
+                .as_ref()
+                .is_some_and(|(doc, _)| closed_docs.contains(doc))
         {
             state.editing = None;
             state.needs_focus = false;
-        }
-    }
-
-    if let Some(state) = tabs.as_mut() {
-        let tab_ids: Vec<_> = state
-            .iter()
-            .filter_map(|(tab, model)| closed_docs.contains(&model.doc).then_some(tab))
-            .collect();
-        for tab in tab_ids {
-            state.close_tab(tab);
-            commands.trigger(lunco_workbench_core::commands::CloseTab {
-                kind: MODEL_VIEW_KIND,
-                instance: tab,
-            });
-            if let Some(canvas) = canvas.as_mut() {
-                canvas.drop_tab(tab);
-            }
         }
     }
 
@@ -659,7 +637,7 @@ impl Plugin for ModelicaUiPlugin {
             .add_observer(panels::graphs::on_export_graph_requested)
             .add_observer(panels::model_view::on_sync_model_tab_requested)
             .add_observer(panels::model_view::on_fast_run_setup_requested)
-            .add_observer(clear_modelica_state_on_twin_closed)
+            .add_observer(clear_modelica_selection_on_twin_closed)
             .init_resource::<LogBuffer>()
             .init_resource::<panels::diagnostics::DiagnosticsLog>()
             // Journal panel reads directly from the canonical

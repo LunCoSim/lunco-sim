@@ -1339,6 +1339,7 @@ pub fn on_document_closed_cleanup(
     mut experiments: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut drafts: Option<ResMut<lunco_modelica_runner::ExperimentDrafts>>,
     mut canvas_state: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
+    mut commands: Commands,
 ) {
     let doc = trigger.event().doc_id;
     retire_editor_document_work(
@@ -1348,7 +1349,12 @@ pub fn on_document_closed_cleanup(
         &mut modals,
         &mut pending_save_close,
     );
-    model_tabs.close(doc);
+    for tab in model_tabs.close_all_for_doc(doc) {
+        commands.trigger(lunco_workbench_core::commands::CloseTab {
+            kind: MODEL_VIEW_KIND,
+            instance: tab,
+        });
+    }
     cache.in_memory_models.retain(|e| e.doc != doc);
     // Drop the per-doc canvas entry (viewport, selection, in-flight
     // projection task) so a later tab reusing the id starts fresh.

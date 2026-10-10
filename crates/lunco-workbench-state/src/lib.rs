@@ -30,7 +30,7 @@
 //! Bevy's task pool. A corrupt or missing file degrades to "open with
 //! defaults" — never a panic.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -66,7 +66,6 @@ pub trait WorkspaceStateLayoutProvider: Send + Sync + 'static {
         world: &mut World,
         docks: &HashMap<String, PerspectiveDockSnapshot>,
         id_map: &HashMap<(&'static str, u64), u64>,
-        discard_unmapped_kinds: &HashSet<&'static str>,
     );
 }
 
@@ -238,11 +237,6 @@ pub trait DocumentSessionCodec: Send + Sync + 'static {
     /// flat instance→instance map would cross-rewrite them. `None` (default)
     /// means [`instance_remaps`](Self::instance_remaps) is unused.
     fn dock_tab_kind(&self) -> Option<&'static str> {
-        None
-    }
-    /// Return a dynamic dock-tab kind whose unmatched instances must be
-    /// discarded during restore. Stable-instance tabs should leave this unset.
-    fn discard_unmapped_dock_tab_kind(&self) -> Option<&'static str> {
         None
     }
 }
@@ -748,7 +742,7 @@ struct AppliedTwin {
 /// by [`DocumentSessionCodec::instance_remaps`] + [`DocumentSnapshot::tab_instance`]
 /// (old tab id → live tab id); `set_dock_from_json` remaps mapped instances,
 /// keeps unmatched stable-id tabs like the default plot, and drops unmatched
-/// document-backed tabs when their codec requests it.
+/// session-allocated tabs when their view owner requires a restoration mapping.
 /// The codec's own `OpenTab` (fired before the dock is re-installed) opens +
 /// focuses the live tab, so the re-installed dock's matching instance
 /// renders. Restore still falls back gracefully (keeps the codec-opened
@@ -1168,15 +1162,9 @@ fn apply_workspace_state(
     // share an instance number aren't cross-rewritten.
     let mut id_map: std::collections::HashMap<(&'static str, u64), u64> =
         std::collections::HashMap::new();
-    let mut discard_unmapped_kinds = HashSet::new();
     let mut restore_incomplete = false;
 
     world.resource_scope(|world, reg: Mut<DocumentSessionRegistry>| {
-        discard_unmapped_kinds.extend(
-            reg.codecs
-                .iter()
-                .filter_map(|codec| codec.discard_unmapped_dock_tab_kind()),
-        );
         for idx in order {
             let snap = &state.documents[idx];
             let codec = reg.codecs.iter().find(|c| c.kind() == snap.kind);
@@ -1242,7 +1230,7 @@ fn apply_workspace_state(
     // them. See RESTORE_DOCK_ARRANGEMENT.
     if RESTORE_DOCK_ARRANGEMENT {
         with_layout_mut(world, |layout, world| {
-            layout.seed_perspective_docks(world, &state.docks, &id_map, &discard_unmapped_kinds);
+            layout.seed_perspective_docks(world, &state.docks, &id_map);
         });
     }
 }

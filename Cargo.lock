@@ -9432,6 +9432,7 @@ dependencies = [
  "bevy",
  "lunco-api",
  "lunco-api-core",
+ "lunco-assets-core",
  "lunco-command-contracts",
  "lunco-core",
  "lunco-core-runtime",

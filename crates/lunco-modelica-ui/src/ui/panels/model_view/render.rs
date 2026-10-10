@@ -149,6 +149,10 @@ impl Default for ModelViewPanel {
 }
 
 impl InstancePanel for ModelViewPanel {
+    fn requires_instance_remap(&self) -> bool {
+        true
+    }
+
     fn kind(&self) -> PanelId {
         MODEL_VIEW_KIND
     }

@@ -2812,9 +2812,14 @@ fn build_world_engine_base(
     // sibling file without hardcoding a machine-specific absolute path:
     // `twin_root() + "/shots"`. See `bridge_core::twin_root`.
     engine.register_fn("twin_root", || -> String { bridge_core::twin_root() });
-    // twin_name() -> String — stable `twin://` authority of the active Twin
+    // twin_name() -> String — live `twin://` mount authority of the active Twin
     // ("" if none), for source-set and asset-provider queries.
-    engine.register_fn("twin_name", || -> String { bridge_core::twin_name() });
+    engine.register_fn(
+        "twin_name",
+        || -> Result<String, Box<rhai::EvalAltResult>> {
+            bridge_core::twin_name().map_err(Into::into)
+        },
+    );
 
     // asset_source_relative_uri(document, relative) -> an addressable URI.
     // This is the Rhai-facing form of the generic asset identity operation: it

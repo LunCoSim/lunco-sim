@@ -122,19 +122,25 @@ fn resolve(reference: &str) -> Result<PathBuf, String> {
 /// [`validate_asset_loadability`].
 #[cfg(not(target_arch = "wasm32"))]
 pub fn validate_asset(reference: &str) -> ValidationReport {
-    validate_asset_with_policy(reference, true)
+    validate_asset_with_policy(reference, true, None)
 }
 
 /// Check whether the runtime loader accepts one asset, without running authored
 /// lint policies. Use this from automatic discovery/startup paths that need to
 /// hide assets which cannot load; policy lint remains an explicit user action.
+/// A Twin source owner supplies its admitted root so authored Twin-qualified
+/// composition dependencies use the same context as scene loading.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn validate_asset_loadability(reference: &str) -> ValidationReport {
-    validate_asset_with_policy(reference, false)
+pub fn validate_asset_loadability(reference: &str, twin_root: Option<&Path>) -> ValidationReport {
+    validate_asset_with_policy(reference, false, twin_root)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn validate_asset_with_policy(reference: &str, apply_authored_policy: bool) -> ValidationReport {
+fn validate_asset_with_policy(
+    reference: &str,
+    apply_authored_policy: bool,
+    twin_root: Option<&Path>,
+) -> ValidationReport {
     let path = match resolve(reference) {
         Ok(p) => p,
         Err(e) => return ValidationReport::new(reference, "unknown").error(e),
@@ -156,7 +162,7 @@ fn validate_asset_with_policy(reference: &str, apply_authored_policy: bool) -> V
             &id,
             std::mem::take(&mut bytes),
             Some(engine_root.as_path()),
-            None,
+            twin_root,
             lunco_usd_compose::recipe::StageClosureLimits::default(),
         ) {
             Ok(recipe) => Some(recipe),
@@ -886,7 +892,7 @@ pub(crate) fn validate_sysml_reference(
     #[cfg(not(target_arch = "wasm32"))]
     {
         let Some((name, relative)) = lunco_assets_core::parse_twin_uri(reference) else {
-            return validate_asset_with_policy(reference, apply_structural_policy);
+            return validate_asset_with_policy(reference, apply_structural_policy, None);
         };
         let Some(roots) = world.get_resource::<lunco_assets_core::TwinRoots>() else {
             return ValidationReport::new(reference, "sysml")

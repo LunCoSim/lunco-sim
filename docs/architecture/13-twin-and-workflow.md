@@ -116,6 +116,27 @@ the same teardown and fresh admission; it does not reuse resident documents.
 `AddTwin` and `AddFolderToWorkspace` remain explicitly additive. A rejected
 replacement leaves the current Twin and its documents intact.
 
+The active Twin's status lifetime includes discrete history, progress handles,
+and terminal outcomes. `lunco-status-core` retires all three on active
+`TwinClosed`, so the replacement's status strip and popup cannot fall back to
+outgoing information. Monotonic publication counters are retained, and late
+outgoing handle completions cannot retire replacement work. Closing a
+non-active Twin leaves the active status intact.
+
+The scripting `twin_name()` bridge resolves the active workspace root through
+`TwinRoots::name_for_root`. It returns the current mount authority, including
+reopen and equal-name disambiguation. Source queries and required-input keys
+use that authority. The manifest name remains presentation metadata; an
+active Twin without a live asset mount is a scripting error.
+Catalog preflight also carries the discovered asset's admitted Twin root into
+the existing composition validator. Its filesystem path alone cannot resolve
+authored `twin://` reference arcs. Retired scan generations cannot publish
+into the replacement catalog.
+Document views also retire from inactive perspective snapshots. Each document's
+close owner emits `CloseTab`; the layout owner removes that instance from both
+the live dock and cached docks, preventing old source/Modelica placeholders
+from returning on a later perspective switch.
+
 A newer replacement request discards superseded folder scans. Once its valid
 candidate is admitted, outgoing `TwinClosed` handlers also retire any loading
 scene owner, cancel queued preparation and fence running results before the

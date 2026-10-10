@@ -229,10 +229,6 @@ impl ModelTabs {
         ids
     }
 
-    pub fn close(&mut self, doc: DocumentId) {
-        let _ = self.close_all_for_doc(doc);
-    }
-
     pub fn get(&self, tab_id: TabId) -> Option<&ModelTabState> {
         self.tabs.get(&tab_id)
     }

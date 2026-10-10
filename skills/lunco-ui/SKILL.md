@@ -224,7 +224,15 @@ they must not release the simulation hold or change the model's time or outputs.
 
 The workbench status history is one shared presentation surface: render Info,
 Warn, Error, and Attention through the same responsive
-level/source/message/action row. Its popup is compact, sized to roughly
+level/source/message/action row.
+Active `TwinClosed` retires progress, outcomes, and discrete history together;
+the new Twin's strip and popup must not display outgoing events. Publication
+counters remain monotonic, and late outgoing BusyHandle drops cannot clear
+replacement progress. Closing a non-active Twin preserves the active status.
+The sky-clock menu and HUD share a seek draft owned by the installed
+`SceneTimeState.transition_id`; scene replacement seeds it from the new clock,
+and controls remain hidden or unavailable until scene time is ready.
+The status popup is sized to roughly
 half the available parent window and clamped to 420–960 logical px;
 the message column consumes the remaining inner width rather than an arbitrary
 fixed fraction. A new terminal RuntimeFault opens the popup automatically, but
@@ -324,7 +332,9 @@ typed navigation actions. Do not add a per-domain search resource or make the
 browser search generated ids.
 Shared scene-catalog choices retire closed-mount entries at `TwinClosed`; the
 catalog owner invalidates scan generations while preserving application library
-and surviving-mount entries. See the
+and surviving-mount entries. Native spawn preflight uses the discovered asset's
+admitted Twin root; checking only its filesystem path loses authored Twin
+reference context and can hide valid parts. See the
 [lifecycle contract](../../docs/architecture/61-scene-lifecycle-and-teardown.md).
 
 Native USD Scene Files reads the published `SceneFileView`; never traverse or
@@ -366,9 +376,15 @@ app-global no-folder session.
 Workspace snapshots load, prepare file-backed documents, serialize, and save on
 Bevy's task pool through `lunco-storage`. Domain codecs restore documents
 through their existing registries and lifecycle events. Document-backed view
-tabs can remap many saved views onto one canonical document; the codec chooses
-whether unmatched tabs are retained or dropped, while stable singleton-instance
-panels keep their own IDs.
+tabs can remap many saved views onto one canonical document. Each instance-panel
+owner declares `requires_instance_remap`: Source, Modelica and USD views use
+session-allocated IDs, so unmatched restored tabs are discarded. Stable-instance
+panels retain their own IDs.
+Document-close owners emit `CloseTab` for every retired view. The layout owner
+removes the instance from the live dock and all cached perspective docks.
+Verify replacement while another perspective is active, then return to the
+Editor: retired source and Modelica views must be absent, including their tabs.
+
 For the missing-asset consent flow, the popup's unchecked negative checkbox
 means "show next time" and persists through `twin.toml [downloads]`; do not
 add a second global settings key for it.

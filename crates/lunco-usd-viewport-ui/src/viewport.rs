@@ -535,6 +535,10 @@ fn state_session_edit_target(state: &UsdViewportState, preview: UsdPreviewId) ->
 pub(crate) struct UsdPreviewViewPanel;
 
 impl InstancePanel for UsdPreviewViewPanel {
+    fn requires_instance_remap(&self) -> bool {
+        true
+    }
+
     fn kind(&self) -> PanelId {
         USD_PREVIEW_VIEW_PANEL_ID
     }

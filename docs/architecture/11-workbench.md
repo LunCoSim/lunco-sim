@@ -759,6 +759,18 @@ choice to cover it. Later Twin switches and ordinary launches restore the
 persisted state for that Twin's root. With no active Twin, previous document
 tabs and dock windows are not restored or persisted.
 
+Document-close owners retire their view instances and emit `CloseTab` for each
+one. `lunco-workbench-layout::WorkbenchLayout::close_instance` removes that
+identity from the live dock and every cached perspective dock. Returning to an
+inactive perspective therefore cannot revive a closed document tab. Modelica
+view retirement belongs to the `CloseDocument` observer; Twin teardown uses
+that same path for generated, scratch, and file-backed documents.
+An `InstancePanel` declares `requires_instance_remap` for session-allocated IDs.
+The layout owner discards unmatched Source, Modelica and USD view IDs when
+restoring any perspective. Document codecs supply the actual saved-to-live
+mappings; stable-instance panels retain their IDs without a mapping. Source
+views have no persisted document codec and are therefore not restored.
+
 **Reconciliation.** Restore maps stored string ids back to the panels /
 perspectives registered in *this* binary (luncosim and lunica ship
 different sets) and **drops anything unknown** — `PanelId` /
