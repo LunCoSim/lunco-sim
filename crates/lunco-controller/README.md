@@ -78,9 +78,11 @@ display without introducing a second control scheme.
 
 `InjectWindowInput` is the generic local automation boundary for Rhai, API
 clients, playback, and accessibility tooling. It accepts one typed
-`WindowInputEvent` at a time: `key`, `pointer_move`, `pointer_button`, or
-`scroll`. The controller delivers the event through both Bevy's aggregate
-`WindowEvent` stream and its typed keyboard/mouse messages, matching the
+`WindowInputEvent` at a time: `Key`, `PointerMove`, `PointerButton`,
+`MouseMotion`, `Scroll`, or `Pinch`. `Pinch { delta }` uses the native
+logarithmic magnification delta (positive enlarges, negative shrinks).
+The controller delivers the event through both Bevy's aggregate
+`WindowEvent` stream and its typed input messages, matching the
 `bevy_winit` delivery boundary. Picking, egui, focus, input bindings, and scene
 tools therefore see the same event path as hardware input.
 

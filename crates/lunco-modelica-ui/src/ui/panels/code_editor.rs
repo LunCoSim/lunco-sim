@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench_core::{Panel, PanelId, PanelSlot};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -71,16 +72,87 @@ pub(crate) fn on_code_editor_menu_action(
 /// event keeps the mutation at the editor boundary.
 #[derive(Event, Clone, Copy, Debug)]
 pub struct EditorSettingsChanged {
+    pub settings: EditorSettings,
+}
+
+/// Application preferences shared by all Modelica source tabs, independent of
+/// the model and Twin. Persisted through the application's settings document.
+#[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
+#[serde(default)]
+pub struct EditorSettings {
     pub word_wrap: bool,
     pub auto_indent: bool,
+    pub text_scale: f32,
+}
+
+impl Default for EditorSettings {
+    fn default() -> Self {
+        Self {
+            word_wrap: true,
+            auto_indent: true,
+            text_scale: 1.0,
+        }
+    }
+}
+
+impl EditorSettings {
+    pub const MIN_TEXT_SCALE: f32 = 0.5;
+    pub const MAX_TEXT_SCALE: f32 = 3.0;
+}
+
+impl lunco_settings::SettingsSection for EditorSettings {
+    const KEY: &'static str = "modelica_code_editor";
+
+    fn validate_section(&self) -> Result<(), String> {
+        if self.text_scale.is_finite()
+            && (Self::MIN_TEXT_SCALE..=Self::MAX_TEXT_SCALE).contains(&self.text_scale)
+        {
+            Ok(())
+        } else {
+            Err("editor text scale must be between 50% and 300%".into())
+        }
+    }
 }
 
 pub(crate) fn on_editor_settings_changed(
     trigger: On<EditorSettingsChanged>,
     mut buffer: ResMut<EditorBufferState>,
+    mut settings: ResMut<EditorSettings>,
 ) {
-    buffer.word_wrap = trigger.event().word_wrap;
-    buffer.auto_indent = trigger.event().auto_indent;
+    if *settings != trigger.settings {
+        *settings = trigger.settings;
+        buffer.cached_galley = None;
+    }
+}
+
+/// Consume editor zoom shortcuts before TextEdit or egui's whole-GUI zoom.
+/// Ordinary wheel/two-finger scrolling is left to the enclosing ScrollArea.
+fn editor_text_zoom(ui: &egui::Ui, text_edit_id: egui::Id, settings: &mut EditorSettings) {
+    let hovered = ui.rect_contains_pointer(ui.max_rect());
+    let focused = ui.ctx().memory(|m| m.has_focus(text_edit_id));
+    if hovered || focused {
+        ui.input_mut(|input| {
+            let reset = input.consume_key(egui::Modifiers::COMMAND, egui::Key::Num0);
+            let plus = input.consume_key(egui::Modifiers::COMMAND, egui::Key::Plus);
+            let equals = input.consume_key(egui::Modifiers::COMMAND, egui::Key::Equals);
+            let minus = input.consume_key(egui::Modifiers::COMMAND, egui::Key::Minus);
+            if reset {
+                settings.text_scale = 1.0;
+            } else {
+                settings.text_scale += 0.1 * (i32::from(plus || equals) - i32::from(minus)) as f32;
+            }
+        });
+    }
+    if hovered {
+        let delta = ui.input(|input| input.zoom_delta());
+        if delta.is_finite() && delta > 0.0 {
+            settings.text_scale *= delta;
+        }
+    }
+    settings.text_scale = settings.text_scale.clamp(
+        EditorSettings::MIN_TEXT_SCALE,
+        EditorSettings::MAX_TEXT_SCALE,
+    );
 }
 
 /// Mirror the current text buffer into the workbench view-model after paint.
@@ -150,16 +222,6 @@ pub struct EditorBufferState {
     pub detected_name: Option<String>,
     /// Pre-computed text layout for high-performance rendering.
     pub cached_galley: Option<Arc<egui::Galley>>,
-    /// When `true` long lines wrap at the editor width; when `false`
-    /// (default) long lines stay on one line and the view scrolls
-    /// horizontally — mirroring VS Code's default "Word Wrap: Off".
-    pub word_wrap: bool,
-    /// When `true` (default), pressing Enter copies the previous
-    /// line's leading whitespace onto the new line — i.e. continues
-    /// at the same indent level. Mirrors the default behaviour of
-    /// every modern code editor (VS Code, Sublime, IntelliJ, Emacs
-    /// electric-indent). Turn off for plain-text-buffer behaviour.
-    pub auto_indent: bool,
     /// egui timestamp (in seconds, from `ctx.input(|i| i.time)`) of
     /// the last keystroke that diverged `text` from the bound
     /// document's source. `None` when the buffer is already in sync.
@@ -268,8 +330,6 @@ impl Default for EditorBufferState {
             text: String::new(),
             detected_name: None,
             cached_galley: None,
-            word_wrap: false,
-            auto_indent: true,
             pending_commit_at: None,
             per_doc: HashMap::new(),
         }
@@ -582,17 +642,32 @@ impl Panel for CodeEditorPanel {
             // options (font size, indent width, tab-vs-spaces, …)
             // without turning into a button pile.
             //
-            // Current options, all persisted on `EditorBufferState`:
-            //   • **Word wrap** (default off): long lines wrap at editor
-            //     width when on, horizontal-scroll when off. Matches VS
-            //     Code's default.
+            // Current options, persisted through application EditorSettings:
+            //   • **Word wrap** (default on): long lines wrap at editor
+            //     width when on, horizontal-scroll when off.
             //   • **Auto indent** (default on): pressing Enter copies
             //     the previous line's leading whitespace onto the new
             //     line. Every modern code editor does this.
             // Editor prefs (word wrap, auto indent) live in the app-wide
             // Settings submenu — see `register_settings_submenu` in `ui/mod.rs`.
             // Here we just read the current values.
-            let (word_wrap, auto_indent) = (buf.word_wrap, buf.auto_indent);
+            let mut editor_settings = ctx
+                .resource::<EditorSettings>()
+                .copied()
+                .unwrap_or_default();
+            let previous_settings = editor_settings;
+            let text_edit_id = egui::Id::new("modelica_code_editor");
+            editor_text_zoom(ui, text_edit_id, &mut editor_settings);
+            if editor_settings != previous_settings {
+                ctx.trigger(EditorSettingsChanged {
+                    settings: editor_settings,
+                });
+            }
+            let EditorSettings {
+                word_wrap,
+                auto_indent,
+                text_scale,
+            } = editor_settings;
 
             // ── Editor area ──
             //
@@ -622,7 +697,13 @@ impl Panel for CodeEditorPanel {
                 buf.text.clone(),
             );
             let is_ro = is_read_only;
-            let editor_width = avail.x.max(100.0);
+            let editor_margin = egui::Margin {
+                left: 8,
+                right: 0,
+                top: 0,
+                bottom: 0,
+            };
+            let editor_width = (avail.x - editor_margin.sum().x).max(1.0);
             let editor_height = avail.y.max(200.0);
 
             // When word-wrap is off, long lines must live inside a
@@ -634,7 +715,6 @@ impl Panel for CodeEditorPanel {
             // `TextEditState::load`. Without a pinned id, egui generates
             // a hash from the widget's location and we can't target it
             // from outside the closure.
-            let text_edit_id = egui::Id::new("modelica_code_editor");
             // Snapshot the cursor range BEFORE TextEdit runs. We use it
             // to derive `selection_chars` so the toolbar / keyboard /
             // paste handlers know what range was selected at the start
@@ -730,48 +810,50 @@ impl Panel for CodeEditorPanel {
                 *req = CodeEditorMenuRequest::default();
             });
             ui.separator();
-            // When word-wrap is off we need the TextEdit widget's rect to
-            // be AT LEAST as wide as the longest line — otherwise egui's
-            // TextEdit auto-scrolls horizontally *inside its own rect* to
-            // follow the cursor, hiding the leftmost columns. Estimate
-            // width from the longest line's char count × monospace glyph
-            // width (cheap and good enough; overshooting is harmless, the
-            // outer ScrollArea just gains a bit of empty runway).
-            let content_width = if word_wrap {
-                editor_width
-            } else {
-                // Approx monospace glyph width at the default 14px editor
-                // font; overshooting is harmless, we just get a bit of
-                // empty runway at the right edge of the scroll area.
-                let glyph_w = 8.0_f32;
-                let max_chars = text.lines().map(|l| l.chars().count()).max().unwrap_or(0);
-                ((max_chars as f32) * glyph_w + 32.0).max(editor_width)
-            };
+            // An unwrapped TextEdit grows to the actual galley width. Anchor
+            // that overflow at the left edge: add_sized centers oversized
+            // widgets, putting the first columns outside the scroll viewport.
+            // The outer horizontal ScrollArea owns all horizontal scrolling.
             let show_editor = |ui: &mut egui::Ui, text: &mut String| -> egui::Response {
-                let inner_width = content_width;
-                ui.add_sized(
-                    [inner_width, editor_height],
-                    lunco_workbench_widgets::text_editor::code(text)
-                        .id(text_edit_id)
-                        .desired_width(inner_width)
-                        .desired_rows(((editor_height / 16.0) as usize).max(10))
-                        .lock_focus(true)
-                        .interactive(true)
-                        .layouter(&mut |ui, string, _wrap_width| {
-                            if is_ro {
-                                if let Some(galley) = &galley_cache {
-                                    return galley.clone();
-                                }
-                            }
-                            let mut layout_job = modelica_layouter(ui.style(), string.as_str());
-                            layout_job.wrap.max_width = if word_wrap {
-                                editor_width
-                            } else {
-                                f32::INFINITY
-                            };
-                            ui.painter().layout_job(layout_job)
-                        }),
+                ui.allocate_ui_with_layout(
+                    egui::vec2(editor_width, editor_height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        if let Some(font) = ui
+                            .style_mut()
+                            .text_styles
+                            .get_mut(&egui::TextStyle::Monospace)
+                        {
+                            font.size *= text_scale;
+                        }
+                        ui.add(
+                            lunco_workbench_widgets::text_editor::code(text)
+                                .id(text_edit_id)
+                                .desired_width(editor_width)
+                                .desired_rows(
+                                    ((editor_height
+                                        / ui.text_style_height(&egui::TextStyle::Monospace))
+                                        as usize)
+                                        .max(1),
+                                )
+                                .lock_focus(true)
+                                .interactive(true)
+                                .layouter(&mut |ui, string, wrap_width| {
+                                    if is_ro {
+                                        if let Some(galley) = &galley_cache {
+                                            return galley.clone();
+                                        }
+                                    }
+                                    let mut layout_job =
+                                        modelica_layouter(ui.style(), string.as_str());
+                                    layout_job.wrap.max_width =
+                                        if word_wrap { wrap_width } else { f32::INFINITY };
+                                    ui.painter().layout_job(layout_job)
+                                }),
+                        )
+                    },
                 )
+                .inner
             };
 
             // Inner margin so the first column of code isn't flush
@@ -779,37 +861,21 @@ impl Panel for CodeEditorPanel {
             // the leftmost column sit under the adjacent panel's
             // boundary (package browser on the left), hiding the first
             // few characters of every line.
-            // Vertical scroll area owned by the panel (egui_dock's
+            // Both scroll axes are owned by the panel (egui_dock's
             // per-tab ScrollArea is disabled so the toolbar stays
             // pinned — see lunco-workbench::PanelTabViewer::scroll_bars).
             // Without this the TextEdit claims all available vertical
             // space and long files can't be scrolled.
             let output = egui::Frame::default()
-                .inner_margin(egui::Margin {
-                    left: 8,
-                    right: 0,
-                    top: 0,
-                    bottom: 0,
-                })
+                .inner_margin(editor_margin)
                 .show(ui, |ui| {
-                    let v_area = egui::ScrollArea::vertical()
-                        .id_salt("modelica_code_editor_vscroll")
+                    let mut area = egui::ScrollArea::new([!word_wrap, true])
+                        .id_salt("modelica_code_editor_scroll")
                         .auto_shrink([false, false]);
-                    v_area
-                        .show(ui, |ui| {
-                            if word_wrap {
-                                show_editor(ui, &mut text)
-                            } else {
-                                let mut area = egui::ScrollArea::horizontal()
-                                    .id_salt("modelica_code_editor_hscroll")
-                                    .auto_shrink([false, false]);
-                                if model_switched {
-                                    area = area.horizontal_scroll_offset(0.0);
-                                }
-                                area.show(ui, |ui| show_editor(ui, &mut text)).inner
-                            }
-                        })
-                        .inner
+                    if model_switched {
+                        area = area.horizontal_scroll_offset(0.0);
+                    }
+                    area.show(ui, |ui| show_editor(ui, &mut text)).inner
                 })
                 .inner;
 

@@ -569,6 +569,7 @@ impl Plugin for ModelicaUiPlugin {
         // round-trips them.
         use lunco_settings::AppSettingsExt;
         app.register_settings_section::<panels::journal::JournalPanelSettings>();
+        app.register_settings_section::<panels::code_editor::EditorSettings>();
 
         // Document hot-exit: persist every open Modelica buffer into the
         // per-Twin workspace-state and restore it (with unsaved edits) on
@@ -874,23 +875,33 @@ fn register_settings_submenu(world: &mut World) {
                 .text_style(lunco_theme::TypographyRole::Label.text_style())
                 .weak(),
         );
-        let Some((original_word_wrap, original_auto_indent)) = ctx
-            .resource::<panels::code_editor::EditorBufferState>()
-            .map(|buf| (buf.word_wrap, buf.auto_indent))
+        let Some(original) = ctx
+            .resource::<panels::code_editor::EditorSettings>()
+            .copied()
         else {
             return;
         };
-        let mut word_wrap = original_word_wrap;
-        let mut auto_indent = original_auto_indent;
-        ui.checkbox(&mut word_wrap, "Word wrap")
+        let mut settings = original;
+        ui.checkbox(&mut settings.word_wrap, "Word wrap")
             .on_hover_text("Wrap long lines at editor width");
-        ui.checkbox(&mut auto_indent, "Auto indent")
+        ui.checkbox(&mut settings.auto_indent, "Auto indent")
             .on_hover_text("Copy previous line's indent on Enter");
-        if word_wrap != original_word_wrap || auto_indent != original_auto_indent {
-            ctx.trigger(panels::code_editor::EditorSettingsChanged {
-                word_wrap,
-                auto_indent,
-            });
+        ui.horizontal(|ui| {
+            ui.label("Text scale");
+            let mut percent = settings.text_scale * 100.0;
+            if ui.add(egui::DragValue::new(&mut percent)
+                .range(50.0..=300.0).speed(5.0).suffix("%"))
+                .on_hover_text("Editor text only. Ctrl/Cmd +/−, Ctrl/Cmd + wheel or trackpad pinch. Ctrl/Cmd + 0 resets.")
+                .changed()
+            {
+                settings.text_scale = percent / 100.0;
+            }
+            if ui.small_button("Reset").clicked() {
+                settings.text_scale = 1.0;
+            }
+        });
+        if settings != original {
+            ctx.trigger(panels::code_editor::EditorSettingsChanged { settings });
         }
         ui.separator();
         ui.label(
