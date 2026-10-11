@@ -271,6 +271,7 @@ pub fn compute_local_gravity(
             (Entity, Option<Ref<GravityBody>>, Option<&LocalGravity>),
             (
                 With<Transform>,
+                Or<(With<GravityBody>, With<LocalGravity>)>,
                 Or<(
                     Changed<Transform>,
                     Changed<Position>,
@@ -280,6 +281,7 @@ pub fn compute_local_gravity(
             ),
         >,
         Query<(Entity, Option<Ref<GravityBody>>, Option<&LocalGravity>), With<Transform>>,
+        Query<Entity, (With<Transform>, Without<LocalGravity>)>,
     )>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -287,8 +289,9 @@ pub fn compute_local_gravity(
     q_native_positions: Query<&Position, With<RigidBody>>,
     mut body_pose_cache: Local<HashMap<Entity, (GridPos, DQuat)>>,
 ) {
-    // The field is entity-local, so a quiet frame must visit only entities
-    // whose inputs changed. A provider edit/removal or a global/frame change
+    // Surface fields visit changed consumers and existing fields that may need
+    // removal. Unlinked entities without a field cannot produce an update.
+    // A provider edit/removal or a global/frame change
     // invalidates every cached field and deliberately selects the full query.
     // This is structural change detection, not a timer: transforms, body links,
     // provider structure, and the authored gravity/frame resources remain the
@@ -300,6 +303,23 @@ pub fn compute_local_gravity(
         || active_frame.as_ref().is_some_and(Res::is_changed)
         || provider_changed
         || body_link_removed;
+    // A flat field has no position dependence. Once admitted, moving entities
+    // retain the same vector until an owner-level invalidation. The missing
+    // field query is archetypal, so steady motion does not scan change ticks.
+    if !global_invalidation {
+        if let Gravity::Flat { g, direction } = gravity.as_ref() {
+            let missing = q_entities.p2();
+            if !missing.is_empty() {
+                let acceleration = *direction * *g;
+                let updates: Vec<_> = missing
+                    .iter()
+                    .map(|entity| (entity, LocalGravity(acceleration)))
+                    .collect();
+                commands.try_insert_batch(updates);
+            }
+            return;
+        }
+    }
     let has_work = global_invalidation || !q_entities.p0().is_empty();
     if !has_work {
         return;
@@ -1051,6 +1071,15 @@ mod tests {
             expected,
             "native movement did not invalidate gravity without a render write"
         );
+        let moved = app.world().get::<LocalGravity>(body).unwrap().0;
+        app.world_mut().entity_mut(body).remove::<GravityBody>();
+        app.update();
+        assert!(app.world().get::<LocalGravity>(body).is_none());
+        app.world_mut().entity_mut(body).insert(GravityBody {
+            body_entity: planet,
+        });
+        app.update();
+        assert_eq!(app.world().get::<LocalGravity>(body).unwrap().0, moved);
     }
 
     #[test]
@@ -1085,6 +1114,43 @@ mod tests {
             .get::<LocalGravity>(body)
             .expect("gravity is projected onto every spatial entity");
         assert!(actual.abs_diff_eq(DVec3::new(0.0, -1.62, 0.0), 1.0e-12));
+
+        app.world_mut()
+            .get_mut::<Transform>(body)
+            .unwrap()
+            .translation = Vec3::X;
+        let admitted = app.world_mut().spawn(Transform::default()).id();
+        app.update();
+        for entity in [body, admitted] {
+            assert_eq!(app.world().get::<LocalGravity>(entity).unwrap().0, actual);
+        }
+
+        app.world_mut().entity_mut(body).remove::<LocalGravity>();
+        app.update();
+        assert_eq!(app.world().get::<LocalGravity>(body).unwrap().0, actual);
+
+        app.insert_resource(Gravity::flat(2.3, DVec3::X));
+        app.update();
+        for entity in [body, admitted] {
+            assert_eq!(
+                app.world().get::<LocalGravity>(entity).unwrap().0,
+                DVec3::X * 2.3
+            );
+        }
+
+        app.insert_resource(Gravity::surface());
+        app.update();
+        for entity in [body, admitted] {
+            assert!(
+                app.world().get::<LocalGravity>(entity).is_none(),
+                "unresolved surface state retained flat gravity"
+            );
+        }
+        app.insert_resource(Gravity::flat(1.62, DVec3::NEG_Y));
+        app.update();
+        for entity in [body, admitted] {
+            assert_eq!(app.world().get::<LocalGravity>(entity).unwrap().0, actual);
+        }
     }
 
     #[test]

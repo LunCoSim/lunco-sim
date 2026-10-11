@@ -901,6 +901,14 @@ IDs. Relationship bundles such as `ChildOf` can use the same fallible batch:
 Bevy runs their relationship hooks per entity, in batch order, while continuing
 past stale entities.
 
+For `compute_local_gravity`, distinguish flat fields from position-dependent
+surface fields. Steady flat fields use the archetypal missing-field query;
+motion alone does not require recomputation. Retain global/frame/provider and
+link-removal invalidation, new-entity admission and unresolved surface cleanup.
+Steady surface work includes linked consumers and existing fields, excluding
+unlinked entities that have neither a field to produce nor one to remove.
+Profile flat and surface owners separately and require unchanged exact replay.
+
 For `sync_local_gravity_to_avian`, keep the comparison against the existing
 `ConstantLinearAcceleration` component and batch only changed values in query
 order. Measure its `system_commands` flush separately; removals remain driven

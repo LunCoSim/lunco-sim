@@ -499,6 +499,9 @@ the analytical formulas or their f64 composition order.
 
 **`lunco-environment`**
 Position-dependent environmental state (gravity, atmosphere, radiation, etc.). Uses a provider-consumer pattern to compute local conditions for each entity based on its proximity to celestial bodies and their specific environment models.
+Flat gravity admits only missing spatial fields between owner invalidations;
+surface gravity selects linked consumers and existing fields, retaining
+native-position change detection and body-relative math.
 
 **`lunco-terrain-core`**
 Projection-agnostic terrain LOD spine. Provides quadtree-CDLOD tile selection, tile-grid math, and the `HeightSource` trait. Pure (std + serde only) with no bevy/avian/DEM/sphere dependency, so it is shared by both the planar DEM streamer (`lunco-terrain-surface`) and the cube-sphere planetary tiler (`lunco-terrain-globe`).

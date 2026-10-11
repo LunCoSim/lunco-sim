@@ -1,5 +1,76 @@
 # High-quality realtime performance handover
 
+## Admit only relevant gravity work — 2026-10-11
+
+`lunco-environment` separates flat-field admission from surface-field
+invalidation. Steady surface work selects linked consumers and existing
+fields; unlinked spatial entities without `LocalGravity` cannot produce a
+field or remove one. A flat field admits only missing spatial fields between
+owner invalidations. Gravity, active-frame, provider and link-removal changes
+still check all spatial entities. Native-position changes, body-relative
+surface math, f64 precision, deferred publication and simulation cadence
+remain unchanged. This is an engine derivation mechanism over the existing
+typed gravity facts, with no changeable policy or new hook. Dependencies are
+unchanged.
+
+`cargo test -p lunco-environment --lib gravity -j 4` passes all three checks
+(12 filtered). The existing flat-field check also covers late admission,
+field recreation, resource edits and unresolved surface cleanup. The native
+surface check retains astronomical-ancestor/render-pose isolation and native
+position invalidation, and now covers link removal and re-admission.
+
+The valid Tracy candidate PID 602467 passes readiness, diagnostics, advancing
+physics, three invalid-assembly pause checks and scene replacement; the
+post-dismissal High-quality screenshot shows shadows. Its 321,260,566-byte
+capture matches the collector report and passes native message and gravity
+CPU exports. The sandbox log confirms site selection of surface gravity.
+Across settled View/Build/View windows, gravity-system means are
+0.061513/0.058843/0.058989 ms versus the retained owner-slot baseline's
+0.155416/0.150718/0.153747 ms: a 60–62% reduction in this profiled owner.
+Both retain about 360 calls per six-second window. Deferred-flush means remain
+similar at 0.018373/0.017853/0.016722 ms versus
+0.019169/0.018285/0.018210 ms. This is owner attribution, not a product FPS or
+physics-throughput claim. Main PID 84260 overlaps both captures. Candidate
+launch also records USD PID 602143, while the baseline records USD PID 546786;
+their exact overlap with each window is unknown. App and collector 602466
+exit zero and release API 4202/profiler 8086. Tracy SHA-256:
+`1e115c148229af357a23887ee2b35db8db84859de3e3a1d4ec55cfcd993c6d24`.
+
+Normal candidate PID 619443 passes seven authored sandbox checks before and
+after replacement, readiness, diagnostics, advancing physics and all three
+invalid-assembly pause checks. High quality, no vsync/throttle, 50 bodies,
+33 colliders and 20 joints remain unchanged. Camera poses remain fixed within
+the run; the post-dismissal screenshot shows shadows. Warm readiness is
+6.465 s, with raw View/Build/View frame medians
+18.599387/17.958181/17.912846 ms and maxima
+42.675175/40.954084/98.137291 ms. Main PID 84260 and USD Cargo PID 609672 are
+recorded at launch; their exact overlap with each window is unknown. This
+run does not establish product FPS or loading acceptance.
+
+Using the same production artifact, spawned-body PID 621091 passes four
+authored `SPAWN_FOLLOWS_PHYSICS` checks over 202 ticks/3.37 simulated seconds:
+`luncosim test --scene assets/scenes/tests/spawn_follows_physics.usda --threads 1 --api 4202`.
+Replay PID 621272 passes 24 exact checks over 780 ticks/13 simulated seconds,
+four rovers and one compute thread against the unchanged 56-row reference
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`.
+All three normal sessions exit zero and release API 4202. Normal SHA-256:
+`915870cf2e2d685151ffcabaeff10944df75017fbb6dce38f77c83a8f1d765a9`.
+The full ten-profile determinism matrix remains open.
+
+Evidence lives under `target/entity-tree-perf/`, prefix `gravity-admission-`.
+The current normal binary and hash-verified normal gzip archive are retained,
+alongside validated baseline/candidate raw captures, receipts, exported
+comparisons and the unchanged replay reference. Older sample-borrow and
+shared-shadow raw captures, superseded owner-slot binary archives and the
+completed native-test executable are retired; their receipts, logs and
+extracted measurements remain. The superseded flat-only trial capture is also
+retired, with its receipt and exported comparison retained. The current Tracy
+executable is replaced by the normal build after profiling, with its exact SHA
+recorded above.
+This retention statement supersedes older dated artifact inventories. Overall
+loading, visual FPS, physics throughput, clean acceptance and the existing
+detach/fall failure remain open. Official Trello tools remain unavailable.
+
 ## Retain live owner resolution — 2026-10-11
 
 `lunco-port-core` retains the winning backend's optional slot during live
@@ -53,11 +124,11 @@ collector 548236 exit zero and release API 4202/profiler 8086.
 Tracy SHA-256:
 `9c904b1d8b48c546c76efe6bc9962a5a8d032771862434e4c95514588f4ab3ff`.
 Evidence lives under `target/entity-tree-perf/`, prefix `owner-slot-`.
-Normal and Tracy archives are verified against their uncompressed SHA-256.
-They replace the shared-shadow binary archives; validated raw captures,
-receipts, logs and the replay reference remain. The normal candidate remains
-installed at `target/debug/luncosim`. Overall loading, visual FPS, physics
-throughput, clean acceptance and the existing detach/fall failure remain open.
+These normal/Tracy binary archives are retired at the gravity-admission
+checkpoint. This checkpoint's validated raw capture remains as its comparison
+baseline; receipts, logs and the replay reference remain. Overall loading,
+visual FPS, physics throughput, clean acceptance and the existing detach/fall
+failure remain open.
 Official Trello tools remain unavailable in this session.
 
 ## Native shared-shadow schedule — 2026-10-11
@@ -119,15 +190,15 @@ Tracy candidate SHA-256:
 `317b78bbcaf26016ffe1d49659a962d59254c7f90ff5ee572e308ab8b5721ce5`.
 
 Evidence lives under `target/entity-tree-perf/`, prefix `shared-shadow-`.
-The owner-slot checkpoint replaces these normal/Tracy binary archives;
-validated baseline and candidate raw captures, receipts and replay reference
-remain. Overall loading,
+These normal/Tracy binary archives and raw captures are retired; receipts,
+exported CPU/GPU comparisons and the replay reference remain. Overall loading,
 visual FPS, physics throughput, clean acceptance and the existing detach/fall
 failure remain open. Official Trello tools remain unavailable in this session.
 
 ## Auxiliary shadow-root scheduling investigation — 2026-10-11
 
-The readable `sample-borrow-after-tracy-20261011.tracy` capture identifies 13
+The validated export from the retired
+`sample-borrow-after-tracy-20261011.tracy` capture identifies 13
 Core3d roots per rendered frame: one camera and 12 local light-shadow roots.
 Across three settled windows, Core3d appears 6,045 times for 465 rendered
 frames. The camera pipeline averages about 2.82 ms; individual auxiliary roots

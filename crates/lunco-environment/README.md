@@ -89,8 +89,13 @@ Gravity vector at an entity's world-space position, in m/s². Computed in
 `FixedUpdate` when gravity, frame, provider, transform, or body-link inputs
 change. Stable ticks return before entity iteration; a global invalidation
 checks all entities. Changed valid values are applied as one deferred batch,
-while unresolved surface links remove stale values. The source is the global
-[`Gravity`](https://docs.rs/lunco-celestial) resource:
+while unresolved surface links remove stale values. In a flat field, steady
+motion does not invalidate gravity: an archetypal query admits only spatial
+entities missing the cached field. Steady surface work selects linked
+consumers and existing fields, excluding unlinked entities with nothing to
+produce or remove. Gravity, frame, provider and link-removal invalidations
+still check all spatial entities. The source is this crate's
+[`Gravity`](src/gravity_types.rs) resource:
 
 - **`Gravity::Flat`** — same vector for all entities (sandbox / single-body)
 - **`Gravity::Surface`** — per-entity vector via `GravityBody` link to a body
