@@ -83,11 +83,16 @@ struct RuntimeTelemetrySession {
     /// registry remains the final per-channel authority; this batch cursor
     /// only avoids rebuilding the same variable list between due samples.
     last_sample_time: Option<f64>,
+    /// The registry owns archived wire identity. This cursor admits reuse only
+    /// while its catalog and the source's live owner remain unchanged.
+    global_owner: Option<GlobalEntityId>,
+    owner_catalog_revision: Option<u64>,
 }
 
 struct RuntimeSignalCache {
     signal: SignalRef,
     retained: bool,
+    owner_published: bool,
     /// The registry owns metadata; the producer only tracks its publication.
     metadata_published: bool,
 }
@@ -153,6 +158,8 @@ pub fn retain_modelica_runtime_state(
             session.document_id = None;
             session.document_generation = None;
             session.last_sample_time = None;
+            session.global_owner = None;
+            session.owner_catalog_revision = None;
         }
 
         let metadata_dirty = session.document_id != document.map(|(id, _)| id)
@@ -179,6 +186,13 @@ pub fn retain_modelica_runtime_state(
             None
         };
 
+        let owner_dirty = session.global_owner != global_owner.copied()
+            || session.owner_catalog_revision != Some(signals.catalog_revision());
+        if owner_dirty {
+            for cached in session.signals.values_mut() {
+                cached.owner_published = false;
+            }
+        }
         let mut retained_any = false;
         for (name, &value) in &variables.values {
             if !value.is_finite() || name.is_empty() {
@@ -203,6 +217,7 @@ pub fn retain_modelica_runtime_state(
                         RuntimeSignalCache {
                             signal,
                             retained: false,
+                            owner_published: false,
                             metadata_published: false,
                         },
                     );
@@ -224,7 +239,10 @@ pub fn retain_modelica_runtime_state(
                 continue;
             }
             if let Some(owner) = global_owner {
-                signals.associate_global_owner(signal, *owner);
+                if !cached.owner_published || !cached.retained {
+                    signals.associate_global_owner(signal, *owner);
+                    cached.owner_published = true;
+                }
             }
 
             // Generated-document metadata can become available after the
@@ -262,6 +280,8 @@ pub fn retain_modelica_runtime_state(
             }
         }
 
+        session.global_owner = global_owner.copied();
+        session.owner_catalog_revision = Some(signals.catalog_revision());
         if retained_any && signal_source.is_none() {
             commands.entity(entity).try_insert(SignalSource);
         }
@@ -617,6 +637,174 @@ mod tests {
         assert_eq!(history.len(), 1);
         let sample = history.back().expect("new session sample");
         assert_eq!((sample.time, sample.value), (0.0, 8.0));
+    }
+
+    #[test]
+    fn owner_publication_tracks_channel_lifecycle_and_source_identity() {
+        let mut variables = ModelicaVariables::default();
+        variables.values.insert("x".into(), 1.0);
+        let mut model = ModelicaModel::default();
+        model.current_time = f64::NAN;
+        let (mut app, entity) = app_with_model(model, variables);
+        let first_owner = GlobalEntityId::from_raw(42);
+        app.world_mut().entity_mut(entity).insert(first_owner);
+        app.update();
+        let x = SignalRef::new(entity, "x");
+        assert_eq!(
+            app.world().resource::<SignalRegistry>().global_owner(&x),
+            Some(first_owner)
+        );
+
+        assert!(
+            app.world()
+                .resource::<SignalRegistry>()
+                .scalar_history(&x)
+                .is_none()
+        );
+        app.world_mut()
+            .resource_mut::<SignalRegistry>()
+            .remove_signal(&x);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 0.0;
+        app.update();
+        assert_eq!(
+            app.world().resource::<SignalRegistry>().global_owner(&x),
+            Some(first_owner)
+        );
+        assert!(
+            app.world()
+                .resource::<SignalRegistry>()
+                .scalar_history(&x)
+                .is_some()
+        );
+
+        app.world_mut()
+            .resource_mut::<SignalRegistry>()
+            .remove_signal(&x);
+        assert_eq!(
+            app.world().resource::<SignalRegistry>().global_owner(&x),
+            None
+        );
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 0.25;
+        app.update();
+        assert_eq!(
+            app.world().resource::<SignalRegistry>().global_owner(&x),
+            Some(first_owner)
+        );
+
+        app.world_mut()
+            .get_mut::<ModelicaVariables>(entity)
+            .unwrap()
+            .values
+            .insert("y".into(), 2.0);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 0.5;
+        app.update();
+        let y = SignalRef::new(entity, "y");
+        assert_eq!(
+            app.world().resource::<SignalRegistry>().global_owner(&y),
+            Some(first_owner)
+        );
+
+        let next_owner = GlobalEntityId::from_raw(99);
+        app.world_mut().entity_mut(entity).insert(next_owner);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 0.75;
+        app.update();
+        for signal in [&x, &y] {
+            assert_eq!(
+                app.world()
+                    .resource::<SignalRegistry>()
+                    .global_owner(signal),
+                Some(next_owner)
+            );
+        }
+
+        // A skipped value must not acknowledge a batch's owner/catalog change.
+        app.world_mut()
+            .get_mut::<ModelicaVariables>(entity)
+            .unwrap()
+            .values
+            .insert("x".into(), f64::NAN);
+        let final_owner = GlobalEntityId::from_raw(123);
+        app.world_mut().entity_mut(entity).insert(final_owner);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 1.0;
+        app.update();
+        assert_eq!(
+            app.world().resource::<SignalRegistry>().global_owner(&x),
+            Some(next_owner)
+        );
+        app.world_mut()
+            .get_mut::<ModelicaVariables>(entity)
+            .unwrap()
+            .values
+            .insert("x".into(), 3.0);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 1.25;
+        app.update();
+        assert_eq!(
+            app.world().resource::<SignalRegistry>().global_owner(&x),
+            Some(final_owner)
+        );
+
+        app.world_mut()
+            .get_mut::<ModelicaVariables>(entity)
+            .unwrap()
+            .values
+            .insert("x".into(), f64::NAN);
+        app.world_mut()
+            .resource_mut::<SignalRegistry>()
+            .remove_signal(&x);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 1.5;
+        app.update();
+        app.world_mut()
+            .get_mut::<ModelicaVariables>(entity)
+            .unwrap()
+            .values
+            .insert("x".into(), 4.0);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 1.75;
+        app.update();
+        assert_eq!(
+            app.world().resource::<SignalRegistry>().global_owner(&x),
+            Some(final_owner)
+        );
+
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<GlobalEntityId>();
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 2.0;
+        app.update();
+        for signal in [&x, &y] {
+            assert_eq!(
+                app.world()
+                    .resource::<SignalRegistry>()
+                    .global_owner(signal),
+                Some(final_owner)
+            );
+        }
     }
 
     #[test]

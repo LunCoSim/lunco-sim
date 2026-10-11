@@ -1068,7 +1068,14 @@ For fixed-step telemetry, keep static channel-presentation facts borrowed in
 the per-sample path and allocate their owned signal metadata only when that
 channel's metadata is first created or changes. Reuse one `HashMap::entry` for
 each sample's cached identity lookup and mutation, and update its global-owner
-association only when the owner identity changes. Add the shared `SignalSource`
+association only when publication is needed. Modelica's session cursor checks
+both live owner identity and the registry's catalog revision once per batch;
+new variables and removed/re-admitted channels still publish through the
+registry. Reuse starts only after a scalar sample has been retained; owner or
+metadata preparation alone cannot prove admitted wire ownership.
+Invalidate per-channel publication on a changed batch even for skipped values;
+only a channel's actual association acknowledges its new owner/catalog state.
+Add the shared `SignalSource`
 owner marker only when the entity first retains a sample; its removal observer
 owns history cleanup, so later batches do not need to queue marker writes.
 

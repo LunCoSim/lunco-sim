@@ -1,5 +1,50 @@
 # High-quality realtime performance handover
 
+## Avoid repeated Modelica wire-owner lookups — 2026-10-11
+
+`lunco-modelica-telemetry` caches each channel's owner publication under a
+session cursor for live ownership and the shared registry's catalog revision.
+Unchanged admitted channels skip repeated string-keyed owner lookups. A changed
+batch invalidates every channel's publication, including channels skipped for
+non-finite values or capacity; only actual association acknowledges a channel.
+Reuse also requires a retained scalar sample: preparing an owner or metadata
+alone does not establish admitted wire ownership. New variables, owner changes
+and removal/re-admission publish through `SignalRegistry`, which remains the
+archived wire-identity owner. Sampling, histories, variable iteration, f64 values
+and solver/physics timing retain their existing contracts. This is cache
+admission in the existing projection owner, with no new policy hook or parallel
+identity store; see [the telemetry contract](../architecture/telemetry-subsystem.md).
+
+The focused Rust resource-seam test covers removal before the first scalar,
+removal of an admitted channel, a new variable, changed source identity,
+non-finite values across owner/catalog changes and preservation of archived
+ownership when the live component disappears. The normal production artifact is
+`195d19025df902d0c19442d61c0f6bce70eb0a19bd554f814bdb03c30b927a88`.
+Its 18-check telemetry-history gate, stable API schema and scene restart pass.
+All ten existing replay profiles pass 360 authored checks at compute widths
+1/24, with 4/8/20 rovers, large seeds and jitter, against the unchanged exact
+reference `9d4d03c5864a07d8db782959ab79256297e9d49761b073f4a3a23cd0f406c548`.
+Owned normal PID 3786863 and all replay processes exit zero and release API
+4202. The `modelica-owner-publication-complete-` receipts under
+`target/entity-tree-perf/` retain exact artifacts/sources, native exports,
+verdicts, workload observations and session closure.
+
+A temporary native admission diagnostic observes 324 settled source batches
+covering 73,692 eligible channel visits with zero owner-publication calls.
+All nine live Modelica sources have a global owner. The 312,615,482-byte capture
+passes native CPU/message exports, and its compressed payload matches the
+collector's reported 298.08 MiB after excluding container headers. Owned
+app/collector PIDs 3874847/3874846 exit zero and release API 4202/Tracy 8087.
+Instrumentation is removed and the validated normal artifact is restored.
+These counts establish admitted reuse, not elapsed-time savings.
+
+High-quality, fixed-camera normal frame medians are 10.851/10.906/10.821 ms
+for View/Builder/View, with 614/606/607 physics steps in the ten-second windows,
+50 bodies and 33 colliders. The first and third windows observe sibling builds;
+the middle window's 38 workload observations are clear. These observations do
+not establish a whole-app speedup. Loading, clean visual-FPS acceptance and
+broader physics-FPS improvement remain open.
+
 ## Native preprocessing binding lifetime — 2026-10-11
 
 The native `prepare_preprocess_bind_groups` cost of 0.50–0.61 ms per settled

@@ -85,6 +85,18 @@ Modelica runtime telemetry caches each session's `SignalRef` by solver variable 
 `record_scalar_at_rate` path borrows that identity for existing channels, so steady samples do
 not rebuild or clone an owned signal path. The registry clones the key only when it first
 creates the channel; a new solver session clears the prior histories and cached identities.
+Modelica reuses owner publication only for variables that have retained a scalar
+sample. Until that first admission, it continues to associate through the registry;
+preparing an owner or metadata alone does not establish a retained channel. A session
+compares the live `GlobalEntityId` and the registry's catalog revision once per
+batch; unchanged admitted channels skip repeated owner-map lookups. New variables,
+source-owner changes and catalog edits publish through the registry again. This
+includes removal/re-admission: prior scalar retention cannot establish that a
+removed wire owner still exists. A changed batch invalidates each channel's
+publication flag, including channels skipped for invalid values or capacity.
+Only actual owner association acknowledges that channel. Session reset clears
+the publication cursor, and absent live ownership preserves the registry's
+archived identity.
 Rate admission, backwards-time clearing and append share one mutable history lookup.
 Rejected samples leave history capacity, publisher activity and catalog revision unchanged;
 accepted samples apply retention and reactivate archived publishers at that same boundary.
